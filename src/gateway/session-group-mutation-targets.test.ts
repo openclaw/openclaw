@@ -1,177 +1,112 @@
 import fs from "node:fs";
-import { performance } from "node:perf_hooks";
-import { DatabaseSync } from "node:sqlite";
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
+import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
+import * as runtimeConfig from "../config/runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { promptReport } from "../config/sessions/system-prompt-report.test-support.js";
+import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import * as sqliteIntegrity from "../infra/sqlite-integrity.js";
 import * as sqliteWal from "../infra/sqlite-wal.js";
 import * as agentDatabaseLeases from "../state/openclaw-agent-db-lease.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { setStateDirEnv, withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { resolveSessionGroupMutationTargetsByName } from "./session-groups.js";
+import { readSessionGroupMembershipInWorker } from "./session-group-catalog.js";
 
-const EXPECTED_OPEN_HANDLE_CAP = 64;
+const handleCap = 64;
+afterEach(() => {
+  runtimeConfig.clearRuntimeConfigSnapshot();
+  vi.restoreAllMocks();
+});
+const readGroups = async (config: Parameters<typeof readSessionGroupMembershipInWorker>[0]) =>
+  new Map((await readSessionGroupMembershipInWorker(config, process.env)).groups);
 
-test.each([false, true])(
-  "discovers current group members without decoding saved prompts (cold=%s)",
-  async (cold) => {
-    await withStateDirEnv("openclaw-session-group-metadata-", async ({ stateDir }) => {
-      setStateDirEnv(fs.realpathSync(stateDir));
-      const scopes = [
-        { agentId: "main", sessionKey: "agent:main:group-member" },
-        { agentId: "research", sessionKey: "agent:research:matrix:group:!Room:example.org" },
-      ] as const;
-      const config = {
-        agents: { list: [{ id: "main", default: true }, { id: "research" }] },
-      } satisfies OpenClawConfig;
-      const entry = {
+test("discovers warm and cold groups above the handle cap without prompt decoding or maintenance", async () => {
+  await withStateDirEnv("openclaw-session-group-metadata-", async ({ stateDir }) => {
+    const scopes = [
+      { agentId: "main", sessionKey: "agent:main:group-member" },
+      { agentId: "research", sessionKey: "agent:research:matrix:group:!Room:example.org" },
+      ...Array.from({ length: handleCap - 1 }, (_, index) => ({
+        agentId: `group-reader-${index}`,
+        sessionKey: `agent:group-reader-${index}:main`,
+      })),
+    ] as const;
+    const savedPrompts = {
+      skillsSnapshot: { prompt: "unneeded-group-prompt".repeat(4096), skills: [] },
+      systemPromptReport: promptReport(1, 1, 0),
+    };
+    setStateDirEnv(fs.realpathSync(stateDir));
+    const config = {
+      agents: { entries: Object.fromEntries(scopes.map(({ agentId }) => [agentId, {}])) },
+    };
+    runtimeConfig.setRuntimeConfigSnapshot(config);
+    for (const scope of scopes) {
+      await upsertSessionEntryCore(scope, {
         sessionId: "group-member",
         updatedAt: 1,
         category: " Shared work ",
-        skillsSnapshot: { prompt: "unneeded-group-prompt".repeat(4096), skills: [] },
-        systemPromptReport: {
-          source: "run" as const,
-          generatedAt: 1,
-          systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
-          injectedWorkspaceFiles: [],
-          skills: { promptChars: 0, entries: [] },
-          tools: { listChars: 0, schemaChars: 0, entries: [] },
-        },
-      };
-      const parse = vi.spyOn(JSON, "parse");
-      const readTargets = () => {
-        parse.mockClear();
-        const targets = resolveSessionGroupMutationTargetsByName(config);
-        expect(
-          parse.mock.calls.filter(
-            ([json]) => json.includes('"skillsSnapshot"') || json.includes('"systemPromptReport"'),
-          ),
-        ).toEqual([]);
-        return targets;
-      };
-      try {
-        for (const scope of scopes) {
-          await upsertSessionEntryCore(scope, entry);
-        }
-        if (cold) {
-          closeOpenClawAgentDatabasesForTest();
-        }
-        expect(readTargets()).toEqual(new Map([["Shared work", scopes]]));
-        await upsertSessionEntryCore(scopes[0], { ...entry, category: "Renamed" });
-        expect(readTargets()).toEqual(
-          new Map([
-            ["Renamed", [scopes[0]]],
-            ["Shared work", [scopes[1]]],
-          ]),
-        );
-        const database = openOpenClawAgentDatabase(scopes[0]);
-        const external = new DatabaseSync(database.path);
-        try {
-          external
-            .prepare(
-              "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.category', ?) WHERE session_key = ?",
-            )
-            .run("External", scopes[0].sessionKey);
-        } finally {
-          external.close();
-        }
-        expect(readTargets()).toEqual(
-          new Map([
-            ["External", [scopes[0]]],
-            ["Shared work", [scopes[1]]],
-          ]),
-        );
-        parse.mockRestore();
-        expect(loadSessionEntry(scopes[0])).toMatchObject({
-          skillsSnapshot: entry.skillsSnapshot,
-          systemPromptReport: entry.systemPromptReport,
-        });
-      } finally {
-        parse.mockRestore();
-        closeOpenClawAgentDatabasesForTest();
-        closeOpenClawStateDatabaseForTest();
-      }
-    });
-  },
-);
-
-test("discovers groups across more than the handle cap without writable database maintenance", async () => {
-  await withStateDirEnv("openclaw-session-group-readonly-", async ({ stateDir }) => {
-    setStateDirEnv(fs.realpathSync(stateDir));
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-
-    const agentIds = Array.from(
-      { length: EXPECTED_OPEN_HANDLE_CAP + 1 },
-      (_, index) => `group-reader-${index}`,
-    );
-    const config = {
-      agents: {
-        list: agentIds.map((id, index) => ({ id, ...(index === 0 ? { default: true } : {}) })),
-      },
-    } satisfies OpenClawConfig;
-
-    for (const [index, agentId] of agentIds.entries()) {
-      await upsertSessionEntryCore(
-        { agentId, sessionKey: `agent:${agentId}:main` },
-        { category: "Shared work", sessionId: `group-session-${index}`, updatedAt: index + 1 },
-      );
+        ...(scope === scopes[0] ? savedPrompts : {}),
+      });
     }
-    closeOpenClawAgentDatabasesForTest();
-
-    const integritySpy = vi.spyOn(sqliteIntegrity, "assertSqliteIntegrity");
-    const claimSpy = vi.spyOn(agentDatabaseLeases, "claimOpenClawAgentDatabaseLease");
-    const releaseSpy = vi.spyOn(agentDatabaseLeases, "releaseOpenClawAgentDatabaseLease");
-    const walSpy = vi.spyOn(sqliteWal, "configureSqliteConnectionPragmas");
-
-    try {
-      let targets: ReturnType<typeof resolveSessionGroupMutationTargetsByName> | undefined;
-      const startedAt = performance.now();
-      try {
-        targets = resolveSessionGroupMutationTargetsByName(config);
-      } finally {
-        console.info(
-          JSON.stringify({
-            probe: "session-group-readonly-many-agents",
-            agents: agentIds.length,
-            elapsedMs: Math.round((performance.now() - startedAt) * 100) / 100,
-            integrityScans: integritySpy.mock.calls.length,
-            agentWalConfigurations: walSpy.mock.calls.filter(([, options]) =>
-              options?.databaseLabel?.startsWith("openclaw-agent:"),
-            ).length,
-            leaseClaims: claimSpy.mock.calls.length,
-            leaseReleases: releaseSpy.mock.calls.length,
-            openWriterHandles: listOpenClawAgentDatabasesForTest().length,
-            groupMembers: targets?.get("Shared work")?.length ?? 0,
-          }),
-        );
-      }
-
-      expect(targets?.get("Shared work")).toEqual(
-        agentIds.map((agentId) => ({ agentId, sessionKey: `agent:${agentId}:main` })),
-      );
-      expect(integritySpy.mock.calls.length).toBe(0);
-      expect(claimSpy.mock.calls.length).toBe(0);
-      expect(releaseSpy.mock.calls.length).toBe(0);
+    const parse = vi.spyOn(JSON, "parse");
+    const readTargets = async () => {
+      parse.mockClear();
+      const targets = await readGroups(config);
       expect(
-        walSpy.mock.calls.filter(([, options]) =>
-          options?.databaseLabel?.startsWith("openclaw-agent:"),
-        ),
-      ).toEqual([]);
-      expect(listOpenClawAgentDatabasesForTest()).toEqual([]);
-    } finally {
-      integritySpy.mockRestore();
-      claimSpy.mockRestore();
-      releaseSpy.mockRestore();
-      walSpy.mockRestore();
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
+        parse.mock.calls.some(([json]) => /"(skillsSnapshot|systemPromptReport)"/.test(json)),
+      ).toBe(false);
+      return targets;
+    };
+    const expectRenamed = async (name: string) =>
+      expect(await readTargets()).toEqual(
+        new Map([
+          [name, [scopes[0]]],
+          ["Shared work", scopes.slice(1)],
+        ]),
+      );
+    expect(await readTargets()).toEqual(new Map([["Shared work", scopes]]));
+    await closeOpenClawAgentDatabasesAsync(stateDir);
+    const maintenance = [
+      vi.spyOn(sqliteIntegrity, "assertSqliteIntegrity"),
+      vi.spyOn(agentDatabaseLeases, "claimOpenClawAgentDatabaseLease"),
+      vi.spyOn(agentDatabaseLeases, "releaseOpenClawAgentDatabaseLease"),
+    ];
+    const wal = vi.spyOn(sqliteWal, "configureSqliteConnectionPragmas");
+    expect(await readTargets()).toEqual(new Map([["Shared work", scopes]]));
+    expect(maintenance.map((spy) => spy.mock.calls)).toEqual([[], [], []]);
+    expect(
+      wal.mock.calls.filter(([, options]) => options?.databaseLabel?.startsWith("openclaw-agent:")),
+    ).toEqual([]);
+    expect(listOpenClawAgentDatabasesForTest()).toEqual([]);
+    for (const spy of [...maintenance, wal]) {
+      spy.mockRestore();
     }
+    await upsertSessionEntryCore(scopes[0], { category: "Renamed" });
+    await expectRenamed("Renamed");
+    const entryUrl = new URL("../config/sessions/session-accessor.ts", import.meta.url);
+    const cleanupUrl = new URL("../test-utils/session-state-cleanup.ts", import.meta.url);
+    const configUrl = new URL("../config/runtime-snapshot.ts", import.meta.url);
+    // A foreign canonical writer refreshes metadata without this process's publications.
+    const external = await runCliProcessChild({
+      nodeArgs: [
+        ...resolveRuntimeWorkerArgv(entryUrl).slice(0, -1),
+        "--input-type=module",
+        "--eval",
+        `import { upsertSessionEntryCore } from ${JSON.stringify(entryUrl.href)};
+             import { cleanupSessionStateForTest } from ${JSON.stringify(cleanupUrl.href)};
+             import { setRuntimeConfigSnapshot } from ${JSON.stringify(configUrl.href)};
+             setRuntimeConfigSnapshot(${JSON.stringify(config)});
+             try {
+               await upsertSessionEntryCore(${JSON.stringify(scopes[0])}, { category: "External" });
+             } finally {
+               await cleanupSessionStateForTest({ stateDir: process.env.OPENCLAW_STATE_DIR });
+             }`,
+      ],
+      env: { ...process.env },
+    });
+    expect(external.code, external.stderr).toBe(0);
+    await expectRenamed("External");
+    parse.mockRestore();
+    expect(loadSessionEntry(scopes[0])).toMatchObject(savedPrompts);
   });
 });

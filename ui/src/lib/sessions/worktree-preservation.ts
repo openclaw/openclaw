@@ -1,5 +1,8 @@
 import type { PreservedSessionWorktree } from "../../../../packages/gateway-protocol/src/index.js";
 import { t } from "../../i18n/index.ts";
+import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
+
+registerSessionOrganizationEnglish();
 
 export function formatPreservedWorktreesNotice(
   worktrees: readonly PreservedSessionWorktree[],
@@ -15,5 +18,5 @@ export function formatPreservedWorktreesNotice(
 
 export function formatPreservedWorktreeConfirmation(worktree: PreservedSessionWorktree): string {
   const reason = t(`sessionsView.deletePreservedReasons.${worktree.reason}`);
-  return `${t("sessionsView.attentionRequired")}: ${worktree.branch} — ${reason}. ${t("common.remove")}?`;
+  return `${t("sessionsView.attentionRequired")}: ${reason}.`;
 }

@@ -1,4 +1,3 @@
-// Slack plugin module implements media behavior.
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 
 export const slackMediaLog = createSubsystemLogger("gateway/channels/slack").child("media");

@@ -1,14 +1,9 @@
-/**
- * Dispatches embedded attempts to native harness or OpenClaw backend execution.
- */
 import { mergeAcceptedSessionSpawnsForRun } from "../../accepted-session-spawn.js";
-import {
-  runAgentHarnessAttempt,
-  runAgentHarnessSettledTurnFinalization,
-} from "../../harness/selection.js";
-import type { AgentHarness } from "../../harness/types.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import { runAgentHarnessAttempt } from "../../harness/selection.js";
 import type { AgentRuntimeModelAttempt, AgentRuntimePlan } from "../../runtime-plan/types.js";
 import { copyCoreTtsAttemptResultProvenance } from "../../tools/tts-tool-result-provenance.js";
+import { prepareAgentWorkspaceAttachments } from "../../workspace-access.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 /** Replaces backend-retained provenance with the exact prepared request fact. */
@@ -25,14 +20,45 @@ export function resolveRuntimeModelAttempt(
     : undefined;
 }
 
-/**
- * Backend bridge for executing one embedded-agent attempt through the selected harness.
- */
 export async function runEmbeddedAttemptWithBackend(
   params: EmbeddedRunAttemptParams,
   nativeSessionRuntime?: Parameters<typeof runAgentHarnessAttempt>[1],
+  // Native image projection clears media; attachment transfer still needs the originals.
+  attachmentMedia = params.media,
 ): Promise<EmbeddedRunAttemptResult> {
-  const result = await runAgentHarnessAttempt(params, nativeSessionRuntime);
+  const assertAdmittedCurrent = params.admittedRunContext
+    ? resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)
+    : undefined;
+  const attachmentNote = await prepareAgentWorkspaceAttachments({
+    workspaceDir: params.workspaceDir,
+    turn: {
+      config: params.config,
+      media: attachmentMedia,
+      timeoutMs: params.timeoutMs,
+      abortSignal: params.abortSignal,
+      userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+    },
+    assertCurrent: () => {
+      if (!assertAdmittedCurrent) {
+        throw new Error("Workspace attachment preparation requires active admitted run authority");
+      }
+      assertAdmittedCurrent();
+      params.hostCapabilities?.assertActive();
+    },
+  });
+  const preparedParams = attachmentMedia?.length
+    ? { ...params, inputAttachmentMedia: attachmentMedia }
+    : params;
+  const result = await runAgentHarnessAttempt(
+    attachmentNote
+      ? {
+          ...preparedParams,
+          prompt: `${params.prompt}\n\n${attachmentNote}`,
+          transcriptPrompt: params.transcriptPrompt ?? params.prompt,
+        }
+      : preparedParams,
+    nativeSessionRuntime,
+  );
   // Only the logical run can settle its full child batch after all retries.
   const {
     modelAttempt: _backendModelAttempt,
@@ -59,13 +85,4 @@ export async function runEmbeddedAttemptWithBackend(
         }
       : {}),
   });
-}
-
-/** Runs one operation-specific settled-turn finalization through the selected harness. */
-export async function runEmbeddedSettledTurnFinalizationWithBackend(
-  params: EmbeddedRunAttemptParams,
-  settledAttempt: EmbeddedRunAttemptResult,
-  harness: AgentHarness,
-) {
-  return runAgentHarnessSettledTurnFinalization(params, settledAttempt, harness);
 }

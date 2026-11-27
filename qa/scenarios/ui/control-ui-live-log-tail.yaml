@@ -20,7 +20,7 @@ scenario:
     - docs/gateway/logging.md
   codeRefs:
     - ui/src/e2e/logs-autofollow.e2e.test.ts
-    - ui/src/pages/logs/logs-page.ts
+    - ui/src/pages/logs/logs-page.tsx
   execution:
     kind: playwright
     path: ui/src/e2e/logs-autofollow.e2e.test.ts

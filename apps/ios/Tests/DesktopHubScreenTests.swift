@@ -34,7 +34,7 @@ struct DesktopHubScreenTests {
             token: "secret-token",
             password: "secret-password")
 
-        let url = DesktopHubScreen.desktopURL(config: config, source: nil, session: nil)
+        let url = ControlUIHubPage.desktop(source: nil, session: nil).url(config: config)
 
         #expect(url?.absoluteString == "https://gateway.example.com:8443/openclaw/focus/desktop")
         #expect(url?.absoluteString.contains("secret-token") == false)
@@ -46,10 +46,7 @@ struct DesktopHubScreenTests {
             url: #require(URL(string: "ws://192.168.1.10:18789")),
             token: "secret-token")
 
-        let url = DesktopHubScreen.desktopURL(
-            config: config,
-            source: nil,
-            session: "agent:main/mobile session")
+        let url = ControlUIHubPage.desktop(source: nil, session: "agent:main/mobile session").url(config: config)
 
         #expect(
             url?.absoluteString ==
@@ -60,10 +57,9 @@ struct DesktopHubScreenTests {
     @Test func `explicit desktop source wins over the session`() throws {
         let config = try Self.makeConfig(url: #require(URL(string: "wss://gateway.example.com")))
 
-        let url = DesktopHubScreen.desktopURL(
-            config: config,
+        let url = ControlUIHubPage.desktop(
             source: "node:worker-1/primary?mode=qa",
-            session: "agent:main:mobile")
+            session: "agent:main:mobile").url(config: config)
 
         #expect(
             url?.absoluteString ==
@@ -73,9 +69,24 @@ struct DesktopHubScreenTests {
     @Test func `empty desktop source and session are normalized away`() throws {
         let config = try Self.makeConfig(url: #require(URL(string: "wss://gateway.example.com")))
 
-        let url = DesktopHubScreen.desktopURL(config: config, source: "  ", session: "  ")
+        let url = ControlUIHubPage.desktop(source: "  ", session: "  ").url(config: config)
 
         #expect(url?.absoluteString == "https://gateway.example.com/focus/desktop")
+    }
+
+    @Test func `desktop reload identity follows the resolved destination`() throws {
+        let config = try Self.makeConfig(url: #require(URL(string: "wss://gateway.example.com")))
+        let first = ControlUIHubPage.desktop(source: nil, session: "first")
+        let second = ControlUIHubPage.desktop(source: nil, session: "second")
+        let source = ControlUIHubPage.desktop(source: "worker", session: "first")
+        let sameSource = ControlUIHubPage.desktop(source: " worker ", session: "second")
+
+        #expect(first.webContentIdentity(config: config, storedOperatorToken: nil) !=
+            second.webContentIdentity(config: config, storedOperatorToken: nil))
+        #expect(first.webContentIdentity(config: config, storedOperatorToken: nil) !=
+            source.webContentIdentity(config: config, storedOperatorToken: nil))
+        #expect(source.webContentIdentity(config: config, storedOperatorToken: nil) ==
+            sameSource.webContentIdentity(config: config, storedOperatorToken: nil))
     }
 
     @Test func `desktop auth script carries credentials outside the URL`() throws {
@@ -84,14 +95,19 @@ struct DesktopHubScreenTests {
             token: " secret-token ",
             password: "secret-password")
 
-        let url = DesktopHubScreen.desktopURL(config: config, source: "gateway")
-        let script = DesktopHubScreen.desktopAuthUserScript(config: config, source: "gateway")
+        let page = ControlUIHubPage.desktop(source: "gateway", session: nil)
+        let url = page.url(config: config)
+        let script = page.authUserScript(
+            config: config,
+            legacyCredentials: ["password": "accepted-password"])
 
         #expect(url?.absoluteString == "https://gateway.example.com/focus/desktop/source/gateway")
         #expect(url?.absoluteString.contains("secret-token") == false)
         #expect(url?.absoluteString.contains("secret-password") == false)
         #expect(script?.contains("__OPENCLAW_NATIVE_CONTROL_AUTH__") == true)
-        #expect(script?.contains("\"token\":\"secret-token\"") == true)
-        #expect(script?.contains("\"password\":\"secret-password\"") == true)
+        #expect(script?.contains("\"password\":\"accepted-password\"") == true)
+        #expect(script?.contains("secret-token") == false)
+        #expect(script?.contains("secret-password") == false)
+        #expect(script?.contains("\"nativeConnectAuth\":true") == true)
     }
 }

@@ -12,10 +12,16 @@ import type {
   listThinkingLevelOptions,
   resolveThinkingProfile,
 } from "../auto-reply/thinking.js";
-import type { SessionEntry } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { ProjectedAgentRunIndex } from "../infra/agent-run-registry.js";
-import type { ModelCostConfig } from "../utils/usage-format.js";
-import type { CurrentUserProfileDisplay } from "./current-user-profile-display.js";
+import type { CapturedModelCostPricing } from "../model-catalog/usage-pricing.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type {
+  SessionActorProfileIdentity,
+  SessionIdentityProjection,
+} from "./session-identity-projection.js";
+
+export type { SessionActorProfileIdentity } from "./session-identity-projection.js";
 
 export type GatewayModelThinkingProfile = {
   thinkingLevels: ReturnType<typeof listThinkingLevelOptions>;
@@ -27,24 +33,30 @@ export type GatewayModelThinkingFacts = {
   metadata: GatewayModelThinkingProfile;
 };
 
-export type SessionActorProfileIdentity = Extract<CurrentUserProfileDisplay, { kind: "resolved" }>;
-
 export type GatewaySessionModelSource = {
   entry: SessionEntry | undefined;
   readSourceEntry: (key: string) => SessionEntry | undefined;
 };
 
 export type SessionListRowContext = {
+  identityProjection?: SessionIdentityProjection;
   workerPlacementEnvironment?: NodeJS.ProcessEnv;
   projectedAgentRuns?: ProjectedAgentRunIndex;
+  projectedSubagentActivity?: ReadonlySet<string>;
   subagentRuns: SubagentRunReadIndex<SubagentRunReadRecord>;
   subagentRunsByChildSessionKey: ReadonlyMap<string, readonly SubagentRunReadRecord[]>;
   configuredDefaultModelByAgent: Map<string, ReturnType<typeof resolveSessionModelRef>>;
   thinkingFactsByModelRef: Map<string, GatewayModelThinkingFacts>;
   findModelCatalogEntry: typeof findModelCatalogEntry;
   selectModelCatalogRuntimeEntry: typeof selectModelCatalogRuntimeEntry;
-  displayModelIdentityByKey: Map<string, { provider?: string; model?: string }>;
-  modelCostConfigByModelRef: Map<string, ModelCostConfig | undefined>;
+  displayModelIdentityByKey: Map<
+    string,
+    {
+      metadataSnapshot?: PluginMetadataSnapshot | null;
+      identity: { provider?: string; model?: string };
+    }
+  >;
+  modelCostPricing?: CapturedModelCostPricing;
   userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined>;
 };
 
@@ -62,3 +74,9 @@ export type SessionListActiveRunProjector = (
   entry: SessionEntry,
   agentId: string,
 ) => { active: boolean; status?: "queued" };
+
+export type SessionChildActivity = {
+  revision?: object;
+  childSessions: string[] | undefined;
+  hasActiveSubagentRun: boolean;
+};

@@ -34,8 +34,7 @@ export function listRegisteredPluginAgentPromptGuidance(params?: {
   surface?: AgentPromptSurfaceKind;
   includeLegacyGlobalGuidance?: boolean;
 }): string[] {
-  const lines: string[] = [];
-  const seen = new Set<string>();
+  const lines = new Set<string>();
   // Plugin discovery can complete in a different order on the next run; only
   // canonical command ownership may decide bytes in the cached prompt prefix.
   const commands = listRegisteredPluginCommands(requireActivePluginRegistry()).toSorted(
@@ -52,14 +51,12 @@ export function listRegisteredPluginAgentPromptGuidance(params?: {
         surface: params?.surface ? normalizeAgentPromptSurfaceKind(params.surface) : undefined,
         includeLegacyGlobalGuidance: params?.includeLegacyGlobalGuidance ?? true,
       });
-      if (!trimmed || seen.has(trimmed)) {
-        continue;
+      if (trimmed) {
+        lines.add(trimmed);
       }
-      seen.add(trimmed);
-      lines.push(trimmed);
     }
   }
-  return lines;
+  return [...lines];
 }
 
 function resolveAgentPromptGuidanceTextForSurface(

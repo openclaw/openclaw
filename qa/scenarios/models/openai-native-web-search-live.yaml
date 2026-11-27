@@ -26,7 +26,7 @@ scenario:
     - docs/help/testing.md
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
-    - extensions/openai/native-web-search.ts
+    - extensions/openai/responses-stream.runtime.ts
     - extensions/openai/shared.ts
     - extensions/openai/openai-provider.ts
     - extensions/qa-lab/src/suite.ts

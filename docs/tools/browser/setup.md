@@ -21,6 +21,12 @@ openclaw browser --browser-profile openclaw snapshot
 "Browser disabled" means the plugin or `browser.enabled` is off; see
 [Configuration](/tools/browser/configuration#configuration) and [Plugin control](#plugin-control).
 
+Browser control errors name the recorded policy refusal or plugin load failure.
+If `browser` is excluded from `plugins.allow`, add it to the existing list before
+running `openclaw plugins enable browser`; restarting alone cannot repair that
+policy. Follow the error's enablement or Doctor command. If no availability
+reason is recorded, run `openclaw doctor` and check the Gateway logs.
+
 If `openclaw browser` is missing entirely, or the agent says the browser tool
 is unavailable, jump to [Missing browser command or tool](#missing-browser-command-or-tool).
 
@@ -89,7 +95,7 @@ action discovery; they intentionally omit most non-interactive prose.
 
 ## Missing browser command or tool
 
-If `openclaw browser` is unknown after an upgrade, `browser.request` is missing, or the agent reports the browser tool as unavailable, the usual cause is a `plugins.allow` list that omits `browser` and no root `browser` config block exists. Add it:
+If `openclaw browser` is unknown after an upgrade, `browser.request` is missing, or the agent reports the browser tool as unavailable, the usual cause is a `plugins.allow` list that omits `browser` without other browser activation settings. Add it:
 
 ```json5
 {
@@ -99,9 +105,10 @@ If `openclaw browser` is unknown after an upgrade, `browser.request` is missing,
 }
 ```
 
-An explicit root `browser` block (any key under `browser`, such as
-`browser.enabled=true` or `browser.profiles.<name>`) activates the bundled
-browser plugin even under a restrictive `plugins.allow`, matching bundled
-channel config behavior. `plugins.entries.browser.enabled=true` and
-`tools.alsoAllow: ["browser"]` do not substitute for allowlist membership by
-themselves. Removing `plugins.allow` entirely also restores the default.
+An explicit root `browser` block (such as `browser.enabled=true` or
+`browser.profiles.<name>`) activates the bundled browser plugin even under a
+restrictive `plugins.allow`, matching bundled channel config behavior. A block
+containing only `browser.extensionRelay.allowLegacyAuth=false` hardens relay
+authentication without activating browser control. Existing browser plugin entries
+and explicit browser tool references still apply. Removing `plugins.allow`
+entirely also restores the default.

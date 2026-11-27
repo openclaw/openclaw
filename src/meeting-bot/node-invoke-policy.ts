@@ -4,10 +4,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
-import type {
-  OpenClawPluginNodeInvokePolicy,
-  OpenClawPluginNodeInvokePolicyResult,
-} from "../plugins/plugin-registration.types.js";
+import type { OpenClawPluginNodeInvokePolicy } from "../plugins/plugin-registration.types.js";
 import type { MeetingAudioBackendSelection } from "./audio-backend.js";
 import { isMeetingAudioBase64 } from "./audio-base64.js";
 import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
@@ -38,13 +35,7 @@ export type MeetingBrowserNodePolicyOptions = {
   start: MeetingBrowserNodeStartConfig;
 };
 
-type PolicyDecision =
-  | { approved: true; params: Record<string, unknown> }
-  | { approved: false; result: OpenClawPluginNodeInvokePolicyResult };
-
-function readOutputGeneration(value: unknown): number | undefined {
-  return asSafeIntegerInRange(value, { min: 0 });
-}
+type PolicyDecision = { ok: true; params: Record<string, unknown> } | ReturnType<typeof denied>;
 
 function copyCommand(command: string[] | undefined): string[] | undefined {
   return command && command.length > 0 ? [...command] : undefined;
@@ -69,19 +60,13 @@ function copyConfiguredAudio(
   }
   const hasCommandOverrideFields =
     "audioInputCommandOverride" in start || "audioOutputCommandOverride" in start;
-  const audioInputCommand = copyCommand(
-    start.audioInputCommandOverride ??
-      (hasCommandOverrideFields ? undefined : start.audioInputCommand),
-  );
-  const audioOutputCommand = copyCommand(
-    start.audioOutputCommandOverride ??
-      (hasCommandOverrideFields ? undefined : start.audioOutputCommand),
-  );
-  if (audioInputCommand) {
-    target.audioInputCommand = audioInputCommand;
-  }
-  if (audioOutputCommand) {
-    target.audioOutputCommand = audioOutputCommand;
+  for (const key of ["audioInputCommand", "audioOutputCommand"] as const) {
+    const command = copyCommand(
+      start[`${key}Override`] ?? (hasCommandOverrideFields ? undefined : start[key]),
+    );
+    if (command) {
+      target[key] = command;
+    }
   }
   for (const key of [
     "bargeInInputCommand",
@@ -100,7 +85,7 @@ function denied(options: MeetingBrowserNodePolicyOptions, message: string) {
 }
 
 function approved(params: Record<string, unknown>): PolicyDecision {
-  return { approved: true, params };
+  return { ok: true, params };
 }
 
 function buildStartParams(
@@ -111,20 +96,14 @@ function buildStartParams(
   try {
     url = options.normalizeUrl(params.url);
   } catch (error) {
-    return {
-      approved: false,
-      result: denied(
-        options,
-        error instanceof Error ? error.message : `${options.commandName} start requires url`,
-      ),
-    };
+    return denied(
+      options,
+      error instanceof Error ? error.message : `${options.commandName} start requires url`,
+    );
   }
   const mode = readNonEmptyString(params.mode);
   if (mode && !options.supportedModes.has(mode)) {
-    return {
-      approved: false,
-      result: denied(options, `${options.commandName} start mode is unsupported: ${mode}`),
-    };
+    return denied(options, `${options.commandName} start mode is unsupported: ${mode}`);
   }
   const startParams: Record<string, unknown> = {
     action: "start",
@@ -145,10 +124,7 @@ function denyMissing(
   action: string,
   field: string,
 ): PolicyDecision {
-  return {
-    approved: false,
-    result: denied(options, `${options.commandName} ${action} requires ${field}`),
-  };
+  return denied(options, `${options.commandName} ${action} requires ${field}`);
 }
 
 function buildForwardParams(
@@ -159,50 +135,30 @@ function buildForwardParams(
   switch (action) {
     case "setup":
       return approved({ action });
+    case "stop":
     case "status": {
       const bridgeId = readNonEmptyString(params.bridgeId);
       return approved(bridgeId ? { action, bridgeId } : { action });
     }
-    case "list": {
-      const forwarded: Record<string, unknown> = { action };
-      const url = readNonEmptyString(params.url);
-      const mode = readNonEmptyString(params.mode);
-      if (url) {
-        try {
-          forwarded.url = options.normalizeUrl(url);
-        } catch (error) {
-          return {
-            approved: false,
-            result: denied(
-              options,
-              error instanceof Error ? error.message : `${options.commandName} list url`,
-            ),
-          };
-        }
-      }
-      if (mode) {
-        forwarded.mode = mode;
-      }
-      return approved(forwarded);
-    }
+    case "list":
     case "stopByUrl": {
       const forwarded: Record<string, unknown> = { action };
       const url = readNonEmptyString(params.url);
       const mode = readNonEmptyString(params.mode);
-      const exceptBridgeId = readNonEmptyString(params.exceptBridgeId);
-      if (!url) {
+      const exceptBridgeId =
+        action === "stopByUrl" ? readNonEmptyString(params.exceptBridgeId) : undefined;
+      if (action === "stopByUrl" && !url) {
         return denyMissing(options, action, "url");
       }
-      try {
-        forwarded.url = options.normalizeUrl(url);
-      } catch (error) {
-        return {
-          approved: false,
-          result: denied(
+      if (url) {
+        try {
+          forwarded.url = options.normalizeUrl(url);
+        } catch (error) {
+          return denied(
             options,
-            error instanceof Error ? error.message : `${options.commandName} stopByUrl url`,
-          ),
-        };
+            error instanceof Error ? error.message : `${options.commandName} ${action} url`,
+          );
+        }
       }
       if (mode) {
         forwarded.mode = mode;
@@ -212,70 +168,39 @@ function buildForwardParams(
       }
       return approved(forwarded);
     }
-    case "pullAudio": {
+    case "pullAudio":
+    case "pushAudio":
+    case "clearAudio": {
       const forwarded: Record<string, unknown> = { action };
       const bridgeId = readNonEmptyString(params.bridgeId);
-      const timeoutMs = readPositiveNumber(params.timeoutMs);
+      const base64 = action === "pushAudio" ? readNonEmptyString(params.base64) : undefined;
       if (!bridgeId) {
         return denyMissing(options, action, "bridgeId");
       }
-      forwarded.bridgeId = bridgeId;
-      if (timeoutMs) {
-        forwarded.timeoutMs = timeoutMs;
+      if (action === "pullAudio") {
+        const timeoutMs = readPositiveNumber(params.timeoutMs);
+        return approved({ action, bridgeId, ...(timeoutMs ? { timeoutMs } : {}) });
       }
-      return approved(forwarded);
-    }
-    case "pushAudio": {
-      const forwarded: Record<string, unknown> = { action };
-      const bridgeId = readNonEmptyString(params.bridgeId);
-      const base64 = readNonEmptyString(params.base64);
-      if (!bridgeId) {
-        return denyMissing(options, action, "bridgeId");
-      }
-      if (!base64) {
-        return denyMissing(options, action, "base64");
-      }
-      if (!isMeetingAudioBase64(base64)) {
-        return {
-          approved: false,
-          result: denied(options, "base64 must be a valid audio payload"),
-        };
+      if (action === "pushAudio") {
+        if (!base64) {
+          return denyMissing(options, action, "base64");
+        }
+        if (!isMeetingAudioBase64(base64)) {
+          return denied(options, "base64 must be a valid audio payload");
+        }
       }
       forwarded.bridgeId = bridgeId;
-      forwarded.base64 = base64;
-      const outputGeneration = readOutputGeneration(params.outputGeneration);
+      if (base64) {
+        forwarded.base64 = base64;
+      }
+      const outputGeneration = asSafeIntegerInRange(params.outputGeneration, { min: 0 });
       if (params.outputGeneration !== undefined && outputGeneration === undefined) {
-        return {
-          approved: false,
-          result: denied(options, "outputGeneration must be a non-negative safe integer"),
-        };
+        return denied(options, "outputGeneration must be a non-negative safe integer");
       }
       if (outputGeneration !== undefined) {
         forwarded.outputGeneration = outputGeneration;
       }
       return approved(forwarded);
-    }
-    case "clearAudio": {
-      const bridgeId = readNonEmptyString(params.bridgeId);
-      if (!bridgeId) {
-        return denyMissing(options, action, "bridgeId");
-      }
-      const outputGeneration = readOutputGeneration(params.outputGeneration);
-      if (params.outputGeneration !== undefined && outputGeneration === undefined) {
-        return {
-          approved: false,
-          result: denied(options, "outputGeneration must be a non-negative safe integer"),
-        };
-      }
-      return approved({
-        action,
-        bridgeId,
-        ...(outputGeneration !== undefined ? { outputGeneration } : {}),
-      });
-    }
-    case "stop": {
-      const bridgeId = readNonEmptyString(params.bridgeId);
-      return approved(bridgeId ? { action, bridgeId } : { action });
     }
     default:
       return null;
@@ -302,12 +227,10 @@ export function createMeetingBrowserNodeInvokePolicy(
       const decision =
         action === "start"
           ? buildStartParams(params, options)
-          : (buildForwardParams(params, options) ?? {
-              approved: false as const,
-              result: denied(options, `unsupported ${options.commandName} action`),
-            });
-      if (!decision.approved) {
-        return decision.result;
+          : (buildForwardParams(params, options) ??
+            denied(options, `unsupported ${options.commandName} action`));
+      if (!decision.ok) {
+        return decision;
       }
       return await ctx.invokeNode({ params: decision.params });
     },

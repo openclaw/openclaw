@@ -173,7 +173,7 @@ class PermissionRequesterTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
-  fun emptyPlatformCallbackTreatsRequestedPermissionsAsDenied() =
+  fun emptyPlatformCallbackReturnsDeniedWithoutSettingsEscalation() =
     runTest {
       Dispatchers.setMain(StandardTestDispatcher(testScheduler))
       val requests = FakePermissionRequests()
@@ -192,9 +192,45 @@ class PermissionRequesterTest {
         )
         runCurrent()
 
-        cancelDialog(checkNotNull(ShadowDialog.getLatestDialog()))
-        runCurrent()
+        assertTrue(ShadowDialog.getLatestDialog()?.isShowing != true)
         assertEquals(mapOf(Manifest.permission.CAMERA to false), pending.await())
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun optionalBatchWaitsForItsResultAndSerializesOtherRequests() =
+    runTest {
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      val requests = FakePermissionRequests()
+      val requester = requester(activity(), requests)
+      try {
+        val batch =
+          async {
+            requester.requestIfMissing(
+              listOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO),
+              timeoutMs = Long.MAX_VALUE,
+              showSettingsOnDenial = false,
+            )
+          }
+        val next = async { requester.requestIfMissing(listOf(Manifest.permission.READ_CONTACTS)) }
+        runCurrent()
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertFalse(batch.isCompleted)
+        assertFalse(next.isCompleted)
+        assertEquals(1, requests.size)
+
+        assertTrue(requests.deliver(requester, 0, mapOf(Manifest.permission.CAMERA to true)))
+        runCurrent()
+        assertEquals(mapOf(Manifest.permission.CAMERA to true, Manifest.permission.RECORD_AUDIO to false), batch.await())
+        assertTrue(ShadowDialog.getLatestDialog()?.isShowing != true)
+        assertEquals(2, requests.size)
+        assertTrue(requests.deliver(requester, 1, mapOf(Manifest.permission.READ_CONTACTS to true)))
+        runCurrent()
+        assertEquals(mapOf(Manifest.permission.READ_CONTACTS to true), next.await())
       } finally {
         Dispatchers.resetMain()
       }
@@ -406,8 +442,10 @@ class PermissionRequesterTest {
 
   @Test
   fun requestCodeAllocatorWrapsWithinLegacyRangeAndSkipsLiveCodes() {
-    val allocator =
-      PermissionRequestCodeAllocator(PermissionRequestCodeAllocator.LAST_PERMISSION_REQUEST_CODE)
+    val allocator = PermissionRequestCodeAllocator()
+    repeat(PermissionRequestCodeAllocator.LAST_PERMISSION_REQUEST_CODE - PermissionRequestCodeAllocator.FIRST_PERMISSION_REQUEST_CODE) {
+      allocator.allocate { false }
+    }
 
     assertEquals(PermissionRequestCodeAllocator.LAST_PERMISSION_REQUEST_CODE, allocator.allocate { false })
     assertEquals(

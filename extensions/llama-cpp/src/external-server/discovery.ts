@@ -1,84 +1,80 @@
-import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
-import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";
+import os from "node:os";
+import path from "node:path";
+import { buildOpenAICompatibleLiveModels } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { discoverOpenAICompatibleLocalModels } from "openclaw/plugin-sdk/provider-setup";
 import {
-  LLAMA_SERVER_DISCOVERY_CACHE_TTL_MS,
+  LLAMA_CPP_SERVER,
   LLAMA_SERVER_DISCOVERY_TIMEOUT_MS,
+  type LlamaServerIdentity,
 } from "./defaults.js";
 import { resolveLlamaServerEndpoint } from "./endpoint.js";
-import { mapLlamaServerModel, type LlamaServerDiscoveredModel } from "./models.js";
+import { mapLlamaServerModel } from "./models.js";
 
-export type LlamaServerDiscoveryResult =
-  | {
-      kind: "success";
-      endpoint: ReturnType<typeof resolveLlamaServerEndpoint>;
-      models: LlamaServerDiscoveredModel[];
-    }
-  | {
-      kind: "unreachable";
-      endpoint: ReturnType<typeof resolveLlamaServerEndpoint>;
-      error: unknown;
-    }
-  | {
-      kind: "http-error";
-      endpoint: ReturnType<typeof resolveLlamaServerEndpoint>;
-      status: number;
-      path: string;
-    }
-  | {
-      kind: "invalid-response";
-      endpoint: ReturnType<typeof resolveLlamaServerEndpoint>;
-      path: string;
-      error: unknown;
-    };
+export type LlamaServerDiscoveryResult = Awaited<ReturnType<typeof discoverLlamaServer>>;
 
 /** Discovers llama-server models without loading, waking, or unloading them. */
 export async function discoverLlamaServer(params: {
+  server?: LlamaServerIdentity;
   baseUrl?: string;
   apiKey?: string;
   headers?: Record<string, string>;
-  timeoutMs?: number;
-  cacheTtlMs?: number;
+  allowPrivateNetwork?: boolean;
   signal?: AbortSignal;
-}): Promise<LlamaServerDiscoveryResult> {
-  const endpoint = resolveLlamaServerEndpoint(params.baseUrl);
-  const apiKey = params.apiKey?.trim();
-  const hasCredentialScope =
-    Boolean(apiKey && !isNonSecretApiKeyMarker(apiKey)) ||
-    Boolean(params.headers && Object.keys(params.headers).length > 0);
-  const cacheTtlMs = hasCredentialScope
-    ? 0
-    : Math.max(0, params.cacheTtlMs ?? LLAMA_SERVER_DISCOVERY_CACHE_TTL_MS);
-
-  return await getCachedLiveCatalogValue({
-    keyParts: ["llama-cpp", "external", endpoint.origin],
-    ttlMs: cacheTtlMs,
-    shouldCache: (result) => result.kind === "success",
-    load: async () => {
-      const result = await discoverOpenAICompatibleLocalModels({
-        baseUrl: endpoint.inferenceBaseUrl,
-        serverBaseUrl: endpoint.origin,
-        apiKey: params.apiKey,
-        headers: params.headers,
-        label: "llama-server",
-        healthPath: "/health",
-        modelsPathOrder: "server-first",
-        routerModelProps: true,
-        timeoutMs: params.timeoutMs ?? LLAMA_SERVER_DISCOVERY_TIMEOUT_MS,
-        signal: params.signal,
-        rawResult: true,
-      });
-      if (result.kind !== "success") {
-        return { ...result, endpoint };
-      }
-      return {
-        kind: "success" as const,
-        endpoint,
-        models: result.rows.flatMap(({ model, props }) => {
-          const mapped = mapLlamaServerModel(model, props);
-          return mapped ? [mapped] : [];
-        }),
-      };
-    },
+  useRuntimeDefaults?: boolean;
+  requireAppListener?: boolean;
+}) {
+  const endpoint = resolveLlamaServerEndpoint(params.baseUrl, params.server ?? LLAMA_CPP_SERVER);
+  const preset =
+    process.platform === "win32"
+      ? path.join(os.homedir(), ".llama", "model-context-presets.ini")
+      : path.join(os.homedir(), "Library", "Application Support", "Llama", "models.ini");
+  const result = await discoverOpenAICompatibleLocalModels({
+    ...(params.requireAppListener
+      ? { localListenerArgument: { flag: "--models-preset", value: preset } }
+      : {}),
+    baseUrl: endpoint.inferenceBaseUrl,
+    serverBaseUrl: endpoint.origin,
+    allowPrivateNetwork: params.allowPrivateNetwork,
+    apiKey: params.apiKey,
+    headers: params.headers,
+    label: "llama-server",
+    healthPath: "/health",
+    modelsPathOrder: "server-first",
+    routerModelProps: true,
+    timeoutMs: LLAMA_SERVER_DISCOVERY_TIMEOUT_MS,
+    signal: params.signal,
+    rawResult: true,
   });
+  if (result.kind !== "success") {
+    return { ...result, endpoint };
+  }
+  // Older hosts can still connect explicitly, but cannot identify a desktop app by port alone.
+  if (params.requireAppListener && result.matchedLocalListener !== true) {
+    return {
+      kind: "unreachable" as const,
+      endpoint,
+      error: new Error("Llama app listener was not identified"),
+    };
+  }
+  // Keep the catalog owner's chat eligibility alongside llama-server's runtime limits.
+  const catalog = buildOpenAICompatibleLiveModels(
+    result.rows.map(({ model }) => model),
+    { baseUrl: endpoint.inferenceBaseUrl, models: [] },
+  );
+  const catalogById = new Map(catalog.map((model) => [model.id, model]));
+  return {
+    kind: "success" as const,
+    endpoint,
+    models: result.rows.flatMap(({ model, props }) => {
+      const mapped = mapLlamaServerModel(model, props, params.useRuntimeDefaults);
+      const entry = mapped && catalogById.get(mapped.config.id);
+      if (!mapped || !entry) {
+        return [];
+      }
+      if (entry.inference) {
+        mapped.config.inference = entry.inference;
+      }
+      return [mapped];
+    }),
+  };
 }

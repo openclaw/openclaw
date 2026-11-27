@@ -1,10 +1,16 @@
 import { defineCodexBuildState } from "./build-state.js";
 
 export type CodexCatalogSource = { readonly closed: boolean };
+
 const getSources = defineCodexBuildState("openclaw.codexCatalogSources", () => ({
   clients: new WeakMap<object, { closed: boolean }>(),
   values: new WeakMap<object, CodexCatalogSource>(),
 }));
+// Local rebuilds retain source records created by earlier copies of this published version.
+const getEphemeralObservers = defineCodexBuildState(
+  "openclaw.codexCatalogEphemeralObservers",
+  () => new WeakMap<CodexCatalogSource, (threadId: string) => void>(),
+);
 
 /** A passive lifetime fact; the token never retains its client or a lease. */
 export function codexCatalogSourceForClient(client: object): CodexCatalogSource {
@@ -22,13 +28,22 @@ export function closeCodexCatalogClientSource(client: object): void {
   const source = clients.get(client);
   if (source) {
     source.closed = true;
+    getEphemeralObservers().delete(source);
   } else {
     clients.set(client, { closed: true });
   }
 }
 
-export function getCodexCatalogSource(value: unknown): CodexCatalogSource | undefined {
-  return value !== null && typeof value === "object" ? getSources().values.get(value) : undefined;
+/** The catalog observer is bound once per physical source and released on closure. */
+export function observeCodexCatalogEphemeralThreads(
+  source: CodexCatalogSource,
+  observer: (threadId: string) => void,
+): void {
+  getEphemeralObservers().set(source, observer);
+}
+
+export function getCodexCatalogSource(value: object): CodexCatalogSource | undefined {
+  return getSources().values.get(value);
 }
 
 export function setCodexCatalogSource<T extends object>(
@@ -73,5 +88,13 @@ export function recordCodexCatalogResponseSource(
   ) {
     setCodexCatalogSource(result, source);
     setCodexCatalogSource(result.thread, source);
+    if (
+      "ephemeral" in result.thread &&
+      result.thread.ephemeral === true &&
+      "id" in result.thread &&
+      typeof result.thread.id === "string"
+    ) {
+      getEphemeralObservers().get(source)?.(result.thread.id);
+    }
   }
 }

@@ -1,6 +1,8 @@
+import type { GatewayPluginEventBroadcastFn } from "../gateway/server-broadcast-types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSet } from "../shared/global-singleton.js";
-import type { PluginJsonValue } from "./host-hook-json.js";
+import type { PluginRuntimeCapabilityLease } from "./capability-lease.js";
+import { isPluginJsonValue, type PluginJsonValue } from "./host-hook-json.js";
 
 const log = createSubsystemLogger("plugins");
 
@@ -35,7 +37,46 @@ export type OpenClawPluginGatewayEvents = {
   onSessionsChanged: (handler: (event: OpenClawPluginSessionsChangedEvent) => void) => () => void;
 };
 
-export function subscribePluginSessionsChanged(
+export function createPluginServiceGatewayEvents({
+  pluginId,
+  broadcast,
+  lease,
+}: {
+  pluginId: string;
+  broadcast?: GatewayPluginEventBroadcastFn;
+  lease: PluginRuntimeCapabilityLease;
+}): OpenClawPluginGatewayEvents | undefined {
+  // The broadcaster owns delivery and sessions.changed scheduling. Without it,
+  // omit this capability so plugins can detect absence and choose their fallback.
+  if (!broadcast) {
+    return undefined;
+  }
+  return {
+    emit: (event, payload, opts) => {
+      lease.assertActive("gateway event emitter");
+      if (!/^[a-z][a-z0-9_-]*$/u.test(event)) {
+        throw new Error(`invalid plugin gateway event name: ${event}`);
+      }
+      if (!isPluginJsonValue(payload)) {
+        throw new Error("plugin gateway event payload must be bounded JSON");
+      }
+      if (
+        opts?.scope !== "operator.read" &&
+        opts?.scope !== "operator.write" &&
+        opts?.scope !== "operator.admin"
+      ) {
+        throw new Error("plugin gateway event scope must be an operator scope");
+      }
+      broadcast(`plugin.${pluginId}.${event}`, payload, opts.scope);
+    },
+    onSessionsChanged: (handler) => {
+      lease.assertActive("gateway event subscriber");
+      return lease.retain(subscribePluginSessionsChanged(handler));
+    },
+  };
+}
+
+function subscribePluginSessionsChanged(
   handler: (event: OpenClawPluginSessionsChangedEvent) => void,
 ): () => void {
   const subscription: SessionsChangedHandler = (event) => handler(event);

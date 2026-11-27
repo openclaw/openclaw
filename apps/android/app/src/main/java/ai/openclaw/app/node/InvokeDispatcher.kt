@@ -1,6 +1,6 @@
 package ai.openclaw.app.node
 
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.InvokeResult
 import ai.openclaw.app.protocol.OpenClawCalendarCommand
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawCameraCommand
@@ -49,26 +49,26 @@ class InvokeDispatcher(
 ) {
   private class CommandGate(
     val isAvailable: () -> Boolean,
-    val unavailable: GatewaySession.InvokeResult,
+    val unavailable: InvokeResult,
     val isAdvertised: () -> Boolean = isAvailable,
   )
 
   private class Command(
     val name: String,
-    val invoke: suspend (String?) -> GatewaySession.InvokeResult,
+    val invoke: suspend (String?) -> InvokeResult,
     val gate: CommandGate? = null,
     val requiresForeground: Boolean = false,
   )
 
   private val cameraGate =
-    CommandGate(cameraEnabled, unavailable("CAMERA_DISABLED", "enable Camera in Settings"))
+    CommandGate(cameraEnabled, nodeInvokeError("CAMERA_DISABLED", "enable Camera in Settings"))
   private val locationGate =
-    CommandGate(locationEnabled, unavailable("LOCATION_DISABLED", "enable Location in Settings"))
+    CommandGate(locationEnabled, nodeInvokeError("LOCATION_DISABLED", "enable Location in Settings"))
   private val motionActivityGate =
-    CommandGate(motionActivityAvailable, unavailable("MOTION_UNAVAILABLE", "accelerometer not available"))
+    CommandGate(motionActivityAvailable, nodeInvokeError("MOTION_UNAVAILABLE", "accelerometer not available"))
   private val motionPedometerGate =
-    CommandGate(motionPedometerAvailable, unavailable("PEDOMETER_UNAVAILABLE", "step counter not available"))
-  private val smsUnavailable = unavailable("SMS_UNAVAILABLE", "SMS not available on this device")
+    CommandGate(motionPedometerAvailable, nodeInvokeError("PEDOMETER_UNAVAILABLE", "step counter not available"))
+  private val smsUnavailable = nodeInvokeError("SMS_UNAVAILABLE", "SMS not available on this device")
   private val smsSendGate = CommandGate(sendSmsAvailable, smsUnavailable)
   private val smsSearchGate =
     CommandGate(
@@ -78,15 +78,15 @@ class InvokeDispatcher(
       isAdvertised = smsSearchPossible,
     )
   private val callLogGate =
-    CommandGate(callLogAvailable, unavailable("CALL_LOG_UNAVAILABLE", "call log not available on this build"))
+    CommandGate(callLogAvailable, nodeInvokeError("CALL_LOG_UNAVAILABLE", "call log not available on this build"))
   private val photosGate =
-    CommandGate(photosAvailable, unavailable("PHOTOS_UNAVAILABLE", "photos not available on this build"))
+    CommandGate(photosAvailable, nodeInvokeError("PHOTOS_UNAVAILABLE", "photos not available on this build"))
   private val installedAppsGate =
-    CommandGate(installedAppsSharingEnabled, unavailable("INSTALLED_APPS_SHARING_DISABLED", "enable Installed Apps in Settings"))
+    CommandGate(installedAppsSharingEnabled, nodeInvokeError("INSTALLED_APPS_SHARING_DISABLED", "enable Installed Apps in Settings"))
   private val debugGate =
-    CommandGate(debugBuild, unavailable("INVALID_REQUEST", "unknown command"))
+    CommandGate(debugBuild, nodeInvokeError("INVALID_REQUEST", "unknown command"))
   private val mobileUiGate =
-    CommandGate(mobileUiAvailable, unavailable("MOBILE_UI_UNAVAILABLE", "accessibility service is not connected"))
+    CommandGate(mobileUiAvailable, nodeInvokeError("MOBILE_UI_UNAVAILABLE", "accessibility service is not connected"))
 
   // Keep protocol ordering stable. The same entries advertise and dispatch each bound handler.
   private val commands =
@@ -127,25 +127,17 @@ class InvokeDispatcher(
   suspend fun handleInvoke(
     command: String,
     paramsJson: String?,
-  ): GatewaySession.InvokeResult {
-    val binding = commandsByName[command] ?: return unavailable("INVALID_REQUEST", "unknown command")
+  ): InvokeResult {
+    val binding = commandsByName[command] ?: return nodeInvokeError("INVALID_REQUEST", "unknown command")
     if (binding.requiresForeground && !isForeground()) {
-      return unavailable("NODE_BACKGROUND_UNAVAILABLE", "command requires foreground")
+      return nodeInvokeError("NODE_BACKGROUND_UNAVAILABLE", "command requires foreground")
     }
     val gate = binding.gate
     if (gate != null && !gate.isAvailable()) return gate.unavailable
     return binding.invoke(paramsJson)
   }
 
-  fun buildInvokeCommands(): List<String> {
-    // A settings change must not split a command family within one connect payload.
-    val availability = mutableMapOf<CommandGate, Boolean>()
-    return commands
-      .filter { command ->
-        val gate = command.gate
-        gate == null || availability.getOrPut(gate, gate.isAdvertised)
-      }.map(Command::name)
-  }
+  fun buildInvokeCommands(): List<String> = commands.filter { it.gate?.isAdvertised?.invoke() != false }.map(Command::name)
 
   fun buildCapabilities(): List<String> =
     buildList {
@@ -165,24 +157,19 @@ class InvokeDispatcher(
       if (voiceWakeAvailable()) add(OpenClawCapability.VoiceWake.rawValue)
       if (mobileUiGate.isAvailable()) add(OpenClawCapability.MobileUI.rawValue)
     }
-
-  private fun unavailable(
-    code: String,
-    message: String,
-  ): GatewaySession.InvokeResult = GatewaySession.InvokeResult.error(code, "$code: $message")
 }
 
 /** Talk-mode command adapter implemented by the voice subsystem. */
 interface TalkHandler {
   /** Starts a push-to-talk capture session and keeps it open until stop or cancel. */
-  suspend fun handlePttStart(paramsJson: String?): GatewaySession.InvokeResult
+  suspend fun handlePttStart(paramsJson: String?): InvokeResult
 
   /** Finishes the active push-to-talk capture and submits recognized speech. */
-  suspend fun handlePttStop(paramsJson: String?): GatewaySession.InvokeResult
+  suspend fun handlePttStop(paramsJson: String?): InvokeResult
 
   /** Aborts the active push-to-talk capture without submitting speech. */
-  suspend fun handlePttCancel(paramsJson: String?): GatewaySession.InvokeResult
+  suspend fun handlePttCancel(paramsJson: String?): InvokeResult
 
   /** Runs a bounded one-shot push-to-talk capture. */
-  suspend fun handlePttOnce(paramsJson: String?): GatewaySession.InvokeResult
+  suspend fun handlePttOnce(paramsJson: String?): InvokeResult
 }

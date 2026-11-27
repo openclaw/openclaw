@@ -10,16 +10,6 @@ enum MicRefreshSupport {
         }
     }
 
-    static func selectedMicName<T>(
-        selectedID: String,
-        in devices: [T],
-        uid: KeyPath<T, String>,
-        name: KeyPath<T, String>) -> String
-    {
-        guard !selectedID.isEmpty else { return "" }
-        return devices.first(where: { $0[keyPath: uid] == selectedID })?[keyPath: name] ?? ""
-    }
-
     @MainActor
     static func voiceWakeBinding(for state: AppState) -> Binding<Bool> {
         Binding(

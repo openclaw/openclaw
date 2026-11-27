@@ -1,6 +1,6 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { withTimeout } from "./app-server/timeout.js";
-import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";
+import { rememberCodexCatalogCursor } from "./session-catalog-limits.js";
 import {
   CatalogParamsError,
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
@@ -16,8 +16,15 @@ export async function lookupNodeCodexCatalogRecord(params: {
   runtime: PluginRuntime;
   nodeId: string;
   threadId: string;
+  sourceHomeId?: string;
 }): Promise<
-  { kind: "found"; record: CodexSessionCatalogSession } | { kind: "missing" | "cursor-cycle" }
+  | {
+      kind: "found";
+      record: CodexSessionCatalogSession;
+      sourceHomeId?: string;
+      canContinueCodex?: boolean;
+    }
+  | { kind: "missing" | "cursor-cycle" }
 > {
   const deadline = performance.now() + NODE_INVOKE_TIMEOUT_MS;
   const unverified = () =>
@@ -30,6 +37,8 @@ export async function lookupNodeCodexCatalogRecord(params: {
     return timeoutMs;
   };
   let cursor: string | undefined;
+  let sourceHomeId = params.sourceHomeId;
+  let firstPage = true;
   const seenCursors = new Set<string>();
   for (;;) {
     const timeoutMs = remaining();
@@ -39,6 +48,7 @@ export async function lookupNodeCodexCatalogRecord(params: {
         command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
         params: {
           agentId: params.agentId,
+          ...(sourceHomeId ? { sourceHomeId } : {}),
           limit: CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
           ...(cursor ? { cursor } : {}),
         },
@@ -51,9 +61,16 @@ export async function lookupNodeCodexCatalogRecord(params: {
     );
     remaining();
     const page = parseCatalogPage(unwrapNodeInvokePayload(raw));
+    if ((!firstPage || sourceHomeId !== undefined) && page.sourceHomeId !== sourceHomeId) {
+      throw new CatalogParamsError(
+        "Codex session source home changed; refresh the catalog and retry",
+      );
+    }
+    sourceHomeId = page.sourceHomeId;
+    firstPage = false;
     const record = page.sessions.find((candidate) => candidate.threadId === params.threadId);
     if (record) {
-      return { kind: "found", record };
+      return { kind: "found", record, sourceHomeId, canContinueCodex: page.canContinueCodex };
     }
     const nextCursor = page.nextCursor?.trim();
     if (!nextCursor) {
@@ -62,13 +79,7 @@ export async function lookupNodeCodexCatalogRecord(params: {
     if (seenCursors.has(nextCursor)) {
       return { kind: "cursor-cycle" };
     }
-    seenCursors.add(nextCursor);
-    if (seenCursors.size > CODEX_CATALOG_MAX_ROWS) {
-      const oldest = seenCursors.values().next().value;
-      if (oldest !== undefined) {
-        seenCursors.delete(oldest);
-      }
-    }
+    rememberCodexCatalogCursor(seenCursors, nextCursor);
     cursor = nextCursor;
   }
   return { kind: "missing" };

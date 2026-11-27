@@ -2,22 +2,24 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { onTrustedMessageAuditEventForTest } from "../../audit/message-audit-events.test-support.js";
-import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
+import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import {
   beginConversationDeliveryOperation,
   getConversationDeliveryOperation,
 } from "../../config/sessions/conversation-delivery-store.js";
 import {
   registerConversationAddresses,
-  resolveConversation,
-  resolveConversationRegistryScope,
+  prepareConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
 import { resolveConversationRouteFingerprint } from "../../config/sessions/conversation-route-fingerprint.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   conversation,
+  createClickClackConversationConfig,
   holdConversationWriterForTest,
+  readConversationDeliveryStateForTest,
 } from "../../gateway/conversation-delivery.test-support.js";
 import { runGatewayConversationSend } from "../../gateway/conversation-send.js";
 import {
@@ -27,15 +29,15 @@ import {
 import { addTestHook } from "../../plugins/hooks.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { PluginHookHandlerMap } from "../../plugins/types.js";
-import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { buildConversationRef } from "../../routing/conversation-ref.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
-import {
-  defaultConversationDeliveryDeps,
-  type ConversationDeliveryDeps,
-} from "./conversation-delivery.js";
+import { getDeliveryQueueEntryOwnersInDatabase } from "../delivery-queue-sqlite.kernel.js";
+import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
-import { deliverOutboundPayloadsInternal } from "./deliver.js";
+import { deliverOutboundPayloadsInternal, type DeliverOutboundPayloadsParams } from "./deliver.js";
 import {
   captureConversationDeliveryTarget,
   markDurableDeliveryQueued,
@@ -44,18 +46,51 @@ import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js"
 import { drainPendingDeliveriesCore } from "./delivery-queue-recovery.js";
 import {
   enqueueDeliveryOnce,
-  findDeliveryIntentOwner,
   loadPendingDelivery,
   loadUnfinishedDelivery,
 } from "./delivery-queue-storage.js";
+import { holdEnqueueReply } from "./delivery-queue-worker-reply.test-support.js";
 import {
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
   readQueuedEntries,
 } from "./delivery-queue.test-helpers.js";
+import * as messageActionRunner from "./message-action-runner.js";
+
+const { clickClackPlugin } = await loadBundledPluginFacade<{ clickClackPlugin: ChannelPlugin }>({
+  pluginId: "clickclack",
+  artifactBasename: "channel-plugin-api.ts",
+});
 
 describe("conversation completion through the real delivery queue", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();
+  const send = (
+    config: OpenClawConfig,
+    operationId: string,
+    message: string,
+    destination = conversation,
+  ) =>
+    runGatewayConversationSend({
+      config,
+      readCurrentConfig: () => config,
+      agentId: "main",
+      senderIsOwner: true,
+      operationId,
+      conversationRef: destination.conversationRef,
+      message,
+    });
+
+  async function openScope(config: OpenClawConfig, stateDir: string, destination = conversation) {
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const scope = await prepareConversationRegistryScope({ agentId: "main", config });
+    onTestFinished(async () => {
+      await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
+    });
+    await registerConversationAddresses(scope, [
+      { ...destination, deliveryTarget: destination.target },
+    ]);
+    return scope;
+  }
 
   function installSender(sendText: NonNullable<ChannelOutboundAdapter["sendText"]>) {
     const registry = createTestRegistry([
@@ -86,23 +121,44 @@ describe("conversation completion through the real delivery queue", () => {
     return registry;
   }
 
-  function createConversationOperation(operationId: string, message: string) {
+  async function createOperation(
+    operationId: string,
+    message: string,
+    config: OpenClawConfig = {},
+    destination = conversation,
+  ) {
     const stateDir = fixtures.tmpDir();
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const scope = resolveConversationRegistryScope({ agentId: "main", config: {} });
-    onTestFinished(() => {
-      closeOpenClawAgentDatabaseByPath(scope.storePath);
-    });
-    registerConversationAddresses(scope, [
-      { ...conversation, deliveryTarget: conversation.target },
-    ]);
-    beginConversationDeliveryOperation(scope, {
+    const scope = await openScope(config, stateDir, destination);
+    await beginConversationDeliveryOperation(scope, {
       operationId,
       operationKind: "send",
-      conversationRef: conversation.conversationRef,
+      conversationRef: destination.conversationRef,
       message,
     });
-    return { stateDir, scope };
+    const completion = {
+      kind: "conversation" as const,
+      agentId: "main",
+      operationId,
+      routeFingerprint: resolveConversationRouteFingerprint(destination),
+    };
+    return {
+      stateDir,
+      scope,
+      completion,
+      read: () => getConversationDeliveryOperation(scope, operationId),
+      deliver: (overrides: Partial<DeliverOutboundPayloadsParams> = {}) =>
+        deliverOutboundPayloadsInternal({
+          cfg: config,
+          channel: "reef",
+          to: destination.target,
+          payloads: [{ text: message }],
+          queuePolicy: "required",
+          deliveryCompletion: completion,
+          conversationDeliveryTarget: captureConversationDeliveryTarget(scope),
+          onDeliveryAttempt: async () => {},
+          ...overrides,
+        }),
+    };
   }
 
   async function drainReefRecovery(stateDir: string) {
@@ -123,32 +179,72 @@ describe("conversation completion through the real delivery queue", () => {
     vi.unstubAllEnvs();
   });
 
+  it.each(["message", "outbound"] as const)(
+    "settles ClickClack scaffold-only text as suppressed through the %s adapter",
+    async (adapter) => {
+      const address = {
+        channel: "clickclack",
+        accountId: "default",
+        kind: "direct" as const,
+        peerId: "usr_synthetic",
+      };
+      const destination = {
+        ...conversation,
+        ...address,
+        conversationRef: buildConversationRef(address),
+        target: "dm:usr_synthetic",
+      };
+      const config = createClickClackConversationConfig();
+      const operationId = `clickclack-scaffold-${adapter}`;
+      const message = "⚠️ 🛠️ `search repos (agent)` failed";
+      const { stateDir, scope } = await createOperation(operationId, message, config, destination);
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "clickclack",
+            source: "test",
+            plugin:
+              adapter === "message"
+                ? clickClackPlugin
+                : { ...clickClackPlugin, message: undefined },
+          },
+        ]),
+      );
+      const transport = vi
+        .spyOn(globalThis, "fetch")
+        .mockRejectedValue(new Error("unexpected send"));
+      onTestFinished(() => transport.mockRestore());
+
+      const result = await send(config, operationId, message, destination);
+
+      expect(result.status).toBe("suppressed");
+      expect(await getConversationDeliveryOperation(scope, operationId)).toMatchObject({
+        status: "suppressed",
+      });
+      expect(readQueuedEntries(stateDir)).toEqual([]);
+      expect(transport).not.toHaveBeenCalled();
+    },
+  );
+
   it("fails closed for an unfinished conversation intent without route authority", async () => {
     const operationId = "missing-route-operation";
     const queueId = "missing-route-queue";
-    const { stateDir, scope } = createConversationOperation(operationId, "retained intent");
+    const { stateDir, read, deliver } = await createOperation(operationId, "retained intent");
     const sendText = vi.fn(async () => ({ channel: "reef" as const, messageId: "must-not-send" }));
     installSender(sendText);
     const rejectionError = "Conversation delivery is missing its current route authorization";
 
     await expect(
-      deliverOutboundPayloadsInternal({
-        cfg: {},
-        channel: "reef",
-        to: conversation.target,
-        payloads: [{ text: "retained intent" }],
-        queuePolicy: "required",
+      deliver({
         deliveryIntentId: queueId,
         deliveryCompletion: { kind: "conversation", agentId: "main", operationId },
-        conversationDeliveryTarget: captureConversationDeliveryTarget(scope),
-        onDeliveryAttempt: async () => {},
       }),
     ).rejects.toMatchObject({
       message: rejectionError,
       cause: { retryable: false },
       queueCustody: "released",
     });
-    expect(getConversationDeliveryOperation(scope, operationId)).toMatchObject({
+    expect(await read()).toMatchObject({
       status: "rejected",
       queueId,
       rejectionError,
@@ -162,26 +258,23 @@ describe("conversation completion through the real delivery queue", () => {
   });
 
   it.each([
-    { kind: "explicit", reason: "atomic message limit", expectedReason: "atomic message limit" },
-    {
-      kind: "empty",
-      reason: "   ",
-      expectedReason: "Platform rejected the message before dispatch",
-    },
+    ["atomic message limit", "atomic message limit"],
+    ["   ", "Platform rejected the message before dispatch"],
   ])(
-    "settles $kind permanent provider rejection before notifying observers",
-    async ({ reason, expectedReason }) => {
+    "settles permanent provider rejection %j before notifying observers",
+    async (reason, expectedReason) => {
       const operationId = "provider-rejected-operation";
       const queueId = "provider-rejected-queue";
-      const { stateDir, scope } = createConversationOperation(operationId, "rendered text");
+      const { stateDir, scope, read, deliver } = await createOperation(
+        operationId,
+        "rendered text",
+      );
       const writerReady = createDeferred<ReturnType<typeof holdConversationWriterForTest>>();
-      let providerRejects = true;
-      const platformSend = vi.fn(async () => ({
-        channel: "reef" as const,
-        messageId: "must-not-send",
-      }));
-      const sendText = vi.fn<NonNullable<ChannelOutboundAdapter["sendText"]>>(async (context) => {
-        if (providerRejects) {
+      const sendText = vi
+        .fn<NonNullable<ChannelOutboundAdapter["sendText"]>>(async () => {
+          throw new Error("rejected sends must not be retried");
+        })
+        .mockImplementationOnce(async () => {
           const writer = holdConversationWriterForTest(scope);
           writerReady.resolve(writer);
           await writer.entered;
@@ -189,25 +282,23 @@ describe("conversation completion through the real delivery queue", () => {
             cause: new Error("provider rejected the rendered payload"),
             retryable: false,
           });
-        }
-        await context.onPlatformSendDispatch?.();
-        return platformSend();
-      });
+        });
       const registry = installSender(sendText);
       const readState = () => {
-        const owner = findDeliveryIntentOwner(queueId, stateDir);
+        const owner = getDeliveryQueueEntryOwnersInDatabase(
+          openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } }),
+          [OUTBOUND_DELIVERY_QUEUE_NAME],
+          queueId,
+        ).get(OUTBOUND_DELIVERY_QUEUE_NAME);
         return {
           queueStatus: owner?.status,
           settlementPending: owner?.settlementPending === true,
-          operation: getConversationDeliveryOperation(scope, operationId),
+          operation: readConversationDeliveryStateForTest(scope, operationId),
         };
       };
-      const observations: Array<{
-        observer: "message_sent" | "audit";
-        state: ReturnType<typeof readState>;
-      }> = [];
+      const observations: Array<["message_sent" | "audit", ReturnType<typeof readState>]> = [];
       const messageSent = vi.fn<PluginHookHandlerMap["message_sent"]>(() => {
-        observations.push({ observer: "message_sent", state: readState() });
+        observations.push(["message_sent", readState()]);
       });
       addTestHook({ registry, pluginId: "reef", hookName: "message_sent", handler: messageSent });
       initializeGlobalHookRunner(registry);
@@ -215,32 +306,18 @@ describe("conversation completion through the real delivery queue", () => {
       onTrustedMessageAuditEventForTest((event) => {
         if (event.action === "message.outbound.finished") {
           auditOutcomes.push(event.outcome);
-          observations.push({ observer: "audit", state: readState() });
+          observations.push(["audit", readState()]);
         }
       });
-      const outcome = deliverOutboundPayloadsInternal({
-        cfg: {},
-        channel: "reef",
-        to: conversation.target,
-        payloads: [{ text: "rendered text" }],
-        queuePolicy: "required",
-        deliveryIntentId: queueId,
-        deliveryCompletion: {
-          kind: "conversation",
-          agentId: "main",
-          operationId,
-          routeFingerprint: resolveConversationRouteFingerprint(conversation),
-        },
-        conversationDeliveryTarget: captureConversationDeliveryTarget(scope),
-        onDeliveryAttempt: async () => {},
-      }).then(
+      const outcome = deliver({ deliveryIntentId: queueId }).then(
         (results) => ({ results }),
         (error: unknown) => ({ error }),
       );
-      const writer = await Promise.race([writerReady.promise, outcome.then(() => undefined)]);
-      if (!writer) {
-        throw new Error("Delivery settled before provider rejection", { cause: await outcome });
-      }
+      const writer = await awaitGateBeforeSettlement(
+        writerReady.promise,
+        outcome,
+        "Delivery settled before provider rejection",
+      );
       try {
         await writer.entered;
         await vi.waitFor(() =>
@@ -260,10 +337,8 @@ describe("conversation completion through the real delivery queue", () => {
           },
         });
         expect(await loadUnfinishedDelivery(queueId, stateDir)).toBeNull();
-        providerRejects = false;
         await drainReefRecovery(stateDir);
         expect(sendText).toHaveBeenCalledOnce();
-        expect(platformSend).not.toHaveBeenCalled();
         const terminalState = {
           queueStatus: "failed",
           settlementPending: false,
@@ -274,13 +349,11 @@ describe("conversation completion through the real delivery queue", () => {
           }),
         };
         expect(observations).toEqual([
-          { observer: "message_sent", state: terminalState },
-          { observer: "audit", state: terminalState },
+          ["message_sent", terminalState],
+          ["audit", terminalState],
         ]);
         expect(auditOutcomes).toEqual(["failed"]);
-        expect(
-          getConversationDeliveryOperation(scope, operationId)?.platformMessageId,
-        ).toBeUndefined();
+        expect((await read())?.platformMessageId).toBeUndefined();
         expect(messageSent).toHaveBeenCalledWith(
           expect.objectContaining({
             content: "rendered text",
@@ -299,29 +372,18 @@ describe("conversation completion through the real delivery queue", () => {
   it.each(["omitted-default", "legacy-marker"] as const)(
     "resumes created operation custody with a retained %s completion locator",
     async (locator) => {
-      const stateDir = fixtures.tmpDir();
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      const legacyMarker = path.join(stateDir, "custom", "sessions.json");
+      const legacyMarker = path.join(fixtures.tmpDir(), "custom", "sessions.json");
       const config = locator === "legacy-marker" ? { session: { store: legacyMarker } } : {};
-      const scope = resolveConversationRegistryScope({ agentId: "main", config });
-      onTestFinished(() => {
-        closeOpenClawAgentDatabaseByPath(scope.storePath);
-      });
-      registerConversationAddresses(scope, [
-        { ...conversation, deliveryTarget: conversation.target },
-      ]);
       const operationId = "retained-created-operation";
-      beginConversationDeliveryOperation(scope, {
-        operationId,
-        operationKind: "send",
-        conversationRef: conversation.conversationRef,
-        message: "retained intent",
-      });
+      const {
+        stateDir,
+        scope,
+        completion: baseCompletion,
+        read,
+        deliver,
+      } = await createOperation(operationId, "retained intent", config);
       const completion = {
-        kind: "conversation" as const,
-        agentId: "main",
-        operationId,
-        routeFingerprint: resolveConversationRouteFingerprint(conversation),
+        ...baseCompletion,
         ...(locator === "legacy-marker" ? { storePath: legacyMarker } : {}),
       };
       const queueId = "retained-queue-before-callback";
@@ -336,7 +398,7 @@ describe("conversation completion through the real delivery queue", () => {
         queueId,
         stateDir,
       );
-      expect(getConversationDeliveryOperation(scope, operationId)?.status).toBe("created");
+      expect((await read())?.status).toBe("created");
       const sendText = vi.fn(async () => {
         expect((await loadPendingDelivery(queueId, stateDir))?.deliveryCompletion).toEqual(
           completion,
@@ -345,54 +407,30 @@ describe("conversation completion through the real delivery queue", () => {
       });
       installSender(sendText);
       await expect(
-        deliverOutboundPayloadsInternal({
-          cfg: config,
-          channel: "reef",
-          to: conversation.target,
-          payloads: [{ text: "retained intent" }],
-          queuePolicy: "required",
+        deliver({
           deliveryIntentId: queueId,
           reusePendingDeliveryIntent: true,
           requireUnknownSendReconciliation: false,
           deliveryCompletion: { ...completion, storePath: scope.storePath },
-          conversationDeliveryTarget: captureConversationDeliveryTarget(scope),
-          onDeliveryAttempt: async () => {},
         }),
       ).resolves.toMatchObject([{ messageId: "retained-send" }]);
       expect(sendText).toHaveBeenCalledOnce();
-      expect(getConversationDeliveryOperation(scope, operationId)?.status).toBe("sent");
+      expect((await read())?.status).toBe("sent");
       expect(await loadPendingDelivery(queueId, stateDir)).toBeNull();
     },
   );
 
-  it.each(["logical-agent", "physical-owner", "physical-path"] as const)(
+  it.each([
+    ["logical-agent", "agentId"],
+    ["physical-owner", "databaseAgentId"],
+    ["physical-path", "storePath"],
+  ] as const)(
     "rejects changed %s before completion mutates the operation",
-    async (changed) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", fixtures.tmpDir());
-      const scope = resolveConversationRegistryScope({ agentId: "main", config: {} });
-      onTestFinished(() => {
-        closeOpenClawAgentDatabaseByPath(scope.storePath);
-      });
-      registerConversationAddresses(scope, [
-        { ...conversation, deliveryTarget: conversation.target },
-      ]);
+    async (_changed, key) => {
       const operationId = "mismatched-completion";
-      beginConversationDeliveryOperation(scope, {
-        operationId,
-        operationKind: "send",
-        conversationRef: conversation.conversationRef,
-        message: "captured owner",
-      });
+      const { scope } = await createOperation(operationId, "captured owner");
       const target = captureConversationDeliveryTarget(scope);
-      if (changed === "logical-agent") {
-        target.agentId = "other";
-      }
-      if (changed === "physical-owner") {
-        target.databaseAgentId = "other";
-      }
-      if (changed === "physical-path") {
-        target.storePath = path.join(fixtures.tmpDir(), "other.sqlite");
-      }
+      target[key] = key === "storePath" ? path.join(fixtures.tmpDir(), "other.sqlite") : "other";
       await expect(
         markDurableDeliveryQueued(
           { kind: "conversation", agentId: "main", operationId },
@@ -403,7 +441,7 @@ describe("conversation completion through the real delivery queue", () => {
           target,
         ),
       ).rejects.toThrow("Conversation delivery target does not match durable custody");
-      expect(getConversationDeliveryOperation(scope, operationId)?.status).toBe("created");
+      expect((await getConversationDeliveryOperation(scope, operationId))?.status).toBe("created");
     },
   );
 
@@ -412,22 +450,17 @@ describe("conversation completion through the real delivery queue", () => {
     const replacementRoot = path.join(fixtures.tmpDir(), "replacement");
     fs.mkdirSync(originalRoot);
     fs.mkdirSync(replacementRoot);
-    vi.stubEnv("OPENCLAW_STATE_DIR", originalRoot);
-    const scope = resolveConversationRegistryScope({ agentId: "main", config: {} });
+    const scope = await openScope({}, originalRoot);
     const replacementScope = {
       agentId: "main",
       storePath: path.join(replacementRoot, "agents", "main", "agent", "openclaw-agent.sqlite"),
       env: { ...scope.env, OPENCLAW_STATE_DIR: replacementRoot },
     };
-    onTestFinished(() => {
-      closeOpenClawAgentDatabaseByPath(scope.storePath);
-      closeOpenClawAgentDatabaseByPath(replacementScope.storePath);
+    onTestFinished(async () => {
+      await closeOpenClawAgentDatabaseByPathAsync(replacementScope.storePath);
     });
     const config = { agents: { entries: { main: {} } }, session: { store: scope.storePath } };
     const operationId = "real-queue-admission";
-    registerConversationAddresses(scope, [
-      { ...conversation, deliveryTarget: conversation.target },
-    ]);
     const started = createDeferred<{
       writer: ReturnType<typeof holdConversationWriterForTest>;
       queueId: string;
@@ -450,72 +483,56 @@ describe("conversation completion through the real delivery queue", () => {
       return { channel: "reef" as const, messageId: "reef-delivered" };
     });
     installSender(sendText);
-    let actionFailed = false;
-    let actionError: unknown;
-    const runMessageAction = vi.fn<ConversationDeliveryDeps["runMessageAction"]>(async (input) => {
-      if (!input.deliveryIntentId) {
-        throw new Error("Gateway conversation send did not supply its queue intent");
-      }
-      const writer = holdConversationWriterForTest(scope);
-      custodyWriter = writer;
-      started.resolve({ writer, queueId: input.deliveryIntentId });
-      await writer.entered;
-      if (cleanupStarted) {
-        await writer.release();
-      }
-      // Gateway has created the operation and captured its target; every real
-      // action/send adapter below must retain those facts through its awaits.
-      vi.stubEnv("OPENCLAW_STATE_DIR", replacementRoot);
-      try {
-        return await defaultConversationDeliveryDeps.runMessageAction(input);
-      } catch (error) {
-        actionFailed = true;
-        actionError = error;
-        throw error;
-      }
+    const runMessageAction = messageActionRunner.runMessageAction;
+    const action = vi
+      .spyOn(messageActionRunner, "runMessageAction")
+      .mockImplementation(async (input) => {
+        if (!input.deliveryIntentId) {
+          throw new Error("Gateway conversation send did not supply its queue intent");
+        }
+        const writer = holdConversationWriterForTest(scope);
+        custodyWriter = writer;
+        started.resolve({ writer, queueId: input.deliveryIntentId });
+        await writer.entered;
+        if (cleanupStarted) {
+          await writer.release();
+        }
+        // Gateway has created the operation and captured its target; every real
+        // action/send adapter below must retain those facts through its awaits.
+        vi.stubEnv("OPENCLAW_STATE_DIR", replacementRoot);
+        return await runMessageAction(input);
+      });
+    onTestFinished(() => action.mockRestore());
+    const enqueueReply = holdEnqueueReply();
+    const enqueueCommitted = enqueueReply.held.then(() => {
+      enqueueReply.release();
     });
     let settled = false;
-    const delivery = runGatewayConversationSend(
-      {
-        config,
-        readCurrentConfig: () => config,
-        agentId: "main",
-        senderIsOwner: true,
-        operationId,
-        conversationRef: conversation.conversationRef,
-        message: "synthetic conversation",
-      },
-      { ...defaultConversationDeliveryDeps, resolveConversation, runMessageAction },
-    ).finally(() => {
+    const delivery = send(config, operationId, "synthetic conversation").finally(() => {
       settled = true;
     });
     const outcome = delivery.then(
       (value) => ({ value }),
       (error: unknown) => ({ error }),
     );
-    const custodyWriterReady = Promise.race([started.promise, outcome.then(() => undefined)]);
-    const settlementWriterReady = Promise.race([sent.promise, outcome.then(() => undefined)]);
     try {
-      const custody = await custodyWriterReady;
-      if (!custody) {
-        throw new Error("Gateway send settled before reaching its custody writer", {
-          cause: await outcome,
-        });
-      }
+      const custody = await awaitGateBeforeSettlement(
+        started.promise,
+        outcome,
+        "Gateway send settled before reaching its custody writer",
+      );
       const { queueId } = custody;
       await custody.writer.entered;
+      // Join the real committed enqueue before checking custody behind the held writer.
+      await Promise.race([enqueueCommitted, outcome]);
       await vi.waitFor(() =>
         expect(
           readQueuedEntries(originalRoot).length > 0 ||
             readQueuedEntries(replacementRoot).length > 0 ||
             sendText.mock.calls.length > 0 ||
-            actionFailed ||
             settled,
         ).toBe(true),
       );
-      if (actionFailed) {
-        throw actionError;
-      }
       if (settled) {
         await delivery;
       }
@@ -523,30 +540,31 @@ describe("conversation completion through the real delivery queue", () => {
       expect(settled).toBe(false);
       expect(readQueuedEntries(originalRoot)).toHaveLength(1);
       expect(readQueuedEntries(replacementRoot)).toEqual([]);
-      expect(getConversationDeliveryOperation(scope, operationId)?.status).toBe("created");
+      expect(readConversationDeliveryStateForTest(scope, operationId)?.status).toBe("created");
       const [queued] = readQueuedEntries(originalRoot);
       expect(queued).not.toHaveProperty("conversationDeliveryTarget");
       expect(queued).not.toHaveProperty("deliveryQueueStateContext");
       expect(queued).not.toHaveProperty("env");
       expect(queued).not.toHaveProperty("supervisorMode");
-      expect(queued?.id).toBe(queueId);
-      expect(queued?.deliveryCompletion).toMatchObject({
-        kind: "conversation",
-        agentId: "main",
-        operationId,
-        routeFingerprint: resolveConversationRouteFingerprint(conversation),
+      expect(queued).toMatchObject({
+        id: queueId,
+        deliveryCompletion: {
+          kind: "conversation",
+          agentId: "main",
+          operationId,
+          routeFingerprint: resolveConversationRouteFingerprint(conversation),
+        },
       });
       await custody.writer.release();
-      settlementWriter = await settlementWriterReady;
-      if (!settlementWriter) {
-        throw new Error("Gateway send settled before reaching its completion writer", {
-          cause: await outcome,
-        });
-      }
+      settlementWriter = await awaitGateBeforeSettlement(
+        sent.promise,
+        outcome,
+        "Gateway send settled before reaching its completion writer",
+      );
       await settlementWriter.entered;
       await setImmediate();
       expect(settled).toBe(false);
-      expect(getConversationDeliveryOperation(scope, operationId)).toMatchObject({
+      expect(readConversationDeliveryStateForTest(scope, operationId)).toMatchObject({
         status: "queued",
         queueId,
       });
@@ -557,22 +575,24 @@ describe("conversation completion through the real delivery queue", () => {
       expect(await outcome).toMatchObject({
         value: { status: "sent", messageId: "reef-delivered", queueId },
       });
-      expect(runMessageAction).toHaveBeenCalledOnce();
+      expect(action).toHaveBeenCalledOnce();
       expect(sendText).toHaveBeenCalledOnce();
-      expect(getConversationDeliveryOperation(scope, operationId)).toMatchObject({
+      expect(await getConversationDeliveryOperation(scope, operationId)).toMatchObject({
         status: "sent",
         platformMessageId: "reef-delivered",
         queueId,
       });
-      expect(getConversationDeliveryOperation(replacementScope, operationId)).toBeUndefined();
+      expect(await getConversationDeliveryOperation(replacementScope, operationId)).toBeUndefined();
       expect(readQueuedEntries(originalRoot)).toEqual([]);
       expect(readQueuedEntries(replacementRoot)).toEqual([]);
     } finally {
       cleanupStarted = true;
+      enqueueReply.release();
       try {
         await Promise.all([custodyWriter?.release(), settlementWriter?.release()]);
       } finally {
         await outcome;
+        enqueueReply.restore();
       }
     }
   });

@@ -1,5 +1,4 @@
 import { mkdir } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import { createEmptyPluginRegistry } from "../../../src/plugins/registry.ts";
@@ -10,20 +9,22 @@ import {
 import type { SessionCatalogProvider } from "../../../src/plugins/session-catalog.ts";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { expectDefined } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
+import { catalogList } from "./sidebar-assertions.test-support.ts";
 
+type ProgressRequest = { outcome: "pending" | "ok"; sessionKey: string };
 declare global {
   interface Window {
-    catalogProgressRequests?: Array<{ outcome: "error" | "ok"; sessionKey: string }>;
+    catalogProgressRequests?: ProgressRequest[];
   }
 }
 
 const suite = createControlUiE2eSuite({
   name: "Control UI catalog progress hovercard with a real Gateway",
   startServerBeforeBrowser: true,
-  unavailableMessage: (executablePath) =>
-    `Playwright Chromium is not available at ${executablePath}`,
 });
 
 const threadId = "00000000-0000-0000-0000-000000135156";
@@ -36,16 +37,7 @@ suite.define(() => {
     const state = await createOpenClawTestState({
       label: "control-ui-catalog-progress",
       layout: "home",
-      env: {
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-        VITEST: "1",
-      },
+      env: deviceGatewayEnv,
     });
     let gateway: GatewayServer | undefined;
     const registry = createEmptyPluginRegistry();
@@ -65,6 +57,8 @@ suite.define(() => {
             [routeAgentId]: { name: "Writer", workspace: writerWorkspace },
           },
         },
+        // Keep the injected registry active without loading unrelated runtime plugins.
+        plugins: { allow: ["codex"], entries: { codex: { enabled: false } } },
         gateway: {
           auth: { mode: "none" },
           controlUi: {
@@ -75,28 +69,24 @@ suite.define(() => {
         },
       });
       state.applyEnv();
+      const catalog = catalogList({
+        id: "codex",
+        label: "Codex",
+        host: "Local Codex",
+        thread: threadId,
+        name: "Native catalog progress",
+        status: "idle",
+        archive: false,
+      });
+      const host = expectDefined(catalog.catalogs[0]?.hosts[0], "catalog host");
+      Object.assign(expectDefined(host.sessions[0], "catalog session"), {
+        cwd: writerWorkspace,
+        canContinue: false,
+      });
       const provider: SessionCatalogProvider = {
         id: "codex",
         label: "Codex",
-        list: async () => [
-          {
-            hostId: "gateway:local",
-            label: "Local Codex",
-            kind: "gateway",
-            connected: true,
-            sessions: [
-              {
-                threadId,
-                name: "Native catalog progress",
-                cwd: writerWorkspace,
-                status: "idle",
-                archived: false,
-                canContinue: false,
-                canArchive: false,
-              },
-            ],
-          },
-        ],
+        list: async () => [{ ...host, kind: "gateway" }],
         read: async ({ hostId, threadId: requestedThreadId }) => ({
           hostId,
           threadId: requestedThreadId,
@@ -114,7 +104,6 @@ suite.define(() => {
         sidecarStartup: "start",
       });
 
-      const artifactDir = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" ? suite.artifactDir : null;
       await suite.withPage(
         {
           hasTouch: false,
@@ -139,40 +128,27 @@ suite.define(() => {
             },
           );
           await row.waitFor({ state: "visible", timeout: 30_000 });
-          if (artifactDir) {
-            await page.screenshot({
-              animations: "disabled",
-              fullPage: true,
-              path: path.join(artifactDir, "01-native-catalog-row.png"),
-            });
-          }
           expect(await row.getAttribute("data-session-key")).toBe(catalogSessionKey);
-          await page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime: {
-                context: { gateway: { snapshot: { client: GatewayBrowserClient | null } } };
-              };
-            };
-            const client = app.runtime.context.gateway.snapshot.client;
+          await evaluateControlUiContext(page, (context) => {
+            const client = context.gateway.snapshot.client;
             if (!client) {
               throw new Error("Control UI Gateway client is unavailable");
             }
             const request = client.request.bind(client);
-            const observed: Array<{ outcome: "error" | "ok"; sessionKey: string }> = [];
+            const observed: ProgressRequest[] = [];
             window.catalogProgressRequests = observed;
             client.request = async <T>(method: string, params?: unknown): Promise<T> => {
               if (method !== "progressCard.get") {
                 return await request<T>(method, params);
               }
-              const sessionKey = (params as { sessionKey: string }).sessionKey;
-              try {
-                const result = await request<T>(method, params);
-                observed.push({ outcome: "ok", sessionKey });
-                return result;
-              } catch (error) {
-                observed.push({ outcome: "error", sessionKey });
-                throw error;
-              }
+              const observedRequest: ProgressRequest = {
+                outcome: "pending",
+                sessionKey: (params as { sessionKey: string }).sessionKey,
+              };
+              observed.push(observedRequest);
+              const result = await request<T>(method, params);
+              observedRequest.outcome = "ok";
+              return result;
             };
           });
           await row.locator("a.sidebar-recent-session__link").focus();
@@ -182,13 +158,6 @@ suite.define(() => {
             .poll(() => page.evaluate(() => window.catalogProgressRequests))
             .toEqual([{ outcome: "ok", sessionKey: catalogSessionKey }]);
           await expect.poll(() => card.textContent()).toContain("Native catalog progress");
-          if (artifactDir) {
-            await page.screenshot({
-              animations: "disabled",
-              fullPage: true,
-              path: path.join(artifactDir, "02-qualified-progress-card.png"),
-            });
-          }
         },
       );
     } finally {

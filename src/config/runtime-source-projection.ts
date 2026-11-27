@@ -1,33 +1,36 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { freezeJsonSnapshot } from "../shared/immutable-data.js";
-import { inheritLegacyDefaultAgentId } from "./legacy.default-agent-owner.js";
-import { cloneConfigWithResolutionFacts } from "./resolution-facts.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
+import { getConfigResolutionFacts } from "./resolution-facts.js";
 import {
-  bindRuntimeConfigCapture,
+  captureRuntimeConfigWithSource,
+  getPublishedRuntimeConfigSource,
   getRuntimeConfigCapture,
 } from "./runtime-config-capture-state.js";
 import { getRuntimeConfigSnapshot, getRuntimeConfigSourceSnapshot } from "./runtime-snapshot.js";
 import { projectRuntimeChangesOntoSource } from "./source-value-projection.js";
 import type { OpenClawConfig } from "./types.js";
 
+const immutableCaptures = new WeakMap<OpenClawConfig, OpenClawConfig>();
+
 /** Captures runtime and authored values together for one admitted preparation generation. */
 export function captureRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
+  if (config === getRuntimeConfigSnapshot()) {
+    return getRuntimeConfigSnapshot({ capture: true })!;
+  }
   if (getRuntimeConfigCapture(config)) {
     return config;
   }
-  const captured = freezeJsonSnapshot(
-    inheritLegacyDefaultAgentId(config, cloneConfigWithResolutionFacts(config)),
-  );
   const source = projectConfigOntoRuntimeSourceSnapshot(config);
-  const capturedSource =
-    source === config
-      ? captured
-      : freezeJsonSnapshot(
-          inheritLegacyDefaultAgentId(source, cloneConfigWithResolutionFacts(source)),
-        );
-  bindRuntimeConfigCapture(captured, { source: capturedSource, origin: config });
-  if (capturedSource !== captured) {
-    bindRuntimeConfigCapture(capturedSource, { source: capturedSource, origin: source });
+  // Standalone captures can follow immutable inputs. Publications own their capture
+  // separately; memoizing by their live origin would retain retired full config copies.
+  const reusable = config === source && isDeeplyFrozenPlainData(config);
+  const previous = reusable ? immutableCaptures.get(config) : undefined;
+  if (previous && getConfigResolutionFacts(previous) === getConfigResolutionFacts(config)) {
+    return previous;
+  }
+  const captured = captureRuntimeConfigWithSource(config, source);
+  if (reusable) {
+    immutableCaptures.set(config, captured);
   }
   return captured;
 }
@@ -37,6 +40,10 @@ export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): 
   const captured = getRuntimeConfigCapture(config);
   if (captured) {
     return captured.source;
+  }
+  const published = getPublishedRuntimeConfigSource(config);
+  if (published) {
+    return published;
   }
   const runtimeConfigSnapshot = getRuntimeConfigSnapshot();
   const runtimeConfigSourceSnapshot = getRuntimeConfigSourceSnapshot();

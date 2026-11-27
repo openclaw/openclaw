@@ -1,4 +1,3 @@
-// Memory Core plugin module implements manager runtime behavior.
 import { getMemoryIndexManagerRegistry, MemoryIndexManager } from "./manager.js";
 
 export { MemoryIndexManager };

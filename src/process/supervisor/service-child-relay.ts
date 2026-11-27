@@ -1,27 +1,31 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import childProcess, { type ChildProcess } from "node:child_process";
 import { closeSync, createWriteStream } from "node:fs";
-import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { setTimeout as delay } from "node:timers/promises";
+import { stripNodeStartupHooks } from "../../../node-runtime-env.mjs";
+import {
+  registerSealedRuntimeProcessEntrypoints,
+  resolveRuntimeProcessEntrypointUrl,
+} from "../../infra/runtime-process-url.js";
 import {
   resolveRuntimeWorkerArgv,
-  resolveRuntimeWorkerUrl,
+  resolveRuntimeWorkerEnv,
 } from "../../infra/runtime-worker-url.js";
+import { resolveLaunchableNodePath } from "../../infra/stable-node-path.js";
+import type { SpawnStdioEntry } from "../spawn-secret-input.js";
+import type { acquireLinuxChildSubreaper } from "./linux-child-subreaper.js";
+import { isOwnedProcessGroupGone } from "./service-child-group-ownership.js";
 import type {
   ServiceChildControlMessage,
   ServiceChildRelayMessage,
+  ServiceChildRelayRelease,
   ServiceChildStart,
 } from "./service-child-protocol.js";
+import { reserveStdioEntry, setStdioEntry } from "./service-child-stdio.js";
 
-type StdioEntry = "ignore" | "inherit" | "ipc" | number;
+declare const WORKER_DEPLOY_BUILD: boolean;
 
-function reserveIpcFd(stdio: StdioEntry[]): void {
-  let fd = 3;
-  while (stdio[fd] !== undefined && stdio[fd] !== "ignore") {
-    fd += 1;
-  }
-  while (stdio.length <= fd) {
-    stdio.push("ignore");
-  }
-  stdio[fd] = "ipc";
+if (typeof WORKER_DEPLOY_BUILD === "boolean" && WORKER_DEPLOY_BUILD) {
+  registerSealedRuntimeProcessEntrypoints("serviceChildRelay", import.meta.url);
 }
 
 function runServiceChildRelay(): void {
@@ -29,8 +33,10 @@ function runServiceChildRelay(): void {
   let anchor: ChildProcess | undefined;
   let parentLost = false;
   let forcedSequence: number | undefined;
-  let signalError: string | undefined;
   let anchorExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+  let parentLineageFds: number[] = [];
+  let parentLineageReleased = false;
+  let subreaper: ReturnType<typeof acquireLinuxChildSubreaper> | undefined;
 
   const report = (message: ServiceChildRelayMessage) => {
     if (!process.connected) {
@@ -42,16 +48,57 @@ function runServiceChildRelay(): void {
       // Disconnect owns parent loss; failed reporting must not abandon anchor reaping.
     }
   };
-  const reportRetirement = () => {
-    if (generation && forcedSequence !== undefined) {
-      report({
-        type: "retirement",
-        generation,
-        sequence: forcedSequence,
-        anchorExited: anchorExit !== undefined,
-        signalError,
-      });
+  const settleAnchorExit = () => {
+    if (!anchorExit || !parentLineageReleased) {
+      return;
     }
+    // Reaping the anchor and releasing its lineage completes this relay's work.
+    process.exitCode = anchorExit.code === 0 || anchorExit.signal === "SIGKILL" ? 0 : 1;
+    if (process.connected) {
+      process.disconnect?.();
+    }
+  };
+  const releaseParentLineage = async () => {
+    if (subreaper) {
+      // Anchor death adopts even setsid/double-fork descendants into this
+      // dedicated owner. Only its retained kernel wait can certify extinction.
+      while (!subreaper.drain("SIGKILL")) {
+        await delay(10);
+      }
+      if (process.connected) {
+        await new Promise<void>((resolve) => {
+          process.send?.({ type: "custody-closed", generation }, () => resolve());
+        });
+      }
+    }
+    if (parentLineageFds.length > 0) {
+      let reportedFailure = false;
+      for (;;) {
+        try {
+          if (subreaper || isOwnedProcessGroupGone(anchor!.pid!)) {
+            break;
+          }
+        } catch (error) {
+          if (!reportedFailure) {
+            reportedFailure = true;
+            report({
+              type: "relay-error",
+              generation: generation!,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+        await delay(100);
+      }
+      // These writers belong to the enclosing worker. They do not include this
+      // relay's own lineage, and close before the relay exits.
+      for (const fd of parentLineageFds) {
+        closeSync(fd);
+      }
+      parentLineageFds = [];
+    }
+    parentLineageReleased = true;
+    settleAnchorExit();
   };
   const notifyParentLoss = () => {
     if (parentLost) {
@@ -59,7 +106,8 @@ function runServiceChildRelay(): void {
     }
     parentLost = true;
     if (anchorExit) {
-      process.exit(anchorExit.code === 0 || anchorExit.signal === "SIGKILL" ? 0 : 1);
+      settleAnchorExit();
+      return;
     }
     if (anchor?.connected) {
       anchor.send({ type: "parent-loss", generation });
@@ -67,11 +115,32 @@ function runServiceChildRelay(): void {
   };
 
   process.once("disconnect", notifyParentLoss);
-  process.once("SIGTERM", notifyParentLoss);
-  process.once("SIGINT", notifyParentLoss);
-  process.on("message", (raw: unknown) => {
+  process.on("SIGTERM", notifyParentLoss);
+  process.on("SIGINT", notifyParentLoss);
+  const onMessage = async (raw: unknown) => {
     // SAFETY: the spawned host is the sole sender on this private IPC channel.
-    const start = raw as ServiceChildStart | ServiceChildControlMessage;
+    const start = raw as ServiceChildStart | ServiceChildControlMessage | ServiceChildRelayRelease;
+    if (start?.type === "release") {
+      if (!generation || !anchor || start.generation !== generation) {
+        return;
+      }
+      // The anchor already gave up its group without signalling it. Released
+      // processes keep that group alive, so do not join its extinction here.
+      for (const fd of parentLineageFds) {
+        closeSync(fd);
+      }
+      parentLineageFds = [];
+      parentLineageReleased = true;
+      anchor.unref();
+      if (anchor.connected) {
+        anchor.disconnect();
+      }
+      process.exitCode = 0;
+      if (process.connected) {
+        process.disconnect?.();
+      }
+      return;
+    }
     if (start?.type === "cancel") {
       if (
         !generation ||
@@ -88,19 +157,22 @@ function runServiceChildRelay(): void {
       if (!anchorExit) {
         try {
           if (!anchor.kill("SIGKILL")) {
-            signalError ??= "retained anchor SIGKILL was not delivered";
+            throw new Error("retained anchor SIGKILL was not delivered");
           }
         } catch (error) {
-          signalError = error instanceof Error ? error.message : String(error);
+          report({
+            type: "relay-error",
+            generation,
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
       }
-      reportRetirement();
       return;
     }
     if (generation) {
       return;
     }
-    if (!start || start.type !== "start" || !start.generation) {
+    if (!start || (start.type !== "start" && start.type !== "prepare") || !start.generation) {
       process.exitCode = 1;
       return;
     }
@@ -110,32 +182,46 @@ function runServiceChildRelay(): void {
       process.exitCode = 1;
       return;
     }
-    const anchorUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.serviceChildGroupAnchor);
-    const stdio: StdioEntry[] = ["inherit", "inherit", "inherit"];
-    while (stdio.length <= start.controlFd) {
-      stdio.push("ignore");
-    }
-    stdio[start.controlFd] = start.controlFd;
-    if (start.lineageFd !== undefined) {
-      while (stdio.length <= start.lineageFd) {
-        stdio.push("ignore");
+    const anchorUrl = start.nativeProcessOwner
+      ? new URL(start.nativeProcessOwner)
+      : resolveRuntimeProcessEntrypointUrl("serviceChildGroupAnchor");
+    const stdio: SpawnStdioEntry[] = ["inherit", "inherit", "inherit"];
+    parentLineageFds = start.parentLineageFds ?? [];
+    for (const fd of [start.controlFd, start.lineageFd, ...parentLineageFds, start.secretFd]) {
+      if (fd !== undefined) {
+        setStdioEntry(stdio, fd, fd);
       }
-      stdio[start.lineageFd] = start.lineageFd;
     }
-    if (start.secretFd !== undefined) {
-      while (stdio.length <= start.secretFd) {
-        stdio.push("ignore");
-      }
-      stdio[start.secretFd] = start.secretFd;
-    }
-    reserveIpcFd(stdio);
+    reserveStdioEntry(stdio, "ipc");
     try {
-      anchor = spawn(process.execPath, resolveRuntimeWorkerArgv(anchorUrl), {
+      if (start.retainNativeCustody) {
+        if (
+          start.treeOwnership !== "linux-subreaper" ||
+          start.releaseOnRootExit ||
+          start.ownedWorker
+        ) {
+          throw new Error("Retained native custody requires a strict Linux command scope");
+        }
+        subreaper = (await import("./linux-child-subreaper.js")).acquireLinuxChildSubreaper();
+      }
+      const executable = resolveLaunchableNodePath();
+      const env = resolveRuntimeWorkerEnv(anchorUrl, process.env);
+      if (env.NODE_OPTIONS !== undefined) {
+        env.NODE_OPTIONS = stripNodeStartupHooks(env.NODE_OPTIONS);
+      }
+      if (start.nativeProcessOwner) {
+        // The admitted host owns this entry; portable relays have no embedded image inventory.
+        delete env.BUN_BE_BUN;
+      }
+      anchor = childProcess.spawn(executable, resolveRuntimeWorkerArgv(anchorUrl, executable), {
         stdio,
         detached: true,
         windowsHide: true,
-        env: process.env,
+        env,
       });
+      if (anchor.pid) {
+        subreaper?.retainSpawnedChild(anchor.pid, anchor);
+      }
     } catch (error) {
       report({
         type: "relay-error",
@@ -152,6 +238,7 @@ function runServiceChildRelay(): void {
       return;
     }
     anchor.once("spawn", () => {
+      closeSync(start.controlFd!);
       // Only the anchor and command may retain the host's lineage writer.
       if (start.lineageFd !== undefined) {
         closeSync(start.lineageFd);
@@ -177,21 +264,25 @@ function runServiceChildRelay(): void {
       }
     });
     anchor.once("error", (error) => {
-      if (forcedSequence !== undefined) {
-        signalError = error.message;
-        reportRetirement();
-      } else {
-        report({ type: "relay-error", generation: generation!, error: error.message });
-      }
+      report({ type: "relay-error", generation: generation!, error: error.message });
     });
     anchor.once("exit", (code, signal) => {
       anchorExit = { code, signal };
-      if (forcedSequence !== undefined && !parentLost && process.connected) {
-        // Keep the reaper alive until the host receives the exit fact and releases its handle.
-        reportRetirement();
-      } else {
-        process.exit(code === 0 || signal === "SIGKILL" ? 0 : 1);
+      void releaseParentLineage().catch((error: unknown) => {
+        report({
+          type: "relay-error",
+          generation: generation!,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    });
+  };
+  process.on("message", (raw: unknown) => {
+    void onMessage(raw).catch((error: unknown) => {
+      if (generation) {
+        report({ type: "relay-error", generation, error: String(error) });
       }
+      notifyParentLoss();
     });
   });
 }

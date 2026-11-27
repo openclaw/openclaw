@@ -11,13 +11,14 @@ defineDiscordVoiceTests(
     joinVoiceChannelMock,
     entersStateMock,
     createAudioPlayerMock,
-    resolveRealtimeBootstrapContextInstructionsMock,
+    resolveRealtimeVoiceAgentContextInstructionsMock,
     createRealtimeVoiceBridgeSessionMock,
     realtimeSessionMock,
     createManager,
     createAgentProxyManager,
     expectConnectedStatus,
     getSessionEntry,
+    getSessionConnection,
     getVoiceReceive,
     createJoinedAgentProxyFixture,
     startTranscripts,
@@ -363,7 +364,7 @@ defineDiscordVoiceTests(
             expect(connection.destroy).not.toHaveBeenCalled();
             expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
             expectConnectedStatus(manager, channelId);
-            expect(getSessionEntry(manager).connection).toBe(connection);
+            expect(getSessionConnection(getSessionEntry(manager))).toBe(connection);
             expect(getSessionEntry(manager).realtimeLifecycle.status).toBe("active");
             await receiveRecordedSpeech(manager, "newer conversation");
             expect(realtimeSessionMock.sendAudio).toHaveBeenCalled();
@@ -675,9 +676,16 @@ defineDiscordVoiceTests(
         const realtimeReady = createDeferred<undefined>();
         const pending =
           phase === "bootstrap"
-            ? resolveRealtimeBootstrapContextInstructionsMock
+            ? resolveRealtimeVoiceAgentContextInstructionsMock
             : realtimeSessionMock.connect;
-        pending.mockImplementationOnce(() => realtimeReady.promise);
+        if (phase === "bootstrap") {
+          resolveRealtimeVoiceAgentContextInstructionsMock.mockImplementationOnce(async () => {
+            await realtimeReady.promise;
+            return "Agent context: shared voice agent context.";
+          });
+        } else {
+          realtimeSessionMock.connect.mockImplementationOnce(() => realtimeReady.promise);
+        }
 
         const upgrade = manager.join({ guildId: "g1", channelId: "1001" });
 
@@ -705,9 +713,10 @@ defineDiscordVoiceTests(
 
       await startTranscripts(manager, onUtterance, "notes-1");
       const bootstrapReady = createDeferred<undefined>();
-      resolveRealtimeBootstrapContextInstructionsMock.mockImplementationOnce(
-        () => bootstrapReady.promise,
-      );
+      resolveRealtimeVoiceAgentContextInstructionsMock.mockImplementationOnce(async () => {
+        await bootstrapReady.promise;
+        return "Agent context: shared voice agent context.";
+      });
 
       const upgrade = manager.join({ guildId: "g1", channelId: "1001" });
       await Promise.resolve();

@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { SessionManager, buildSessionContext } from "./session-manager.js";
 
 vi.mock("../runtime/index.js", () => {
   throw new Error("session storage must not load the agent runtime facade");
@@ -9,7 +10,6 @@ vi.mock("../../plugin-sdk/agent-core.js", () => {
 });
 
 it("creates sessions and builds context without loading agent runtime facades", async () => {
-  const { SessionManager, buildSessionContext } = await import("./session-manager.js");
   const { uuidv7 } = await import("../../../packages/agent-core/src/harness/session/uuid.js");
   const now = vi.spyOn(Date, "now").mockReturnValue(Date.now());
   try {
@@ -31,8 +31,8 @@ it("creates sessions and builds context without loading agent runtime facades", 
 
     const message = { role: "user" as const, content: "session context", timestamp: 1 };
     const entryIds = [
-      manager.appendThinkingLevelChange("high"),
-      manager.appendModelChange("test-provider", "test-model"),
+      await manager.appendThinkingLevelChange("high"),
+      await manager.appendModelChange("test-provider", "test-model"),
       manager.appendMessage(message),
     ];
     for (const id of entryIds) {

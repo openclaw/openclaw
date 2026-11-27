@@ -21,11 +21,8 @@ export function safeAttachmentHref(value: string): string | undefined {
   if (href.startsWith("/") && !href.startsWith("//") && !href.startsWith("/\\")) {
     return href;
   }
-  try {
-    return SAFE_ATTACHMENT_PROTOCOLS.has(new URL(href).protocol.toLowerCase()) ? href : undefined;
-  } catch {
-    return undefined;
-  }
+  const url = URL.parse(href);
+  return url && SAFE_ATTACHMENT_PROTOCOLS.has(url.protocol) ? href : undefined;
 }
 
 /** Keeps normalized base64 media usable without admitting scriptable data URL types. */
@@ -42,4 +39,15 @@ export function safeMediaAttachmentHref(
       : undefined;
   }
   return safeAttachmentHref(href);
+}
+
+/** Plain-text clipboard sources are inert and retain their original downloadable bytes. */
+export function safePlainTextAttachmentHref(value: string): string | undefined {
+  const href = value.trim();
+  const payload = /^data:text\/plain;base64,([a-z0-9+/]*={0,2})$/i.exec(href)?.[1];
+  return payload !== undefined
+    ? payload.length % 4 === 0
+      ? href
+      : undefined
+    : safeAttachmentHref(href);
 }

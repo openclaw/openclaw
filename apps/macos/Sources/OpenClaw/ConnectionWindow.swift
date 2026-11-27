@@ -23,6 +23,10 @@ struct ConnectionWindow: View {
                         .frame(width: Self.width, height: 720)
                 }
             }
+            Tab("About", systemImage: "info.circle", value: ConnectionTab.about) {
+                AboutSettings()
+                    .frame(width: Self.width, height: 480)
+            }
         }
         .defaultAppStorage(AppDefaults.standard)
         .onChange(of: self.state.debugPaneEnabled, initial: true) { _, enabled in

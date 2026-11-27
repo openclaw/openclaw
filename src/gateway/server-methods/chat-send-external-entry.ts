@@ -4,6 +4,7 @@ import {
 } from "../../agents/cron-creator-authority-context.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
+import { isGatewayUiAdmin } from "../operator-scopes.js";
 import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import {
@@ -14,8 +15,8 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const externalAuthorityAdmission: ChatSendExternalAuthorityAdmission = {
   allowsDashboardReads: (params) =>
-    params.client?.internal?.authenticatedControlUi === true &&
-    authorizeOperatorScopesForMethod("chat.send", params.client.connect.scopes ?? []).allowed &&
+    (params.client?.internal?.authenticatedControlUi === true || isGatewayUiAdmin(params.client)) &&
+    authorizeOperatorScopesForMethod("chat.send", params.client?.connect.scopes ?? []).allowed &&
     isDirectGatewayChatUserTurn({
       ...params,
       resolvedSessionKey: params.sessionKey,
@@ -24,18 +25,9 @@ const externalAuthorityAdmission: ChatSendExternalAuthorityAdmission = {
     }),
   resolve: (params) => {
     const authority = resolveGatewayChatCronCreatorAuthorityAdmission({
-      runId: params.runId,
+      ...params,
       resolvedSessionKey: params.sessionKey,
-      spawnedBy: params.spawnedBy,
-      client: params.client,
-      isCurrent: params.isCurrent,
-      inputProvenance: params.inputProvenance,
-      hasExplicitOrigin: params.hasExplicitOrigin,
-      hasRestoredCronContinuation: params.hasRestoredCronContinuation,
       isIncognito: params.isIncognitoEntry || isIncognitoSessionKey(params.sessionKey),
-      isReconnectResume: params.isReconnectResume,
-      isSystemGenerated: params.isSystemGenerated,
-      turnKind: params.turnKind,
       isDirectExternalUser: true,
     });
     return authority
@@ -44,6 +36,8 @@ const externalAuthorityAdmission: ChatSendExternalAuthorityAdmission = {
           authority.callerOrigin,
           authority.managementEntitlement,
           authority.isCurrent,
+          undefined,
+          authority.callerScopedCreation,
         )
       : undefined;
   },

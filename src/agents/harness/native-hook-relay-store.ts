@@ -78,42 +78,28 @@ export async function deleteNativeHookRelayBridgeRecordIfOwned(params: {
 export async function pruneNativeHookRelayBridgeRecords(params: {
   currentPid: number;
   isPidDead: (pid: number) => boolean | Promise<boolean>;
-  nowMs?: number;
   stateDbPath?: string;
 }): Promise<NativeHookRelayBridgePruneResult[]> {
   const context = captureOpenClawStateWorkerContext({ path: params.stateDbPath });
-  const nowMs = params.nowMs ?? Date.now();
+  const nowMs = Date.now();
   const { currentPid, isPidDead } = params;
   return runOpenClawStateWorkerOperation(context, async (scope) => {
-    const snapshots = await scope.execute({
-      type: "nativeHookRelay.listSnapshots",
+    const records = await scope.execute({
+      type: "nativeHookRelay.listRecords",
       input: undefined,
     });
     const candidates: NativeHookRelayBridgePruneCandidate[] = [];
-    for (const snapshot of snapshots) {
-      if (nowMs > snapshot.record.expiresAtMs) {
-        candidates.push({ snapshot, reason: "expired" });
+    for (const record of records) {
+      if (nowMs > record.expiresAtMs) {
+        candidates.push({ record, reason: "expired" });
         continue;
       }
-      if (snapshot.record.pid !== currentPid && (await isPidDead(snapshot.record.pid))) {
-        candidates.push({ snapshot, reason: "dead-pid" });
+      if (record.pid !== currentPid && (await isPidDead(record.pid))) {
+        candidates.push({ record, reason: "dead-pid" });
       }
     }
     return candidates.length === 0
       ? []
       : scope.execute({ type: "nativeHookRelay.prune", input: { candidates, nowMs } });
-  });
-}
-
-export async function clearNativeHookRelayBridgeRecordsForTests(
-  options: NativeHookRelayBridgeStoreOptions = {},
-): Promise<void> {
-  const [{ runOpenClawStateWriteTransaction }, { clearNativeHookRelayBridgeRecordsInDatabase }] =
-    await Promise.all([
-      import("../../state/openclaw-state-db.js"),
-      import("./native-hook-relay-store.kernel.js"),
-    ]);
-  runOpenClawStateWriteTransaction(clearNativeHookRelayBridgeRecordsInDatabase, {
-    path: options.stateDbPath,
   });
 }

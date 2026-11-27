@@ -7,7 +7,7 @@ import type { createModelSelectionState } from "./model-selection.js";
 export function createModelSelectionStateFixture(params: {
   agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
   provider: string;
-  model: string;
+  model: string | undefined;
 }): Awaited<ReturnType<typeof createModelSelectionState>> {
   return {
     provider: params.provider,
@@ -21,7 +21,6 @@ export function createModelSelectionStateFixture(params: {
     }),
     allowedModelKeys: new Set<string>(),
     allowedModelCatalog: [],
-    policyAliasIndex: { byAlias: new Map(), byKey: new Map() },
     resetModelOverride: false,
     resetModelOverrideRef: undefined,
     resetModelOverrideReason: undefined,
@@ -31,7 +30,6 @@ export function createModelSelectionStateFixture(params: {
     resolveDefaultThinkingLevel: async () => params.agentCfg?.thinkingDefault as ThinkLevel,
     hasConfiguredThinkingDefault: params.agentCfg?.thinkingDefault !== undefined,
     resolveDefaultReasoningLevel: async () => "off",
-    needsModelCatalog: false,
     modelContextWindow: undefined,
     modelContextTokens: undefined,
   };

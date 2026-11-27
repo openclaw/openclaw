@@ -11,11 +11,7 @@ import {
 } from "./evidence-summary-schema.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScenarioExecutionCell } from "./scenario-lane.js";
-import {
-  qaMaturityTaxonomyIdentitySchema,
-  type QaMaturityTaxonomyIdentity,
-  type QaProofRequirements,
-} from "./scorecard-taxonomy.js";
+import type { QaMaturityTaxonomyIdentity, QaProofRequirements } from "./scorecard-taxonomy.js";
 
 export type { QaProfileEvidencePlan } from "./evidence-summary-schema.js";
 
@@ -59,7 +55,7 @@ function build(params: {
     profile: params.profile,
     ...lists,
     counts: Object.fromEntries(listNames.map((name) => [name, lists[name].length])),
-    taxonomyIdentity: qaMaturityTaxonomyIdentitySchema.parse(params.taxonomyIdentity),
+    taxonomyIdentity: params.taxonomyIdentity,
     ...(params.proofRequirements ? { proofRequirements: params.proofRequirements } : {}),
   });
 }

@@ -3,6 +3,7 @@ package ai.openclaw.app.voice
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
@@ -98,25 +99,26 @@ class TalkModeConfigParsingTest {
 
   @Test
   fun gatesAndroidRealtimeRelayFromEffectiveModel() {
-    val releasedNative =
-      json
-        .parseToJsonElement(
-          """{"talk":{"realtime":{"model":"gpt-live-1-codex"}}}""",
-        ).jsonObject
-    val browserOnly =
-      json
-        .parseToJsonElement(
-          """{"talk":{"realtime":{"model":"gpt-live-future"}}}""",
-        ).jsonObject
-    val relayCapable =
-      json
-        .parseToJsonElement(
-          """{"talk":{"realtime":{"model":"gpt-realtime-2.1"}}}""",
-        ).jsonObject
-
-    assertFalse(TalkModeGatewayConfigParser.parse(releasedNative).realtimeRelayModelSupported)
-    assertFalse(TalkModeGatewayConfigParser.parse(browserOnly).realtimeRelayModelSupported)
-    assertTrue(TalkModeGatewayConfigParser.parse(relayCapable).realtimeRelayModelSupported)
+    val cases =
+      listOf(
+        Triple("gpt-live-1-codex", TalkModeRoute.NativeAndroidFallback, false),
+        Triple("gpt-live-future", TalkModeRoute.NativeAndroidFallback, false),
+        Triple("gpt-live", TalkModeRoute.NativeAndroidFallback, false),
+        Triple(" GPT-LIVE-future ", TalkModeRoute.NativeAndroidFallback, false),
+        Triple("gpt-realtime-2.1", TalkModeRoute.RealtimeRelay, true),
+        Triple("gpt-liveness", TalkModeRoute.RealtimeRelay, true),
+        Triple(null, TalkModeRoute.RealtimeRelay, true),
+      )
+    for ((model, route, relaySupported) in cases) {
+      val parsed =
+        parseTalkConfig(
+          buildJsonObject {
+            put("realtime", buildJsonObject { put("model", JsonPrimitive(model)) })
+          },
+        )
+      assertEquals(model, route, parsed.route)
+      assertEquals(model, relaySupported, parsed.realtimeRelayModelSupported)
+    }
   }
 
   @Test
@@ -133,6 +135,7 @@ class TalkModeConfigParsingTest {
         ).jsonObject
 
     // gateway-relay carries only realtime sessions, so stt-tts must use device STT plus talk.speak.
+    assertEquals(TalkModeRoute.NativeConfigured, TalkModeGatewayConfigParser.parse(sttTts).route)
     assertFalse(TalkModeGatewayConfigParser.parse(sttTts).realtimeRelayModelSupported)
     assertTrue(TalkModeGatewayConfigParser.parse(explicitRealtime).realtimeRelayModelSupported)
   }
@@ -150,6 +153,7 @@ class TalkModeConfigParsingTest {
           """{"talk":{"realtime":{"provider":"openai","model":"gpt-realtime-2.1","providers":{"openai":{"model":"gpt-live-test-canary"}}}}}""",
         ).jsonObject
 
+    assertEquals(TalkModeRoute.NativeAndroidFallback, TalkModeGatewayConfigParser.parse(providerLevelBrowserOnly).route)
     assertFalse(TalkModeGatewayConfigParser.parse(providerLevelBrowserOnly).realtimeRelayModelSupported)
     assertTrue(TalkModeGatewayConfigParser.parse(topLevelWins).realtimeRelayModelSupported)
   }
@@ -167,7 +171,20 @@ class TalkModeConfigParsingTest {
           """.trimIndent(),
         ).jsonObject
 
+    assertEquals(TalkModeRoute.NativeGatewayFallback, TalkModeGatewayConfigParser.parse(projected).route)
     assertFalse(TalkModeGatewayConfigParser.parse(projected).realtimeRelayModelSupported)
+  }
+
+  @Test
+  fun positiveGatewayHintStillOverridesTheLocalModelGate() {
+    val config =
+      json
+        .parseToJsonElement(
+          """{"talk":{"realtime":{"model":"gpt-live-1-codex"}},"clientHints":{"realtime":{"gatewayRelaySupported":true}}}""",
+        ).jsonObject
+
+    assertEquals(TalkModeRoute.RealtimeRelay, TalkModeGatewayConfigParser.parse(config).route)
+    assertTrue(TalkModeGatewayConfigParser.parse(config).realtimeRelayModelSupported)
   }
 
   @Test

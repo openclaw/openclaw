@@ -39,3 +39,44 @@ export async function seedPluginConversationBindingApprovalForTest(params: {
   // Seeded rows must become visible even if another test loaded the process cache first.
   await drainGlobalSingletonLifecycleState();
 }
+
+export function createDiscordCodexBindRequest(
+  conversationId: string,
+  summary: string,
+  accountId = "isolated",
+): Parameters<typeof import("./conversation-binding.js").requestPluginConversationBinding>[0] {
+  return {
+    pluginId: "codex",
+    pluginName: "Codex App Server",
+    pluginRoot: "/plugins/codex-a",
+    requestedBySenderId: "user-1",
+    conversation: {
+      channel: "discord",
+      accountId,
+      conversationId,
+    },
+    binding: { summary },
+  };
+}
+
+export function createTelegramCodexBindRequest(
+  conversationId: string,
+  threadId: string,
+  summary: string,
+  pluginRoot = "/plugins/codex-a",
+): Parameters<typeof import("./conversation-binding.js").requestPluginConversationBinding>[0] {
+  return {
+    pluginId: "codex",
+    pluginName: "Codex App Server",
+    pluginRoot,
+    requestedBySenderId: "user-1",
+    conversation: {
+      channel: "telegram",
+      accountId: "default",
+      conversationId,
+      parentConversationId: "-10099",
+      threadId,
+    },
+    binding: { summary },
+  };
+}

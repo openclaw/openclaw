@@ -2,10 +2,8 @@ import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  createPluginBlobStoreForTests,
-  resetPluginBlobStoreForTests,
-} from "./plugin-blob-store.js";
+import { resetPluginBlobStoreForTests } from "./plugin-blob-store.js";
+import { createPluginBlobKernelStore } from "./plugin-blob-store.test-helpers.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -14,16 +12,13 @@ afterEach(() => {
 
 it("fetches only the eviction prefix needed for a bounded blob write", async () => {
   await withOpenClawTestState({ label: "blob-eviction-prefix" }, async (state) => {
-    const store = createPluginBlobStoreForTests(
-      "diffs",
-      {
-        namespace: "artifacts",
-        maxEntries: 64,
-        maxBytesPerEntry: 16,
-        maxBytesPerNamespace: 1024,
-      },
-      state.env,
-    );
+    const store = createPluginBlobKernelStore("diffs", {
+      namespace: "artifacts",
+      maxEntries: 64,
+      maxBytesPerEntry: 16,
+      maxBytesPerNamespace: 1024,
+      env: state.env,
+    });
     const { db } = openOpenClawStateDatabase({ env: state.env });
     const insert = db.prepare(`INSERT INTO plugin_blob_entries
       (plugin_id, namespace, entry_key, metadata_json, blob, created_at, expires_at)
@@ -51,6 +46,7 @@ it("fetches only the eviction prefix needed for a bounded blob write", async () 
     });
     await store.register("new", new Uint8Array([255]), { retained: true });
     reads.mockRestore();
+    expect(fetchedRows).toBeGreaterThan(0);
     expect(fetchedRows).toBeLessThanOrEqual(2);
     await expect(store.lookup("old-0")).resolves.toBeUndefined();
     await expect(store.lookup("old-1")).resolves.toMatchObject({ bytes: new Uint8Array([1]) });

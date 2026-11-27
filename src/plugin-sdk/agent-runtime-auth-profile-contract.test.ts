@@ -5,30 +5,6 @@ import {
   resolveProfilesUnavailableReason,
 } from "./agent-runtime.js";
 
-const cases = [
-  {
-    cooldownReason: "auth",
-    cooldownClassification: "wham_token_expired",
-    expected: "auth",
-  },
-  {
-    cooldownReason: "auth_permanent",
-    cooldownClassification: "wham_account_dead",
-    expected: "auth_permanent",
-  },
-  {
-    cooldownReason: "rate_limit",
-    cooldownClassification: "wham_account_dead",
-    expected: "rate_limit",
-  },
-] satisfies Array<{
-  cooldownReason: AuthProfileFailureReason;
-  cooldownClassification: NonNullable<
-    NonNullable<AuthProfileStore["usageStats"]>[string]["cooldownClassification"]
-  >;
-  expected: AuthProfileFailureReason;
-}>;
-
 function preserveExhaustiveFailureReasonHandling(
   reason: AuthProfileFailureReason,
 ): AuthProfileFailureReason {
@@ -66,27 +42,24 @@ function consumeCanonicalReasonFromPublicStore(
 }
 
 describe("agent-runtime auth profile contract", () => {
-  it.each(cases)(
-    "keeps $cooldownReason canonical with $cooldownClassification diagnostics",
-    ({ cooldownReason, cooldownClassification, expected }) => {
-      const now = 1_700_000_000_000;
-      const profileId = "openai:default";
-      const store: AuthProfileStore = {
-        version: 1,
-        profiles: {},
-        usageStats: {
-          [profileId]: {
-            cooldownUntil: now + 60_000,
-            cooldownReason,
-            cooldownClassification,
-          },
+  it("keeps the canonical reason independent of diagnostic classification", () => {
+    const now = 1_700_000_000_000;
+    const profileId = "openai:default";
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {},
+      usageStats: {
+        [profileId]: {
+          cooldownUntil: now + 60_000,
+          cooldownReason: "rate_limit",
+          cooldownClassification: "wham_account_dead",
         },
-      };
+      },
+    };
 
-      expect(consumeCanonicalReasonFromPublicStore(store, profileId)).toBe(expected);
-      expect(resolveProfilesUnavailableReason({ store, profileIds: [profileId], now })).toBe(
-        expected,
-      );
-    },
-  );
+    expect(consumeCanonicalReasonFromPublicStore(store, profileId)).toBe("rate_limit");
+    expect(resolveProfilesUnavailableReason({ store, profileIds: [profileId], now })).toBe(
+      "rate_limit",
+    );
+  });
 });

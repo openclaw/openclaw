@@ -303,8 +303,8 @@ class MainActivityTest {
     val snapshot = checkNotNull(state.toConversationSnapshot())
     assertTrue(snapshot.modelCatalogRefreshFailed)
     assertNull(snapshot.failure)
-    assertEquals(listOf("openai/gpt-a"), snapshot.models.map(WearModelSummary::ref))
-    assertEquals(listOf("anthropic/claude"), snapshot.modelSearchResults.map(WearModelSummary::ref))
+    assertEquals(listOf("openai/gpt-a"), snapshot.models.map(WearModel::ref))
+    assertEquals(listOf("anthropic/claude"), snapshot.modelSearchResults.map(WearModel::ref))
     assertFalse(state.resetForPhoneChange().modelCatalogRefreshFailed)
     assertTrue(state.containsModelRef("openai/gpt-a"))
     assertTrue(state.containsModelRef("anthropic/claude"))
@@ -346,16 +346,6 @@ class MainActivityTest {
   fun conversationSnapshotExposesPulseOnlyForConnectedCapablePhone() {
     val pulse =
       WearAgentPulseSnapshot(
-        tasks =
-          WearAgentPulseTasks(
-            state = WearAgentPulseTaskState.Ready,
-            queued = 2,
-            running = 3,
-            completed = 5,
-            failed = 1,
-            activeAtLimit = false,
-            recentAtLimit = false,
-          ),
         swarm =
           WearAgentPulseSwarm(
             state = WearAgentPulseSwarmState.Active,

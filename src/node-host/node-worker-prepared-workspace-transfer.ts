@@ -1,15 +1,10 @@
 import { createHash } from "node:crypto";
-import fsp from "node:fs/promises";
-import path from "node:path";
 import {
   withWorkerWorkspaceHashMemo,
   type WorkspaceHashMemo,
 } from "../gateway/worker-environments/workspace-hash-memo.js";
-import { changedPaths } from "../gateway/worker-environments/workspace-manifest-comparison.js";
-import {
-  parseWorkspaceManifest,
-  overlayWorkspaceManifest,
-} from "../gateway/worker-environments/workspace-manifest-worker.js";
+import { prepareWorkspaceReconciliation } from "../gateway/worker-environments/workspace-manifest-comparison.js";
+import { overlayWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
@@ -17,11 +12,19 @@ import type {
 import { applyStagedWorkerWorkspace } from "../gateway/worker-environments/workspace-reconcile-apply.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
 import { runCommandBuffered } from "../process/exec.js";
+import {
+  withNodeWorkerFilesystemCommands,
+  type NodeWorkerCommandIsolation,
+} from "./node-worker-command-filesystem.js";
 import type {
   NodeWorkerPreparedWorkspaceRow,
   NodeWorkerPreparedWorkspaceStore,
 } from "./node-worker-prepared-workspace-store.js";
-import { captureManifest, TRANSFER_TIMEOUT_MS } from "./node-worker-workspace-commands.js";
+import {
+  captureManifest,
+  readWorkspaceManifest,
+  TRANSFER_TIMEOUT_MS,
+} from "./node-worker-workspace-commands.js";
 
 export type NodeWorkerPreparedWorkspaceTransfer = {
   row: NodeWorkerPreparedWorkspaceRow;
@@ -36,23 +39,20 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
   sourceOverlay: boolean;
   hashMemo?: WorkspaceHashMemo;
   signal?: AbortSignal;
+  isolation?: NodeWorkerCommandIsolation;
 }) {
   const { row, store } = params.prepared;
-  const readManifest = async (ref: string) =>
-    await parseWorkspaceManifest(
-      await fsp.readFile(
-        path.join(row.home_dir, ".openclaw-worker", "manifests", `${ref.slice(7)}.json`),
-        "utf8",
-      ),
-      ref,
-      params.signal,
-    );
-  const source = await readManifest(row.source_manifest_ref);
+  const { manifest: source } = await readWorkspaceManifest(
+    row.home_dir,
+    row.source_manifest_ref,
+    params.signal,
+  );
   if (!source.baseCommit || params.manifest.baseCommit !== source.baseCommit) {
     throw new Error("Prepared workspace transfer does not match its immutable Git base");
   }
   const capture = async (referenceManifestRef: string, baseManifestRef?: string) =>
     await captureManifest({
+      mode: "eligible",
       workspaceDir: row.workspace_dir,
       manifestHome: row.home_dir,
       baseCommit: source.baseCommit,
@@ -60,9 +60,14 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
       baseManifestRef,
       hashMemo: params.hashMemo,
       signal: params.signal,
+      isolation: params.isolation,
     });
   const baseManifestRef = await capture(row.source_manifest_ref);
-  const base = await readManifest(baseManifestRef);
+  const { manifest: base } = await readWorkspaceManifest(
+    row.home_dir,
+    baseManifestRef,
+    params.signal,
+  );
   let target = params.manifest;
   let targetRef = params.manifestRef;
   if (params.sourceOverlay) {
@@ -71,12 +76,13 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
     target = overlay.manifest;
   }
   const sourceEntries = new Map(source.entries.map((entry) => [entry.path, entry]));
+  params.signal?.throwIfAborted();
+  const reconciliation = prepareWorkspaceReconciliation(base, target);
   return {
-    changed: changedPaths(base, target, params.signal),
-    materializeSourceFile: async (
+    changed: new Set(reconciliation.preflight.changedPaths),
+    readSourceFile: async (
       entry: Extract<WorkerWorkspaceManifestEntry, { type: "file" }>,
-      destination: string,
-    ) => {
+    ): Promise<Buffer> => {
       const original = sourceEntries.get(entry.path);
       if (
         original?.type !== "file" ||
@@ -88,32 +94,42 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
       }
       // Checkpoints carry C-vs-B blobs only. If setup changed B into P and the
       // session restored B, recover those bytes locally without expanding its download token.
-      const result = await runCommandBuffered(
-        [
-          "git",
-          "--no-replace-objects",
-          "-c",
-          "protocol.allow=never",
-          "cat-file",
-          "blob",
-          `${source.baseCommit}:${entry.path}`,
-        ],
+      const result = await withNodeWorkerFilesystemCommands(
         {
-          cwd: row.workspace_dir,
-          baseEnv: {
-            PATH: process.env.PATH,
-            HOME: row.home_dir,
-            GIT_CONFIG_NOSYSTEM: "1",
-            GIT_CONFIG_GLOBAL: gitNullConfigPath(),
-            GIT_NO_LAZY_FETCH: "1",
-            GIT_TERMINAL_PROMPT: "0",
-          },
+          isolation: params.isolation,
+          workspaceDir: row.workspace_dir,
+          homeDir: row.home_dir,
+          env: { PATH: process.env.PATH, HOME: row.home_dir },
           signal: params.signal,
-          timeoutMs: TRANSFER_TIMEOUT_MS,
-          killProcessTree: true,
-          maxOutputBytes: { stdout: entry.size + 1, stderr: 16 * 1024 },
-          maxCombinedOutputBytes: entry.size + 1 + 16 * 1024,
         },
+        () =>
+          runCommandBuffered(
+            [
+              "git",
+              "--no-replace-objects",
+              "-c",
+              "protocol.allow=never",
+              "cat-file",
+              "blob",
+              `${source.baseCommit}:${entry.path}`,
+            ],
+            {
+              cwd: row.workspace_dir,
+              baseEnv: {
+                PATH: process.env.PATH,
+                HOME: row.home_dir,
+                GIT_CONFIG_NOSYSTEM: "1",
+                GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+                GIT_NO_LAZY_FETCH: "1",
+                GIT_TERMINAL_PROMPT: "0",
+              },
+              signal: params.signal,
+              timeoutMs: TRANSFER_TIMEOUT_MS,
+              killProcessTree: true,
+              maxOutputBytes: { stdout: entry.size + 1, stderr: 16 * 1024 },
+              maxCombinedOutputBytes: entry.size + 1 + 16 * 1024,
+            },
+          ),
       );
       if (
         result.termination !== "exit" ||
@@ -124,13 +140,15 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
         throw new Error("Prepared checkpoint immutable Git content verification failed");
       }
       params.signal?.throwIfAborted();
-      await fsp.writeFile(destination, result.stdout, { mode: entry.mode, flag: "wx" });
+      return result.stdout;
     },
     apply: async (stagingRoot: string): Promise<string> => {
       params.signal?.throwIfAborted();
       // The normal workspace fence holds throughout. After a crash this row is
       // cleanup-only: no in-memory permit survives to resurrect a partial tree.
-      const mutation = store.beginMutation(row);
+      const mutation = await store.beginMutation(row, {
+        assertCurrent: () => params.signal?.throwIfAborted(),
+      });
       let rolledBack = false;
       try {
         await withWorkerWorkspaceHashMemo(
@@ -138,16 +156,17 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
           async () =>
             await applyStagedWorkerWorkspace({
               root: row.workspace_dir,
+              assertCurrent: () => params.signal?.throwIfAborted(),
               stagingRoot,
               baseManifestRef,
               currentManifestRef: targetRef,
-              base,
+              reconciliation,
               current: target,
               journal: {
-                load: () => undefined,
-                begin: () => {},
-                commit: () => {},
-                abort: () => {
+                load: async () => undefined,
+                begin: async () => {},
+                commit: async () => {},
+                abort: async () => {
                   rolledBack = true;
                 },
               },
@@ -162,7 +181,7 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
             }),
         );
         params.signal?.throwIfAborted();
-        mutation.complete();
+        await mutation.complete();
         // Acknowledge the accepted Gateway baseline; its next three-way reconciliation
         // independently captures setup output retained in the verified remote target.
         return params.manifestRef;
@@ -172,7 +191,7 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
           !params.signal?.aborted &&
           (await capture(baseManifestRef)) === baseManifestRef
         ) {
-          mutation.complete();
+          await mutation.complete();
         }
         throw error;
       } finally {

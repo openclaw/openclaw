@@ -8,7 +8,6 @@ export function createSelectedAuthProfileUnavailableError(params: {
 }): FailoverError {
   return new FailoverError(`Selected auth profile "${params.profileId}" is unavailable.`, {
     reason: "auth",
-    status: 401,
     code: "selected_auth_profile_unavailable",
     provider: params.provider,
     model: params.modelId,

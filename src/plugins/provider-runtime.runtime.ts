@@ -1,48 +1,38 @@
-/** Runtime-side provider discovery and provider registration resolution helpers. */
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createLazyRuntimeMethodBinder } from "../shared/lazy-runtime.js";
 
-const providerRuntimeLoader = createLazyImportLoader(() => import("./provider-runtime.js"));
-// Keep the heavy provider runtime behind an actual async boundary so callers
-// can import this wrapper eagerly without collapsing the lazy chunk.
-const bindProviderRuntime = createLazyRuntimeMethodBinder(providerRuntimeLoader.load);
+// Keep each execution owner behind the same deferred invocation boundary.
+const bindProviderAuth = createLazyRuntimeMethodBinder(
+  createLazyImportLoader(() => import("./provider-runtime-auth.js")).load,
+);
+const bindProviderCatalog = createLazyRuntimeMethodBinder(
+  createLazyImportLoader(() => import("./provider-catalog-augment.js")).load,
+);
 
-/** Lazily augments the model catalog with provider plugin metadata. */
-export const augmentModelCatalogWithProviderPlugins = bindProviderRuntime(
+export const augmentModelCatalogWithProviderPlugins = bindProviderCatalog(
   (runtime) => runtime.augmentModelCatalogWithProviderPlugins,
 );
 
-/** Lazily builds doctor hint text for provider auth problems. */
-export const buildProviderAuthDoctorHintWithPlugin = bindProviderRuntime(
-  (runtime) => runtime.buildProviderAuthDoctorHintWithPlugin,
-);
-
-/** Lazily formats API-key auth profile display text with provider plugin rules. */
-export const formatProviderAuthProfileApiKeyWithPlugin = bindProviderRuntime(
+export const formatProviderAuthProfileApiKeyWithPlugin = bindProviderAuth(
   (runtime) => runtime.formatProviderAuthProfileApiKeyWithPlugin,
 );
 
-/** Lazily runs the callback-based OAuth login owned by a provider plugin. */
-export const loginProviderOAuthWithPlugin = bindProviderRuntime(
+export const loginProviderOAuthWithPlugin = bindProviderAuth(
   (runtime) => runtime.loginProviderOAuthWithPlugin,
 );
 
-/** Lazily resolves or refreshes a session OAuth credential through its provider plugin. */
-export const resolveProviderOAuthCredentialWithPlugin = bindProviderRuntime(
+export const resolveProviderOAuthCredentialWithPlugin = bindProviderAuth(
   (runtime) => runtime.resolveProviderOAuthCredentialWithPlugin,
 );
 
-/** Lazily checks whether a provider plugin owns OAuth refresh. */
-export const resolveProviderOAuthRefreshCapabilityWithPlugin = bindProviderRuntime(
+export const resolveProviderOAuthRefreshCapabilityWithPlugin = bindProviderAuth(
   (runtime) => runtime.resolveProviderOAuthRefreshCapabilityWithPlugin,
 );
 
-/** Lazily prepares provider runtime auth for model execution. */
-export const prepareProviderRuntimeAuth = bindProviderRuntime(
+export const prepareProviderRuntimeAuth = bindProviderAuth(
   (runtime) => runtime.prepareProviderRuntimeAuth,
 );
 
-/** Lazily refreshes OAuth credentials through provider plugin runtime hooks. */
-export const refreshProviderOAuthCredentialWithPlugin = bindProviderRuntime(
+export const refreshProviderOAuthCredentialWithPlugin = bindProviderAuth(
   (runtime) => runtime.refreshProviderOAuthCredentialWithPlugin,
 );

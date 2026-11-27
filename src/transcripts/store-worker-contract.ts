@@ -1,6 +1,5 @@
-import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
-import type { TranscriptSessionDescriptor, TranscriptSourceLocator } from "./provider-types.js";
 import type {
+  queryTranscriptReadEntries,
   readLatestTranscriptEntry,
   readStoredTranscriptNotes,
   readTranscriptEntry,
@@ -9,20 +8,51 @@ import type {
   TranscriptReadPurpose,
 } from "./store-read.js";
 import type {
+  readTranscriptCanonicalSessionRow,
+  readTranscriptExportOwnership,
+  readTranscriptExportPathCollisions,
+  readTranscriptExportPathOwners,
   readTranscriptSessionByIdentity,
   readTranscriptSessionEntries,
   readTranscriptSessionMatches,
   readStoredTranscriptSummary,
   readTranscriptUtterances,
+  readTranscriptSummarySnapshot,
+  readTranscriptJsonlDigest,
 } from "./store-sqlite-read.js";
 import type {
   readRecentStoppedTranscriptSession,
   readTranscriptSummaryInputRevision,
 } from "./store-sqlite.js";
+import type { TranscriptSessionDescriptor, TranscriptSourceLocator } from "./types.js";
 
 type SessionIdentity = Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
 
 export type TranscriptReadRequests = {
+  "transcripts.canonicalSessionRow": {
+    input: { selector: string };
+    output: ReturnType<typeof readTranscriptCanonicalSessionRow>;
+  };
+  "transcripts.readEntries": {
+    input: Parameters<typeof queryTranscriptReadEntries>[1];
+    output: ReturnType<typeof queryTranscriptReadEntries>;
+  };
+  "transcripts.exportOwnership": {
+    input: { session: SessionIdentity };
+    output: ReturnType<typeof readTranscriptExportOwnership>;
+  };
+  "transcripts.exportPathCollisions": {
+    input: { exportKey: string };
+    output: ReturnType<typeof readTranscriptExportPathCollisions>;
+  };
+  "transcripts.exportPathOwners": {
+    input: { exportKey: string };
+    output: ReturnType<typeof readTranscriptExportPathOwners>;
+  };
+  "transcripts.summarySnapshot": {
+    input: { session: SessionIdentity; maxUtterances: number; minimumNextSequence?: number };
+    output: ReturnType<typeof readTranscriptSummarySnapshot>;
+  };
   "transcripts.sessionEntries": {
     input: undefined;
     output: ReturnType<typeof readTranscriptSessionEntries>;
@@ -41,7 +71,7 @@ export type TranscriptReadRequests = {
   };
   "transcripts.latest": { input: undefined; output: ReturnType<typeof readLatestTranscriptEntry> };
   "transcripts.notes": {
-    input: { session: SessionIdentity; purpose: TranscriptReadPurpose };
+    input: { session: SessionIdentity };
     output: ReturnType<typeof readStoredTranscriptNotes>;
   };
   "transcripts.libraryEntry": {
@@ -57,12 +87,16 @@ export type TranscriptReadRequests = {
     output: ReturnType<typeof readTranscriptSummaryInputRevision>;
   };
   "transcripts.utterances": {
-    input: { session: SessionIdentity; maxUtterances?: number };
+    input: { session: SessionIdentity };
     output: ReturnType<typeof readTranscriptUtterances>;
   };
   "transcripts.summary": {
     input: { session: SessionIdentity };
     output: ReturnType<typeof readStoredTranscriptSummary>;
+  };
+  "transcripts.exportDigest": {
+    input: { session: SessionIdentity };
+    output: ReturnType<typeof readTranscriptJsonlDigest>;
   };
 };
 
@@ -76,5 +110,3 @@ export type TranscriptReadOperations = {
     output: TranscriptReadResult<TranscriptReadRequests[Key]["output"]>;
   };
 };
-
-export type TranscriptReadCommand = SqliteWorkerCommand<TranscriptReadOperations>;

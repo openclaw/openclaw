@@ -2,32 +2,21 @@ import { randomBytes } from "@noble/hashes/utils.js";
 
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
-export interface UlidFactoryOptions {
-  clock?: () => number;
-  rng?: (length: number) => Uint8Array;
-}
-
-export function createMonotonicUlidFactory(options: UlidFactoryOptions = {}): () => string {
-  const clock = options.clock ?? Date.now;
-  const rng = options.rng ?? randomBytes;
+export function createMonotonicUlidFactory(): () => string {
   let lastTime = -1;
   let randomness = new Uint8Array(10);
   return () => {
-    const now = Math.floor(clock());
+    const now = Math.floor(Date.now());
     if (!Number.isSafeInteger(now) || now < 0 || now > 0xffffffffffff) {
       throw new Error("invalid ULID clock");
     }
     if (now > lastTime) {
-      const generated = rng(10);
-      if (generated.length !== 10) {
-        throw new Error("invalid ULID rng");
-      }
-      randomness = generated.slice();
+      randomness = randomBytes(10);
       lastTime = now;
     } else {
       increment(randomness);
     }
-    return encodeTime(lastTime) + encodeRandom(randomness);
+    return encodeCrockford(BigInt(lastTime), 10) + encodeRandom(randomness);
   };
 }
 
@@ -41,10 +30,10 @@ function increment(value: Uint8Array): void {
   throw new Error("ULID monotonic overflow");
 }
 
-function encodeTime(time: number): string {
-  let value = BigInt(time);
+function encodeCrockford(input: bigint, length: number): string {
+  let value = input;
   let output = "";
-  for (let index = 0; index < 10; index++) {
+  for (let index = 0; index < length; index++) {
     output = CROCKFORD[Number(value & 31n)]! + output;
     value >>= 5n;
   }
@@ -56,10 +45,5 @@ function encodeRandom(bytes: Uint8Array): string {
   for (const byte of bytes) {
     value = (value << 8n) | BigInt(byte);
   }
-  let output = "";
-  for (let index = 0; index < 16; index++) {
-    output = CROCKFORD[Number(value & 31n)]! + output;
-    value >>= 5n;
-  }
-  return output;
+  return encodeCrockford(value, 16);
 }

@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements media behavior.
 import type { proto, WAMessage } from "baileys";
 import { saveMediaStream, type SavedMedia } from "openclaw/plugin-sdk/media-store";
 import { identitiesOverlap } from "../identity.js";
@@ -7,10 +6,10 @@ import { extractContextInfo } from "./extract.js";
 import { resolveInboundMediaMimetype } from "./media-mimetype.js";
 import { downloadMediaMessage, normalizeMessageContent } from "./runtime-api.js";
 
-function unwrapMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
-  const normalized = normalizeMessageContent(message);
-  return normalized;
-}
+// WhatsApp Web and Desktop can put media urls on hosts with no DNS record. Baileys rc14
+// builds the directPath download on the url host, so these use the socket's media host
+// until Baileys falls back on its own.
+const NON_MEDIA_URL_HOSTS = new Set(["a.whatsapp.net", "web.whatsapp.net"]);
 
 export async function downloadInboundMedia(
   msg: proto.IWebMessageInfo,
@@ -18,26 +17,27 @@ export async function downloadInboundMedia(
   maxBytes = 50 * 1024 * 1024,
   normalizedMessage?: proto.IMessage,
 ): Promise<{ saved: SavedMedia; mimetype?: string; fileName?: string } | undefined> {
-  const message = normalizedMessage ?? unwrapMessage(msg.message as proto.IMessage | undefined);
+  const message = normalizedMessage ?? normalizeMessageContent(msg.message);
   if (!message) {
     return undefined;
   }
   const mimetype = resolveInboundMediaMimetype(message);
   const fileName = message.documentMessage?.fileName ?? undefined;
-  if (
-    !message.imageMessage &&
-    !message.videoMessage &&
-    !message.ptvMessage &&
-    !message.documentMessage &&
-    !message.audioMessage &&
-    !message.stickerMessage
-  ) {
+  const media =
+    message.imageMessage ??
+    message.videoMessage ??
+    message.ptvMessage ??
+    message.documentMessage ??
+    message.audioMessage ??
+    message.stickerMessage;
+  if (!media) {
     return undefined;
   }
+  const urlHost = media.url ? URL.parse(media.url)?.hostname : undefined;
   const stream = await downloadMediaMessage(
     msg as WAMessage,
     "stream",
-    {},
+    urlHost && NON_MEDIA_URL_HOSTS.has(urlHost) ? { host: sock.getMediaHost() } : {},
     {
       reuploadRequest: sock.updateMediaMessage,
       logger: sock.logger,
@@ -58,7 +58,7 @@ export async function downloadQuotedInboundMedia(
   sock: Awaited<ReturnType<typeof createWaSocket>>,
   maxBytes = 50 * 1024 * 1024,
 ): Promise<{ saved: SavedMedia; mimetype?: string; fileName?: string } | undefined> {
-  const message = unwrapMessage(msg.message as proto.IMessage | undefined);
+  const message = normalizeMessageContent(msg.message);
   const contextInfo = extractContextInfo(message);
   if (!contextInfo?.quotedMessage) {
     return undefined;

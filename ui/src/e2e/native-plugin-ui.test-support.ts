@@ -1,7 +1,30 @@
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
+import { expect } from "vitest";
+import {
+  captureControlUiE2eFailureDiagnostics,
+  installControlUiE2ePageDiagnosticRing,
+} from "../test-helpers/control-ui-e2e-diagnostics.ts";
+
+// Existing fixture hook; native rendering no longer has Lit RootParts to instrument.
+export function installNativeWorkspaceLitErrorTrace(page: Page): Promise<void> {
+  installControlUiE2ePageDiagnosticRing(page);
+  return Promise.resolve();
+}
+
+export async function captureNativeWorkspaceFailure(page: Page): Promise<void> {
+  await captureControlUiE2eFailureDiagnostics(page, {
+    label: "native workspace",
+    error: new Error("Custom workspace did not become visible"),
+  });
+}
 
 export type NativePluginWindow = Window & {
-  nativePluginProof?: { release?: () => void };
+  nativePluginProof?: {
+    release?: () => void;
+    open?: (view: string) => void;
+    mounts?: number;
+    view?: string;
+  };
   nativeActionProof?: {
     runs: number;
     current?: {
@@ -24,19 +47,14 @@ export async function waitForPendingPluginInitializer(page: Page): Promise<void>
 export const pluginId = "ui-fixture";
 
 export function catalog(revision: string) {
-  return {
+  const plugin = {
+    pluginId,
+    name: "UI fixture",
     revision,
-    diagnostics: [],
-    plugins: [
-      {
-        pluginId,
-        name: "UI fixture",
-        revision,
-        entryUrl: `/__openclaw__/plugins/control-ui/${pluginId}/${revision}/index.js`,
-        styles: [],
-      },
-    ],
+    entryUrl: `/__openclaw__/plugins/control-ui/${pluginId}/${revision}/index.js`,
+    styles: [],
   };
+  return { revision, diagnostics: [], plugins: [plugin] };
 }
 
 export function pluginModule(revision: string, replacements = true) {
@@ -53,6 +71,7 @@ export function pluginModule(revision: string, replacements = true) {
       }
       proof.host = host;
       host.ui.registerPage({id:"proof", label:"UI fixture", mount(container, context) {
+        proof.mounts = (proof.mounts ?? 0) + 1; proof.open = view => context.host.navigation.openPage({id:"proof", params:{view}});
         const title = document.createElement("h1"); title.textContent = "Fixture revision ${revision}";
         const output = document.createElement("output"); output.setAttribute("aria-label", "Fixture outcome");
         const button = (label, action) => { const element = document.createElement("button"); element.textContent = label; element.onclick = async () => { try { await action(); output.textContent = "completed"; } catch(error) { output.textContent = error.message; } }; return element; };
@@ -64,6 +83,7 @@ export function pluginModule(revision: string, replacements = true) {
           button("Call retired composer", () => proof.composer.setDraft("retired draft")),
           button("Call previous activation", () => previous.request("fixture.stale")),
           button("Release pending initializer", () => { proof.release(); throw new Error("released"); }));
+        return { update(next) { proof.view = next.props.view; } };
       }});
       host.ui.registerNavigation({id:"proof", label:"UI fixture", page:{id:"proof"}});
       host.ui.registerAccessory({id:"session", placement:"session-header", mount(container, context) {
@@ -118,4 +138,51 @@ export function pluginModule(revision: string, replacements = true) {
       return () => { proof.disposed = (proof.disposed ?? 0) + 1; };
     }
   };`;
+}
+
+export async function expectComposerFooterLayout(page: Page, composer: Locator, variant: string) {
+  for (const width of [1280, 640]) {
+    await page.setViewportSize({ width, height: 900 });
+    // Wait for the ResizeObserver-owned scrollport and its settled plugin layout together.
+    await expect
+      .poll(
+        () =>
+          composer.evaluate((element) => {
+            const footer = element.closest(".chat-footer");
+            const thread = element
+              .closest(".chat-main__conversation")
+              ?.querySelector(".chat-thread");
+            const content = thread?.querySelector(".chat-thread-inner");
+            if (
+              !(thread instanceof HTMLElement) ||
+              !thread.parentElement ||
+              !(content instanceof HTMLElement) ||
+              !footer
+            ) {
+              throw new Error("Expected the composer in the footer beside the transcript.");
+            }
+            const shellBounds = element.getBoundingClientRect();
+            const footerBounds = footer.getBoundingClientRect();
+            const input = element.querySelector(".agent-chat__input");
+            return {
+              committed:
+                thread.offsetWidth === thread.parentElement.offsetWidth &&
+                thread.offsetHeight === thread.parentElement.offsetHeight,
+              // The scrollport overlaps the footer; visible transcript content must clear it.
+              separated: content.getBoundingClientRect().bottom <= footerBounds.top,
+              contained:
+                shellBounds.top >= footerBounds.top && shellBounds.bottom <= footerBounds.bottom,
+              inputOutsideContext: Boolean(input) && !input?.closest(".chat-footer__context"),
+            };
+          }),
+        { message: `${variant} at ${width}px` },
+      )
+      .toEqual({
+        committed: true,
+        separated: true,
+        contained: true,
+        inputOutsideContext: true,
+      });
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
 }

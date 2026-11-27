@@ -1,10 +1,20 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import fs, { type BigIntStats } from "node:fs";
+import fs, { createWriteStream, type BigIntStats, type Stats } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
+import { sha256File as hashFile } from "@openclaw/fs-safe/durability";
+import {
+  ARCHIVE_LIMIT_ERROR_CODE,
+  ArchiveLimitError,
+  extractArchive,
+  type ArchiveExtractLimits,
+} from "openclaw/plugin-sdk/archive";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { resolveLlamaCppDataDir } from "./defaults.js";
 import {
   LLAMA_SERVER_BUILD,
@@ -14,24 +24,100 @@ import {
   selectLlamaServerAsset,
   type LlamaServerArchive,
   type LlamaServerAsset,
+  type LlamaServerDependency,
 } from "./llama-server-assets.js";
-import {
-  extractLlamaServerArchive,
-  extractLlamaServerDependencyArchive,
-} from "./llama-server-extract.js";
+import { formatLlamaServerRuntimeError } from "./runtime-error.js";
 
-export {
-  resolveManagedLlamaServerPaths,
-  selectLlamaServerAsset,
-  type LlamaServerAsset,
-} from "./llama-server-assets.js";
+const MEBIBYTE = 1024 * 1024;
+const LLAMA_ARCHIVE_LIMITS = {
+  maxArchiveBytes: 256 * MEBIBYTE,
+  maxEntries: 1_000,
+  maxExtractedBytes: 512 * MEBIBYTE,
+  maxEntryBytes: 256 * MEBIBYTE,
+  maxMetaEntryBytes: MEBIBYTE,
+} satisfies ArchiveExtractLimits;
+const MAX_ALIAS_BYTES = 512 * MEBIBYTE;
+const CAB_HEADER_SIZE = 12;
+const EXPAND_TIMEOUT_MS = 60_000;
+
+async function assertRegularFile(
+  filePath: string,
+  label: string,
+  source = "llama-server archive",
+): Promise<Stats> {
+  const stat = await fsp.lstat(filePath).catch(() => undefined);
+  if (!stat?.isFile() || stat.nlink > 1) {
+    throw new Error(`${source} does not contain regular ${label}`);
+  }
+  return stat;
+}
+
+async function extractVerifiedArchive(
+  archivePath: string,
+  destDir: string,
+  asset: LlamaServerArchive,
+  requiredFiles: readonly string[],
+): Promise<string> {
+  const isTar = asset.archive === "tar.gz";
+  const limits = { ...LLAMA_ARCHIVE_LIMITS, ...asset.limits };
+  const aliasCount = asset.regularFileAliases.reduce(
+    (count, [, aliases]) => count + aliases.length,
+    0,
+  );
+  if (aliasCount > limits.maxEntries) {
+    throw new ArchiveLimitError(ARCHIVE_LIMIT_ERROR_CODE.ENTRY_COUNT_EXCEEDS_LIMIT);
+  }
+  await extractArchive({
+    archivePath,
+    destDir,
+    kind: isTar ? "tar" : "zip",
+    // The installer owns destination cleanup, so keep extraction joined instead of racing
+    // fs-safe's internal transaction against a caller-side timeout.
+    timeoutMs: 0,
+    limits: {
+      ...limits,
+      maxEntries: limits.maxEntries - aliasCount,
+    },
+    tarGzip: isTar,
+    entryFilter: (entry) => (entry.kind === "symlink" ? "skip" : "extract"),
+    onFiltered: "skip-entry",
+  });
+  const rootDir = path.join(destDir, asset.archiveRoot);
+  // Paths come from the private pinned asset manifest, not archive entries.
+  for (const file of requiredFiles) {
+    await assertRegularFile(path.join(rootDir, file), `file ${file}`);
+  }
+  let copiedBytes = 0;
+  for (const [source, aliases] of asset.regularFileAliases) {
+    const sourcePath = path.join(rootDir, source);
+    const sourceStat = await assertRegularFile(sourcePath, `alias source ${source}`);
+    for (const alias of aliases) {
+      copiedBytes += sourceStat.size;
+      if (copiedBytes > MAX_ALIAS_BYTES) {
+        throw new ArchiveLimitError(ARCHIVE_LIMIT_ERROR_CODE.EXTRACTED_SIZE_EXCEEDS_LIMIT);
+      }
+      const aliasPath = path.join(rootDir, alias);
+      await fsp.copyFile(sourcePath, aliasPath, fs.constants.COPYFILE_EXCL);
+      await fsp.chmod(aliasPath, sourceStat.mode & 0o777);
+    }
+  }
+  return rootDir;
+}
+
+async function runExpand(command: string, args: string[], signal?: AbortSignal): Promise<void> {
+  await runServerCommand(command, args, signal, EXPAND_TIMEOUT_MS, (error, stderr) => {
+    const detail = stderr.trim();
+    return new Error(`Failed to extract the Visual C++ runtime${detail ? `: ${detail}` : ""}`, {
+      cause: error,
+    });
+  });
+}
 
 const DOWNLOAD_TIMEOUT_MS = 30 * 60_000;
-const VERSION_TIMEOUT_MS = 15_000;
-// Freshly extracted macOS binaries can spend tens of seconds in Gatekeeper
-// evaluation. Keep this wider budget at the pre-publication version check;
-// reused, post-publication, and CUDA probes retain the fast default.
-const FRESH_VERSION_TIMEOUT_MS = 120_000;
+const PROBE_TIMEOUT_MS = 15_000;
+// Version checks initialize backends and can trigger macOS security assessment.
+// Publication or a previous successful launch does not guarantee a warm runtime.
+const VERSION_TIMEOUT_MS = 120_000;
 
 export type LlamaDownloadProgress = (status: {
   downloadedSize: number;
@@ -53,6 +139,11 @@ function compareVersion(left: string, right: string): number {
   return 0;
 }
 
+/** The verified build cannot run on this host; rerunning setup cannot change that. */
+export class UnsupportedLlamaServerHostError extends Error {
+  override name = "UnsupportedLlamaServerHostError";
+}
+
 function assertSupportedLinuxRuntime(asset: LlamaServerAsset): void {
   if (asset.platform !== "linux") {
     return;
@@ -60,20 +151,50 @@ function assertSupportedLinuxRuntime(asset: LlamaServerAsset): void {
   const header = asOptionalRecord(asOptionalRecord(process.report?.getReport())?.header);
   const glibc = typeof header?.glibcVersionRuntime === "string" ? header.glibcVersionRuntime : "";
   if (!glibc) {
-    throw new Error(
+    throw new UnsupportedLlamaServerHostError(
       "The verified Ubuntu llama-server build requires glibc and cannot run on musl/Alpine. Install llama-server manually for this host and configure its absolute path.",
     );
   }
   const minimum = asset.arch === "arm64" ? "2.38" : "2.34";
   if (compareVersion(glibc, minimum) < 0) {
-    throw new Error(
+    throw new UnsupportedLlamaServerHostError(
       `The verified llama-server build requires glibc ${minimum}+ on Linux ${asset.arch}; this host has ${glibc}. Install a compatible llama-server manually and configure its absolute path.`,
     );
   }
 }
 
-function assetUrl(asset: LlamaServerArchive): string {
-  return `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_SERVER_RELEASE}/${asset.name}`;
+// The verified macOS archives link Accelerate's ILP64 LAPACK interface, added in macOS 13.3.
+const MACOS_MINIMUM = "13.3";
+
+async function assertSupportedMacosRuntime(
+  asset: LlamaServerAsset,
+  signal?: AbortSignal,
+  cause?: unknown,
+): Promise<void> {
+  if (asset.platform !== "darwin") {
+    return;
+  }
+  const version = await runServerCommand("/usr/bin/sw_vers", ["-productVersion"], signal).catch(
+    () => {
+      signal?.throwIfAborted();
+      // An unreadable version leaves the post-extraction launch check as the guard.
+      return "";
+    },
+  );
+  if (!/^\d+\.\d+(?:\.\d+)?$/u.test(version) || compareVersion(version, MACOS_MINIMUM) >= 0) {
+    return;
+  }
+  throw new UnsupportedLlamaServerHostError(
+    `The verified llama-server ${LLAMA_SERVER_RELEASE} build requires macOS ${MACOS_MINIMUM}+; this Mac runs macOS ${version}. Build llama-server for this Mac and set models.providers.llama-cpp.localService.command to its absolute path, or use a remote model or embedding provider.`,
+    cause === undefined ? undefined : { cause },
+  );
+}
+
+function assetUrl(asset: Pick<LlamaServerArchive, "name" | "url">): string {
+  return (
+    asset.url ??
+    `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_SERVER_RELEASE}/${asset.name}`
+  );
 }
 
 const verifiedFiles = new Map<string, { identity: string; sha256: string }>();
@@ -86,12 +207,7 @@ function fileIdentity(stat: BigIntStats): string {
 function rememberVerifiedFile(filePath: string, stat: BigIntStats, sha256: string): void {
   verifiedFiles.delete(filePath);
   verifiedFiles.set(filePath, { identity: fileIdentity(stat), sha256 });
-  if (verifiedFiles.size > VERIFIED_FILE_LIMIT) {
-    const oldest = verifiedFiles.keys().next().value;
-    if (oldest !== undefined) {
-      verifiedFiles.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(verifiedFiles, VERIFIED_FILE_LIMIT);
 }
 
 export async function sha256File(filePath: string, signal?: AbortSignal): Promise<string> {
@@ -106,16 +222,7 @@ export async function sha256File(filePath: string, signal?: AbortSignal): Promis
     const handle = await fsp.open(filePath, "r");
     try {
       const before = fileIdentity(await handle.stat({ bigint: true }));
-      const hash = createHash("sha256");
-      // Bind the digest to an open file, not a pathname that can be replaced during the scan.
-      const input = handle.createReadStream({
-        autoClose: false,
-        highWaterMark: 1024 * 1024,
-        signal,
-      });
-      for await (const chunk of input) {
-        hash.update(chunk);
-      }
+      const { digest: sha256 } = await hashFile(handle, { signal });
       const after = await handle.stat({ bigint: true });
       if (
         before !== fileIdentity(after) ||
@@ -123,7 +230,6 @@ export async function sha256File(filePath: string, signal?: AbortSignal): Promis
       ) {
         throw new Error(`File changed during integrity verification: ${filePath}. Retry setup.`);
       }
-      const sha256 = hash.digest("hex");
       rememberVerifiedFile(filePath, after, sha256);
       return sha256;
     } finally {
@@ -244,7 +350,8 @@ async function runServerCommand(
   command: string,
   args: string[],
   signal?: AbortSignal,
-  timeoutMs = VERSION_TIMEOUT_MS,
+  timeoutMs = PROBE_TIMEOUT_MS,
+  formatError: (error: Error, stderr: string) => Error = formatRuntimeDependencyError,
 ): Promise<string> {
   return await new Promise((resolve, reject) => {
     execFile(
@@ -253,7 +360,11 @@ async function runServerCommand(
       { timeout: timeoutMs, signal, windowsHide: true },
       (error, stdout, stderr) => {
         if (error) {
-          reject(new Error(error.message, { cause: error }));
+          reject(
+            signal?.aborted
+              ? toErrorObject(signal.reason, "Installation cancelled")
+              : formatError(error, stderr),
+          );
         } else {
           resolve(`${stdout}${stderr}`.trim());
         }
@@ -264,34 +375,20 @@ async function runServerCommand(
 
 function formatRuntimeDependencyError(error: unknown): Error {
   const detail = error instanceof Error ? error.message : String(error);
-  if (process.platform === "linux") {
-    return new Error(
-      `The verified llama-server build could not start. Install the OpenMP runtime (for example libgomp1 on Debian/Ubuntu or libgomp on Fedora), then rerun llama.cpp setup. Detail: ${detail}`,
-      { cause: error },
-    );
-  }
   if (process.platform === "win32") {
     return new Error(
-      `The verified llama-server build could not start. Install the Microsoft Visual C++ 2015-2022 Redistributable, then rerun llama.cpp setup. Detail: ${detail}`,
+      `The verified llama-server build could not start with its app-local Visual C++ runtime. Rerun llama.cpp setup to reinstall it, or configure a compatible llama-server manually. Detail: ${detail}`,
       { cause: error },
     );
   }
-  return new Error(`The verified llama-server build could not start: ${detail}`, { cause: error });
+  return formatLlamaServerRuntimeError(error);
 }
 
-async function validateInstalledServer(
-  command: string,
-  asset: LlamaServerAsset,
-  signal?: AbortSignal,
-  versionTimeoutMs = VERSION_TIMEOUT_MS,
-): Promise<void> {
-  let version: string;
-  try {
-    version = await runServerCommand(command, ["--version"], signal, versionTimeoutMs);
-  } catch (error) {
-    signal?.throwIfAborted();
-    throw formatRuntimeDependencyError(error);
-  }
+function queryServerVersion(command: string, signal?: AbortSignal): Promise<string> {
+  return runServerCommand(command, ["--version"], signal, VERSION_TIMEOUT_MS);
+}
+
+function validateServerVersionOutput(command: string, version: string): void {
   const versionLine = version.split(/\r?\n/u, 1)[0]?.trim() ?? "";
   const match = versionLine.match(/^version: .+ \(build (\d+), commit ([a-f\d]{9})\)$/u);
   const build = match?.[1] ? Number(match[1]) : undefined;
@@ -301,6 +398,13 @@ async function validateInstalledServer(
       `Unexpected llama-server build at ${command}: expected ${LLAMA_SERVER_RELEASE} (${LLAMA_SERVER_COMMIT.slice(0, 9)}), got ${version || "no version output"}`,
     );
   }
+}
+
+async function validateCudaServer(
+  command: string,
+  asset: LlamaServerAsset,
+  signal?: AbortSignal,
+): Promise<void> {
   if (asset.backend === "cuda") {
     // --version succeeds even if a dynamically loaded CUDA backend fails. Device
     // enumeration must prove CUDA is usable before this installation is published.
@@ -313,11 +417,30 @@ async function validateInstalledServer(
   }
 }
 
+async function validateInstalledServer(
+  command: string,
+  asset: LlamaServerAsset,
+  signal?: AbortSignal,
+): Promise<void> {
+  validateServerVersionOutput(command, await queryServerVersion(command, signal));
+  await validateCudaServer(command, asset, signal);
+}
+
 type LlamaServerInstallOptions = {
   asset?: LlamaServerAsset;
   signal?: AbortSignal;
   onProgress?: LlamaDownloadProgress;
 };
+
+function formatVcRuntimeFallbackError(startupError: unknown, fallbackError: unknown): Error {
+  const startupDetail = startupError instanceof Error ? startupError.message : String(startupError);
+  const fallbackDetail =
+    fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+  return new Error(
+    `The extracted llama-server could not start with the installed Windows runtime, and its app-local Visual C++ runtime fallback did not restore it. Initial startup detail: ${startupDetail} Fallback detail: ${fallbackDetail}`,
+    { cause: fallbackError },
+  );
+}
 
 async function installLlamaServer(
   asset: LlamaServerAsset,
@@ -332,9 +455,16 @@ async function installLlamaServer(
       .then((stat) => stat.isFile())
       .catch(() => false)
   ) {
-    await validateInstalledServer(command, asset, options.signal);
+    // A build that validates is reused on any macOS, including one built for an older release.
+    try {
+      await validateInstalledServer(command, asset, options.signal);
+    } catch (error) {
+      await assertSupportedMacosRuntime(asset, options.signal, error);
+      throw error;
+    }
     return command;
   }
+  await assertSupportedMacosRuntime(asset, options.signal);
   const dataDir = resolveLlamaCppDataDir();
   const archivePath = path.join(dataDir, `.download-${randomUUID()}-${asset.name}`);
   const extractDir = path.join(dataDir, `.extract-${randomUUID()}`);
@@ -349,50 +479,171 @@ async function installLlamaServer(
     });
     const serverExtractDir = path.join(extractDir, "server");
     await fsp.mkdir(serverExtractDir, { recursive: true });
-    const extractedCommand = await extractLlamaServerArchive({
-      archivePath,
-      destDir: serverExtractDir,
-      asset,
-    });
+    const extractedCommand = path.join(
+      await extractVerifiedArchive(archivePath, serverExtractDir, asset, [asset.executable]),
+      asset.executable,
+    );
     const extractedRoot = path.dirname(extractedCommand);
-    for (const [index, dependency] of (asset.dependencies ?? []).entries()) {
+    const stageDependency = async (
+      dependency: LlamaServerDependency,
+      index: number,
+    ): Promise<void> => {
       options.signal?.throwIfAborted();
       const dependencyArchive = path.join(extractDir, dependency.name);
       await downloadVerifiedFile({
         url: assetUrl(dependency),
         destination: dependencyArchive,
         expectedSha256: dependency.sha256,
+        expectedSize: dependency.archive === "vc-redist" ? dependency.size : undefined,
         signal: options.signal,
         onProgress: options.onProgress,
       });
       const dependencyExtractDir = path.join(extractDir, `dependency-${index}`);
       await fsp.mkdir(dependencyExtractDir);
-      const dependencyRoot = await extractLlamaServerDependencyArchive({
-        archivePath: dependencyArchive,
-        destDir: dependencyExtractDir,
-        asset: dependency,
-      });
-      for (const file of dependency.files) {
+      let dependencyRoot: string;
+      if (dependency.archive === "vc-redist") {
+        const { nestedCabinet, files } = dependency;
+        const systemRoot = process.env.SystemRoot;
+        if (!systemRoot || !path.win32.isAbsolute(systemRoot)) {
+          throw new Error("SystemRoot is unavailable; cannot extract the Visual C++ runtime");
+        }
+        const expandCommand = path.win32.join(systemRoot, "System32", "expand.exe");
+        const containerPath = path.join(dependencyExtractDir, "bundle.cab");
+        const nestedDir = path.join(dependencyExtractDir, "nested");
+        const filesDir = path.join(dependencyExtractDir, "files");
+        await Promise.all([
+          fsp.mkdir(nestedDir, { recursive: true }),
+          fsp.mkdir(filesDir, { recursive: true }),
+        ]);
+        const source = await fsp.open(dependencyArchive, "r");
+        try {
+          const stat = await source.stat();
+          if (!stat.isFile() || stat.size !== dependency.size) {
+            throw new Error(
+              `Visual C++ runtime bundle size mismatch: expected ${dependency.size}, got ${stat.size}`,
+            );
+          }
+          if (
+            dependency.containerOffset < 0 ||
+            dependency.containerSize < CAB_HEADER_SIZE ||
+            dependency.containerOffset + dependency.containerSize > stat.size
+          ) {
+            throw new Error("invalid Visual C++ runtime container bounds");
+          }
+          const header = Buffer.alloc(CAB_HEADER_SIZE);
+          const headerRead = await source.read(
+            header,
+            0,
+            header.length,
+            dependency.containerOffset,
+          );
+          if (
+            headerRead.bytesRead !== header.length ||
+            header.subarray(0, 4).toString("ascii") !== "MSCF" ||
+            header.readUInt32LE(8) !== dependency.containerSize
+          ) {
+            throw new Error("Visual C++ runtime bundle does not contain the pinned cabinet");
+          }
+
+          await pipeline(
+            source.createReadStream({
+              start: dependency.containerOffset,
+              end: dependency.containerOffset + dependency.containerSize - 1,
+              autoClose: false,
+            }),
+            createWriteStream(containerPath, { flags: "wx", mode: 0o600 }),
+            { signal: options.signal },
+          );
+        } finally {
+          await source.close();
+        }
+        await runExpand(
+          expandCommand,
+          [`-F:${nestedCabinet}`, containerPath, nestedDir],
+          options.signal,
+        );
+        const nestedPath = path.join(nestedDir, nestedCabinet);
+        await assertRegularFile(nestedPath, `file ${nestedCabinet}`, "Visual C++ runtime");
+        for (const file of files) {
+          options.signal?.throwIfAborted();
+          await runExpand(
+            expandCommand,
+            [`-F:${file.source}`, nestedPath, filesDir],
+            options.signal,
+          );
+          const sourcePath = path.join(filesDir, file.source);
+          await assertRegularFile(sourcePath, `file ${file.source}`, "Visual C++ runtime");
+          await fsp.copyFile(
+            sourcePath,
+            path.join(dependencyExtractDir, file.target),
+            fs.constants.COPYFILE_EXCL,
+          );
+        }
+        dependencyRoot = dependencyExtractDir;
+      } else {
+        dependencyRoot = await extractVerifiedArchive(
+          dependencyArchive,
+          dependencyExtractDir,
+          dependency,
+          dependency.files,
+        );
+      }
+      const files =
+        dependency.archive === "vc-redist"
+          ? dependency.files.map((file) => file.target)
+          : dependency.files;
+      for (const file of files) {
         await fsp.copyFile(
           path.join(dependencyRoot, file),
           path.join(extractedRoot, file),
           fs.constants.COPYFILE_EXCL,
         );
       }
+    };
+    const dependencies = asset.dependencies ?? [];
+    const windowsRuntimeDependencies: Array<{
+      dependency: LlamaServerDependency;
+      index: number;
+    }> = [];
+    for (const [index, dependency] of dependencies.entries()) {
+      if (dependency.archive === "vc-redist") {
+        windowsRuntimeDependencies.push({ dependency, index });
+      } else {
+        await stageDependency(dependency, index);
+      }
     }
     options.signal?.throwIfAborted();
     await fsp.chmod(extractedCommand, 0o755);
-    await validateInstalledServer(
-      extractedCommand,
-      asset,
-      options.signal,
-      FRESH_VERSION_TIMEOUT_MS,
-    );
+    if (windowsRuntimeDependencies.length > 0) {
+      let version: string;
+      try {
+        version = await queryServerVersion(extractedCommand, options.signal);
+      } catch (startupError) {
+        options.signal?.throwIfAborted();
+        try {
+          for (const { dependency, index } of windowsRuntimeDependencies) {
+            await stageDependency(dependency, index);
+          }
+        } catch (stagingError) {
+          options.signal?.throwIfAborted();
+          throw formatVcRuntimeFallbackError(startupError, stagingError);
+        }
+        try {
+          version = await queryServerVersion(extractedCommand, options.signal);
+        } catch (retryError) {
+          options.signal?.throwIfAborted();
+          throw formatVcRuntimeFallbackError(startupError, retryError);
+        }
+      }
+      validateServerVersionOutput(extractedCommand, version);
+      await validateCudaServer(extractedCommand, asset, options.signal);
+    } else {
+      await validateInstalledServer(extractedCommand, asset, options.signal);
+    }
     await fsp.mkdir(path.dirname(installDir), { recursive: true });
     options.signal?.throwIfAborted();
     await fsp.rm(installDir, { recursive: true, force: true });
     await fsp.rename(extractedRoot, installDir);
-    await validateInstalledServer(command, asset, options.signal);
     return command;
   } finally {
     await Promise.all([
@@ -404,7 +655,6 @@ async function installLlamaServer(
 
 export async function ensureLlamaServerInstalled(options: LlamaServerInstallOptions = {}): Promise<{
   command: string;
-  asset: LlamaServerAsset;
 }> {
   options.signal?.throwIfAborted();
   const asset = options.asset ?? selectLlamaServerAsset();
@@ -421,19 +671,10 @@ export async function ensureLlamaServerInstalled(options: LlamaServerInstallOpti
       }
     });
   installationPromises.set(key, pending);
-  const command =
-    previous && options.signal
-      ? await new Promise<string>((resolve, reject) => {
-          const signal = options.signal;
-          const onAbort = () => reject(toErrorObject(signal?.reason, "Installation cancelled"));
-          signal?.addEventListener("abort", onAbort, { once: true });
-          void pending
-            .then(resolve, reject)
-            .finally(() => signal?.removeEventListener("abort", onAbort));
-          if (signal?.aborted) {
-            onAbort();
-          }
-        })
-      : await pending;
-  return { command, asset };
+  const command = await racePromiseWithAbortSignal(
+    pending,
+    previous ? options.signal : undefined,
+    (signal) => toErrorObject(signal.reason, "Installation cancelled"),
+  );
+  return { command };
 }

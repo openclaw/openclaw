@@ -1,10 +1,14 @@
 import { buildSandboxHostPath } from "../agents/sandbox-host.js";
 import type { BoardWidgetHtmlViewMetadata } from "../boards/board-store.js";
 import { WIDGET_CDN_ORIGINS } from "../plugin-sdk/widget-html.js";
+import { WIDGET_MEDIA_SOURCES } from "../shared/widget-media.js";
 
 type BoardWidgetSandboxMetadata = Pick<BoardWidgetHtmlViewMetadata, "declared" | "grantState"> & {
   resourceOrigins?: readonly string[];
 };
+
+// This policy depends only on frozen process constants, never a widget or viewer.
+let fixedSandboxPath: string | undefined;
 
 function grantedConnectOrigins(document: BoardWidgetSandboxMetadata): string[] | undefined {
   if (document.grantState !== "granted") {
@@ -16,13 +20,22 @@ function grantedConnectOrigins(document: BoardWidgetSandboxMetadata): string[] |
 
 export function buildBoardWidgetSandboxPath(document: BoardWidgetSandboxMetadata): string {
   const connectDomains = grantedConnectOrigins(document);
-  return buildSandboxHostPath({
+  const fixedPolicy = !connectDomains && !document.resourceOrigins?.length;
+  if (fixedPolicy && fixedSandboxPath !== undefined) {
+    return fixedSandboxPath;
+  }
+  const pathname = buildSandboxHostPath({
     // Best-effort hardening for the documented WebRTC residual; the DOM guard
     // reduces fresh descendant realms but is not an authorization boundary.
     blockDescendantFrames: true,
+    mediaDomains: [...WIDGET_MEDIA_SOURCES, ...(document.resourceOrigins ?? [])],
     resourceDomains: [...new Set([...WIDGET_CDN_ORIGINS, ...(document.resourceOrigins ?? [])])],
     ...(connectDomains ? { connectDomains } : {}),
   });
+  if (fixedPolicy) {
+    fixedSandboxPath = pathname;
+  }
+  return pathname;
 }
 
 /** Defense in depth for direct/legacy widget document loads outside the proxy host. */
@@ -38,7 +51,7 @@ export function buildBoardWidgetContentSecurityPolicy(
     `style-src 'unsafe-inline' ${cdnSources}`,
     `font-src data: ${cdnSources}`,
     `img-src data: ${resourceSources}`.trim(),
-    `media-src data: ${resourceSources}`.trim(),
+    `media-src data: ${WIDGET_MEDIA_SOURCES.join(" ")} ${resourceSources}`.trim(),
     `connect-src ${connectSources}`,
     "webrtc 'block'",
     "base-uri 'none'",

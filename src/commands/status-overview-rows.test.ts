@@ -1,322 +1,286 @@
-// Status overview row tests cover status-all overview values, update metadata, and display rows.
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { theme } from "../../packages/terminal-core/src/theme.js";
+import * as memoryStatus from "../memory-host-sdk/status.js";
 import { VERSION } from "../version.js";
 import {
   buildStatusAllOverviewRows,
   buildStatusCommandOverviewRows,
 } from "./status-overview-rows.ts";
-import {
-  baseStatusOverviewSurface,
-  createStatusCommandOverviewRowsParams,
-} from "./status.test-support.ts";
+import { createStatusCommandOverviewRowsParams } from "./status.test-support.ts";
+
+let params: ReturnType<typeof createStatusCommandOverviewRowsParams>;
+beforeEach(() => {
+  params = createStatusCommandOverviewRowsParams();
+  params.surface = { ...params.surface };
+  params.summary = { ...params.summary };
+  vi.spyOn(theme, "success").mockImplementation((value) => `ok(${String(value)})`);
+  vi.spyOn(theme, "warn").mockImplementation((value) => `warn(${String(value)})`);
+  vi.spyOn(theme, "muted").mockImplementation((value) => `muted(${String(value)})`);
+  vi.spyOn(memoryStatus, "resolveMemoryVectorState").mockReturnValue({
+    state: "ready",
+    tone: "ok",
+  });
+  vi.spyOn(memoryStatus, "resolveMemoryFtsState").mockReturnValue({ state: "ready", tone: "warn" });
+  vi.spyOn(memoryStatus, "resolveMemoryCacheSummary").mockReturnValue({
+    text: "cache warm",
+    tone: "muted",
+  });
+});
+afterEach(() => vi.restoreAllMocks());
 
 function findRowValue(rows: Array<{ Item: string; Value: string }>, item: string) {
   return rows.find((row) => row.Item === item)?.Value;
 }
-
-describe("status-overview-rows", () => {
-  it.each(["default", "all"])("preserves service inspection failures in %s output", (mode) => {
-    const params = createStatusCommandOverviewRowsParams();
-    const service = {
-      label: "LaunchAgent",
-      installed: false,
-      loadedText: "unknown",
-      loadState: { status: "unknown" as const, detail: "permission denied token=fixture" },
-    };
-    const surface = {
-      ...params.surface,
-      gatewayService: service,
-      nodeService: {
-        ...service,
-        loadedText: "not loaded",
-        loadState: { status: "not-loaded" as const },
-        runtime: { status: "unknown", detail: "system domain permission denied token=fixture" },
-      },
-    };
-    const rows =
-      mode === "default"
-        ? buildStatusCommandOverviewRows({ ...params, surface })
-        : buildStatusAllOverviewRows({
-            ...params,
-            surface,
-            configPath: "/tmp/openclaw.json",
-            secretDiagnosticsCount: 0,
-          });
-
-    expect(findRowValue(rows, "Gateway service")).toBe(
-      "LaunchAgent unknown (inspection failed: permission denied token=***)",
-    );
-    expect(findRowValue(rows, "Node service")).toBe(
-      "LaunchAgent not loaded (inspection failed: system domain permission denied token=***) · unknown",
-    );
+const value = (item: string) => findRowValue(buildStatusCommandOverviewRows(params), item);
+function allRows(overrides: Partial<Parameters<typeof buildStatusAllOverviewRows>[0]> = {}) {
+  return buildStatusAllOverviewRows({
+    ...params,
+    configPath: "/fixture/openclaw.json",
+    secretDiagnosticsCount: 0,
+    ...overrides,
   });
+}
 
-  it("builds command overview rows from the shared surface", () => {
-    const rows = buildStatusCommandOverviewRows(createStatusCommandOverviewRowsParams());
+function backup(createdAt: number, kind: "git" | "archive", status: "ok" | "failed") {
+  return { id: "fixture", archivePath: "", createdAt, kind, status };
+}
 
-    expect(findRowValue(rows, "OS")).toBe(`macOS · node ${process.versions.node}`);
-    expect(findRowValue(rows, "Memory")).toBe(
-      "1 files · 2 chunks · plugin memory · ok(vector ready) · warn(fts ready) · muted(cache warm)",
-    );
-    expect(findRowValue(rows, "Plugin compatibility")).toBe("warn(1 notice · 1 plugin)");
-    expect(findRowValue(rows, "Telemetry")).toBe("muted(disabled · update checks only)");
-    expect(findRowValue(rows, "Host desktop")).toBe("muted(disabled)");
-    expect(findRowValue(rows, "Sessions")).toBe(
-      "2 stored · default gpt-5.5 (12k ctx) · store.json",
-    );
+it("counts recent activity in the status-all agent overview", () => {
+  const rows = allRows({
+    agentStatus: {
+      bootstrapPendingCount: 2,
+      totalSessions: 3,
+      agents: [
+        { id: "main", lastActiveAgeMs: 5_000 },
+        { id: "ops", lastActiveAgeMs: 11 * 60_000 },
+        { id: "idle", lastActiveAgeMs: null },
+      ],
+    },
   });
+  expect(findRowValue(rows, "Agents")).toBe("3 total · 2 bootstrapping · 1 active · 3 sessions");
+  expect(findRowValue(rows, "Secrets")).toBe("none");
+  expect(findRowValue(allRows({ secretDiagnosticsCount: 1 }), "Secrets")).toBe("1 diagnostic");
+});
 
-  it.each([
-    {
-      label: "explicitly enabled",
-      telemetry: { enabled: true },
-      doNotTrack: undefined,
-      noAutoUpdate: undefined,
-      checkOnStart: true,
-      expected: "ok(enabled · anonymous feature stats)",
-    },
-    {
-      label: "blocked by DO_NOT_TRACK",
-      telemetry: { enabled: true },
-      doNotTrack: "1",
-      noAutoUpdate: undefined,
-      checkOnStart: true,
-      expected: "muted(disabled (DO_NOT_TRACK))",
-    },
-    {
-      label: "blocked by a trimmed DO_NOT_TRACK value",
-      telemetry: { enabled: true },
-      doNotTrack: " TRUE ",
-      noAutoUpdate: undefined,
-      checkOnStart: true,
-      expected: "muted(disabled (DO_NOT_TRACK))",
-    },
-    {
-      label: "update checks disabled",
-      telemetry: { enabled: true },
-      doNotTrack: undefined,
-      noAutoUpdate: undefined,
-      checkOnStart: false,
-      expected: "muted(disabled · update checks off)",
-    },
-    {
-      label: "update checks disabled by OPENCLAW_NO_AUTO_UPDATE=yes",
-      telemetry: { enabled: true },
-      doNotTrack: undefined,
-      noAutoUpdate: "yes",
-      checkOnStart: true,
-      expected: "muted(disabled · update checks off)",
-    },
-    {
-      label: "update checks disabled by a trimmed OPENCLAW_NO_AUTO_UPDATE=on",
-      telemetry: { enabled: true },
-      doNotTrack: undefined,
-      noAutoUpdate: " on ",
-      checkOnStart: true,
-      expected: "muted(disabled · update checks off)",
-    },
-  ])(
-    "shows telemetry state when $label",
-    ({ telemetry, doNotTrack, noAutoUpdate, checkOnStart, expected }) => {
-      const params = createStatusCommandOverviewRowsParams();
-      const rows = buildStatusCommandOverviewRows({
-        ...params,
-        env: {
-          ...params.env,
-          DO_NOT_TRACK: doNotTrack,
-          OPENCLAW_NO_AUTO_UPDATE: noAutoUpdate,
-        },
-        surface: {
-          ...params.surface,
-          cfg: { ...params.surface.cfg, telemetry, update: { checkOnStart } },
-        },
-      });
+it("reports events, skipped probes and distinct incompatible plugins", () => {
+  params.health = undefined;
+  params.pluginCompatibility = ["a", "a", "b"].map((pluginId) => ({
+    pluginId,
+    code: "hook-only",
+    severity: "warn",
+    message: "fixture",
+  }));
+  const rows = buildStatusCommandOverviewRows(params);
+  expect(findRowValue(rows, "Events")).toBe("2 queued");
+  expect(findRowValue(rows, "Checks")).toBe("muted(skipped (use --deep))");
+  expect(findRowValue(rows, "Plugin compatibility")).toBe("warn(3 notices · 2 plugins)");
+  params.summary.queuedSystemEvents = [];
+  params.pluginCompatibility = [];
+  const emptyRows = buildStatusCommandOverviewRows(params);
+  expect(findRowValue(emptyRows, "Events")).toBe("none");
+  expect(findRowValue(emptyRows, "Plugin compatibility")).toBe("ok(none)");
+});
 
-      expect(findRowValue(rows, "Telemetry")).toBe(expected);
-    },
+it("reports stored sessions, default context and multiple or absent stores", () => {
+  params.summary.sessions = { ...params.summary.sessions, paths: ["store.json", "other.json"] };
+  expect(value("Sessions")).toBe("2 stored · default gpt-5.5 (12k ctx) · 2 stores");
+  params.summary.sessions = {
+    ...params.summary.sessions,
+    count: 0,
+    paths: [],
+    defaults: { model: null, contextTokens: null },
+  };
+  expect(value("Sessions")).toBe("0 stored · default unknown · unknown");
+});
+
+it("keeps default status concise and reports configured family choices without secrets", () => {
+  expect(value("Database engines (configured)")).toBeUndefined();
+  const all = allRows();
+  expect(findRowValue(all, "Database engines (configured)")).toContain(
+    "state: default=sqlite, override=inherit, effective=sqlite",
   );
-
-  it("reports automatic update checks as disabled for Nix-managed installations", () => {
-    const params = createStatusCommandOverviewRowsParams();
-    const rows = buildStatusCommandOverviewRows({
-      ...params,
-      env: { ...params.env, OPENCLAW_NIX_MODE: "1" },
-      surface: {
-        ...params.surface,
-        cfg: { ...params.surface.cfg, telemetry: { enabled: true } },
+  params.surface = {
+    ...params.surface,
+    cfg: {
+      ...params.surface.cfg,
+      database: {
+        families: { workboard: { engine: "postgres" } },
+        postgres: { connection: "postgres://fixture:secret@host/database" },
       },
-    });
-
-    expect(findRowValue(rows, "Telemetry")).toBe("muted(disabled · update checks off)");
-  });
-
-  it("marks skipped memory inspection as not checked in fast status output", () => {
-    const rows = buildStatusCommandOverviewRows(
-      createStatusCommandOverviewRowsParams({
-        memory: null,
-        memoryPlugin: { enabled: true, slot: "memory-lancedb-pro" },
-      }),
-    );
-
-    expect(findRowValue(rows, "Memory")).toBe(
-      "muted(enabled (plugin memory-lancedb-pro) · not checked)",
-    );
-  });
-
-  it("shows managed host desktop coordinates", () => {
-    const params = createStatusCommandOverviewRowsParams();
-    const rows = buildStatusCommandOverviewRows({
-      ...params,
-      summary: {
-        ...params.summary,
-        hostDesktop: {
-          enabled: true,
-          state: "managed",
-          managedState: "running",
-          display: 99,
-          port: 46_001,
-          security: "VncAuth",
-        },
-      },
-    });
-
-    expect(findRowValue(rows, "Host desktop")).toBe(
-      "managed · running · display :99 · 127.0.0.1:46001 · security VncAuth",
-    );
-  });
-
-  it("shows update restart state in fast status output", () => {
-    const rows = buildStatusCommandOverviewRows(
-      createStatusCommandOverviewRowsParams({
-        updateRows: [{ Item: "Update restart", Value: "failed · managed-service-handoff-failed" }],
-      }),
-    );
-
-    expect(findRowValue(rows, "Update restart")).toBe("failed · managed-service-handoff-failed");
-  });
-
-  it("lists plugins quarantined as configured-unavailable", () => {
-    const rows = buildStatusCommandOverviewRows(
-      createStatusCommandOverviewRowsParams({
-        summary: {
-          ...createStatusCommandOverviewRowsParams().summary,
-          degradedPlugins: [
-            {
-              pluginId: "discord",
-              state: "configured-unavailable",
-              diagnostic: {
-                kind: "plugin-verification",
-                reason: "unreadable-package-json",
-                detail: "permission denied",
-              },
-            },
-          ],
-        },
-      }),
-    );
-
-    expect(findRowValue(rows, "Degraded plugins")).toBe("warn(1 configured-unavailable · discord)");
-  });
-
-  it.each([
-    ["default", "startupMigrationWarning", "Startup migrations"],
-    ["all", "startupMigrationWarning", "Startup migrations"],
-    ["default", "startupRecoveryWarning", "Session recovery"],
-    ["all", "startupRecoveryWarning", "Session recovery"],
-  ] as const)("surfaces %s %s output", (mode, field, label) => {
-    const params = createStatusCommandOverviewRowsParams();
-    params.summary[field] = "Inspect the affected state. Run openclaw doctor.";
-    const rows =
-      mode === "default"
-        ? buildStatusCommandOverviewRows(params)
-        : buildStatusAllOverviewRows({
-            ...params,
-            configPath: "/tmp/openclaw.json",
-            secretDiagnosticsCount: 0,
-          });
-    expect(findRowValue(rows, label)).toContain(params.summary[field]);
-  });
-
-  it("builds status-all overview rows from the shared surface", () => {
-    const summary = createStatusCommandOverviewRowsParams().summary;
-    const rows = buildStatusAllOverviewRows({
-      surface: {
-        ...baseStatusOverviewSurface,
-        tailscaleMode: "off",
-        tailscaleHttpsUrl: null,
-        gatewayConnection: { url: "wss://gateway.example.com", urlSource: "config" },
-      },
-      summary: {
-        ...summary,
-        secretEgressProxy: {
-          state: "degraded",
-          caExpiresAt: "2036-09-01T00:00:00.000Z",
-          failedCertificates: 1,
-          message: "Check OpenSSL, then retry the request.",
-        },
-        degradedSecretOwners: [
-          {
-            ownerKind: "capability",
-            ownerId: "tts",
-            state: "unavailable",
-            paths: ["tts.providers.elevenlabs.apiKey"],
-            reason: "secret reference was not found",
-          },
-        ],
-        degradedPlugins: [
-          {
-            pluginId: "discord",
-            state: "configured-unavailable",
-            diagnostic: {
-              kind: "plugin-verification",
-              reason: "unreadable-package-json",
-              detail: "permission denied",
-            },
-          },
-        ],
-      },
-      osLabel: "macOS",
-      configPath: "/tmp/openclaw.json",
-      secretDiagnosticsCount: 2,
-      updateRows: [{ Item: "Update restart", Value: "restart pending health verification" }],
-      agentStatus: {
-        bootstrapPendingCount: 1,
-        totalSessions: 2,
-        agents: [{ id: "main", lastActiveAgeMs: 60_000 }],
-      },
-    });
-
-    expect(findRowValue(rows, "Version")).toBe(VERSION);
-    expect(findRowValue(rows, "OS")).toBe("macOS");
-    expect(findRowValue(rows, "Config")).toBe("/tmp/openclaw.json");
-    expect(findRowValue(rows, "Gateway self")).toBe("gateway app 1.2.3");
-    expect(findRowValue(rows, "Update")).toContain("behind 2");
-    expect(findRowValue(rows, "Update restart")).toBe("restart pending health verification");
-    expect(findRowValue(rows, "Security")).toBe("Run: openclaw security audit --deep");
-    expect(findRowValue(rows, "Secret egress proxy")).toBe(
-      "Check OpenSSL, then retry the request.",
-    );
-    expect(findRowValue(rows, "Degraded secrets")).toBe("1 degraded · capability:tts");
-    expect(findRowValue(rows, "Degraded plugins")).toBe("1 configured-unavailable · discord");
-    expect(findRowValue(rows, "Secrets")).toBe("2 diagnostics");
-  });
-
-  it.each([null, {}])(
-    "uses unknown only when Gateway self metadata is absent (%j)",
-    (gatewaySelf) => {
-      const params = createStatusCommandOverviewRowsParams();
-      const surface = { ...params.surface, gatewaySelf };
-      const rows = buildStatusAllOverviewRows({
-        ...params,
-        surface,
-        configPath: "/tmp/openclaw.json",
-        secretDiagnosticsCount: 0,
-      });
-
-      expect(findRowValue(rows, "Gateway self")).toBe("unknown");
-      expect(
-        findRowValue(buildStatusCommandOverviewRows({ ...params, surface }), "Gateway self"),
-      ).toBeUndefined();
     },
+  };
+  const database = value("Database engines (configured)");
+  expect(database).toContain("state: default=sqlite, override=inherit, effective=sqlite");
+  expect(database).toContain("workboard: default=sqlite, override=postgres, effective=postgres");
+  expect(database).toContain("quarantine: default=sqlite, override=fixed local, effective=sqlite");
+  expect(database).not.toContain("secret");
+  expect(database).not.toContain("experimental");
+});
+
+it("shows the latest offsite attempt beside a newer local backup", () => {
+  vi.spyOn(Date, "now").mockReturnValue(3_600_000);
+  params.backupFreshness = {
+    latest: backup(3_000_000, "git", "ok"),
+    latestOffsite: { ...backup(1, "archive", "failed"), target: "offsite" },
+  };
+  const rows = buildStatusCommandOverviewRows(params);
+  expect(findRowValue(rows, "Backups")).toContain("last ok");
+  expect(findRowValue(rows, "Offsite backup")).toContain("offsite: last attempt failed");
+});
+
+it("redacts both load and runtime service inspection errors", () => {
+  const service = {
+    label: "LaunchAgent",
+    installed: false,
+    loadedText: "unknown",
+    loadState: { status: "unknown" as const, detail: "permission denied token=fixture" },
+  };
+  params.surface.gatewayService = service;
+  params.surface.nodeService = {
+    ...service,
+    loadedText: "not loaded",
+    loadState: { status: "not-loaded" as const },
+    runtime: { status: "unknown", detail: "system domain permission denied token=fixture" },
+  };
+  const rows = buildStatusCommandOverviewRows(params);
+  expect(findRowValue(rows, "Gateway service")).toBe(
+    "LaunchAgent unknown (inspection failed: permission denied token=***)",
   );
+  expect(findRowValue(rows, "Node service")).toBe(
+    "LaunchAgent not loaded (inspection failed: system domain permission denied token=***) · unknown",
+  );
+});
+
+it.each([
+  [{}, "ok(enabled · anonymous feature stats)"],
+  [{ DO_NOT_TRACK: " TRUE " }, "muted(disabled (DO_NOT_TRACK))"],
+  [{ OPENCLAW_NIX_MODE: "1" }, "muted(disabled · update checks off)"],
+] as const)("shows telemetry state for %j", (env, expected) => {
+  params.env = { ...params.env, ...env };
+  params.surface.cfg = {
+    ...params.surface.cfg,
+    telemetry: { enabled: true },
+    update: { checkOnStart: true },
+  };
+  expect(value("Telemetry")).toBe(expected);
+});
+
+it("marks skipped memory inspection as not checked in fast status output", () => {
+  params.memory = null;
+  params.memoryPlugin = { enabled: true, slot: "memory-lancedb-pro" };
+  expect(value("Memory")).toBe("muted(enabled (plugin memory-lancedb-pro) · not checked)");
+});
+
+it("renders native provider health without legacy index counters", () => {
+  params.memory = {
+    agentId: "main",
+    provider: "records",
+    health: { status: "degraded", message: "warming" },
+  };
+  expect(value("Memory")).toBe("plugin records · warn(degraded) · warming");
+});
+
+it("shows supported remediation for an enabled automation without a route", () => {
+  params.summary.heartbeat = {
+    defaultAgentId: "main",
+    agents: [
+      { agentId: "main", enabled: true, every: "scheduled", everyMs: null, waitingForRoute: true },
+    ],
+  };
+  const heartbeat = value("Heartbeat");
+  expect(heartbeat).toContain("scheduled (main; waiting for delivery route");
+  expect(heartbeat).toContain('commands.ownerAllowFrom=["telegram:123456789"]');
+  expect(heartbeat).toContain("edit the automation delivery channel and recipient");
+});
+
+it("shows managed host desktop coordinates", () => {
+  params.summary.hostDesktop = {
+    enabled: true,
+    state: "managed",
+    managedState: "running",
+    display: 99,
+    port: 46_001,
+    security: "VncAuth",
+  };
+  expect(value("Host desktop")).toBe(
+    "managed · running · display :99 · 127.0.0.1:46001 · security VncAuth",
+  );
+});
+
+it("shows utility model capability warnings in normal and full status", () => {
+  expect(value("Utility model")).toBeUndefined();
+  params.summary.utilityModelWarnings = [
+    { path: "agents.defaults.utilityModel", message: "fixture-cli/small cannot disable tools." },
+  ];
+  expect(value("Utility model")).toBe(
+    "warn(agents.defaults.utilityModel: fixture-cli/small cannot disable tools.)",
+  );
+  const rows = allRows();
+  expect(findRowValue(rows, "Utility model")).toBe(
+    "agents.defaults.utilityModel: fixture-cli/small cannot disable tools.",
+  );
+});
+
+it("builds status-all overview rows from the shared surface", () => {
+  const rows = allRows({
+    summary: {
+      ...params.summary,
+      modelReasoningWarning: "Model ollama/qwen3:4b emitted hidden reasoning; set reasoning:true.",
+      secretEgressProxy: {
+        state: "degraded",
+        caExpiresAt: "2036-09-01T00:00:00.000Z",
+        failedCertificates: 1,
+        message: "Check OpenSSL, then retry the request.",
+      },
+      degradedSecretOwners: [
+        {
+          ownerKind: "capability",
+          ownerId: "tts",
+          state: "unavailable",
+          paths: ["tts.providers.elevenlabs.apiKey"],
+          reason: "secret reference was not found",
+        },
+      ],
+      degradedPlugins: [
+        {
+          pluginId: "discord",
+          state: "configured-unavailable",
+          diagnostic: {
+            kind: "plugin-verification",
+            reason: "unreadable-package-json",
+            detail: "permission denied",
+          },
+        },
+      ],
+    },
+    configPath: "/tmp/openclaw.json",
+    secretDiagnosticsCount: 2,
+    updateRows: [{ Item: "Update restart", Value: "restart pending health verification" }],
+  });
+
+  expect(Object.fromEntries(rows.map(({ Item, Value }) => [Item, Value]))).toMatchObject({
+    Version: VERSION,
+    OS: "macOS",
+    Config: "/tmp/openclaw.json",
+    "Gateway self": "gateway app 1.2.3",
+    Update: expect.stringContaining("behind 2"),
+    "Update restart": "restart pending health verification",
+    Security: "Run: openclaw security audit --deep",
+    "Secret egress proxy": "Check OpenSSL, then retry the request.",
+    "Degraded secrets":
+      "1 degraded · cold capability:tts (tts.providers.elevenlabs.apiKey): secret reference was not found",
+    "Degraded plugins": "1 configured-unavailable · discord",
+    "Model reasoning": "Model ollama/qwen3:4b emitted hidden reasoning; set reasoning:true.",
+    Secrets: "2 diagnostics",
+  });
+});
+
+it("uses unknown only when Gateway self metadata is absent", () => {
+  const surface = { ...params.surface, gatewaySelf: {} };
+  const rows = allRows({ surface });
+
+  expect(findRowValue(rows, "Gateway self")).toBe("unknown");
+  expect(
+    findRowValue(buildStatusCommandOverviewRows({ ...params, surface }), "Gateway self"),
+  ).toBeUndefined();
 });

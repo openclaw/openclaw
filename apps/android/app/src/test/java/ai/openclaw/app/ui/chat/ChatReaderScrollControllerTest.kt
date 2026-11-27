@@ -60,6 +60,36 @@ class ChatReaderScrollControllerTest {
   }
 
   @Test
+  fun olderPrependAndRemoteUserTurnPreserveSavedReadingAnchor() {
+    val prompt = user("prompt")
+    val reply = assistant("reply")
+    val before = timeline(prompt, reply)
+    val reading =
+      initialChatReaderTransition(before, "gateway|agent|session").state.copy(
+        followTarget = null,
+        readingItemKey = "message:reply",
+        readingOffset = 37,
+      )
+    val prepended = timeline(user("older"), prompt, reply)
+    val older = reading.onTimelineChanged(prepended)
+    assertEquals(before.latestContentVersion, prepended.latestContentVersion)
+    assertNull(older.scrollIndex)
+    assertFalse(older.state.hasNewerContent)
+    val saver = createChatReaderStateSaver("gateway|agent|session")
+    val saved = with(saver) { SaverScope { true }.save(older.state) }
+    val restored = requireNotNull(saver.restore(requireNotNull(saved)))
+    val remote = restored.onTimelineChanged(timeline(user("older"), prompt, reply, user("remote")))
+    assertNull(remote.scrollIndex)
+    assertNull(remote.state.followTarget)
+    assertTrue(remote.state.hasNewerContent)
+    assertEquals("message:reply", remote.state.readingItemKey)
+    assertEquals(37, remote.state.readingOffset)
+    val explicit = remote.state.jumpToLatest(timeline(prompt, reply, user("remote")))
+    assertEquals(0, explicit.scrollIndex)
+    assertNull(explicit.state.readingItemKey)
+  }
+
+  @Test
   fun newUserTurnFollowsLatestContentWhileStreaming() {
     val previous = initialChatReaderTransition(timeline(assistant("assistant-1"))).state
     val active = activeTimeline(user("user-1"), stream = null)
@@ -196,9 +226,10 @@ class ChatReaderScrollControllerTest {
         latestUserMessageId = "user-1",
         latestContentVersion = timeline.latestContentVersion,
       )
-    val saved = with(ChatReaderStateSaver) { SaverScope { true }.save(state) }
+    val saver = createChatReaderStateSaver()
+    val saved = with(saver) { SaverScope { true }.save(state) }
 
-    val restored = ChatReaderStateSaver.restore(requireNotNull(saved))
+    val restored = saver.restore(requireNotNull(saved))
 
     assertEquals(state, restored)
   }
@@ -211,7 +242,7 @@ class ChatReaderScrollControllerTest {
         initialized = true,
         followTarget = ChatScrollFollowTarget.LatestContent,
       )
-    val saved = with(ChatReaderStateSaver) { SaverScope { true }.save(state) }
+    val saved = with(createChatReaderStateSaver("session-old")) { SaverScope { true }.save(state) }
 
     val restored = createChatReaderStateSaver("session-new").restore(requireNotNull(saved))
 
@@ -233,8 +264,9 @@ class ChatReaderScrollControllerTest {
         latestUserMessageVersion = before.latestUserMessageVersion,
         latestContentVersion = before.latestContentVersion,
       )
-    val saved = with(ChatReaderStateSaver) { SaverScope { true }.save(savedState) }
-    val restored = requireNotNull(ChatReaderStateSaver.restore(requireNotNull(saved)))
+    val saver = createChatReaderStateSaver()
+    val saved = with(saver) { SaverScope { true }.save(savedState) }
+    val restored = requireNotNull(saver.restore(requireNotNull(saved)))
     val after =
       timeline(
         user("user-after", text = "rewritten prompt", timestampMs = 2000L, idempotencyKey = "run-1:user"),

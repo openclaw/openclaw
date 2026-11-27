@@ -16,9 +16,8 @@ final class GatewayMenuStatusStore {
     private(set) var facts: [DashboardGatewayTarget: Facts] = [:]
     private var probingTargets: Set<DashboardGatewayTarget> = []
     private var startedTargets: Set<DashboardGatewayTarget> = []
-    private var generation: UInt64 = 0
     private var probeTask: Task<Void, Never>?
-    private var cleanupTasks: [DashboardGatewayTarget: (generation: UInt64, task: Task<Void, Never>)] = [:]
+    private var cleanupTasks: [DashboardGatewayTarget: Task<Void, Never>] = [:]
     private let primaryProbe: @MainActor @Sendable () async throws -> Probe
     private let localProbe: @MainActor @Sendable () async throws -> Probe
     private let disconnectLocal: @MainActor @Sendable () async -> Void
@@ -80,22 +79,20 @@ final class GatewayMenuStatusStore {
 
     func beginProbing(targets: [DashboardGatewayTarget], onChange: @escaping @MainActor () -> Void) {
         guard self.probeTask == nil else { return }
-        self.generation &+= 1
-        let generation = self.generation
         self.probingTargets = Set(targets)
         self.startedTargets.removeAll()
         for target in targets where target != .primary {
-            self.cleanupTasks.removeValue(forKey: target)?.task.cancel()
+            self.cleanupTasks.removeValue(forKey: target)?.cancel()
         }
         self.probeTask = Task {
             await withTaskGroup(of: Void.self) { group in
                 for target in Set(targets) {
                     group.addTask {
-                        await self.probe(target, generation: generation, onChange: onChange)
+                        await self.probe(target, onChange: onChange)
                     }
                 }
             }
-            if self.generation == generation {
+            if !Task.isCancelled {
                 self.probeTask = nil
             }
         }
@@ -105,13 +102,11 @@ final class GatewayMenuStatusStore {
         let task = self.probeTask
         task?.cancel()
         self.probeTask = nil
-        self.generation &+= 1
-        let generation = self.generation
         self.probingTargets.removeAll()
         let targets = self.startedTargets
         self.startedTargets.removeAll()
         for target in targets where target != .primary {
-            self.cleanupTasks[target]?.task.cancel()
+            self.cleanupTasks[target]?.cancel()
             let cleanup = Task {
                 // Drain canceled probes before disconnecting: a delayed profile
                 // lookup must not establish a socket after menu cleanup finishes.
@@ -124,44 +119,36 @@ final class GatewayMenuStatusStore {
                     case let .profile(profileID): await self.disconnectProfile(profileID)
                     }
                 }
-                if self.cleanupTasks[target]?.generation == generation {
+                if !Task.isCancelled {
                     self.cleanupTasks.removeValue(forKey: target)
                 }
             }
-            self.cleanupTasks[target] = (generation, cleanup)
+            self.cleanupTasks[target] = cleanup
         }
     }
 
     private func probe(
         _ target: DashboardGatewayTarget,
-        generation: UInt64,
         onChange: @MainActor () -> Void) async
     {
-        guard self.generation == generation, !Task.isCancelled else { return }
+        guard !Task.isCancelled else { return }
         self.startedTargets.insert(target)
-        let result: Result<Probe, Error>
-        do {
-            let probe = switch target {
-            case .primary: try await self.primaryProbe()
-            case .local: try await self.localProbe()
-            case let .profile(profileID): try await self.profileProbe(profileID)
-            }
-            result = .success(probe)
-        } catch {
-            result = .failure(error)
+        let probe: Probe? = switch target {
+        case .primary: try? await self.primaryProbe()
+        case .local: try? await self.localProbe()
+        case let .profile(profileID): try? await self.profileProbe(profileID)
         }
-        guard self.generation == generation, !Task.isCancelled else { return }
+        guard !Task.isCancelled else { return }
         var facts = self.facts[target] ?? Facts()
         let now = Date()
         facts.probedAt = now
-        switch result {
-        case let .success(probe):
+        if let probe {
             facts.version = probe.version
             facts.buildId = probe.buildId
             facts.latencyMs = probe.latencyMs
             facts.health = .ok
             facts.lastSeen = now
-        case .failure:
+        } else {
             facts.health = .error
             facts.latencyMs = nil
         }

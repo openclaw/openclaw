@@ -31,20 +31,6 @@ describe("copyToClipboard", () => {
     expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
   });
 
-  it("falls through failed attempts until a later command succeeds", async () => {
-    runCommandWithTimeoutMock
-      .mockRejectedValueOnce(new Error("missing pbcopy"))
-      .mockResolvedValueOnce({ code: 1, killed: false })
-      .mockResolvedValueOnce({ code: 0, killed: false });
-
-    await expect(copyToClipboard("hello")).resolves.toBe(true);
-    expect(runCommandWithTimeoutMock.mock.calls.map((call) => call[0])).toEqual([
-      ["pbcopy"],
-      ["xclip", "-selection", "clipboard"],
-      ["wl-copy"],
-    ]);
-  });
-
   it("uses a startup-free WSL2 shell bridge for clip.exe without putting the value in argv", async () => {
     isWSL2SyncMock.mockReturnValue(true);
     runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, killed: false });

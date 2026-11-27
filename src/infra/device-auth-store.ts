@@ -1,52 +1,20 @@
-// Persists device authorization records for paired nodes.
-import fs from "node:fs";
-import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
+// Installation-local client token cache; paired-device authority remains Gateway-owned.
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { normalizeDeviceAuthRole } from "../shared/device-auth.js";
+import { runClientCredentialOperationAsync } from "./client-credential-async.js";
+import type { ClientTokenKey } from "./client-credential-store.js";
 import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import {
-  clearDeviceAuthTokenFromDatabase,
-  clearOriginDeviceTokenInDatabase,
   createDeviceAuthEntry,
+  deviceAuthEntryFromRow,
   type DeviceAuthTokenObservation,
-  readDeviceAuthTokenObservationFromDatabase,
-  readOriginDeviceTokenObservationFromDatabase,
-  storeDeviceAuthTokenInDatabase,
-  storeOriginDeviceTokenInDatabase,
 } from "./device-auth-store.kernel.js";
 
-export { clearDeviceAuthTokenFromDatabase } from "./device-auth-store.kernel.js";
-
-// The Gateway lock makes state-directory contents process-stable. Cache both
-// outcomes to keep reconnects free of freshness polling; Doctor invalidates
-// the entry after its exclusive legacy import removes the retired file.
-const legacyPresenceCache = new Map<string, boolean>();
-
-function assertNoLegacyDeviceAuth(env: NodeJS.ProcessEnv | undefined): void {
-  const stateDir = resolveStateDir(env);
-  let hasLegacy = legacyPresenceCache.get(stateDir);
-  if (hasLegacy === undefined) {
-    hasLegacy = fs.existsSync(path.join(stateDir, "identity", "device-auth.json"));
-    legacyPresenceCache.set(stateDir, hasLegacy);
-  }
-  if (hasLegacy) {
-    throw new Error(
-      "Legacy device auth requires migration; stop the Gateway and run `openclaw doctor --fix`.",
-    );
-  }
-}
-
-/** Forget one process-local legacy-state probe after Doctor removes the source. */
-export function resetLegacyDeviceAuthPresenceCache(env: NodeJS.ProcessEnv): void {
-  legacyPresenceCache.delete(resolveStateDir(env));
-}
-
-type DeviceAuthLookup = { deviceId: string; role: string; env?: NodeJS.ProcessEnv };
+type DeviceAuthOperation = {
+  env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
+};
+type DeviceAuthLookup = DeviceAuthOperation & { deviceId: string; role: string };
 type OriginDeviceAuthLookup = DeviceAuthLookup & { gatewayScope: string };
 type DeviceAuthRead = {
   onSnapshot?: (observation: DeviceAuthTokenObservation) => void;
@@ -61,109 +29,154 @@ type DeviceAuthClear = DeviceAuthLookup & {
   observedToken?: string;
 };
 
+function captureDeviceAuthOperation(params: DeviceAuthOperation) {
+  const env = { ...(params.env ?? process.env) };
+  const { signal, assertCurrent } = params;
+  const assertActive = () => {
+    signal?.throwIfAborted();
+    assertCurrent?.();
+  };
+  assertActive();
+  return { env, signal, assertCurrent: assertActive };
+}
+
+function tokenKey(params: DeviceAuthLookup, gatewayScope?: string): ClientTokenKey {
+  return {
+    device_id: params.deviceId,
+    role: normalizeDeviceAuthRole(params.role),
+    ...(gatewayScope === undefined ? {} : { gateway_scope: gatewayScope }),
+  };
+}
+
+async function readDeviceAuth(
+  params: DeviceAuthLookup & DeviceAuthRead,
+  gatewayScope?: string,
+): Promise<DeviceAuthEntry | null> {
+  const captured = captureDeviceAuthOperation(params);
+  const result = await runClientCredentialOperationAsync(
+    captured.env,
+    {
+      kind: "token.read",
+      key: tokenKey(params, gatewayScope),
+    },
+    captured,
+  );
+  if (result.kind !== "token") {
+    throw new Error("Client credential owner returned an unexpected token result.");
+  }
+  captured.assertCurrent();
+  const observation = {
+    entry: result.token ? deviceAuthEntryFromRow(result.token) : null,
+    expectedToken: result.token?.token ?? null,
+  };
+  params.onSnapshot?.(observation);
+  return observation.entry;
+}
+
 export function loadDeviceAuthToken(
   params: DeviceAuthLookup & DeviceAuthRead,
-): DeviceAuthEntry | null {
-  assertNoLegacyDeviceAuth(params.env);
-  const { db } = openOpenClawStateDatabase({ env: params.env });
-  const observation = readDeviceAuthTokenObservationFromDatabase(db, params);
-  params.onSnapshot?.(observation);
-  return observation.entry;
+): Promise<DeviceAuthEntry | null> {
+  return readDeviceAuth(params);
 }
 
-export function loadDeviceAuthTokenReadOnly(
-  params: DeviceAuthLookup & DeviceAuthRead,
-): DeviceAuthEntry | null {
-  assertNoLegacyDeviceAuth(params.env);
-  const observation = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-    ({ db }) => readDeviceAuthTokenObservationFromDatabase(db, params),
-    { env: params.env },
-  ) ?? { entry: null, expectedToken: null };
-  params.onSnapshot?.(observation);
-  return observation.entry;
+export const loadDeviceAuthTokenReadOnly = loadDeviceAuthToken;
+
+export async function loadDeviceAuthTokens(
+  params: DeviceAuthOperation & { deviceId: string },
+): Promise<DeviceAuthEntry[]> {
+  const captured = captureDeviceAuthOperation(params);
+  const entries: DeviceAuthEntry[] = [];
+  let afterRole: string | undefined;
+  do {
+    const result = await runClientCredentialOperationAsync(
+      captured.env,
+      {
+        kind: "token.list",
+        device_id: params.deviceId,
+        afterRole,
+      },
+      captured,
+    );
+    if (result.kind !== "tokens") {
+      throw new Error("Client credential owner returned an unexpected token list.");
+    }
+    for (const row of result.tokens) {
+      const entry = deviceAuthEntryFromRow(row);
+      if (entry) {
+        entries.push(entry);
+      }
+    }
+    afterRole = result.nextRole ?? undefined;
+  } while (afterRole !== undefined);
+  captured.assertCurrent();
+  return entries;
 }
 
-export async function loadDeviceAuthTokens(params: {
-  deviceId: string;
-  env?: NodeJS.ProcessEnv;
-}): Promise<DeviceAuthEntry[]> {
-  assertNoLegacyDeviceAuth(params.env);
-  const context = captureOpenClawStateWorkerContext({ env: params.env });
-  const deviceId = params.deviceId;
-  const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
-  return executeOpenClawStateWorker(context, {
-    type: "deviceAuth.list",
-    input: { deviceId },
-  });
-}
-
-export function storeDeviceAuthToken(params: DeviceAuthWrite): DeviceAuthEntry | null {
-  assertNoLegacyDeviceAuth(params.env);
+async function storeToken(
+  params: DeviceAuthWrite,
+  gatewayScope?: string,
+): Promise<DeviceAuthEntry | null> {
+  const captured = captureDeviceAuthOperation(params);
   const entry = createDeviceAuthEntry(params);
-  return runOpenClawStateWriteTransaction(
-    ({ db }) =>
-      storeDeviceAuthTokenInDatabase(db, {
-        deviceId: params.deviceId,
-        ...entry,
-        expectedToken: params.expectedToken,
-      }),
-    { env: params.env },
+  const result = await runClientCredentialOperationAsync(
+    captured.env,
+    {
+      kind: "token.replace",
+      key: tokenKey(params, gatewayScope),
+      expectedToken: params.expectedToken,
+      token: {
+        device_id: params.deviceId,
+        role: entry.role,
+        token: entry.token,
+        scopes_json: JSON.stringify(entry.scopes),
+        updated_at_ms: entry.updatedAtMs,
+      },
+    },
+    captured,
   );
+  if (result.kind !== "changed") {
+    throw new Error("Client credential owner returned an unexpected token write result.");
+  }
+  return result.changed ? entry : null;
 }
 
-export function clearDeviceAuthToken(params: DeviceAuthClear): boolean {
-  assertNoLegacyDeviceAuth(params.env);
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => clearDeviceAuthTokenFromDatabase(db, params),
-    { env: params.env },
+async function clearToken(params: DeviceAuthClear, gatewayScope?: string): Promise<boolean> {
+  const captured = captureDeviceAuthOperation(params);
+  const result = await runClientCredentialOperationAsync(
+    captured.env,
+    {
+      kind: "token.remove",
+      key: tokenKey(params, gatewayScope),
+      expectedToken: params.expectedToken,
+      observedToken: params.observedToken,
+    },
+    captured,
   );
+  if (result.kind !== "changed") {
+    throw new Error("Client credential owner returned an unexpected token removal result.");
+  }
+  return result.changed;
 }
 
+export function storeDeviceAuthToken(params: DeviceAuthWrite): Promise<DeviceAuthEntry | null> {
+  return storeToken(params);
+}
+export function clearDeviceAuthToken(params: DeviceAuthClear): Promise<boolean> {
+  return clearToken(params);
+}
 export function loadOriginDeviceToken(
   params: OriginDeviceAuthLookup & DeviceAuthRead,
-): DeviceAuthEntry | null {
-  assertNoLegacyDeviceAuth(params.env);
-  const { db } = openOpenClawStateDatabase({ env: params.env });
-  const observation = readOriginDeviceTokenObservationFromDatabase(db, params);
-  params.onSnapshot?.(observation);
-  return observation.entry;
+): Promise<DeviceAuthEntry | null> {
+  return readDeviceAuth(params, params.gatewayScope);
 }
-
-export function loadOriginDeviceTokenReadOnly(
-  params: OriginDeviceAuthLookup & DeviceAuthRead,
-): DeviceAuthEntry | null {
-  assertNoLegacyDeviceAuth(params.env);
-  const observation = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-    ({ db }) => readOriginDeviceTokenObservationFromDatabase(db, params),
-    { env: params.env },
-  ) ?? { entry: null, expectedToken: null };
-  params.onSnapshot?.(observation);
-  return observation.entry;
-}
-
+export const loadOriginDeviceTokenReadOnly = loadOriginDeviceToken;
 export function storeOriginDeviceToken(
   params: DeviceAuthWrite & { gatewayScope: string },
-): DeviceAuthEntry | null {
-  assertNoLegacyDeviceAuth(params.env);
-  const entry = createDeviceAuthEntry(params);
-  return runOpenClawStateWriteTransaction(
-    ({ db }) =>
-      storeOriginDeviceTokenInDatabase(db, {
-        gatewayScope: params.gatewayScope,
-        deviceId: params.deviceId,
-        ...entry,
-        expectedToken: params.expectedToken,
-      }),
-    { env: params.env },
-  );
+): Promise<DeviceAuthEntry | null> {
+  return storeToken(params, params.gatewayScope);
 }
-
 export function clearOriginDeviceToken(
   params: DeviceAuthClear & { gatewayScope: string },
-): boolean {
-  assertNoLegacyDeviceAuth(params.env);
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => clearOriginDeviceTokenInDatabase(db, params),
-    { env: params.env },
-  );
+): Promise<boolean> {
+  return clearToken(params, params.gatewayScope);
 }

@@ -1,6 +1,14 @@
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { cloneConfigWithResolutionFacts } from "./resolution-facts.js";
+import { runtimeConfigPublication } from "./runtime-config-publication.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
-type RuntimeConfigCapture = Readonly<{ source: OpenClawConfig; origin: OpenClawConfig }>;
+type RuntimeConfigCapture = Readonly<{
+  source: OpenClawConfig;
+  origin: OpenClawConfig;
+  /** Explicit live readers retain the owner selected before preparation yields. */
+  runtimeOwned: boolean;
+}>;
 
 const captures = new WeakMap<OpenClawConfig, RuntimeConfigCapture>();
 
@@ -10,9 +18,49 @@ export function getRuntimeConfigCapture(
   return config ? captures.get(config) : undefined;
 }
 
-export function bindRuntimeConfigCapture(
+const publishedSources = new WeakMap<OpenClawConfig, OpenClawConfig>();
+
+/**
+ * Record the authored source last published with a runtime config object, without cloning it.
+ * Holders of an older generation then project their own source, not a newer one. Unlike a
+ * capture, the config stays mutable: callers that need an isolated pair still capture it.
+ */
+export function recordPublishedRuntimeConfigSource(
   config: OpenClawConfig,
-  capture: RuntimeConfigCapture,
+  source: OpenClawConfig,
 ): void {
-  captures.set(config, capture);
+  publishedSources.set(config, source);
 }
+
+export function getPublishedRuntimeConfigSource(
+  config: OpenClawConfig | undefined,
+): OpenClawConfig | undefined {
+  return config ? publishedSources.get(config) : undefined;
+}
+
+/** Freeze a selected runtime/source pair before its publication owner yields. */
+export function captureRuntimeConfigWithSource(
+  config: OpenClawConfig,
+  source: OpenClawConfig,
+  runtimeOwner = runtimeConfigPublication.current?.config,
+): OpenClawConfig {
+  const clone = (value: OpenClawConfig) =>
+    freezeJsonSnapshot(cloneConfigWithResolutionFacts(value));
+  const captured = clone(config);
+  const capturedSource = source === config ? captured : clone(source);
+  captures.set(captured, {
+    source: capturedSource,
+    origin: config,
+    runtimeOwned: config === runtimeOwner,
+  });
+  if (capturedSource !== captured) {
+    captures.set(capturedSource, {
+      source: capturedSource,
+      origin: source,
+      runtimeOwned: source === runtimeOwner,
+    });
+  }
+  return captured;
+}
+
+export type CapturedRuntimeConfigRead = { config: OpenClawConfig; env: NodeJS.ProcessEnv };

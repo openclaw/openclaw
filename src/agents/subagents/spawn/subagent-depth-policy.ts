@@ -17,23 +17,6 @@ function normalizeSpawnDepth(value: unknown): number | undefined {
   return undefined;
 }
 
-export function findSubagentSessionEntryById<T extends SessionDepthEntry>(
-  store: Record<string, T>,
-  sessionId: string,
-): T | undefined {
-  const normalizedSessionId = normalizeOptionalString(sessionId);
-  if (!normalizedSessionId) {
-    return undefined;
-  }
-  for (const entry of Object.values(store)) {
-    const candidateSessionId = normalizeOptionalString(entry?.sessionId);
-    if (candidateSessionId && candidateSessionId === normalizedSessionId) {
-      return entry;
-    }
-  }
-  return undefined;
-}
-
 export function getSubagentDepthFromEntryLookup(
   sessionKey: string | undefined | null,
   resolveEntry: (sessionKey: string) => SessionDepthEntry | undefined,
@@ -48,10 +31,7 @@ export function getSubagentDepthFromEntryLookup(
 
   const depthFromStore = (key: string): number | undefined => {
     const normalizedKey = normalizeOptionalString(key);
-    if (!normalizedKey) {
-      return undefined;
-    }
-    if (visited.has(normalizedKey)) {
+    if (!normalizedKey || visited.has(normalizedKey)) {
       return undefined;
     }
     visited.add(normalizedKey);
@@ -68,12 +48,7 @@ export function getSubagentDepthFromEntryLookup(
       return undefined;
     }
 
-    const parentDepth = depthFromStore(parentKey);
-    if (parentDepth !== undefined) {
-      return parentDepth + 1;
-    }
-
-    return getSubagentDepth(parentKey) + 1;
+    return (depthFromStore(parentKey) ?? getSubagentDepth(parentKey)) + 1;
   };
 
   return depthFromStore(raw) ?? fallbackDepth;
@@ -82,7 +57,7 @@ export function getSubagentDepthFromEntryLookup(
 /** Classifies coordination from the exact session entry and its canonical ACP metadata. */
 export function isSubagentSessionFromEntry(
   sessionKey: string,
-  entry: SessionEntry | null | undefined,
+  entry: Pick<SessionEntry, "spawnDepth" | "spawnedBy" | "parentSessionKey"> | null | undefined,
   acpMeta?: unknown,
 ): boolean {
   const spawnDepth = normalizeSpawnDepth(entry?.spawnDepth);

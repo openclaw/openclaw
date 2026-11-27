@@ -1,7 +1,8 @@
 package ai.openclaw.app.voice
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayErrorDetails
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.RpcResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -11,46 +12,6 @@ import org.junit.Test
 
 class TalkSpeakClientTest {
   @Test
-  fun buildsRequestFromDirective() {
-    val request =
-      TalkSpeakRequest.from(
-        text = "Hello from talk mode.",
-        directive =
-          TalkDirective(
-            voiceId = "voice-123",
-            modelId = "model-abc",
-            speed = 1.1,
-            rateWpm = 190,
-            stability = 0.5,
-            similarity = 0.7,
-            style = 0.2,
-            speakerBoost = true,
-            seed = 42,
-            normalize = "auto",
-            language = "en",
-            outputFormat = "pcm_24000",
-            latencyTier = 3,
-            once = true,
-          ),
-      )
-
-    assertEquals("Hello from talk mode.", request.text)
-    assertEquals("voice-123", request.voiceId)
-    assertEquals("model-abc", request.modelId)
-    assertEquals(1.1, request.speed)
-    assertEquals(190, request.rateWpm)
-    assertEquals(0.5, request.stability)
-    assertEquals(0.7, request.similarity)
-    assertEquals(0.2, request.style)
-    assertEquals(true, request.speakerBoost)
-    assertEquals(42L, request.seed)
-    assertEquals("auto", request.normalize)
-    assertEquals("en", request.language)
-    assertEquals("pcm_24000", request.outputFormat)
-    assertEquals(3, request.latencyTier)
-  }
-
-  @Test
   fun serializesParsedDirectiveWithStableBytesAndOmitsOnce() =
     runTest {
       var request: Triple<String, String, Long>? = null
@@ -58,7 +19,7 @@ class TalkSpeakClientTest {
         TalkSpeakClient(
           requestDetailed = { method, paramsJson, timeoutMs ->
             request = Triple(method, paramsJson, timeoutMs)
-            GatewaySession.RpcResult(ok = false, payloadJson = null, error = null)
+            RpcResult(ok = false, payloadJson = null, error = null)
           },
         )
       val parsed =
@@ -74,6 +35,11 @@ class TalkSpeakClientTest {
       val expectedJson =
         """{"text":"Say \"hello\".","voiceId":"v","modelId":"m","outputFormat":"pcm","speed":1.25,"rateWpm":0,"stability":0.0,"similarity":0.4,"style":0.0,"speakerBoost":false,"seed":42,"normalize":"auto","language":"en","latencyTier":0}"""
       assertEquals(Triple("talk.speak", expectedJson, 45_000L), request)
+
+      for (directive in listOf(null, TalkDirective(once = true))) {
+        client.synthesize(text = "Hello", directive = directive)
+        assertEquals(Triple("talk.speak", """{"text":"Hello"}""", 45_000L), request)
+      }
     }
 
   @Test
@@ -82,11 +48,11 @@ class TalkSpeakClientTest {
       val client =
         TalkSpeakClient(
           requestDetailed = { _, _, _ ->
-            GatewaySession.RpcResult(
+            RpcResult(
               ok = false,
               payloadJson = null,
               error =
-                GatewaySession.ErrorShape(
+                ErrorShape(
                   code = "UNAVAILABLE",
                   message = "talk unavailable",
                   details =
@@ -111,11 +77,11 @@ class TalkSpeakClientTest {
       val client =
         TalkSpeakClient(
           requestDetailed = { _, _, _ ->
-            GatewaySession.RpcResult(
+            RpcResult(
               ok = false,
               payloadJson = null,
               error =
-                GatewaySession.ErrorShape(
+                ErrorShape(
                   code = "UNAVAILABLE",
                   message = "provider failed",
                   details =
@@ -140,11 +106,11 @@ class TalkSpeakClientTest {
       val client =
         TalkSpeakClient(
           requestDetailed = { _, _, _ ->
-            GatewaySession.RpcResult(
+            RpcResult(
               ok = false,
               payloadJson = null,
               error =
-                GatewaySession.ErrorShape(
+                ErrorShape(
                   code = "INVALID_REQUEST",
                   message = "unknown method: talk.speak",
                   details = null,

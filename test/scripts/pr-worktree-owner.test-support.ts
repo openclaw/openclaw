@@ -1,27 +1,35 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect } from "vitest";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
+import { exitedDescendantReaper } from "./exited-descendant-reaper.test-support.js";
+import { createProvisionIsolationFixture } from "./pr-provision-isolation.test-support.js";
 
 export function createProvisionOwnerFixture(
   directory: string,
   mode: "native" | "managed" = "native",
   files = 128,
+  /** Wrapper sources to run; extracted trusted-anchor copies omit the rest of the checkout. */
+  source = process.cwd(),
 ) {
+  const nodeExecPath = requireNodeTool("node");
   const root = realpathSync(directory);
-  const source = process.cwd();
   const canonical = join(root, "repo");
   const home = join(root, "home");
   const bin = join(root, "bin");
+  // These private fixture ancestors must not inherit a group-writable host umask.
   for (const dir of [canonical, home, bin]) {
-    mkdirSync(dir);
+    mkdirSync(dir, { mode: 0o700 });
   }
+  const isolation = createProvisionIsolationFixture(root, canonical);
   const env: NodeJS.ProcessEnv = {
-    PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
+    PATH: isolation.path(`${bin}${delimiter}${process.env.PATH ?? ""}`),
     HOME: home,
     TMPDIR: root,
     XDG_CONFIG_HOME: join(home, ".config"),
+    XDG_CACHE_HOME: isolation.snapshotCache,
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_PARAMETERS: "'maintenance.auto=false' 'gc.auto=0'",
@@ -35,8 +43,8 @@ export function createProvisionOwnerFixture(
     gh,
     `#!/bin/sh
 [ "$1" != auth ] || exit 1
-[ "$1" = api ] && [ "$2" = graphql ] || exit 2
-printf 'HTTP/2.0 200 OK\\r\\n\\r\\n{"data":{"viewer":{"login":"fixture"}}}\\n'
+[ "$*" = 'api user --include' ] || exit 2
+printf 'HTTP/2.0 200 OK\\r\\n\\r\\n{"login":"fixture"}\\n'
 `,
   );
   chmodSync(gh, 0o755);
@@ -88,28 +96,39 @@ fi
     env,
     main,
     git,
-    run(action = "entry", owner = "") {
-      return spawnSync(
-        process.execPath,
-        [
-          resolve(source, "scripts/pr-lib/process-group-runner.mjs"),
-          canonical,
-          process.platform === "darwin" ? "/bin/bash" : "bash",
-          "-c",
-          script,
-          "provision-owner-fixture",
-          canonical,
-          source,
-          action,
-          owner,
-        ],
-        { cwd: canonical, env, encoding: "utf8" },
-      );
+    isolation,
+    run(action = "entry", owner = "", options: { holdExitedDescendants?: boolean } = {}) {
+      const args = [
+        ...isolation.nodeArgs,
+        resolve(source, "scripts/pr-lib/process-group-runner.mjs"),
+        canonical,
+        process.platform === "darwin" ? "/bin/bash" : "bash",
+        "-c",
+        script,
+        "provision-owner-fixture",
+        canonical,
+        source,
+        action,
+        owner,
+      ];
+      if (options.holdExitedDescendants) {
+        args.unshift("-c", exitedDescendantReaper, nodeExecPath);
+      }
+      return spawnSync(options.holdExitedDescendants ? "python3" : nodeExecPath, args, {
+        cwd: canonical,
+        env,
+        encoding: "utf8",
+      });
     },
   };
 }
 
-export function expectProvisionSeed(f: ReturnType<typeof createProvisionOwnerFixture>, pr = 42) {
+type ProvisionCheckout = Pick<
+  ReturnType<typeof createProvisionOwnerFixture>,
+  "canonical" | "main" | "git"
+>;
+
+export function expectProvisionSeed(f: ProvisionCheckout, pr = 42) {
   const worktree = join(f.canonical, ".worktrees", `pr-${pr}`);
   expect(f.git(worktree, "symbolic-ref", "HEAD")).toBe(`refs/heads/temp/pr-${pr}`);
   expect(f.git(worktree, "rev-parse", "HEAD")).toBe(f.main);
@@ -118,15 +137,18 @@ export function expectProvisionSeed(f: ReturnType<typeof createProvisionOwnerFix
 }
 
 export function expectProvisionLeaseReleased(f: ReturnType<typeof createProvisionOwnerFixture>) {
-  const database = new DatabaseSync(
+  using database = new DatabaseSync(
     join(f.canonical, ".local", "pr-state", "state", "openclaw.sqlite"),
     { readOnly: true },
   );
-  try {
-    expect(database.prepare("SELECT count(*) AS leases FROM state_leases").get()).toEqual({
-      leases: 0,
-    });
-  } finally {
-    database.close();
-  }
+  expect(database.prepare("SELECT count(*) AS leases FROM state_leases").get()).toEqual({
+    leases: 0,
+  });
+}
+
+export function expectProvisionComplete(f: ReturnType<typeof createProvisionOwnerFixture>) {
+  expectProvisionSeed(f);
+  expectProvisionLeaseReleased(f);
+  expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
+  expect(existsSync(join(f.home, ".openclaw"))).toBe(false);
 }

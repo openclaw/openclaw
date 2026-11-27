@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
-import * as ledger from "../../infra/update-run-ledger.js";
+import * as interruption from "../../infra/update-run-interruption.js";
 import {
   adoptUpdateRun,
   createUpdateRun,
@@ -12,14 +12,14 @@ import {
   listUpdateRuns,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { readUpdateRunStatus } from "../../infra/update-run-status.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../plugins/installed-plugin-index-records.js";
 import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { registerUpdateCli } from "../update-cli.js";
 import * as postCore from "./update-command-post-core.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
@@ -50,10 +50,11 @@ it.each(["finalize", "repair", "resume", "resume-unowned", "resume-write-failure
   async (command) => {
     await withOpenClawTestState({ label: `load-path-${command}` }, async (state) => {
       controls.root = state.root;
-      await fs.writeFile(
-        state.path("package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
-      );
+      await writeFixtureJson(state.path("package.json"), { name: "openclaw", version: "2026.9.4" });
+      await fs.mkdir(state.path("dist"));
+      await writeFixtureJson(state.path("dist/build-info.json"), {
+        buildId: "installed-candidate-build",
+      });
       const pluginId = "local-provider";
       const localDir = state.statePath("plugins-local", pluginId);
       const managedRelative = `managed/${"shadow-".repeat(34)}${pluginId}`;
@@ -119,17 +120,18 @@ it.each(["finalize", "repair", "resume", "resume-unowned", "resume-write-failure
         const recordsWarning = command !== "resume-unowned" && command !== "resume-write-failure";
         if (command.startsWith("resume")) {
           const parent = createUpdateRun({ trigger: "cli" });
+          recordUpdateRunStep(parent.runId, { step: "openclaw doctor", status: "completed" });
+          recordUpdateRunStep(parent.runId, {
+            step: "post-update verification",
+            status: "in_progress",
+          });
           if (command !== "resume-unowned") {
             adoptUpdateRun(parent.runId);
           }
           const initialParent = getUpdateRun(parent.runId);
           if (command === "resume-write-failure") {
-            const recordStep = ledger.recordUpdateRunStep;
-            vi.spyOn(ledger, "recordUpdateRunStep").mockImplementation((...args) => {
-              if (args[1].step.startsWith("warning:finalize:plugins:")) {
-                throw new Error("synthetic update history is busy");
-              }
-              return recordStep(...args);
+            vi.spyOn(interruption, "recordPostCoreUpdateEvidence").mockImplementation(() => {
+              throw new Error("synthetic update history is busy");
             });
           }
           const resultPath = state.path("plugins-result.json");
@@ -139,6 +141,17 @@ it.each(["finalize", "repair", "resume", "resume-unowned", "resume-write-failure
               // A published parent can terminate its child as soon as this file appears.
               if (recordsWarning) {
                 expect(getUpdateRun(parent.runId)?.steps).toContainEqual(expectedStep);
+                expect(getUpdateRun(parent.runId)?.steps).toContainEqual(
+                  expect.objectContaining({
+                    step: "finalize:installed-candidate",
+                    status: "completed",
+                    detail: JSON.stringify({
+                      version: "2026.9.4",
+                      buildId: "installed-candidate-build",
+                    }),
+                  }),
+                );
+                expect(getUpdateRun(parent.runId)?.after).toEqual({});
               } else {
                 expect(getUpdateRun(parent.runId)).toEqual(initialParent);
               }
@@ -166,10 +179,12 @@ it.each(["finalize", "repair", "resume", "resume-unowned", "resume-write-failure
           });
           expect(getUpdateRun(parent.runId)?.status).toBe("running");
           if (!recordsWarning) {
+            const reason =
+              command === "resume-unowned"
+                ? "Cannot verify a live parent for the inherited update history."
+                : "synthetic update history is busy";
             expect(errors).toHaveBeenCalledWith(
-              expect.stringContaining(
-                "Plugin update warnings could not be saved to update history",
-              ),
+              `Post-core update evidence could not be saved: ${reason} Update completion may require Doctor verification.`,
             );
           }
           // Published parents close their run without projecting plugin warning rows.
@@ -196,17 +211,13 @@ it.each(["finalize", "repair", "resume", "resume-unowned", "resume-write-failure
         } else {
           expect(latest.steps).not.toContainEqual(expectedStep);
         }
-        const runStatus = readUpdateRunStatus();
+        const runStatus = await readUpdateRunStatus();
         if (runStatus.runStatusError !== undefined) {
           throw new Error(runStatus.runStatusError);
         }
         expect(runStatus.lastRun?.runId).toBe(latest.runId);
-        if (recordsWarning) {
-          expect(renderUpdateRunReport(latest).markdown).toContain("plugins.load.paths");
-          expect(renderUpdateRunReport(latest).markdown).toContain("verify it against 2026.9.4");
-        }
         expect(getUpdateRun(original.runId)).toEqual(retained);
-        expect(readPersistedInstalledPluginIndexInstallRecords()).toEqual(records);
+        expect(await readPersistedInstalledPluginIndexInstallRecordsAsync()).toEqual(records);
         expect(await fs.readFile(state.configPath, "utf8")).toBe(configBytes);
         expect(await fs.readFile(`${localDir}/index.js`, "utf8")).toBe(payload);
         expect(await fs.readFile(`${managedDir}/index.js`, "utf8")).toBe(payload);

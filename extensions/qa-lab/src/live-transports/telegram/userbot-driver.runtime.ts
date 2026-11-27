@@ -18,10 +18,17 @@ export type TelegramUserbotUpdate = {
   kind: "edit" | "message";
   messageId: number;
   replyToMessageId?: number;
+  forumTopicId?: number;
+  threadId?: number;
   senderId: number;
   senderUsername?: string;
   text: string;
   timestamp: number;
+};
+
+type PendingUserbotCommand = {
+  reject(error: Error): void;
+  resolve(value: TelegramUserbotUpdate): void;
 };
 
 function isUtf16Boundary(text: string, offset: number) {
@@ -107,6 +114,8 @@ function parseUserbotUpdate(value: unknown): TelegramUserbotUpdate {
     ...(typeof value.replyToMessageId === "number"
       ? { replyToMessageId: value.replyToMessageId }
       : {}),
+    ...(typeof value.forumTopicId === "number" ? { forumTopicId: value.forumTopicId } : {}),
+    ...(typeof value.threadId === "number" ? { threadId: value.threadId } : {}),
     ...(typeof value.senderUsername === "string" ? { senderUsername: value.senderUsername } : {}),
   };
 }
@@ -130,13 +139,10 @@ function waitForChildExit(child: ChildProcessWithoutNullStreams, timeoutMs: numb
 }
 
 export class TelegramUserbotDriver {
-  private activeChatId: number | undefined;
+  private activeUserId: number | undefined;
   private closing = false;
   private commandId = 0;
-  private readonly pending = new Map<
-    string,
-    { reject(error: Error): void; resolve(value: TelegramUserbotUpdate): void }
-  >();
+  private readonly pending = new Map<string, PendingUserbotCommand>();
   private readyReject: (error: Error) => void = () => undefined;
   private readyResolve: () => void = () => undefined;
   private readonly ready: Promise<void>;
@@ -146,6 +152,7 @@ export class TelegramUserbotDriver {
 
   private constructor(
     private readonly child: ChildProcessWithoutNullStreams,
+    private readonly role: "primary" | "participant",
     private readonly onUpdate: (update: TelegramUserbotUpdate) => Promise<void> | void,
     private readonly leaseHealth: {
       assertHealthy(): void;
@@ -173,39 +180,62 @@ export class TelegramUserbotDriver {
       const detail = this.stderr.trim();
       this.fail(
         new Error(
-          `Telegram userbot exited before cleanup (${signal ?? code ?? "unknown"})${detail ? `: ${detail}` : ""}`,
+          `Telegram userbot (role=${this.role}) exited before cleanup (${signal ?? code ?? "unknown"})${detail ? `: ${detail}` : ""}`,
         ),
       );
     });
   }
 
   static async start(params: {
+    role: "primary" | "participant";
     chatId: string;
+    observeChatIds?: string[];
+    expectedUserId?: string;
     driverEnv: Record<string, string>;
     leaseHealth: { assertHealthy(): void; whenUnhealthy: Promise<Error> };
     onUpdate(update: TelegramUserbotUpdate): Promise<void> | void;
     userDriverPath: string;
   }): Promise<TelegramUserbotDriver> {
     params.leaseHealth.assertHealthy();
-    const child = spawn("python3", [params.userDriverPath, "serve", "--chat", params.chatId], {
-      env: { ...process.env, ...params.driverEnv },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    const child = spawn(
+      "python3",
+      [
+        params.userDriverPath,
+        "serve",
+        "--chat",
+        params.chatId,
+        ...(params.observeChatIds ?? []).flatMap((chatId) => ["--observe-chat", chatId]),
+      ],
+      {
+        env: { ...process.env, ...params.driverEnv },
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
     const driver = new TelegramUserbotDriver(
       child,
+      params.role,
       (update) => params.onUpdate(update),
       params.leaseHealth,
     );
     const timer = setTimeout(
-      () => driver.fail(new Error("Telegram userbot did not become ready within 120000ms.")),
+      () =>
+        driver.fail(
+          new Error(`Telegram userbot (role=${params.role}) did not become ready within 120000ms.`),
+        ),
       120_000,
     );
     timer.unref?.();
     try {
       await driver.ready;
+      if (
+        params.expectedUserId !== undefined &&
+        String(driver.activeUserId) !== params.expectedUserId
+      ) {
+        throw new Error("Telegram userbot authorization does not match the leased participant.");
+      }
       return driver;
     } catch (error) {
-      child.kill("SIGTERM");
+      await driver.close();
       throw error;
     } finally {
       clearTimeout(timer);
@@ -230,7 +260,8 @@ export class TelegramUserbotDriver {
         this.fail(new Error("Telegram userbot emitted an invalid ready chat id."));
         return;
       }
-      this.activeChatId = chatId;
+      this.activeUserId =
+        isRecord(message.user) && typeof message.user.id === "number" ? message.user.id : undefined;
       this.readyResolve();
       return;
     }
@@ -291,14 +322,12 @@ export class TelegramUserbotDriver {
     }
   }
 
-  get chatId(): number {
-    if (this.activeChatId === undefined) {
-      throw new Error("Telegram userbot chat id is unavailable before readiness.");
-    }
-    return this.activeChatId;
-  }
-
-  async send(params: { replyToMessageId?: number; text: string }): Promise<TelegramUserbotUpdate> {
+  async send(params: {
+    chatId?: string;
+    forumTopicId?: number;
+    replyToMessageId?: number;
+    text: string;
+  }): Promise<TelegramUserbotUpdate> {
     this.leaseHealth.assertHealthy();
     this.assertHealthy();
     this.commandId += 1;
@@ -306,9 +335,7 @@ export class TelegramUserbotDriver {
     const result = new Promise<TelegramUserbotUpdate>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
     });
-    this.child.stdin.write(
-      `${JSON.stringify({ id, method: "send", text: params.text, replyToMessageId: params.replyToMessageId })}\n`,
-    );
+    this.child.stdin.write(`${JSON.stringify({ id, method: "send", ...params })}\n`);
     return await result;
   }
 
@@ -323,7 +350,9 @@ export class TelegramUserbotDriver {
     }
     if (!(await waitForChildExit(this.child, 2_000))) {
       this.child.kill("SIGKILL");
-      await waitForChildExit(this.child, 2_000);
+      if (!(await waitForChildExit(this.child, 2_000))) {
+        throw new Error("Telegram userbot process exit is unconfirmed.");
+      }
     }
     await this.updateChain;
   }

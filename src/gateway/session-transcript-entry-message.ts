@@ -1,7 +1,8 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { TranscriptDisplayPosition } from "../chat/transcript-display-position.js";
-import type { SessionTranscriptMessageEvent } from "../config/sessions/session-accessor.js";
-import { isVisibleTranscriptRecord } from "../sessions/transcript-visible-record.js";
+import type { SessionTranscriptMessageEvent } from "../config/sessions/session-accessor.sqlite-projection-read.js";
+import { isVisibleTranscriptRecord } from "../sessions/transcript-record-visibility.js";
 
 /** Attach OpenClaw metadata to a transcript message without dropping existing metadata. */
 export function attachOpenClawTranscriptMeta(
@@ -23,8 +24,7 @@ export function attachOpenClawTranscriptMeta(
 }
 
 export function readTranscriptMessageIdempotencyKey(message: unknown): string | undefined {
-  const value = asOptionalRecord(message)?.idempotencyKey;
-  return typeof value === "string" && value.trim() ? value : undefined;
+  return readNonBlankString(asOptionalRecord(message)?.idempotencyKey);
 }
 
 export function sqliteMessageEventWithSeq(
@@ -95,6 +95,16 @@ export function projectTranscriptEntryMessage(
       ...(typeof compactionIdentity?.runId === "string" ? { runId: compactionIdentity.runId } : {}),
       ...(typeof compactionIdentity?.itemId === "string"
         ? { itemId: compactionIdentity.itemId }
+        : {}),
+      ...(kind === "compaction" &&
+      typeof record.tokensBefore === "number" &&
+      Number.isFinite(record.tokensBefore)
+        ? { tokensBefore: record.tokensBefore }
+        : {}),
+      ...(kind === "compaction" &&
+      typeof record.tokensAfter === "number" &&
+      Number.isFinite(record.tokensAfter)
+        ? { tokensAfter: record.tokensAfter }
         : {}),
       transcriptPosition,
       seq,

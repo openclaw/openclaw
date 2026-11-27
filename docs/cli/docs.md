@@ -15,7 +15,7 @@ Search the live OpenClaw docs index from the terminal.
 ```bash
 openclaw docs                              # print docs entrypoint and example search
 openclaw docs --json                       # print the same guidance as JSON
-openclaw docs <query...> [--json] [--limit <count>]
+openclaw docs [query...] [--json] [--limit <count>]
 ```
 
 | Argument/option   | Description                                                                        |
@@ -41,6 +41,9 @@ openclaw docs gateway token secretref
 ## How it works
 
 `openclaw docs` calls `https://docs.openclaw.ai/api/search` and renders the JSON results. The search request uses a fixed 30 second timeout.
+
+Ctrl-C or SIGTERM cancels an in-progress search, including its response download,
+without printing a partial result or a search-failure envelope.
 
 ## Output
 

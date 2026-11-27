@@ -50,10 +50,8 @@ export function createFrozenTargetSource(root, sha) {
     throw new Error("selected source checkout does not match OPENCLAW_SELECTED_SHA");
   }
   const readObject = (oid, type) => {
-    if (textDecoder.decode(git("cat-file", "-t", oid)).trim() !== type) {
-      throw new Error(`expected committed ${type} object`);
-    }
     const content = git("cat-file", type, oid);
+    // Hash the expected type too: typed cat-file can dereference a commit or tag.
     const actual = createHash("sha1")
       .update(`${type} ${content.length}\0`)
       .update(content)

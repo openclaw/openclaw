@@ -143,6 +143,8 @@ export const codexOrphanedSessionBindingMigration: PluginDoctorStateMigration = 
   label: "Codex app-server orphaned session bindings",
   doctorOnly: true,
   phase: "after-session-repair",
+  // These bindings live in the core-captured shared SQLite store.
+  collectBackupResources: () => [],
   async detectLegacyState(params) {
     for await (const _ of iterateOrphanBindingPages(params)) {
       return { preview: ["- Codex app-server bindings: remove orphaned session ownership"] };

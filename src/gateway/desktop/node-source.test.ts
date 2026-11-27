@@ -1,93 +1,61 @@
 import { PassThrough } from "node:stream";
 import { setImmediate } from "node:timers/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
 import { NodeRegistry } from "../node-registry.js";
-import type { GatewayWsClient } from "../server/ws-types.js";
+import { createWorkerSupervisorNodeClient } from "../server-methods/nodes.runner-inventory.test-support.js";
 import { createNodeDesktopService } from "./node-source.js";
 import { createNodeDesktopStreamBroker } from "./node-stream-broker.js";
 import * as observeBridge from "./observe-bridge.js";
+import type { DesktopObserveRequester } from "./observe-requester.js";
 import { createDesktopSessionRegistry } from "./session-registry.js";
 
-const cleanups: Array<() => Promise<void>> = [];
+const cleanups: Array<() => void | Promise<void>> = [];
+const credentials = { password: "synthetic-password" };
 
 afterEach(async () => {
-  await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
+  await Promise.all(cleanups.splice(0).map(async (cleanup) => await cleanup()));
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
+function createRequester() {
+  const controller = new AbortController();
+  cleanups.push(() => controller.abort());
+  return Object.assign(controller, { isCurrent: () => !controller.signal.aborted });
+}
+
+const rejected = (promise: Promise<unknown>) => promise.then(() => false).catch(() => true);
+
 function createFixture(boundary: "activation" | "pairing" | "attachment") {
-  let config: OpenClawConfig = {
-    gateway: { nodes: { commands: { allow: [NODE_DESKTOP_STREAM_COMMAND] } } },
+  let config: OpenClawConfig = {};
+  const gate = { reached: createDeferred(), release: createDeferred() };
+  const hold = async <T>(value: T) => {
+    gate.reached.resolve();
+    await gate.release.promise;
+    return value;
   };
-  const reached = createDeferred();
-  const release = createDeferred();
-  const forwarded: string[] = [];
+  const forwarded = vi.fn(() => gate.reached.resolve());
+  const pairing = { identity: "identity", generation: "generation" };
   const nodeRegistry = new NodeRegistry({
-    resolveCurrentPairingState: async () => {
-      if (boundary === "pairing") {
-        reached.resolve();
-        await release.promise;
-      }
-      return { identity: "identity", generation: "generation" };
-    },
+    resolveCurrentPairingState: async () => (boundary === "pairing" ? hold(pairing) : pairing),
   });
-  const client = {
-    connId: "node-conn",
-    usesSharedGatewayAuth: false,
-    socket: {
-      readyState: 1,
-      bufferedAmount: 0,
-      send(frame: string) {
-        const event = JSON.parse(frame) as {
-          event: string;
-          payload: { id: string; command: string };
-        };
-        if (event.event !== "node.invoke.request") {
-          return;
-        }
-        forwarded.push(event.payload.command);
-        if (boundary === "attachment") {
-          reached.resolve();
-          return;
-        }
-        queueMicrotask(() =>
-          nodeRegistry.handleInvokeResult({
-            id: event.payload.id,
-            nodeId: "node",
-            connId: "node-conn",
-            ok: false,
-            error: { code: "FIXTURE", message: "unexpected desktop dispatch" },
-          }),
-        );
-      },
-      close: vi.fn(),
-    },
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: {
-        id: GATEWAY_CLIENT_IDS.NODE_HOST,
-        platform: "linux",
-        version: "test",
-        mode: "node",
-      },
-      device: { id: "node" },
-      commands: [NODE_DESKTOP_STREAM_COMMAND],
-    },
-  } as unknown as GatewayWsClient;
-  nodeRegistry.register(client, { pairingIdentity: "identity", pairingGeneration: "generation" });
+  const client = createWorkerSupervisorNodeClient("node-conn");
+  client.connect.commands = [NODE_DESKTOP_STREAM_COMMAND];
+  client.connect.client.deviceFamily = "Linux";
+  client.socket.send = forwarded;
+  nodeRegistry.register(client, {
+    pairingIdentity: "identity",
+    pairingGeneration: "generation",
+  });
   const desktopRegistry = createDesktopSessionRegistry();
   if (boundary === "activation") {
     const activate = desktopRegistry.activate;
-    vi.spyOn(desktopRegistry, "activate").mockImplementation(async (request) => {
-      await activate(request);
-      reached.resolve();
-      await release.promise;
-    });
+    vi.spyOn(desktopRegistry, "activate").mockImplementation((request) =>
+      activate(request).then(hold),
+    );
   }
   const streamBroker = createNodeDesktopStreamBroker();
   const attached = createDeferred<Awaited<ReturnType<typeof streamBroker.mint>["attached"]>>();
@@ -107,15 +75,23 @@ function createFixture(boundary: "activation" | "pairing" | "attachment") {
     streamBroker,
   });
   cleanups.push(async () => {
-    release.resolve();
+    gate.release.resolve();
     await desktopRegistry.stopAll();
     nodeRegistry.unregister(client.connId);
   });
   return {
-    service,
+    stop: () => service.stopNode("node-1"),
+    observe: async (requester?: DesktopObserveRequester, stream?: PassThrough) => {
+      const pending = service.observe({ nodeId: "node-1", control: false, credentials, requester });
+      if (stream) {
+        await gate.reached.promise;
+        attached.resolve({ stream, auth: "vnc-password" });
+      }
+      return pending;
+    },
     nodeRegistry,
-    reached: reached.promise,
-    release: release.resolve,
+    desktopRegistry,
+    gate,
     attached,
     forwarded,
     revoke() {
@@ -124,179 +100,94 @@ function createFixture(boundary: "activation" | "pairing" | "attachment") {
   };
 }
 
-describe("node desktop runtime policy", () => {
-  it.each(["release", "stop"] as const)(
-    "joins invocation settlement when owner stop overlaps %s",
-    async (firstAction) => {
-      const fixture = createFixture("attachment");
-      const canceled = createDeferred();
-      const finishInvocation = createDeferred();
-      const completionOrder: string[] = [];
-      const invoke = fixture.nodeRegistry.invoke.bind(fixture.nodeRegistry);
-      vi.spyOn(fixture.nodeRegistry, "invoke").mockImplementation(async (request) => {
-        const result = await invoke(request);
-        canceled.resolve();
-        await finishInvocation.promise;
-        completionOrder.push("invocation");
-        return result;
-      });
-      const controller = new AbortController();
-      const requester = {
-        connId: "desktop-panel-client",
-        signal: controller.signal,
-        isCurrent: () => !controller.signal.aborted,
-      };
-      try {
-        const observing = fixture.service.observe({
-          nodeId: "node",
-          control: false,
-          credentials: { password: "synthetic-password" },
-          requester,
-        });
-        await fixture.reached;
-        fixture.attached.resolve({ stream: new PassThrough(), auth: "vnc-password" });
-        const observed = await observing;
-        const retiring = (
-          firstAction === "release"
-            ? observeBridge.releaseDesktopObserverToken(observed.wsPath, requester)
-            : fixture.service.stopNode("node")
-        ).then((result) => {
-          completionOrder.push(firstAction);
-          return result;
-        });
-        await canceled.promise;
-        const stopping = fixture.service.stopNode("node").then(() => {
-          completionOrder.push("stop");
-        });
-        await setImmediate();
-        finishInvocation.resolve();
-        expect(await retiring).toBe(firstAction === "release" ? true : undefined);
-        await stopping;
-        expect(completionOrder[0]).toBe("invocation");
-      } finally {
-        finishInvocation.resolve();
-        controller.abort();
-      }
-    },
-  );
+it("refuses an advertised desktop without pairing approval", async () => {
+  const fixture = createFixture("attachment");
+  fixture.nodeRegistry.get("node-1")!.pairingGeneration = undefined;
+  await expect(fixture.observe()).rejects.toThrow("reconnect and approve the node capability");
+  expect(fixture.forwarded).not.toHaveBeenCalled();
+});
 
-  it.each(["activation", "pairing"] as const)(
-    "does not dispatch after the requesting connection closes during %s",
-    async (boundary) => {
-      const fixture = createFixture(boundary);
-      const controller = new AbortController();
-      const observed = fixture.service
-        .observe({
-          nodeId: "node",
-          control: false,
-          requester: {
-            signal: controller.signal,
-            isCurrent: () => !controller.signal.aborted,
-          },
-        })
-        .then(
-          () => true,
-          () => false,
-        );
-      await fixture.reached;
-      controller.abort();
-      fixture.release();
-      expect(await observed).toBe(false);
-      expect(fixture.forwarded).toEqual([]);
-    },
-  );
-
-  it("settles a canceled observer while its node pairing lookup is still pending", async () => {
-    const fixture = createFixture("pairing");
-    const controller = new AbortController();
-    let settled = false;
-    const observed = fixture.service
-      .observe({
-        nodeId: "node",
-        control: false,
-        requester: {
-          signal: controller.signal,
-          isCurrent: () => !controller.signal.aborted,
-        },
-      })
-      .then(
-        () => {
-          settled = true;
-          return true;
-        },
-        () => {
-          settled = true;
-          return false;
-        },
-      );
-    await fixture.reached;
-    controller.abort();
-    await expect.poll(() => settled).toBe(true);
-    expect(await observed).toBe(false);
-    expect(fixture.forwarded).toEqual([]);
-    fixture.release();
-    await Promise.resolve();
-    expect(fixture.forwarded).toEqual([]);
+it("joins invocation settlement when owner stop overlaps release", async () => {
+  const fixture = createFixture("attachment");
+  const canceled = createDeferred();
+  const finishInvocation = createDeferred();
+  cleanups.push(finishInvocation.resolve);
+  const completionOrder: string[] = [];
+  const invoke = fixture.nodeRegistry.invoke.bind(fixture.nodeRegistry);
+  vi.spyOn(fixture.nodeRegistry, "invoke").mockImplementation(async (request) => {
+    const result = await invoke(request);
+    canceled.resolve();
+    await finishInvocation.promise;
+    completionOrder.push("invocation");
+    return result;
   });
+  const owner = Object.assign(createRequester(), { connId: "desktop-panel-client" });
+  const observed = await fixture.observe(owner, new PassThrough());
+  const retiring = observeBridge
+    .releaseDesktopObserverToken(observed.wsPath, owner)
+    .finally(() => completionOrder.push("release"));
+  await canceled.promise;
+  const stopping = fixture.stop().then(() => completionOrder.push("stop"));
+  await setImmediate();
+  finishInvocation.resolve();
+  expect(await retiring).toBe(true);
+  await stopping;
+  expect(completionOrder[0]).toBe("invocation");
+});
 
-  it("keeps requester authority on the observer ticket after node attachment", async () => {
-    const fixture = createFixture("attachment");
-    const mint = vi.spyOn(observeBridge, "mintDesktopObserverToken");
-    const controller = new AbortController();
-    const client = { invalidated: false };
-    const requester = {
-      signal: controller.signal,
-      isCurrent: () => !client.invalidated,
-    };
-    const observed = fixture.service.observe({
-      nodeId: "node",
-      control: false,
-      credentials: { password: "synthetic-password" },
-      requester,
-    });
-    await fixture.reached;
-    fixture.attached.resolve({ stream: new PassThrough(), auth: "vnc-password" });
+it.each([false, true])("expires only unclaimed streams (claimed=%s)", async (claimed) => {
+  vi.useFakeTimers();
+  const { desktopRegistry: registry, observe, nodeRegistry } = createFixture("attachment");
+  const mint = vi.spyOn(observeBridge, "mintDesktopObserverToken");
+  const invoke = vi.spyOn(nodeRegistry, "invoke");
+  const stream = new PassThrough();
+  const observed = await observe(undefined, stream);
+  const { attachment, sourceKey, ownerEpoch } = mint.mock.calls[0]![0];
+  if (claimed) {
+    assert(attachment.kind === "stream", "expected a streamed node desktop");
+    expect(registry.claimStream(sourceKey, attachment)).toBe(stream);
+    const observer = registry.attachObserver(sourceKey, { ownerEpoch, control: false, close() {} });
+    expect(observer).toBeDefined();
+  }
+  await vi.advanceTimersByTimeAsync(observed.expiresAtMs - Date.now());
+  expect(stream.destroyed).toBe(!claimed);
+  expect(registry.hasActivity(sourceKey, ownerEpoch)).toBe(claimed);
+  if (!claimed) {
+    await expect(invoke.mock.results[0]!.value).resolves.toMatchObject({ ok: false });
+  }
+});
 
-    await expect(observed).resolves.toMatchObject({ transport: "rfb", control: false });
-    const mintedRequester = mint.mock.calls[0]?.[0].requester;
-    expect(mintedRequester).toBe(requester);
-    expect(mintedRequester?.isCurrent()).toBe(true);
-    client.invalidated = true;
-    expect(mintedRequester?.isCurrent()).toBe(false);
-    expect(controller.signal.aborted).toBe(false);
-  });
-
-  it.each(["activation", "pairing"] as const)(
-    "does not dispatch after policy changes during %s",
-    async (boundary) => {
-      const fixture = createFixture(boundary);
-      const observed = fixture.service.observe({ nodeId: "node", control: false }).then(
-        () => true,
-        () => false,
-      );
-      await fixture.reached;
-      fixture.revoke();
-      fixture.release();
-
-      expect(await observed).toBe(false);
-      expect(fixture.forwarded).toEqual([]);
-    },
-  );
-
-  it("destroys a late attachment instead of publishing a revoked desktop", async () => {
-    const fixture = createFixture("attachment");
-    const stream = new PassThrough();
-    const observed = fixture.service
-      .observe({ nodeId: "node", control: false, credentials: { password: "synthetic-password" } })
-      .then(
-        () => true,
-        () => false,
-      );
-    await fixture.reached;
+it.each([
+  { boundary: "activation", revoked: "requester" },
+  { boundary: "activation", revoked: "policy" },
+  { boundary: "pairing", revoked: "requester" },
+  { boundary: "pairing", revoked: "policy" },
+  { boundary: "attachment", revoked: "policy" },
+] as const)("rejects $revoked revocation during $boundary", async ({ boundary, revoked }) => {
+  const fixture = createFixture(boundary);
+  const requester = createRequester();
+  const observed = rejected(fixture.observe(revoked === "requester" ? requester : undefined));
+  await fixture.gate.reached.promise;
+  if (revoked === "requester") {
+    requester.abort();
+    if (boundary === "pairing") {
+      expect(await observed).toBe(true);
+      expect(fixture.forwarded).not.toHaveBeenCalled();
+    }
+  } else {
     fixture.revoke();
+  }
+  const stream = boundary === "attachment" ? new PassThrough() : undefined;
+  if (stream) {
     fixture.attached.resolve({ stream, auth: "vnc-password" });
-
-    expect(await observed).toBe(false);
+  } else {
+    fixture.gate.release.resolve();
+  }
+  expect(await observed).toBe(true);
+  if (stream) {
     expect(stream.destroyed).toBe(true);
-  });
+  } else {
+    await Promise.resolve();
+    expect(fixture.forwarded).not.toHaveBeenCalled();
+  }
 });

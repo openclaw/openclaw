@@ -1,4 +1,5 @@
-import type { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { sanitizeTerminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import { isJsonObject, type JsonObject, type CodexThread } from "./app-server/protocol.js";
 import { detachCodexCatalogString } from "./session-catalog-limits.js";
 import {
@@ -6,32 +7,12 @@ import {
   MAX_CURSOR_LENGTH,
   MAX_CWD_LENGTH,
   MAX_SESSION_ID_LENGTH,
-  selectCodexCatalogPreviewInput,
   truncateCodexCatalogPreview,
 } from "./session-catalog-parsing.js";
 import { copyCodexCatalogSource } from "./session-catalog-source.js";
+import type { CodexCatalogNativePage, CodexCatalogNativeThread } from "./session-catalog-types.js";
 
 export const CODEX_CATALOG_NATIVE_PAGE_LIMIT = 64;
-type CodexCatalogNativeThread = Pick<
-  CodexThread,
-  | "id"
-  | "projectId"
-  | "sessionId"
-  | "ephemeral"
-  | "name"
-  | "cwd"
-  | "modelProvider"
-  | "cliVersion"
-  | "path"
-  | "originator"
-  | "createdAt"
-  | "updatedAt"
-  | "recencyAt"
-  | "preview"
-  | "source"
-  | "gitInfo"
-  | "status"
->;
 export type CodexCatalogPreviewCache = (
   thread: Pick<CodexThread, "id" | "path" | "updatedAt" | "recencyAt">,
 ) => string | undefined;
@@ -83,8 +64,9 @@ export function projectCodexCatalogNativeThread(
     row.path = null;
   }
   if (typeof thread.originator === "string") {
-    // Provenance tests exact native identity, unlike trimmed display metadata.
-    row.originator = detachCodexCatalogString(thread.originator.slice(0, 500));
+    // Provenance tests exact native identity, unlike trimmed display metadata;
+    // when truncation splits a surrogate pair, the whole pair is dropped.
+    row.originator = detachCodexCatalogString(truncateUtf16Safe(thread.originator, 500));
   }
   for (const field of ["createdAt", "updatedAt", "recencyAt"] as const) {
     const value = thread[field];
@@ -92,30 +74,20 @@ export function projectCodexCatalogNativeThread(
       row[field] = value;
     }
   }
-  const preview = cachedPreview?.({
-    id,
-    path: typeof row.path === "string" ? row.path : null,
-    updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : null,
-    recencyAt: typeof row.recencyAt === "number" ? row.recencyAt : null,
-  });
   const rawPreview = thread.preview;
-  if (
-    preview !== undefined &&
-    preview.length <= 500 &&
-    !(typeof rawPreview === "string" && Boolean(rawPreview) !== Boolean(preview))
-  ) {
+  const preview = reuseCodexCatalogPreview(
+    row,
+    typeof rawPreview === "string" ? Boolean(rawPreview) : undefined,
+    cachedPreview,
+  );
+  if (preview !== undefined) {
     row.preview = preview;
   } else if (typeof rawPreview === "string") {
-    row.preview = rawPreview
-      ? truncateCodexCatalogPreview(selectCodexCatalogPreviewInput(rawPreview), sanitize)
-      : "";
+    row.preview = rawPreview ? truncateCodexCatalogPreview(rawPreview, sanitize) : "";
   } else if (rawPreview === null) {
     row.preview = null;
   }
-  const source =
-    typeof thread.source === "string"
-      ? detachCodexCatalogString(thread.source.slice(0, 500))
-      : undefined;
+  const source = thread.source;
   if (
     source === "cli" ||
     source === "vscode" ||
@@ -159,17 +131,18 @@ export function projectCodexCatalogNativeResponse(
   sanitize: typeof sanitizeTerminalText,
   cachedPreview?: CodexCatalogPreviewCache,
   remainingRows = CODEX_CATALOG_NATIVE_PAGE_LIMIT,
-): JsonObject {
+): CodexCatalogNativePage {
   if (!Array.isArray(response.data) || response.data.length > CODEX_CATALOG_NATIVE_PAGE_LIMIT) {
     throw new Error("Codex catalog response exceeds its native page limit");
   }
   const limit = Number.isFinite(remainingRows)
     ? Math.max(0, Math.min(CODEX_CATALOG_NATIVE_PAGE_LIMIT, Math.floor(remainingRows)))
     : 0;
-  const data = response.data
-    .slice(0, limit)
-    .map((thread) => projectCodexCatalogNativeThread(thread, sanitize, cachedPreview));
-  const page: JsonObject = { data };
+  const data: CodexCatalogNativeThread[] = [];
+  for (let index = 0; index < Math.min(limit, response.data.length); index++) {
+    data.push(projectCodexCatalogNativeThread(response.data[index], sanitize, cachedPreview));
+  }
+  const page: CodexCatalogNativePage = { data };
   for (const field of ["nextCursor", "backwardsCursor"] as const) {
     const value = response[field];
     if (value === null) {
@@ -182,4 +155,23 @@ export function projectCodexCatalogNativeResponse(
     }
   }
   return page;
+}
+
+/** Reuse resident text without transferring a cache or an unbounded native preview. */
+export function reuseCodexCatalogPreview(
+  thread: Pick<CodexThread, "id" | "path" | "updatedAt" | "recencyAt">,
+  rawPreviewNonempty: boolean | undefined,
+  cachedPreview?: CodexCatalogPreviewCache,
+): string | undefined {
+  const preview = cachedPreview?.({
+    id: thread.id,
+    path: thread.path ?? null,
+    updatedAt: thread.updatedAt ?? null,
+    recencyAt: thread.recencyAt ?? null,
+  });
+  return preview !== undefined &&
+    preview.length <= 500 &&
+    (rawPreviewNonempty === undefined || rawPreviewNonempty === Boolean(preview))
+    ? preview
+    : undefined;
 }

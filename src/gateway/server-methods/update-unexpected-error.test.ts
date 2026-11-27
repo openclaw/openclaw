@@ -1,112 +1,77 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import {
+  adoptUpdateCampaignMock,
+  detectRespawnSupervisorMock,
   invokeUpdateRun,
-  runGatewayUpdateMock,
-  runPostCoreFinalizeAfterGatewayUpdateMock,
-  sentinelState,
+  mockGlobalInstallSurface,
+  startManagedServiceUpdateHandoffMock,
 } from "./update.test-harness.js";
 
-describe("update.run unexpected-error diagnostics", () => {
-  it.each(["runner", "finalization"])("retains report facts when %s throws", async (source) => {
-    const error = Object.assign(
-      new Error(
-        "EACCES: permission denied, open '/Users/example/private-file' token=synthetic-secret\nprivate second line",
-      ),
-      { code: "EACCES" },
-    );
-    const recovery = { serviceRestartSafe: true as const, version: "1.0.0" };
-    runGatewayUpdateMock.mockImplementationOnce(async (opts) => {
-      await opts?.beforeGitMutation?.({ sha: "a".repeat(40), version: "2.0.0" });
-      const step = { name: "build", command: "pnpm build", index: 0, total: 1 };
-      opts?.progress?.onStepStart?.(step);
-      if (source === "runner") {
-        throw error;
-      }
-      opts?.progress?.onStepComplete?.({ ...step, exitCode: 0, durationMs: 1 });
-      return {
-        status: "error",
-        mode: "git",
-        before: { version: "1.0.0" },
-        after: { version: "2.0.0" },
-        recovery,
-        durationMs: 1,
-        steps: [{ ...step, cwd: "", exitCode: 0, durationMs: 1 }],
-      };
-    });
-    if (source === "finalization") {
-      runPostCoreFinalizeAfterGatewayUpdateMock.mockRejectedValueOnce(error);
-    }
-    const logGateway = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
-    let payload: { runId: string; result: UpdateRunResult } | undefined;
-    await invokeUpdateRun(
-      {},
-      (_ok, response) => {
-        payload = response as typeof payload;
-      },
-      undefined,
-      { logGateway },
-    );
+async function captureLoggedUpdate(params: Record<string, unknown> = {}) {
+  const logGateway = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
+  let payload:
+    | { runId: string; ok: boolean; ackDelivered: boolean; result: UpdateRunResult }
+    | undefined;
+  await invokeUpdateRun(
+    params,
+    (_ok, response) => {
+      payload = response as typeof payload;
+    },
+    undefined,
+    { logGateway },
+  );
+  return { response: expectDefined(payload, "update response"), logGateway };
+}
 
-    const response = expectDefined(payload, "update response");
-    const recordedRun = expectDefined(getUpdateRun(response.runId), "recorded update run");
-    const phase = source === "runner" ? "build" : "validating";
-    expect(recordedRun.target).toMatchObject({
-      kind: "git",
-      sha: "a".repeat(40),
-      version: "2.0.0",
-    });
-    expect(recordedRun.steps).toContainEqual(
-      expect.objectContaining({
-        step: phase,
-        status: "failed",
-        failureFacts: [
-          {
-            check: phase,
-            code: "EACCES",
-            message: expect.stringContaining("EACCES: permission denied, open [redacted-path]"),
-          },
-        ],
-      }),
+function expectWarning(warn: ReturnType<typeof vi.fn>, text: string) {
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining(text));
+}
+
+describe("update.run unexpected-error diagnostics", () => {
+  it("logs a terminal failure at warning level with its public reason", async () => {
+    mockGlobalInstallSurface();
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+    startManagedServiceUpdateHandoffMock.mockRejectedValueOnce(
+      new Error("synthetic helper launch failure"),
     );
+    const { response, logGateway } = await captureLoggedUpdate();
     expect(response.result).toMatchObject({
       status: "error",
-      mode: "git",
-      reason: "unexpected-error",
+      reason: "managed-service-handoff-failed",
     });
-    if (source === "finalization") {
-      expect(response.result.recovery).toEqual(recovery);
-      expect(sentinelState.capturedPayload?.stats?.recovery).toEqual(recovery);
-      expect(response.result.steps).toContainEqual(
-        expect.objectContaining({ name: "build", exitCode: 0 }),
-      );
-    }
-    const report = await prepareUpdateFailureReport({
-      attemptId: response.runId,
-      result: response.result,
-      recordedRun,
-    });
-    expect(report.body).toContain(`Update target: ${"a".repeat(40)}`);
-    expect(report.body).toContain("Update mode: git");
-    expect(report.body).toContain(`Failed phase ${phase}:`);
-    expect(report.body).toContain("EACCES; Permission denied");
-    expect(report.body).toContain(
-      source === "finalization"
-        ? "Recovery outcome: verified safe to restart"
-        : "Recovery outcome: not recorded",
+    expectWarning(
+      logGateway.warn,
+      `status=error reason=managed-service-handoff-failed error="Error code=Error"`,
     );
-    for (const privateText of [
-      "/Users/example",
-      "private-file",
-      "synthetic-secret",
-      "private second line",
-    ]) {
-      expect(JSON.stringify(recordedRun)).not.toContain(privateText);
-      expect(report.body).not.toContain(privateText);
-    }
-    expect(logGateway.warn).toHaveBeenCalledWith(expect.stringContaining("EACCES"));
+    expect(logGateway.info).not.toHaveBeenCalledWith(
+      expect.stringContaining("update.run completed"),
+    );
+  });
+
+  it("keeps the primary exception when optional history reads fail", async () => {
+    const original = Object.assign(new TypeError("campaign admission failed"), { code: "EACCES" });
+    adoptUpdateCampaignMock.mockImplementationOnce(() => {
+      throw original;
+    });
+    const historyRead = vi
+      .spyOn(await import("../../infra/update-run-reader.js"), "getUpdateRunAsync")
+      .mockImplementation(() => {
+        throw new Error("history lookup failed");
+      });
+    const { response, logGateway } = await captureLoggedUpdate().finally(() => {
+      historyRead.mockRestore();
+    });
+    expect(response.result).toMatchObject({
+      status: "error",
+      reason: "unexpected-error",
+      steps: [{ failureFacts: [{ code: "EACCES", errorName: "TypeError" }] }],
+    });
+    expect(JSON.stringify(response.result)).not.toContain("history lookup failed");
+    expect(getUpdateRun(response.runId)?.status).toBe("failed");
+    expectWarning(logGateway.warn, "Update history could not be read");
+    expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
   });
 });

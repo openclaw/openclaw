@@ -1,13 +1,40 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { ExpressionBuilder } from "kysely";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { chunkItems } from "../utils/chunk-items.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  iterateSqliteQuerySync,
+} from "./kysely-sync.js";
+import { boundedUsageCacheColumn, usageCacheJsonText } from "./session-cost-usage-expressions.js";
+import {
+  LEGACY_USAGE_COST_PARTITION_SCOPE,
+  USAGE_COST_PARTITION_SCOPE,
+  usageCostPartitionKey,
+  type UsageCostPartition,
+} from "./session-cost-usage-partitions.js";
+import {
+  deleteSessionCostUsagePartitionsInDatabase,
+  pruneSessionCostUsagePartitionsInDatabase,
+} from "./session-cost-usage-partitions.worker.js";
+import { USAGE_COST_QUARTER_SCOPE } from "./session-cost-usage-quarters.js";
+import {
+  decodeUsageCostRollupEnvelope,
+  readUsageCostDeferredMetadata,
+  USAGE_COST_ROLLUP_SCOPE as ROLLUP_SCOPE,
+  type UsageCostFreshnessCheckpoint,
+} from "./session-cost-usage-rollup-codec.js";
+import type { EngineConnection } from "./sql-connection.js";
+import { withSqliteDatabaseWriteScope } from "./sqlite-database-admission.js";
 
 const LEGACY_CACHE_SCOPE = "session-cost-usage";
 const LEGACY_CACHE_KEY = "cache";
-const REFRESH_LOCK_KEY = "refresh-lock";
-const RETIRED_ROLLUP_SCOPE = "session-cost-usage-rollup-v1";
-const ROLLUP_SCOPE = "session-cost-usage-rollup-v2";
+// v1 projection partitions (2026.10.10 and earlier) are rebuilt as v2 from transcripts.
+const RETIRED_ROLLUP_SCOPES = [
+  "session-cost-usage-rollup-v1",
+  "session-cost-usage-rollup-v2",
+  LEGACY_USAGE_COST_PARTITION_SCOPE,
+];
 const ROLLUP_PRUNE_BATCH_SIZE = 32;
 
 type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
@@ -16,194 +43,268 @@ export type SessionCostUsageRollupRow = {
   key: string;
   updatedAt: number;
   valueJson: string;
+  /** Actual stored length, carried by database reads for cheap read repair. */
+  bodyBytes?: number;
 };
 
-export function readSessionCostUsageRefreshLockInDatabase(db: DatabaseSync): string | null {
-  const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
-  const row = executeSqliteQuerySync(
-    db,
-    kysely
-      .selectFrom("cache_entries")
-      .select("value_json")
-      .where("scope", "=", LEGACY_CACHE_SCOPE)
-      .where("key", "=", REFRESH_LOCK_KEY)
-      .limit(1),
-  ).rows[0];
-  return row?.value_json ?? null;
-}
+type SessionCostUsageJson = string | Uint8Array;
+
+export type SessionCostUsageRollupSnapshot = Omit<SessionCostUsageRollupRow, "valueJson"> & {
+  valueJson: SessionCostUsageJson;
+};
+
+export type SessionCostUsageDeferredMetadata = {
+  checkpoint: UsageCostFreshnessCheckpoint;
+  scannedAt: number;
+  sqliteGenerationHash?: string;
+};
+
+type RollupReadOptions = {
+  includeBody?: boolean;
+  throwIfCancelled?: () => void;
+  budget?: {
+    remainingBytes: number;
+    deferredPaths: Set<string>;
+    deferredMetadata: Map<string, SessionCostUsageDeferredMetadata>;
+    metadataLimit: number;
+    pricingFingerprint: string;
+  };
+};
 
 export function readSessionCostUsageRollupRowsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
+  filePaths: readonly string[] | undefined,
+  options: RollupReadOptions & { includeBody: true },
+): Array<SessionCostUsageRollupRow & { blob: Uint8Array | null }>;
+export function readSessionCostUsageRollupRowsInDatabase(
+  db: EngineConnection,
   filePaths?: readonly string[],
-): SessionCostUsageRollupRow[] {
+  options?: RollupReadOptions & { includeBody?: false },
+): SessionCostUsageRollupRow[];
+export function readSessionCostUsageRollupRowsInDatabase(
+  db: EngineConnection,
+  filePaths?: readonly string[],
+  options?: RollupReadOptions,
+): Array<SessionCostUsageRollupRow & { blob?: Uint8Array | null }> {
   const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
   // Bound SQL parameters even when a historical family contains many instances.
   const batches = filePaths ? chunkItems([...new Set(filePaths)], 500) : [undefined];
-  return batches
-    .flatMap((keys) => {
-      const query = kysely
-        .selectFrom("cache_entries")
-        .select(["key", "value_json", "updated_at"])
-        .where("scope", "=", ROLLUP_SCOPE);
-      return executeSqliteQuerySync(db, keys ? query.where("key", "in", keys) : query).rows;
-    })
-    .flatMap((row) =>
-      row.value_json === null
-        ? []
-        : [{ key: row.key, valueJson: row.value_json, updatedAt: row.updated_at }],
-    );
+  const result: Array<SessionCostUsageRollupRow & { blob?: Uint8Array | null }> = [];
+  for (const keys of batches) {
+    options?.throwIfCancelled?.();
+    const budget = options?.budget;
+    const query = kysely
+      .selectFrom("cache_entries")
+      .select(["key", "updated_at"])
+      .select((eb) => [
+        boundedUsageCacheColumn("value_json", budget).as("value_json"),
+        (options?.includeBody ? boundedUsageCacheColumn("blob", budget) : eb.val(null)).as("blob"),
+        eb.fn<number>("coalesce", [eb.fn<number>("length", ["blob"]), eb.val(0)]).as("body_bytes"),
+        eb.fn<number>("octet_length", ["value_json"]).as("header_bytes"),
+      ])
+      .where("scope", "=", ROLLUP_SCOPE);
+    for (const row of iterateSqliteQuerySync(db, keys ? query.where("key", "in", keys) : query)) {
+      options?.throwIfCancelled?.();
+      const headerBytes = 2 * (row.value_json?.length ?? 0);
+      const bytes = headerBytes + row.body_bytes;
+      const deferred =
+        budget &&
+        (row.header_bytes > 64 * 1024 ||
+          (row.body_bytes > 0 && row.blob === null) ||
+          bytes > budget.remainingBytes);
+      if (deferred) {
+        const envelope = row.value_json
+          ? decodeUsageCostRollupEnvelope(row.value_json, budget.pricingFingerprint)
+          : undefined;
+        const invalidBody = envelope && envelope.body.storedBytes !== row.body_bytes;
+        if (!invalidBody) {
+          budget.deferredPaths.add(row.key);
+        }
+        if (row.value_json === null || headerBytes > budget.remainingBytes) {
+          if (!invalidBody && envelope && budget.deferredMetadata.size < budget.metadataLimit) {
+            const metadata = readUsageCostDeferredMetadata(envelope);
+            if (metadata) {
+              budget.deferredMetadata.set(row.key, metadata);
+            }
+          }
+          continue;
+        }
+        budget.remainingBytes -= headerBytes;
+      } else if (budget) {
+        budget.remainingBytes -= bytes;
+      }
+      if (row.value_json !== null) {
+        result.push({
+          key: row.key,
+          valueJson: row.value_json,
+          updatedAt: row.updated_at,
+          bodyBytes: row.body_bytes,
+          ...(options?.includeBody ? { blob: deferred ? null : row.blob } : {}),
+        });
+      }
+    }
+  }
+  return result;
 }
 
-export function writeSessionCostUsageRollupInDatabase(
-  db: DatabaseSync,
+export function writeSessionCostUsageRollupsInDatabase(
+  db: EngineConnection,
   params: {
     rollupId: string;
-    previousValueJson: string | null;
-    valueJson: string;
+    valueJson: Uint8Array;
+    blob: Uint8Array | null;
     updatedAt: number;
-  },
+    partitions?: UsageCostPartition[];
+    removedDates?: string[];
+    replacePartitions?: boolean;
+  }[],
 ): boolean {
-  const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
-  const currentValueJson =
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .selectFrom("cache_entries")
-        .select("value_json")
-        .where("scope", "=", ROLLUP_SCOPE)
-        .where("key", "=", params.rollupId)
-        .limit(1),
-    ).rows[0]?.value_json ?? null;
-  if (currentValueJson !== params.previousValueJson) {
-    return false;
-  }
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .insertInto("cache_entries")
-      .values({
+  return withSqliteDatabaseWriteScope(db, [ROLLUP_SCOPE], () => {
+    const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
+    if (params.some((row) => row.partitions || row.removedDates || row.replacePartitions)) {
+      deleteSessionCostUsagePartitionsInDatabase(db, params);
+    }
+    const rows = params.flatMap((row) => [
+      {
         scope: ROLLUP_SCOPE,
-        key: params.rollupId,
-        value_json: params.valueJson,
-        blob: null,
+        key: row.rollupId,
+        value_json: usageCacheJsonText(row.valueJson),
+        blob: row.blob,
         expires_at: null,
-        updated_at: params.updatedAt,
-      })
-      .onConflict((conflict) =>
-        conflict.columns(["scope", "key"]).doUpdateSet({
-          value_json: params.valueJson,
-          blob: null,
+        updated_at: row.updatedAt,
+      },
+      ...(row.partitions ?? []).flatMap((partition) => {
+        const key = usageCostPartitionKey(row.rollupId, partition.date);
+        const stored = {
+          scope: USAGE_COST_PARTITION_SCOPE,
+          key,
+          value_json: partition.valueJson,
+          blob: partition.blob,
           expires_at: null,
-          updated_at: params.updatedAt,
-        }),
-      ),
-  );
-  return true;
+          updated_at: row.updatedAt,
+        };
+        // Readers pair the report summary with its partition by key and update time.
+        return partition.quarters
+          ? [
+              stored,
+              {
+                ...stored,
+                scope: USAGE_COST_QUARTER_SCOPE,
+                value_json: partition.quarters.valueJson,
+                blob: partition.quarters.blob,
+              },
+            ]
+          : [stored];
+      }),
+    ]);
+    for (const batch of chunkItems(rows, 100)) {
+      executeSqliteQuerySync(
+        db,
+        kysely
+          .insertInto("cache_entries")
+          .values(batch)
+          .onConflict((conflict) =>
+            conflict.columns(["scope", "key"]).doUpdateSet((eb) => ({
+              value_json: eb.ref("excluded.value_json"),
+              blob: eb.ref("excluded.blob"),
+              expires_at: eb.ref("excluded.expires_at"),
+              updated_at: eb.ref("excluded.updated_at"),
+            })),
+          ),
+      );
+    }
+    return true;
+  });
+}
+
+/** The refresh lease owns the checkpoint while its body is loaded. */
+export function readSessionCostUsageRollupBodyInDatabase(
+  db: EngineConnection,
+  key: string,
+): { blob: Uint8Array | null } | undefined {
+  return executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<AgentCacheDatabase>(db)
+      .selectFrom("cache_entries")
+      .select("blob")
+      .where("scope", "=", ROLLUP_SCOPE)
+      .where("key", "=", key),
+  ).rows[0];
 }
 
 export function pruneSessionCostUsageRollupsInDatabase(
-  db: DatabaseSync,
-  existing: readonly SessionCostUsageRollupRow[],
+  db: EngineConnection,
+  existing: readonly SessionCostUsageRollupSnapshot[],
 ): void {
-  const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
-  for (const batch of chunkItems(existing, ROLLUP_PRUNE_BATCH_SIZE)) {
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .deleteFrom("cache_entries")
-        .where("scope", "=", ROLLUP_SCOPE)
-        // Keep indexed key probes and each snapshot's exact comparison together.
-        .where(
-          "key",
-          "in",
-          batch.map((row) => row.key),
-        )
-        .where((eb) =>
-          eb.or(
-            batch.map((row) =>
-              eb.and([
-                eb("key", "=", row.key),
-                eb("value_json", "=", row.valueJson),
-                eb("updated_at", "=", row.updatedAt),
-              ]),
+  return withSqliteDatabaseWriteScope(db, [ROLLUP_SCOPE], () => {
+    const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
+    if (existing.length > 0) {
+      pruneSessionCostUsagePartitionsInDatabase(db, existing);
+    }
+    for (const batch of chunkItems(existing, ROLLUP_PRUNE_BATCH_SIZE)) {
+      executeSqliteQuerySync(
+        db,
+        kysely
+          .deleteFrom("cache_entries")
+          .where("scope", "=", ROLLUP_SCOPE)
+          // Keep indexed key probes and each snapshot's exact comparison together.
+          .where(
+            "key",
+            "in",
+            batch.map((row) => row.key),
+          )
+          .where((eb) =>
+            eb.or(
+              batch.map((row) =>
+                eb.and([
+                  eb("key", "=", row.key),
+                  eb("value_json", "=", usageCacheJsonText(row.valueJson)),
+                  eb("updated_at", "=", row.updatedAt),
+                ]),
+              ),
             ),
           ),
-        ),
-    );
-  }
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .deleteFrom("cache_entries")
-      .where("scope", "=", LEGACY_CACHE_SCOPE)
-      .where("key", "=", LEGACY_CACHE_KEY),
-  );
-  // v1 duplicated a multi-megabyte pricing catalog per row (#115282).
-  // Delete by scope so those values are never materialized during cleanup.
-  executeSqliteQuerySync(
-    db,
-    kysely.deleteFrom("cache_entries").where("scope", "=", RETIRED_ROLLUP_SCOPE),
-  );
+      );
+    }
+  });
 }
 
-export function deleteSessionCostUsageRefreshLockInDatabase(
-  db: DatabaseSync,
-  valueJson: string,
-): void {
-  const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .deleteFrom("cache_entries")
-      .where("scope", "=", LEGACY_CACHE_SCOPE)
-      .where("key", "=", REFRESH_LOCK_KEY)
-      .where("value_json", "=", valueJson),
-  );
+/** The rows Doctor retires: the v0 JSON cache entry and every retired projection scope. */
+function isRetiredSessionCostUsageCacheEntry(
+  eb: ExpressionBuilder<AgentCacheDatabase, "cache_entries">,
+) {
+  return eb.or([
+    eb.and([eb("scope", "=", LEGACY_CACHE_SCOPE), eb("key", "=", LEGACY_CACHE_KEY)]),
+    eb("scope", "in", RETIRED_ROLLUP_SCOPES),
+  ]);
 }
 
-export function acquireSessionCostUsageRefreshLockInDatabase(
-  db: DatabaseSync,
-  params: {
-    previousRaw: string | null;
-    previousOwnerIsRunning: boolean;
-    lockJson: string;
-    startedAt: number;
-  },
-): boolean {
+/** Read-only: whether `retireLegacySessionCostUsageCacheInDatabase` would delete a row. */
+export function hasRetiredSessionCostUsageCacheEntriesInDatabase(db: EngineConnection): boolean {
   const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
-  const currentRaw =
+  // Select the key only: v1 rows carry a multi-megabyte value (#115282).
+  return (
     executeSqliteQuerySync(
       db,
       kysely
         .selectFrom("cache_entries")
-        .select("value_json")
-        .where("scope", "=", LEGACY_CACHE_SCOPE)
-        .where("key", "=", REFRESH_LOCK_KEY)
+        .select("key")
+        .where(isRetiredSessionCostUsageCacheEntry)
         .limit(1),
-    ).rows[0]?.value_json ?? null;
-  if (currentRaw !== params.previousRaw || params.previousOwnerIsRunning) {
-    return false;
-  }
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .insertInto("cache_entries")
-      .values({
-        scope: LEGACY_CACHE_SCOPE,
-        key: REFRESH_LOCK_KEY,
-        value_json: params.lockJson,
-        blob: null,
-        expires_at: null,
-        updated_at: params.startedAt,
-      })
-      .onConflict((conflict) =>
-        conflict.columns(["scope", "key"]).doUpdateSet({
-          value_json: params.lockJson,
-          blob: null,
-          expires_at: null,
-          updated_at: params.startedAt,
-        }),
-      ),
+    ).rows.length > 0
   );
-  return true;
+}
+
+/** Doctor owns retired scopes; ordinary refreshes only prune observed stale rows. */
+export function retireLegacySessionCostUsageCacheInDatabase(db: EngineConnection): void {
+  return withSqliteDatabaseWriteScope(db, [], () => {
+    // v1 duplicated a multi-megabyte pricing catalog per row (#115282).
+    // Delete by scope so those values are never materialized during cleanup.
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<AgentCacheDatabase>(db)
+        .deleteFrom("cache_entries")
+        .where(isRetiredSessionCostUsageCacheEntry),
+    );
+  });
 }

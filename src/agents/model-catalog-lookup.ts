@@ -2,17 +2,19 @@
  * Looks up model catalog entries and input capability support.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { isModelThinkingFormat, type ModelCompatConfig } from "../config/types.models.js";
+import { isModelThinkingFormat } from "../config/types.models.js";
+import type { ModelCompatConfig } from "../config/zod-schema.model-compat.js";
 import type { Model } from "../llm/types.js";
 import {
   resolveProviderModelCatalogId,
   resolveProviderModelPolicySurface,
 } from "../plugins/provider-model-routes.js";
+import { indexFirstByKey } from "../shared/dedupe-by-key.js";
 import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
@@ -22,6 +24,15 @@ import { canonicalizeProviderModelId } from "./provider-model-route.js";
 type ModelThinkingCompat = {
   thinkingFormat?: ModelCompatConfig["thinkingFormat"];
   supportedReasoningEfforts?: readonly string[] | null;
+};
+
+type ModelRunCapabilityEntry = {
+  provider: string;
+  id: string;
+  api?: string;
+  baseUrl?: string;
+  input?: readonly ModelInputType[];
+  compat?: unknown;
 };
 
 export type PreparedModelThinkingCapability = Readonly<{
@@ -45,10 +56,7 @@ export function projectModelThinkingCompat(compat: unknown): ModelThinkingCompat
   }
   if (record.supportedReasoningEfforts === null) {
     projected.supportedReasoningEfforts = null;
-  } else if (
-    Array.isArray(record.supportedReasoningEfforts) &&
-    record.supportedReasoningEfforts.every((effort) => typeof effort === "string")
-  ) {
+  } else if (isStringArray(record.supportedReasoningEfforts)) {
     projected.supportedReasoningEfforts = [...record.supportedReasoningEfforts];
   }
   return Object.keys(projected).length > 0 ? projected : undefined;
@@ -56,8 +64,8 @@ export function projectModelThinkingCompat(compat: unknown): ModelThinkingCompat
 
 /** Freezes thinking capability from the selected prepared catalog row. */
 function prepareModelThinkingCapability(params: {
-  entry: ModelCatalogEntry | undefined;
-  route?: Pick<ModelCatalogEntry, "api" | "baseUrl">;
+  entry: ModelRunCapabilityEntry | undefined;
+  route?: Pick<ModelRunCapabilityEntry, "api" | "baseUrl">;
   agentRuntime: string;
 }): PreparedModelThinkingCapability | undefined {
   const compat = projectModelThinkingCompat(params.entry?.compat);
@@ -125,7 +133,10 @@ export function resolvePreparedModelThinkingCompat(params: {
 
 /** Projects the prepared capabilities needed by one selected run candidate. */
 export function prepareModelRunCapabilities(
-  [catalog, configuredCatalog]: readonly [ModelCatalogEntry[] | undefined, ModelCatalogEntry[]],
+  [catalog, configuredCatalog]: readonly [
+    readonly ModelRunCapabilityEntry[] | undefined,
+    readonly ModelRunCapabilityEntry[],
+  ],
   [provider, modelId, agentRuntime]: readonly [string, string, string],
 ) {
   const entry = findModelInCatalog(catalog ?? [], provider, modelId);
@@ -148,6 +159,23 @@ export function modelSupportsInput(
   return entry?.input?.includes(input) ?? false;
 }
 
+/** Reuse the publication's first-wins index when the caller has already projected the captured rows. */
+export function createCapturedModelLookup(
+  source?: readonly ModelCatalogEntry[] | ReadonlyMap<string, ModelCatalogEntry>,
+) {
+  const keyOf = createModelCatalogIdentityKeyResolver();
+  const byIdentity =
+    source && "get" in source
+      ? source
+      : source?.length
+        ? indexFirstByKey(source, keyOf)
+        : undefined;
+  if (!byIdentity?.size) {
+    return undefined;
+  }
+  return (provider: string, id: string) => byIdentity.get(keyOf({ provider, id }));
+}
+
 /** Prefers canonical identity; the shipped SDK's case-insensitive fallback must be unique. */
 export function findModelInCatalog<T extends Pick<ModelCatalogEntry, "provider" | "id">>(
   catalog: readonly T[],
@@ -155,10 +183,24 @@ export function findModelInCatalog<T extends Pick<ModelCatalogEntry, "provider" 
   modelId: string,
 ): T | undefined {
   const normalizedProvider = normalizeProviderId(provider);
-  const providerCatalog = catalog.filter(
-    (entry) => normalizeProviderId(entry.provider) === normalizedProvider,
-  );
-  const literal = providerCatalog.find((entry) => entry.id === modelId.trim());
+  const trimmedModelId = modelId.trim();
+  // A session with no model has nothing to look up, and no provider policy to load.
+  if (!normalizedProvider || !trimmedModelId) {
+    return undefined;
+  }
+  const providerCatalog: T[] = [];
+  let literal: T | undefined;
+  catalog.some((entry) => {
+    if (normalizeProviderId(entry.provider) !== normalizedProvider) {
+      return false;
+    }
+    if (entry.id === trimmedModelId) {
+      literal = entry;
+      return true;
+    }
+    providerCatalog.push(entry);
+    return false;
+  });
   if (literal) {
     return literal;
   }
@@ -170,7 +212,7 @@ export function findModelInCatalog<T extends Pick<ModelCatalogEntry, "provider" 
       modelId: splitTrailingAuthProfile(id).model,
       surface,
     }) ?? id;
-  const identity = identityOf(modelId.trim());
+  const identity = identityOf(trimmedModelId);
   const exact = providerCatalog.find((entry) => identityOf(entry.id) === identity);
   if (exact) {
     return exact;
@@ -179,6 +221,26 @@ export function findModelInCatalog<T extends Pick<ModelCatalogEntry, "provider" 
   const matches = providerCatalog.filter(
     (entry) => normalizeLowercaseStringOrEmpty(entry.id) === normalizedModelId,
   );
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+/**
+ * Finds the row a CLI-native selector (for example Claude Code's `fable`)
+ * resolves to, as published by the CLI's own model menu in `params.nativeModelAliases`.
+ */
+export function findModelByNativeAlias<
+  T extends Pick<ModelCatalogEntry, "provider" | "id" | "params">,
+>(catalog: readonly T[], provider: string, alias: string): T | undefined {
+  const normalizedProvider = normalizeProviderId(provider);
+  const trimmed = alias.trim();
+  const matches = catalog.filter((entry) => {
+    const aliases = entry.params?.nativeModelAliases;
+    return (
+      normalizeProviderId(entry.provider) === normalizedProvider &&
+      Array.isArray(aliases) &&
+      aliases.includes(trimmed)
+    );
+  });
   return matches.length === 1 ? matches[0] : undefined;
 }
 
@@ -206,4 +268,11 @@ export function findModelCatalogEntry(
     ? exact
     : catalog.filter((entry) => normalizeLowercaseStringOrEmpty(entry.id) === normalizedModelId);
   return matches.length === 1 ? matches[0] : undefined;
+}
+
+/**
+ * Check if a model supports image input based on its catalog entry.
+ */
+export function modelSupportsVision(entry: ModelCatalogEntry | undefined): boolean {
+  return modelSupportsInput(entry, "image");
 }

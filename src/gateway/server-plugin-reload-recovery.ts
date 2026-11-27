@@ -1,4 +1,6 @@
+import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import type { PluginRuntimeRecovery } from "../plugins/loader-types.js";
+import { PluginSourceRecoveryUnavailableError } from "../plugins/plugin-instance-error.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { capturePluginRuntimeRecovery } from "../plugins/plugin-runtime-artifact-binding.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -22,7 +24,11 @@ export function createPluginReloadRecovery(
     get previousHookIds(): ReadonlySet<string> {
       return previousHookIds;
     },
-    capture(pluginIds: ReadonlySet<string>) {
+    get unavailablePluginIds(): ReadonlySet<string> {
+      return new Set([...selectedUnavailableIds].filter((id) => !previouslyUnavailableIds.has(id)));
+    },
+    async capture(pluginIds: ReadonlySet<string>) {
+      const warnings: string[] = [];
       for (const record of previousRegistry.plugins) {
         if (!pluginIds.has(record.id)) {
           continue;
@@ -32,13 +38,24 @@ export function createPluginReloadRecovery(
           continue;
         }
         previousHookIds.add(record.id);
-        const recovery = capturePluginRuntimeRecovery(record);
-        if (recovery) {
-          moduleRecoveries.set(record.id, recovery);
+        try {
+          const recovery = await capturePluginRuntimeRecovery(record);
+          if (recovery) {
+            moduleRecoveries.set(record.id, recovery);
+          }
+        } catch (error) {
+          if (!(error instanceof PluginSourceRecoveryUnavailableError)) {
+            throw error;
+          }
+          selectedUnavailableIds.add(record.id);
+          warnings.push(
+            `Plugin ${record.id} captured source is missing. Continuing replacement; rollback cannot restore this plugin's previous code.`,
+          );
         }
       }
+      return warnings;
     },
-    prepare(
+    async prepare(
       params: Omit<Parameters<typeof preparePlugins>[0], "pluginIds" | "moduleRecoveries">,
       cause: unknown,
     ) {
@@ -65,7 +82,7 @@ export function createPluginReloadRecovery(
         moduleRecoveries,
       };
       if (selectedUnavailableIds.size) {
-        const plan = preparePlugins({ ...recoveryParams, loadModules: false });
+        const plan = await preparePlugins({ ...recoveryParams, loadModules: false });
         plan.retireGatewayRuntimeBindings();
         // The loader can add dependencies outside the requested scope. Validate
         // its actual plan before any unavailable owner could run from disk.
@@ -82,11 +99,35 @@ export function createPluginReloadRecovery(
       }
       return preparePlugins(recoveryParams);
     },
-    dispose() {
-      for (const recovery of moduleRecoveries.values()) {
-        recovery.module.dispose();
-      }
+    async dispose() {
+      const results = await Promise.allSettled(
+        [...moduleRecoveries.values()].map((recovery) => recovery.module.dispose()),
+      );
       moduleRecoveries.clear();
+      throwIfSettledRejected(results, "Plugin reload recovery cleanup failed");
     },
   };
+}
+
+/** Select old owners whose registrations cannot be retained by this reload. */
+export function resolvePluginReloadReplacementIds(
+  previousRegistry: PluginRegistry,
+  requestedIds: readonly string[],
+  changedPaths: readonly string[],
+): Set<string> {
+  const replacePluginIds = new Set(requestedIds);
+  for (const record of previousRegistry.plugins) {
+    if (
+      changedPaths.some(
+        (key) =>
+          key === `plugins.entries.${record.id}` ||
+          key.startsWith(`plugins.entries.${record.id}.`) ||
+          key === `plugins.installs.${record.id}` ||
+          key.startsWith(`plugins.installs.${record.id}.`),
+      )
+    ) {
+      replacePluginIds.add(record.id);
+    }
+  }
+  return replacePluginIds;
 }
