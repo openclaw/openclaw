@@ -246,7 +246,7 @@ it.each([
       throw failure;
     });
     const input = prepare.mock.calls[0]?.[0];
-    expect(input?.attemptId).toBe(run.runId);
+    expect(input?.runId).toBe(run.runId);
     expect(getUpdateRun(run.runId, options)).toMatchObject({
       status: "failed",
       reason: "update-failed",
