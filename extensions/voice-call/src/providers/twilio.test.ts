@@ -97,11 +97,9 @@ function expectStreamingTwiml(body: string) {
   expect(body).toContain("<Connect>");
 }
 
-function expectQueueTwiml(body: string) {
-  expect(body).toContain("Please hold while we connect you.");
-  expect(body).toContain("<Enqueue");
-  expect(body).toContain("hold-queue");
-  expect(body).toContain('waitUrl="/voice/hold-music"');
+function expectBusyTwiml(body: string) {
+  expect(body).toContain('<Reject reason="busy"/>');
+  expect(body).not.toContain("<Enqueue");
 }
 
 function requireResponseBody(body: string | undefined): string {
@@ -458,7 +456,7 @@ describe("TwilioProvider", () => {
     );
   });
 
-  it("returns queue TwiML for second inbound call when first call is active", () => {
+  it("rejects a second inbound call as busy while the first call is streaming", () => {
     const provider = createProvider();
     const firstInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA111");
     const secondInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA222");
@@ -468,7 +466,7 @@ describe("TwilioProvider", () => {
     const secondResult = provider.parseWebhookEvent(secondInbound);
 
     expectStreamingTwiml(requireResponseBody(firstResult.providerResponseBody));
-    expectQueueTwiml(requireResponseBody(secondResult.providerResponseBody));
+    expectBusyTwiml(requireResponseBody(secondResult.providerResponseBody));
   });
 
   it("connects next inbound call after unregisterCallStream cleanup", () => {
@@ -483,7 +481,7 @@ describe("TwilioProvider", () => {
 
     const secondBody = requireResponseBody(secondResult.providerResponseBody);
     expectStreamingTwiml(secondBody);
-    expect(secondBody).not.toContain("hold-queue");
+    expect(secondBody).not.toContain("<Reject");
   });
 
   it.each([
@@ -511,7 +509,7 @@ describe("TwilioProvider", () => {
 
       const nextBody = requireResponseBody(nextResult.providerResponseBody);
       expectStreamingTwiml(nextBody);
-      expect(nextBody).not.toContain("hold-queue");
+      expect(nextBody).not.toContain("<Reject");
     },
   );
 
@@ -611,7 +609,7 @@ describe("TwilioProvider", () => {
 
     const secondBody = requireResponseBody(secondResult.providerResponseBody);
     expectStreamingTwiml(secondBody);
-    expect(secondBody).not.toContain("hold-queue");
+    expect(secondBody).not.toContain("<Reject");
   });
 
   it("records the webhook URL needed to control an inbound call", async () => {
