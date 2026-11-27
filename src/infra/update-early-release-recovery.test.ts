@@ -149,6 +149,8 @@ posix("starts the runner as a separate launchd job beside a LaunchAgent Gateway"
   const envFile = path.join(fx.change.stateDir, "service-env", "ai.openclaw.gateway.env");
   fs.mkdirSync(path.dirname(envFile), { recursive: true });
   fs.writeFileSync(envFile, "OPENCLAW_STATE_DIR=x\n");
+  // A custom LaunchAgent label selects the Gateway the runner's install rewrites.
+  fx.deps.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
   const result = await startEarlyGitReleaseRecovery(fx.change, fx.deps);
 
   expect(result).toMatchObject({ started: true, target: fx.target });
@@ -165,6 +167,7 @@ posix("starts the runner as a separate launchd job beside a LaunchAgent Gateway"
   expect(plan).toMatchObject({ supervisor: "launchd", domain: GUI, unit: LAUNCHD_LABEL });
   expect(plan.log).toBe(path.join(fx.change.stateDir, "logs", "update-recovery.log"));
   expect(plist).toContain(`<key>StandardOutPath</key><string>${plan.log}</string>`);
+  expect(plist).toContain("<key>OPENCLAW_LAUNCHD_LABEL</key><string>ai.openclaw.gateway</string>");
   expect(plan.definitionFiles).toEqual([fx.service.sourcePath, envFile]);
   // The early updater prints the check's output with the state directory redacted; a state
   // directory outside $HOME is named through the variable.

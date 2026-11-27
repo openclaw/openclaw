@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveStateDir } from "../config/paths.js";
-import { resolveGatewayProfileSuffix } from "../daemon/constants.js";
+import {
+  GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
+  resolveGatewayProfileSuffix,
+} from "../daemon/constants.js";
 import { resolveLaunchAgentGuiDomain } from "../daemon/launchd-runtime.js";
 import {
   resolveLaunchAgentEnvFilePath,
@@ -62,8 +65,9 @@ const PASSED_ENV = [
   "XDG_RUNTIME_DIR",
   "DBUS_SESSION_BUS_ADDRESS",
   "OPENCLAW_HOME",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_PROFILE",
+  // The selectors name the Gateway service the runner's `gateway install` rewrites (a custom
+  // LaunchAgent label or systemd unit); the state directory is passed resolved, below.
+  ...GATEWAY_SERVICE_SELECTOR_ENV_KEYS.filter((key) => key !== "OPENCLAW_STATE_DIR"),
   "OPENCLAW_AGENT_DIR",
   "PI_CODING_AGENT_DIR",
   "COREPACK_HOME",
