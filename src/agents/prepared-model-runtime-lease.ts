@@ -64,6 +64,7 @@ type PreparedModelRuntimeLeaseContext = {
   getPendingReplacement(
     input?: PreparedModelRuntimeInput,
   ): PreparedModelRuntimeReplacement | undefined;
+  ensureReady(params: { agentId: string; abortSignal?: AbortSignal }): Promise<void>;
 };
 
 function createPreparedModelRuntimeAdmissionClaim(context: PreparedModelRuntimeLeaseContext) {
@@ -254,6 +255,17 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
   });
   if (provenance === "run" && context.getGatewayLifecycleActive()) {
     const configured = resolveConfiguredOwner(context.owners, input);
+    const recoveryAgentId = configured?.input.agentId;
+    if (configured?.catalogRecovery && configured.needsRefresh && recoveryAgentId) {
+      // A failed refresh leaves its owner for demand recovery. Run admission is demand too:
+      // OpenAI-compatible and worker turns never pass through reply dispatch first.
+      await runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+        runOutsidePluginRuntimeGenerationScope(() =>
+          context.ensureReady({ agentId: recoveryAgentId, abortSignal: options.abortSignal }),
+        ),
+      );
+      assertAdmission();
+    }
     if (configured?.pending) {
       assertPreparedModelRuntimeAdmissionCanWait(configured);
       await racePromiseWithAbortSignal(configured.pending, options.abortSignal);
