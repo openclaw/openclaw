@@ -1,14 +1,15 @@
 import type { JSX } from "@solidjs/web";
-import { createSignal, For, onSettled, Repeat, Show } from "solid-js";
+import { createMemo, createSignal, createUniqueId, For, onSettled, Repeat, Show } from "solid-js";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
 import { takeGraphemes } from "../lib/graphemes.ts";
 import { cancelLayout, scheduleLayout } from "../lib/layout-frame.ts";
-import { formatDateTimeMs, formatRelativeTimestamp } from "../lib/reactive/format.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { createIntersectionObserver } from "../lib/reactive/observers.ts";
 import { ChecksContent } from "./link-reader-checks.tsx";
+import { DateLabel } from "./link-reader-date-label.tsx";
+import { LinkReaderExternalAction } from "./link-reader-external-action.tsx";
 import { Diff, FileContent } from "./link-reader-files.tsx";
 import {
   LinkReaderMarkdown,
@@ -19,7 +20,9 @@ import {
 import type { ReaderReadyView, ReaderSection } from "./link-reader-panel-view.ts";
 import { linkReaderAuthorHref, safePreviewImage } from "./link-reader-response.ts";
 import type { LinkReaderTarget } from "./link-reader-target.ts";
+import { IconButton } from "./solid/icon-button.tsx";
 import { Icon } from "./solid/icon.tsx";
+import { Popover } from "./solid/popover.tsx";
 
 type ControlUiLinkReaderComment = NonNullable<ControlUiLinkReaderDocument["comments"]>[number];
 type SectionKey = "overview" | ReaderSection;
@@ -27,32 +30,8 @@ type SectionState = "idle" | "loading" | "error";
 
 registerEnglishCatalog(registerLinkReaderEnglish);
 
-// Recent activity reads as "2h ago"; older dates stay absolute and drop the seconds.
-const RELATIVE_DATE_MS = 7 * 24 * 60 * 60 * 1000;
 // Document order, which differs from the navigation: checks sit above the description.
 const SECTION_ORDER = ["checks", "overview", "files", "discussion"] as const;
-
-function DateLabel(props: { value: string | undefined }) {
-  return (
-    <Show when={props.value}>
-      {(value) => {
-        const time = () => new Date(value()).getTime();
-        return (
-          <time
-            datetime={value()}
-            title={Number.isNaN(time()) ? value() : formatDateTimeMs(time())}
-          >
-            {Number.isNaN(time())
-              ? value()
-              : Date.now() - time() < RELATIVE_DATE_MS
-                ? formatRelativeTimestamp(time())
-                : formatDateTimeMs(time(), { dateStyle: "medium" })}
-          </time>
-        );
-      }}
-    </Show>
-  );
-}
 
 /** A person: their picture when the source provides one, otherwise their initial. */
 function Avatar(props: { name: string; imageUrl?: string }) {
@@ -242,6 +221,12 @@ export function LinkReaderContent(props: {
   loadImage?: LoadImage;
   sections?: ReaderReadyView["sections"];
   onLoadSection?: (section: ReaderSection) => void;
+  /** Fetches the item again; the header shows no refresh action without it. */
+  onRefresh?: () => void;
+  refreshing?: boolean;
+  refreshDisabled?: boolean;
+  /** Why the document may be out of date, such as a failed refresh. Replaces the date. */
+  notice?: string;
   onScrollPortRef?: (element: HTMLElement) => void | (() => void);
   /** The element that scrolls this document; the navigation follows its position. */
   scrollPort?: () => HTMLElement | undefined;
@@ -431,6 +416,11 @@ export function LinkReaderContent(props: {
     );
   }
 
+  // A refresh in flight is announced, not shown: the button already spins.
+  const notice = () => (props.refreshing ? undefined : props.notice);
+  const noticeId = createUniqueId();
+  const subtitle = () => props.detail.subtitle ?? props.target.reader.label;
+  const reference = createMemo(() => / (?:#\d+|· [\da-f]{12})$/i.exec(subtitle()));
   return (
     <article class="lr-document">
       <header class="lr-document-header">
@@ -443,8 +433,48 @@ export function LinkReaderContent(props: {
               </span>
             )}
           </Show>
-          <span class="lr-eyebrow">{props.detail.subtitle ?? props.target.reader.label}</span>
-          <DateLabel value={props.detail.badge?.timestamp ?? props.detail.createdAt} />
+          <span class="lr-eyebrow" title={subtitle()}>
+            <span>{subtitle().slice(0, reference()?.index)}</span>
+            <span>{reference()?.[0]}</span>
+          </span>
+          <span class="sr-only" role="status">
+            {props.refreshing ? t("linkReader.refreshingSaved") : notice()}
+          </span>
+          <Show
+            when={notice()}
+            keyed
+            fallback={<DateLabel value={props.detail.badge?.timestamp ?? props.detail.createdAt} />}
+          >
+            {(message) => (
+              <Popover
+                id={noticeId}
+                label={message}
+                triggerClass="lr-notice"
+                class="lr-notice-popover"
+                placement="bottom-end"
+                sameRoot
+                lazy="while-open"
+              >
+                {message}
+              </Popover>
+            )}
+          </Show>
+          <span class="lr-actions">
+            <Show when={props.onRefresh}>
+              {(refresh) => (
+                <IconButton
+                  size={28}
+                  class="lr-refresh"
+                  label={t("linkReader.refresh")}
+                  icon={props.refreshing ? "loaderCircle" : "refresh"}
+                  busy={props.refreshing}
+                  disabled={props.refreshDisabled || props.refreshing}
+                  onClick={() => refresh()()}
+                />
+              )}
+            </Show>
+            <LinkReaderExternalAction target={props.target} />
+          </span>
         </div>
         <h1>{props.detail.title}</h1>
         <div class="lr-byline">
