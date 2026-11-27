@@ -126,7 +126,7 @@ it.for([
     const execCompletion =
       shape === "exec-completion" ? createDeferredCore<SessionEventOutcome>() : undefined;
     const execAccepted = createDeferredCore<{ ok: true }>();
-    const execWithdrawn = createDeferredCore<void>();
+    const execWithdrawn = createDeferredCore();
     if (execCompletion) {
       const withhold = owed.withhold;
       vi.spyOn(owed, "withhold").mockImplementation(async (...args) => {
