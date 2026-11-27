@@ -66,7 +66,7 @@ export function ChatGoalActions(props: GoalPresentationProps) {
       : action === "pause"
         ? props.goal.status === "active"
         : action === "resume"
-          ? props.goal.status !== "active"
+          ? props.goal.status !== "active" || props.resumeBusy === false
           : true);
   return (
     <span class="agent-chat__goal-command-actions">
