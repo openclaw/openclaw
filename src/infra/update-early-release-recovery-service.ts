@@ -31,6 +31,8 @@ export type GatewayServiceControl = {
   stop(): Promise<boolean>;
   /** Starts it from its definition on disk, after a put-back or a failure. */
   start(wait: boolean): Promise<void>;
+  /** The command line the manager loaded for it and the process it runs now ("" when none). */
+  loaded(): Promise<{ command: string; pid: string }>;
   /** Commands that show why it does not run. */
   describe: string;
 };
@@ -83,6 +85,13 @@ function systemdControl(plan: RecoveryPlan, run: RunCommand): GatewayServiceCont
       await systemctl("reset-failed", gateway);
       await systemctl("start", ...(wait ? [] : ["--no-block"]), gateway);
     },
+    loaded: async () => {
+      const pid = await systemctlShow(run, gateway, "MainPID");
+      return {
+        command: await systemctlShow(run, gateway, "ExecStart"),
+        pid: pid === "0" ? "" : pid,
+      };
+    },
     describe: `\`systemctl --user status ${gateway}\` and \`journalctl --user -u ${gateway}\``,
   };
 }
@@ -134,6 +143,13 @@ function launchdControl(plan: RecoveryPlan, run: RunCommand): GatewayServiceCont
       } else {
         await run(["launchctl", "kickstart", target]);
       }
+    },
+    loaded: async () => {
+      const printed = await launchctlPrint(run, target);
+      return {
+        command: /^\targuments = \{\n([\s\S]*?)^\t\}/mu.exec(printed ?? "")?.[1] ?? "",
+        pid: printedValue(printed, "pid"),
+      };
     },
     describe: `\`launchctl print ${target}\` and the Gateway log in the state directory's \`logs\``,
   };

@@ -319,6 +319,8 @@ type Opts = {
   /** The release's install writes and restarts a definition that names another entry, or
    * rewrites only the definition's environment file. */
   elsewhere?: "unit" | "env";
+  /** The install of this build writes its definition, then fails before the manager restarts. */
+  publishOnly?: "release" | "checkout";
 };
 function runner(opts: Opts) {
   const { fail = {}, resumed = false, restarts = 0, supervisor = "systemd" } = opts;
@@ -371,6 +373,11 @@ function runner(opts: Opts) {
   // A resumed runner can find the release still migrating; it holds state until ready.
   let [migrating, alive, running, enabled, failed] = [resumed, 2, true, false, false];
   let loaded = true;
+  // What the manager loaded and the process it runs, as `systemctl show` / `launchctl print`.
+  let [loadedDef, pid] = [fs.readFileSync(serviceFile, "utf8"), 100];
+  const startedFrom = () => {
+    [loadedDef, pid] = [fs.readFileSync(serviceFile, "utf8"), pid + 1];
+  };
   const [calls, records, finished] = [[] as string[], [] as RecoveryOutcome[], [] as FinishFacts[]];
   const logs: string[] = [];
   const serves = () => {
@@ -390,6 +397,10 @@ function runner(opts: Opts) {
       const result = spawnSync(argv[0], argv.slice(1), { encoding: "utf8" });
       return { code: result.status, output: `${result.stdout}${result.stderr}` };
     }
+    if (name.endsWith("gateway install") && opts.publishOnly === role) {
+      fs.writeFileSync(serviceFile, unit(cli));
+      return { code: 1, output: "bootstrap failed" };
+    }
     if (name.endsWith("gateway install") && !fail[name]) {
       // While the early link exists, the install binds the service to that updater's launcher.
       const linked = fs.lstatSync(legacy, { throwIfNoEntry: false });
@@ -400,6 +411,7 @@ function runner(opts: Opts) {
         fs.writeFileSync(serviceFile, unit(bound));
       }
       [running, enabled, loaded] = [true, true, true];
+      startedFrom();
       // A release that crashes part-way through its boot migration, until its unit fails.
       if (opts.migrates && cli === release) {
         [schema, running, failed] = [migrated, false, true];
@@ -428,19 +440,31 @@ function runner(opts: Opts) {
       }
       if (gatewayVerb === "bootstrap" || (gatewayVerb === "kickstart" && loaded)) {
         [running, loaded, failed] = [true, true, false];
+        startedFrom();
       }
       if (verb === "print" && gatewayVerb === "print") {
+        const state = running ? `running\n\tpid = ${pid}` : "not running";
+        const args = `\targuments = {\n\t\t${loadedDef}\t}\n`;
         return loaded
-          ? { code: 0, output: `x = {\n\tstate = ${running ? "running" : "not running"}\n}` }
+          ? { code: 0, output: `x = {\n\tstate = ${state}\n${args}}` }
           : { code: 113, output: "Could not find service" };
       }
       return { code: fail[name] ?? 0, output: "" };
     }
     const shown = argv.find((arg) => arg.startsWith("--property="))?.slice(11);
     const state = running ? "active" : failed ? "failed" : "inactive";
-    const output = { ActiveState: state, TimeoutStopUSec: "5min 30s" }[shown ?? ""] ?? "";
+    const facts = {
+      ActiveState: state,
+      TimeoutStopUSec: "5min 30s",
+      ExecStart: running ? loadedDef : "",
+      MainPID: running ? String(pid) : "0",
+    };
+    const output = facts[(shown ?? "") as keyof typeof facts] ?? "";
     // A failed unit starts again only after `reset-failed` (systemd refuses a start-limit hit).
     failed = gatewayVerb === "reset-failed" || gatewayVerb === "stop" ? false : failed;
+    if (gatewayVerb === "start" && !failed) {
+      startedFrom();
+    }
     running = gatewayVerb === "stop" ? false : gatewayVerb === "start" && !failed ? true : running;
     enabled = gatewayVerb === "disable" ? false : enabled;
     return { code: fail[name] ?? 0, output };
@@ -519,6 +543,17 @@ const runs: Run[] = [
   ["keeps it while the old one fails", f(READY, { fail: { [OLD]: 1 } }), "original", "", "stays"],
   ["keeps the release serving when the build fails", f("pnpm build"), "release", "build-failed"],
   ["back to the release when the checkout fails", f("checkout ready"), "release", "switch-failed"],
+  [
+    "puts it back when the release's install never restarts",
+    { publishOnly: "release" },
+    "original",
+  ],
+  [
+    "keeps the release when the checkout's never restarts",
+    { publishOnly: "checkout" },
+    "release",
+    "switch-failed",
+  ],
   ["records that another update holds the lock", f("hold"), "release", "update-running"],
   ["records an unexpected error with its next step", f("throw"), "release", "error"],
   ["stops after repeated interruptions", gaveUp, "release", "interrupted"],
@@ -526,6 +561,11 @@ const runs: Run[] = [
 const launchd: Opts = { supervisor: "launchd" };
 const launchdRuns: Run[] = [
   ["launchd: release, rebuild, then the checkout", launchd, "checkout"],
+  [
+    "launchd: puts it back when the install never restarts",
+    { ...launchd, publishOnly: "release" },
+    "original",
+  ],
   ["launchd: puts the previous build back when unmigrated", f(READY, launchd), "original"],
   ["launchd: puts back a definition sent elsewhere", { ...launchd, elsewhere: "unit" }, "original"],
   [

@@ -211,11 +211,18 @@ export async function runEarlyGitReleaseRecovery(
     // Keep the port the service runs on, which `--port` may have set outside the config.
     const current = unitPort();
     const port = current ? ["--port", String(current)] : [];
+    const before = await service.loaded();
     const installed = await cli(root, "gateway", "install", "--force", ...port, "--json");
-    if (!names(path.join(root, "dist"))) {
+    const entry = path.join(root, "dist");
+    if (!names(entry)) {
       return { switched: false, ready: false, detail: commandTail(installed) };
     }
-    return { switched: true, ready: await deps.ready(unitPort()), detail: commandTail(installed) };
+    // The service manager keeps running what it loaded: a ready answer counts only from a
+    // process it started from the new definition, not from the Gateway the install replaced.
+    const ready = ok(installed) && (await deps.ready(unitPort()));
+    const after = await service.loaded();
+    const started = after.pid !== before.pid && after.command.includes(entry);
+    return { switched: true, ready: ready && started, detail: commandTail(installed) };
   };
   // `gateway install --force` enables the systemd service; a disabled autostart stays disabled.
   const keepEnablement = async () => {
