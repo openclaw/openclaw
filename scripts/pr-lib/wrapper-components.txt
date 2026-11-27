@@ -346,10 +346,12 @@ src/agents/model-selection-alias-scope.ts
 src/agents/model-selection-config.ts
 src/agents/model-selection-normalize.ts
 src/agents/model-selection-shared.ts
+src/agents/model-selection-resolve.ts
 src/agents/model-selection-warnings.ts
 src/agents/model-serving-context.ts
 src/agents/openai-model-routes.ts
 src/agents/openai-routing.ts
+src/agents/operator-model-policy.ts
 src/agents/owner-display.ts
 src/agents/requester-origin.ts
 src/agents/plugin-model-catalog-repair.ts
@@ -379,6 +381,7 @@ src/agents/tool-policy.ts
 src/agents/tool-search-protocol.ts
 src/agents/tools/automations-tool-name.ts
 src/agents/utility-model-setting.ts
+src/agents/utility-model-selection.ts
 src/agents/utils/git.ts
 src/agents/workspace-access.ts
 src/agents/workspace-default-path.ts
