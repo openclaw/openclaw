@@ -61,7 +61,7 @@ describe("ComposerDictationOwner", () => {
     const review = vi
       .spyOn(snippetReview, "showVoiceSnippetReview")
       .mockImplementation(({ owner }) => owner.accept());
-    const commit = vi.fn(() => true);
+    const commit = vi.fn(() => document.createElement("textarea"));
     const { controller, onCommit } = createHarness({
       captureSnippetTarget: () => ({ isCurrent: () => true, commit }),
     });
@@ -124,7 +124,7 @@ describe("ComposerDictationOwner", () => {
           ? Promise.resolve({ status, entries: {} })
           : implementation!(method, params),
       );
-      const commitSnippet = vi.fn(() => true);
+      const commitSnippet = vi.fn(() => document.createElement("textarea"));
       const { controller, onCommit, onError } = createHarness({
         captureSnippetTarget: () => ({ isCurrent: () => true, commit: commitSnippet }),
       });

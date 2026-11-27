@@ -1,4 +1,5 @@
 import { For, onSettled, Show } from "solid-js";
+import type { OpenClawModalDialog } from "../../../components/modal-dialog.tsx";
 import { DialogHeader } from "../../../components/solid/dialog-header.tsx";
 import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { registerChatDictationEnglish } from "../../../i18n/locales/en-chat-dictation.ts";
@@ -14,6 +15,7 @@ type ReviewDialogContext = {
   owner: VoiceSnippetReview;
   signal: AbortSignal;
   returnFocus: HTMLElement | null;
+  getAcceptedFocusTarget: () => HTMLElement | undefined;
   finish: (accepted: boolean) => void;
 };
 
@@ -27,6 +29,7 @@ export function VoiceSnippetReviewDialog(props: { context: ReviewDialogContext }
 
 function renderVoiceSnippetReviewDialog(options: ReviewDialogContext) {
   const view = projectOwner(options.owner, (owner) => owner.snapshot());
+  let modal!: OpenClawModalDialog;
   let source!: HTMLTextAreaElement;
   let preview!: HTMLTextAreaElement;
   const cancel = () => {
@@ -47,7 +50,10 @@ function renderVoiceSnippetReviewDialog(options: ReviewDialogContext) {
   return (
     <openclaw-modal-dialog
       class="voice-snippets-dialog"
-      ref={(modal) => modal.setReturnFocusTarget(options.returnFocus)}
+      ref={(element) => {
+        modal = element;
+        modal.setReturnFocusTarget(options.returnFocus);
+      }}
       label={t("chat.dictation.snippets.reviewTitle")}
       prop:initialFocus={() => preview}
       onModal-cancel={cancel}
@@ -156,6 +162,11 @@ function renderVoiceSnippetReviewDialog(options: ReviewDialogContext) {
             onClick={() => {
               void options.owner.accept().then((result) => {
                 if (result) {
+                  // Only the modal can restore focus after the composer stops being inert.
+                  const target = options.getAcceptedFocusTarget();
+                  if (target) {
+                    modal.setReturnFocusTarget(target);
+                  }
                   options.finish(true);
                 }
               });

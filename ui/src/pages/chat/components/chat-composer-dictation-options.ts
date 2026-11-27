@@ -66,6 +66,10 @@ export function createComposerDictationOptions(
     }
     commitComposerDraft(props, insertion.value);
     state.dictationSelection = insertion.captured;
+    if (exact) {
+      selectComposerInput(target, insertion.caret, insertion.caret);
+      return true;
+    }
     queueMicrotask(() => {
       const textarea = state.composerTextarea;
       if (!textarea) {
@@ -125,7 +129,7 @@ export function createComposerDictationOptions(
             return false;
           }
           state.dictationSelection = selection;
-          return onCommit(text, undefined, undefined, true);
+          return onCommit(text, undefined, undefined, true) ? target : false;
         },
       };
     },

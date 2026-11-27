@@ -138,8 +138,9 @@ it("delivers one exact body through the existing direct draft writer and rejects
   const editor = createDirectDictationTextarea(() => target);
   const captured = editor.captureSnippetTarget(placeComposerDictation, onMessage);
   const body = "\n00042 {{name}} <date>\n\n$HOME insert snippet other\n";
-  expect(captured?.commit(body)).toBe(true);
+  expect(captured?.commit(body)).toBe(target);
   expect(target.value).toBe(body);
+  expect([target.selectionStart, target.selectionEnd]).toEqual([body.length, body.length]);
   expect(onMessage).toHaveBeenCalledExactlyOnceWith(body);
   expect(captured?.commit(body)).toBe(false);
   expect(onMessage).toHaveBeenCalledOnce();

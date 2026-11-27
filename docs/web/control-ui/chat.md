@@ -386,7 +386,8 @@ the same segment, and received source positions keep segments in order.
 
 Every enabled capture requires review, including first use, imported definitions,
 and sensitive content. The preview displays stored text literally, with readable
-line breaks. If several enabled definitions in different languages match, choose
+line breaks. **Add to draft** returns keyboard focus to the draft without sending.
+If several enabled definitions in different languages match, choose
 the intended definition. The chooser shows at most ten matches; cancel and rename
 a trigger in **Voice snippets** to disambiguate a definition outside that list.
 Enabled definitions within one language cannot share a normalized trigger.

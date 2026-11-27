@@ -11,6 +11,7 @@ const ReviewDialog = lazy(() => import("./voice-snippet-review-dialog.tsx"), {
 export async function showVoiceSnippetReview(options: {
   owner: VoiceSnippetReview;
   signal: AbortSignal;
+  getAcceptedFocusTarget: () => HTMLElement | undefined;
 }): Promise<boolean> {
   let accepted = false;
   const returnFocus = activeElement(document.body);
@@ -22,6 +23,7 @@ export async function showVoiceSnippetReview(options: {
           owner: options.owner,
           signal: options.signal,
           returnFocus,
+          getAcceptedFocusTarget: options.getAcceptedFocusTarget,
           finish: modal.finish,
         };
         const cancel = () => {

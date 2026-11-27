@@ -2,13 +2,14 @@ import type { DictationRefinementResult } from "../../../../src/shared/dictation
 import { recognizeSnippetPhrase } from "../../../../src/shared/dictation-snippets.js";
 import type { VoiceSnippetCatalog } from "../../../../src/shared/voice-snippets.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { composerInputFocusElement } from "../../lib/composer-input.ts";
 import { showVoiceSnippetReview } from "./components/voice-snippet-review.tsx";
 import { VoiceSnippetCatalogView } from "./voice-snippet-catalog.ts";
 import { VoiceSnippetReview } from "./voice-snippet-review.ts";
 
 export type ComposerSnippetTarget = {
   isCurrent: () => boolean;
-  commit: (text: string) => boolean;
+  commit: (text: string) => HTMLTextAreaElement | false;
 };
 
 /** One generation's optional refinement, attached to the existing capture/delivery queue. */
@@ -87,6 +88,7 @@ export class ComposerSnippetCapture {
     this.options.changed();
     const rawTranscript =
       structured?.qualified && structured.finalized ? structured.text : transcript;
+    let committedTarget: HTMLTextAreaElement | false = false;
     const owner = new VoiceSnippetReview({
       request: {
         schemaVersion: 1,
@@ -106,7 +108,8 @@ export class ComposerSnippetCapture {
           return "not-committed";
         }
         try {
-          return this.options.target.commit(result.text) ? "committed" : "not-committed";
+          committedTarget = this.options.target.commit(result.text);
+          return committedTarget ? "committed" : "not-committed";
         } catch {
           return "outcome-unknown";
         }
@@ -114,11 +117,15 @@ export class ComposerSnippetCapture {
     });
     try {
       await owner.prepare();
-      if (!this.current()) {
-        return false;
-      }
       return this.current()
-        ? await showVoiceSnippetReview({ owner, signal: this.abort.signal })
+        ? await showVoiceSnippetReview({
+            owner,
+            signal: this.abort.signal,
+            getAcceptedFocusTarget: () =>
+              committedTarget && this.current() && !committedTarget.disabled
+                ? composerInputFocusElement(committedTarget)
+                : undefined,
+          })
         : false;
     } finally {
       owner.cancel();

@@ -45,10 +45,14 @@ function catalog(body: string): VoiceSnippetCatalog {
 
 async function open(saved: VoiceSnippetCatalog, rawTranscript = "insert snippet signature") {
   const invoker = document.createElement("button");
-  document.body.append(invoker);
+  const draft = document.createElement("textarea");
+  document.body.append(invoker, draft);
   invoker.focus();
   const lifetime = new AbortController();
-  const deliver = vi.fn(() => "committed" as const);
+  const deliver = vi.fn(({ text }: { text: string }) => {
+    draft.value = text;
+    return "committed" as const;
+  });
   let connected = true;
   const owner = new VoiceSnippetReview({
     request: {
@@ -65,7 +69,9 @@ async function open(saved: VoiceSnippetCatalog, rawTranscript = "insert snippet 
     deliver,
   });
   await owner.prepare();
-  const closed = dialogs.track(showVoiceSnippetReview({ owner, signal: lifetime.signal }));
+  const closed = dialogs.track(
+    showVoiceSnippetReview({ owner, signal: lifetime.signal, getAcceptedFocusTarget: () => draft }),
+  );
   const { modal } = await getRenderedModalDialog(document.body);
   const query = getQueriesForElement(document.body);
   const preview = query.getByLabelText("Complete dictation preview");
@@ -84,12 +90,13 @@ async function open(saved: VoiceSnippetCatalog, rawTranscript = "insert snippet 
     query,
     preview,
     invoker,
+    draft,
   };
 }
 
-it("shows complete literal sensitive text in a focused readonly preview before one explicit acceptance", async () => {
+it("shows complete literal sensitive text in a readonly preview, then focuses the draft on Add", async () => {
   const body = `00017\n{{name}} <script>alert(1)</script> $HOME\n\n${"long text ".repeat(200)}`;
-  const { query, preview, deliver, closed, invoker } = await open(catalog(body));
+  const { query, preview, deliver, closed, draft } = await open(catalog(body));
   expect(preview.value).toBe(body);
   expect(preview.readOnly).toBe(true);
   expect(document.body.querySelector("script")).toBeNull();
@@ -98,7 +105,8 @@ it("shows complete literal sensitive text in a focused readonly preview before o
   query.getByRole("button", { name: "Add to draft" }).click();
   await expect(closed).resolves.toBe(true);
   expect(deliver).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ text: body }));
-  await waitForSolid(() => expect(document.activeElement).toBe(invoker));
+  expect(draft.value).toBe(body);
+  await waitForSolid(() => expect(document.activeElement).toBe(draft));
 });
 
 it("blocks recovery and Apply after the capture loses its connection", async () => {
@@ -119,13 +127,15 @@ it("does not duplicate acceptance when Apply is clicked twice", async () => {
   expect(deliver).toHaveBeenCalledOnce();
 });
 
-it("clears the admitted result and blocks recovery on explicit cancellation", async () => {
-  const { query, owner, deliver, closed } = await open(catalog("Exact body"));
+it("returns focus to the opener and clears the admitted result on explicit cancellation", async () => {
+  const { query, owner, deliver, closed, invoker, draft } = await open(catalog("Exact body"));
   query.getByRole("button", { name: "Cancel" }).click();
   await expect(closed).resolves.toBe(false);
   expect(owner.snapshot()).toMatchObject({ text: "", sourceText: "", canAccept: false });
   expect(owner.exportText()).toBeNull();
   expect(deliver).not.toHaveBeenCalled();
+  expect(draft.value).toBe("");
+  await waitForSolid(() => expect(document.activeElement).toBe(invoker));
 });
 
 it("expands two deliberate source selections without changing surrounding prose and modal cancel prevents delivery", async () => {

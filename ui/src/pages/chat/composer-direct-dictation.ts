@@ -75,12 +75,16 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
       }
       target.value = insertion.value;
       adjustTextareaHeight(target);
-      queueMicrotask(() => {
-        if (target.isConnected) {
-          focusComposerInput(target, { preventScroll: true });
-          selectComposerInput(target, insertion.caret, insertion.caret);
-        }
-      });
+      if (exact) {
+        selectComposerInput(target, insertion.caret, insertion.caret);
+      } else {
+        queueMicrotask(() => {
+          if (target.isConnected) {
+            focusComposerInput(target, { preventScroll: true });
+            selectComposerInput(target, insertion.caret, insertion.caret);
+          }
+        });
+      }
       return insertion.value;
     },
     captureSnippetTarget(
@@ -122,7 +126,7 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
               selection.end,
               true,
             );
-            return target.value === insertion.value;
+            return target.value === insertion.value ? target : false;
           }
           // A mention-capable surface may not have mounted the rich editor yet.
           const mentions = target.getAttribute("data-composer-mentions");
@@ -135,7 +139,7 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
             return false;
           }
           onMessage(value);
-          return true;
+          return target;
         },
       };
     },
