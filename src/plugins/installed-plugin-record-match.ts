@@ -101,6 +101,12 @@ export function resolvePluginTrust(params: {
     reason = "record-missing";
   } else if (!matchesInstalledPluginRecord({ ...params, installPathOnly: true })) {
     reason = "install-path-mismatch";
+  } else if (record.source === "archive") {
+    // A matching local archive is a documented local override (origin-path), not
+    // invalid provenance. Placed after install-path-mismatch so a loaded path that
+    // diverges from the installed archive still warns, and after owner-ambiguous /
+    // record-missing so ownership and record checks are preserved.
+    reason = "origin-path";
   } else if (
     isTrustedOfficialPluginInstallRecord({
       pluginId: installOwner,
