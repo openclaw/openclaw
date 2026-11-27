@@ -530,6 +530,8 @@ describe("ChatSessionRailElement", () => {
     vi.spyOn(DirectDictationControl.prototype, "dictation", "get").mockReturnValue({
       active: true,
       finalizing: false,
+      invalidatePendingSend: vi.fn(),
+      capturePublicationGuard: () => () => true,
       finishActive,
     } as never);
 

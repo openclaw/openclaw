@@ -29,11 +29,11 @@ Three immutable presets would patch one optional browser-local
 `dictationPreparation` group in the existing `UiSettings` / `UiPreferences` owner.
 Each preset uses version 1 and `literalProfile: "prose"`:
 
-| Preset     | Punctuation | Cleanup  | Correction | Structure | Refinement |
-| ---------- | ----------- | -------- | ---------- | --------- | ---------- |
-| Literal    | preserve    | off      | off        | off       | off        |
-| Clean      | review      | review   | review     | off       | off        |
-| Structured | review      | review   | review     | review    | off        |
+| Preset     | Punctuation | Cleanup | Correction | Structure | Refinement |
+| ---------- | ----------- | ------- | ---------- | --------- | ---------- |
+| Literal    | preserve    | off     | off        | off       | off        |
+| Clean      | review      | review  | review     | off       | off        |
+| Structured | review      | review  | review     | review    | off        |
 
 The displayed name would derive from those values, without a saved preset ID or
 catalog. A missing group would preserve existing prose insertion with optional
