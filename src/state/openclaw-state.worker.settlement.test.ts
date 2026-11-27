@@ -1,6 +1,7 @@
 import { copyFileSync, existsSync, linkSync, readFileSync, unlinkSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import { isSqliteDatabaseAdmissionFactCurrent } from "../infra/sqlite-database-admission-record.js";
 import {
@@ -167,10 +168,12 @@ it.each(["removed", "replaced"] as const)("refuses a %s locator with a hardlink"
     expect(() => run(() => backend.execute(command))).toThrow(
       kind === "removed" ? /ENOENT/ : /identity changed/,
     );
-    expect([
-      readFileSync(alias),
-      kind === "removed" ? existsSync(databasePath) : readFileSync(databasePath),
-    ]).toEqual([original, kind === "removed" ? false : original]);
+    expectBytesEqual(readFileSync(alias), original, "retained hardlink");
+    if (kind === "removed") {
+      expect(existsSync(databasePath)).toBe(false);
+    } else {
+      expectBytesEqual(readFileSync(databasePath), original, "replaced locator");
+    }
   }
 });
 

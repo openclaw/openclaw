@@ -1,9 +1,10 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { publishDiagnostics } from "../../scripts/e2e/lib/upgrade-survivor/diagnostics.mjs";
+import { packToArchive } from "../../src/plugins/test-helpers/archive-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { successSummary } from "./upgrade-survivor-shard.test-support.js";
 
@@ -22,7 +23,7 @@ function writeSchema(file: string, version: number) {
   }
 }
 
-function schemaFixture(
+async function schemaFixture(
   baselineVersion = "2026.9.2",
   stateVersion: number | null = 15,
   agentVersion: number | null = 19,
@@ -55,7 +56,7 @@ function schemaFixture(
     }),
   );
   const tarball = join(root, "candidate.tgz");
-  execFileSync("tar", ["-czf", tarball, "-C", root, "package"]);
+  await packToArchive({ pkgDir: candidateDir, outDir: root, outName: "candidate.tgz" });
   const snapshotFile = join(root, "snapshot.json");
   const afterFile = join(root, "schema-after.json");
   const run = (...args: string[]) =>
@@ -95,7 +96,7 @@ function schemaFixture(
   };
 }
 
-function legacyAgentFixture() {
+async function legacyAgentFixture() {
   const agentId = "main";
   const sessionKey = `agent:${agentId}:explicit:seeded-turn`;
   const events = [
@@ -118,7 +119,7 @@ function legacyAgentFixture() {
     "seeded-turn.trajectory.jsonl",
     "seeded-turn.trajectory-path.json",
   ];
-  const lane = schemaFixture("2026.6.34", 1, null, (stateDir) => {
+  const lane = await schemaFixture("2026.6.34", 1, null, (stateDir) => {
     const sessions = join(stateDir, "agents", agentId, "sessions");
     mkdirSync(sessions, { recursive: true });
     writeFileSync(join(sessions, "sessions.json"), JSON.stringify(index));
@@ -189,9 +190,9 @@ function legacyAgentFixture() {
 describe("published survivor schema outcome", () => {
   it.each([35, 36])(
     "binds a same-database Doctor witness to candidate schema %s",
-    (contentVersion) => {
+    async (contentVersion) => {
       // Synthetic observer/parser control; the packaged lane must supply the natural tuple.
-      const lane = schemaFixture("2026.9.2", 15, 19, undefined, contentVersion);
+      const lane = await schemaFixture("2026.9.2", 15, 19, undefined, contentVersion);
       const snapshot = JSON.parse(readFileSync(lane.snapshotFile, "utf8"));
       snapshot.sourceSha = "c".repeat(40);
       writeFileSync(lane.snapshotFile, JSON.stringify(snapshot));
@@ -416,7 +417,7 @@ describe("published survivor schema outcome", () => {
     { name: "rollback", installed: "2026.9.1", diagnostic: "candidate package is not installed" },
   ])(
     "validates the installed candidate before probes: $name",
-    ({
+    async ({
       code = 0,
       outcome = "success",
       installed,
@@ -425,7 +426,7 @@ describe("published survivor schema outcome", () => {
       accepted = false,
       diagnostic,
     }) => {
-      const lane = schemaFixture("2026.9.1", 15, 18);
+      const lane = await schemaFixture("2026.9.1", 15, 18);
       for (const [file, version] of [
         [lane.stateDatabase, state],
         [lane.agentDatabase, agent],
@@ -451,8 +452,8 @@ describe("published survivor schema outcome", () => {
     [null, null],
   ] as const)(
     "requires successful migration from schemas %s/%s without observer writes",
-    (state, agent) => {
-      const lane = schemaFixture(
+    async (state, agent) => {
+      const lane = await schemaFixture(
         state === null || state === 0 ? "2026.6.34" : "2026.9.2",
         state,
         agent,
@@ -482,8 +483,8 @@ describe("published survivor schema outcome", () => {
     },
   );
 
-  it("ignores model catalogs and unrelated agent files while retaining strict session classification", () => {
-    const lane = schemaFixture("2026.7.1-2", 1, null, (stateDir) => {
+  it("ignores model catalogs and unrelated agent files while retaining strict session classification", async () => {
+    const lane = await schemaFixture("2026.7.1-2", 1, null, (stateDir) => {
       const agentDir = join(stateDir, "agents", "main", "agent");
       mkdirSync(join(agentDir, "provider-cache"), { recursive: true });
       writeFileSync(
@@ -517,8 +518,8 @@ describe("published survivor schema outcome", () => {
     );
   });
 
-  it("admits only the required native fixture agent and verifies its database", () => {
-    const lane = schemaFixture("2026.9.4");
+  it("admits only the required native fixture agent and verifies its database", async () => {
+    const lane = await schemaFixture("2026.9.4");
     const artifactRoot = dirname(lane.snapshotFile);
     const configFile = join(artifactRoot, "openclaw.json");
     const eligibility = join(artifactRoot, "native-assignment-eligibility.json");
@@ -573,8 +574,8 @@ describe("published survivor schema outcome", () => {
 
   it.each([false, true])(
     "verifies every legacy specimen, including a restored receipt (%s)",
-    (restored) => {
-      const lane = legacyAgentFixture();
+    async (restored) => {
+      const lane = await legacyAgentFixture();
       const snapshot = JSON.parse(readFileSync(lane.snapshotFile, "utf8"));
       expect(
         snapshot.agents.map((agent: { agentId: string; requiresDatabase: boolean }) => [
@@ -622,28 +623,28 @@ describe("published survivor schema outcome", () => {
   it.each([
     [
       "required store removed",
-      (lane: ReturnType<typeof legacyAgentFixture>) => rmSync(lane.databasePath),
+      (lane: Awaited<ReturnType<typeof legacyAgentFixture>>) => rmSync(lane.databasePath),
       "required agent database missing",
     ],
     [
       "old agent schema",
-      (lane: ReturnType<typeof legacyAgentFixture>) => writeSchema(lane.databasePath, 18),
+      (lane: Awaited<ReturnType<typeof legacyAgentFixture>>) => writeSchema(lane.databasePath, 18),
       "required agent database lacks candidate schema",
     ],
     [
       "active legacy source",
-      (lane: ReturnType<typeof legacyAgentFixture>) =>
+      (lane: Awaited<ReturnType<typeof legacyAgentFixture>>) =>
         writeFileSync(join(lane.sessions, "sessions.json"), "{}"),
       "specimen was not retired",
     ],
     [
       "missing archive receipt",
-      (lane: ReturnType<typeof legacyAgentFixture>) => rmSync(lane.manifestPath),
+      (lane: Awaited<ReturnType<typeof legacyAgentFixture>>) => rmSync(lane.manifestPath),
       "lacks completed archive receipt",
     ],
     [
       "consumed archive receipt",
-      (lane: ReturnType<typeof legacyAgentFixture>) => {
+      (lane: Awaited<ReturnType<typeof legacyAgentFixture>>) => {
         const manifest = JSON.parse(readFileSync(lane.manifestPath, "utf8"));
         const consumedArchives: string[] = [];
         for (const target of manifest.targets) {
@@ -658,24 +659,25 @@ describe("published survivor schema outcome", () => {
     ],
     [
       "lost transcript archive",
-      (lane: ReturnType<typeof legacyAgentFixture>) =>
+      (lane: Awaited<ReturnType<typeof legacyAgentFixture>>) =>
         rmSync(join(lane.archiveDir, "seeded-turn.jsonl.imported-1")),
       "archive missing",
     ],
     [
       "changed trajectory",
-      (lane: ReturnType<typeof legacyAgentFixture>) =>
+      (lane: Awaited<ReturnType<typeof legacyAgentFixture>>) =>
         writeFileSync(join(lane.archiveDir, "seeded-turn.trajectory.jsonl.imported-1"), "changed"),
       "archive changed",
     ],
     [
       "lost prompt blob",
-      (lane: ReturnType<typeof legacyAgentFixture>) => rmSync(lane.promptPath),
+      (lane: Awaited<ReturnType<typeof legacyAgentFixture>>) => rmSync(lane.promptPath),
       "skill prompt missing",
     ],
     [
       "changed prompt blob",
-      (lane: ReturnType<typeof legacyAgentFixture>) => writeFileSync(lane.promptPath, "changed"),
+      (lane: Awaited<ReturnType<typeof legacyAgentFixture>>) =>
+        writeFileSync(lane.promptPath, "changed"),
       "skill prompt changed",
     ],
     ...[
@@ -694,7 +696,7 @@ describe("published survivor schema outcome", () => {
       ([label, sql, diagnostic]) =>
         [
           label,
-          (lane: ReturnType<typeof legacyAgentFixture>) => {
+          (lane: Awaited<ReturnType<typeof legacyAgentFixture>>) => {
             const db = new DatabaseSync(lane.databasePath);
             try {
               db.exec(sql!);
@@ -705,8 +707,8 @@ describe("published survivor schema outcome", () => {
           diagnostic,
         ] as const,
     ),
-  ] as const)("rejects %s before candidate probes", (_label, corrupt, diagnostic) => {
-    const lane = legacyAgentFixture();
+  ] as const)("rejects %s before candidate probes", async (_label, corrupt, diagnostic) => {
+    const lane = await legacyAgentFixture();
     lane.migrate();
     corrupt(lane);
     const result = lane.check();
@@ -724,8 +726,8 @@ describe("published survivor schema outcome", () => {
     [15, "broken", false],
   ] as const)(
     "observes published schema %i with content marker %s without changing it",
-    (published, marker, accepted) => {
-      const lane = schemaFixture();
+    async (published, marker, accepted) => {
+      const lane = await schemaFixture();
       writeSchema(lane.stateDatabase, published);
       const database = new DatabaseSync(lane.stateDatabase);
       try {

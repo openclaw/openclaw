@@ -21,7 +21,7 @@ import type {
   PreparedGatewayModelCatalogReadResult,
 } from "./server-model-catalog.types.js";
 
-export type GatewayModelChoice = import("../agents/model-catalog.js").ModelCatalogEntry;
+export type GatewayModelChoice = import("../agents/model-catalog.types.js").ModelCatalogEntry;
 export type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 
 type GatewayModelCatalogConfig = ReturnType<typeof getRuntimeConfig>;

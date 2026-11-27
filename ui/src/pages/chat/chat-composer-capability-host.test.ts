@@ -16,7 +16,7 @@ import {
   sessionMutationGatewayHello,
 } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   ChatComposerCapabilityHost,
   ChatComposerCapabilityDialogs,
@@ -220,7 +220,8 @@ function createAddServerHarness(
         .click();
       expect(query("form")).toBe(form);
       container.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "docs";
-      container.querySelector<HTMLSelectElement>('[name="mcp-transport"]')!.value = "stdio";
+      container.querySelector<HTMLInputElement>('input[type="radio"][value="stdio"]')!.click();
+      flush();
       container.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value = "docs-mcp";
       query("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
       await waitForSolid(() => expect(host.dialogView(context, state, session).busy).toBe(false));
@@ -280,6 +281,7 @@ describe("ChatComposerCapabilityHost", () => {
       });
     });
     await import("./components/chat-composer-plus-menu-content.tsx");
+    await import("./components/chat-composer-plus-menu-subview.tsx");
     const expectMessage = (message: string) =>
       waitForSolid(() =>
         expect(
@@ -343,7 +345,7 @@ describe("ChatComposerCapabilityHost", () => {
     ],
     [
       { navigateAfterSave: true },
-      "The active session changed before it could be enabled.",
+      "Couldn’t enable this server. The active session changed. Try again.",
       ["global"],
     ],
     [{ refreshError: "refresh failed" }, "refresh failed", ["global", "load"]],
@@ -354,7 +356,7 @@ describe("ChatComposerCapabilityHost", () => {
       await harness.submit();
       expect(harness.globalWrites).toEqual([disabledServer]);
       expect(harness.alert()).toContain(
-        "The server was saved disabled globally, but enabling it for this session failed:",
+        "The server was saved but is still disabled. Couldn’t enable it for this session.",
       );
       expect(harness.alert()).toContain(error);
       expect(harness.events).toEqual(events);
@@ -631,7 +633,7 @@ describe("ChatComposerCapabilityHost", () => {
     props().onOpenToolAccess?.("github");
     await vi.waitFor(() => expect(props().toolsEffectiveError).toBe(true));
 
-    expect(props().toolAccessMutationBlockedReason).toBe("Couldn’t load tools.");
+    expect(props().toolAccessMutationBlockedReason).toBe("Couldn’t load tools. Try again.");
 
     props().onOpenToolAccess?.("github");
     await vi.waitFor(() => expect(props().toolsEffectiveResult).not.toBeNull());

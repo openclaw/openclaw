@@ -325,6 +325,15 @@ it.each(["active", "replaced extension"])("binds atomic creation to %s", async (
   await flush();
   expect(frames(socket, "attach")).toEqual([]);
   if (lifecycle === "active") {
+    // The attach keeps the tab rendering while hidden before announcing the target.
+    const focus = frames(socket, "cdp")[0];
+    expect(focus).toMatchObject({
+      tabId: 99,
+      method: "Emulation.setFocusEmulationEnabled",
+      params: { enabled: true },
+    });
+    sendResult(extension, focus?.seq, {});
+    await flush();
     expect(client.frames().map((frame) => frame.method ?? frame.id)).toEqual([
       "Target.attachedToTarget",
       1,
@@ -617,25 +626,25 @@ it("publishes a shared recovered attachment to every waiting auto-attach client"
   expect(attached(first)).toHaveLength(firstAttachedEventCount);
 });
 
-it("skips a permanent Chrome refusal but retries that tab on the next enumeration", async () => {
+it.each([
+  ["The extensions gallery cannot be scripted.", true],
+  ["Cannot access a chrome:// URL", true],
+  ["Cannot access a chrome-extension:// URL of different extension", true],
+  ["Cannot attach to this target.", true],
+  ["Cannot attach to this target. Please retry.", false],
+] as const)("classifies refusal %s and retries after recovery", async (refusal, permanent) => {
   let refused = true;
   const { bridge } = readyBridge(
     (message) =>
       message.type === "attach" && message.tabId === 2 && refused
-        ? {
-            type: "error",
-            seq: message.seq,
-            message: "The extensions gallery cannot be scripted.",
-          }
+        ? { type: "error", seq: message.seq, message: refusal }
         : replyFor(message),
-    [
-      ...defaultTabs(),
-      tab(2, "https://chromewebstore.google.com/detail/x/abc", "Chrome Web Store"),
-    ],
+    [...defaultTabs(), tab(2, "https://example.com/refused", "Refused")],
   );
   const { client, cdp } = connectClient(bridge);
   await dispatch(cdp, 1, "Target.getTargets");
-  expect(response(client, 1)).toMatchObject(targetInfos("target-1"));
+  const unavailable = { error: { message: "Target identities are unavailable" } };
+  expect(response(client, 1)).toMatchObject(permanent ? targetInfos("target-1") : unavailable);
   refused = false;
   await dispatch(cdp, 2, "Target.getTargets");
   expect(response(client, 2)).toMatchObject(targetInfos("target-1", "target-2"));
@@ -662,6 +671,10 @@ it.each(["attach", "createTab"])(
     await flush();
     expect(finished).toBe(false);
     sendResult(extension, command?.seq, { tabId: 1, targetId: "target-1" });
+    if (operation === "attach") {
+      await vi.waitFor(() => expect(frames(extensionSocket, "cdp").length > 0).toBe(true));
+      sendResult(extension, frames(extensionSocket, "cdp")[0]?.seq, {});
+    }
     await vi.waitFor(() => expect(frames(extensionSocket, "detach").length > 0).toBe(true));
     expect(finished).toBe(false);
     const detach = frames(extensionSocket, "detach")[0];

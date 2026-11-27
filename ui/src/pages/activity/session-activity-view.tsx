@@ -1,25 +1,23 @@
-import { createMemo as createActivityMemo } from "@solidjs/signals";
-import { dynamic } from "@solidjs/web";
 import {
   createDeferred,
   createMemo,
+  createSignal,
   Errored,
   For,
   isPending,
   latest,
   Loading,
+  onSettled,
   Show,
 } from "solid-js";
-import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { IpLocation } from "../../components/ip-location.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import "../../components/solid/viewer-facepile.tsx";
-import { formatRelativeTimestamp, formatTimeAgo } from "../../lib/format.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { formatTimeAgo } from "../../lib/format.ts";
 import {
   groupPresenceConnections,
   presenceConnectionDescriptions,
@@ -30,36 +28,18 @@ import {
   presenceViewerLabel,
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
-import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, getLocale, t } from "../../lib/reactive/i18n.ts";
-import {
-  sharedAgentIdentityProjection,
-  sharedAgentsProjection,
-} from "../../lib/reactive/shared-application-projections.ts";
-import { resolveSessionDisplayName } from "../../lib/session-display.ts";
-import {
-  isSessionKeyAddressable,
-  resolveSessionNavigationAgentId,
-  resolveSessionPreferredFace,
-  sessionNavigationTarget,
-} from "../../lib/sessions/route-navigation.ts";
-import {
-  isUiGlobalScopeConfigured,
-  parseAgentSessionKey,
-  resolveUiConfiguredMainKey,
-  scopedSessionArtifactKey,
-} from "../../lib/sessions/session-key.ts";
-import { activityRunInspectorHref } from "./run-inspector-model.ts";
-import { ActivitySessionGit } from "./session-activity-git.tsx";
-import { ActivitySessionMedia } from "./session-activity-media.tsx";
+import { createKeyedListMotion } from "../../lib/reactive/keyed-list-motion.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import { createTimeout } from "../../lib/reactive/timers.ts";
 import { PeopleControl } from "./session-activity-people.tsx";
 import { renderSessionActivityPulse as SessionActivityPulse } from "./session-activity-pulse.tsx";
+import { SessionLinkView } from "./session-activity-row.tsx";
 import {
   ACTIVITY_TIME_FILTERS,
   TIME_LABELS,
   projectSessionActivity,
   resolveViewingNow,
-  sessionActivityOwner,
   type SessionActivityFilters,
 } from "./session-activity.ts";
 
@@ -68,6 +48,7 @@ registerEnglishCatalog(registerActivityEnglish);
 export type SessionActivityViewProps = {
   expandedAutomationDays: ReadonlySet<string>;
   filters: SessionActivityFilters;
+  searchInputValue: string;
   presenceViewers: readonly PresenceViewer[];
   presentationRevision?: number;
   result?: SessionsListResult;
@@ -103,222 +84,9 @@ function dayLabel(timestamp: number | null, now = Date.now()): string {
   }).format(timestamp);
 }
 
-function SessionLinkView(props: {
-  row: GatewaySessionRow;
-  onSummaryRetry?: (row: GatewaySessionRow) => void;
-  presentationRevision?: number;
-}) {
-  const context = useApplication();
-  const agentId = createMemo(
-    () =>
-      parseAgentSessionKey(props.row.key)?.agentId ??
-      props.row.agentId ??
-      resolveSessionNavigationAgentId(context),
-  );
-  const sessionHost = createMemo(() => ({
-    agentsList: context.agents.state.agentsList,
-    hello: context.gateway.snapshot.hello,
-  }));
-  const face = () => resolveSessionPreferredFace(props.row);
-  const addressable = createMemo(() =>
-    isSessionKeyAddressable(props.row.key, isUiGlobalScopeConfigured(sessionHost())),
-  );
-  const target = createMemo(() =>
-    addressable()
-      ? sessionNavigationTarget({
-          face: face(),
-          sessionKey: props.row.key,
-          fallbackAgentId:
-            props.row.key === "global" ? agentId() : resolveSessionNavigationAgentId(context),
-          basePath: context.basePath,
-          row: props.row,
-          mainKey: resolveUiConfiguredMainKey(sessionHost()),
-        })
-      : null,
-  );
-  const SessionLink = dynamic(() => (target() ? "a" : "div"));
-  const agents = sharedAgentsProjection(context.agents);
-  const agentIdentity = sharedAgentIdentityProjection(context.agentIdentity);
-  const owner = createMemo(() =>
-    sessionActivityOwner(
-      props.row,
-      agents.read().agentsList,
-      agentIdentity.read().get(props.row.agentId),
-    ),
-  );
-  const ownerName = () => {
-    getLocale();
-    return presenceViewerLabel(owner());
-  };
-  const activityAt = () => sessionActivityTimestamp(props.row);
-  const relativeTime = createMemo(() => {
-    void props.presentationRevision;
-    getLocale();
-    return formatRelativeTimestamp(activityAt(), { fallback: "" });
-  });
-  const activeObserverRunId = createMemo(() => {
-    const runId = props.row.observerDigest?.runId;
-    return props.row.hasActiveRun === true && runId && props.row.activeRunIds?.includes(runId)
-      ? runId
-      : undefined;
-  });
-  const headline = () => (activeObserverRunId() ? props.row.observerDigest?.headline.trim() : "");
-  const scope = () =>
-    props.row.channel ? t("activityFeed.channelLabel", { value: props.row.channel }) : null;
-  const showAgent = () => props.row.kind !== "global" || Boolean(props.row.agentId);
-  const source = () => (props.row.createdVia === "cron" ? t("activityFeed.automation") : null);
-  const summary = () => props.row.activitySummary;
-  const state = () =>
-    summary()?.state === "current" && !summary()?.text
-      ? "missing"
-      : (summary()?.state ?? "missing");
-  const updating = () => state() === "updating";
-  const feedback = () =>
-    state() === "stale"
-      ? t(summary()?.text ? "activityFeed.recapStale" : "activityFeed.recapMissing")
-      : state() === "unavailable"
-        ? t(summary()?.text ? "activityFeed.recapRefreshFailed" : "activityFeed.recapUnavailable")
-        : state() === "missing"
-          ? t("activityFeed.recapMissing")
-          : "";
-  const title = createActivityMemo(() => {
-    const updatedAt = summary()?.updatedAt;
-    return updatedAt
-      ? t("activityFeed.recapUpdated", {
-          time: formatRelativeTimestamp(updatedAt, { fallback: "" }),
-        })
-      : undefined;
-  });
-  return (
-    <div
-      class={[
-        "activity-feed__session-row",
-        { "activity-feed__session-row--link": Boolean(target()) },
-      ]}
-    >
-      <SessionLink
-        class="activity-feed__session"
-        data-activity-session={props.row.key}
-        href={target()?.href ?? undefined}
-        onClick={(event: MouseEvent) => {
-          const destination = target();
-          if (destination && shouldHandleNavigationClick(event)) {
-            event.preventDefault();
-            context.navigate(face(), destination.options);
-          }
-        }}
-      >
-        <span class="activity-feed__session-avatar">
-          {props.row.hasActiveRun === true ? (
-            <span class="activity-feed__presence-dot activity-feed__run-dot" aria-hidden="true" />
-          ) : undefined}
-          <openclaw-viewer-avatar
-            prop:identity={props.row.owner?.actor.identity ?? props.row.createdActor?.identity}
-            prop:user={owner()}
-            prop:markAsViewer={false}
-            variant="footer"
-          />
-        </span>
-        <span class="activity-feed__session-main">
-          <span class="activity-feed__session-title">
-            {resolveSessionDisplayName(props.row.key, props.row)}
-          </span>
-          <span class="activity-feed__session-meta">
-            {headline() ? (
-              <span
-                class="activity-feed__session-headline"
-                data-health={props.row.observerDigest?.health ?? undefined}
-              >
-                {headline()}
-              </span>
-            ) : (
-              <span>{ownerName()}</span>
-            )}
-            {source() ? (
-              <span class="activity-feed__session-source" data-activity-created-via="cron">
-                · {source()}
-                {scope() || showAgent() ? " ·" : ""}
-              </span>
-            ) : undefined}
-            {showAgent() ? (
-              <span class="activity-feed__session-scope">
-                <AgentRowChip agentId={agentId()} />
-              </span>
-            ) : undefined}
-            {scope() ? <span class="activity-feed__session-scope">{scope()}</span> : undefined}
-          </span>
-        </span>
-        <span class="activity-feed__session-time">
-          {headline() ? <span class="activity-feed__session-owner">{ownerName()}</span> : undefined}
-          {activityAt() > 0 ? <span>{relativeTime()}</span> : undefined}
-        </span>
-      </SessionLink>
-      <div
-        class="activity-feed__recap"
-        data-activity-recap={props.row.key}
-        data-state={state()}
-        role="group"
-        aria-busy={updating() ? "true" : "false"}
-        aria-label={t("activityFeed.recap")}
-        title={title()}
-      >
-        {summary()?.text ? (
-          <p class="activity-feed__recap-text">{summary()?.text}</p>
-        ) : updating() ? (
-          <div class="activity-feed__recap-skeleton" aria-hidden="true">
-            <div class="skeleton skeleton-line skeleton-line--long" />
-            <div class="skeleton skeleton-line skeleton-line--medium" />
-          </div>
-        ) : undefined}
-        {updating() ? (
-          <span class="sr-only" role="status">
-            {t("activityFeed.recapUpdating")}
-          </span>
-        ) : undefined}
-        {feedback() ? (
-          <div class="activity-feed__note">
-            <span>{feedback()}</span>
-            {props.onSummaryRetry &&
-            summary()?.canEnsure === true &&
-            (state() === "unavailable" || state() === "stale") ? (
-              <button
-                class="activity-feed__note-action"
-                onClick={() => props.onSummaryRetry?.(props.row)}
-              >
-                {t("activityFeed.recapRetry")}
-              </button>
-            ) : undefined}
-          </div>
-        ) : undefined}
-      </div>
-      <ActivitySessionGit
-        context={context}
-        sessionKey={scopedSessionArtifactKey(props.row.key, agentId())}
-        agentId={agentId()}
-      />
-      <ActivitySessionMedia
-        context={context}
-        sessionKey={scopedSessionArtifactKey(props.row.key, agentId())}
-        agentId={agentId()}
-        revision={props.row.updatedAt ?? 0}
-        session={props.row}
-      />
-      <Show when={activeObserverRunId()}>
-        {(runId) => (
-          <a
-            class="activity-feed__inspect-run"
-            href={activityRunInspectorHref(runId(), context.basePath)}
-          >
-            {t("activityFeed.inspectRun")}
-          </a>
-        )}
-      </Show>
-    </div>
-  );
-}
-
 function DaySessions(props: {
   view: SessionActivityViewProps;
+  scope: string;
   day: ReturnType<typeof projectSessionActivity>["days"][number];
 }) {
   // GatewaySessionRow.hasAutomation records the enabled cron job binding; titles and keys do not.
@@ -331,48 +99,61 @@ function DaySessions(props: {
   const regular = createMemo(() =>
     grouped() ? props.day.sessions.filter((row) => row.hasAutomation !== true) : props.day.sessions,
   );
+  const motion = createKeyedListMotion({
+    ids: () => regular().map((row) => row.key),
+    scope: () => props.scope,
+    active: () => true,
+    ready: () => Boolean(props.view.result),
+  });
   return (
-    <>
-      <For each={regular()} keyed={(row) => row.key}>
-        {(row) => (
-          <SessionLinkView
-            row={row()}
-            onSummaryRetry={props.view.onSummaryRetry}
-            presentationRevision={props.view.presentationRevision}
-          />
-        )}
-      </For>
-      {grouped() ? (
-        <>
-          <button
-            type="button"
-            class="activity-feed__session activity-feed__automation-group"
-            data-activity-automation-group={props.day.key}
-            aria-expanded={props.view.expandedAutomationDays.has(props.day.key) ? "true" : "false"}
-            onClick={() => props.view.onAutomationDayToggle(props.day.key)}
-          >
-            <span class="activity-feed__automation-group-icon" aria-hidden="true">
-              <Icon name="clock" />
-            </span>
-            <span>{t("activityFeed.automationGroup", { count: String(automation().length) })}</span>
-            <span class="activity-feed__automation-group-chevron" aria-hidden="true">
-              <Icon name="chevronRight" />
-            </span>
-          </button>
-          {props.view.expandedAutomationDays.has(props.day.key) ? (
-            <For each={automation()} keyed={(row) => row.key}>
-              {(row) => (
-                <SessionLinkView
-                  row={row()}
-                  onSummaryRetry={props.view.onSummaryRetry}
-                  presentationRevision={props.view.presentationRevision}
-                />
-              )}
-            </For>
-          ) : undefined}
-        </>
-      ) : undefined}
-    </>
+    <div class="activity-feed__sessions" ref={motion.shell}>
+      <div ref={motion.content}>
+        <For each={regular()} keyed={(row) => row.key}>
+          {(row) => (
+            <SessionLinkView
+              row={row()}
+              elementRef={motion.row}
+              onSummaryRetry={props.view.onSummaryRetry}
+              presentationRevision={props.view.presentationRevision}
+            />
+          )}
+        </For>
+        {grouped() ? (
+          <>
+            <button
+              type="button"
+              class="activity-feed__session activity-feed__automation-group"
+              data-activity-automation-group={props.day.key}
+              aria-expanded={
+                props.view.expandedAutomationDays.has(props.day.key) ? "true" : "false"
+              }
+              onClick={() => props.view.onAutomationDayToggle(props.day.key)}
+            >
+              <span class="activity-feed__automation-group-icon" aria-hidden="true">
+                <Icon name="clock" />
+              </span>
+              <span>
+                {t("activityFeed.automationGroup", { count: String(automation().length) })}
+              </span>
+              <span class="activity-feed__automation-group-chevron" aria-hidden="true">
+                <Icon name="chevronRight" />
+              </span>
+            </button>
+            {props.view.expandedAutomationDays.has(props.day.key) ? (
+              <For each={automation()} keyed={(row) => row.key}>
+                {(row) => (
+                  <SessionLinkView
+                    row={row()}
+                    onSummaryRetry={props.view.onSummaryRetry}
+                    presentationRevision={props.view.presentationRevision}
+                  />
+                )}
+              </For>
+            ) : undefined}
+          </>
+        ) : undefined}
+      </div>
+    </div>
   );
 }
 
@@ -524,6 +305,66 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
   // Keep accepted rows and scope changes live while their next read settles.
   const read = createDeferred(() => request()?.promise);
   const projection = createMemo(() => projectSessionActivity(props.result));
+  const scope = createMemo(() =>
+    JSON.stringify([props.filters.personId, props.filters.query, props.filters.time]),
+  );
+  const [readingScope, setReadingScope] = createSignal<string>();
+  let main!: HTMLDivElement;
+  // The compact layout scrolls the page; the desktop layout scrolls the feed.
+  let page: Element | null;
+  const away = () => main.scrollTop > 1 || (page?.scrollTop ?? 0) > 1;
+  const settle = createTimeout(() => {
+    if (!away()) {
+      setReadingScope(undefined);
+    }
+  }, 180);
+  onSettled(() => {
+    page = main.closest("main.content");
+    const scroll = () => {
+      if (away()) {
+        settle.cancel();
+        setReadingScope(scope());
+      } else {
+        // Momentum and direction reversals can briefly touch the top.
+        settle.schedule();
+      }
+    };
+    scroll();
+    const stopFeed = listen(main, "scroll", scroll, { passive: true });
+    const stopPage = page && listen(page, "scroll", scroll, { passive: true });
+    return () => {
+      stopFeed();
+      stopPage?.();
+    };
+  });
+  type ReadingList = { scope: string; days: ReturnType<typeof projectSessionActivity>["days"] };
+  const list = createMemo<ReadingList>((previous) => {
+    const query = scope();
+    const current = projection();
+    if (
+      readingScope() !== query ||
+      previous?.scope !== query ||
+      !previous.days.length ||
+      !props.result
+    ) {
+      return { scope: query, days: current.days };
+    }
+    // Hold placement, not row data or membership. A removed or filtered-out row
+    // must never persist just because the reader is away from the top.
+    const rows = new Map(current.sessions.map((row) => [row.key, row]));
+    return {
+      scope: query,
+      days: previous.days
+        .map((day) => ({
+          ...day,
+          sessions: day.sessions.flatMap((row) => rows.get(row.key) ?? []),
+        }))
+        .filter((day) => day.sessions.length > 0),
+    };
+  });
+  const shownCount = createMemo(() =>
+    list().days.reduce((count, day) => count + day.sessions.length, 0),
+  );
   const onlineById = createMemo(
     () =>
       new Map(
@@ -550,6 +391,12 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
       ? (people().find((person) => person.id === props.filters.personId) ?? identity())
       : null,
   );
+  function changeFilters(changes: Partial<SessionActivityFilters>) {
+    props.onFiltersChange({ ...props.filters, query: props.searchInputValue, ...changes });
+  }
+  function selectTime(time: SessionActivityFilters["time"]) {
+    changeFilters({ time });
+  }
   function feedback(error: string | undefined, pending: boolean) {
     return (
       <>
@@ -572,11 +419,9 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
           <input
             type="search"
             aria-label={t("activityFeed.searchPlaceholder")}
-            value={props.filters.query}
+            value={props.searchInputValue}
             placeholder={t("activityFeed.searchPlaceholder")}
-            onInput={(event) =>
-              props.onFiltersChange({ ...props.filters, query: event.currentTarget.value })
-            }
+            onInput={(event) => changeFilters({ query: event.currentTarget.value })}
           />
         </label>
         <SettingsSegmented
@@ -590,11 +435,12 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
             ariaLabel: t(TIME_LABELS[time]),
             compactLabel: time === "all" ? t(TIME_LABELS[time]) : time,
           }))}
-          onChange={(time) => props.onFiltersChange({ ...props.filters, time })}
-          onReselect={(time) => props.onFiltersChange({ ...props.filters, time })}
+          onChange={selectTime}
+          onReselect={selectTime}
         />
         <PeopleControl
           view={props}
+          onPersonChange={(personId) => changeFilters({ personId })}
           people={people()}
           selectedPerson={selectedPerson()}
           totalSessions={projection().timeCount}
@@ -605,14 +451,14 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
           <Errored
             fallback={(error) => {
               const failure = error();
-              return feedback(failure instanceof Error ? failure.message : String(failure), false);
+              return feedback(formatUiError(failure), false);
             }}
           >
             {(latest(read), feedback(props.error, props.loading || isPending(read)))}
           </Errored>
         </Loading>
       </div>
-      <div class="activity-feed__main">
+      <div class="activity-feed__main" ref={(element) => (main = element)}>
         <Errored fallback={() => null}>
           <Loading on={request()} fallback={!props.result ? renderActivityLoading() : undefined}>
             {
@@ -650,14 +496,12 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
         ) : undefined}
         {props.result && (!props.filters.personId || identity()) ? (
           <>
-            {projection().days.length > 0 ? (
-              <For each={projection().days} keyed={(day) => day.key}>
+            {list().days.length > 0 ? (
+              <For each={list().days} keyed={(day) => day.key}>
                 {(day) => (
                   <section class="activity-feed__day">
-                    <h3>{dayLabel(day().timestamp)}</h3>
-                    <div class="activity-feed__sessions">
-                      <DaySessions view={props} day={day()} />
-                    </div>
+                    <h3 class="settings-section__heading">{dayLabel(day().timestamp)}</h3>
+                    <DaySessions view={props} scope={scope()} day={day()} />
                   </section>
                 )}
               </For>
@@ -666,10 +510,10 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
                 {t("activityFeed.noSessions")}
               </section>
             )}
-            {projection().matchedCount > projection().sessions.length ? (
+            {projection().matchedCount > shownCount() ? (
               <p class="activity-feed__footer">
                 {t("activityFeed.showing", {
-                  shown: String(projection().sessions.length),
+                  shown: String(shownCount()),
                   total: String(projection().matchedCount),
                 })}
               </p>

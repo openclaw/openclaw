@@ -1,4 +1,5 @@
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import type { CDPSession } from "playwright";
 import {
   prepareColdLoadTraceEvent,
   summarizeCpuProfile,
@@ -49,6 +50,25 @@ export type InteractionStyleSheet = {
   startLine: number;
   startColumn: number;
 };
+
+export async function collectInteractionStyleSheets(
+  cdp: CDPSession,
+  styleSheets: Map<string, InteractionStyleSheet>,
+) {
+  cdp.on(
+    "CSS.styleSheetAdded",
+    ({ header }: { header: InteractionStyleSheet & { styleSheetId: string } }) =>
+      styleSheets.set(header.styleSheetId, {
+        sourceURL: header.sourceURL,
+        origin: header.origin,
+        title: header.title,
+        startLine: header.startLine,
+        startColumn: header.startColumn,
+      }),
+  );
+  await cdp.send("DOM.enable");
+  await cdp.send("CSS.enable");
+}
 
 /** Chromium emits one aggregate per style pass, in microseconds, on blink.debug.
  * Source: third_party/blink/renderer/core/css/element_rule_collector.cc,

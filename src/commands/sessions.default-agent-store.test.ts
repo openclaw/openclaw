@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
-import { ExpectedCliError } from "../cli/failure-output.js";
+import { ExpectedCliError } from "../cli/expected-cli-error.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());

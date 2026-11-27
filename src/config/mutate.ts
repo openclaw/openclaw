@@ -4,7 +4,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { assertUpdateDoctorConfigInputHash } from "../infra/update-doctor-result.js";
+import { assertUpdateDoctorConfigInputHash } from "../infra/update-doctor-config-capture.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import {
@@ -593,6 +593,7 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
             deferredPluginMigrations: params.deferredPluginMigrations,
             configPath: params.snapshot.path,
             includePath,
+            includeBoundaryPath: boundaryPath,
             allowedRoots,
             expectedTargetPath: expectedIncludeTarget,
             value: includedValueToWrite,
@@ -604,7 +605,7 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
               },
               targets: {
                 ...params.writeOptions?.includeFileTargetsForWrite,
-                [params.snapshot.path]: fsNode.realpathSync(params.snapshot.path),
+                [params.snapshot.path]: fsNode.realpathSync.native(params.snapshot.path),
               },
             },
             assertIncludeGraphForWrite,

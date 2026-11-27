@@ -7,6 +7,7 @@ import { readTranscriptStorageRows } from "../config/sessions/session-accessor.s
 import { replaceTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as fileDescriptor from "../infra/file-descriptor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as agentDatabase from "../state/openclaw-agent-db.js";
 import { observeMainThreadReads } from "../test-utils/main-thread-sql-spies.test-support.js";
@@ -14,12 +15,19 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import {
+  changedStoreFiles,
+  snapshotStoreFiles,
+} from "../test-utils/store-snapshot.test-support.js";
 
 const note = vi.hoisted(() => vi.fn());
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
-import { noteSessionTranscriptHeaderHealth } from "./doctor-session-transcript-headers.js";
+import {
+  checkSessionTranscriptHeaderRepairPending,
+  noteSessionTranscriptHeaderHealth,
+} from "./doctor-session-transcript-headers.js";
 
 const AGENT_ID = "main";
 const SESSION_ID = "headerless-session";
@@ -51,8 +59,10 @@ describe("doctor SQLite session transcript header repair", () => {
   const rows = () => readTranscriptStorageRows(database(), SESSION_ID);
   const health = (shouldRepair = true) =>
     noteSessionTranscriptHeaderHealth({ cfg, env: state.env, shouldRepair });
+  const pending = (shouldRepair = true) =>
+    checkSessionTranscriptHeaderRepairPending({ cfg, env: state.env, shouldRepair });
   const expectNote = (text: unknown) =>
-    expect(note).toHaveBeenCalledWith(text, "Session transcript headers");
+    expect(note).toHaveBeenCalledWith(text, "Chat history headers");
 
   beforeEach(async () => {
     note.mockClear();
@@ -134,11 +144,17 @@ describe("doctor SQLite session transcript header repair", () => {
       "require doctor/import migration before runtime use",
     );
 
+    // The --fix check finds the same work without writing; plain Doctor never repairs.
+    const storeBeforeCheck = snapshotStoreFiles(state.stateDir);
+    await expect(pending()).resolves.toBe("work");
+    await expect(pending(false)).resolves.toBe("none");
+    expect(changedStoreFiles(storeBeforeCheck, snapshotStoreFiles(state.stateDir))).toEqual([]);
+
     await expect(health(false)).resolves.toEqual({ found: 1, repaired: 0 });
     expect(rows()).toEqual(beforeRows);
     expect(recoveryDirectories()).toEqual([]);
     expectNote(
-      '- Found 1 stored session transcript without a header.\n- Run "openclaw doctor --fix" to repair it before resuming the session.',
+      '- Found 1 stored chat history file without a header.\n- Run "openclaw doctor --fix" to repair it before resuming the session.',
     );
 
     note.mockClear();
@@ -202,7 +218,7 @@ describe("doctor SQLite session transcript header repair", () => {
     expect(repairedManager.buildSessionContext().messages).toEqual([
       { role: "user", content: userText },
     ]);
-    expectNote("- Prepended missing headers to 1 session transcript.");
+    expectNote("- Prepended missing headers to 1 chat history file.");
 
     note.mockClear();
     const afterFirstRepair = rows();
@@ -219,22 +235,25 @@ describe("doctor SQLite session transcript header repair", () => {
     expect(rows()).toEqual(afterFirstRepair);
     expect(note).not.toHaveBeenCalled();
     expect(recoveryDirectories()).toEqual(backups);
+    await expect(pending()).resolves.toBe("none");
   });
 
   it("leaves retained history unchanged when its recovery copy cannot be saved", async () => {
     await seedTranscript([message("retained history")]);
     const before = rows();
-    const copyFile = fs.copyFileSync;
-    vi.spyOn(fs, "copyFileSync").mockImplementation((source, destination, mode) => {
-      if (String(destination).includes("openclaw-transcript-headers-recovery-")) {
-        throw new Error("recovery copy: disk full");
-      }
-      return copyFile(source, destination, mode);
-    });
+    const copy = vi
+      .spyOn(fileDescriptor, "copyFileHandle")
+      .mockRejectedValueOnce(new Error("recovery copy: disk full"));
 
     await expect(health()).resolves.toEqual({ found: 1, repaired: 0 });
+    expect(copy).toHaveBeenCalledOnce();
     expect(rows()).toEqual(before);
     expectNote(expect.stringContaining("recovery copy: disk full"));
+    expect(
+      fs
+        .readdirSync(path.dirname(database().path))
+        .filter((name) => name.startsWith("openclaw-transcript-headers-recovery-")),
+    ).toEqual([]);
   });
 
   it("rejects a row timestamp change between detection and header repair", async () => {
@@ -288,6 +307,7 @@ describe("doctor SQLite session transcript header repair", () => {
       }, transcriptDatabaseOptions);
     }
     const before = rows();
+    await expect(pending()).resolves.toBe("none");
     await expect(health()).resolves.toEqual({ found: 0, repaired: 0 });
     expect(rows()).toEqual(before);
     expect(() => SessionManager.open(scope, state.workspaceDir)).toThrow(

@@ -123,9 +123,6 @@ export async function applyPluginNodeInvokePolicy(params: {
   const callerIdentity =
     params.agentRuntimeIdentity ?? params.client?.internal?.agentRuntimeIdentity;
   const token = callerIdentity?.executionIdentity;
-  const isCallerRuntimeAuthorityActive = () =>
-    !callerIdentity ||
-    params.context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) === true;
   const decisionOccurrenceId = randomUUID();
   let receiptOrdinal = 0;
   const recordNodeDecision = (input: {
@@ -255,12 +252,6 @@ export async function applyPluginNodeInvokePolicy(params: {
       return { ok: false, ...error };
     };
     sessionAuthority?.assertCurrent();
-    if (!isCallerRuntimeAuthorityActive()) {
-      return deny("node_runtime_authority_closed", {
-        code: "APPROVAL_AUTHORITY_CLOSED",
-        message: "agent runtime approval authority closed before node dispatch",
-      });
-    }
     // Policies invoke the real node through this narrowed transport wrapper so
     // they can retry/override params without getting direct registry access.
     if (params.isInvocationCurrent && !(await params.isInvocationCurrent())) {
@@ -345,12 +336,6 @@ export async function applyPluginNodeInvokePolicy(params: {
         message: "node plugin policy changed before dispatch",
       });
     }
-    if (!isCallerRuntimeAuthorityActive()) {
-      return deny("node_runtime_authority_closed", {
-        code: "APPROVAL_AUTHORITY_CLOSED",
-        message: "agent runtime approval authority closed before node dispatch",
-      });
-    }
     if (params.isApprovalAuthorityActive?.() === false) {
       return deny("node_approval_authority_closed", {
         code: "APPROVAL_AUTHORITY_CLOSED",
@@ -410,7 +395,6 @@ export async function applyPluginNodeInvokePolicy(params: {
           isPluginCurrent() &&
           params.privateTransport?.isCurrent() !== false &&
           (params.nodeInvokeStream?.isRuntimeCurrent() ?? true) &&
-          isCallerRuntimeAuthorityActive() &&
           params.isApprovalAuthorityActive?.() !== false &&
           resolveCommandAuthorization().ok;
         if (!current) {
@@ -567,11 +551,6 @@ export async function applyPluginNodeInvokePolicy(params: {
           ? { placementGrantAuthority: scope.nodePlacementGrantAuthority }
           : {}),
         turnSource: trustedTurnSource,
-        isCurrent: () =>
-          isPluginCurrent() &&
-          isCallerRuntimeAuthorityActive() &&
-          params.privateTransport?.isCurrent() !== false &&
-          params.isApprovalAuthorityActive?.() !== false,
       }),
       invokeNode,
       ...(ownedInvocation
@@ -582,10 +561,9 @@ export async function applyPluginNodeInvokePolicy(params: {
         : {}),
     });
   } catch (error) {
-    // Observer closure is not a denial. Do not attribute a late policy failure
-    // after the exact caller authority has closed.
+    // Observer closure is not a denial.
     const policyFailed = !(error instanceof ApprovalObserverClosedError);
-    if (policyFailed && !nodeCommandDispatched && isCallerRuntimeAuthorityActive()) {
+    if (policyFailed && !nodeCommandDispatched) {
       recordNodeDecision({
         pluginId: entry.pluginId,
         outcome: "denied",
@@ -596,7 +574,7 @@ export async function applyPluginNodeInvokePolicy(params: {
     }
     throw error;
   }
-  if (!nodeCommandDispatched && !nodeGateDecisionRecorded && isCallerRuntimeAuthorityActive()) {
+  if (!nodeCommandDispatched && !nodeGateDecisionRecorded) {
     recordNodeDecision({
       pluginId: entry.pluginId,
       outcome: result.ok ? "unknown" : "denied",

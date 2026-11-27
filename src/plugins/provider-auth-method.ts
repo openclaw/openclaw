@@ -46,6 +46,7 @@ export async function runProviderPluginAuthMethodUnpersisted(
     allowSecretRefPrompt: params.allowSecretRefPrompt,
     isRemote: params.isRemote ?? isRemoteEnvironment(),
     openUrl: openBrowser,
+    nodes: params.nodes,
     oauth: {
       createVpsAwareHandlers: (options) => createVpsAwareOAuthHandlers(options),
       ...(authorize ? { authorize } : {}),

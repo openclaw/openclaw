@@ -48,10 +48,10 @@ const modelIds = (entries: ModelCatalogSnapshot["entries"]) =>
   entries.map(({ id }) => id).toSorted();
 const buildCounts = () => [buildCommands.mock.calls.length, buildProjection.mock.calls.length];
 const clearBuilds = () => [buildCommands, buildProjection].forEach((mock) => mock.mockClear());
-const publication = (changed: boolean) => ({
+const publication = (changed: boolean, refreshStatusChanged = true) => ({
   phase: "catalog-published",
   modelFactsChanged: changed,
-  refreshStatusChanged: true,
+  ...(refreshStatusChanged ? { refreshStatusChanged: true } : {}),
 });
 
 beforeEach(async () => {
@@ -140,9 +140,9 @@ it("retains the published model owner across metadata reads and catalog renewal"
   const metadata = await harness.lifecycle.read({ agentId: "main" });
   expect(modelIds(metadata.models ?? [])).toEqual(modelIds(next.entries));
   expect(owner.isCurrent()).toBe(true);
-  expect(harness.broadcast).toHaveBeenCalledOnce();
+  expect(harness.broadcast).toHaveBeenCalledTimes(2);
   await harness.lifecycle.read({ agentId: "main" });
-  expect(harness.broadcast).toHaveBeenCalledOnce();
+  expect(harness.broadcast).toHaveBeenCalledTimes(2);
   expect(owner.isCurrent()).toBe(true);
 });
 
@@ -202,7 +202,8 @@ it.for(["usage", "removed", "failed"] as const)(
     try {
       await entered.promise;
       const pendingCatalog = structuredClone(original);
-      expect(pendingCatalog.pendingProviders).toEqual(["custom"]);
+      // A background expiry renewal shows no pending check.
+      expect(pendingCatalog.pendingProviders).toBeUndefined();
       // An unrelated refresh during discovery must not turn progress into a metadata change.
       await harness.lifecycle.refresh();
       await harness.lifecycle.read({ agentId: "main" });
@@ -216,27 +217,32 @@ it.for(["usage", "removed", "failed"] as const)(
       const published = publications.mock.calls.flatMap(([event]) =>
         event.phase === "catalog-published" ? [event] : [],
       );
-      expect(published).toEqual(change === "failed" ? [] : [publication(change !== "usage")]);
-      expect(harness.broadcast).toHaveBeenCalledExactlyOnceWith(
-        "chat.metadata.changed",
-        {
-          modelCatalogChanged: change !== "usage",
-          ...(change === "usage" ? { modelCatalogStatusChanged: true } : {}),
-          authChanged: change === "removed",
-          commandsChanged: false,
-        },
-        { dropIfSlow: true },
+      // A silent renewal had no pending status, so settling it changes no refresh status.
+      expect(published).toEqual(
+        change === "failed" ? [] : [publication(change !== "usage", false)],
       );
-      expect(harness.observedCatalogs).toHaveLength(1);
-      const observedCatalog = harness.observedCatalogs[0]!;
-      expect(observedCatalog.pendingProviders).toBeUndefined();
-      // The pending reply remains pending until the consumer receives the settlement signal.
-      expect(pendingCatalog.pendingProviders).toEqual(["custom"]);
+      const changes =
+        change === "usage"
+          ? []
+          : [
+              {
+                agentId: "main",
+                modelCatalogChanged: true,
+                authChanged: change === "removed",
+                commandsChanged: false,
+              },
+            ];
+      expect(harness.broadcast.mock.calls).toEqual(
+        changes.map((payload) => ["chat.metadata.changed", payload, { dropIfSlow: true }]),
+      );
+      expect(harness.observedCatalogs).toHaveLength(changes.length);
+      for (const observed of harness.observedCatalogs) {
+        expect(observed.pendingProviders).toBeUndefined();
+      }
       const modelChanges = change === "usage" ? 0 : 1;
       expect(buildCounts()).toEqual([modelChanges, modelChanges]);
       if (change === "usage") {
         expect(owner.readFullModelCatalog!()).toBe(original);
-        expect(observedCatalog.entries).toEqual(pendingCatalog.entries);
         expect(owner.isCurrent()).toBe(true);
         expect(getPreparedModelFullCatalogAuth(original)?.authStore.lastGood).toEqual({
           custom: "custom:default",
@@ -249,7 +255,7 @@ it.for(["usage", "removed", "failed"] as const)(
         await nextEventLoopTurn();
         await harness.lifecycle.read({ agentId: "main" });
         expect(owner.readFullModelCatalog!()?.refreshFailed).toBeUndefined();
-        expect(harness.broadcast).toHaveBeenCalledTimes(2);
+        expect(harness.broadcast).toHaveBeenCalledTimes(3);
         expect(buildCommands).toHaveBeenCalledTimes(2);
         expect(publications).toHaveBeenLastCalledWith(publication(false));
       }
@@ -267,3 +273,35 @@ it.for(["usage", "removed", "failed"] as const)(
     }
   },
 );
+
+it("backs off consecutive expiry renewal failures instead of spinning at 0ms", async () => {
+  const harness = await createRenewalLifecycle();
+  const inventoryOwner = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!;
+  const acquisitions = mocks.runPreparedModelCatalogWorker.mock.calls.length;
+  mocks.runPreparedModelCatalogWorker.mockRejectedValue(new Error("synthetic expiry failure"));
+
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  try {
+    vi.setSystemTime(1_000_000);
+    inventoryOwner.catalogInventory!.providers.get("custom")!.expiresAt = 999_999;
+
+    owner.refreshExpiredModelCatalog!();
+    for (const [elapsed, failures, expiresAt] of [
+      [0, 1, 1_030_000],
+      [29_999, 1, 1_030_000],
+      [1, 2, 1_090_000],
+      [59_999, 2, 1_090_000],
+      [1, 3, 1_210_000],
+    ] as const) {
+      await vi.advanceTimersByTimeAsync(elapsed);
+      expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(acquisitions + failures);
+      expect(inventoryOwner.catalogInventory!.providers.get("custom")).toMatchObject({
+        discoveryFailures: failures,
+        expiresAt,
+      });
+      expect(harness.broadcast).toHaveBeenCalledTimes(1);
+    }
+  } finally {
+    vi.useRealTimers();
+  }
+});

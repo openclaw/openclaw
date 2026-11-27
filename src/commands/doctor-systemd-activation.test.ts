@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { resolveCliStartupPolicy } from "../cli/command-startup-policy.js";
 import { bootstrapGatewayRun } from "../cli/gateway-cli/run-command.js";
 import { resolveGatewayStartupFailureExitCode } from "../cli/gateway-cli/startup-maintenance.js";
@@ -11,11 +12,17 @@ import { createGatewayDispatchStartupTrace } from "../cli/startup-trace.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "../state/openclaw-agent-schema-v24.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import * as schemaMigrations from "./doctor-schema-migrations.js";
 
+// Startup migration normally brings these databases current before activation repair.
+// mock-isolation: Keep Doctor's offline activation repair reachable without startup migrations.
+vi.mock("../state/state-upgrade-startup.js", () => ({
+  upgradeStateOnGatewayStart: vi.fn(async () => {}),
+}));
 vi.mock("../cli/run-main-service-installation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof serviceInstallation>()),
   readOwnGatewayServiceCommand: vi.fn(),
@@ -44,12 +51,7 @@ async function fixture(run: (pathname: string, home: string) => Promise<void>) {
     await fs.mkdir(path.dirname(pathname), { recursive: true });
     {
       using db = new DatabaseSync(pathname);
-      db.exec(
-        await fs.readFile(
-          new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v24.sql", import.meta.url),
-          "utf8",
-        ),
-      );
+      db.exec(OPENCLAW_AGENT_SCHEMA_V24_SQL);
       db.exec(`PRAGMA user_version=24;
         INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
         VALUES ('primary', 'agent', 24, 'openclaw', 1, 1);
@@ -158,7 +160,7 @@ it.each(["ordinary", "child", "newer", "corrupt", "foreign"])(
       }
       const before = await fs.readFile(pathname);
       await expect(bootstrap()).rejects.toThrow();
-      expect(await fs.readFile(pathname)).toEqual(before);
+      expectBytesEqual(await fs.readFile(pathname), before, pathname);
       expect((await fs.readdir(path.dirname(pathname))).some((file) => file.includes(".bak"))).toBe(
         false,
       );
@@ -176,7 +178,7 @@ test("parks failed activation repair without migrating unbacked state", async ()
     expect(failure).toBeInstanceOf(Error);
     expect(String(failure)).toContain("synthetic pre-migration backup refusal");
     expect(resolveGatewayStartupFailureExitCode(failure)).toBe(78);
-    expect(await fs.readFile(pathname)).toEqual(before);
+    expectBytesEqual(await fs.readFile(pathname), before, pathname);
     expect((await fs.readdir(path.dirname(pathname))).some((file) => file.includes(".bak"))).toBe(
       false,
     );

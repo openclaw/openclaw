@@ -48,7 +48,7 @@ function requireUnchanged(
   return row;
 }
 
-/** One fresh dedicated node owns one immutable registration and one session binding. */
+/** A dedicated node may refresh its available baseline before its one session binding. */
 export class NodeWorkerPreparedWorkspaceKernel {
   constructor(private readonly options: OpenClawStateDatabaseOptions) {}
 
@@ -117,18 +117,42 @@ export class NodeWorkerPreparedWorkspaceKernel {
       if (existing) {
         if (
           existing.state !== "available" ||
+          existing.session_id !== null ||
+          existing.session_key !== null ||
+          existing.owner_epoch !== null ||
+          existing.bound_at_ms !== null ||
           existing.preparation_key !== input.preparationKey ||
           existing.cache_key !== input.cacheKey ||
           existing.gateway_namespace !== input.gatewayNamespace ||
           existing.environment_id !== input.environmentId ||
           existing.workspace_dir !== input.workspaceDir ||
-          existing.home_dir !== input.homeDir ||
-          existing.source_manifest_ref !== input.sourceManifestRef ||
-          existing.prepared_manifest_ref !== input.preparedManifestRef
+          existing.home_dir !== input.homeDir
         ) {
           throw new Error("INVALID_REQUEST: this node already owns a prepared workspace");
         }
-        return existing;
+        if (
+          existing.source_manifest_ref === input.sourceManifestRef &&
+          existing.prepared_manifest_ref === input.preparedManifestRef
+        ) {
+          return existing;
+        }
+        const refreshed = {
+          ...existing,
+          source_manifest_ref: input.sourceManifestRef,
+          prepared_manifest_ref: input.preparedManifestRef,
+        };
+        executeSqliteQuerySync(
+          db,
+          query(db)
+            .updateTable(TABLE)
+            .set({
+              source_manifest_ref: input.sourceManifestRef,
+              prepared_manifest_ref: input.preparedManifestRef,
+            })
+            .where("preparation_key", "=", input.preparationKey),
+        );
+        nodePreparedWorkspacePublication.stagePostimages(db, [refreshed]);
+        return refreshed;
       }
       const row = {
         preparation_key: input.preparationKey,

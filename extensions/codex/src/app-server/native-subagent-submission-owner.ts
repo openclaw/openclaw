@@ -393,7 +393,7 @@ export class CodexNativeSubagentSubmissionOwner {
         await custody.recorded.catch(() => {});
         try {
           if (
-            (child.nativeCompletionDelivered ||
+            (child.completionDelivery?.isConsumed() ||
               (child.subscriptionClosed && !child.pendingCompletion)) &&
             state.submissionStore
           ) {

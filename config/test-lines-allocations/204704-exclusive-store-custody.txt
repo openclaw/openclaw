@@ -1,0 +1,4 @@
+# Physical descriptor retirement across shared/control/agent SQLite families,
+# unlinked identity FDs, native reader exit, bounded trial/scope waits, and repair facts
+# plus full-lock borrower settlement, real-process stop deadlines and successor admission.
+448

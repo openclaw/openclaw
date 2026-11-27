@@ -5,4 +5,9 @@
 
 BOOL OpenClawWebKitTestSupportDidSuppressScreenTime(WKWebView * _Nonnull webView);
 
+// Install only while the serialized permission boundary test owns the fixture.
+BOOL OpenClawInstallSpeechAuthorizationFixture(void);
+int OpenClawSpeechAuthorizationRequestCount(void);
+void OpenClawRestoreSpeechAuthorizationFixture(void);
+
 #endif

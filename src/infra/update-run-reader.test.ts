@@ -2,17 +2,22 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { describe, expect, it, vi } from "vitest";
+import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import {
-  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import {
+  observeMainThreadReads,
+  observeMainThreadSql,
+} from "../test-utils/main-thread-sql-spies.test-support.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { assertSqliteSchemaContains } from "./sqlite-schema-contract.test-support.js";
+import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
+import { prepareUpdateRunAdmissionRead } from "./update-run-admission.read.js";
 import {
   createUpdateRun,
   findActiveUpdateRun,
@@ -26,7 +31,7 @@ import {
   recordUpdateRunVerification,
 } from "./update-run-ledger.js";
 
-const tempDirs = createTempDirTracker();
+const tempDirs = useStateDatabaseTempDirs();
 
 function isolatedOptions() {
   return { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-update-ledger-") } };
@@ -62,13 +67,6 @@ function snapshotDatabaseFiles(filename: string) {
     }),
   };
 }
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
-  tempDirs.cleanup();
-});
 
 describe("update run history reads", () => {
   it("keeps reads non-creating and adds the table on first write without changing the older schema", async () => {
@@ -116,6 +114,16 @@ describe("update run history reads", () => {
 
     const created = createUpdateRun({ runId, trigger: "cli" }, options);
     expect(created).toMatchObject({ runId, phase: "requested", status: "running" });
+    const transactions = vi.spyOn(initial.db, "exec");
+    const readCandidates = await prepareUpdateRunAdmissionRead({
+      type: "updateRuns.reconciliationCandidates",
+      input: { excludeRunId: runId },
+    });
+    expect(readCandidates(initial.db)).toEqual({
+      type: "updateRuns.reconciliationCandidates",
+      candidates: [],
+    });
+    expect(transactions).not.toHaveBeenCalled();
     closeOpenClawStateDatabaseForTest();
     const olderReader = new DatabaseSync(filename);
     try {
@@ -129,6 +137,60 @@ describe("update run history reads", () => {
     expect(getUpdateRun(runId, options)).toEqual(created);
     expect(createUpdateRun({ runId, trigger: "api" }, options)).toEqual(created);
     expect(listUpdateRuns({}, options)).toEqual([created]);
+  });
+
+  it("probes one status outside the snapshot and reads current records inside it", async () => {
+    const options = isolatedOptions();
+    const { runId } = createUpdateRun({ trigger: "cli" }, options);
+    const other = createUpdateRun({ trigger: "api" }, options);
+    const { db } = openOpenClawStateDatabase(options);
+    const selected = await prepareUpdateRunAdmissionRead({
+      type: "updateRuns.reconciliationCandidates",
+      input: { runIds: [other.runId, runId], excludeRunId: other.runId },
+    });
+    const all = await prepareUpdateRunAdmissionRead({
+      type: "updateRuns.reconciliationCandidates",
+      input: {},
+    });
+    const reads: [pinned: boolean, sql: string, bindings: readonly unknown[]][] = [];
+    const observer = observeMainThreadReads((sql, bindings) => {
+      if (sql.includes('from "update_runs"')) {
+        reads.push([db.isTransaction, sql, bindings]);
+      }
+    });
+    const exec = db.exec.bind(db);
+    const begin = vi.spyOn(db, "exec").mockImplementationOnce((sql) => {
+      expect(sql).toBe("BEGIN");
+      db.prepare("UPDATE update_runs SET phase = 'staging' WHERE run_id = ?").run(runId);
+      exec(sql);
+    });
+    try {
+      expect(selected(db)).toMatchObject({ candidates: [{ record: { runId, phase: "staging" } }] });
+      const running = 'from "update_runs" where "status" = ?';
+      const targeted = `${running} and "run_id" in (?, ?) and "run_id" != ?`;
+      const ids = ["running", other.runId, runId, other.runId];
+      const fullRead = `select * ${running} order by "run_id"`;
+      expect(reads.splice(0)).toEqual([
+        [false, `select "status" ${targeted} order by "run_id" limit ?`, [...ids, 1]],
+        [true, `select * ${targeted} order by "run_id"`, ids],
+      ]);
+      all(db);
+      expect(reads.splice(0)).toEqual([
+        [false, `select "status" ${running} limit ?`, ["running", 1]],
+        [true, fullRead, ["running"]],
+      ]);
+      runSqliteReadSnapshotSync(db, () => all(db));
+      expect(reads).toEqual([[true, fullRead, ["running"]]]);
+      begin.mockImplementationOnce((sql) => {
+        expect(sql).toBe("BEGIN");
+        exec("DROP TABLE update_runs");
+        exec(sql);
+      });
+      expect(all(db)).toMatchObject({ candidates: [] });
+    } finally {
+      begin.mockRestore();
+      observer.restore();
+    }
   });
 
   it.each([
@@ -185,7 +247,7 @@ describe("update run history reads", () => {
               : reader === "list-async"
                 ? await listUpdateRunsAsync({}, options)
                 : reader === "status"
-                  ? await getUpdateRunStatusAsync(options)
+                  ? await withArtifactPreservingStateReads(() => getUpdateRunStatusAsync(options))
                   : findActiveUpdateRun(options);
       expect(result).toEqual(
         reader === "status"
@@ -252,10 +314,14 @@ describe("update run history reads", () => {
       expect(getUpdateRun(created.runId, options)).toEqual(created);
       expect(listUpdateRuns({}, options)).toEqual([created]);
       expect(findActiveUpdateRun(options)).toEqual(created);
+      expect(await getUpdateRunStatusAsync(options)).toEqual({
+        activeRun: created,
+        lastRun: created,
+      });
       for (const read of [
         () => getUpdateRunAsync(created.runId, options),
         () => listUpdateRunsAsync({}, options),
-        () => getUpdateRunStatusAsync(options),
+        () => withArtifactPreservingStateReads(() => getUpdateRunStatusAsync(options)),
       ]) {
         await expect(read()).rejects.toThrow(
           "Asynchronous shared-state reads cannot run inside a native transaction",
@@ -295,6 +361,9 @@ describe("update run history reads", () => {
     expect((await listUpdateRunsAsync({ limit: 2 }, options)).map((run) => run.runId)).toEqual(
       tied.map((run) => run.runId),
     );
+    const selection = { active: true, limit: 1, excludeRunIds: tied.map((run) => run.runId) };
+    expect(listUpdateRuns(selection, options)).toEqual([oldest]);
+    expect(await listUpdateRunsAsync(selection, options)).toEqual([oldest]);
     expect(findActiveUpdateRun(options)).toEqual(tied[0]);
     for (const run of tied) {
       finishUpdateRun(run.runId, { status: "skipped", reason: "dry-run" }, options);

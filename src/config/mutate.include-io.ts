@@ -9,7 +9,7 @@ import {
 } from "../infra/deferred-plugin-migrations.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { root as createFsRoot, type Root as FsSafeRoot } from "../infra/fs-safe.js";
-import { recordUpdateDoctorConfigFileWrite } from "../infra/update-doctor-result.js";
+import { recordUpdateDoctorConfigFileWrite } from "../infra/update-doctor-config-capture.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { prepareConfigFileWrite } from "./backup-rotation.js";
 import {
@@ -29,6 +29,7 @@ import {
 } from "./io.write-safety.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
+import { preparePluginCohortConfigPublication } from "./plugin-cohort-publication.js";
 import type { ConfigFileSnapshot } from "./types.js";
 import { rejectConfigNonFiniteNumbers } from "./value-tree.js";
 import { createConfigWriteAuthorityGuard } from "./write-authority.js";
@@ -203,6 +204,7 @@ export async function writeRootBoundJsonFile(params: {
   deferredPluginMigrations?: readonly DeferredPluginMigration[];
   configPath: string;
   includePath: string;
+  includeBoundaryPath?: readonly string[];
   allowedRoots: readonly string[];
   expectedTargetPath: string;
   value: unknown;
@@ -260,6 +262,7 @@ export async function writeRootBoundJsonFile(params: {
     {
       snapshot: { path: targetAtCommit.absolutePath, exists: currentRaw !== null, raw: currentRaw },
       includeGraph: params.includeGraph,
+      validateUtf8: true,
       targetPathProof: pathProof,
       preserveDirectoryMode: true,
       onRootRemoved: () => {
@@ -308,6 +311,25 @@ export async function writeRootBoundJsonFile(params: {
       durable: true,
     });
     await params.beforeCommit?.();
+    preparePluginCohortConfigPublication(
+      {
+        rootConfigPath: params.configPath,
+        filePath: params.includePath,
+        targetPath: targetAtCommit.absolutePath,
+        pathSnapshot: pathProof.snapshot,
+        beforeRaw: currentRaw,
+        afterRaw: content,
+        ...(params.includeBoundaryPath
+          ? {
+              include: {
+                boundaryPath: [...params.includeBoundaryPath],
+                includePath: params.includePath,
+              },
+            }
+          : {}),
+      },
+      writeGuard.assertCurrent,
+    );
     writeGuard.assertCurrent();
     const publish = () => {
       params.assertBeforePublish?.();

@@ -1,18 +1,12 @@
+import { DecisionContractError } from "./contract-error.js";
 import type { DecisionBatch, DecisionBatchResult } from "./types.js";
 import {
   decisionEntry,
+  exactKeys,
   finiteJson,
   isPlainDecisionRecord,
   validDecisionCriteria,
 } from "./validation-common.js";
-
-/** A caller contract defect is not a provider outage. Never include evidence in errors. */
-export class DecisionContractError extends Error {
-  constructor() {
-    super("Invalid decision contract; check the input and evaluation options.");
-    this.name = "DecisionContractError";
-  }
-}
 
 export const MAX_DECISION_V1_QUESTIONS = 256;
 
@@ -25,6 +19,11 @@ export function validateDecisionBatch(batch: unknown): batch is DecisionBatch {
   if (shape === "oversized") {
     return false;
   }
+  return validateDecisionBatchShape(batch);
+}
+
+/** Internal V1 shape checks after finite JSON admission; callers retain their JSON policy. */
+export function validateDecisionBatchShape(batch: unknown): batch is DecisionBatch {
   if (
     !isPlainDecisionRecord(batch) ||
     !decisionEntry(batch.state) ||
@@ -63,13 +62,6 @@ function probability(value: unknown): value is number {
 function distribution(values: unknown[]): values is number[] {
   return values.every(probability) && values.some((value) => value > 0);
 }
-export function exactKeys(left: object, right: object): boolean {
-  const keys = Object.keys(left);
-  return (
-    keys.length === Object.keys(right).length && keys.every((key) => Object.hasOwn(right, key))
-  );
-}
-
 /** Validate all answers before returning any; provider data never grants partial acceptance. */
 export function validateDecisionResult(
   batch: Pick<DecisionBatch, "questions">,
@@ -127,18 +119,16 @@ export function validateDecisionResult(
       if (!distribution(values)) {
         return false;
       }
-    } else {
-      if (
-        !Array.isArray(answer.probabilities) ||
-        answer.probabilities.length !== question.criteria.length ||
-        !distribution(answer.probabilities) ||
-        typeof answer.score !== "number" ||
-        !Number.isFinite(answer.score) ||
-        answer.score < 0 ||
-        answer.score > question.criteria.length - 1
-      ) {
-        return false;
-      }
+    } else if (
+      !Array.isArray(answer.probabilities) ||
+      answer.probabilities.length !== question.criteria.length ||
+      !distribution(answer.probabilities) ||
+      typeof answer.score !== "number" ||
+      !Number.isFinite(answer.score) ||
+      answer.score < 0 ||
+      answer.score > question.criteria.length - 1
+    ) {
+      return false;
     }
   }
   return true;

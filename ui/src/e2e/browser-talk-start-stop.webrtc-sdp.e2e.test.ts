@@ -60,7 +60,7 @@ suite.define(() => {
         .click({ noWaitAfter: scenario.status === 200 });
       await waitForWebRtcSdpFetch(page);
 
-      const alert = page.locator('.agent-chat__talk-status[role="alert"]');
+      const alert = page.locator('.agent-chat__composer-alert[role="alert"]');
       await expect.poll(() => alert.textContent()).toContain(scenario.message);
       await captureWebRtcSdpAlertProof(suite, page, scenario.screenshot);
       await expect

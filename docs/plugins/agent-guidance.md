@@ -56,7 +56,7 @@ with filesystem permissions, then add an entry to your configuration:
         "enabled": true,
         "hooks": {
           "allowConversationAccess": true,
-          "allowPromptInjection": true
+          "allowPromptModification": true
         },
         "config": {
           "directory": "/srv/agent-guidance",

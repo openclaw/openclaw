@@ -20,6 +20,8 @@ export type EngineScenario = Omit<InteractionScenario, "run"> & {
   viewports?: readonly ("desktop" | "mobile")[];
   /** A fresh context stays unnavigated until the measured action starts. */
   navigation?: "measured" | "reload";
+  /** Standalone documents have no app preferences, shell roster or route preload manifest. */
+  standaloneDocument?: boolean;
   /** Append to the mock Gateway's init script, preserving WebSocket wrapper order. */
   initScript?: string;
   settings?: Partial<UiSettings>;
@@ -42,7 +44,7 @@ export function createEngineTranscript(messages: number) {
 }
 
 /** Browser-local sampling excludes the driver's polling delay from boot readiness. */
-function installEngineBootReadiness() {
+function installEngineBootReadiness(transcriptSelector = ".chat-virtual-row .chat-text") {
   const milestones = { transcriptMs: 0, composerMs: 0, readyMs: 0 };
   Reflect.set(window, "__engineBootReadiness", milestones);
   const sample = () => {
@@ -50,7 +52,7 @@ function installEngineBootReadiness() {
     const input = pane?.querySelector<HTMLTextAreaElement>(
       ".agent-chat__composer-combobox textarea",
     );
-    const rows = pane?.querySelectorAll(".chat-virtual-row .chat-text") ?? [];
+    const rows = pane?.querySelectorAll(transcriptSelector) ?? [];
     if (
       !milestones.transcriptMs &&
       Reflect.get(pane ?? {}, "transcriptReady") === true &&
@@ -70,7 +72,11 @@ function installEngineBootReadiness() {
   requestAnimationFrame(sample);
 }
 
-export function engineProbeInitScript(streaming = false, gatewayLatencyMs = 0) {
+export function engineProbeInitScript(
+  streaming = false,
+  gatewayLatencyMs = 0,
+  transcriptSelector?: string,
+) {
   return `;if (window === window.top && location.protocol !== "about:") {
     ${createColdLoadProbeInitScript({
       ownerProbes: false,
@@ -79,7 +85,7 @@ export function engineProbeInitScript(streaming = false, gatewayLatencyMs = 0) {
       frameGapMs: 0,
       events: [],
     })}
-    ;(() => { const __name = (fn) => fn; (${installEngineBootReadiness.toString()})(); })();
+    ;(() => { const __name = (fn) => fn; (${installEngineBootReadiness.toString()})(${JSON.stringify(transcriptSelector)}); })();
     ${streaming ? createStreamingReplyProbeInitScript() : ""}
   }`;
 }
@@ -188,6 +194,9 @@ export async function waitForEngineTranscript(
       ...phases,
       messages: snapshot?.[1].snapshot.messages.length ?? 0,
       mountedRows: pane?.querySelectorAll(".chat-virtual-row").length ?? 0,
+      cachedAdmission:
+        pane?.querySelector("[data-cached-session]")?.getAttribute("data-cached-session") ===
+        "true",
       composerReady: input !== null && input !== undefined && !input.disabled,
       transcriptReady: pane ? Reflect.get(pane, "transcriptReady") === true : false,
       longTasksSupported: PerformanceObserver.supportedEntryTypes.includes("longtask"),
@@ -206,19 +215,18 @@ async function persistTranscript(page: Page) {
     const pane = document.querySelector(".chat-pane-cache__pane--active");
     const store:
       | {
-          write(key: string, snapshot: { messages: unknown[] }): void;
+          write(key: string, snapshot: { messages: unknown[] }, weight: number): void;
           flush(): Promise<void>;
         }
       | undefined = pane ? Reflect.get(pane, "sessionSnapshotStore") : undefined;
-    const cache: Map<string, { snapshot: { messages: unknown[] } }> | undefined = pane
-      ? Reflect.get(pane, "chatMessagesBySession")
-      : undefined;
+    const cache: Map<string, { snapshot: { messages: unknown[] }; weight: number }> | undefined =
+      pane ? Reflect.get(pane, "chatMessagesBySession") : undefined;
     const key = pane ? Reflect.get(pane, "sessionKey") : undefined;
     const entry = cache && [...cache].find(([stored]) => stored.endsWith(`\u0000${key}`));
     if (!store || !entry) {
       throw new Error("Warm boot requires the active transcript persistence owner");
     }
-    store.write(entry[0], { ...entry[1].snapshot });
+    store.write(entry[0], { ...entry[1].snapshot }, entry[1].weight);
     await store.flush();
   });
 }
@@ -233,6 +241,7 @@ export function createEngineBootScenarios(
   return [
     ...(["paste", "typing"] as const).map((input): EngineScenario => ({
       id: `native-input-${input}`,
+      standaloneDocument: true,
       route: `/__native-input-${input}`,
       explicitOnly: true,
       diagnostic: "Native search-input automation without application code, not a latency floor.",
@@ -267,6 +276,7 @@ export function createEngineBootScenarios(
     })),
     {
       id: "blank-frame-cadence",
+      standaloneDocument: true,
       route: "/__frame-cadence-control",
       explicitOnly: true,
       diagnostic: "Blank-document frame cadence, not application latency.",
@@ -335,6 +345,8 @@ export function createEngineBootScenarios(
       navigation: "reload",
       route,
       expected: "A same-context reload restores the persisted transcript and enabled composer.",
+      // Persist a credential-admitted boot record so reload can prewarm the stored transcript.
+      fixtureOverrides: () => ({ authMethod: "trusted-proxy" }),
       initScript: bootScript,
       prepare: async (page) => {
         await waitForEngineTranscript(page);

@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import fs, { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -13,6 +13,7 @@ import {
   resolveExtensionTestPlan as resolvePlan,
   splitExtensionTestJobTargets as splitTargets,
 } from "../../scripts/lib/extension-test-plan.mts";
+import { createGatewayServerTestTargetChunks } from "../../scripts/lib/gateway-server-test-plan.mts";
 import { resolveBoundedVitestInvocations } from "../../scripts/run-vitest.mts";
 import {
   buildFullSuiteVitestRunPlans,
@@ -24,6 +25,29 @@ import { listVitestConfigTestFiles } from "../vitest-projects-config.test-suppor
 import { databaseWorkerExtensionTestFiles } from "../vitest/vitest.extension-database-workers-paths.mjs";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+it("keeps Gateway and plugin file bounds balanced at the owner boundary", () => {
+  const cwd = tempDirs.make("balanced-test-targets-");
+  const gateway = Array.from(
+    { length: 17 },
+    (_, index) => `src/gateway/server.balance-${String(index).padStart(2, "0")}.test.ts`,
+  );
+  gateway.forEach((file) => writeFixture(cwd, file));
+  expect(createGatewayServerTestTargetChunks(cwd)).toEqual([gateway.slice(0, 9), gateway.slice(9)]);
+  const matrix = Array.from(
+    { length: 41 },
+    (_, index) => `extensions/matrix/src/balance-${String(index).padStart(2, "0")}.test.ts`,
+  );
+  const config = "test/vitest/vitest.extension-matrix.config.ts";
+  expect(
+    extensionTestPlan.splitExtensionTestProcessTargets(config, [
+      ...matrix.toReversed(),
+      matrix[0]!,
+    ]),
+  ).toEqual([matrix.slice(0, 21), matrix.slice(21)]);
+  expect(extensionTestPlan.splitExtensionTestProcessTargets(config, [])).toEqual([]);
+  expect(extensionTestPlan.splitExtensionTestProcessTargets("unbounded", [])).toEqual([[]]);
+});
+
 const telegramConfig = "test/vitest/vitest.extension-telegram.config.ts";
 const workerConfig = "test/vitest/vitest.extension-database-workers.config.ts";
 const telegramFile = (name: string) => `extensions/telegram/src/${name}.test.ts`;
@@ -100,7 +124,9 @@ describe("extension executable test plans", () => {
     expect(shards[0]!.includePatterns?.toSorted()).toEqual(files.toSorted());
   });
 
-  it("reads each candidate checkout's filesystem plugin inventory", () => {
+  it("reads each candidate checkout's filesystem plugin inventory", async () => {
+    const { createChangedExtensionConfigShards } =
+      await import("../../scripts/lib/ci-extension-test-shards.mts");
     const root = "extensions/fixture";
     for (const snapshot of ["before", "after"]) {
       const cwd = tempDirs.make(`extension-inventory-${snapshot}-`);
@@ -112,6 +138,7 @@ describe("extension executable test plans", () => {
         `extensions/manifest-${snapshot}/openclaw.plugin.json`,
         `extensions/nested/${snapshot}/openclaw.plugin.json`,
         selected,
+        `extensions/unrelated/ignored.test.ts`,
         `${root}/browser/ui.test.ts`,
         `${root}/dist/generated.test.ts`,
         `${root}/node_modules/dependency/copied.test.ts`,
@@ -122,6 +149,14 @@ describe("extension executable test plans", () => {
       );
       expect(listFiles([root], cwd)).toEqual([selected]);
       expect(listFiles([selected], cwd)).toEqual([selected]);
+      const reads = vi.spyOn(fs, "readdirSync");
+      const shards = createChangedExtensionConfigShards([root], {
+        cwd,
+        targets: new Set([selected]),
+      });
+      expect(shards.flatMap((shard) => shard.includePatterns ?? [])).toEqual([selected]);
+      expect(reads.mock.calls.map(([dir]) => String(dir))).toEqual([path.join(cwd, root)]);
+      reads.mockRestore();
     }
   });
 

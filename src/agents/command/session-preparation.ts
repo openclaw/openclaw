@@ -119,10 +119,7 @@ export async function prepareEmbeddedSessionState(params: {
   });
   const skillSnapshotState = await resolveReusableWorkspaceSkillSnapshot({
     workspaceDir: resolveAgentWorkspaceDir(params.cfg, params.sessionAgentId),
-    ...resolveSessionSkillExecutionWorkspace(
-      sessionEntry?.worktree?.canonicalWorkspaceDir,
-      params.executionWorkspaceDir,
-    ),
+    ...resolveSessionSkillExecutionWorkspace(sessionEntry, params.executionWorkspaceDir),
     config: params.cfg,
     agentId: params.sessionAgentId,
     existingSnapshot: params.isNewSession ? undefined : currentSkillsSnapshot,
@@ -201,7 +198,6 @@ export async function prepareEmbeddedSessionState(params: {
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       params.opts.abortSignal?.throwIfAborted();
       params.opts.assertSourceCurrent?.();
-      params.opts.operatorAuthority?.assertCurrent();
     };
     await recordSessionHumanDirectMessage(
       {

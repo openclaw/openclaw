@@ -22,7 +22,7 @@ import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.j
 import { matchCommandPrefix, rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 import { createCompactionNoticePayload } from "./compaction-notice.js";
-import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { stripMentions } from "./mentions.js";
 
 function formatCompactionReason(reason?: string): string | undefined {
   const text = normalizeOptionalString(reason);
@@ -88,7 +88,6 @@ export async function handleCompactCommand(
     return unauthorized;
   }
   const operatorAuthority = params.opts?.operatorAuthority;
-  operatorAuthority?.assertCurrent();
   const targetSessionEntry = params.commandInvocationSignal
     ? params.compactionSessionEntry
     : (params.sessionStore?.[params.sessionKey] ?? params.sessionEntry);
@@ -109,7 +108,7 @@ export async function handleCompactCommand(
     sessionAgentId === currentAgentId && params.agentDir
       ? params.agentDir
       : resolveAgentDir(params.cfg, sessionAgentId);
-  const raw = stripStructuralPrefixes(params.ctx.commandText ?? "");
+  const raw = params.ctx.commandText ?? "";
   const stripped = params.isGroup
     ? stripMentions(raw, params.ctx, params.cfg, sessionAgentId)
     : raw;
@@ -154,9 +153,7 @@ export async function handleCompactCommand(
   let compactionAccepted = false;
   let ingressAdopted = false;
   const assertOwnerBeforeAcceptance = () => {
-    operatorAuthority?.assertCurrent();
     if (!compactionAccepted) {
-      params.command.assertOwnerCurrent?.();
       assertOwnerCurrent?.();
     }
   };
@@ -342,6 +339,7 @@ export async function handleCompactCommand(
             conversationRoutePeerId: params.ctx.ConversationRoutePeerId,
             chatType: normalizeChatType(params.ctx.ChatType),
             skillsSnapshot: expectedSession.skillsSnapshot,
+            toolOverrides: expectedSession.toolOverrides,
             provider: params.provider,
             model: params.model,
             authProfileId:
@@ -434,9 +432,10 @@ export async function handleCompactCommand(
         );
         const reason = formatCompactionReason(result.reason);
         const line = `${compactLabel}${reason ? `: ${reason}` : ""} • ${contextSummary}`;
+        const details = parseCompactionDetails(result.result?.details);
         const degradedNotice =
-          didCompact && parseCompactionDetails(result.result?.details)?.qualityDegraded
-            ? `\n${createCompactionNoticePayload({ phase: "degraded" }).text}`
+          didCompact && details?.qualityDegraded
+            ? `\n${createCompactionNoticePayload({ phase: "degraded", summaryRefused: details.summaryRefused }).text}`
             : "";
         runtime.enqueueSystemEvent(line, {
           sessionKey: resolveSystemEventQueueKey(params.sessionKey, sessionAgentId),

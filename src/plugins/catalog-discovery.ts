@@ -172,7 +172,8 @@ export function joinClawHubPluginCatalog(params: {
   const publishedPackages = new Set(
     params.remote.map((plugin) => normalizedAlias(plugin.packageName)),
   );
-  const query = normalizedAlias(params.query);
+  // Normalize search comparisons only; catalog identities and display text retain their bytes.
+  const query = normalizedAlias(params.query)?.normalize("NFC");
   const localOnly = params.local.plugins
     .filter(
       (plugin) =>
@@ -197,7 +198,7 @@ export function joinClawHubPluginCatalog(params: {
         return true;
       }
       return [plugin.id, plugin.packageName, plugin.name, plugin.description, ...categories]
-        .flatMap((value) => (value ? [value.toLowerCase()] : []))
+        .flatMap((value) => (value ? [value.toLowerCase().normalize("NFC")] : []))
         .some((value) => value.includes(query));
     })
     .toSorted((left, right) => left.name.localeCompare(right.name))
@@ -313,6 +314,11 @@ export function joinLocalPluginDetail(params: {
           : {}),
       ...(params.plugin.packageName ? { packageName: params.plugin.packageName } : {}),
       topics: [],
+      ...(params.plugin.recommendedPrompts !== undefined
+        ? { recommendedPrompts: params.plugin.recommendedPrompts }
+        : inspection?.overview?.recommendedPrompts !== undefined
+          ? { recommendedPrompts: inspection.overview.recommendedPrompts }
+          : {}),
       ...(inspection?.overview?.readme ? { readme: inspection.overview.readme } : {}),
       ...(inspection?.overview?.repositoryUrl
         ? { repositoryUrl: inspection.overview.repositoryUrl }
@@ -367,6 +373,9 @@ export function joinClawHubPluginDetail(params: {
     ...(params.remote.uiCapabilities !== undefined
       ? { uiCapabilities: params.remote.uiCapabilities }
       : {}),
+    ...(params.remote.recommendedPrompts !== undefined
+      ? { recommendedPrompts: params.remote.recommendedPrompts }
+      : {}),
     configuration: params.remote.configFields,
     mcpServers: params.remote.mcpServers,
     ...(params.remote.mcpServerDetails ? { mcpServerDetails: params.remote.mcpServerDetails } : {}),
@@ -403,6 +412,7 @@ export function projectClawHubPluginInspection(params: {
     },
     origin: "global",
     entryConfig: runtimePlugin?.installed ? config.plugins?.entries?.[runtimePlugin.id] : undefined,
+    conversationAccessAccepted: "if-declared",
   });
   const catalog = joinClawHubPluginDetail({ remote, local });
   return {
@@ -426,6 +436,9 @@ export function projectClawHubPluginInspection(params: {
     declaredSurfaceStatus: remote.metadata.manifest === "available" ? "partial" : "unavailable",
     components: emptyInstalledPluginComponents(),
     overview: {
+      ...(remote.recommendedPrompts !== undefined
+        ? { recommendedPrompts: remote.recommendedPrompts }
+        : {}),
       ...(remote.metadata.manifest === "available"
         ? {
             capabilities: projectPluginOverviewCapabilities(

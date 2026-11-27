@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { prepareRetainedUpdateRuntimeCleanup } from "../commands/doctor-retained-runtime.js";
+import {
+  checkRetainedUpdateRuntimesPending,
+  prepareRetainedUpdateRuntimeCleanup,
+} from "../commands/doctor-retained-runtime.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
 import * as containerEnvironment from "../infra/container-environment.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
@@ -66,14 +69,45 @@ function projection(suffix: string, root = parent): string {
   return createDoctorRuntimeProjection(root, packageRoot, suffix);
 }
 
+const shippedRetainedRoot = () => path.join(parent, "pnpm/global/5/previous/node_modules/openclaw");
+
+/** A runtime as updaters through 2026.11.10 leave it: no owner.json, its file list and native gate. */
+function shippedRuntime(suffix: string): string {
+  const directory = path.join(parent, `openclaw-update-runtime-${suffix}`);
+  // The installation that retained it is gone: pnpm installs each update into a new directory.
+  const retainedRoot = shippedRetainedRoot();
+  const projected = projectedPath(directory, retainedRoot);
+  fs.mkdirSync(path.join(projected, "dist"), { recursive: true });
+  fs.writeFileSync(
+    path.join(projected, "package.json"),
+    '{"name":"openclaw","version":"2026.11.9"}',
+  );
+  fs.writeFileSync(path.join(projected, "dist/index.js"), "export {};");
+  fs.writeFileSync(
+    path.join(directory, "retained-files.json"),
+    JSON.stringify(["package.json", "dist/index.js"].map((file) => path.join(retainedRoot, file))),
+  );
+  fs.writeFileSync(path.join(directory, "update-native-gate.mjs"), "await main();");
+  return directory;
+}
+
+const doctorEnv = () => ({
+  HOME: parent,
+  OPENCLAW_HOME: parent,
+  OPENCLAW_STATE_DIR: path.join(parent, "state"),
+  OPENCLAW_UPDATE_IN_PROGRESS: "1",
+  TMPDIR: path.join(parent, "shell-tmp"),
+});
+
+/** Doctor's pending decision; it must not remove or report anything itself. */
+async function decidePending() {
+  const pending = await checkRetainedUpdateRuntimesPending(doctorEnv());
+  expect(mocks.census).not.toHaveBeenCalled();
+  return pending;
+}
+
 async function runDoctor(repair: boolean, maintenance = true): Promise<string> {
-  const env = {
-    HOME: parent,
-    OPENCLAW_HOME: parent,
-    OPENCLAW_STATE_DIR: path.join(parent, "state"),
-    OPENCLAW_UPDATE_IN_PROGRESS: "1",
-    TMPDIR: path.join(parent, "shell-tmp"),
-  };
+  const env = doctorEnv();
   const run = async () => (await prepareRetainedUpdateRuntimeCleanup(env))(repair);
   if (maintenance) {
     const lock = await acquireGatewayLock({
@@ -128,12 +162,14 @@ it.each(["checkout", "command TMPDIR", "managed TEMP", "service unavailable", "m
     fs.mkdirSync(path.dirname(retainedManifest), { recursive: true });
     fs.writeFileSync(manifest, JSON.stringify({ id: "discord" }));
     fs.linkSync(manifest, retainedManifest);
+    await expect(decidePending()).resolves.toBe("work");
     const preview = await runDoctor(false);
     expect(fs.existsSync(abandoned)).toBe(true);
     expect(fs.statSync(manifest).nlink).toBe(2);
     mocks.note.mockClear();
     const output = await runDoctor(true);
     expect(fs.existsSync(abandoned)).toBe(false);
+    await expect(checkRetainedUpdateRuntimesPending(doctorEnv())).resolves.toBe("none");
     expect(fs.statSync(manifest).nlink).toBe(1);
     expect(fs.readFileSync(manifest, "utf8")).toBe('{"id":"discord"}');
     expect(preview).toContain("openclaw doctor --fix");
@@ -174,9 +210,71 @@ it("Doctor scopes holders to each runtime and reports unknown custody once", asy
   expect(output).toContain(`Removed abandoned updater runtime: ${free}`);
 });
 
-it("Doctor reclaims an abandoned runtime despite unrelated helpers with unreadable cwd", async () => {
-  const held = projection("Held01");
-  const free = projection("Free01");
+it.each(["system helper", "foreign Node runtime"])(
+  "Doctor reclaims an abandoned runtime despite an unrelated %s with unreadable cwd",
+  async (helper) => {
+    const held = projection("Held01");
+    const free = projection("Free01");
+    const actual = await vi.importActual<typeof import("../infra/openclaw-process-census.js")>(
+      "../infra/openclaw-process-census.js",
+    );
+    mocks.census.mockImplementation(actual.inspectOtherOpenClawProcesses);
+    mockProcessPlatform("linux");
+    vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(false);
+    vi.spyOn(processGroups, "readProcessGroupMembers").mockImplementation(function* () {
+      for (const [pid, argv] of [
+        [process.pid, ["openclaw-doctor"]],
+        [
+          4242,
+          helper === "foreign Node runtime"
+            ? ["node", "/app/server/index.mjs"]
+            : ["/usr/bin/gpg-agent", "--supervised"],
+        ],
+        [4243, ["/usr/bin/fusermount3", "-o", "subtype=portal"]],
+        [4244, ["/bin/sleep", "600"]],
+      ] as const) {
+        yield {
+          pid,
+          pgid: process.pid,
+          state: "S",
+          command: {
+            ppid: 0,
+            argv: [...argv],
+            uid: pid === 4242 ? (process.getuid?.() === 0 ? 2000 : 0) : process.getuid?.(),
+          },
+        };
+      }
+    });
+    vi.spyOn(processArgv, "readProcessWorkingDirectories").mockReturnValue(
+      new Map([
+        [process.pid, parent],
+        [4244, held],
+      ]),
+    );
+    const readFile = fs.readFileSync;
+    vi.spyOn(fs, "readFileSync").mockImplementation((...args) => {
+      if (args[0] === "/proc/4242/environ") {
+        throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      }
+      return readFile(...args);
+    });
+    const output = await runDoctor(true);
+    expect(fs.existsSync(free)).toBe(false);
+    expect(fs.existsSync(held)).toBe(true);
+    expect(output).toContain(`Removed abandoned updater runtime: ${free}`);
+    expect(output).toContain("PIDs: 4244");
+    expect(output).not.toContain("4242");
+    expect(output).not.toContain("4243");
+  },
+);
+
+it.each([
+  ["Gateway", "current", ["openclaw-gateway"], true],
+  ["title-erased CLI that may be its updater", "current", ["openclaw"], false],
+  ["Gateway", "shipped", ["openclaw-gateway"], true],
+  ["title-erased CLI that may be its updater", "shipped", ["openclaw"], false],
+] as const)("Doctor with a live %s (%s runtime)", async (_name, kind, argv, reclaimed) => {
+  const runtime = kind === "current" ? projection("Gate01") : shippedRuntime("Gate02");
   const actual = await vi.importActual<typeof import("../infra/openclaw-process-census.js")>(
     "../infra/openclaw-process-census.js",
   );
@@ -184,28 +282,24 @@ it("Doctor reclaims an abandoned runtime despite unrelated helpers with unreadab
   mockProcessPlatform("linux");
   vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(false);
   vi.spyOn(processGroups, "readProcessGroupMembers").mockImplementation(function* () {
-    for (const [pid, argv] of [
+    for (const [pid, command] of [
       [process.pid, ["openclaw-doctor"]],
-      [4242, ["/usr/bin/gpg-agent", "--supervised"]],
-      [4243, ["/usr/bin/fusermount3", "-o", "subtype=portal"]],
-      [4244, ["/bin/sleep", "600"]],
+      [4245, argv],
     ] as const) {
-      yield { pid, pgid: process.pid, state: "S", command: { ppid: 0, argv: [...argv] } };
+      yield { pid, pgid: process.pid, state: "S", command: { ppid: 0, argv: [...command] } };
     }
   });
   vi.spyOn(processArgv, "readProcessWorkingDirectories").mockReturnValue(
     new Map([
       [process.pid, parent],
-      [4244, held],
+      [4245, "/"],
     ]),
   );
   const output = await runDoctor(true);
-  expect(fs.existsSync(free)).toBe(false);
-  expect(fs.existsSync(held)).toBe(true);
-  expect(output).toContain(`Removed abandoned updater runtime: ${free}`);
-  expect(output).toContain("PIDs: 4244");
-  expect(output).not.toContain("4242");
-  expect(output).not.toContain("4243");
+  expect(fs.existsSync(runtime)).toBe(!reclaimed);
+  expect(output).toContain(
+    reclaimed ? `Removed abandoned updater runtime: ${runtime}` : "PIDs: 4245",
+  );
 });
 
 it("Doctor reclaims an npm-prefix runtime and releases its activation journal hardlink", async () => {
@@ -263,11 +357,86 @@ it("Doctor preserves unmarked directories and symbolic-link targets", async () =
   fs.writeFileSync(path.join(foreign, "operator-data"), "preserve");
   const link = path.join(parent, "openclaw-update-runtime-Link01");
   fs.symlinkSync(packageRoot, link, process.platform === "win32" ? "junction" : "dir");
+  await expect(decidePending()).resolves.toBe("none");
   const output = await runDoctor(true);
   expect(fs.readFileSync(path.join(foreign, "operator-data"), "utf8")).toBe("preserve");
   expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
-  expect(output).toContain("no recognized runtime marker");
+  expect(output).toContain(`Runtime retained at ${foreign}: ${notAnUpdaterRuntime}`);
   expect(output).toContain("directory ownership is unknown");
+});
+
+const notAnUpdaterRuntime =
+  "it does not match a runtime an OpenClaw updater created, so it is kept";
+
+it.each([
+  ["the installation moved", () => {}],
+  [
+    "an operator file sits beside it",
+    (directory: string) => fs.writeFileSync(path.join(directory, "notes.txt"), "preserve"),
+  ],
+  [
+    "its file list names another package",
+    (directory: string) =>
+      fs.writeFileSync(
+        path.join(directory, "retained-files.json"),
+        JSON.stringify([
+          path.join(parent, "pnpm/global/5/previous/node_modules/other/package.json"),
+        ]),
+      ),
+  ],
+  [
+    "its file list leaves the tree",
+    (directory: string) =>
+      fs.writeFileSync(
+        path.join(directory, "retained-files.json"),
+        JSON.stringify([`${parent}/pnpm/../../package.json`]),
+      ),
+  ],
+  [
+    "its tree is a symbolic link",
+    (directory: string) => {
+      const outside = path.join(parent, "outside-tree");
+      fs.renameSync(path.join(directory, "tree"), outside);
+      fs.symlinkSync(
+        outside,
+        path.join(directory, "tree"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    },
+  ],
+])("Doctor and a shipped updater's runtime when %s", async (condition, alter) => {
+  const directory = shippedRuntime("Ship01");
+  alter(directory);
+  // Read through tree/, so a symbolic link's target counts too.
+  const retained = () =>
+    fs.readFileSync(
+      projectedPath(directory, path.join(shippedRetainedRoot(), "package.json")),
+      "utf8",
+    );
+  await expect(decidePending()).resolves.toBe(
+    condition === "the installation moved" ? "work" : "none",
+  );
+  const preview = await runDoctor(false);
+  expect(retained()).toContain("openclaw");
+  mocks.note.mockClear();
+  const output = await runDoctor(true);
+  if (condition === "the installation moved") {
+    expect(preview).toContain(`Runtime retained at ${directory}: run \`openclaw doctor --fix\``);
+    expect(output).toContain(`Removed abandoned updater runtime: ${directory}`);
+    expect(fs.existsSync(directory)).toBe(false);
+    return;
+  }
+  expect(output).toContain(`Runtime retained at ${directory}: ${notAnUpdaterRuntime}`);
+  expect(output).not.toContain("Removed abandoned updater runtime");
+  expect(fs.readdirSync(directory).toSorted()).toEqual(
+    [
+      "retained-files.json",
+      "tree",
+      "update-native-gate.mjs",
+      ...(condition === "an operator file sits beside it" ? ["notes.txt"] : []),
+    ].toSorted(),
+  );
+  expect(retained()).toContain("openclaw");
 });
 
 it("Doctor warns instead of resolving service TMP against the shell cwd", async () => {
@@ -339,7 +508,7 @@ it.each(["abandoned", "symlink", "bounded"])(
         ? `Removed abandoned updater runtime: ${directory}`
         : condition === "bounded"
           ? "exceeds the bounded lookup"
-          : "no recognized runtime marker",
+          : notAnUpdaterRuntime,
     );
   },
 );

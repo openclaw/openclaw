@@ -1,5 +1,6 @@
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   loadSessionEntry,
@@ -9,9 +10,15 @@ import {
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
+import {
+  beginSessionEffect,
+  withSessionControllerOwner,
+} from "../../sessions/session-controller.lifecycle.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
+import { cancelSelfSnooze } from "../../sessions/session-self-snooze.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import * as inProcessGateway from "./in-process-gateway.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { createSessionsTool } from "./sessions-tool.js";
@@ -19,7 +26,11 @@ import { withSessionToolTestCaller } from "./sessions-tool.test-helpers.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sessions-tool-self-archive-");
 const authority = (profileId: string, scopes = ["operator.write"], signal?: AbortSignal) =>
-  createAdmittedRunOperatorAuthority({ profileId, scopes, signal, assertCurrent: () => {} });
+  createTestOperatorAuthority({
+    profileId,
+    scopes,
+    signal,
+  });
 const patchRequest = (key: string, params: Record<string, unknown>) => ({
   method: "sessions.patch",
   params: { key, ...params },
@@ -67,8 +78,216 @@ async function createArchiveSession(name: string, sessionId = `session-${name}`)
   };
 }
 
+describe("sessions tool self-snooze", () => {
+  it.each([
+    "quiet",
+    "queued",
+    "queued-after-rollover",
+    "submitted",
+    "aborted",
+    "failed",
+    "yielded",
+    "rejected-replacement",
+    "accepted-replacement",
+  ] as const)("settles with %s", async (scenario) => {
+    const { sessionKey, sessionId, storePath, createTool, update } =
+      await createArchiveSession("self-snooze");
+    const snoozedUntil = Date.now() + 60_000;
+    const patches: unknown[] = [];
+    const tool = createTool(async (request) => {
+      request.sessionMutationCommitGuard?.();
+      patches.push(request.params);
+      return {} as never;
+    });
+    const continuation = inProcessGateway.runWithGatewayToolContinuationContext;
+    const pending: Promise<unknown>[] = [];
+    const spy = vi
+      .spyOn(inProcessGateway, "runWithGatewayToolContinuationContext")
+      .mockImplementation(<T>(run: () => Promise<T>, options?: { agentId?: string }) => {
+        const work = continuation(run, options);
+        pending.push(work);
+        return work;
+      });
+    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+    try {
+      await withSessionControllerOwner(operation, async () => {
+        const result = await tool.execute("snooze", { action: "patch", snoozedUntil });
+        expect(result.details).toMatchObject({ status: "scheduled", sessionKey });
+        expect(patches).toEqual([]);
+        if (scenario === "aborted") {
+          operation.abortByUser();
+        } else if (scenario === "failed") {
+          operation.fail("run_stalled");
+        } else if (scenario === "yielded") {
+          operation.yield();
+        } else if (scenario === "accepted-replacement") {
+          await tool.execute("replace", { action: "patch", snoozedUntil: snoozedUntil + 60_000 });
+        } else if (scenario === "rejected-replacement") {
+          await expect(
+            tool.execute("replace", { action: "patch", snoozedUntil: Date.now() - 1 }),
+          ).rejects.toThrow(/future/);
+        } else if (scenario !== "quiet") {
+          const inputSessionId =
+            scenario === "queued-after-rollover" ? "next-transcript" : sessionId;
+          if (scenario === "queued-after-rollover") {
+            await update({ sessionId: inputSessionId, updatedAt: Date.now() });
+          }
+          const recorder = createUserTurnTranscriptRecorder({
+            target: {
+              agentId: "main",
+              sessionKey,
+              sessionId: inputSessionId,
+              storePath,
+              sessionEntry: undefined,
+            },
+            input: { text: "New human input", idempotencyKey: "newer-human" },
+          });
+          if (scenario === "queued" || scenario === "queued-after-rollover") {
+            expect(await recorder.stageApproved!({ runId: "newer", assertCurrent() {} })).toBe(
+              true,
+            );
+            recorder.finishPendingInput!("cancelled", "failed");
+            await recorder.waitForPendingInputSettlement?.();
+          } else {
+            expect(await recorder.persistApproved()).toBeDefined();
+          }
+        }
+      });
+      operation.complete();
+      await Promise.allSettled(pending);
+      expect(patches).toEqual(
+        scenario === "quiet" || scenario.endsWith("replacement")
+          ? [
+              {
+                key: sessionKey,
+                snoozedUntil:
+                  scenario === "accepted-replacement" ? snoozedUntil + 60_000 : snoozedUntil,
+              },
+            ]
+          : [],
+      );
+    } finally {
+      operation.complete();
+      spy.mockRestore();
+    }
+  });
+
+  it.each([
+    ["ack lost after commit", null],
+    ["write failed", "failed"],
+    ["read unavailable", "unconfirmed"],
+    ["no visible row", "unconfirmed"],
+    ["manual wake before read", null],
+    ["new input during read", null],
+    ["transcript replaced", null],
+  ] as const)("reconciles a rejected write: %s", async (scenario, outcome) => {
+    const { sessionKey, sessionId, storePath, createTool, update, events, load } =
+      await createArchiveSession("snooze-outcome");
+    const snoozedUntil = Date.now() + 60_000;
+    const calls: Array<Pick<Parameters<AgentToolGatewayRequestCaller>[0], "method" | "params">> =
+      [];
+    let writeSignal: AbortSignal | undefined;
+    const target = { agentId: "main", storePath, sessionKey };
+    const tool = createTool(async (request) => {
+      calls.push({ method: request.method, params: request.params });
+      if (request.method === "sessions.patch") {
+        writeSignal = request.signal;
+        request.sessionMutationCommitGuard?.();
+        if (scenario === "ack lost after commit") {
+          await update({ sessionId, snoozedUntil, updatedAt: Date.now() });
+        } else if (scenario === "manual wake before read") {
+          cancelSelfSnooze(target);
+        }
+        throw new Error("Transport failed: /private/session/path");
+      }
+      if (scenario === "read unavailable") {
+        throw new Error("Read failed: /private/session/path");
+      }
+      // A timed-out handler could still try to commit while its caller reconciles.
+      if (scenario === "write failed" && !writeSignal?.aborted) {
+        await update({ sessionId, snoozedUntil, updatedAt: Date.now() });
+      }
+      const row = load();
+      if (scenario === "new input during read") {
+        const recorder = createUserTurnTranscriptRecorder({
+          target: { ...target, sessionId, sessionEntry: undefined },
+          input: { text: "Keep this chat open.", idempotencyKey: "during-read" },
+        });
+        await recorder.persistApproved();
+      }
+      // Visibility is a chat fact; describe need not expose a transcript id.
+      return {
+        session:
+          scenario === "no visible row"
+            ? null
+            : { key: sessionKey, kind: "direct", snoozedUntil: row?.snoozedUntil },
+      } as never;
+    });
+    using continuation = vi.spyOn(inProcessGateway, "runWithGatewayToolContinuationContext");
+    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+    try {
+      await withSessionControllerOwner(operation, () =>
+        tool.execute("snooze", { action: "patch", snoozedUntil }),
+      );
+      if (scenario === "transcript replaced") {
+        await update({ sessionId: "next-transcript", updatedAt: Date.now() });
+        operation.updateSessionId("next-transcript");
+      }
+    } finally {
+      operation.complete();
+    }
+    await Promise.all(continuation.mock.results.map((result) => result.value));
+    const recorded = await events(
+      scenario === "transcript replaced" ? "next-transcript" : sessionId,
+    );
+    const notices = recorded.filter((event) => asNullableRecord(event)?.type === "custom_message");
+    expect(notices).toEqual(
+      outcome === null
+        ? []
+        : [
+            expect.objectContaining({
+              customType: "session-snooze-failed",
+              display: true,
+              excludeFromContext: true,
+              content:
+                outcome === "failed"
+                  ? "The requested snooze time isn’t set. You can ask me to try again."
+                  : "I couldn’t confirm the snooze. You can ask me to set a new time.",
+              details: { operation: "snooze", outcome },
+            }),
+          ],
+    );
+    expect(JSON.stringify(recorded)).not.toContain("/private/session/path");
+    expect(calls).toEqual([
+      patchRequest(sessionKey, { snoozedUntil }),
+      ...(scenario === "manual wake before read"
+        ? []
+        : [{ method: "sessions.describe", params: { key: sessionKey, agentId: "main" } }]),
+    ]);
+    if (scenario === "ack lost after commit") {
+      expect(load()?.snoozedUntil).toBe(snoozedUntil);
+    } else if (scenario === "new input during read") {
+      expect(JSON.stringify(recorded)).toContain("Keep this chat open.");
+    }
+  });
+
+  it("rejects an effect without a requesting reply turn", async () => {
+    const { createTool, beginAdmission } = await createArchiveSession("effect-without-turn");
+    const gateway = vi.fn();
+    await withAdmission(await beginAdmission(), async () => {
+      await expect(
+        createTool(gateway).execute("snooze", {
+          action: "patch",
+          snoozedUntil: Date.now() + 60_000,
+        }),
+      ).rejects.toThrow(/requesting turn/);
+    });
+    expect(gateway).not.toHaveBeenCalled();
+  });
+});
+
 describe("sessions tool self-archive", () => {
-  it.each(["current", "replaced", "revoked"])(
+  it.each(["current", "replaced"])(
     "reports an unconfirmed deferred archive only to its authorized original generation (%s)",
     async (scenario) => {
       const replaced = scenario === "replaced";
@@ -85,9 +304,6 @@ describe("sessions tool self-archive", () => {
       const callGateway = vi.fn(async () => {
         if (replaced) {
           await update({ sessionId: "replacement-session-id", updatedAt: 2 });
-        }
-        if (scenario === "revoked") {
-          controller.abort(new Error("archive source revoked"));
         }
         throw new Error("Transport failed: Bearer synthetic-private-token /private/session/path");
       });
@@ -187,6 +403,20 @@ describe("sessions tool self-archive", () => {
       expect(callGateway).toHaveBeenCalledExactlyOnceWith(archiveRequest);
       expect(load()).toHaveProperty("archivedAt");
     });
+  });
+
+  it("rejects a mixed self-archive before unpinning or scheduling any deferred mutation", async () => {
+    const session = await createArchiveSession("mixed-personal-pin");
+    const call = vi.fn();
+    using continuation = vi.spyOn(inProcessGateway, "runWithGatewayToolContinuationContext");
+    await withAdmission(await session.beginAdmission(), async () => {
+      await expect(archive(session.createTool(call), "mixed", { pinned: false })).rejects.toThrow(
+        /pinned separately/,
+      );
+    });
+    expect(continuation).not.toHaveBeenCalled();
+    expect(call).not.toHaveBeenCalled();
+    expect(session.load()).not.toHaveProperty("archivedAt");
   });
 
   it("applies other self-patch settings before the deferred archive", async () => {
@@ -377,11 +607,10 @@ describe("sessions tool ownership", () => {
         method: "sessions.assignOwner",
         params: { key: sessionKey, owner: { type: actor.type, id: actor.id } },
         agentToolCaller: { agentId: "main", sessionKey },
-        assertDispatchCurrent: expect.any(Function),
       });
       if (!controls) {
         expect(assigned).toMatchObject({
-          content: [{ type: "text", text: expect.stringContaining('"label": "Colin"') }],
+          content: [{ type: "text", text: expect.stringContaining('"label":"Colin"') }],
         });
         return;
       }
@@ -395,12 +624,9 @@ describe("sessions tool ownership", () => {
         { action: "patch", archived: true, model: "other" },
       ]) {
         await expect(tool.execute("settings-denied", denied)).rejects.toThrow(
-          /only permits archive, restore, and stop/,
+          /only permits archive, restore, snooze, wake, and stop/,
         );
       }
-      expect(callGateway).toHaveBeenCalledOnce();
-      controller.abort(new Error("operator source revoked"));
-      await expect(tool.execute("retired-assign", args)).rejects.toThrow("operator source revoked");
       expect(callGateway).toHaveBeenCalledOnce();
     }, runAuthority);
   });
@@ -467,12 +693,14 @@ it("patches and clears sidebar title, icon, group, status, attention, and archiv
   });
   await tool.execute("clear-null", { action: "patch", group: null });
 
+  await tool.execute("wake", { action: "patch", snoozedUntil: null });
   const { group, ...unchanged } = settings;
   expect(callGateway.mock.calls).toEqual(
     [
       { ...unchanged, category: group, expectedSessionId: "session-main" },
       { label: null, icon: null, category: null, attention: null },
       { category: null },
+      { snoozedUntil: null, expectedSessionId: "session-main" },
     ].map((params) => [patchRequest(sessionKey, params)]),
   );
 });

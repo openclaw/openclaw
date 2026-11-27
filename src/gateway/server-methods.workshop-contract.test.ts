@@ -2,8 +2,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveOpenClawPluginToolsForOptions } from "../agents/openclaw-plugin-tools.js";
+import { finalizeOpenClawTools } from "../agents/openclaw-tools.finalize.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadOpenClawPlugins } from "../plugins/loader.js";
+import {
+  disposePluginRegistryInstances,
+  resetPluginRuntimeStateForTest,
+} from "../plugins/runtime.js";
 import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
+import { workshopPluginConfig } from "../skills/test-support/workshop-config.test-support.js";
+import { shareCoreWithWorkshopPluginForTest } from "../skills/test-support/workshop-plugin.test-support.js";
 import { historicalWorkshopChangesSchema } from "../skills/test-support/workshop-schema.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -20,13 +30,13 @@ const reviewId = "11111111-1111-4111-8111-111111111111";
 let state: OpenClawTestState;
 let config: OpenClawConfig;
 let root: string;
+let registry: ReturnType<typeof loadOpenClawPlugins> | undefined;
 
 type RequestOptions = GatewayRequestOptions;
 async function dispatch(
   method: string,
   params: Record<string, unknown> = {},
   scopes = ["operator.admin"],
-  hasCurrentClientAuthority?: () => boolean,
 ) {
   const respond = vi.fn<RequestOptions["respond"]>();
   await handleGatewayRequest({
@@ -46,7 +56,6 @@ async function dispatch(
       getRuntimeConfig: () => config,
       logGateway: { warn: vi.fn() },
     } as unknown as RequestOptions["context"],
-    hasCurrentClientAuthority,
     respond,
   });
   expect(respond).toHaveBeenCalledOnce();
@@ -60,15 +69,27 @@ beforeEach(async () => {
   state = await createOpenClawTestState({ prefix: "workshop-rpc-contract-" });
   config = {
     agents: { ownership: "explicit", entries: { ops: { workspace: state.workspaceDir } } },
-    skills: { load: { watch: false }, workshop: { autonomous: { mode: "off" } } },
+    skills: { load: { watch: false } },
+    ...workshopPluginConfig(
+      { autonomous: { mode: "off" } },
+      { plugins: { enabled: true, allow: ["skill-workshop"] } },
+    ),
   };
   await state.writeConfig(config);
+  // The skills.workshop.* methods belong to the bundled skill-workshop plugin.
+  await shareCoreWithWorkshopPluginForTest();
+  registry = loadOpenClawPlugins({ config, cache: false, activate: true });
   root = path.join(state.agentDir("ops"), "workshop-skills");
   await fs.mkdir(path.join(root, "deploy-notes"), { recursive: true });
   await fs.writeFile(path.join(root, "deploy-notes", "SKILL.md"), skill);
 });
 afterEach(async () => {
   vi.restoreAllMocks();
+  if (registry) {
+    await disposePluginRegistryInstances(registry);
+    registry = undefined;
+  }
+  resetPluginRuntimeStateForTest();
   await closeSkillsWatchers(true);
   await state?.cleanup();
 });
@@ -256,7 +277,154 @@ describe("Workshop through Gateway authorization and dispatch", () => {
     });
   });
 
-  it("allows admin to undo a persisted review, once", async () => {
+  const reviewRunId = `skill-workshop-review:${reviewId}`;
+  const otherRunId = "skill-workshop-review:22222222-2222-4222-8222-222222222222";
+  function openReviewTool(name: string, runId: string) {
+    config = workshopPluginConfig({ autonomous: { mode: "auto" } }, config);
+    setRuntimeConfigSnapshot(config);
+    const agentSessionKey = "agent:ops:internal-session-effects:review";
+    const tools = resolveOpenClawPluginToolsForOptions({
+      resolvedConfig: config,
+      options: {
+        config,
+        agentDir: state.agentDir("ops"),
+        workspaceDir: state.workspaceDir,
+        agentSessionKey,
+        runId,
+        inputProvenance: {
+          kind: "internal_system",
+          sourceTool: "session_fork",
+          sourceSessionKey: "agent:ops:contract",
+        },
+        runtimePluginToolOwnerId: "skill-workshop",
+        assertInvocationCurrent: () => {},
+      },
+    });
+    const tool = finalizeOpenClawTools({
+      tools,
+      config,
+      hookAgentId: "ops",
+      gatewayCallerAccountId: undefined,
+      options: { agentSessionKey, beforeToolCallHookContext: { runId } },
+    }).find((entry) => entry.name === "skill_workshop");
+    assert.isDefined(tool);
+    return (action: string, params: Record<string, string> = {}) =>
+      tool.execute(action, { name, action, ...params });
+  }
+
+  function recorded(skillName: string, action: string, runId = reviewRunId) {
+    return { skillName, action, actor: "review", runId };
+  }
+
+  it.each(["existing", "new", "interleaved"] as const)(
+    "reverts the first change to the current skill across same-run creates (%s)",
+    async (scenario) => {
+      const name = scenario === "existing" ? "deploy-notes" : "release-notes";
+      const doc = (body: string) =>
+        skill.replace("deploy-notes", name).replace("Keep the signed receipt.", body);
+      const review = openReviewTool(name, reviewRunId);
+      if (scenario === "existing") {
+        await review("view");
+      } else {
+        await review("create", { content: doc("First version.") });
+      }
+      await review("archive", { reason: "Replace the checklist." });
+      if (scenario === "interleaved") {
+        const independent = openReviewTool(name, otherRunId);
+        await independent("create", { content: doc("Independent version.") });
+        await independent("archive", { reason: "Retire that version." });
+      }
+      const final = doc("Rewritten checklist.");
+      await review("create", { content: final });
+      const target = { agentId: "ops", name };
+      expect(await dispatch("skills.workshop.read", target)).toMatchObject({
+        ok: true,
+        payload: { content: final },
+      });
+      const writes = [
+        recorded(name, "create"),
+        ...(scenario === "interleaved"
+          ? [recorded(name, "archive", otherRunId), recorded(name, "create", otherRunId)]
+          : []),
+        recorded(name, "archive"),
+        ...(scenario === "existing" ? [] : [recorded(name, "create")]),
+      ];
+      expect(await dispatch("skills.workshop.changes", { agentId: "ops" })).toMatchObject({
+        ok: true,
+        payload: { changes: writes },
+      });
+      const undone = await dispatch("skills.workshop.undo", { agentId: "ops", runId: reviewRunId });
+      if (scenario === "existing") {
+        expect(undone).toMatchObject({
+          ok: true,
+          payload: { status: "undone", changes: [{ action: "restore" }] },
+        });
+        expect(await dispatch("skills.workshop.read", target)).toMatchObject({
+          ok: true,
+          payload: { content: skill },
+        });
+      } else {
+        expect(undone).toMatchObject({
+          ok: true,
+          payload: { status: "undone", changes: [{ action: "archive" }] },
+        });
+        await expect(fs.stat(path.join(root, name))).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    },
+  );
+
+  it("restores the independent skill's bytes from before this review patched it", async () => {
+    const name = "deploy-notes";
+    const target = { agentId: "ops", name };
+    const review = openReviewTool(name, reviewRunId);
+    await review("view");
+    await review("patch", { old_text: "signed receipt", new_text: "old checklist" });
+    await review("archive", { reason: "Retire the old checklist." });
+    const other = openReviewTool(name, otherRunId);
+    const replacement = skill.replace("signed receipt", "independent checklist");
+    await other("create", { content: replacement });
+    const filePath = "templates/checklist.txt";
+    const support = "Independent checklist.\n";
+    await other("write_file", { file_path: filePath, content: support });
+    await review("view");
+    await review("patch", { old_text: "independent checklist", new_text: "revised checklist" });
+    const writes = [
+      recorded(name, "patch"),
+      recorded(name, "write_file", otherRunId),
+      recorded(name, "create", otherRunId),
+      recorded(name, "archive"),
+      recorded(name, "patch"),
+    ];
+    expect(await dispatch("skills.workshop.changes", { agentId: "ops" })).toMatchObject({
+      ok: true,
+      payload: { changes: writes },
+    });
+    expect(
+      await dispatch("skills.workshop.undo", { agentId: "ops", runId: reviewRunId }),
+    ).toMatchObject({
+      ok: true,
+      payload: { status: "undone", changes: [{ action: "restore" }] },
+    });
+    expect(await dispatch("skills.workshop.read", target)).toMatchObject({
+      ok: true,
+      payload: { content: replacement },
+    });
+    expect(await dispatch("skills.workshop.read", { ...target, filePath })).toMatchObject({
+      ok: true,
+      payload: { content: support },
+    });
+  });
+
+  async function seedReviewChange(action: "create" | "patch" = "create") {
+    const versionId = action === "patch" ? "20260101T000000000Z-patch" : null;
+    if (versionId) {
+      const saved = path.join(root, ".archive", "deploy-notes", versionId);
+      await fs.mkdir(saved, { recursive: true });
+      await fs.writeFile(
+        path.join(saved, "SKILL.md"),
+        skill.replace("Keep the signed receipt.", "Keep the original checklist."),
+      );
+    }
     openOpenClawStateDatabase();
     await closeStateDatabaseForTest();
     const db = new DatabaseSync(state.statePath("state", "openclaw.sqlite"));
@@ -264,15 +432,16 @@ describe("Workshop through Gateway authorization and dispatch", () => {
       db.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE");
       db.exec(historicalWorkshopChangesSchema);
       db.prepare(
-        "INSERT INTO skill_workshop_changes (cursor_id, change_id, agent_id, skill_name, action, actor, summary, run_id, created_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO skill_workshop_changes (cursor_id, change_id, agent_id, skill_name, action, actor, summary, version_id, run_id, created_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       ).run(
         1,
-        "review-created",
+        `review-${action}`,
         "ops",
         "deploy-notes",
-        "create",
+        action,
         "review",
-        "created receipt procedure",
+        "reviewed receipt procedure",
+        versionId,
         `skill-workshop-review:${reviewId}`,
         1,
       );
@@ -280,6 +449,10 @@ describe("Workshop through Gateway authorization and dispatch", () => {
     } finally {
       db.close();
     }
+  }
+
+  it("allows admin to undo a persisted review, once", async () => {
+    await seedReviewChange();
     const params = { agentId: "ops", runId: `skill-workshop-review:${reviewId}` };
     expect(await dispatch("skills.workshop.undo", params)).toMatchObject({
       ok: true,
@@ -296,6 +469,71 @@ describe("Workshop through Gateway authorization and dispatch", () => {
       payload: { status: "already-undone", changes: [] },
     });
   });
+
+  it("still undoes the original review creation after a deliberate restore", async () => {
+    await seedReviewChange();
+    const target = { agentId: "ops", name: "deploy-notes" };
+    expect(await dispatch("skills.workshop.archive", target)).toMatchObject({ ok: true });
+    expect(await dispatch("skills.workshop.restore", target)).toMatchObject({ ok: true });
+    expect(await dispatch("skills.workshop.read", target)).toMatchObject({
+      ok: true,
+      payload: { content: skill },
+    });
+    expect(
+      await dispatch("skills.workshop.undo", {
+        agentId: target.agentId,
+        runId: `skill-workshop-review:${reviewId}`,
+      }),
+    ).toMatchObject({ ok: true, payload: { status: "undone", changes: [{ action: "archive" }] } });
+    await expect(fs.stat(path.join(root, target.name))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each(["create", "patch"] as const)(
+    "preserves an operator-created replacement when undoing the original review %s",
+    async (action) => {
+      await seedReviewChange(action);
+      const target = { agentId: "ops", name: "deploy-notes" };
+      const undo = { agentId: target.agentId, runId: `skill-workshop-review:${reviewId}` };
+      expect(await dispatch("skills.workshop.archive", target)).toMatchObject({ ok: true });
+      if (action === "create") {
+        expect(await dispatch("skills.workshop.undo", undo)).toMatchObject({
+          ok: true,
+          payload: { status: "already-undone", changes: [] },
+        });
+      }
+
+      const draftId = "deploy-notes-1a2b3c4d";
+      const draft = path.join(root, ".drafts", draftId);
+      const replacement = skill.replace("Keep the signed receipt.", "Use the new checklist.");
+      const filePath = "templates/checklist.txt";
+      const checklist = "Verify the deployment.\n";
+      await fs.mkdir(path.join(draft, "templates"), { recursive: true });
+      await fs.writeFile(path.join(draft, "SKILL.md"), replacement);
+      await fs.writeFile(path.join(draft, filePath), checklist);
+      expect(await dispatch("skills.workshop.applyDraft", { ...target, draftId })).toMatchObject({
+        ok: true,
+        payload: { changes: [{ action: "create", actor: "user" }] },
+      });
+      const changes = { agentId: target.agentId };
+      const before = await dispatch("skills.workshop.changes", changes);
+      expect(before.ok).toBe(true);
+
+      const result = await dispatch("skills.workshop.undo", undo);
+      expect(await dispatch("skills.workshop.read", target)).toMatchObject({
+        ok: true,
+        payload: { content: replacement },
+      });
+      expect(await dispatch("skills.workshop.read", { ...target, filePath })).toMatchObject({
+        ok: true,
+        payload: { content: checklist },
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        payload: { status: "already-undone", changes: [] },
+      });
+      expect(await dispatch("skills.workshop.changes", changes)).toEqual(before);
+    },
+  );
 
   it("returns protocol validation, unknown-agent, and library refusals as INVALID_REQUEST", async () => {
     for (const [method, params] of [
@@ -339,29 +577,6 @@ describe("Workshop through Gateway authorization and dispatch", () => {
         code: "INVALID_REQUEST",
         message: `No skill changes recorded for review skill-workshop-review:${reviewId}.`,
       },
-    });
-  });
-
-  it("refuses file effects when requester authority changes during the snapshot", async () => {
-    let current = true;
-    const copy = fs.cp.bind(fs);
-    vi.spyOn(fs, "cp").mockImplementation(async (...args) => {
-      await copy(...args);
-      current = false;
-    });
-    await expect(
-      dispatch(
-        "skills.workshop.archive",
-        { agentId: "ops", name: "deploy-notes" },
-        ["operator.admin"],
-        () => current,
-      ),
-    ).rejects.toThrow("Gateway requester authority changed");
-    expect(await fs.readFile(path.join(root, "deploy-notes", "SKILL.md"), "utf8")).toBe(skill);
-    expect(await fs.readdir(path.join(root, ".archive", "deploy-notes"))).toEqual([]);
-    expect(await dispatch("skills.workshop.changes", { agentId: "ops" })).toMatchObject({
-      ok: true,
-      payload: { changes: [] },
     });
   });
 

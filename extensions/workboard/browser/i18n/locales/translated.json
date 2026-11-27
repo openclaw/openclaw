@@ -353,7 +353,8 @@
           "cyan": "青色"
         },
         "partial": "已加载 {count} 个会话，共 {total} 个。智能体筛选仅适用于已加载的会话。",
-        "loadMore": "加载更多会话"
+        "loadMore": "加载更多会话",
+        "loadedCount": "显示 {count} 个会话，共 {total} 个"
       },
       "boardName": "名称",
       "boardAppearance": "看板外观",
@@ -466,7 +467,16 @@
       "loadMoreCards": "加载更多卡片",
       "automationEvent": "事件：{source}",
       "automationWaitingForEvent": "等待事件",
-      "dependencyStatusNotLoaded": "未加载"
+      "dependencyStatusNotLoaded": "未加载",
+      "automationDisabled": "已禁用",
+      "dispatchFirstFailure": "首次启动失败：{message}",
+      "findLabel": "查找或添加标签",
+      "createLabel": "添加“{label}”",
+      "noMatchingLabels": "没有匹配的标签。",
+      "noKnownLabels": "已加载的卡片中还没有标签。",
+      "labelLengthLimit": "标签最多可包含 40 个字符。",
+      "bulkLabelLimit": "这会使某张所选卡片的标签超过 12 个。请减少选择的标签。",
+      "labelLimit": "已选择 12 个标签。请先移除一个，再添加其他标签。"
     }
   },
   "zh-TW": {
@@ -823,7 +833,8 @@
           "cyan": "青色"
         },
         "partial": "已載入 {count} 個工作階段，共 {total} 個。代理程式篩選僅適用於已載入的工作階段。",
-        "loadMore": "載入更多工作階段"
+        "loadMore": "載入更多工作階段",
+        "loadedCount": "顯示 {count} 個工作階段，共 {total} 個"
       },
       "boardName": "名稱",
       "boardAppearance": "看板外觀",
@@ -936,7 +947,16 @@
       "loadMoreCards": "載入更多卡片",
       "automationEvent": "事件：{source}",
       "automationWaitingForEvent": "等待事件",
-      "dependencyStatusNotLoaded": "未載入"
+      "dependencyStatusNotLoaded": "未載入",
+      "automationDisabled": "已停用",
+      "dispatchFirstFailure": "首次啟動失敗：{message}",
+      "findLabel": "尋找或新增標籤",
+      "createLabel": "新增「{label}」",
+      "noMatchingLabels": "沒有符合的標籤。",
+      "noKnownLabels": "已載入的卡片中尚無標籤。",
+      "labelLengthLimit": "標籤最多可包含 40 個字元。",
+      "bulkLabelLimit": "這會使所選卡片的標籤超過 12 個。請減少選取的標籤。",
+      "labelLimit": "已選取 12 個標籤。請先移除一個，再新增其他標籤。"
     }
   },
   "pt-BR": {
@@ -1293,7 +1313,8 @@
           "cyan": "Ciano"
         },
         "partial": "{count} de {total} sessões carregadas. O filtro de agente se aplica às sessões carregadas.",
-        "loadMore": "Carregar mais sessões"
+        "loadMore": "Carregar mais sessões",
+        "loadedCount": "Exibindo {count} de {total} sessões"
       },
       "boardName": "Nome",
       "boardAppearance": "Aparência do quadro",
@@ -1406,7 +1427,16 @@
       "loadMoreCards": "Carregar mais cartões",
       "automationEvent": "Evento: {source}",
       "automationWaitingForEvent": "Aguardando evento",
-      "dependencyStatusNotLoaded": "Não carregado"
+      "dependencyStatusNotLoaded": "Não carregado",
+      "automationDisabled": "Desativado",
+      "dispatchFirstFailure": "Primeira falha na inicialização: {message}",
+      "findLabel": "Busque ou adicione uma etiqueta",
+      "createLabel": "Adicionar “{label}”",
+      "noMatchingLabels": "Nenhuma etiqueta correspondente.",
+      "noKnownLabels": "Ainda não há etiquetas nos cartões carregados.",
+      "labelLengthLimit": "As etiquetas podem ter até 40 caracteres.",
+      "bulkLabelLimit": "Isso faria com que um cartão selecionado tivesse mais de 12 etiquetas. Escolha menos etiquetas.",
+      "labelLimit": "12 etiquetas selecionadas. Remova uma para adicionar outra."
     }
   },
   "de": {
@@ -1763,7 +1793,8 @@
           "cyan": "Cyan"
         },
         "partial": "{count} von {total} Sitzungen geladen. Der Agentenfilter gilt für geladene Sitzungen.",
-        "loadMore": "Weitere Sitzungen laden"
+        "loadMore": "Weitere Sitzungen laden",
+        "loadedCount": "{count} von {total} Sitzungen werden angezeigt"
       },
       "boardName": "Name",
       "boardAppearance": "Board-Darstellung",
@@ -1876,7 +1907,16 @@
       "loadMoreCards": "Weitere Karten laden",
       "automationEvent": "Ereignis: {source}",
       "automationWaitingForEvent": "Warten auf Ereignis",
-      "dependencyStatusNotLoaded": "Nicht geladen"
+      "dependencyStatusNotLoaded": "Nicht geladen",
+      "automationDisabled": "Deaktiviert",
+      "dispatchFirstFailure": "Erster Startfehler: {message}",
+      "findLabel": "Label suchen oder hinzufügen",
+      "createLabel": "„{label}“ hinzufügen",
+      "noMatchingLabels": "Keine passenden Labels.",
+      "noKnownLabels": "Noch keine Labels in den geladenen Karten.",
+      "labelLengthLimit": "Labels dürfen bis zu 40 Zeichen lang sein.",
+      "bulkLabelLimit": "Dadurch würde eine ausgewählte Karte mehr als 12 Labels erhalten. Wählen Sie weniger Labels aus.",
+      "labelLimit": "12 Labels ausgewählt. Entfernen Sie eines, um ein weiteres hinzuzufügen."
     }
   },
   "es": {
@@ -2233,7 +2273,8 @@
           "cyan": "Cian"
         },
         "partial": "{count} de {total} sesiones cargadas. El filtro de agentes se aplica a las sesiones cargadas.",
-        "loadMore": "Cargar más sesiones"
+        "loadMore": "Cargar más sesiones",
+        "loadedCount": "Mostrando {count} de {total} sesiones"
       },
       "boardName": "Nombre",
       "boardAppearance": "Apariencia del tablero",
@@ -2346,7 +2387,16 @@
       "loadMoreCards": "Cargar más tarjetas",
       "automationEvent": "Evento: {source}",
       "automationWaitingForEvent": "Esperando un evento",
-      "dependencyStatusNotLoaded": "Sin cargar"
+      "dependencyStatusNotLoaded": "Sin cargar",
+      "automationDisabled": "Desactivado",
+      "dispatchFirstFailure": "Primer fallo de inicio: {message}",
+      "findLabel": "Buscar o añadir una etiqueta",
+      "createLabel": "Añadir «{label}»",
+      "noMatchingLabels": "No hay etiquetas que coincidan.",
+      "noKnownLabels": "Aún no hay etiquetas en las tarjetas cargadas.",
+      "labelLengthLimit": "Las etiquetas pueden tener hasta 40 caracteres.",
+      "bulkLabelLimit": "Esto haría que una tarjeta seleccionada tuviera más de 12 etiquetas. Elige menos etiquetas.",
+      "labelLimit": "12 etiquetas seleccionadas. Elimina una para añadir otra."
     }
   },
   "ja-JP": {
@@ -2703,7 +2753,8 @@
           "cyan": "シアン"
         },
         "partial": "{total}件中{count}件のセッションを読み込み済みです。エージェントフィルターは読み込み済みのセッションに適用されます。",
-        "loadMore": "セッションをさらに読み込む"
+        "loadMore": "セッションをさらに読み込む",
+        "loadedCount": "{total}件中{count}件のセッションを表示中"
       },
       "boardName": "名前",
       "boardAppearance": "ボードの外観",
@@ -2816,7 +2867,16 @@
       "loadMoreCards": "カードをさらに読み込む",
       "automationEvent": "イベント：{source}",
       "automationWaitingForEvent": "イベント待機中",
-      "dependencyStatusNotLoaded": "未読み込み"
+      "dependencyStatusNotLoaded": "未読み込み",
+      "automationDisabled": "無効",
+      "dispatchFirstFailure": "初回起動の失敗: {message}",
+      "findLabel": "ラベルを検索または追加",
+      "createLabel": "「{label}」を追加",
+      "noMatchingLabels": "一致するラベルがありません。",
+      "noKnownLabels": "読み込まれたカードにはまだラベルがありません。",
+      "labelLengthLimit": "ラベルは40文字まで入力できます。",
+      "bulkLabelLimit": "この操作を行うと、選択したカードのラベルが12個を超えます。選択するラベルを減らしてください。",
+      "labelLimit": "ラベルが12個選択されています。別のラベルを追加するには、1個削除してください。"
     }
   },
   "ko": {
@@ -3173,7 +3233,8 @@
           "cyan": "청록색"
         },
         "partial": "세션 {total}개 중 {count}개를 불러왔습니다. 에이전트 필터는 불러온 세션에 적용됩니다.",
-        "loadMore": "세션 더 불러오기"
+        "loadMore": "세션 더 불러오기",
+        "loadedCount": "전체 세션 {total}개 중 {count}개 표시 중"
       },
       "boardName": "이름",
       "boardAppearance": "보드 모양",
@@ -3286,7 +3347,16 @@
       "loadMoreCards": "카드 더 불러오기",
       "automationEvent": "이벤트: {source}",
       "automationWaitingForEvent": "이벤트 대기 중",
-      "dependencyStatusNotLoaded": "불러오지 않음"
+      "dependencyStatusNotLoaded": "불러오지 않음",
+      "automationDisabled": "비활성화됨",
+      "dispatchFirstFailure": "첫 시작 실패: {message}",
+      "findLabel": "라벨 검색 또는 추가",
+      "createLabel": "“{label}” 추가",
+      "noMatchingLabels": "일치하는 라벨이 없습니다.",
+      "noKnownLabels": "불러온 카드에 아직 라벨이 없습니다.",
+      "labelLengthLimit": "라벨은 최대 40자까지 입력할 수 있습니다.",
+      "bulkLabelLimit": "선택한 카드의 라벨이 12개를 초과하게 됩니다. 라벨을 더 적게 선택하세요.",
+      "labelLimit": "라벨 12개를 선택했습니다. 다른 라벨을 추가하려면 하나를 제거하세요."
     }
   },
   "fr": {
@@ -3643,7 +3713,8 @@
           "cyan": "Cyan"
         },
         "partial": "{count} sessions chargées sur {total}. Le filtre par agent s’applique aux sessions chargées.",
-        "loadMore": "Charger plus de sessions"
+        "loadMore": "Charger plus de sessions",
+        "loadedCount": "Affichage de {count} sessions sur {total}"
       },
       "boardName": "Nom",
       "boardAppearance": "Apparence du tableau",
@@ -3756,7 +3827,16 @@
       "loadMoreCards": "Charger plus de cartes",
       "automationEvent": "Événement : {source}",
       "automationWaitingForEvent": "En attente d’un événement",
-      "dependencyStatusNotLoaded": "Non chargé"
+      "dependencyStatusNotLoaded": "Non chargé",
+      "automationDisabled": "Désactivé",
+      "dispatchFirstFailure": "Premier échec de démarrage : {message}",
+      "findLabel": "Rechercher ou ajouter une étiquette",
+      "createLabel": "Ajouter « {label} »",
+      "noMatchingLabels": "Aucune étiquette correspondante.",
+      "noKnownLabels": "Aucune étiquette dans les cartes chargées pour le moment.",
+      "labelLengthLimit": "Les étiquettes peuvent contenir jusqu’à 40 caractères.",
+      "bulkLabelLimit": "Cela attribuerait plus de 12 étiquettes à une carte sélectionnée. Choisissez moins d’étiquettes.",
+      "labelLimit": "12 étiquettes sélectionnées. Retirez-en une pour en ajouter une autre."
     }
   },
   "hi": {
@@ -4113,7 +4193,8 @@
           "cyan": "सियान"
         },
         "partial": "{total} में से {count} सत्र लोड हो गए हैं। एजेंट फ़िल्टर लोड किए गए सत्रों पर लागू होता है।",
-        "loadMore": "और सत्र लोड करें"
+        "loadMore": "और सत्र लोड करें",
+        "loadedCount": "{total} में से {count} सत्र दिखाए जा रहे हैं"
       },
       "boardName": "नाम",
       "boardAppearance": "बोर्ड का स्वरूप",
@@ -4226,7 +4307,16 @@
       "loadMoreCards": "और कार्ड लोड करें",
       "automationEvent": "घटना: {source}",
       "automationWaitingForEvent": "घटना की प्रतीक्षा है",
-      "dependencyStatusNotLoaded": "लोड नहीं हुआ"
+      "dependencyStatusNotLoaded": "लोड नहीं हुआ",
+      "automationDisabled": "अक्षम",
+      "dispatchFirstFailure": "शुरू करने का पहला प्रयास विफल: {message}",
+      "findLabel": "लेबल खोजें या जोड़ें",
+      "createLabel": "“{label}” जोड़ें",
+      "noMatchingLabels": "कोई मेल खाने वाला लेबल नहीं मिला।",
+      "noKnownLabels": "लोड किए गए कार्ड में अभी कोई लेबल नहीं है।",
+      "labelLengthLimit": "लेबल में अधिकतम 40 वर्ण हो सकते हैं।",
+      "bulkLabelLimit": "इससे किसी चुने हुए कार्ड में 12 से ज़्यादा लेबल हो जाएंगे। कम लेबल चुनें।",
+      "labelLimit": "12 लेबल चुने गए हैं। दूसरा जोड़ने के लिए एक हटाएं।"
     }
   },
   "ar": {
@@ -4583,7 +4673,8 @@
           "cyan": "سماوي"
         },
         "partial": "تم تحميل {count} من أصل {total} جلسة. ينطبق عامل تصفية الوكيل على الجلسات المحمّلة.",
-        "loadMore": "تحميل المزيد من الجلسات"
+        "loadMore": "تحميل المزيد من الجلسات",
+        "loadedCount": "عرض {count} من أصل {total} جلسة"
       },
       "boardName": "الاسم",
       "boardAppearance": "مظهر اللوحة",
@@ -4696,7 +4787,16 @@
       "loadMoreCards": "تحميل المزيد من البطاقات",
       "automationEvent": "الحدث: {source}",
       "automationWaitingForEvent": "في انتظار حدث",
-      "dependencyStatusNotLoaded": "غير محمّل"
+      "dependencyStatusNotLoaded": "غير محمّل",
+      "automationDisabled": "معطّل",
+      "dispatchFirstFailure": "أول فشل في بدء التشغيل: {message}",
+      "findLabel": "ابحث عن تصنيف أو أضفه",
+      "createLabel": "إضافة «{label}»",
+      "noMatchingLabels": "لا توجد تصنيفات مطابقة.",
+      "noKnownLabels": "لا توجد تصنيفات في البطاقات المحمّلة بعد.",
+      "labelLengthLimit": "يمكن أن يصل طول التصنيف إلى 40 حرفًا.",
+      "bulkLabelLimit": "سيؤدي هذا إلى تجاوز عدد التصنيفات في إحدى البطاقات المحددة 12 تصنيفًا. اختر تصنيفات أقل.",
+      "labelLimit": "تم تحديد 12 تصنيفًا. أزل أحدها لإضافة تصنيف آخر."
     }
   },
   "it": {
@@ -5053,7 +5153,8 @@
           "cyan": "Ciano"
         },
         "partial": "{count} sessioni caricate su {total}. Il filtro per agente si applica alle sessioni caricate.",
-        "loadMore": "Carica altre sessioni"
+        "loadMore": "Carica altre sessioni",
+        "loadedCount": "Visualizzazione di {count} sessioni su {total}"
       },
       "boardName": "Nome",
       "boardAppearance": "Aspetto della bacheca",
@@ -5166,7 +5267,16 @@
       "loadMoreCards": "Carica altre schede",
       "automationEvent": "Evento: {source}",
       "automationWaitingForEvent": "In attesa di un evento",
-      "dependencyStatusNotLoaded": "Non caricato"
+      "dependencyStatusNotLoaded": "Non caricato",
+      "automationDisabled": "Disabilitata",
+      "dispatchFirstFailure": "Primo errore di avvio: {message}",
+      "findLabel": "Trova o aggiungi un'etichetta",
+      "createLabel": "Aggiungi “{label}”",
+      "noMatchingLabels": "Nessuna etichetta corrispondente.",
+      "noKnownLabels": "Non ci sono ancora etichette nelle schede caricate.",
+      "labelLengthLimit": "Le etichette possono contenere fino a 40 caratteri.",
+      "bulkLabelLimit": "Questa operazione assegnerebbe più di 12 etichette a una scheda selezionata. Scegli meno etichette.",
+      "labelLimit": "12 etichette selezionate. Rimuovine una per aggiungerne un'altra."
     }
   },
   "tr": {
@@ -5523,7 +5633,8 @@
           "cyan": "Camgöbeği"
         },
         "partial": "{total} oturumdan {count} tanesi yüklendi. Aracı filtresi, yüklenen oturumlara uygulanır.",
-        "loadMore": "Daha fazla oturum yükle"
+        "loadMore": "Daha fazla oturum yükle",
+        "loadedCount": "{total} oturumdan {count} tanesi gösteriliyor"
       },
       "boardName": "Ad",
       "boardAppearance": "Pano görünümü",
@@ -5636,7 +5747,16 @@
       "loadMoreCards": "Daha fazla kart yükle",
       "automationEvent": "Olay: {source}",
       "automationWaitingForEvent": "Olay bekleniyor",
-      "dependencyStatusNotLoaded": "Yüklenmedi"
+      "dependencyStatusNotLoaded": "Yüklenmedi",
+      "automationDisabled": "Devre dışı",
+      "dispatchFirstFailure": "İlk başlatma hatası: {message}",
+      "findLabel": "Etiket bulun veya ekleyin",
+      "createLabel": "“{label}” etiketini ekle",
+      "noMatchingLabels": "Eşleşen etiket yok.",
+      "noKnownLabels": "Yüklenen kartlarda henüz etiket yok.",
+      "labelLengthLimit": "Etiketler en fazla 40 karakter olabilir.",
+      "bulkLabelLimit": "Bu işlem, seçili kartlardan birinin 12'den fazla etikete sahip olmasına neden olur. Daha az etiket seçin.",
+      "labelLimit": "12 etiket seçildi. Başka bir etiket eklemek için birini kaldırın."
     }
   },
   "uk": {
@@ -5993,7 +6113,8 @@
           "cyan": "Блакитний"
         },
         "partial": "Завантажено сеансів: {count} із {total}. Фільтр за агентом застосовується до завантажених сеансів.",
-        "loadMore": "Завантажити більше сеансів"
+        "loadMore": "Завантажити більше сеансів",
+        "loadedCount": "Показано {count} із {total} сеансів"
       },
       "boardName": "Назва",
       "boardAppearance": "Вигляд дошки",
@@ -6106,7 +6227,16 @@
       "loadMoreCards": "Завантажити більше карток",
       "automationEvent": "Подія: {source}",
       "automationWaitingForEvent": "Очікування події",
-      "dependencyStatusNotLoaded": "Не завантажено"
+      "dependencyStatusNotLoaded": "Не завантажено",
+      "automationDisabled": "Вимкнено",
+      "dispatchFirstFailure": "Перша помилка запуску: {message}",
+      "findLabel": "Знайти або додати мітку",
+      "createLabel": "Додати «{label}»",
+      "noMatchingLabels": "Відповідних міток немає.",
+      "noKnownLabels": "У завантажених картках ще немає міток.",
+      "labelLengthLimit": "Мітки можуть містити до 40 символів.",
+      "bulkLabelLimit": "Унаслідок цієї дії вибрана картка матиме понад 12 міток. Виберіть менше міток.",
+      "labelLimit": "Вибрано 12 міток. Видаліть одну, щоб додати іншу."
     }
   },
   "id": {
@@ -6463,7 +6593,8 @@
           "cyan": "Sian"
         },
         "partial": "{count} dari {total} sesi dimuat. Filter agen berlaku untuk sesi yang dimuat.",
-        "loadMore": "Muat lebih banyak sesi"
+        "loadMore": "Muat lebih banyak sesi",
+        "loadedCount": "Menampilkan {count} dari {total} sesi"
       },
       "boardName": "Nama",
       "boardAppearance": "Tampilan papan",
@@ -6576,7 +6707,16 @@
       "loadMoreCards": "Muat lebih banyak kartu",
       "automationEvent": "Peristiwa: {source}",
       "automationWaitingForEvent": "Menunggu peristiwa",
-      "dependencyStatusNotLoaded": "Belum dimuat"
+      "dependencyStatusNotLoaded": "Belum dimuat",
+      "automationDisabled": "Dinonaktifkan",
+      "dispatchFirstFailure": "Kegagalan awal saat memulai: {message}",
+      "findLabel": "Cari atau tambahkan label",
+      "createLabel": "Tambahkan “{label}”",
+      "noMatchingLabels": "Tidak ada label yang cocok.",
+      "noKnownLabels": "Belum ada label pada kartu yang dimuat.",
+      "labelLengthLimit": "Label dapat berisi hingga 40 karakter.",
+      "bulkLabelLimit": "Tindakan ini akan membuat salah satu kartu yang dipilih memiliki lebih dari 12 label. Kurangi jumlah label yang dipilih.",
+      "labelLimit": "12 label dipilih. Hapus satu untuk menambahkan label lain."
     }
   },
   "pl": {
@@ -6933,7 +7073,8 @@
           "cyan": "Cyjan"
         },
         "partial": "Liczba wczytanych sesji: {count} z {total}. Filtr agentów dotyczy wczytanych sesji.",
-        "loadMore": "Wczytaj więcej sesji"
+        "loadMore": "Wczytaj więcej sesji",
+        "loadedCount": "Wyświetlono {count} z {total} sesji"
       },
       "boardName": "Nazwa",
       "boardAppearance": "Wygląd tablicy",
@@ -7046,7 +7187,16 @@
       "loadMoreCards": "Wczytaj więcej kart",
       "automationEvent": "Zdarzenie: {source}",
       "automationWaitingForEvent": "Oczekiwanie na zdarzenie",
-      "dependencyStatusNotLoaded": "Nie wczytano"
+      "dependencyStatusNotLoaded": "Nie wczytano",
+      "automationDisabled": "Wyłączona",
+      "dispatchFirstFailure": "Pierwszy błąd uruchomienia: {message}",
+      "findLabel": "Znajdź lub dodaj etykietę",
+      "createLabel": "Dodaj „{label}”",
+      "noMatchingLabels": "Brak pasujących etykiet.",
+      "noKnownLabels": "We wczytanych kartach nie ma jeszcze etykiet.",
+      "labelLengthLimit": "Etykiety mogą mieć maksymalnie 40 znaków.",
+      "bulkLabelLimit": "Spowodowałoby to przekroczenie limitu 12 etykiet na jednej z wybranych kart. Wybierz mniej etykiet.",
+      "labelLimit": "Wybrano 12 etykiet. Usuń jedną, aby dodać kolejną."
     }
   },
   "th": {
@@ -7403,7 +7553,8 @@
           "cyan": "สีฟ้าอมเขียว"
         },
         "partial": "โหลดเซสชันแล้ว {count} จาก {total} เซสชัน ตัวกรองเอเจนต์จะใช้กับเซสชันที่โหลดแล้วเท่านั้น",
-        "loadMore": "โหลดเซสชันเพิ่มเติม"
+        "loadMore": "โหลดเซสชันเพิ่มเติม",
+        "loadedCount": "แสดง {count} จากทั้งหมด {total} เซสชัน"
       },
       "boardName": "ชื่อ",
       "boardAppearance": "รูปลักษณ์ของบอร์ด",
@@ -7516,7 +7667,16 @@
       "loadMoreCards": "โหลดการ์ดเพิ่มเติม",
       "automationEvent": "เหตุการณ์: {source}",
       "automationWaitingForEvent": "กำลังรอเหตุการณ์",
-      "dependencyStatusNotLoaded": "ยังไม่ได้โหลด"
+      "dependencyStatusNotLoaded": "ยังไม่ได้โหลด",
+      "automationDisabled": "ปิดใช้งาน",
+      "dispatchFirstFailure": "การเริ่มทำงานล้มเหลวครั้งแรก: {message}",
+      "findLabel": "ค้นหาหรือเพิ่มป้ายกำกับ",
+      "createLabel": "เพิ่ม “{label}”",
+      "noMatchingLabels": "ไม่พบป้ายกำกับที่ตรงกัน",
+      "noKnownLabels": "ยังไม่มีป้ายกำกับในการ์ดที่โหลดไว้",
+      "labelLengthLimit": "ป้ายกำกับมีความยาวได้ไม่เกิน 40 อักขระ",
+      "bulkLabelLimit": "การดำเนินการนี้จะทำให้การ์ดที่เลือกมีป้ายกำกับเกิน 12 รายการ โปรดเลือกป้ายกำกับให้น้อยลง",
+      "labelLimit": "เลือกป้ายกำกับแล้ว 12 รายการ ลบออกหนึ่งรายการเพื่อเพิ่มรายการใหม่"
     }
   },
   "vi": {
@@ -7873,7 +8033,8 @@
           "cyan": "Xanh lơ"
         },
         "partial": "Đã tải {count} trên tổng số {total} phiên. Bộ lọc tác nhân áp dụng cho các phiên đã tải.",
-        "loadMore": "Tải thêm phiên"
+        "loadMore": "Tải thêm phiên",
+        "loadedCount": "Đang hiển thị {count} trên tổng số {total} phiên"
       },
       "boardName": "Tên",
       "boardAppearance": "Giao diện bảng",
@@ -7986,7 +8147,16 @@
       "loadMoreCards": "Tải thêm thẻ",
       "automationEvent": "Sự kiện: {source}",
       "automationWaitingForEvent": "Đang chờ sự kiện",
-      "dependencyStatusNotLoaded": "Chưa tải"
+      "dependencyStatusNotLoaded": "Chưa tải",
+      "automationDisabled": "Đã tắt",
+      "dispatchFirstFailure": "Lỗi khởi động đầu tiên: {message}",
+      "findLabel": "Tìm hoặc thêm nhãn",
+      "createLabel": "Thêm “{label}”",
+      "noMatchingLabels": "Không có nhãn phù hợp.",
+      "noKnownLabels": "Chưa có nhãn nào trong các thẻ đã tải.",
+      "labelLengthLimit": "Nhãn có thể dài tối đa 40 ký tự.",
+      "bulkLabelLimit": "Thao tác này sẽ khiến một thẻ được chọn có hơn 12 nhãn. Hãy chọn ít nhãn hơn.",
+      "labelLimit": "Đã chọn 12 nhãn. Hãy xóa một nhãn để thêm nhãn khác."
     }
   },
   "nl": {
@@ -8343,7 +8513,8 @@
           "cyan": "Cyaan"
         },
         "partial": "{count} van {total} sessies geladen. Het agentfilter is van toepassing op geladen sessies.",
-        "loadMore": "Meer sessies laden"
+        "loadMore": "Meer sessies laden",
+        "loadedCount": "{count} van {total} sessies worden weergegeven"
       },
       "boardName": "Naam",
       "boardAppearance": "Bordweergave",
@@ -8456,7 +8627,16 @@
       "loadMoreCards": "Meer kaarten laden",
       "automationEvent": "Gebeurtenis: {source}",
       "automationWaitingForEvent": "Wachten op gebeurtenis",
-      "dependencyStatusNotLoaded": "Niet geladen"
+      "dependencyStatusNotLoaded": "Niet geladen",
+      "automationDisabled": "Uitgeschakeld",
+      "dispatchFirstFailure": "Eerste opstartfout: {message}",
+      "findLabel": "Zoek een label of voeg er een toe",
+      "createLabel": "Voeg “{label}” toe",
+      "noMatchingLabels": "Geen overeenkomende labels.",
+      "noKnownLabels": "Nog geen labels in de geladen kaarten.",
+      "labelLengthLimit": "Labels mogen maximaal 40 tekens bevatten.",
+      "bulkLabelLimit": "Hierdoor zou een geselecteerde kaart meer dan 12 labels krijgen. Kies minder labels.",
+      "labelLimit": "12 labels geselecteerd. Verwijder er een om een ander toe te voegen."
     }
   },
   "fa": {
@@ -8813,7 +8993,8 @@
           "cyan": "فیروزه‌ای"
         },
         "partial": "{count} جلسه از {total} جلسه بارگذاری شده است. فیلتر عامل روی جلسه‌های بارگذاری‌شده اعمال می‌شود.",
-        "loadMore": "بارگذاری جلسه‌های بیشتر"
+        "loadMore": "بارگذاری جلسه‌های بیشتر",
+        "loadedCount": "نمایش {count} جلسه از {total} جلسه"
       },
       "boardName": "نام",
       "boardAppearance": "ظاهر تابلو",
@@ -8926,7 +9107,16 @@
       "loadMoreCards": "بارگذاری کارت‌های بیشتر",
       "automationEvent": "رویداد: {source}",
       "automationWaitingForEvent": "در انتظار رویداد",
-      "dependencyStatusNotLoaded": "بارگذاری نشده"
+      "dependencyStatusNotLoaded": "بارگذاری نشده",
+      "automationDisabled": "غیرفعال",
+      "dispatchFirstFailure": "اولین خطا در شروع: {message}",
+      "findLabel": "جستجو یا افزودن برچسب",
+      "createLabel": "افزودن «{label}»",
+      "noMatchingLabels": "هیچ برچسبی مطابق جستجو یافت نشد.",
+      "noKnownLabels": "هنوز هیچ برچسبی در کارت‌های بارگذاری‌شده وجود ندارد.",
+      "labelLengthLimit": "برچسب‌ها می‌توانند حداکثر ۴۰ نویسه داشته باشند.",
+      "bulkLabelLimit": "با این کار، تعداد برچسب‌های یکی از کارت‌های انتخاب‌شده از ۱۲ بیشتر می‌شود. برچسب‌های کمتری انتخاب کنید.",
+      "labelLimit": "۱۲ برچسب انتخاب شده است. برای افزودن برچسب دیگر، یکی را حذف کنید."
     }
   },
   "ru": {
@@ -9283,7 +9473,8 @@
           "cyan": "Голубой"
         },
         "partial": "Загружено сеансов: {count} из {total}. Фильтр по агенту применяется к загруженным сеансам.",
-        "loadMore": "Загрузить ещё сеансы"
+        "loadMore": "Загрузить ещё сеансы",
+        "loadedCount": "Показано сеансов: {count} из {total}"
       },
       "boardName": "Название",
       "boardAppearance": "Оформление доски",
@@ -9396,7 +9587,16 @@
       "loadMoreCards": "Загрузить ещё карточки",
       "automationEvent": "Событие: {source}",
       "automationWaitingForEvent": "Ожидание события",
-      "dependencyStatusNotLoaded": "Не загружено"
+      "dependencyStatusNotLoaded": "Не загружено",
+      "automationDisabled": "Отключено",
+      "dispatchFirstFailure": "Первая ошибка запуска: {message}",
+      "findLabel": "Найти или добавить метку",
+      "createLabel": "Добавить «{label}»",
+      "noMatchingLabels": "Подходящих меток нет.",
+      "noKnownLabels": "В загруженных карточках пока нет меток.",
+      "labelLengthLimit": "Метка может содержать до 40 символов.",
+      "bulkLabelLimit": "В результате в одной из выбранных карточек будет больше 12 меток. Выберите меньше меток.",
+      "labelLimit": "Выбрано 12 меток. Удалите одну, чтобы добавить другую."
     }
   },
   "sv": {
@@ -9559,7 +9759,8 @@
           "orange": "Orange",
           "pink": "Rosa",
           "cyan": "Cyan"
-        }
+        },
+        "loadedCount": "Visar {count} av {total} sessioner"
       },
       "boardName": "Namn",
       "boardAppearance": "Tavlans utseende",
@@ -9805,7 +10006,435 @@
       "eventProtocolViolation": "Protokollöverträdelse",
       "eventArchived": "Arkiverad",
       "eventUnarchived": "Återställd från arkivet",
-      "eventStale": "Inaktuell session"
+      "eventStale": "Inaktuell session",
+      "automationDisabled": "Inaktiverad",
+      "dispatchFirstFailure": "Första startfelet: {message}",
+      "findLabel": "Sök efter eller lägg till en etikett",
+      "createLabel": "Lägg till ”{label}”",
+      "noMatchingLabels": "Inga matchande etiketter.",
+      "noKnownLabels": "Det finns inga etiketter på de inlästa korten ännu.",
+      "labelLengthLimit": "Etiketter får innehålla högst 40 tecken.",
+      "bulkLabelLimit": "Detta skulle ge ett markerat kort fler än 12 etiketter. Välj färre etiketter.",
+      "labelLimit": "12 etiketter valda. Ta bort en för att lägga till en annan."
+    }
+  },
+  "ca": {
+    "common": {
+      "refreshing": "S'està actualitzant…",
+      "refresh": "Actualitza",
+      "retry": "Torna-ho a provar",
+      "cancel": "Cancel·la",
+      "close": "Tanca",
+      "create": "Crea",
+      "na": "n/d",
+      "save": "Desa"
+    },
+    "sessionsView": {
+      "statusQueued": "En cua"
+    },
+    "workboard": {
+      "partialCards": "S'han carregat {count} targetes. La cerca i els filtres s'apliquen a les targetes carregades. Carregueu totes les targetes per reordenar-les.",
+      "loadMoreCards": "Carrega més targetes",
+      "pageLoadFailed": "No s'ha pogut carregar el tauler de treball. Comproveu la connexió i torneu a carregar aquesta pàgina.",
+      "pinBoard": "Fixa a la barra lateral",
+      "unpinBoard": "Desfixa de la barra lateral",
+      "deleteBoard": "Suprimeix el tauler…",
+      "deleteBoardTitle": "Voleu suprimir «{name}»?",
+      "deleteBoardConfirm": "Suprimeix el tauler",
+      "deleteBoardHelp": "Aquesta acció suprimeix permanentment el tauler i les ubicacions desades de les sessions. Les sessions es conserven. Els taulers amb targetes s'han de buidar abans.",
+      "deleteBoardUnavailable": "Connecteu-vos amb permisos d'escriptura per suprimir aquest tauler.",
+      "discardCardTitle": "Voleu descartar aquesta targeta?",
+      "discardChangesTitle": "Vols descartar els canvis?",
+      "discardDraftHelp": "Es perdran els canvis que no hagis desat.",
+      "keepEditing": "Continua editant",
+      "discardDraft": "Descarta",
+      "viewBoard": "Columnes",
+      "boardColor": "Color",
+      "clearFilters": "Esborra els filtres",
+      "activeFilters": "Filtres actius",
+      "removeFilter": "Elimina el filtre: {filter}",
+      "filterChipValue": "{field}: {value}",
+      "filterChipExcludes": "{field} ≠ {value}",
+      "filterChipSearch": "Cerca: «{query}»",
+      "filterChipArchived": "Inclou les arxivades",
+      "filterAttention": "Requereix atenció",
+      "filterStale": "Sense activitat recent",
+      "filterStaleHint": "Targetes marcades com a inactives o vinculades a una sessió inactiva",
+      "filterMissingProof": "Completades sense evidències",
+      "filterMissingProofHint": "Targetes completades sense proves, artefactes ni fitxers adjunts",
+      "filterDonePeriod": "Targetes completades",
+      "filterAllTime": "Tot el període",
+      "filterLastWeek": "Últims 7 dies",
+      "filterLayout": "Disposició",
+      "filterDensity": "Densitat",
+      "densityCompact": "Compacta",
+      "densityComfortable": "Còmoda",
+      "viewList": "Llista",
+      "columnActions": "Accions de la columna {column}",
+      "selectAllInColumn": "Selecciona-ho tot a {column}",
+      "selectCard": "Selecciona {title}",
+      "deselectCard": "Desselecciona {title}",
+      "selectedCountOne": "1 seleccionada",
+      "selectedCount": "{count} seleccionades",
+      "selectionLabel": "Targetes seleccionades",
+      "clearSelection": "Esborra la selecció",
+      "bulkAssign": "Assigna un agent…",
+      "bulkEdit": "Edita les propietats",
+      "bulkArchive": "Arxiva",
+      "bulkDelete": "Suprimeix",
+      "bulkEditTitle": "Edita {count} targetes",
+      "bulkDeleteTitle": "Vols suprimir {count} targetes?",
+      "bulkDeleteHelp": "Aquestes targetes se suprimiran permanentment. Les sessions en execució continuaran.",
+      "bulkEditHelp": "Els canvis s'apliquen a totes les targetes seleccionades.",
+      "bulkKeep": "Mantén sense canvis",
+      "bulkLabels_keep": "Mantén sense canvis",
+      "bulkLabels_add": "Afegeix etiquetes",
+      "bulkLabels_replace": "Substitueix les etiquetes",
+      "bulkLabels_remove": "Elimina les etiquetes",
+      "bulkLabelsPlaceholder": "Etiquetes separades per comes",
+      "bulkApplying": "S'estan aplicant…",
+      "bulkApply": "Aplica els canvis",
+      "bulkResult": "S'han aplicat a {completed} de {total} targetes.",
+      "bulkUnavailable": "L'operació s'ha aturat. Les targetes restants continuen seleccionades; actualitza i torna-ho a provar.",
+      "bulkMoveLabel": "Mou a…",
+      "widget": {
+        "boardLabel": "Tauler de Workboard",
+        "loading": "S'està carregant Workboard…",
+        "disconnected": "Connecta't a la Passarel·la per carregar Workboard.",
+        "cardIdRequired": "Aquest giny necessita una propietat cardId.",
+        "cardMissing": "Aquesta targeta de Workboard ja no està disponible.",
+        "cardNotLoaded": "Aquesta targeta encara no s'ha carregat. Carrega més targetes per trobar-la.",
+        "partialCards": "{count} targetes carregades. Els recomptes i els resultats només inclouen les targetes carregades.",
+        "unassigned": "Sense assignar",
+        "openBoard": "Obre el tauler",
+        "statusCounts": "Targetes per estat",
+        "cardCount": "{count} targetes",
+        "noActiveCards": "No hi ha targetes preparades ni en execució."
+      },
+      "status": {
+        "triage": "Triatge",
+        "backlog": "Pendents",
+        "todo": "Per fer",
+        "scheduled": "Programada",
+        "ready": "Preparada",
+        "running": "En execució",
+        "review": "En revisió",
+        "blocked": "Bloquejada",
+        "done": "Feta"
+      },
+      "noLinkedSession": "Cap sessió vinculada",
+      "stopSession": "Atura la sessió",
+      "editCard": "Edita la targeta",
+      "editBoard": "Edita el tauler",
+      "newBoard": "Tauler nou",
+      "boardKind": "Tipus de tauler",
+      "cardsBoard": "Targetes",
+      "sessionsBoard": {
+        "kind": "Sessions",
+        "peopleFilter": "Filtre de persones",
+        "everyone": "Tothom",
+        "involvingMe": "On participo",
+        "agent": "Agent del tauler",
+        "agentLabel": "Tauler de sessions · {name}",
+        "agentUnavailable": "L'agent de la conversa del tauler no està disponible. Trieu un agent configurat o actualitzeu la conversa del tauler.",
+        "agentCreateFailed": "No s'ha pogut crear la conversa del tauler. Torneu-ho a provar.",
+        "writeUnavailable": "S'ha desat l'aparença del tauler. Torneu a connectar-vos amb permisos d'escriptura per desar les columnes de sessions.",
+        "loading": "S'estan carregant les sessions…",
+        "partial": "S'han carregat {count} de {total} sessions. El filtre d'agents s'aplica a les sessions carregades.",
+        "loadMore": "Carrega més sessions",
+        "empty": "No hi ha sessions en aquesta columna",
+        "columns": "Columnes",
+        "columnLabel": "Etiqueta de la columna",
+        "description": "Descripció",
+        "fallback": "Columna alternativa",
+        "defaultColor": "Predeterminat",
+        "addColumn": "Afegeix una columna",
+        "removeColumn": "Elimina la columna",
+        "newColumn": "Columna nova",
+        "moveUp": "Mou amunt",
+        "moveDown": "Mou avall",
+        "rulesHelp": "L'agent del tauler pot editar les regles de les columnes i l'àmbit de les sessions.",
+        "source": {
+          "state": "per regla",
+          "operator": "fixat"
+        },
+        "run": {
+          "active": "Treballant",
+          "idle": "Inactiu",
+          "failed": "Ha fallat"
+        },
+        "pullRequest": {
+          "open": "Oberta",
+          "draft": "Esborrany",
+          "merged": "Fusionada",
+          "closed": "Tancada"
+        },
+        "color": {
+          "red": "Vermell",
+          "blue": "Blau",
+          "green": "Verd",
+          "yellow": "Groc",
+          "purple": "Porpra",
+          "orange": "Taronja",
+          "pink": "Rosa",
+          "cyan": "Cian"
+        },
+        "loadedCount": "Es mostren {count} de {total} sessions"
+      },
+      "boardName": "Nom",
+      "boardAppearance": "Aparença del tauler",
+      "boardAutomation": "Automatització del tauler",
+      "openBoardAutomation": "Obre",
+      "automationLoading": "S'està carregant l'automatització vinculada…",
+      "automationUnavailable": "Automatització no disponible",
+      "automationPaused": "En pausa",
+      "automationEnabled": "Activada",
+      "automationState": "Estat",
+      "automationFrequency": "Freqüència",
+      "automationNextRunLabel": "Propera execució",
+      "automationNotScheduled": "No programada",
+      "automationUpdatedAgo": "Actualitzada fa {time}",
+      "automationUpdatedNow": "Actualitzada ara mateix",
+      "automationRefreshHint": "Actualitza el tauler per tornar-ho a provar.",
+      "openNamedAutomation": "Obre {name}",
+      "automationNextRun": "Propera execució: {time}",
+      "automationNextRunDue": "La propera execució toca ara",
+      "automationEvery": "Cada {duration}",
+      "automationAt": "A les {time}",
+      "automationOnExit": "En sortir: {command}",
+      "automationStream": "Flux: {command}",
+      "automationEvent": "Esdeveniment: {source}",
+      "automationWaitingForEvent": "Esperant un esdeveniment",
+      "viewPresetCountOne": "1 targeta",
+      "editCardHelp": "Actualitza les metadades de la cua i el traspàs de sessió.",
+      "newCard": "Targeta nova",
+      "newCardShort": "Nova",
+      "newCardInColumn": "Targeta nova a {column}",
+      "newCardHelp": "Afegeix feina a la cua per a una sessió d'agent.",
+      "archiveCard": "Arxiva la targeta",
+      "unarchiveCard": "Restaura des de l'arxiu",
+      "archived": "Arxivada",
+      "deleteCard": "Suprimeix la targeta",
+      "cardActions": "Accions de la targeta",
+      "viewDetails": "Mostra els detalls",
+      "detailTitle": "Detalls de la targeta",
+      "detailProperties": "Propietats",
+      "detailTabOverview": "Visió general",
+      "detailTabActivity": "Activitat",
+      "detailTabSession": "Sessió",
+      "detailTabDetails": "Detalls",
+      "detailTemplate": "Plantilla",
+      "detailFailures": "Intents fallits",
+      "detailClaim": "Responsable de la reclamació",
+      "detailHeartbeat": "Últim polset",
+      "detailNotifications": "Notificacions",
+      "inlineAddLabels": "Afegeix etiquetes",
+      "inlineAddDescription": "Afegeix una descripció",
+      "detailOccurrences": "{count} ocurrències",
+      "detailFirstSeen": "Primera detecció: {time}",
+      "detailLastSeen": "Última detecció: {time}",
+      "detailExecutionOptions": "Altres maneres de començar",
+      "detailRunAutomatically": "Executa automàticament",
+      "detailOpenManually": "Obre una sessió manualment",
+      "detailNoSessionYet": "Encara no hi ha cap sessió",
+      "defaultAgentBadge": "Per defecte",
+      "detailStartSessionHelp": "Inicia {agent} per treballar en aquesta targeta.",
+      "detailTechnical": "Detalls tècnics",
+      "detailRun": "Execució",
+      "detailUpdated": "Actualitzat",
+      "detailProof": "Verificació",
+      "detailAttemptTitle": "Intent {number}",
+      "proofPassed": "Superada",
+      "proofSkipped": "Omesa",
+      "proofUnknown": "Desconeguda",
+      "detailDiagnostics": "Diagnòstic",
+      "detailWorkerLogs": "Registres del procés de treball",
+      "detailWorkerProtocol": "Protocol del procés de treball",
+      "detailCardAutomation": "Automatització de la targeta",
+      "detailBoard": "Tauler",
+      "detailScheduled": "Programat",
+      "detailSkills": "Habilitats",
+      "detailWorkspace": "Espai de treball",
+      "detailDispatchCount": "Assignacions",
+      "detailLastDispatch": "Última assignació",
+      "detailRuntimeLimit": "Límit de temps d'execució",
+      "detailRetryLimit": "Límit de reintents",
+      "detailTenant": "Organització",
+      "detailUpdatedValue": "Actualitzat: {time}",
+      "detailOperatorNotes": "Notes de l'operador",
+      "detailNoNotes": "Encara no hi ha notes de l'operador.",
+      "detailNotePlaceholder": "Afegeix una nota sobre una decisió, un impediment o una prova...",
+      "detailAddNote": "Afegeix una nota",
+      "openSession": "Obre la sessió",
+      "defaultAgent": "Agent per defecte",
+      "allAgents": "Tots els agents",
+      "agentFilter": "Filtra per agent",
+      "allBoards": "Tots els taulers",
+      "boardFilter": "Filtra per tauler",
+      "defaultBoard": "Tauler per defecte",
+      "boardFilterSummary": "{active} actives · {total} en total",
+      "boardFilterArchivedSummary": "Arxivat · {active} actives · {total} en total",
+      "agentFilterUnassigned": "Sense assignar (utilitza {agent})",
+      "agentFilterUnassignedHelp": "Targetes sense un agent explícit.",
+      "agentFilterConfiguredDefault": "{agent} (per defecte)",
+      "agentFilterConfiguredDefaultHelp": "Targetes assignades explícitament a l'agent configurat per defecte.",
+      "agentCurrentUnconfigured": "{agent} (no configurat)",
+      "viewPresetCount": "{count} targetes",
+      "engineOpenAI": "OpenAI",
+      "engineClaude": "Claude",
+      "engineDisabledRuntime": "{agent} utilitza l'entorn d'execució ACP {runtime}. Fes servir l'inici per defecte per a aquesta sessió.",
+      "runEngine": "Executa {engine}",
+      "openEngine": "Obre {engine}",
+      "runDefaultAgent": "Executa l'agent per defecte",
+      "start": "Inicia",
+      "dependencies": "Dependències",
+      "dependenciesBlocked": "{count} bloquejades",
+      "dependencyStatusMissing": "Falta",
+      "dependencyStatusNotLoaded": "No carregada",
+      "unknownStatus": "Desconegut",
+      "showArchived": "Mostra les arxivades",
+      "dispatch": "Inicia els agents",
+      "dispatchHelp": "Demana als agents que executin les targetes amb l'estat A punt d'aquest tauler, fins a 3 alhora.",
+      "dispatchHelpAll": "Demana als agents que executin les targetes amb l'estat A punt de tots els taulers, fins a 3 alhora.",
+      "moveTo": "Mou a",
+      "dispatchSummary": "Iniciades: {started}. Preparades: {promoted}, bloquejades: {blocked}, alliberades: {reclaimed}, organitzades: {orchestrated}. No s'han pogut iniciar: {failures}.",
+      "dispatchSummaryEmpty": "No s'ha iniciat cap targeta.",
+      "lastRefreshed": "Actualitzat {time}",
+      "refreshError": "No s'ha pogut actualitzar",
+      "fieldTitle": "Títol",
+      "fieldNotes": "Notes",
+      "fieldStatus": "Estat",
+      "fieldPriority": "Prioritat",
+      "fieldAgent": "Agent",
+      "fieldSession": "Sessió",
+      "fieldLabels": "Etiquetes",
+      "templatesLabel": "Plantilles de targetes",
+      "suggestionsLabel": "Suggeriments",
+      "template": {
+        "bugfix": "Correcció d'errors",
+        "docs": "Documentació",
+        "release": "Llançament",
+        "pr_review": "Revisió de PR",
+        "plugin": "Connector"
+      },
+      "templateDraft": {
+        "bugfixTitle": "Correcció: ",
+        "bugfixNotes": "Símptoma:\nCausa:\nAcceptació:\nEvidència:",
+        "docsTitle": "Documentació: ",
+        "docsNotes": "Pàgina:\nCanvi:\nEvidència de la font:",
+        "releaseTitle": "Llançament: ",
+        "releaseNotes": "Abast:\nVerificació:\nTancament:",
+        "prReviewTitle": "Revisa la PR ",
+        "prReviewNotes": "Àrea afectada:\nRiscos:\nEvidències:",
+        "pluginTitle": "Connector: ",
+        "pluginNotes": "Límits:\nConfiguració/documentació:\nProves:"
+      },
+      "cardStaleAge": "Sense activitat · {age}",
+      "cardStaleTitle": "Sense activitat des de fa {age}",
+      "cardUpdatedNow": "ara mateix",
+      "cardUpdatedAgo": "fa {time}",
+      "cardMoreLabels": "{count} etiquetes més: {labels}",
+      "cardFiles": "{count} fitxers",
+      "cardWarnings": "{count} advertiments",
+      "sessionStatus": {
+        "queued": "En cua",
+        "running": "En execució",
+        "done": "Completada",
+        "failed": "Fallida",
+        "stale": "Sense activitat",
+        "unknown": "Desconeguda",
+        "unavailable": "No disponible",
+        "ambiguous": "Ambigu",
+        "stopped": "Aturat",
+        "timedOut": "Temps d'espera esgotat",
+        "cancelled": "Cancel·lat"
+      },
+      "badgeAttempts": "{count} intents",
+      "badgeFailures": "{count} fallits",
+      "badgeComments": "{count} comentaris",
+      "badgeLinks": "{count} enllaços",
+      "badgeProof": "{count} proves",
+      "badgeArtifacts": "{count} artefactes",
+      "badgeAttachments": "{count} fitxers adjunts",
+      "badgeStale": "obsolet",
+      "titlePlaceholder": "Títol de la targeta",
+      "notesPlaceholder": "Notes, criteris d'acceptació, enllaços",
+      "labelsPlaceholder": "p. ex. interfície, documentació",
+      "searchPlaceholder": "Cerca targetes",
+      "closeSearch": "Esborra i tanca la cerca",
+      "allStatuses": "Tots",
+      "allWork": "Tota la feina",
+      "filters": "Filtres",
+      "filtersActive": "Filtres, {count} actius",
+      "emptyColumns": "Columnes buides",
+      "emptyColumnsShow": "Mostra",
+      "emptyColumnsCollapse": "Replega",
+      "emptyColumnsHide": "Amaga",
+      "showEmptyColumns": "Mostra-les totes",
+      "collapseEmptyColumns": "Replega les buides",
+      "hideEmptyColumns": "Amaga les buides",
+      "collapseColumn": "Replega la columna {column}",
+      "expandColumn": "Desplega la columna {column}",
+      "emptyColumn": "Deixa anar el treball aquí",
+      "emptyColumnTitle": "Encara no hi ha targetes",
+      "emptyFilteredTitle": "Cap targeta coincideix amb aquesta vista",
+      "emptyFilteredHint": "Prova amb menys filtres o amb una altra cerca.",
+      "lifecycleUnlinked": "Sense sessió",
+      "lifecycleUnlinkedDetail": "Inicia o vincula una sessió",
+      "lifecycleUnknown": "Estat de la sessió desconegut",
+      "lifecycleUnknownDetail": "Obre la targeta o actualitza la vista per carregar els detalls de la sessió",
+      "lifecycleUnavailable": "Sessió no disponible",
+      "lifecycleUnavailableDetail": "Obre la sessió o torna a vincular aquesta targeta",
+      "lifecycleAmbiguous": "Vinculació amb la sessió ambigua",
+      "lifecycleAmbiguousDetail": "Editeu la targeta per seleccionar una sessió concreta",
+      "lifecycleLinked": "Vinculada",
+      "lifecycleIdleDetail": "Cap execució activa",
+      "lifecycleRunning": "En execució",
+      "lifecycleRunningDetail": "Execució activa en curs",
+      "lifecycleStale": "Inactiva",
+      "lifecycleStaleDetail": "Sense activitat recent a la sessió",
+      "lifecycleDone": "Completada",
+      "lifecycleDoneDetail": "Execució completada",
+      "lifecycleFailed": "Fallida",
+      "lifecycleFailedDetail": "Obriu la sessió per revisar l'error",
+      "lifecycleStopped": "Aturada",
+      "lifecycleTimedOut": "Temps d'espera esgotat",
+      "lifecycleStoppedDetail": "L'execució s'ha aturat",
+      "eventsLabel": "Esdeveniments de la targeta",
+      "eventCreated": "Creada",
+      "eventEdited": "Editada",
+      "eventMoved": "Moguda",
+      "eventMovedTo": "Moguda a {status}",
+      "eventLinked": "Sessió vinculada",
+      "eventSpecified": "Especificat",
+      "eventDecomposed": "Desglossat",
+      "eventClaimed": "Reclamat",
+      "eventHeartbeat": "Polset",
+      "eventExecutionUpdated": "Agent actualitzat",
+      "eventAttemptStarted": "Intent iniciat",
+      "eventAttemptUpdated": "Intent actualitzat",
+      "eventCommentAdded": "Comentari afegit",
+      "eventLinkAdded": "Enllaç afegit",
+      "eventProofAdded": "Prova afegida",
+      "eventArtifactAdded": "Artefacte afegit",
+      "eventAttachmentAdded": "Fitxer adjunt afegit",
+      "eventDiagnostic": "Diagnòstic",
+      "eventNotification": "Notificació",
+      "eventDispatch": "Enviament",
+      "eventOrchestration": "Orquestració",
+      "eventProtocolViolation": "Infracció del protocol",
+      "eventArchived": "Arxivat",
+      "eventUnarchived": "Desarxivat",
+      "eventStale": "Sessió obsoleta",
+      "automationDisabled": "Desactivada",
+      "dispatchFirstFailure": "Primer error d'inici: {message}",
+      "findLabel": "Cerca o afegeix una etiqueta",
+      "createLabel": "Afegeix «{label}»",
+      "noMatchingLabels": "No hi ha cap etiqueta que coincideixi.",
+      "noKnownLabels": "Encara no hi ha etiquetes a les targetes carregades.",
+      "labelLengthLimit": "Les etiquetes poden tenir fins a 40 caràcters.",
+      "bulkLabelLimit": "Això faria que una de les targetes seleccionades tingués més de 12 etiquetes. Tria menys etiquetes.",
+      "labelLimit": "Has seleccionat 12 etiquetes. Elimina'n una per afegir-ne una altra."
     }
   }
 }

@@ -4,6 +4,7 @@ import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import { registerControlUiReloadGuard } from "../app/document-reload-guard.ts";
 import { NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT } from "../app/native-link-routing.ts";
 import { formatDateTimeMs } from "../lib/format.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
@@ -13,8 +14,8 @@ import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { SidebarUpdateCard, type SidebarUpdateCardProps } from "./sidebar-update-card.tsx";
 
 let originalWebkit: PropertyDescriptor | undefined;
-const checkFailure = "Could not check the latest update";
-const reconnectFailure = "Could not refresh. Check your connection and try again.";
+const checkFailure = "Couldn’t check for updates. Try again.";
+const reconnectFailure = "Couldn't reach the server";
 async function settle() {
   await Promise.resolve();
   flush();
@@ -61,6 +62,13 @@ function packageSchedule(
       ...campaign,
     },
   };
+}
+/** A same-version campaign publishes no target: it restarts to finish an earlier update. */
+function finishingSchedule(
+  campaign: Partial<NonNullable<UpdateScheduleState["campaign"]>>,
+): UpdateScheduleState {
+  const { target: _target, ...schedule } = packageSchedule(campaign);
+  return schedule;
 }
 function succeededRun(patch: Parameters<typeof createUpdateRunFixture>[0] = {}) {
   return createUpdateRunFixture({ status: "succeeded", phase: "finished", ...patch });
@@ -225,7 +233,11 @@ describe("SidebarUpdateCard", () => {
       ),
     });
     try {
-      element.action()!.click();
+      await element.expand();
+      const trigger = native
+        ? element.action()
+        : element.find<HTMLButtonElement>(".sidebar-issues-panel__action");
+      trigger!.click();
       // Bridge loss must happen before the preflight promise continues.
       if (bridgeLost) {
         Reflect.deleteProperty(window, "webkit");
@@ -266,7 +278,7 @@ describe("SidebarUpdateCard", () => {
           const failedModal = document.querySelector("openclaw-modal-dialog");
           expect(failedModal).not.toBeNull();
           expect(failedModal?.textContent).toContain(
-            "Status could not be refreshed. Check your connection and try again.",
+            "Couldn’t refresh update status. Check your connection and try again.",
           );
           await element.update({
             statusBanner: {
@@ -275,9 +287,10 @@ describe("SidebarUpdateCard", () => {
               text: "Latest target unavailable.",
             },
           });
-          for (const selector of ['[role="alert"]', "summary"]) {
-            expect(element.find(selector)?.textContent).toContain("Latest target unavailable.");
-          }
+          expect(element.find('summary [role="alert"]')?.textContent).toContain(
+            "Latest target unavailable.",
+          );
+          expect(element.element.querySelectorAll('[role="alert"]')).toHaveLength(1);
         }
       }
       if (!bridgeLost) {
@@ -415,23 +428,21 @@ describe("SidebarUpdateCard", () => {
   });
 
   it("retains refresh retries across shell updates and ignores obsolete recovery results", async () => {
-    const element = await mount(null);
     const first = createDeferred<boolean>();
     const second = createDeferred<boolean>();
     const third = createDeferred<boolean>();
-    const onRefresh = vi
-      .fn<() => Promise<boolean>>()
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise)
-      .mockReturnValueOnce(third.promise);
-    await element.update({ refreshRequired: true, onRefresh });
+    const onRefresh = vi.fn<() => Promise<boolean>>();
+    for (const request of [first, second, third]) {
+      onRefresh.mockReturnValueOnce(request.promise);
+    }
+    const element = await mount(null, { refreshRequired: true, onRefresh });
 
-    element.action()?.click();
+    element.find<HTMLButtonElement>(".refresh-notice__surface")?.click();
     await settle();
 
     await element.update({ refreshRequired: false });
     await element.update({ refreshRequired: true });
-    const action = element.action();
+    const action = element.find<HTMLButtonElement>(".refresh-notice__surface");
     action?.click();
     await settle();
     expect(onRefresh).toHaveBeenCalledTimes(2);
@@ -451,27 +462,47 @@ describe("SidebarUpdateCard", () => {
     expect(element.text()).toContain(reconnectFailure);
     await element.update({ connected: true });
     expect(element.text()).toContain(reconnectFailure);
-    expect(action?.textContent).toContain("Retry now");
+    expect(action?.textContent).toContain("Retry");
     action?.click();
     expect(onRefresh).toHaveBeenCalledTimes(3);
     await settle();
-    expect(element.action()).toBe(action);
+    expect(element.find<HTMLButtonElement>(".refresh-notice__surface")).toBe(action);
     expect(element.text()).not.toContain(reconnectFailure);
     third.resolve(true);
     await settle();
     await element.update({ connected: false });
-    expect(element.action()).toBe(action);
+    expect(element.find<HTMLButtonElement>(".refresh-notice__surface")).toBe(action);
     expect(action?.disabled).toBe(true);
-    expect(action?.textContent).toContain("Reloading");
+    expect(action?.textContent).toContain("Refreshing");
+  });
+
+  it("keeps a guard-blocked refresh out of the connection failure state", async () => {
+    const releaseGuard = registerControlUiReloadGuard(
+      () => false,
+      () => undefined,
+    );
+    try {
+      const element = await mount(null, { refreshRequired: true, onRefresh: async () => false });
+      const action = element.find<HTMLButtonElement>(".refresh-notice__surface");
+      action?.click();
+      await vi.waitFor(() => expect(element.text()).toContain("Finish pending work first"));
+      expect(element.text()).not.toContain(reconnectFailure);
+      expect(element.find(".sidebar-update-card__status")).toBeNull();
+    } finally {
+      releaseGuard();
+    }
   });
 
   it.each([false, true])(
     "keeps live run controls focused until acknowledgement (compact: %s)",
     async (compact) => {
       const element = await mount(null, { compact, updateRun: createUpdateRunFixture() });
-      expect(element.element.textContent).toContain("OpenClaw update in progress: staging");
+      expect(element.element.textContent).toContain("OpenClaw");
       expect(element.element.textContent).toContain("phases complete");
-      const action = element.action()!;
+      const actionSelector = compact
+        ? ".sidebar-issues-panel__action"
+        : ".sidebar-update-card__action";
+      const action = element.find<HTMLButtonElement>(actionSelector)!;
       const details = element.find("details");
       if (details) {
         details.open = true;
@@ -483,8 +514,8 @@ describe("SidebarUpdateCard", () => {
       await element.update({
         updateRun: createUpdateRunFixture({ phase: "verifying", updatedAtMs: 3 }),
       });
-      expect(element.element.textContent).toContain("OpenClaw update in progress: verifying");
-      expect(element.find(".sidebar-update-card__action")).toBe(action);
+      expect(element.element.textContent).toContain("OpenClaw");
+      expect(element.find(actionSelector)).toBe(action);
       expect(document.activeElement).toBe(action);
       if (details) {
         expect(element.find("details")).toBe(details);
@@ -498,12 +529,12 @@ describe("SidebarUpdateCard", () => {
       await element.update({ updateRun: completedRun });
       expect(element.element.textContent).toContain("OpenClaw updated to 2026.9.2");
       await element.update({ updateRunAcknowledged: true });
-      expect(element.find(".sidebar-update-card")).toBeNull();
+      expect(element.find(actionSelector)).toBeNull();
       await element.update({
         updateRunAcknowledged: false,
         updateRun: { ...completedRun, finishedAtMs: Date.now() - 24 * 60 * 60 * 1000 },
       });
-      expect(element.find(".sidebar-update-card")).toBeNull();
+      expect(element.find(actionSelector)).toBeNull();
     },
   );
 
@@ -572,7 +603,7 @@ describe("SidebarUpdateCard", () => {
     { state: "running", ageMinutes: 30 },
     { state: "campaign", ageMinutes: 20 },
   ] as const)(
-    "shows the recorded $state age beside the compact row's detail",
+    "shows the recorded $state age beside the compact row's title",
     async ({ state, ageMinutes }) => {
       const now = Date.parse("2026-09-23T12:00:00Z");
       vi.useFakeTimers({ now });
@@ -604,10 +635,9 @@ describe("SidebarUpdateCard", () => {
       )?.updateComplete;
 
       const title = element.find("summary .sidebar-issues-panel__entity");
-      const meta = title?.nextElementSibling;
-      const time = meta?.querySelector("time");
+      const time = title?.parentElement?.querySelector("time");
       const timestamp = now - ageMinutes * 60_000;
-      expect(meta?.querySelector(".sidebar-issues-panel__state")).not.toBeNull();
+      expect(element.find("summary .sidebar-issues-panel__state")).not.toBeNull();
       expect(time?.getAttribute("datetime")).toBe(new Date(timestamp).toISOString());
       expect(time?.getAttribute("title")).toBe(formatDateTimeMs(timestamp));
       expect(time?.textContent?.trim()).toBe(`${ageMinutes}m ago`);
@@ -659,7 +689,7 @@ describe("SidebarUpdateCard", () => {
     expect(action?.getAttribute("aria-disabled")).toBe("true");
     expect(action?.getAttribute("aria-describedby")).not.toBeNull();
     expect(tooltip?.hasAttribute("open-on-click")).toBe(true);
-    expect(tooltip?.content).toContain("Administrator access is required");
+    expect(tooltip?.content).toContain("Admin access required.");
     action?.click();
     expect(onUpdate).not.toHaveBeenCalled();
   });
@@ -692,6 +722,139 @@ describe("SidebarUpdateCard", () => {
 
     element.dispose();
     expect(clearInterval).toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "a new release",
+      update: stableUpdate,
+      schedule: packageSchedule({ state: "countdown", applyAtMs: 46_000 }),
+      title: "Update available",
+      status: "Updating in 0:45 · v2.0.0",
+      absent: "plugin",
+    },
+    {
+      name: "an owed plugin retry",
+      update: null,
+      schedule: finishingSchedule({ state: "countdown", applyAtMs: 46_000 }),
+      title: "Finishing update",
+      status: "Restarting in 0:45 to finish plugin updates",
+      absent: "Update available",
+    },
+    {
+      // Applying is busy, which otherwise titles the row "Updating Gateway…".
+      name: "an applying owed plugin retry",
+      update: null,
+      schedule: finishingSchedule({ state: "applying" }),
+      title: "Finishing update",
+      status: "Finishing plugin updates…",
+      absent: "Update",
+    },
+  ])(
+    "names the campaign for $name in the compact row and its card",
+    async ({ update, schedule, title, status, absent }) => {
+      vi.useFakeTimers({ now: 1_000 });
+      const element = await mount(update, { compact: true, updateSchedule: schedule });
+
+      expect(element.find(".sidebar-issues-panel__entity")?.textContent).toBe(title);
+      expect(element.find(".sidebar-issues-panel__state")?.textContent).toBe(status);
+      expect(element.text()).not.toContain(absent);
+      await element.update({ compact: false });
+      expect(element.action()?.textContent).toBe(status);
+      expect(element.text()).not.toContain(absent);
+    },
+  );
+
+  it.each([
+    {
+      name: "countdown",
+      campaign: { state: "countdown", applyAtMs: 46_000 },
+      status: "Restarting in 0:45 to finish plugin updates",
+      hold: true,
+    },
+    {
+      name: "waiting-for-idle",
+      campaign: { state: "waiting-for-idle", forceAtMs: 61_000 },
+      status: "Waiting for active work · restarting in 1:00 to finish plugin updates",
+      hold: true,
+    },
+    {
+      name: "held",
+      campaign: { state: "countdown", applyAtMs: 46_000, holdUntilMs: 61_000 },
+      status: "Restart held · resumes in 1:00",
+      hold: false,
+    },
+    {
+      name: "applying",
+      campaign: { state: "applying" },
+      status: "Finishing plugin updates…",
+      hold: false,
+    },
+  ] as const)(
+    "keeps the $name finishing restart visible beside the update that owes it",
+    async ({ campaign, status, hold }) => {
+      // Only the clock is fixed; the details toggle event still needs real timers.
+      vi.useFakeTimers({ now: 1_000, toFake: ["Date"] });
+      // The Gateway reports the update that left plugins owed as its last, successful run.
+      const element = await mount(null, {
+        compact: true,
+        updateSchedule: finishingSchedule({ id: "campaign-owed", ...campaign }),
+        updateRun: succeededRun({ finishedAtMs: -60_000, after: { version: "2026.9.2" } }),
+      });
+
+      expect(element.find(".sidebar-issues-panel__entity")?.textContent).toBe("Finishing update");
+      expect(element.find(".sidebar-issues-panel__state")?.textContent).toBe(status);
+      await element.expand();
+      expect(element.action()?.textContent).toBe(status);
+      expect(Boolean(element.find(".sidebar-update-card__hold"))).toBe(hold);
+      const outcome = element.element.querySelectorAll(".sidebar-update-card__title");
+      expect([...outcome].map((title) => title.textContent)).toEqual([
+        "✅ OpenClaw updated to 2026.9.2.",
+      ]);
+    },
+  );
+
+  it("keeps a recorded run ahead of a release campaign", async () => {
+    vi.useFakeTimers({ now: 1_000, toFake: ["Date"] });
+    const element = await mount(stableUpdate, {
+      compact: true,
+      updateSchedule: packageSchedule({ state: "countdown", applyAtMs: 46_000 }),
+      updateRun: succeededRun({ finishedAtMs: -60_000, after: { version: "2026.9.2" } }),
+    });
+
+    expect(element.find(".sidebar-issues-panel__entity")?.textContent).toBe(
+      "OpenClaw updated to 2026.9.2.",
+    );
+    await element.expand();
+    expect(element.find("[role='timer']")).toBeNull();
+    expect(element.find(".sidebar-issues-panel__action")?.textContent).toBe("View update details");
+  });
+
+  it("keeps a finishing countdown in view when opened beside a failed run", async () => {
+    vi.useFakeTimers({ now: 1_000, toFake: ["Date"] });
+    const status = "Restarting in 0:45 to finish plugin updates";
+    const element = await mount(null, {
+      compact: true,
+      onCheckStatus: vi.fn(() => createDeferred<boolean>().promise),
+      updateSchedule: finishingSchedule({ state: "countdown", applyAtMs: 46_000 }),
+      updateRun: createUpdateRunFixture({
+        status: "failed",
+        phase: "finished",
+        reason: "build-failed",
+        finishedAtMs: -60_000,
+      }),
+    });
+
+    expect(element.find("details")?.classList).toContain("sidebar-issues-panel__details--error");
+    await element.expand();
+    // No target to refresh: opening must not swap the countdown for "Checking…".
+    expect(element.props().onCheckStatus).not.toHaveBeenCalled();
+    expect(element.find(".sidebar-issues-panel__state")?.textContent).toBe(status);
+    expect(element.action()?.textContent).toBe(status);
+    expect(element.find(".sidebar-update-card__hold")).not.toBeNull();
+    expect(element.find(".sidebar-update-card__title")?.textContent).toContain(
+      "couldn't finish updating",
+    );
   });
 
   it("retries a declined hold and keeps a consumed hold hidden across rerenders after expiry", async () => {

@@ -19,10 +19,8 @@ import {
   upsertCronJobRow,
   projectCronJobThroughStorageCodec,
 } from "../cron/store/row-codec.js";
-import {
-  loadCronRuntimeAuthorities,
-  replaceCronRuntimeAuthorityRows,
-} from "../cron/store/runtime-authority-store.js";
+import { loadCronRuntimeAuthorities } from "../cron/store/runtime-authority-store.js";
+import { replaceCronRuntimeAuthorityRows } from "../cron/store/save.kernel.js";
 import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage as errorMessage } from "../infra/errors.js";
@@ -30,6 +28,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { shortenHomePath } from "../utils.js";
 import { ensureHeartbeatMonitorJobs } from "./doctor-heartbeat-cadence-migration.js";
 import { resolveLegacyHeartbeatConfig } from "./doctor-heartbeat-legacy.js";
@@ -45,6 +44,8 @@ import {
   type MigrationCommitResult,
 } from "./doctor-heartbeat-task-migration.kernel.js";
 import { readLegacyHeartbeatScratch } from "./doctor-heartbeat-task-scratch.js";
+import { decideDoctorPendingFromLiveStores } from "./doctor-live-store-pending.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import { noteDoctorMigrationResult } from "./doctor-migration-notes.js";
 import {
   analyzeLegacyHeartbeatTasks,
@@ -75,9 +76,9 @@ export async function collectHeartbeatTaskMigrationFindings(
   const findings: HealthFinding[] = [];
   for (const agent of resolveHeartbeatTaskMigrationAgents(cfg)) {
     const finding = { ...MIGRATION_FINDING_DEFAULTS, path: storePath, target: agent.agentId };
-    let monitor: ReturnType<typeof readLegacyHeartbeatScratch>;
+    let monitor: Awaited<ReturnType<typeof readLegacyHeartbeatScratch>>;
     try {
-      monitor = readLegacyHeartbeatScratch(storePath, agent.agentId, { env });
+      monitor = await readLegacyHeartbeatScratch(storePath, agent.agentId, { env });
     } catch (error) {
       const deferred = error instanceof CronStoreSelectionRequiredError;
       findings.push({
@@ -239,29 +240,32 @@ async function clearLegacyTaskTimestamps(params: {
   );
 }
 
-/** Converts valid scratch tasks and removes their source block in one SQLite transaction. */
-export async function maybeMigrateHeartbeatTasksToCron(params: {
-  cfg: OpenClawConfig;
-  shouldRepair: boolean;
-  env?: NodeJS.ProcessEnv;
-  nowMs?: number;
-}): Promise<HeartbeatTaskMigrationResult> {
-  const env = params.env ?? process.env;
-  const nowMs = params.nowMs ?? Date.now();
-  const storePath = resolveCronJobsStorePathFromConfig(params.cfg, env);
-  const changes: string[] = [];
+type HeartbeatTaskMigrationCandidate = {
+  agent: ReturnType<typeof resolveHeartbeatTaskMigrationAgents>[number];
+  document: ReturnType<typeof analyzeLegacyHeartbeatTasks>;
+  jobId: string;
+  scratch: NonNullable<CronJobScratchState["scratch"]>;
+};
+
+/** The scratch task blocks the migration converts: valid, inside a heartbeat monitor. */
+async function collectHeartbeatTaskMigrationCandidates(
+  cfg: OpenClawConfig,
+  storePath: string,
+  env: NodeJS.ProcessEnv,
+): Promise<{
+  candidates: HeartbeatTaskMigrationCandidate[];
+  warnings: string[];
+  inspectionFailed: boolean;
+}> {
+  const candidates: HeartbeatTaskMigrationCandidate[] = [];
   const warnings: string[] = [];
-  const candidates: Array<{
-    agent: ReturnType<typeof resolveHeartbeatTaskMigrationAgents>[number];
-    document: ReturnType<typeof analyzeLegacyHeartbeatTasks>;
-    jobId: string;
-    scratch: NonNullable<CronJobScratchState["scratch"]>;
-  }> = [];
-  for (const agent of resolveHeartbeatTaskMigrationAgents(params.cfg)) {
-    let monitor: ReturnType<typeof readLegacyHeartbeatScratch>;
+  let inspectionFailed = false;
+  for (const agent of resolveHeartbeatTaskMigrationAgents(cfg)) {
+    let monitor: Awaited<ReturnType<typeof readLegacyHeartbeatScratch>>;
     try {
-      monitor = readLegacyHeartbeatScratch(storePath, agent.agentId, { env });
+      monitor = await readLegacyHeartbeatScratch(storePath, agent.agentId, { env });
     } catch (error) {
+      inspectionFailed = true;
       warnings.push(
         `Agent "${agent.agentId}" heartbeat scratch could not be inspected: ${errorMessage(error)}.`,
       );
@@ -275,7 +279,6 @@ export async function maybeMigrateHeartbeatTasksToCron(params: {
     if (!document.hasTasksBlock) {
       continue;
     }
-    const tasks = document.tasks;
     try {
       validateHeartbeatTasks(document);
     } catch (error) {
@@ -284,19 +287,58 @@ export async function maybeMigrateHeartbeatTasksToCron(params: {
       );
       continue;
     }
-    if (!params.shouldRepair) {
+    candidates.push({ agent, document, jobId: monitor.jobId, scratch });
+  }
+  return { candidates, warnings, inspectionFailed };
+}
+
+/**
+ * Read-only: whether {@link maybeMigrateHeartbeatTasksToCron} would convert a task block.
+ * Undecidable when a monitor's scratch could not be read; it reads the live state database.
+ */
+export async function checkHeartbeatTaskMigrationPending(params: {
+  cfg: OpenClawConfig;
+  shouldRepair: boolean;
+  env?: NodeJS.ProcessEnv;
+}): Promise<DoctorMaintenancePending> {
+  if (!params.shouldRepair) {
+    return "none";
+  }
+  const env = params.env ?? process.env;
+  return decideDoctorPendingFromLiveStores([resolveOpenClawStateSqlitePath(env)], async () => {
+    const { candidates, inspectionFailed } = await collectHeartbeatTaskMigrationCandidates(
+      params.cfg,
+      resolveCronJobsStorePathFromConfig(params.cfg, env),
+      env,
+    );
+    return candidates.length > 0 ? "work" : inspectionFailed ? "undecidable" : "none";
+  });
+}
+
+/** Converts valid scratch tasks and removes their source block in one SQLite transaction. */
+export async function maybeMigrateHeartbeatTasksToCron(params: {
+  cfg: OpenClawConfig;
+  shouldRepair: boolean;
+  env?: NodeJS.ProcessEnv;
+  nowMs?: number;
+}): Promise<HeartbeatTaskMigrationResult> {
+  const env = params.env ?? process.env;
+  const nowMs = params.nowMs ?? Date.now();
+  const storePath = resolveCronJobsStorePathFromConfig(params.cfg, env);
+  const changes: string[] = [];
+  const { candidates, warnings } = await collectHeartbeatTaskMigrationCandidates(
+    params.cfg,
+    storePath,
+    env,
+  );
+  if (!params.shouldRepair) {
+    for (const { agent, document } of candidates) {
+      const tasks = document.tasks;
       note(
         `${tasks.length} task${tasks.length === 1 ? "" : "s"} in ${shortenHomePath(storePath)} will become independently scheduled cron jobs for agent "${agent.agentId}".`,
         "Heartbeat task migration preview",
       );
-      continue;
     }
-    candidates.push({
-      agent,
-      document,
-      jobId: monitor.jobId,
-      scratch,
-    });
   }
 
   if (!params.shouldRepair || candidates.length === 0) {
@@ -317,7 +359,7 @@ export async function maybeMigrateHeartbeatTasksToCron(params: {
 
   for (const candidate of candidates) {
     const { agent, document, jobId, scratch } = candidate;
-    const session = resolveLegacyHeartbeatSession(
+    const session = await resolveLegacyHeartbeatSession(
       params.cfg,
       agent.agentId,
       agent.heartbeat,

@@ -1,8 +1,9 @@
-import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
+import { createApproverRestrictedNativeApprovalCapabilityAsync } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapterAsync } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import {
   createChannelApproverDmTargetResolverAsync,
   createChannelNativeOriginTargetResolverAsync,
+  resolveApprovalRequestChannelAccountIdAsync,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import type {
   ExecApprovalRequest,
@@ -14,7 +15,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { listTelegramAccountIds } from "./accounts.js";
+import { listTelegramAccountIds, resolveDefaultTelegramAccountId } from "./accounts.js";
 import {
   getTelegramExecApprovalApprovers,
   isTelegramExecApprovalApprover,
@@ -30,43 +31,106 @@ import { normalizeTelegramChatId, parseTelegramTarget } from "./targets.js";
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
 type TelegramOriginTarget = { to: string; threadId?: number };
 
+// Live turns and stored sessions both carry targets such as `telegram:<chat>:topic:<id>`;
+// normalize them the same way so the origin consistency check compares like with like.
+function toTelegramOriginTarget(
+  rawTo: string | null | undefined,
+  rawThreadId: string | number | null | undefined,
+): TelegramOriginTarget | null {
+  const trimmedTo = normalizeOptionalString(rawTo);
+  if (!trimmedTo) {
+    return null;
+  }
+  const parsed = parseTelegramTarget(trimmedTo);
+  const chatId = normalizeTelegramChatId(parsed.chatId);
+  if (!chatId) {
+    return null;
+  }
+  if (parsed.directMessagesTopicId != null) {
+    return { to: `${chatId}:direct-topic:${parsed.directMessagesTopicId}` };
+  }
+  return { to: chatId, threadId: parseTelegramThreadId(rawThreadId ?? parsed.messageThreadId) };
+}
+
 function resolveTurnSourceTelegramOriginTarget(
   request: ApprovalRequest,
 ): TelegramOriginTarget | null {
-  const turnSourceChannel = normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel);
-  const rawTurnSourceTo = normalizeOptionalString(request.request.turnSourceTo) ?? "";
-  const parsedTurnSourceTarget = rawTurnSourceTo ? parseTelegramTarget(rawTurnSourceTo) : null;
-  const turnSourceTo = normalizeTelegramChatId(parsedTurnSourceTarget?.chatId ?? rawTurnSourceTo);
-  if (turnSourceChannel !== "telegram" || !turnSourceTo) {
+  if (normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel) !== "telegram") {
     return null;
   }
-  const rawThreadId =
-    request.request.turnSourceThreadId ?? parsedTurnSourceTarget?.messageThreadId ?? undefined;
-  const directMessagesTopicId = parsedTurnSourceTarget?.directMessagesTopicId;
-  return {
-    to:
-      directMessagesTopicId == null
-        ? turnSourceTo
-        : `${turnSourceTo}:direct-topic:${directMessagesTopicId}`,
-    threadId: directMessagesTopicId == null ? parseTelegramThreadId(rawThreadId) : undefined,
-  };
+  return toTelegramOriginTarget(request.request.turnSourceTo, request.request.turnSourceThreadId);
 }
 
 const resolveTelegramOriginTarget = createChannelNativeOriginTargetResolverAsync({
   channel: "telegram",
   shouldHandleRequest: shouldHandleTelegramExecApprovalRequest,
   resolveTurnSourceTarget: resolveTurnSourceTelegramOriginTarget,
-  resolveSessionTarget: (sessionTarget) => ({
-    to: normalizeTelegramChatId(sessionTarget.to) ?? sessionTarget.to,
-    threadId: parseTelegramThreadId(sessionTarget.threadId),
-  }),
+  // An unparseable stored target still has to disagree with the live turn, not vanish.
+  resolveSessionTarget: (sessionTarget) =>
+    toTelegramOriginTarget(sessionTarget.to, sessionTarget.threadId) ?? {
+      to: sessionTarget.to,
+      threadId: parseTelegramThreadId(sessionTarget.threadId),
+    },
 });
 
-const resolveTelegramApproverDmTargets = createChannelApproverDmTargetResolverAsync({
+const resolveConfiguredTelegramApproverDmTargets = createChannelApproverDmTargetResolverAsync({
   shouldHandleRequest: shouldHandleTelegramExecApprovalRequest,
   resolveApprovers: getTelegramExecApprovalApprovers,
-  mapApprover: (approver) => ({ to: approver }),
+  mapApprover: (approver): TelegramOriginTarget => ({ to: approver }),
 });
+
+const resolveTelegramApproverDmTargets = async (
+  params: Parameters<typeof resolveConfiguredTelegramApproverDmTargets>[0],
+) => {
+  const targets = await resolveConfiguredTelegramApproverDmTargets(params);
+  const originAccountId = await resolveApprovalRequestChannelAccountIdAsync({
+    cfg: params.cfg,
+    request: params.request,
+    channel: "telegram",
+  });
+  const accountId =
+    normalizeOptionalString(params.accountId) ?? resolveDefaultTelegramAccountId(params.cfg);
+  if (!originAccountId || originAccountId !== accountId) {
+    return targets;
+  }
+
+  const origin = await resolveTelegramOriginTarget(params);
+  if (!origin) {
+    return targets;
+  }
+  const parsedOrigin = parseTelegramTarget(origin.to);
+  const originChatId = normalizeTelegramChatId(parsedOrigin.chatId);
+  if (
+    parsedOrigin.chatType !== "direct" ||
+    !originChatId ||
+    originChatId.startsWith("-") ||
+    (parsedOrigin.directMessagesTopicId != null && origin.threadId != null)
+  ) {
+    return targets;
+  }
+
+  return targets.map((target) => {
+    const parsedTarget = parseTelegramTarget(target.to);
+    const targetChatId = normalizeTelegramChatId(parsedTarget.chatId);
+    if (
+      parsedTarget.chatType !== "direct" ||
+      targetChatId !== originChatId ||
+      parsedTarget.messageThreadId != null ||
+      parsedTarget.directMessagesTopicId != null ||
+      (target.threadId != null && target.threadId !== origin.threadId)
+    ) {
+      return target;
+    }
+    if (parsedOrigin.directMessagesTopicId != null) {
+      return Object.assign({}, target, {
+        to: `${originChatId}:direct-topic:${parsedOrigin.directMessagesTopicId}`,
+      });
+    }
+    return origin.threadId == null
+      ? target
+      : Object.assign({}, target, { threadId: origin.threadId });
+  });
+};
 
 function describeTelegramApprovalSetup(
   { accountId }: { accountId?: string | null },
@@ -81,7 +145,7 @@ function describeTelegramApprovalSetup(
 }
 
 export const telegramApprovalCapability: ChannelApprovalCapability = {
-  ...createApproverRestrictedNativeApprovalCapability({
+  ...createApproverRestrictedNativeApprovalCapabilityAsync({
     channel: "telegram",
     channelLabel: "Telegram",
     describeExecApprovalSetup: (params) => describeTelegramApprovalSetup(params, "exec"),
@@ -91,7 +155,7 @@ export const telegramApprovalCapability: ChannelApprovalCapability = {
       getTelegramExecApprovalApprovers({ cfg, accountId }).length > 0,
     isExecAuthorizedSender: isTelegramExecApprovalAuthorizedSender,
     isPluginAuthorizedSender: isTelegramExecApprovalApprover,
-    isNativeDeliveryEnabled: isTelegramExecApprovalClientEnabled,
+    isNativeDeliveryEnabled: async (params) => isTelegramExecApprovalClientEnabled(params),
     resolveNativeDeliveryMode: resolveTelegramExecApprovalTarget,
     requireMatchingTurnSourceChannel: true,
     resolveSuppressionAccountId: ({ target, request }) =>

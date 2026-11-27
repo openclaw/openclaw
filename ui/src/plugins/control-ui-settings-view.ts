@@ -1,7 +1,11 @@
 import { raceWithTimeout } from "@openclaw/retry";
 import type { ControlUiSettingsPlacement } from "../../../src/plugin-sdk/control-ui-settings.js";
+import { registerPluginManagementEnglish } from "../i18n/locales/en-plugin-management.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { controlUiPluginDistributions } from "./control-ui-distribution.ts";
+
+registerEnglishCatalog(registerPluginManagementEnglish);
 
 function sameSettingsPlacement(a: ControlUiSettingsPlacement, b: ControlUiSettingsPlacement) {
   return (
@@ -55,7 +59,7 @@ export async function loadPackagedSettingsView(
       ),
       15_000,
       () => {
-        throw new Error("Settings presentation timed out.");
+        throw new Error(t("pluginUi.settingsTimedOut"));
       },
     );
     lifetime.throwIfAborted();

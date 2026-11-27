@@ -31,6 +31,7 @@ import {
   transferFixture,
   transferHandler,
   workspaceTransferHandler,
+  writeManifest,
 } from "./node-worker-transfer-client.fixture.test-support.js";
 import { listen } from "./node-worker-transfer-client.test-support.js";
 
@@ -508,24 +509,42 @@ describe("node worker transfer client", () => {
     }
   });
 
-  it("rejects a wrong TLS pin on a new socket", async () => {
-    const { download } = fixture("wrong-pin");
-    const { rawManifest, manifestRef } = manifestFixture();
-    let requestCount = 0;
-    const server = createHttpsServer(
-      { cert: TEST_TLS_CERT_PEM, key: TEST_TLS_KEY_PEM },
-      (_req, res) => {
-        requestCount += 1;
-        res.writeHead(200).end(rawManifest);
+  describe.each(["download", "upload"] as const)("%s TLS admission", (direction) => {
+    it.each([
+      [undefined, /self.signed certificate|certificate has expired/iu],
+      ["", /self.signed certificate|certificate has expired/iu],
+      [" \t\n ", /self.signed certificate|certificate has expired/iu],
+      ["00".repeat(32), /gateway TLS fingerprint mismatch/u],
+      ["invalid-pin", /gateway TLS fingerprint is invalid/u],
+    ] as const)(
+      "rejects an untrusted peer with pin %j before sending HTTP bytes",
+      async (pin, error) => {
+        const { root, workspaceDir, download, upload } = fixture("tls-admission");
+        const { rawManifest, manifestRef } = manifestFixture();
+        await writeManifest(root, rawManifest);
+        await fs.mkdir(workspaceDir);
+        await fs.writeFile(path.join(workspaceDir, "result.txt"), "private workspace bytes\n");
+        let requestCount = 0;
+        let receivedBytes = 0;
+        const server = createHttpsServer(
+          { cert: TEST_TLS_CERT_PEM, key: TEST_TLS_KEY_PEM },
+          workspaceTransferHandler(rawManifest, new Map(), (received) => received.currentRef),
+        );
+        server.on("request", () => requestCount++);
+        server.on("secureConnection", (socket) => {
+          socket.on("data", (chunk: Buffer) => (receivedBytes += chunk.byteLength));
+        });
+        await using gateway = await serveTransfer(server);
+        const transfer = direction === "download" ? download : upload;
+        await expect(
+          transfer(gateway.gatewayUrl.replace(/^ws/u, "wss"), manifestRef, {
+            gatewayTlsFingerprint: pin,
+          }),
+        ).rejects.toMatchObject({ cause: { message: expect.stringMatching(error) } });
+        expect(requestCount).toBe(0);
+        expect(receivedBytes).toBe(0);
       },
     );
-    await using gateway = await serveTransfer(server);
-    await expect(
-      download(gateway.gatewayUrl.replace(/^ws/u, "wss"), manifestRef, {
-        gatewayTlsFingerprint: "00".repeat(32),
-      }),
-    ).rejects.toThrow("gateway TLS fingerprint mismatch");
-    expect(requestCount).toBe(0);
   });
 
   it.each([

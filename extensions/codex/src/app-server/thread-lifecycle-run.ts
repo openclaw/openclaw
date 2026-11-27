@@ -277,7 +277,7 @@ export async function startOrResumeThread(
         threadId: current.threadId,
         ...details,
       });
-      stageBindingReplacement("rotating a stale thread binding");
+      stageBindingReplacement(`changing ${changed}`);
     };
     const transientDelegationRestriction =
       params.params.delegationCapability === "report_only" ||
@@ -643,12 +643,13 @@ export async function startOrResumeThread(
             buildLoadedPluginThreadConfig,
             prepareResume: () => prepareCodexThreadResume(params, resumeBinding, requestContext),
             releaseRetainedThread: async (assertCurrent) => {
-              await releaseRetainedThread(
+              const released = await releaseRetainedThread(
                 resumeBinding.threadId,
                 resumeBinding.clientId,
                 assertCurrent,
                 { waitForBackgroundCleanup: true },
               );
+              return released && (!resumeBinding.clientId || resumeBinding.clientId === clientId);
             },
           });
           if (resumed) {

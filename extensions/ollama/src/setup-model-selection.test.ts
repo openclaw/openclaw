@@ -55,8 +55,8 @@ describe("Ollama onboarding model selection", () => {
         ]),
       );
       expect(models.map(({ id, maxTokens }) => ({ id, maxTokens }))).toEqual([
-        { id: "private-alias", maxTokens: 262_144 },
-        { id: "local-model", maxTokens: 8192 },
+        { id: "private-alias", maxTokens: 32_768 },
+        { id: "local-model", maxTokens: 16_384 },
       ]);
     },
   );

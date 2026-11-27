@@ -5,6 +5,11 @@ on:
     - cron: "23 4 * * *"
     - cron: "41 6 * * 1"
   workflow_dispatch:
+    inputs:
+      every_file_only:
+        description: Run only the every-file lane (no credentialed live checks)
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -20,8 +25,82 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  live_and_openwebui_checks:
+  every_file_plan:
     if: github.repository == 'openclaw/openclaw' && (github.event_name == 'workflow_dispatch' || github.event.schedule == '23 4 * * *')
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      has_files: ${{ steps.plan.outputs.has_files }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: "off"
+      - name: Plan scheduled every-file tests
+        id: plan
+        run: node --import tsx scripts/ci-scheduled-test-plan.mts
+
+  every_file_tests:
+    name: ${{ matrix.check_name }}
+    needs: [every_file_plan]
+    if: github.repository == 'openclaw/openclaw' && (github.event_name == 'workflow_dispatch' || github.event.schedule == '23 4 * * *') && needs.every_file_plan.outputs.has_files == 'true'
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJson(needs.every_file_plan.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: "off"
+          semantic-checks: "true"
+      - name: Build Node test runtime
+        id: node-test-runtime
+        if: matrix.pretest_build_mode != null
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_BUILD_PRIVATE_QA: ${{ matrix.pretest_build_mode == 'private-qa' && '1' || '0' }}
+          VITEST: "1"
+        run: pnpm build qaRuntime
+      - name: Run scheduled every-file tests
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_E2E_USE_PREBUILT_DIST: ${{ steps.node-test-runtime.outcome == 'success' && matrix.pretest_build_mode == 'private-qa' && '1' || '' }}
+          OPENCLAW_CI_TEST_RUNTIME: node
+          OPENCLAW_CI_TEST_RUNTIME_POLICY: node
+          FROZEN_TARGET: "false"
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${{ matrix.groups_gzip_base64 || '' }}
+          OPENCLAW_NODE_TEST_GROUPS_JSON: ${{ matrix.groups && toJson(matrix.groups) || '' }}
+          OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
+          OPENCLAW_NODE_TEST_ENV_JSON: ${{ toJson(matrix.env) }}
+          OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
+          OPENCLAW_NODE_TEST_TARGETS_JSON: ${{ toJson(matrix.targets) }}
+          OPENCLAW_NODE_TEST_TARGET_VOLUMES_GZIP_BASE64: ${{ matrix.target_volumes_gzip_base64 || '' }}
+          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: "[]"
+          OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
+          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
+          OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: ${{ matrix.plan_concurrency }}
+          OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: "1"
+        run: node --import tsx scripts/ci-run-node-test-shard.mts
+
+  live_and_openwebui_checks:
+    if: github.repository == 'openclaw/openclaw' && ((github.event_name == 'workflow_dispatch' && !inputs.every_file_only) || github.event.schedule == '23 4 * * *')
     permissions:
       actions: read
       contents: read
@@ -97,6 +176,7 @@ jobs:
       VYDRA_API_KEY: ${{ secrets.VYDRA_API_KEY }}
       XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
       ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+      ZAI_CODING_API_KEY: ${{ secrets.ZAI_CODING_API_KEY }}
       Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
       BYTEPLUS_ACCESS_KEY_ID: ${{ secrets.BYTEPLUS_ACCESS_KEY_ID }}
       BYTEPLUS_SECRET_ACCESS_KEY: ${{ secrets.BYTEPLUS_SECRET_ACCESS_KEY }}
@@ -127,6 +207,6 @@ jobs:
       allow_unreleased_changelog: true
       docker_lanes: update-migration
       published_upgrade_survivor_baselines: 2026.7.1 2026.8.1
-      published_upgrade_survivor_scenarios: mobile-pairing-reconnect watchos-direct-node
+      published_upgrade_survivor_scenarios: base mobile-pairing-reconnect watchos-direct-node
       shared_image_artifact_namespace: scheduled-upgrade-survivors
       shared_image_policy: no-push-artifact

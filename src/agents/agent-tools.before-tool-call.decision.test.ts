@@ -78,7 +78,7 @@ function assembledPluginTool(params: {
 
 function admittedRun(params: {
   works: ExecutionDecisionWork[];
-  authority?: () => boolean | void;
+  authority?: () => void;
   run: () => Promise<unknown>;
 }) {
   const token = createExecutionIdentityAdmissionToken("c02-tool-run", {

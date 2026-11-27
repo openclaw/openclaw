@@ -15,6 +15,8 @@
  * from work deferred until transport. Default models preparation for conditional replies.
  * Repeat --source-file <path/session-list-view-cache.ts> (or session-row-serialization.ts)
  * to pin those owners independently; each source retains its original basename.
+ * Pass --source-file for both baseline and candidate to use the same source transform.
+ * --lists 50 --page-size 200 --stream measures fresh row identities across 50 pages.
  * --max-owner-bytes-per-call <bytes> adds an opt-in sampled allocation regression
  * budget; it requires --allocations and is never an ordinary-CI timing threshold.
  */
@@ -28,6 +30,7 @@ import path from "node:path";
 import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { getHeapStatistics } from "node:v8";
 import { transformSync } from "esbuild";
 import { expandSessionRowFacts } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import type { GatewaySessionRow } from "../../src/gateway/session-utils.types.js";
@@ -39,6 +42,10 @@ const { values } = parseArgs({
     "source-file": { type: "string", multiple: true },
     output: { type: "string" },
     iterations: { type: "string", default: "3000" },
+    lists: { type: "string", default: "66" },
+    "page-size": { type: "string", default: "500" },
+    stream: { type: "boolean", default: false },
+    "cpu-profile": { type: "string" },
     allocations: { type: "boolean", default: false },
     cold: { type: "boolean", default: false },
     transmit: { type: "boolean", default: false },
@@ -95,8 +102,10 @@ hook.deregister();
 assert.equal(replaced.size, sources.size, "owner substitution did not run");
 
 const rowCount = 10_000;
-const pageSize = 500;
-const slots = 66;
+const pageSize = Number(values["page-size"]);
+const slots = Number(values.lists);
+assert(Number.isSafeInteger(pageSize) && pageSize > 1);
+assert(Number.isSafeInteger(slots) && slots > 0 && (slots - 1) * 137 + pageSize <= rowCount);
 const rows: GatewaySessionRow[] = Array.from({ length: rowCount }, (_, index) =>
   Object.freeze({
     key: `agent:main:${index % 5 ? "subagent" : "dashboard"}:synthetic-${index}`,
@@ -123,7 +132,9 @@ function page(index: number) {
   const start = slot * 137;
   const result = rows.slice(start, start + pageSize);
   const changed = Math.floor(index / slots) % pageSize;
-  result[changed] = replacements[start + changed]!;
+  result[changed] = values.stream
+    ? Object.freeze({ ...result[changed]!, updatedAt: 1_800_000_000_000 + rowCount + index })
+    : replacements[start + changed]!;
   return values.cold ? result.map((row) => Object.freeze({ ...row })) : result;
 }
 const retained: ReturnType<typeof shareSidebarSessionRows>[] = [];
@@ -163,8 +174,14 @@ const observer = new PerformanceObserver((list) => {
   }
 });
 const inspector = new Session();
-if (values.allocations) {
+if (values.allocations || values["cpu-profile"]) {
   inspector.connect();
+}
+if (values["cpu-profile"]) {
+  await inspector.post("Profiler.enable");
+  await inspector.post("Profiler.start");
+}
+if (values.allocations) {
   await inspector.post("HeapProfiler.startSampling", {
     samplingInterval: 32768,
     includeObjectsCollectedByMajorGC: true,
@@ -178,6 +195,7 @@ const loadStart = loadavg();
 const memoryStart = process.memoryUsage();
 const cpuStart = process.threadCpuUsage();
 const latency: number[] = [];
+const allocationStart = getHeapStatistics().total_allocated_bytes;
 start = performance.now();
 for (let index = 0; index < iterations; index++) {
   const at = performance.now();
@@ -186,6 +204,7 @@ for (let index = 0; index < iterations; index++) {
   await nextTurn();
 }
 end = performance.now();
+const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocationStart;
 const cpu = process.threadCpuUsage(cpuStart);
 const memoryEnd = process.memoryUsage();
 loop.disable();
@@ -194,7 +213,6 @@ observer.disconnect();
 let allocation: { totalBytes: number; ownerBytes: number } | undefined;
 if (values.allocations) {
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
-  inspector.disconnect();
   writeFileSync(`${output}.heapprofile`, JSON.stringify(profile));
   allocation = { totalBytes: 0, ownerBytes: 0 };
   const visit = (node: HeapProfiler.SamplingHeapProfileNode, owner = false) => {
@@ -209,11 +227,19 @@ if (values.allocations) {
   };
   visit(profile.head);
 }
+if (values["cpu-profile"]) {
+  const { profile } = await inspector.post("Profiler.stop");
+  writeFileSync(values["cpu-profile"], JSON.stringify(profile));
+}
+if (values.allocations || values["cpu-profile"]) {
+  inspector.disconnect();
+}
 function distribution(samples: number[]) {
   const sorted = samples.toSorted((a, b) => a - b);
   return {
     samples: sorted.length,
     totalMs: sorted.reduce((a, b) => a + b, 0),
+    p50Ms: sorted[Math.ceil(sorted.length * 0.5) - 1] ?? null,
     p95Ms: sorted[Math.ceil(sorted.length * 0.95) - 1] ?? null,
     p99Ms: sorted[Math.ceil(sorted.length * 0.99) - 1] ?? null,
     maxMs: sorted.at(-1) ?? null,
@@ -245,6 +271,7 @@ const result = {
   mode: values.allocations ? "sampled-allocation" : "untraced-timing",
   scenario: values.cold ? "cold-identities" : "warm-identities",
   transmit: values.transmit,
+  stream: values.stream,
   rowCount,
   pageSize,
   slots,
@@ -253,6 +280,7 @@ const result = {
   elapsedMs: end - start,
   mainCpuMsPerCall: (cpu.user + cpu.system) / 1000 / iterations,
   allocation,
+  allocatedBytes,
   latency: distribution(latency),
   gc: {
     total: gc(),

@@ -363,7 +363,7 @@ export function createWorkerSessionPlacementStore(
       return await readPlacementRecoveryCandidates(path, async () => {
         const result = await executeExistingOpenClawStateRead(
           { path },
-          { type: "workers.placementRecoveryCandidates" },
+          { type: "workers.placementRecoveryCandidates", input: undefined },
           { current: true },
         );
         if (!result) {

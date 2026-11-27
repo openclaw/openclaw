@@ -10,7 +10,6 @@ import { resolveCronOperatorExecutionRevision } from "../../cron/service/jobs-to
 import type { CronStoredJob } from "../../cron/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getCronManagementAuthority } from "../cron-creator-authority-grant.js";
-import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import {
   cronJobMatchesCallerScope,
   readCronCallerScope,
@@ -88,11 +87,7 @@ export const cronBindHandler: GatewayRequestHandler = defineValidatedGatewayHand
   async (options) => {
     const { params, respond, context, client, signal } = options;
     const { sessionMutationCommitGuard, hasCurrentClientAuthority } = options;
-    assertActiveAgentRuntimeAuthority(client, context);
     sessionMutationCommitGuard?.();
-    if (hasCurrentClientAuthority?.() === false) {
-      throw new Error("Automation caller authority is no longer active");
-    }
     const jobId = resolveCronJobId(params);
     if (!jobId) {
       respondMissingCronJobId(respond, "cron.bind");
@@ -127,12 +122,11 @@ export const cronBindHandler: GatewayRequestHandler = defineValidatedGatewayHand
         client,
         callerScope,
         sessionMutationCommitGuard,
-        hasCurrentClientAuthority,
       });
       capture = await captureCronCreatorSession(
         job,
         callerScope,
-        { client, context, signal },
+        { client, context, signal, hasCurrentClientAuthority },
         cfg,
         true,
       );
@@ -175,7 +169,6 @@ export const cronBindHandler: GatewayRequestHandler = defineValidatedGatewayHand
       sessionMutationCommitGuard: () => {
         sessionMutationCommitGuard?.();
         creator.assertCurrent();
-        capture.assertOperatorSourceCurrent?.();
       },
       hasCurrentClientAuthority,
     });
@@ -219,6 +212,8 @@ export const cronBindHandler: GatewayRequestHandler = defineValidatedGatewayHand
       }
       respondInvalidCronParams(respond, "cron.bind", formatErrorMessage(err));
       return;
+    } finally {
+      capture.disposeOperatorSource?.();
     }
     context.logGateway.info("cron: job bound to parent conversation", { jobId });
     respond(

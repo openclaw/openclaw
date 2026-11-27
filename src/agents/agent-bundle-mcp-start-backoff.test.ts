@@ -19,7 +19,10 @@ import { acquireNativeMcpServer } from "./native-mcp-runtime.js";
 const { warn } = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
-vi.mock("../logger.js", () => ({ logWarn: warn }));
+vi.mock("../logger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logger.js")>()),
+  logWarn: warn,
+}));
 vi.mock("./embedded-agent-mcp.js", () => ({
   loadEmbeddedAgentMcpConfig: ({ cfg }: { cfg: OpenClawConfig }) => ({
     mcpServers: cfg.mcp?.servers ?? {},
@@ -77,6 +80,9 @@ beforeEach(() => {
       }
       if (message.method === "tools/list" && serverName === "remote") {
         await listToolsGate;
+      }
+      if (message.method === "tools/call") {
+        return Response.json({ jsonrpc: "2.0", id: message.id, result: { content: [] } });
       }
       return Response.json({
         jsonrpc: "2.0",
@@ -280,7 +286,22 @@ it("refreshes a connected session while a sibling with the same startup key is u
   expect(failed.catalog.diagnostics?.[0]?.message).toContain("server unavailable");
 
   remoteToolName = "replacement";
+  const listing = Promise.withResolvers<void>();
+  listToolsGate = listing.promise;
   transport.onmessage?.({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(toolNames(await healthy.getCatalog())).toEqual(["probe"]);
+  let called = false;
+  const calling = healthy.callTool("remote", "probe", {}).then(() => {
+    called = true;
+  });
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(called).toBe(true);
+  } finally {
+    listing.resolve();
+    await calling;
+  }
   await vi.advanceTimersByTimeAsync(0);
   const refreshed = await healthy.getCatalog();
   expect(toolNames(refreshed)).toEqual(["replacement"]);

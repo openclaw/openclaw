@@ -101,10 +101,8 @@ export async function editMessageTelegram(
       const tableMode = resolveTelegramTableMode(richMessagesParams);
       const htmlText = renderTelegramHtmlText(text, { textMode, tableMode });
 
-      // Reply markup semantics:
-      // - buttons === undefined → don't send reply_markup (keep existing)
-      // - buttons is [] (or filters to empty) → send { inline_keyboard: [] } (remove)
-      // - otherwise → send built inline keyboard
+      // To keep a known keyboard, the caller must resend its complete button rows.
+      // Omit reply_markup when buttons are absent. Empty rows request removal.
       const replyMarkup =
         opts.buttons === undefined
           ? undefined
@@ -148,14 +146,13 @@ export async function editMessageTelegram(
           warn: (message) => sendLogger.warn(message),
           fallbackLimit: Number.MAX_SAFE_INTEGER,
           sender: {
-            sendPlain: (value, _fallback, label) =>
-              edit(
-                () =>
-                  Object.keys(commonTextParams).length
-                    ? api.editMessageText(chatId, messageId, value, commonTextParams)
-                    : api.editMessageText(chatId, messageId, value),
-                label,
-              ),
+            sendPlain: (value, _fallback, label, entities) =>
+              edit(() => {
+                const other = { ...commonTextParams, ...(entities?.length ? { entities } : {}) };
+                return Object.keys(other).length
+                  ? api.editMessageText(chatId, messageId, value, other)
+                  : api.editMessageText(chatId, messageId, value);
+              }, label),
             sendHtml: (value) =>
               edit(() =>
                 api.editMessageText(chatId, messageId, value, {

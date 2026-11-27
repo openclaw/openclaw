@@ -1,4 +1,4 @@
-import { chmod, writeFile } from "node:fs/promises";
+import { chmod, mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AgentHarnessSupportContext } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
@@ -69,7 +69,7 @@ function makeHarness(
   });
 }
 
-const supportHarness = makeHarness();
+const supportHarness = makeHarness({ pluginConfig: { appServer: { command: "/fixture/codex" } } });
 function supports(context: Partial<AgentHarnessSupportContext>) {
   return supportHarness.supports({ provider: "openai", requestedRuntime: "codex", ...context });
 }
@@ -113,19 +113,30 @@ const isolatedTask = {
 describe("Codex agent harness supports()", () => {
   const harness = supportHarness;
 
-  it("rejects a missing managed native binary without declaring explicit fallback", async () => {
+  it("refreshes native binary presence on activation after install and removal", async () => {
     const originalPlatform = process.platform;
     const originalArch = process.arch;
     Object.defineProperty(process, "platform", { value: "linux" });
     Object.defineProperty(process, "arch", { value: "riscv64" });
-    vi.stubEnv("PATH", "/missing-codex-path");
+    const nativeDir = sessionDirs.make();
+    vi.stubEnv("PATH", nativeDir);
     vi.stubEnv("OPENCLAW_CODEX_APP_SERVER_BIN", "");
     setManagedCodexPluginRoot("/missing-codex-plugin");
     try {
-      expect(supports({})).toEqual({
+      const context = { provider: "openai", requestedRuntime: "codex" } as const;
+      const missing = makeHarness();
+      const unavailable = {
         supported: false,
         reason: expect.stringContaining("native Codex app-server binary"),
-      });
+      };
+      const available = { supported: true, priority: 100 };
+      expect(missing.supports(context)).toEqual(unavailable);
+      expect(missing.routeSupport?.availability).toEqual(unavailable);
+      const workerStateDir = sessionDirs.make();
+      const workerRuntimeDir = path.join(workerStateDir, "codex-runtime");
+      vi.stubEnv("OPENCLAW_STATE_DIR", workerStateDir);
+      await mkdir(workerRuntimeDir);
+      await writeFile(path.join(workerRuntimeDir, "version"), "a".repeat(64), { mode: 0o600 });
       for (const appServer of [
         { command: "/custom/codex" },
         { transport: "websocket", url: "ws://127.0.0.1:4501" },
@@ -140,16 +151,23 @@ describe("Codex agent harness supports()", () => {
         ).toEqual({ supported: true, priority: 100 });
       }
       vi.stubEnv("OPENCLAW_CODEX_APP_SERVER_BIN", "/custom/env-codex");
-      expect(supports({})).toEqual({ supported: true, priority: 100 });
+      expect(makeHarness().supports(context)).toEqual(available);
 
-      const nativeDir = sessionDirs.make();
       const native = path.join(nativeDir, "codex");
+      vi.stubEnv("OPENCLAW_CODEX_APP_SERVER_BIN", "");
       await writeFile(native, "\u007fELF native artifact fixture");
       await chmod(native, 0o755);
-      vi.stubEnv("OPENCLAW_CODEX_APP_SERVER_BIN", "");
-      vi.stubEnv("PATH", nativeDir);
       // Source-built native executables need no published platform package.
-      expect(supports({})).toEqual({ supported: true, priority: 100 });
+      expect(missing.supports(context)).toEqual(unavailable);
+      const installed = makeHarness();
+      expect(installed.supports(context)).toEqual(available);
+      expect(installed.routeSupport?.availability).toEqual(available);
+
+      await unlink(native);
+      expect(installed.supports(context)).toEqual(available);
+      const removed = makeHarness();
+      expect(removed.supports(context)).toEqual(unavailable);
+      expect(removed.routeSupport?.availability).toEqual(unavailable);
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });
       Object.defineProperty(process, "arch", { value: originalArch });
@@ -160,9 +178,9 @@ describe("Codex agent harness supports()", () => {
 
   it("keeps computer-control denies out of the native-surface exemption", () => {
     expect(harness.conversationToolPolicySafeDenyTools).toContain("image_generate");
-    expect(harness.conversationToolPolicySafeDenyTools).not.toEqual(
-      expect.arrayContaining(["browser", "computer", "mobile_ui", "nodes", "screen"]),
-    );
+    for (const name of ["browser", "computer", "mobile_ui", "nodes", "screen"]) {
+      expect(harness.conversationToolPolicySafeDenyTools).not.toContain(name);
+    }
   });
 
   it.each([
@@ -209,14 +227,14 @@ describe("Codex agent harness supports()", () => {
     },
   );
 
-  it("keeps V2 host authorization on the prepared direct transport", async () => {
-    const nativeCallCount = runCodexIsolatedCompletion.mock.calls.length;
+  it("sends V2 host authorization to native Codex without a direct fallback", async () => {
+    const directCallCount = runHostPreparedIsolatedCompletion.mock.calls.length;
     const assistant = {
       role: "assistant",
       content: [{ type: "text", text: "done" }],
       stopReason: "stop",
     };
-    runHostPreparedIsolatedCompletion.mockResolvedValueOnce({ assistant });
+    runCodexIsolatedCompletion.mockResolvedValueOnce({ assistant });
     const websocketHarness = makeHarness({
       pluginConfig: {
         appServer: { transport: "websocket", url: "ws://127.0.0.1:4501" },
@@ -240,8 +258,11 @@ describe("Codex agent harness supports()", () => {
     await expect(websocketHarness.runIsolatedCompletionV2?.(params)).resolves.toEqual({
       assistant,
     });
-    expect(runHostPreparedIsolatedCompletion).toHaveBeenLastCalledWith(params);
-    expect(runCodexIsolatedCompletion).toHaveBeenCalledTimes(nativeCallCount);
+    expect(runCodexIsolatedCompletion).toHaveBeenLastCalledWith(params, expect.any(Object));
+    expect(runHostPreparedIsolatedCompletion).toHaveBeenCalledTimes(directCallCount);
+    expect(
+      websocketHarness.resolveIsolatedCompletionRuntime?.({ authorizationOwner: "host" }),
+    ).toBe("self");
   });
 
   it("delegates locked-session execution only to the voice-call plugin", () => {

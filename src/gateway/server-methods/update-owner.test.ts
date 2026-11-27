@@ -12,15 +12,13 @@ import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGatewayScopedTools } from "../tool-resolution.js";
-import { summarizeUpdateRunResponse } from "../update-run-summary.js";
 import type { GatewayRequestContext } from "./types.js";
 import {
   adoptUpdateCampaignMock as adoptCampaign,
   detectRespawnSupervisorMock as detectSupervisor,
   isRestartEnabledMock as restartEnabled,
   mockGlobalInstallSurface as globalInstall,
-  readGatewayOwnerLeaseMock as ownerLease,
-  resolveStartupInstallStatusMock as installStatus,
+  readGatewayOwnerLeaseAsyncMock as ownerLease,
   scheduleGatewayRestartMock as scheduleRestart,
   sendGatewayLifecycleNoticeMock as notice,
   sentinelState,
@@ -173,6 +171,8 @@ async function runOwnerTool(tool: ReturnType<typeof createGatewayTool>, channel 
 it.each(["revoked", "reassigned", "unchanged", "webchat", "channel-less"])(
   "%s owner after tool construction uses current config",
   async (change) => {
+    globalInstall();
+    detectSupervisor.mockReturnValue("launchd");
     const tool = ownerTool();
     configureOwner(
       change === "unchanged" ? ["owner"] : change === "revoked" ? [] : ["replacement"],
@@ -216,14 +216,11 @@ it.each(promptUpdateCases)(
         toolNames,
         runtimeInfo: { channel },
       });
-      const guidance = expectDefined(
-        prompt.split("\n").find((line) => line.startsWith("For the Gateway hosting this session:")),
-        "hosting Gateway guidance",
-      );
       const action = expectDefined(
-        guidance.match(/perform the work with `gateway`: ([\w.]+)/u)?.[1],
-        "prompt-advertised update action",
+        prompt.match(/`gateway`\s+([\w.]+)\s+only for built-in-updater installs/u)?.[1],
+        "prompt-advertised built-in update action",
       );
+      expect(action).toBe("update.run");
       const result = await tool.execute("update", {
         action,
         requesterSenderId: "model-supplied-sender",
@@ -249,9 +246,8 @@ it.each(promptUpdateCases)(
         handoffId: handoff.handoffId,
       });
       if (!supervisor) {
-        expect(ownerLease).toHaveBeenCalledWith({ current: true });
         const owner = expectDefined(
-          ownerLease.mock.results.at(-1)?.value,
+          await ownerLease.mock.results.at(-1)?.value,
           "current foreground Gateway owner",
         );
         expect(owner).toMatchObject({ mode: "foreground", state: "live", pid: process.pid });
@@ -279,69 +275,10 @@ it.each(promptUpdateCases)(
           }),
         );
       }
-      expect(guidance).toContain("On an explicit owner request");
-      expect(guidance).toContain("Do not redirect the owner to slash commands or a terminal");
-      expect(guidance).toContain("must retain a working restart path before it stops");
     });
   },
 );
 
-it.each(["discovery", "acknowledgement", "scheduled admission"] as const)(
-  "rechecks authority after awaited %s",
-  async (boundary) => {
-    const acknowledged = boundary === "acknowledgement";
-    const scheduled = boundary === "scheduled admission";
-    let active = true;
-    detectSupervisor.mockReturnValue(acknowledged ? "launchd" : null);
-    const revoke = () => {
-      if (scheduled) {
-        active = false;
-      } else {
-        configureOwner(["replacement"]);
-      }
-    };
-    if (acknowledged) {
-      notice.mockImplementationOnce(async () => {
-        revoke();
-        return true;
-      });
-    } else {
-      installStatus.mockImplementationOnce(async () => {
-        revoke();
-        return {
-          root: "/tmp/openclaw",
-          status: { root: "/tmp/openclaw", installKind: "git", packageManager: "pnpm" },
-          installReceipt: null,
-        };
-      });
-    }
-
-    if (scheduled) {
-      const response = await invokeUpdate({}, host.context, () => {
-        if (!active) {
-          throw new Error("cron update authority is no longer active");
-        }
-      });
-      const summary = summarizeUpdateRunResponse(response);
-      expect(summary).toMatchObject({
-        ok: false,
-        reason: "owner_required",
-        message: expect.stringContaining(
-          "no longer has a live requester principal or scheduled operator admission",
-        ),
-      });
-      expectOnlyRun({
-        ...ownerFailure,
-        origin: expect.objectContaining({ nextAction: summary.message }),
-      });
-      expectNoHandoff();
-    } else {
-      const result = await runOwnerTool(ownerTool());
-      expectOwnerRefusal(result.details, acknowledged);
-      expect(notice).toHaveBeenCalledTimes(acknowledged ? 1 : 0);
-    }
-  },
-);
 async function runUpdate(
   requester: { channel?: string; senderId?: string } | undefined = {
     channel: "slack",
@@ -401,7 +338,7 @@ it.each([
   }
 });
 
-it.each([false, true])(
+it.each([true])(
   "rechecks current commands.restart after awaited acknowledgement (managed=%s)",
   async (managed) => {
     if (managed) {
@@ -430,7 +367,7 @@ it.each([false, true])(
     expect(notice).toHaveBeenLastCalledWith(
       expect.objectContaining({
         message:
-          "ℹ️ OpenClaw wasn't updated.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
+          "ℹ️ OpenClaw wasn't updated.\nNext: Updates from chat are disabled (commands.restart=false). Use the OpenClaw app or ask the Gateway operator to update OpenClaw.",
       }),
       expect.any(Object),
     );

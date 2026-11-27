@@ -5,6 +5,7 @@ export function PanelEmptyState(props: {
   icon?: JSX.Element;
   heading: string;
   description: string;
+  details?: JSX.Element;
   action?: JSX.Element;
   /** Explicit session presentation; omitted keeps existing consumers unchanged. */
   presentation?: "desktop" | "mobile";
@@ -27,6 +28,7 @@ export function PanelEmptyState(props: {
             {(!props.presentation || props.description) && (
               <p class="empty-state__description">{props.description}</p>
             )}
+            {props.details}
           </div>
         )}
       </div>

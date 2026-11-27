@@ -22,6 +22,7 @@ import {
   settlePendingPackageActivation,
 } from "./package-update-activation.js";
 import { createPublicationOwner } from "./package-update-publication-owner.js";
+import { publishWithoutPathExchange } from "./package-update-swap.assertions.test-support.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
 const fixture = createPackageActivationLifetimeFixture();
@@ -54,6 +55,32 @@ afterEach(async () => {
   }
 });
 
+it.skipIf(process.platform === "win32")(
+  "a separate helper reports and retires unpublished preparation after lease loss",
+  () =>
+    fixture.lifetime.run(async () => {
+      const { childGuardEnv } = fixture.setup();
+      const prepared = await fixture.prepare();
+      const record = openPackageActivationJournal(prepared.anchor).read();
+      fs.unlinkSync(record.descriptor.authority.databasePath);
+      const before = fixture.snapshotControl(prepared.anchor);
+      const run = recoveryCommand(prepared, childGuardEnv(process.env));
+      const status = run("status");
+      expect(status.status, status.stderr).toBe(0);
+      expect(JSON.parse(status.stdout)).toMatchObject({
+        phase: "prepared",
+        operationId: prepared.operationId,
+      });
+      expect(fixture.snapshotControl(prepared.anchor)).toEqual(before);
+      expect(fs.existsSync(record.descriptor.authority.databasePath)).toBe(false);
+      const repaired = run("repair");
+      expect(repaired.status, repaired.stderr).toBe(0);
+      expect(JSON.parse(repaired.stdout)).toMatchObject({ phase: "complete" });
+      expect(repaired.stderr).toContain("unpublished prepared package update");
+      expect(() => assertNoPendingPackageActivation(prepared.packageRoot)).not.toThrow();
+    }),
+);
+
 it.skipIf(process.platform === "win32").each([false, true])(
   "recovers after private permission repair and preserves package integrity checks (changed=%s)",
   (changed) =>
@@ -74,6 +101,8 @@ it.skipIf(process.platform === "win32").each([false, true])(
         packageModes(path.join(root, "stage/lib/node_modules/openclaw"), false);
       });
       const journal = openPackageActivationJournal(prepared.anchor);
+      // The interruption leaves the installation displaced, which only the two moves do.
+      publishWithoutPathExchange();
       const originalRename = fsp.rename;
       const interrupted = vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
         if (from === path.join(prepared.anchor, "candidate")) {
@@ -115,7 +144,7 @@ it.skipIf(process.platform === "win32").each([false, true])(
       }
       expect(fs.readFileSync(prepared.launcher, "utf8")).toBe("candidate launcher\n");
       expect(fs.statSync(path.join(prepared.packageRoot, "dist/index.js")).mode & 0o777).toBe(
-        0o600,
+        0o650,
       );
       expect(
         JSON.parse(fs.readFileSync(path.join(prepared.packageRoot, "package.json"), "utf8")),

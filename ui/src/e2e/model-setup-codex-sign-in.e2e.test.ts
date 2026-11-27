@@ -84,7 +84,7 @@ suite.define(() => {
           }
           if (state === "after") {
             await gateway.resolveDeferred("wizard.next");
-            await page.getByRole("heading", { name: "Connection verified" }).waitFor();
+            await page.getByRole("heading", { name: "Model verified" }).waitFor();
           }
         },
       );

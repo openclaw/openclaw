@@ -1,10 +1,6 @@
 import { createEffect, createMemo, onSettled } from "solid-js";
 import { focusWithoutTooltip } from "../../../components/tooltip.ts";
-import type {
-  ChatAttachment,
-  ChatSelectionAnnotation,
-  ChatSelectionSource,
-} from "../../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatSelectionAnnotation } from "../../../lib/chat/chat-types.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
@@ -37,7 +33,7 @@ export function ChatCommentController(view: {
   presented: boolean;
   onFocusComposer?: () => void;
   visiblePin?: (id: string) => HTMLElement | undefined;
-  resolveSourceRange?: (source: ChatSelectionSource) => Range | undefined;
+  sourceBubbles?: () => Iterable<HTMLElement> | undefined;
 }) {
   const host = document.createElement("openclaw-chat-comment-controller");
   host.style.display = "contents";
@@ -176,14 +172,16 @@ export function ChatCommentController(view: {
     editorAnchor = anchor;
     const paneId = view.paneId;
     const sessionKey = view.sessionKey;
-    const sourceRange = view.resolveSourceRange?.(attachment.selectionAnnotation);
     try {
       const position = await showChatAnnotationEditor(
         {
           paneId,
           anchorRect: anchor.getBoundingClientRect(),
           anchorElement: anchor,
-          sourceRange,
+          selectionAnchor: {
+            selection: attachment.selectionAnnotation,
+            bubbles: view.sourceBubbles?.(),
+          },
           comment: attachment.selectionAnnotation.comment,
           expanded: true,
           readSignal: owner.signal,
@@ -256,7 +254,7 @@ export function ChatCommentController(view: {
     } catch (error) {
       if (editorOwner === owner && canChange(signal)) {
         retireEditor();
-        showToast({ message: formatUiError(error) });
+        showToast({ severity: "error", message: formatUiError(error) });
       }
       return;
     }

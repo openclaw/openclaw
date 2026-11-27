@@ -10,7 +10,7 @@ import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
 const suite = support.createSessionManagementE2eSuite();
 
 suite.define(() =>
-  it("keeps the browser-local draft pencil visible on active Home beside activity", () =>
+  it("preserves a Home draft without showing it on the rail", () =>
     ui.withSessionPage(
       suite,
       async (page) => {
@@ -33,37 +33,27 @@ suite.define(() =>
         await composer.waitFor({ state: "visible" });
         await support.captureUiProof(suite, page, "draft-indicator-before.png");
 
-        const homeBox = await ui.bounds(homeRow);
         const restingActivity = await ui.bounds(homeRow.getByRole("img", { name: "Active run" }));
         await composer.fill("Keep this unsent");
         const activity = homeRow.getByRole("img", { name: "Active run" });
         const draft = homeRow.getByRole("img", { name: "Unsent draft" });
         await activity.waitFor();
-        await draft.waitFor();
-        const activityBox = await ui.bounds(activity);
-        const draftBox = await ui.bounds(draft);
-        // The compact badge overlays the corner, not the centered run glyph.
-        expect(ui.centerX(activityBox)).toBeCloseTo(ui.centerX(restingActivity), 1);
-        expect(ui.centerY(activityBox)).toBeCloseTo(ui.centerY(restingActivity), 1);
-        expect(draftBox.x).toBeGreaterThanOrEqual(homeBox.x);
-        expect(ui.right(draftBox)).toBeLessThanOrEqual(ui.right(homeBox));
-        expect(draftBox.y + draftBox.height).toBeLessThanOrEqual(homeBox.y + homeBox.height);
-        expect(
-          draftBox.x > activityBox.x + activityBox.width / 2 ||
-            draftBox.y > activityBox.y + activityBox.height / 2,
-        ).toBe(true);
-        await support.captureUiProof(suite, page, "draft-indicator-active.png");
+        await expect.poll(() => draft.count()).toBe(0);
 
         await secondRow.getByRole("link").click();
         await ui.expectSessionPath(page, secondKey);
-        await draft.waitFor();
+        expect(await draft.count()).toBe(0);
+        const activityBox = await ui.bounds(activity);
+        expect(ui.centerX(activityBox)).toBeCloseTo(ui.centerX(restingActivity), 1);
+        expect(ui.centerY(activityBox)).toBeCloseTo(ui.centerY(restingActivity), 1);
+        await support.captureUiProof(suite, page, "draft-indicator-inactive.png");
 
         await openHomeFullPage(page);
         await waitForControlUiRoute(page, {
           pathname: support.controlUiSessionPath(mainKey),
           routeId: "chat",
         });
-        await draft.waitFor();
+        await expect.poll(() => draft.count()).toBe(0);
         const presentedPanes = page.locator('openclaw-chat-pane[aria-hidden="false"]');
         await expect
           .poll(() =>
@@ -78,7 +68,7 @@ suite.define(() =>
         await waitForSettledFormControls(page, [{ locator: composer, value: "" }]);
         await expect.poll(() => draft.count()).toBe(0);
         // Opening Home collapses the desktop list while keeping the rail available.
-        await ui.button(page.locator(".sidebar-rail"), "Sessions").click();
+        await page.locator('.sidebar-rail [data-navigation-view="sessions"]').click();
         await secondRow.getByRole("link").click();
         await ui.expectSessionPath(page, secondKey);
         await expect.poll(() => draft.count()).toBe(0);

@@ -7,6 +7,7 @@ import {
   readSqliteTranscriptPayload,
   sqliteTranscriptPayloadColumns,
 } from "../../../lib/sqlite-transcript-payload.mjs";
+import { assertCompletedUpdate } from "../../../lib/update-receipt.mjs";
 import {
   UPGRADE_SURVIVOR_ASSERTION_SCENARIOS,
   usesCronOwnerAtBaseline,
@@ -496,6 +497,27 @@ function assertConfigSurvived() {
     }
   }
 
+  if (coverage && acceptsIntent(coverage, "skill-library-split")) {
+    const baseline = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE === "baseline";
+    const mode = process.env.OPENCLAW_FROZEN_UPGRADE_SURVIVOR_SKILL_LIBRARY_MODE ?? "current";
+    assert(mode === "current" || mode === "preserve", "Unknown skill library migration contract");
+    const alreadySplit = coverage.baselineSkillLibraryToolSplit === true;
+    const preserve = baseline || alreadySplit || mode === "preserve";
+    assert(
+      JSON.stringify(config.tools?.allow) ===
+        JSON.stringify(
+          preserve ? ["read", "skill_workshop"] : ["read", "skill_workshop", "skill_library"],
+        ),
+      "Pre-split skill_workshop allowlist did not keep covering skill_library exactly once",
+    );
+    assert(
+      (baseline && coverage.baselineSkillLibraryToolSplit === undefined) ||
+        config.meta?.migrations?.skillLibraryToolSplit ===
+          (alreadySplit || (!baseline && mode === "current") ? true : undefined),
+      "Skill library split migration marker was not recorded",
+    );
+  }
+
   if (coverage && acceptsIntent(coverage, "silent-reply-internal-retirement")) {
     const baseline = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE === "baseline";
     assertStrict.deepEqual(
@@ -523,6 +545,16 @@ function assertConfigSurvived() {
 
   if (acceptsIntent(coverage, "skills")) {
     assert(config.skills?.allowBundled?.includes("memory"), "memory skill allowlist changed");
+  }
+
+  if (coverage && acceptsIntent(coverage, "skill-workshop-settings")) {
+    // Candidates since the plugin move keep these settings in the plugin's own config.
+    const workshop = config.plugins?.entries?.["skill-workshop"]?.config ?? config.skills?.workshop;
+    assertStrict.deepEqual(
+      { mode: workshop?.autonomous?.mode, maxSkillBytes: workshop?.maxSkillBytes },
+      { mode: "off", maxSkillBytes: 8000 },
+      "Skill Workshop settings changed across the update",
+    );
   }
 
   if (acceptsIntent(coverage, "plugins")) {
@@ -1365,13 +1397,20 @@ function readInstalledPluginIndex() {
 
 function assertBaselinePlugin([expectedVersion, pluginId, tag]) {
   assert(["latest", "beta", "alpha"].includes(tag), "baseline plugin selector is not moving");
-  const record = readInstalledPluginIndex().installRecords[pluginId];
-  assert(record?.source === "npm", "baseline plugin was not installed from npm");
-  assert(record.spec === `@openclaw/${pluginId}@${tag}`, "baseline plugin selector changed");
-  const installed = readJson(path.join(resolveHomePath(record.installPath), "package.json"));
+  const records = readInstalledPluginIndex().installRecords;
+  const record = records[pluginId];
+  const installed =
+    record?.source === "npm"
+      ? readJson(path.join(resolveHomePath(record.installPath), "package.json"))
+      : assertExternalPluginInstall(records, pluginId, `@openclaw/${pluginId}`);
+  const prefix = record.source === "clawhub" ? "clawhub:" : "";
+  assert(
+    record.spec === `${prefix}@openclaw/${pluginId}@${tag}`,
+    "baseline plugin selector changed",
+  );
   assert(installed.name === `@openclaw/${pluginId}`, "baseline plugin package identity changed");
   assert(installed.version === expectedVersion, "baseline plugin is not the baseline version");
-  console.log(`Baseline npm plugin: @openclaw/${pluginId}@${expectedVersion}, selector=${tag}.`);
+  console.log(`Baseline plugin: @openclaw/${pluginId}@${expectedVersion}, selector=${tag}.`);
 }
 
 function assertExternalPluginInstall(records, pluginId, packageName) {
@@ -1509,7 +1548,6 @@ function assertNpmPluginInstall([
   const records = readInstalledPluginIndex().installRecords ?? {};
   const packageJson = assertExternalPluginInstall(records, pluginId, packageName);
   const record = records[pluginId];
-  assert(record.source === "npm", `${pluginId} plugin must be installed from npm`);
   assertPluginArtifactConsent(
     record,
     pluginId,
@@ -1536,8 +1574,25 @@ function assertNpmPluginInstall([
     expectedTarball = publishedCompanionTarball;
   }
   const archive = fs.readFileSync(expectedTarball);
-  const integrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
-  assert(record.integrity === integrity, `${pluginId} plugin registry artifact integrity changed`);
+  const npmIntegrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
+  // ClawHub records the archive's SHA-256 separately from npm's SHA-512.
+  // Check every recorded digest so a matching field cannot hide stale provenance.
+  const expectedDigests =
+    record.source === "clawhub"
+      ? {
+          integrity: `sha256-${createHash("sha256").update(archive).digest("base64")}`,
+          npmIntegrity,
+          clawpackSha256: createHash("sha256").update(archive).digest("hex"),
+        }
+      : { integrity: npmIntegrity };
+  const recordedDigests = Object.keys(expectedDigests).filter(
+    (field) => record[field] !== undefined,
+  );
+  assert(
+    recordedDigests.length > 0 &&
+      recordedDigests.every((field) => record[field] === expectedDigests[field]),
+    `${pluginId} plugin registry artifact integrity changed`,
+  );
 }
 
 function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSupported]) {
@@ -1811,14 +1866,29 @@ function assertExpectedMissingCodexOutcomes(result, expectedVersion) {
   return failures;
 }
 
-function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot]) {
+function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot, verifyRestart]) {
   let result;
   let outcome = "failed";
   let message;
   try {
     assert(file && expectedVersion, "assert-successful-update-json requires a path and version");
     result = readUpdateJson(file);
-    assertSuccessfulUpdateResult(result, expectedVersion);
+    const lifecycle = assertSuccessfulUpdateResult(result, expectedVersion);
+    if (lifecycle && verifyRestart === "1") {
+      assertStrict.equal(result.target?.version, expectedVersion);
+      assertStrict.equal(result.verification?.runningVersion, expectedVersion);
+      assertStrict.equal(result.verification?.runningBuildId, result.after?.buildId);
+      assert(result.after?.buildId, "serving Gateway did not report an activated build");
+      assert(
+        result.verification.booted &&
+          result.verification.serviceRunning &&
+          result.verification.coreReady &&
+          result.verification.versionMatch &&
+          result.steps.some(({ step, status }) => step === "activating" && status === "completed"),
+        "update did not verify activation of the serving Gateway",
+      );
+      process.stdout.write("resident");
+    }
     outcome = "passed";
   } catch (error) {
     message = error instanceof Error ? error.message : String(error);
@@ -1834,7 +1904,13 @@ function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot]) {
 
 function assertSuccessfulUpdateResult(result, expectedVersion) {
   const plugins = result?.postUpdate?.plugins;
-  assert(result?.status === "ok", `update did not report ok: ${String(result?.status)}`);
+  const lifecycle = assertCompletedUpdate(result);
+  if (lifecycle) {
+    assert(
+      result.steps?.every((step) => step.status === "completed" || step.status === "skipped"),
+      "successful update contained an unfinished step",
+    );
+  }
   if (["projects-doctor", "projects-startup-migration"].includes(getScenario())) {
     assertStrict.equal(
       result.before?.version,
@@ -1864,40 +1940,82 @@ function assertSuccessfulUpdateResult(result, expectedVersion) {
     result?.after?.version === expectedVersion,
     `successful update version changed: ${String(result?.after?.version)}`,
   );
-  assert(
-    Array.isArray(result?.steps) &&
-      result.steps.every(
+  if (lifecycle) {
+    return true;
+  }
+  const rejectedStepIndex = Array.isArray(result?.steps)
+    ? result.steps.findIndex(
         (step) =>
-          step?.exitCode === 0 ||
-          (step?.name === "openclaw doctor" &&
-            step.exitCode === 86 &&
-            step.advisory?.kind === "package-post-install-doctor") ||
-          (step?.name === "candidate-gateway-startup-cleanup" &&
-            step.exitCode === null &&
-            step.advisory?.kind === "recoverable-maintenance" &&
-            !step.termination &&
-            !step.signal &&
-            !step.killed &&
-            !step.outputLimitExceeded &&
-            !step.failureFacts?.length &&
-            result.steps.some(
-              (primary) => primary?.name === "candidate-gateway-startup" && primary.exitCode === 0,
-            )) ||
-          // Doctor lint exits 1 for selected INFO findings after verified activation.
-          (step?.name === "post-activation doctor inspections" &&
-            step.exitCode === 1 &&
-            step.advisory?.kind === "recoverable-maintenance" &&
-            step.termination === "exit" &&
-            !step.signal &&
-            !step.killed &&
-            !step.outputLimitExceeded &&
-            !step.failureFacts?.length &&
-            Array.isArray(step.doctorLintFindings) &&
-            step.doctorLintFindings.length > 0 &&
-            step.doctorLintFindings.every((finding) => finding?.severity === "info")),
-      ),
-    "successful update contained a failed core step",
+          !(
+            step?.exitCode === 0 ||
+            (step?.name === "openclaw doctor" &&
+              step.exitCode === 86 &&
+              step.advisory?.kind === "package-post-install-doctor") ||
+            // The update owner intentionally skips this probe for remote/TLS profiles
+            // and when an existing Gateway owns the state; restart proof is separate.
+            (step?.name === "activated-gateway-startup" &&
+              step.exitCode === null &&
+              step.advisory?.kind === "recoverable-maintenance" &&
+              !step.termination &&
+              !step.signal &&
+              !step.killed &&
+              !step.outputLimitExceeded &&
+              !step.failureFacts?.length) ||
+            (step?.name === "candidate-gateway-startup-cleanup" &&
+              step.exitCode === null &&
+              step.advisory?.kind === "recoverable-maintenance" &&
+              !step.termination &&
+              !step.signal &&
+              !step.killed &&
+              !step.outputLimitExceeded &&
+              !step.failureFacts?.length &&
+              result.steps.some(
+                (primary) =>
+                  primary?.name === "candidate-gateway-startup" && primary.exitCode === 0,
+              )) ||
+            // Doctor lint exits 1 for selected INFO findings after verified activation.
+            (step?.name === "post-activation doctor inspections" &&
+              step.exitCode === 1 &&
+              step.advisory?.kind === "recoverable-maintenance" &&
+              step.termination === "exit" &&
+              !step.signal &&
+              !step.killed &&
+              !step.outputLimitExceeded &&
+              !step.failureFacts?.length &&
+              Array.isArray(step.doctorLintFindings) &&
+              step.doctorLintFindings.length > 0 &&
+              step.doctorLintFindings.every((finding) => finding?.severity === "info"))
+          ),
+      )
+    : -1;
+  const rejectedStep = result?.steps?.[rejectedStepIndex];
+  const rejectedDoctorFindings = Array.isArray(rejectedStep?.doctorLintFindings)
+    ? rejectedStep.doctorLintFindings
+    : undefined;
+  const rejectedStepMetadata = {
+    termination: String(rejectedStep?.termination).slice(0, 24),
+    signal: String(rejectedStep?.signal).slice(0, 24),
+    killed: Boolean(rejectedStep?.killed),
+    outputLimitExceeded: Boolean(rejectedStep?.outputLimitExceeded),
+    failureFactsCount: Array.isArray(rejectedStep?.failureFacts)
+      ? rejectedStep.failureFacts.length
+      : "missing",
+    doctorFindingsCount: rejectedDoctorFindings?.length ?? "missing",
+    doctorFindings: rejectedDoctorFindings?.slice(0, 8).map((finding) => ({
+      checkId: String(finding?.checkId).slice(0, 120),
+      severity: String(finding?.severity).slice(0, 16),
+      target: String(finding?.target ?? "").slice(0, 160),
+    })),
+  };
+  const rejectedStepContext =
+    rejectedStepIndex < 0
+      ? ""
+      : `: step ${rejectedStepIndex + 1} of ${result.steps.length}; name=${JSON.stringify(String(rejectedStep?.name).slice(0, 160))}; exitCode=${String(rejectedStep?.exitCode).slice(0, 16)}; advisory=${JSON.stringify(String(rejectedStep?.advisory?.kind).slice(0, 80))}; metadata=${JSON.stringify(rejectedStepMetadata)}`;
+  assert(
+    Array.isArray(result?.steps) && rejectedStepIndex === -1,
+    `successful update contained a failed core step${rejectedStepContext}`,
   );
+  return false;
 }
 
 function assertRepairJson([file]) {

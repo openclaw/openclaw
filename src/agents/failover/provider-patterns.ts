@@ -1,4 +1,5 @@
 import { classifyProviderFailoverSignalWithPlugin } from "../../plugins/provider-failover.js";
+import type { ProviderPlugin } from "../../plugins/provider-plugin.types.js";
 import type { FailoverReason } from "./signal.js";
 type ProviderSpecificErrorContext = {
   provider?: string;
@@ -9,11 +10,10 @@ type ProviderSpecificErrorContext = {
   errorType?: string;
   providerPlugin?: PreparedProviderFailoverOwner | null;
 };
-export type PreparedProviderFailoverOwner = {
-  id: string;
-  matchesContextOverflowError?: (ctx: ProviderSpecificErrorContext) => boolean | undefined;
-  classifyFailoverReason?: (ctx: ProviderSpecificErrorContext) => FailoverReason | null | undefined;
-};
+export type PreparedProviderFailoverOwner = Pick<
+  ProviderPlugin,
+  "id" | "matchesContextOverflowError" | "classifyFailoverReason" | "formatUserFacingError"
+>;
 
 export function classifyProviderPluginError(
   context: ProviderSpecificErrorContext,

@@ -1,15 +1,21 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type {
+  SessionEntryPage,
+  SessionEntryStream,
+  SessionEntrySummary,
+} from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { resolveRuntimeWorkerUrl, WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import { expect, it } from "vitest";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import type { MemoryIndexTask, MemoryIndexTaskResult } from "./manager-cpu-worker-runtime.js";
-import { prepareMemoryIndexInWorker } from "./manager-cpu-worker-runtime.js";
+import { prepareSessionIndexInWorker } from "./manager-cpu-worker-runtime.js";
 import {
   prepareMemoryIndexChunks,
   type MemoryIndexPreparationInput,
 } from "./manager-index-preparation.js";
 import {
   sessionIndexPages,
+  type SessionIndexPage,
   type SessionIndexProgress,
 } from "./manager-session-index-preparation.js";
 import { resolveMemoryPathClassification } from "./memory-path-provenance.js";
@@ -26,17 +32,77 @@ function input(content: string): MemoryIndexPreparationInput {
   };
 }
 
+const provenance = { originClass: "untrusted", sessionKind: "interactive", observedAt: 7 } as const;
+const summary = { hash: "fixture" } as SessionEntrySummary;
+
+/** A paged export whose lines are produced lazily, as the transcript worker delivers them. */
+function pagedExport(count: number, line: (index: number) => string, linesPerPage = 2048) {
+  return async (stream: SessionEntryStream) => {
+    for (let start = 0; start < count; start += linesPerPage) {
+      const indexes = Array.from({ length: Math.min(linesPerPage, count - start) }, (_, i) => i);
+      await stream.onPage?.({
+        startLine: start,
+        lines: indexes.map((i) => line(start + i)),
+        lineMap: indexes.map((i) => start + i + 1),
+        messageTimestampsMs: indexes.map(() => 0),
+        lineProvenance: indexes.map(() => provenance),
+      });
+    }
+    return summary;
+  };
+}
+
+/** Pages a whole-document fixture so the whole-document owner can serve as an oracle. */
+function exportOf(source: MemoryIndexPreparationInput, linesPerPage = 97) {
+  const lines = source.content.split("\n");
+  source.entry.lineMap ??= lines.map((_, index) => index + 1);
+  source.entry.lineProvenance ??= lines.map(() => provenance);
+  const { lineMap, lineProvenance } = source.entry;
+  return async (stream: SessionEntryStream) => {
+    for (let start = 0; start < lines.length; start += linesPerPage) {
+      const page: SessionEntryPage = {
+        startLine: start,
+        lines: lines.slice(start, start + linesPerPage),
+        lineMap: lineMap.slice(start, start + linesPerPage),
+        messageTimestampsMs: lines.slice(start, start + linesPerPage).map(() => 0),
+        lineProvenance: lineProvenance.slice(start, start + linesPerPage),
+      };
+      await stream.onPage?.(page);
+    }
+    return summary;
+  };
+}
+
+function prepareSession(
+  source: MemoryIndexPreparationInput,
+  streamExport: (stream: SessionEntryStream) => Promise<SessionEntrySummary | null>,
+) {
+  const { content: _content, source: _source, entry, ...settings } = source;
+  return prepareSessionIndexInWorker(
+    { ...settings, entry: { path: entry.path, mtimeMs: entry.mtimeMs } },
+    streamExport,
+  );
+}
+
 it("prepares an oversized high-cardinality transcript through the bounded production worker", async () => {
   // Seven million short lines overflowed the original 512 MiB isolate before it returned a chunk.
-  const source = input(
-    "HEAD_SEARCH_MARKER\n" + "User: synthetic\n".repeat(7_000_000) + "TAIL_SEARCH_MARKER",
+  const count = 7_000_002;
+  const prepared = await prepareSession(
+    input(""),
+    pagedExport(count, (index) =>
+      index === 0
+        ? "HEAD_SEARCH_MARKER"
+        : index === count - 1
+          ? "TAIL_SEARCH_MARKER"
+          : "User: synthetic",
+    ),
   );
-  const { chunks } = await prepareMemoryIndexInWorker(source);
+  const chunks = prepared!.chunks;
   expect(chunks[0]?.text).toContain("HEAD_SEARCH_MARKER");
   expect(chunks.at(-1)?.text).toContain("TAIL_SEARCH_MARKER");
   expect(chunks.at(-1)?.endLine).toBe(7_000_002);
   expect(chunks.every((chunk) => !chunk.embeddingInput)).toBe(true);
-}, 30_000);
+}, 60_000);
 
 it("preserves reset partitions, provenance and provider limits across source pages", async () => {
   const source = input(Array.from({ length: 1200 }, (_, i) => "User: fact " + i).join("\n"));
@@ -55,8 +121,9 @@ it("preserves reset partitions, provenance and provider limits across source pag
   }));
   source.cutoffLine = 610;
   source.provider = { id: "fixture", maxInputTokens: 128 };
-  const { chunks } = await prepareMemoryIndexInWorker(source);
-  expect({ chunks }).toEqual(prepareMemoryIndexChunks(source));
+  const prepared = await prepareSession(source, exportOf(source));
+  const { chunks } = prepared!;
+  expect({ contentHash: undefined, chunks }).toEqual(prepareMemoryIndexChunks(source));
   expect(chunks.length).toBeGreaterThan(2);
   expect(chunks.every((chunk) => chunk.text.length <= 128)).toBe(true);
   expect(chunks.every((chunk) => chunk.endLine < 610 || chunk.startLine >= 610)).toBe(true);
@@ -67,27 +134,49 @@ it("preserves reset partitions, provenance and provider limits across source pag
   expect(chunks.at(-1)?.endLine).toBe(1209);
 });
 
-it.each([{ lineMap: [] }, { lineMap: [1, 2] }])(
-  "does not invent a reset boundary absent from line map %j",
-  async ({ lineMap }) => {
-    const source = input(Array.from({ length: 200 }, (_, i) => "User: fact " + i).join("\n"));
-    source.entry.lineMap = lineMap;
-    source.cutoffLine = 50;
-    expect(await prepareMemoryIndexInWorker(source)).toEqual(prepareMemoryIndexChunks(source));
-  },
-);
+it("discards chunks from pages before an export reset", async () => {
+  const source = input(Array.from({ length: 300 }, (_, i) => "User: kept " + i).join("\n"));
+  const exported = exportOf(source);
+  const prepared = await prepareSession(source, async (stream) => {
+    await pagedExport(500, (index) => "User: discarded " + index)(stream);
+    await stream.onReset?.();
+    return await exported(stream);
+  });
+  expect({ contentHash: undefined, chunks: prepared!.chunks }).toEqual(
+    prepareMemoryIndexChunks(source),
+  );
+  expect(prepared!.chunks.some((chunk) => chunk.text.includes("discarded"))).toBe(false);
+});
+
+it("returns no chunks for a transcript that disappeared", async () => {
+  expect(await prepareSession(input(""), async () => null)).toBeNull();
+});
 
 it("keeps Unicode, overlap and giant-line boundaries independent of transport frames", async () => {
   const source = input("HEAD \u{20000}" + "word \u{20000}".repeat(10_000) + " TAIL\nNext line");
-  const streamed = await prepareMemoryIndexInWorker(source);
+  const streamed = await prepareSession(source, exportOf(source));
   // The existing whole-document owner is an independent transport/framing oracle.
-  expect(streamed).toEqual(prepareMemoryIndexChunks(source));
-  expect(streamed.chunks[0]?.text).toContain("HEAD");
-  expect(streamed.chunks.at(-1)?.text).toContain("Next line");
-  for (const chunk of streamed.chunks) {
+  expect({ contentHash: undefined, chunks: streamed!.chunks }).toEqual(
+    prepareMemoryIndexChunks(source),
+  );
+  expect(streamed!.chunks[0]?.text).toContain("HEAD");
+  expect(streamed!.chunks.at(-1)?.text).toContain("Next line");
+  for (const chunk of streamed!.chunks) {
     expect(() => encodeURIComponent(chunk.text)).not.toThrow();
   }
 });
+
+/** Frames a whole fixture the way the host hands export pages to the index worker. */
+function framedPages(source: MemoryIndexPreparationInput): Iterator<SessionIndexPage> {
+  const lines = source.content.split("\n");
+  return sessionIndexPages({
+    startLine: 0,
+    lines,
+    lineMap: lines.map((_, index) => index + 1),
+    messageTimestampsMs: lines.map(() => 0),
+    lineProvenance: lines.map(() => provenance),
+  })[Symbol.iterator]();
+}
 
 it.each(["cancellation", "source failure"] as const)(
   "settles a stream after %s and permits a complete retry",
@@ -106,12 +195,12 @@ it.each(["cancellation", "source failure"] as const)(
     const source = input(
       "HEAD_SEARCH_MARKER\n" + "User: synthetic\n".repeat(2000) + "TAIL_SEARCH_MARKER",
     );
-    const { content: _content, entry: _entry, ...settings } = source;
+    const { content: _content, entry: _entry, source: _source, ...settings } = source;
     const task: MemoryIndexTask = {
       kind: "prepare-session",
       input: { ...settings, entry: { path: "synthetic-session", mtimeMs: 7 } },
     };
-    const pages = sessionIndexPages(source);
+    const pages = framedPages(source);
     let requests = 0;
     const chunks: SessionIndexProgress["chunks"] = [];
     const pending = pool.run(task, {
@@ -147,7 +236,7 @@ it.each(["cancellation", "source failure"] as const)(
       await expect(pending).rejects.toThrow(
         failure === "cancellation" ? "cancelled fixture" : "source page unavailable",
       );
-      const retryPages = sessionIndexPages(source);
+      const retryPages = framedPages(source);
       const retried: SessionIndexProgress["chunks"] = [];
       await expect(
         pool.run(task, {

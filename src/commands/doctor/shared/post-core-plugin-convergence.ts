@@ -3,21 +3,21 @@ import path from "node:path";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
-import {
-  filterRecordsToActive,
-  runActivePluginPayloadSmokeCheck,
-} from "../../../plugins/active-payload-verification.js";
+import { filterRecordsToActive } from "../../../plugins/active-payload-verification.js";
 import type { PluginCapabilityConsentHandler } from "../../../plugins/capability-consent.js";
 import {
   resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginNpmDir,
 } from "../../../plugins/install-paths.js";
+import { copyPluginInstallTransactionRequest } from "../../../plugins/install-transaction.js";
 import { listManagedPluginNpmRootsForInstallRecords } from "../../../plugins/installed-plugin-npm-roots.js";
-import type { PluginPayloadSmokeFailure } from "../../../plugins/payload-verification.js";
+import {
+  runPluginPayloadSmokeCheck,
+  type PluginPayloadSmokeFailure,
+} from "../../../plugins/payload-verification.js";
 import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
 import { repairInstalledOpenClawHostLinks } from "../../../plugins/plugin-peer-link.js";
 import { detectPluginVersionDrift } from "../../../plugins/plugin-version-drift.js";
-import { pruneStaleLocalBundledPluginInstallRecords } from "../../../plugins/stale-local-bundled-plugin-install-records.js";
 import type { PluginUpdateOutcome } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveCompatibilityHostVersion } from "../../../version.js";
@@ -133,33 +133,29 @@ async function runPostCorePluginConvergenceWithLease(
   });
   const convergenceBaseline =
     staleManagedNpmBundledPluginRepair?.installRecords ?? params.baselineInstallRecords;
-  const prunedBaseline = convergenceBaseline
-    ? pruneStaleLocalBundledPluginInstallRecords({
-        installRecords: convergenceBaseline,
-        env,
-      })
-    : null;
 
   const warnings: PostCoreConvergenceWarning[] = [];
-  const repair = await repairMissingConfiguredPluginInstalls({
-    cfg: params.cfg,
-    // App-owned activation reaches this pass before plugin migrations, without CLI cohort sync.
-    repairVersionDrift,
-    timeoutMs: params.timeoutMs,
-    workTimeoutMs: params.workTimeoutMs,
-    env,
-    ...(prunedBaseline ? { baselineRecords: prunedBaseline.records } : {}),
-    onCapabilityConsent: params.onCapabilityConsent,
-    onWarning: ({ message, pluginId }) => {
-      warnings.push({
-        ...(pluginId ? { kind: "repair", pluginId } : {}),
-        reason: message,
-        message,
-        guidance: [REPAIR_GUIDANCE],
-      });
-    },
-    beforePersistentEffect: params.beforePersistentEffect,
-  });
+  const repair = await repairMissingConfiguredPluginInstalls(
+    copyPluginInstallTransactionRequest(params, {
+      cfg: params.cfg,
+      // App-owned activation reaches this pass before plugin migrations, without CLI cohort sync.
+      repairVersionDrift,
+      timeoutMs: params.timeoutMs,
+      workTimeoutMs: params.workTimeoutMs,
+      env,
+      ...(convergenceBaseline ? { baselineRecords: convergenceBaseline } : {}),
+      onCapabilityConsent: params.onCapabilityConsent,
+      onWarning: ({ message, pluginId }) => {
+        warnings.push({
+          ...(pluginId ? { kind: "repair", pluginId } : {}),
+          reason: message,
+          message,
+          guidance: [REPAIR_GUIDANCE],
+        });
+      },
+      beforePersistentEffect: params.beforePersistentEffect,
+    }),
+  );
   params.beforePersistentEffect?.();
 
   const hostLinkInstallRecords = repair.records;
@@ -239,12 +235,8 @@ async function runPostCorePluginConvergenceWithLease(
   // selected by `filterRecordsToActive`. Without this filter, a stale install
   // record for an inactive plugin could block the update even though the
   // gateway will never load it.
-  const smoke = await runActivePluginPayloadSmokeCheck({
-    cfg: recovered.config,
-    records,
-    env,
-  });
   const smokeRecords = filterRecordsToActive({ cfg: recovered.config, records, env });
+  const smoke = await runPluginPayloadSmokeCheck({ records: smokeRecords, env });
   if (repairVersionDrift) {
     for (const drift of detectPluginVersionDrift({
       gatewayVersion: resolveCompatibilityHostVersion(env),
@@ -309,9 +301,6 @@ async function runPostCorePluginConvergenceWithLease(
     changes: [
       ...(staleManagedNpmBundledPluginRepair?.removedPluginIds.map(
         (pluginId) => `Removed stale managed install record for bundled plugin "${pluginId}".`,
-      ) ?? []),
-      ...(prunedBaseline?.stale.map(
-        (record) => `Removed stale local bundled plugin install record "${record.pluginId}".`,
       ) ?? []),
       ...repair.changes,
       ...peerLinkChanges,

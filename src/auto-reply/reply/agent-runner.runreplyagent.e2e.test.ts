@@ -71,7 +71,6 @@ import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import { resolveReplyOperationAgentTurn } from "./reply-operation-run-state.test-support.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
@@ -643,6 +642,7 @@ describe("runReplyAgent active steering", () => {
           run: { ...followupRun.run, sessionId: operation.sessionId },
         },
         replyOperation: operation,
+        runId: sourceTurnId,
         sourceTurnId,
         sessionKey: "main",
         setEntry: (nextEntry) => {
@@ -650,10 +650,7 @@ describe("runReplyAgent active steering", () => {
         },
         storePath,
       });
-      return Object.assign(controller, {
-        releaseActor: () => actor.release(),
-        [Symbol.asyncDispose]: () => actor[Symbol.asyncDispose](),
-      });
+      return Object.assign(controller, actor);
     };
     await using firstController = await createController(first, "source-first");
     attachSourceTurnRecorder({
@@ -697,7 +694,7 @@ describe("runReplyAgent active steering", () => {
       clearReplyRunForResetBySessionId("session");
       // The write has committed; only this fixture's response wrapper remains held.
       // Its manually created operation has no execution callback to release its owner.
-      await withinTest(firstController.releaseActor(), signal);
+      await withinTest(firstController.release(), signal);
       first.complete();
       const replacementEntry = makeSessionEntry({ sessionId: "replacement-session" });
       await replaceSessionEntry({ storePath, sessionKey: "main" }, replacementEntry);
@@ -831,7 +828,7 @@ describe("runReplyAgent active steering", () => {
       reason: "tool_authority_mismatch",
       disposition: "followup-policy",
       channel: "whatsapp",
-      sessionId: provided.sessionId,
+      sessionKey: provided.key,
       runId: undefined,
       activeRunId: undefined,
     });
@@ -945,14 +942,10 @@ describe("runReplyAgent active steering", () => {
 
     expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
     expect(state.backendQueueMessageMock).toHaveBeenCalledOnce();
-    expect(warning).toHaveBeenCalledWith("steering rejected; applying follow-up policy", {
-      reason: "runtime_rejected",
-      disposition: "followup-policy",
-      channel: "discord",
-      sessionId: "session",
-      runId: "incoming-run-1",
-      activeRunId: "active-run-1",
-    });
+    expect(warning).toHaveBeenCalledWith(
+      "steering rejected; applying follow-up policy",
+      expect.objectContaining({ error: "Error: queue rejected" }),
+    );
     expect(parkedSteer.fallback).toHaveBeenCalledOnce();
     expect(parkedSteer.consume).not.toHaveBeenCalled();
     active.complete();
@@ -1661,9 +1654,6 @@ describe("runReplyAgent admission and cleanup", () => {
         expect(reply).toMatchObject({ isError: true, text: expect.any(String) });
         expect(reply?.text).not.toBe("NO_REPLY");
       }
-      if (label !== "aborted answer") {
-        expect(resolveReplyOperationAgentTurn(runState)).toBe("failed");
-      }
     } finally {
       replyOperation?.complete();
       await blockFlush;
@@ -1706,7 +1696,6 @@ describe("runReplyAgent admission and cleanup", () => {
 
       await expect(run()).rejects.toThrow("persist exploded");
       if (text === undefined) {
-        expect(resolveReplyOperationAgentTurn(runState)).toBe("failed");
         expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
       }
     } finally {
@@ -1773,7 +1762,6 @@ describe("runReplyAgent admission and cleanup", () => {
           text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
           isError: true,
         });
-        expect(resolveReplyOperationAgentTurn(runState)).toBe("failed");
         expect(onBlockReply).toHaveBeenCalledWith(
           expect.objectContaining({ text: `internal ${lane}` }),
           expect.any(Object),
@@ -2120,13 +2108,14 @@ describe("runReplyAgent pending final delivery capture", () => {
     state.beforeAgentReplyRunMock.mockResolvedValue({ handled: true });
     state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
     const receipt: ReplyOperationRunState = {};
+    const onAgentRunTerminalOutcome = vi.fn();
     const { run } = createMinimalRun({
-      opts: { [REPLY_OPERATION_RUN_STATE]: receipt },
+      opts: { [REPLY_OPERATION_RUN_STATE]: receipt, onAgentRunTerminalOutcome },
       runOverrides: { terminalReplyExpectation: "result-required" },
     });
 
     await expect(run()).resolves.toBeUndefined();
-    expect(resolveReplyOperationAgentTurn(receipt)).toBe("ok");
+    expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("completed");
   });
 
   it("finalizes a hook-handled turn when source delivery is intentionally suppressed", async () => {
@@ -2167,7 +2156,6 @@ describe("runReplyAgent pending final delivery capture", () => {
     } finally {
       off();
     }
-    expect(resolveReplyOperationAgentTurn(receipt)).toBe("ok");
     // The Gateway lifecycle observer owns durable status; this runner fixture
     // proves the terminal facts it receives, without a delivery-driven writer.
     expect(terminalEvents).toEqual([
@@ -2832,6 +2820,94 @@ describe("runReplyAgent typing", () => {
     createMinimalRun,
     runEmbeddedAgentMock: state.runEmbeddedAgentMock,
     requireScheduledFollowupRunner,
+  });
+
+  it("hands a completed source reply to prequeued successors without replaying it", async () => {
+    const started = createDeferred();
+    const release = createDeferred();
+    const requests: Array<{ prompt: string; context: string }> = [];
+    const sent: string[] = [];
+    state.runEmbeddedAgentMock.mockImplementation(async (params) => {
+      const label = ["A", "B", "C"][requests.length];
+      requests.push({ prompt: params.prompt, context: params.currentInboundContext?.text ?? "" });
+      if (label === "A") {
+        started.resolve();
+        await release.promise;
+      }
+      const text = `${label}_REPLY_ONCE`;
+      sent.push(text);
+      return {
+        payloads: [],
+        meta: { durationMs: 0 },
+        sourceReplyDeliveryState: "delivered",
+        didDeliverSourceReplyViaMessageTool: true,
+        messagingToolSentTargets: [
+          { tool: "message", provider: "telegram", to: "123", text, sourceReplyFinal: true },
+        ],
+      } satisfies EmbeddedAgentRunResult;
+    });
+    const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
+    const shared = {
+      opts: { sourceReplyDeliveryMode: "message_tool_only", onBlockReply },
+      currentInboundEventKind: "user_request",
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "123",
+        ChatType: "group",
+      },
+      runOverrides: {
+        messageProvider: "telegram",
+        chatType: "group",
+        sourceReplyDeliveryMode: "message_tool_only",
+        config: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      },
+    } satisfies NonNullable<Parameters<typeof createMinimalRun>[0]>;
+    const first = createMinimalRun(shared).run();
+    await started.promise;
+    const successors = ["Fresh B question", "Repeat or discuss the prior reply"].map(
+      (prompt, index) => {
+        const queued = createMinimalRun({
+          ...shared,
+          sessionCtx: { ...shared.sessionCtx, MessageSid: `queued-${index}` },
+          isActive: true,
+          bindActiveAuthority: false,
+          isRunActive: () => true,
+          shouldFollowup: true,
+          resolvedQueueMode: "followup",
+        });
+        queued.followupRun.prompt = prompt;
+        queued.followupRun.currentInboundContext = { text: `Context for ${prompt}` };
+        return queued;
+      },
+    );
+    try {
+      for (const queued of successors) {
+        await expect(queued.run()).resolves.toBeUndefined();
+      }
+      expect(enqueueFollowupRun).toHaveBeenCalledTimes(2);
+      expect(requests).toHaveLength(1);
+      release.resolve();
+      await first;
+      await requireScheduledFollowupRunner()(successors[0]!.followupRun);
+      await successors[1]!.followupRun.controllerInput!.settlement.promise;
+
+      expect(sent).toEqual(["A_REPLY_ONCE", "B_REPLY_ONCE", "C_REPLY_ONCE"]);
+      expect(onBlockReply).not.toHaveBeenCalled();
+      expect(requests.map(({ prompt }) => prompt)).toEqual([
+        "hello",
+        "Fresh B question",
+        "Repeat or discuss the prior reply",
+      ]);
+      expect(requests[0]!.context).not.toContain("preceding turn already delivered");
+      for (const request of requests.slice(1)) {
+        expect(request.context).toContain(`Context for ${request.prompt}`);
+        expect(request.context.match(/preceding turn already delivered/g)).toHaveLength(1);
+      }
+    } finally {
+      release.resolve();
+      await first;
+    }
   });
 
   it("delivers a queued provider error after a private settled-tool completion", async () => {

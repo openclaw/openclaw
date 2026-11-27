@@ -32,11 +32,19 @@ import {
 import { isTerminalAvailable } from "../../lib/terminal-availability.ts";
 import { cachedChatAssistantIdentity, invalidateChatAvatarCache } from "./chat-avatar.ts";
 import {
+  EMPTY_QUESTION_PROJECTION,
+  projectChildSessionQuestions,
+  reuseQuestionProjection,
+} from "./chat-child-questions.ts";
+import {
   getChatHistoryLoadState,
   isChatHistoryLoading,
   synchronizeInitialChatSnapshotConnection,
 } from "./chat-history-state.ts";
-import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
+import {
+  disposeSelectedSessionMessageSubscription,
+  syncSelectedSessionMessageSubscription,
+} from "./chat-history-subscription.ts";
 import { applyChatAgentsList, resumePendingChatHistoryLoad } from "./chat-history.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
 import { resolvePlacementComposer } from "./chat-pane-placement.ts";
@@ -59,7 +67,10 @@ import { retireSessionWorkspaceCheckout } from "./components/chat-session-worksp
 import { retireChatPairingQr } from "./history-merge.ts";
 import { reconcileChatRunLifecycle, replayPendingChatAbort } from "./run-lifecycle.ts";
 import { cancelChatScroll } from "./scroll.ts";
-import { currentInlineSessionApproval } from "./session-approval-projection.ts";
+import {
+  currentInlineSessionApproval,
+  currentParticipantSessionApproval,
+} from "./session-approval-projection.ts";
 import { retireCachedPairingQr } from "./session-message-cache.ts";
 import { migrateLegacyDockVisibility } from "./sidebar-layout-legacy-migration.ts";
 import { normalizeSidebarLayout } from "./sidebar-layout.ts";
@@ -84,10 +95,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
   private outboxRecoveryReady = false;
   private gatewayReadsAvailable = false;
   private sidebarLayoutSource?: { client: ApplicationGatewaySnapshot["client"]; ready: boolean };
-  private questionProjection: { prompts: QuestionPrompt[]; revisions: number[] } = {
-    prompts: [],
-    revisions: [],
-  };
+  private questionProjection = EMPTY_QUESTION_PROJECTION;
   protected placementComposerPresentation(
     row: GatewaySessionRow | undefined,
     startupPending: boolean,
@@ -211,23 +219,12 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       agentId?: string | null;
     }) =>
       uiConversationMatches(state, state.sessionKey, request.sessionKey, request.agentId, agentId);
-    const questions = visible
-      ? listQuestionPrompts(this.questionPromptState).filter(matchesConversation)
-      : [];
-    // Question records mutate in place; their revisions own transcript-cache invalidation.
-    if (
-      questions.length !== this.questionProjection.prompts.length ||
-      questions.some(
-        (prompt, index) =>
-          prompt !== this.questionProjection.prompts[index] ||
-          prompt.revision !== this.questionProjection.revisions[index],
-      )
-    ) {
-      this.questionProjection = {
-        prompts: questions,
-        revisions: questions.map((prompt) => prompt.revision),
-      };
-    }
+    const questions = visible ? listQuestionPrompts(this.questionPromptState) : [];
+    this.questionProjection = reuseQuestionProjection(
+      this.questionProjection,
+      questions.filter(matchesConversation),
+      visible ? this.projectChildQuestions(state, questions) : undefined,
+    );
     const overlays = this.context.overlays;
     const snapshot = overlays?.snapshot;
     const inlineApproval = visible
@@ -235,7 +232,15 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       : null;
     return {
       gatewayQuestionPrompts: this.questionProjection.prompts,
+      gatewayQuestionSources: this.questionProjection.sources,
       inlineApproval,
+      participantApproval: visible
+        ? currentParticipantSessionApproval(
+            state,
+            agentId,
+            this.context.gateway.snapshot.selfUser?.id,
+          )
+        : null,
       approvalBusy: snapshot?.approvalBusy,
       approvalCanGrant: snapshot?.approvalCanGrant ?? false,
       approvalErrors: snapshot?.approvalErrors,
@@ -256,6 +261,17 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
               overlays.decideApproval(decision, approvalId, inlineApproval ?? undefined)
           : undefined,
     };
+  }
+
+  // Reads the same child roster and owner-qualified ancestry key as the subagent rows.
+  private projectChildQuestions(state: ChatPageHost, questions: readonly QuestionPrompt[]) {
+    const roster = this.projectChildRoster(this.resolveChatReadTarget());
+    return projectChildSessionQuestions(
+      state,
+      roster.subagentParentKey,
+      roster.subagentSessions,
+      questions,
+    );
   }
 
   protected applyApplicationConfig(config: ApplicationContext["config"]["current"]) {
@@ -355,6 +371,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.sessionCompanionThreads.retire();
     }
     if (sourceChanged) {
+      if (state.chatSessionMessageSubscription) {
+        disposeSelectedSessionMessageSubscription(state);
+      }
       this.retireTranscriptReads(true);
       this.retireDetailsOutputs();
       this.resetSessionReadAcknowledgements();

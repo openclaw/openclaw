@@ -1,6 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "../../agents/auth-profiles.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import * as rpcSources from "../../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { createRpcSourceForTest } from "../test-helpers.rpc-source.js";
@@ -29,9 +31,13 @@ function createActiveRun(
 
 export function registerModelAuthLogoutTests({
   mocks,
+  readAuthStatus,
+  useRealHealth,
+  setPreparedProfiles,
   createLogoutOptions,
   expectInvalid,
   expectUnknownAgentId,
+  oauthCredential,
 }: {
   mocks: {
     getRuntimeConfig: Mock;
@@ -171,6 +177,98 @@ export function registerModelAuthLogoutTests({
       const [ok, , error] = firstRespondCall(opts) ?? [];
       expect(ok).toBe(false);
       expect(error?.message).toBe("provider is required");
+    });
+  });
+
+  describe("models.authLogout revoke", () => {
+    const credential = () => oauthCredential("acme", { email: "user@example.com" });
+    function installAcme(revoke: Mock) {
+      const registry = createEmptyPluginRegistry();
+      registry.providers.push({
+        pluginId: "acme",
+        source: "acme-fixture",
+        provider: {
+          id: "acme",
+          label: "Acme Cloud Plan",
+          // A management-only method declared first must not hide the revoking one.
+          auth: [
+            {
+              id: "device",
+              label: "Sign in on another device",
+              kind: "device_code",
+              run: vi.fn(),
+              accountManagementUrl: "https://acme.example/connections",
+            },
+            {
+              id: "oauth",
+              label: "Sign in with Acme",
+              kind: "oauth",
+              run: vi.fn(),
+              revoke,
+              disconnectLabel: "Disconnect Acme Account",
+            },
+          ],
+        },
+      });
+      setActivePluginRegistry(registry);
+      mocks.ensureAuthProfileStoreWithoutExternalProfilesAsync.mockReturnValue({
+        version: 1,
+        profiles: { "acme:user": credential() },
+      });
+      mocks.listProfilesForProvider.mockReturnValue(["acme:user"]);
+    }
+    afterEach(() => resetPluginRuntimeStateForTest());
+
+    it("advertises the plugin's disconnect and manage actions on its OAuth provider", async () => {
+      installAcme(vi.fn());
+      setPreparedProfiles({ "acme:user": credential() });
+      await useRealHealth();
+
+      const result = await readAuthStatus();
+
+      expect(result.providers.find((entry) => entry.provider === "acme")).toMatchObject({
+        oauthAccountActions: {
+          disconnect: { label: "Disconnect Acme Account" },
+          manage: { url: "https://acme.example/connections" },
+        },
+      });
+    });
+
+    it("removes the saved sign-in only after the provider revokes it", async () => {
+      const steps: string[] = [];
+      const revoke = vi.fn(async () => {
+        steps.push("revoke");
+      });
+      mocks.removeModelAuthCredentials.mockImplementation(async () => {
+        steps.push("remove");
+      });
+      installAcme(revoke);
+
+      const opts = await logout({ provider: "acme", profileIds: ["acme:user"], revoke: true });
+
+      expect(revoke).toHaveBeenCalledWith(
+        expect.objectContaining({ profileId: "acme:user", credential: credential() }),
+      );
+      expect(steps).toEqual(["revoke", "remove"]);
+      expect(mocks.removeModelAuthCredentials).toHaveBeenCalledWith(
+        expect.objectContaining({ profileIds: ["acme:user"] }),
+      );
+      expect(firstRespondCall(opts)?.[0]).toBe(true);
+    });
+
+    it("keeps the saved sign-in and reports the provider's error when revoke fails", async () => {
+      installAcme(vi.fn().mockRejectedValue(new Error("Acme could not revoke access (HTTP 503).")));
+
+      const opts = await logout({ provider: "acme", profileIds: ["acme:user"], revoke: true });
+
+      expect(mocks.removeModelAuthCredentials).not.toHaveBeenCalled();
+      const [ok, , error] = firstRespondCall(opts) ?? [];
+      expect(ok).toBe(false);
+      expect(error).toMatchObject({
+        code: "UNAVAILABLE",
+        message:
+          "Acme could not revoke access (HTTP 503). The sign-in is still saved on this device.",
+      });
     });
   });
 }

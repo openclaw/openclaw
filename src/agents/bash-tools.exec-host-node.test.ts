@@ -9,6 +9,9 @@ import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { captureProcessUnhandledRejections } from "./bash-tools.exec-runtime.test-support.js";
 
+const pathWarning =
+  "Warning: tools.exec.pathPrepend is ignored for host=node. Configure PATH on the node host/service instead.";
+
 type ExecAutoReviewer = typeof import("../infra/exec-auto-review.js").defaultExecAutoReviewer;
 type ExecAutoReviewDecision = Awaited<ReturnType<ExecAutoReviewer>>;
 type ExecAsk = import("../infra/exec-approvals.js").ExecAsk;
@@ -578,6 +581,7 @@ describe("executeNodeHostCommand", () => {
   });
 
   it("never replaces a detached outcome-unknown result with denial when delivery fails", async () => {
+    const observe = vi.fn();
     const unhandledRejections = captureProcessUnhandledRejections();
 
     try {
@@ -594,12 +598,17 @@ describe("executeNodeHostCommand", () => {
       followupMock.mockRejectedValueOnce(new Error("outcome-unknown follow-up unavailable"));
       setHostPolicy("full", "always");
 
-      const result = await runNode({ approvalFollowupMode: "agent", ask: "always" });
+      const result = await runNode({
+        admitShellDispatch: async () => observe,
+        approvalFollowupMode: "agent",
+        ask: "always",
+      });
 
       expect(result.details?.status).toBe("approval-pending");
       await vi.waitFor(() => expect(followupMock).toHaveBeenCalled());
       await setImmediate();
 
+      expect(observe).not.toHaveBeenCalled();
       expect(unhandledRejections.reasons).toEqual([]);
       expect(followupMock).toHaveBeenCalledOnce();
       expect(followupMock).toHaveBeenCalledWith(
@@ -653,11 +662,6 @@ describe("executeNodeHostCommand", () => {
             expect(requireGatewayCommand("system.run").callOptions).toEqual({
               scopes: ["operator.write", "operator.approvals"],
               signal: controller.signal,
-              dispatchAuthority: {
-                version: 2,
-                kind: "source-bound",
-                assertCurrent: expect.any(Function),
-              },
             }),
           );
           controller.abort(new Error("run aborted during node invocation"));
@@ -700,11 +704,6 @@ describe("executeNodeHostCommand", () => {
     expect(call.params?.timeoutMs).toBe(35_000);
     expect(call.callOptions).toEqual({
       scopes: ["operator.write", "operator.approvals"],
-      dispatchAuthority: {
-        version: 2,
-        kind: "source-bound",
-        assertCurrent: expect.any(Function),
-      },
     });
     const runParams = requireRunParams(call);
     expect(runParams).toMatchObject({
@@ -837,6 +836,7 @@ describe("executeNodeHostCommand", () => {
     { phase: "timeout policy", checkpoints: 2, reason: "approval-timeout: policy-unavailable" },
     { phase: "timeout dispatch", checkpoints: 3, reason: "invoke-failed" },
   ])("does not dispatch after revocation during $phase", async ({ checkpoints, reason }) => {
+    const observe = vi.fn();
     const policy = createHostPolicy("full", "always", "full");
     hostPolicyMock.mockReset();
     for (let index = 1; index < checkpoints; index += 1) {
@@ -847,7 +847,11 @@ describe("executeNodeHostCommand", () => {
     });
     approvalDecisionMock.mockResolvedValue(null);
 
-    const result = await runNode({ approvalFollowupMode: "agent", ask: "always" });
+    const result = await runNode({
+      admitShellDispatch: async () => observe,
+      approvalFollowupMode: "agent",
+      warnings: [pathWarning],
+    });
     expect(result.details?.status).toBe("approval-pending");
     await vi.waitFor(() => {
       expect(followupMock).toHaveBeenCalledWith(
@@ -856,31 +860,33 @@ describe("executeNodeHostCommand", () => {
       );
     });
     expect(hostPolicyMock).toHaveBeenCalledTimes(checkpoints);
+    expect(observe).toHaveBeenCalledExactlyOnceWith({ kind: "not-dispatched" });
     expectNoSystemRun();
   });
 
   it("keeps multiline direct node approval follow-up output intact", async () => {
+    const observe = vi.fn();
     setHostPolicy("full", "always");
     const stdout = "first line\r\n\tindented\n\nlast line  \t\n";
     const stderr = "warning: something\n";
     mockGateway({ stdout, stderr });
 
-    const result = await runNode({ approvalFollowupMode: "direct" });
+    const result = await runNode({
+      admitShellDispatch: async () => observe,
+      approvalFollowupMode: "direct",
+      warnings: [pathWarning],
+    });
 
     expect(result.details?.status).toBe("approval-pending");
     await vi.waitFor(() => expect(followupMock).toHaveBeenCalled());
-    expect(followupMock).toHaveBeenCalledWith(
-      expect.objectContaining({ direct: true }),
-      expect.any(String),
-    );
+    expect(observe).toHaveBeenCalledExactlyOnceWith({ kind: "exited", exitCode: 0 });
+    expect(followupMock.mock.calls[0]?.[0]).toMatchObject({ direct: true });
     const message = followupMock.mock.calls[0]?.[1];
-    if (typeof message !== "string") {
-      throw new Error("expected follow-up message");
-    }
     expect(message).toContain(`[stdout]\n${stdout}`);
     expect(message).toContain(`[stderr]\n${stderr}`);
     // The compact notify formatter would have collapsed every run of whitespace.
     expect(message).not.toContain("first line indented last line");
+    expect(message).toContain(`\n\n${pathWarning}`);
   });
 
   it("returns the reviewer denial to the agent without requesting approval or dispatching", async () => {

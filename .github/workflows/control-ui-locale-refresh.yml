@@ -22,10 +22,13 @@ on:
       - extensions/active-memory/control-ui.presentation.json
       - extensions/memory-wiki/control-ui.presentation.json
       - extensions/*/package.json
+      # Input changes that defer publication must also queue a successor refresh.
+      - extensions/**/*.ts
+      - extensions/**/*.css
       - extensions/**/i18n/locales/en.ts
       - extensions/**/i18n/locales/translated.json
       - ui/src/i18n/lib/config-hint-translation.ts
-      - ui/src/lib/fnv1a.ts
+      - src/shared/fnv1a.ts
       - src/config/schema*.ts
       - src/config/zod-schema*.ts
       - src/config/media-audio-field-metadata.ts
@@ -37,6 +40,7 @@ on:
       - scripts/lib/control-ui-i18n-sync-plan.ts
       - .github/actions/create-generated-pr-tokens/action.yml
       - .github/actions/publish-generated-pr/action.yml
+      - .github/actions/publish-generated-pr/policy.py
       - .github/workflows/control-ui-locale-refresh.yml
   release:
     types:
@@ -126,34 +130,75 @@ jobs:
           persist-credentials: false
           submodules: false
 
-      - name: Create generated PR tokens
-        id: tokens
-        uses: ./.github/actions/create-generated-pr-tokens
+      - name: Reconcile stale generated locale PR
+        uses: ./.github/actions/publish-generated-pr
         with:
+          mode: ${{ github.event_name == 'workflow_dispatch' && inputs.token_preflight_only && 'preflight' || 'reconcile-stale' }}
           contents-client-id: Iv23liOECG0slfuhz093
           contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
           pull-request-client-id: Iv23liPJCozR0uHm6P7G
           pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
-          pull-request-contents-permission: write
-
-      - name: Verify repository auto-merge setting
-        env:
-          GH_TOKEN: ${{ steps.tokens.outputs.pull-request-token }}
-          REPOSITORY_NAME: ${{ github.event.repository.name }}
-          REPOSITORY_OWNER: ${{ github.repository_owner }}
-        run: |
-          set -euo pipefail
-          auto_merge_allowed="$(
-            gh api graphql \
-              -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { autoMergeAllowed } }' \
-              -f owner="${REPOSITORY_OWNER}" \
-              -f name="${REPOSITORY_NAME}" \
-              --jq '.data.repository.autoMergeAllowed'
-          )"
-          if [[ "${auto_merge_allowed}" != "true" ]]; then
-            echo "Repository auto-merge must be enabled before generated locale publication." >&2
-            exit 1
-          fi
+          base-branch: ${{ github.event.repository.default_branch }}
+          head-branch: automation/control-ui-locale-refresh
+          commit-message: "chore(ui): refresh control ui locales"
+          pr-title: "chore(ui): refresh control ui locales"
+          auto-merge: "true"
+          generated-paths: &control-ui-generated-paths |
+            ui/src/i18n/.i18n/*.tm.jsonl
+            ui/src/i18n/.i18n/*.meta.json
+            ui/src/i18n/.i18n/catalog-fallbacks.json
+            extensions/**/i18n/.i18n/*
+            extensions/**/i18n/locales/translated.json
+            extensions/*/openclaw.plugin.json
+          invalidation-paths: &control-ui-invalidation-paths |
+            ui/src/i18n/locales/*.ts
+            ui/src/i18n/locales/en.ts
+            ui/src/i18n/locales/en-agents.ts
+            ui/src/i18n/.i18n/raw-copy-baseline.json
+            ui/src/i18n/lib/types.ts
+            ui/src/i18n/lib/registry.ts
+            src/shared/control-ui-locale.ts
+            src/shared/public-session-copy.ts
+            ui/config/control-ui-locales.ts
+            scripts/control-ui-i18n.ts
+            scripts/control-ui-locale-artifacts.ts
+            scripts/control-ui-i18n-verify.ts
+            scripts/lib/control-ui-i18n-catalog.ts
+            scripts/lib/control-ui-i18n-catalog-values.ts
+            scripts/lib/control-ui-plugin-i18n-catalog.ts
+            extensions/active-memory/control-ui.presentation.json
+            extensions/memory-wiki/control-ui.presentation.json
+            extensions/*/package.json
+            extensions/*/openclaw.plugin.json
+            extensions/**/*.ts
+            extensions/**/*.css
+            extensions/**/i18n/locales/translated.json
+            scripts/build-plugin-control-ui.mts
+            src/cli/plugins-control-ui-build.ts
+            src/cli/plugins-build-bundle.ts
+            src/plugins/sdk-alias*.ts
+            src/plugin-sdk/**
+            packages/**
+            package.json
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+            patches/**
+            ui/src/i18n/lib/config-hint-translation.ts
+            src/shared/fnv1a.ts
+            src/config/schema*.ts
+            src/config/zod-schema*.ts
+            src/config/media-audio-field-metadata.ts
+            src/config/talk-defaults.ts
+            src/config/channel-config-keys.ts
+            scripts/lib/control-ui-i18n-config.json
+            scripts/lib/control-ui-i18n-config.ts
+            scripts/lib/control-ui-i18n-raw-copy.ts
+            scripts/lib/control-ui-i18n-sync-plan.ts
+            .github/actions/create-generated-pr-tokens/action.yml
+            .github/actions/publish-generated-pr/action.yml
+            .github/actions/publish-generated-pr/policy.py
+            .github/workflows/control-ui-locale-refresh.yml
+          pr-body: "Preflight only. The finalizer supplies the generated PR body."
 
   refresh:
     needs: [resolve-base, publisher-preflight]
@@ -299,6 +344,7 @@ jobs:
       - name: Open or update generated locale PR
         uses: ./.github/actions/publish-generated-pr
         with:
+          mode: publish
           contents-client-id: Iv23liOECG0slfuhz093
           contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
           pull-request-client-id: Iv23liPJCozR0uHm6P7G
@@ -308,61 +354,8 @@ jobs:
           commit-message: "chore(ui): refresh control ui locales"
           pr-title: "chore(ui): refresh control ui locales"
           auto-merge: "true"
-          generated-paths: |
-            ui/src/i18n/.i18n/*.tm.jsonl
-            ui/src/i18n/.i18n/*.meta.json
-            ui/src/i18n/.i18n/catalog-fallbacks.json
-            extensions/**/i18n/.i18n/*
-            extensions/**/i18n/locales/translated.json
-            extensions/*/openclaw.plugin.json
-          invalidation-paths: |
-            ui/src/i18n/locales/*.ts
-            ui/src/i18n/locales/en.ts
-            ui/src/i18n/locales/en-agents.ts
-            ui/src/i18n/.i18n/glossary.*.json
-            ui/src/i18n/.i18n/raw-copy-baseline.json
-            ui/src/i18n/lib/types.ts
-            ui/src/i18n/lib/registry.ts
-            src/shared/control-ui-locale.ts
-            src/shared/public-session-copy.ts
-            ui/config/control-ui-locales.ts
-            scripts/control-ui-i18n.ts
-            scripts/control-ui-locale-artifacts.ts
-            scripts/control-ui-i18n-verify.ts
-            scripts/lib/control-ui-i18n-catalog.ts
-            scripts/lib/control-ui-i18n-catalog-values.ts
-            scripts/lib/control-ui-plugin-i18n-catalog.ts
-            extensions/active-memory/control-ui.presentation.json
-            extensions/memory-wiki/control-ui.presentation.json
-            extensions/*/package.json
-            extensions/*/openclaw.plugin.json
-            extensions/**/*.ts
-            extensions/**/*.css
-            extensions/**/i18n/locales/translated.json
-            scripts/build-plugin-control-ui.mts
-            src/cli/plugins-control-ui-build.ts
-            src/cli/plugins-build-bundle.ts
-            src/plugins/sdk-alias*.ts
-            src/plugin-sdk/**
-            packages/**
-            package.json
-            pnpm-lock.yaml
-            pnpm-workspace.yaml
-            patches/**
-            ui/src/i18n/lib/config-hint-translation.ts
-            ui/src/lib/fnv1a.ts
-            src/config/schema*.ts
-            src/config/zod-schema*.ts
-            src/config/media-audio-field-metadata.ts
-            src/config/talk-defaults.ts
-            src/config/channel-config-keys.ts
-            scripts/lib/control-ui-i18n-config.json
-            scripts/lib/control-ui-i18n-config.ts
-            scripts/lib/control-ui-i18n-raw-copy.ts
-            scripts/lib/control-ui-i18n-sync-plan.ts
-            .github/actions/create-generated-pr-tokens/action.yml
-            .github/actions/publish-generated-pr/action.yml
-            .github/workflows/control-ui-locale-refresh.yml
+          generated-paths: *control-ui-generated-paths
+          invalidation-paths: *control-ui-invalidation-paths
           pr-body: |
             ## What Problem This Solves
 

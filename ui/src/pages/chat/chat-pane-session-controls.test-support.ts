@@ -11,6 +11,7 @@ export function renderControls(
   return renderChatPaneComposerControls({
     state,
     selectedSession: state.sessionsResult?.sessions[0],
+    cachedSessionStatePending: !state.connected,
     agentDefaultModel: undefined,
     modelAccess: { allowed: true, requiredScope: "operator.write" },
     effortAccess: { allowed: true, requiredScope: "operator.write" },

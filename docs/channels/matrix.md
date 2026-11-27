@@ -29,7 +29,10 @@ Commands refuse before loading account state when a Gateway owns the state
 directory. Offline ownership lasts through crypto persistence and client shutdown.
 
 After an interrupted encrypted session, `openclaw matrix doctor inspect` reports
-accounts that need explicit snapshot recovery. Clean sessions retain their crypto
+accounts that need explicit snapshot recovery. This recovery subtree remains available
+when a pending plugin migration withholds other Matrix commands. After explicit
+recovery, finish pending migrations with `openclaw update repair` or
+`openclaw doctor --fix` before restarting the Gateway. Clean sessions retain their crypto
 guard files; do not delete them. See [encrypted-state recovery](/channels/matrix/encryption)
 before accepting a snapshot rollback.
 
@@ -148,6 +151,7 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 - `groupPolicy`: `"open"`, `"allowlist"`, or `"disabled"`. Default: `"allowlist"`.
 - `groupAllowFrom`: allowlist of user IDs for room traffic.
 - `mentionPatterns`: scoped regex patterns for room mentions. Object with `{ mode: "allow"|"deny", allowIn: [roomId, ...], denyIn: [roomId, ...] }`. Controls whether configured `agents.entries.*.groupChat.mentionPatterns` apply per-room.
+  Formatted `matrix.to` mentions must still visibly name the bot. Malformed or repetitive HTML is scanned in linear time and does not bypass mention requirements.
 - `dm.enabled`: when `false`, ignore all DMs. Default: `true`.
 - `dm.policy`: `"pairing"` (default), `"allowlist"`, `"open"`, or `"disabled"`. Applies after the bot has joined and classified the room as a DM; it does not affect invite handling.
 - `dm.allowFrom`: allowlist of user IDs for DM traffic.

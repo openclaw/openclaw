@@ -115,7 +115,7 @@ tasks:
     expectedRevision: 0,
     options: { env },
   });
-  const session = resolveLegacyHeartbeatSession(
+  const session = await resolveLegacyHeartbeatSession(
     cfg,
     agentId,
     cfg.agents?.defaults?.heartbeat,
@@ -179,9 +179,10 @@ async function readTasks(fixture: Fixture) {
   );
 }
 
-function taskState(fixture: Fixture, agentId = "main") {
-  return resolveLegacyHeartbeatSession(fixture.cfg, agentId, undefined, undefined, fixture.env)
-    .entry?.heartbeatTaskState;
+async function taskState(fixture: Fixture, agentId = "main") {
+  return (
+    await resolveLegacyHeartbeatSession(fixture.cfg, agentId, undefined, undefined, fixture.env)
+  ).entry?.heartbeatTaskState;
 }
 
 describe("heartbeat scratch task cron migration", () => {
@@ -338,8 +339,8 @@ describe("heartbeat scratch task cron migration", () => {
       everyMs: 60 * 60_000,
       anchorMs: fixture.nowMs + 30 * 60_000,
     });
-    expect(taskState(fixture, "research")).toBeUndefined();
-    expect(taskState(fixture)).toEqual({ inbox: fixture.nowMs - 10 * 60_000 });
+    expect(await taskState(fixture, "research")).toBeUndefined();
+    expect(await taskState(fixture)).toEqual({ inbox: fixture.nowMs - 10 * 60_000 });
   });
 
   it.each([
@@ -505,7 +506,7 @@ describe("heartbeat scratch task cron migration", () => {
     expect(scratch?.content).toContain("# Operations");
     expect(scratch?.content).toContain("# Keep alerts concise");
     expect(scratch?.content).not.toContain("tasks:");
-    expect(taskState(fixture)).toBeUndefined();
+    expect(await taskState(fixture)).toBeUndefined();
 
     const rerun = await migrate(fixture, { nowMs: fixture.nowMs + 10_000 });
     expect(rerun).toEqual({ changes: [], warnings: [] });
@@ -570,7 +571,7 @@ tasks:
     expect(readScratch(fixture).scratch?.content).toBe(concurrentScratch);
     const jobs = await readTasks(fixture);
     expect(jobs).toEqual([existingSnapshot]);
-    expect(taskState(fixture)).toEqual({ inbox: fixture.nowMs - 30 * 60_000 });
+    expect(await taskState(fixture)).toEqual({ inbox: fixture.nowMs - 30 * 60_000 });
   });
 
   it("serializes two plans pinned to one scratch revision and converges the loser on rerun", async () => {
@@ -607,7 +608,7 @@ tasks:
     const committedJobs = await readTasks(fixture);
     expect(committedJobs).toHaveLength(2);
     expect(readScratch(fixture).scratch?.content).not.toContain("tasks:");
-    expect(taskState(fixture)).toEqual({ inbox: fixture.nowMs - 30 * 60_000 });
+    expect(await taskState(fixture)).toEqual({ inbox: fixture.nowMs - 30 * 60_000 });
 
     cleanup.mockRestore();
     await expect(migrate(fixture, { nowMs: fixture.nowMs + 10_000 })).resolves.toEqual({

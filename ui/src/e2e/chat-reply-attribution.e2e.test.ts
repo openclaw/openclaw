@@ -1,6 +1,14 @@
+import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { subagentCompletionMessage } from "../../../src/shared/subagent-completion.js";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  chatThreadDistanceFromBottom,
+  openAiAuthor,
+  visibleChatBubbleTexts,
+  waitForChatScrollIdle,
+} from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Reply attribution" });
@@ -69,6 +77,162 @@ const replyButton = (root: Page | Locator, name: string) =>
   root.getByRole("button", { name, exact: true });
 
 suite.define(() => {
+  it.each(["reduce", "no-preference"] as const)(
+    "returns to the latest message after revealing a reply target with %s motion",
+    async (reducedMotion) => {
+      const messages = sequence(
+        Array.from({ length: 78 }, (_, index) =>
+          message(
+            `note-${index + 1}`,
+            index % 2 === 0 ? "user" : "assistant",
+            `Field note ${index + 1}`,
+            index === 76 ? { replyToId: "note-10" } : {},
+          ),
+        ),
+      );
+      await suite.withPage(
+        { viewport: { width: 1440, height: 900 }, reducedMotion },
+        async ({ page }) => {
+          await preparePage(page, `${sessionKey}-reveal`, messages, "dark");
+          const thread = page.locator(".chat-thread");
+          const latest = page.getByRole("button", { name: "Scroll to latest", exact: true });
+          const reply = thread.locator('[data-entry-id="note-77"] .chat-reply-attribution__target');
+          await reply.waitFor();
+          await thread.hover();
+          await page.mouse.wheel(0, -1200);
+          await latest.click();
+          await waitForChatScrollIdle(page);
+          expect(await chatThreadDistanceFromBottom(page)).toBeLessThanOrEqual(1);
+
+          await reply.click();
+          const original = thread.locator('[data-entry-id="note-10"].chat-bubble--reply-target');
+          await original.waitFor();
+          await original.waitFor({ state: "hidden" });
+          expect((await visibleChatBubbleTexts(page)).join("\n")).toContain("Field note 10");
+          expect(await chatThreadDistanceFromBottom(page)).toBeGreaterThan(900);
+          await expect.poll(() => latest.count()).toBe(1);
+          await latest.click();
+          await waitForChatScrollIdle(page);
+          expect(await chatThreadDistanceFromBottom(page)).toBeLessThanOrEqual(1);
+          expect((await visibleChatBubbleTexts(page)).join("\n")).toContain("Field note 78");
+          expect(await latest.count()).toBe(0);
+        },
+      );
+    },
+  );
+
+  it.each(["explicit", "current", "automatic"])(
+    "omits excerpts only for an adjacent %s reply",
+    async (replyKind) => {
+      const source = message("adjacent-prompt", "user", "Check the release checklist.", {
+        ...peer,
+        idempotencyKey: "adjacent-run:user",
+      });
+      const messages = sequence([
+        message("thread-owner", "user", "Please review today's release.", self),
+        source,
+        message(
+          "adjacent-answer",
+          "assistant",
+          "The checklist looks good.",
+          {
+            runId: "adjacent-run",
+            ...(replyKind === "explicit" ? { replyToId: "adjacent-prompt" } : {}),
+          },
+          replyKind === "current" ? { openclawDelivery: { replyToCurrent: true } } : {},
+        ),
+        message("new-prompt", "user", "Now check the release notes.", peer),
+        message("older-answer", "assistant", "One more detail about the checklist.", {
+          replyToId: "adjacent-prompt",
+          replyToMessage: { ok: true, message: source },
+        }),
+      ]);
+      await suite.withPage(
+        { viewport: { width: 1100, height: 1000 }, locale: "en-US" },
+        async ({ page }) => {
+          await preparePage(page, `${sessionKey}-adjacent`, messages, "dark", true);
+          const adjacent = page.locator(
+            '.chat-group.assistant:has([data-entry-id="adjacent-answer"])',
+          );
+          const older = page.locator('.chat-group.assistant:has([data-entry-id="older-answer"])');
+          await page.locator('[data-entry-id="older-answer"]').waitFor();
+          await replyButton(adjacent, "Replying to Jordan Lee").waitFor();
+          await replyButton(older, "Replying to Jordan Lee").waitFor();
+          expect(await adjacent.locator(".chat-reply-attribution__excerpt").count()).toBe(0);
+          expect(await older.locator(".chat-reply-attribution__excerpt").textContent()).toBe(
+            "Check the release checklist.",
+          );
+          await page.locator(".agent-chat__composer-combobox textarea").focus();
+          await page.keyboard.press(
+            (await page.evaluate(() => /Mac|iPhone|iPad|iPod/.test(navigator.platform)))
+              ? "Meta+f"
+              : "Control+f",
+          );
+          await page
+            .getByRole("textbox", { name: "Search loaded messages", exact: true })
+            .fill("looks good");
+          expect(await page.locator('[data-entry-id="adjacent-prompt"]').count()).toBe(0);
+          await expect
+            .poll(() => adjacent.locator(".chat-reply-attribution__excerpt").allTextContents())
+            .toEqual(["Check the release checklist."]);
+        },
+      );
+    },
+  );
+
+  it("only attributes the answer when a subagent finishes between the prompt and reply", async () => {
+    const messages = sequence([
+      message("earlier-prompt", "user", "Check the release notes.", self),
+      message("review-prompt", "user", "Can we share the release notes?", {
+        ...peer,
+        idempotencyKey: "reply-run:user",
+      }),
+      subagentCompletionMessage(
+        message("review-finished", "assistant", "", { runId: "earlier-run" }),
+        [{ runId: "review", sessionKey: "agent:main:subagent:review", label: "Release check" }],
+      ),
+      message(
+        "review-answer",
+        "assistant",
+        "Yes. I checked the changes, and the notes are ready to share.",
+        { runId: "reply-run" },
+        { ...openAiAuthor, phase: "final_answer", stopReason: "stop" },
+      ),
+    ]);
+    await suite.withPage(
+      { viewport: { width: 1100, height: 750 }, colorScheme: "dark", locale: "en-US" },
+      async ({ page }) => {
+        await preparePage(page, `${sessionKey}-completion`, messages, "dark", true);
+        const thread = page.locator(".chat-thread");
+        const completion = thread.getByText("Release check", { exact: true });
+        const answer = thread.locator('.chat-group.assistant:has([data-entry-id="review-answer"])');
+        const line = replyButton(answer, "Replying to Jordan Lee");
+        await completion.waitFor();
+        await line.waitFor();
+        const avatar = thread
+          .locator(".chat-group.assistant")
+          .filter({ hasText: "Release check" })
+          .locator(":scope > .chat-avatar, :scope > .chat-avatar-slot");
+        await expect
+          .poll(async () => {
+            const [label, face] = await Promise.all([
+              completion.boundingBox(),
+              avatar.boundingBox(),
+            ]);
+            return label && face
+              ? Math.abs(label.y + label.height / 2 - face.y - face.height / 2)
+              : Infinity;
+          })
+          .toBeLessThanOrEqual(1);
+        if (process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR) {
+          await thread.screenshot({ path: path.join(suite.artifactDir, "completion-reply.png") });
+        }
+        expect(await replyButton(thread, "Replying to Jordan Lee").count()).toBe(1);
+        expect((await completion.boundingBox())!.y).toBeLessThan((await line.boundingBox())!.y);
+      },
+    );
+  });
+
   it("keeps the reply line above completed work across an automatic resumption", async () => {
     const resumedSession = "agent:main:dashboard:reply-strip-resumed-work";
     const messages = sequence([
@@ -96,7 +260,7 @@ suite.define(() => {
         "assistant",
         "The checklist is ready to share.",
         { runId: "announce:review-complete" },
-        { phase: "final_answer", stopReason: "stop" },
+        { ...openAiAuthor, phase: "final_answer", stopReason: "stop" },
       ),
     ]);
     await suite.withPage(
@@ -111,7 +275,7 @@ suite.define(() => {
         const work = page.locator(".chat-work-group");
         await line.waitFor();
         await work.waitFor();
-        await answerGroup.locator(".chat-avatar:visible").waitFor();
+        await answerGroup.getByRole("img", { name: "OpenClaw", exact: true }).waitFor();
         await page
           .locator('.chat-group--peer:has([data-entry-id="review-prompt"]) .chat-avatar:visible')
           .waitFor();
@@ -220,12 +384,11 @@ suite.define(() => {
               ).toEqual([true, true]);
             }
             await action.press("Enter");
-            const preview = page
-              .locator(".chat-reply-preview")
-              .filter({ has: page.getByRole("button", { name: "Cancel reply" }) });
-            await expect
-              .poll(() => preview.locator(".chat-reply-preview__text").textContent())
-              .toBe(content);
+            const preview = page.locator(".chat-reply-preview:has(.chat-reply-preview__dismiss)");
+            const strip = preview.locator(
+              ".chat-reply-attribution__name, .chat-reply-preview__text",
+            );
+            await expect.poll(() => strip.allTextContents()).toEqual(["Jordan Lee", content]);
             await preview.getByRole("button", { name: "Cancel reply" }).click();
             await action.evaluate((button) => button.blur());
             await page.mouse.move(0, 0);

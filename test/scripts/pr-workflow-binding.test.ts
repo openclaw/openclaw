@@ -1,10 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
+import { constants as fsConstants, cpSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
+const templates = useAutoCleanupTempDirTracker(afterAll);
+const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
+let seed: { root: string; source: string } | undefined;
 const ref = "refs/openclaw/pr-workflow-bindings/123";
 const inline = readFileSync("scripts/pr", "utf8")
   .split("<<'EOF_WRAPPER_GIT'\n")[1]
@@ -19,6 +22,8 @@ function fixture() {
     PATH: process.env.PATH,
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
+    // Automatic maintenance must not race copying the completed seed.
+    GIT_CONFIG_PARAMETERS: "'maintenance.auto=false' 'gc.auto=0'",
     GIT_AUTHOR_NAME: "Workflow Fixture",
     GIT_AUTHOR_EMAIL: "fixture@example.invalid",
     GIT_COMMITTER_NAME: "Workflow Fixture",
@@ -29,13 +34,24 @@ function fixture() {
     expect(result.status, result.stderr).toBe(0);
     return result.stdout.trim();
   };
-  git(["init", "-q", "-b", "main"]);
-  git(["config", "commit.gpgsign", "false"]);
-  git(["config", "core.hooksPath", "/dev/null"]);
-  git(["remote", "add", "origin", "https://github.com/fixture/repo.git"]);
-  git(["commit", "--allow-empty", "-qm", "fixture workflow"]);
-  const source = git(["rev-parse", "HEAD"]);
-  git(["update-ref", "refs/remotes/origin/main", source]);
+  let source: string;
+  if (seed) {
+    cpSync(seed.root, root, copyOptions);
+    source = seed.source;
+  } else {
+    git(["init", "-q", "-b", "main"]);
+    git(["config", "commit.gpgsign", "false"]);
+    git(["config", "core.hooksPath", "/dev/null"]);
+    git(["remote", "add", "origin", "https://github.com/fixture/repo.git"]);
+    git(["commit", "--allow-empty", "-qm", "fixture workflow"]);
+    source = git(["rev-parse", "HEAD"]);
+    git(["update-ref", "refs/remotes/origin/main", source]);
+
+    const templateRoot = realpathSync(templates.make("pr-workflow-binding-template-"));
+    // Capture before any binding writes; every copy owns its mutable Git files.
+    cpSync(root, templateRoot, copyOptions);
+    seed = { root: templateRoot, source };
+  }
   const record = {
     version: 1,
     repository: "https://github.com/fixture/repo.git",
@@ -124,6 +140,99 @@ describe.skipIf(process.platform === "win32")("native workflow binding storage",
       expect(f.git(["rev-parse", ref])).toBe(next);
     },
   );
+
+  it.each([
+    "valid",
+    "missing",
+    "duplicate",
+    "extra",
+    "required absent",
+    "correction present",
+    "alias",
+    "review kind",
+    "review head",
+    "evidence omitted",
+    "evidence mismatch",
+  ])("validates the complete V3 READY inventory: %s", (fault) => {
+    const f = fixture();
+    const previous = f.write(f.record);
+    const source = f.git(["commit-tree", `${f.source}^{tree}`, "-p", f.source], "next workflow\n");
+    f.git(["update-ref", "refs/remotes/origin/main", source]);
+    const blob = (text: string) => f.git(["hash-object", "-w", "--stdin"], text);
+    const env = blob("retained native env\n");
+    const review = blob(
+      JSON.stringify({
+        pr: { number: 123, headSha: fault === "review head" ? source : f.source },
+        recommendation: "READY FOR /prepare-pr",
+      }),
+    );
+    const meta = blob(JSON.stringify({ number: 123, headRefOid: f.source, state: "OPEN" }));
+    const rows = [
+      `.local/prep-context.env ${env}`,
+      `.local/pr-meta.json ${meta}`,
+      `.local/pr-meta.env ${env}`,
+      `.local/review-mode.env ${env}`,
+      `.local/review.json ${review}`,
+      `.local/prep.env ${env}`,
+      ".local/prepare-push-result.env absent",
+      ".local/prepare-sync-result.env absent",
+      ".local/correction-review.json absent",
+      ".local/correction-incoming-review.json absent",
+      ".local/pending-proof-acceptance.json absent",
+      ".local/prepare-baseline.json absent",
+    ];
+    if (fault === "missing") {
+      rows.splice(3, 1);
+    }
+    if (fault === "duplicate") {
+      rows[3] = rows[0]!;
+    }
+    if (fault === "extra") {
+      rows.push(`.local/unknown.json ${env}`);
+    }
+    if (fault === "required absent") {
+      rows[0] = ".local/prep-context.env absent";
+    }
+    if (fault === "correction present") {
+      rows[8] = `.local/correction-review.json ${review}`;
+    }
+    const snapshot = blob(rows.join("\n"));
+    const evidence = rows
+      .filter((row) => !row.endsWith(" absent"))
+      .map((row) => {
+        const [name, oid] = row.split(" ");
+        return `100644 blob ${fault === "evidence mismatch" ? env : oid}\t${name!.slice(7)}\n`;
+      });
+    // Invalid inventory cases can contain duplicate paths; keep mktree itself valid.
+    const evidenceTree = f.git(["mktree"], [...new Set(evidence)].join(""));
+    const record = {
+      ...f.record,
+      version: 3,
+      source,
+      predecessor: previous,
+      continuation: {
+        head: f.source,
+        hostedHead: fault === "alias" ? source : f.source,
+        tree: f.git(["rev-parse", `${f.source}^{tree}`]),
+        review,
+        snapshot,
+        reviewKind: fault === "review kind" ? "correction" : "ready",
+      },
+    };
+    const next = f.write(
+      record,
+      [previous, source, f.source],
+      `${fault === "evidence omitted" ? "" : `040000 tree ${evidenceTree}\tready-evidence\n`}100644 blob ${snapshot}\treview-snapshot\n`,
+    );
+    const result = f.run("workflow-read");
+    expect(result.status, result.stderr).toBe(fault === "valid" ? 0 : 1);
+    if (fault === "valid") {
+      expect(result.stdout).toBe(`${next}\t${source}\n`);
+    } else {
+      expect(result.stdout).toBe("");
+    }
+    expect(f.git(["rev-parse", ref])).toBe(next);
+  });
 
   it.each([
     ["writer@example.invalid:Org/repo.git", "other@example.invalid:Org/repo.git"],

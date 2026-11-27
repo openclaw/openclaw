@@ -1,4 +1,5 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { MEDIA_ONLY_USER_TEXT } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
 import { describe, expect, it } from "vitest";
 import { CodexHistoryRejection } from "./history-rejection.js";
 import { projectSettledCodexMessages } from "./settled-turn-projection.js";
@@ -228,6 +229,21 @@ describe("projectSettledCodexMessages", () => {
       role: "user",
       content: [{ type: "input_text", text: upstreamUserText }],
     });
+  });
+
+  it("projects a caption-less media turn like the model boundary, not as invalid content", () => {
+    const project = (media: unknown[]) =>
+      projectSettledCodexMessages([
+        message({ role: "user", content: "", __openclaw: { media } }),
+        toolCall(),
+        toolResult(),
+      ])[0];
+    expect(project([{ kind: "image", contentType: "image/jpeg" }])).toEqual({
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: MEDIA_ONLY_USER_TEXT }],
+    });
+    expect(() => project([{ kind: "unknown" }])).toThrow("invalid_content");
   });
 
   it("rejects upstream user text above the projection limit", () => {

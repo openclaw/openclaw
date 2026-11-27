@@ -1,8 +1,11 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { isPlainTextToolCallAttempt } from "../../../../packages/tool-call-repair/src/index.js";
+import { findPlainTextToolCallName } from "../../../../packages/tool-call-repair/src/index.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { isTransientNetworkError } from "../../../infra/retryable-network-errors.js";
-import { extractAssistantTranscriptSourceText } from "../../../shared/chat-message-content.js";
+import {
+  extractAssistantTextForPhase,
+  extractAssistantTranscriptSourceText,
+} from "../../../shared/chat-message-content.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { prepareTerminalAssistantReply } from "../../assistant-terminal-reply.js";
 import type { CompletedAssistantAnswer } from "../../embedded-agent-subscribe.handlers.types.js";
@@ -152,6 +155,7 @@ export function completeEmbeddedAttemptResult(
   const hookAgentId = input.setup.sessionAgentId;
   // Output hooks can reenter the runtime; project only the state settled before they run.
   const state = {
+    agentTerminal: input.state.agentTerminal,
     terminal: input.state.terminal,
     preflightRecovery: prompt.preflightRecovery,
     sessionIdUsed: prompt.sessionIdUsed,
@@ -174,6 +178,7 @@ export function completeEmbeddedAttemptResult(
     yieldDetected: input.lifecycle.readYieldState().yieldDetected,
     yieldAcknowledgment: input.lifecycle.readYieldState().yieldAcknowledgment,
     yieldMessageWaitRegistered: input.lifecycle.readYieldState().yieldMessageWaitRegistered,
+    yieldExecWakeArmed: input.lifecycle.readYieldState().yieldExecWakeArmed,
     didDeliverSourceReplyViaMessageTool: hasDeliveredSourceReply(),
   };
   const terminal = projectAgentRunAttemptTerminal(state.terminal);
@@ -275,8 +280,11 @@ export function completeEmbeddedAttemptResult(
   });
   const keptAnswer = evidence.keptAnswer;
   const keptReply = keptAnswer ? prepareTerminalAssistantReply(keptAnswer.assistant) : closingReply;
+  const finalPresentation = input.preparedStreamRuntime.stream.getFinalPresentation(
+    keptAnswer?.assistant ?? terminalAssistant,
+  );
   const assistant = resolveCurrentAttemptAssistant(state);
-  let textToolCallAttempt = false;
+  let textToolCallName: string | undefined;
   if (
     state.terminal.kind === "ok" &&
     assistant?.stopReason === "stop" &&
@@ -286,11 +294,25 @@ export function completeEmbeddedAttemptResult(
       input.prepared.toolCatalog.toolSearchRunPlan;
     // Deferred names need native correction too; detection never executes text.
     const allowedToolNames = new Set([...liveAllowedToolNames, ...capabilityToolNames]);
-    textToolCallAttempt =
-      allowedToolNames.size > 0 &&
-      isPlainTextToolCallAttempt(extractAssistantTranscriptSourceText(assistant) ?? "", (name) =>
-        Boolean(resolveToolCallName(name, allowedToolNames, undefined, true)),
-      );
+    const hasToolName = (name: string) =>
+      Boolean(resolveToolCallName(name, allowedToolNames, undefined, true));
+    const sourceText = extractAssistantTranscriptSourceText(assistant) ?? "";
+    const renderedText =
+      assistant === terminalAssistant
+        ? closingReply.text
+        : prepareTerminalAssistantReply(assistant).text;
+    const commentary = extractAssistantTextForPhase(assistant, { phase: "commentary" });
+    const renderedSource = commentary ? `${commentary}\n${renderedText}` : renderedText;
+    const name =
+      allowedToolNames.size > 0
+        ? (findPlainTextToolCallName(sourceText, hasToolName) ??
+          (renderedSource !== sourceText
+            ? findPlainTextToolCallName(renderedSource, hasToolName)
+            : undefined))
+        : undefined;
+    textToolCallName = name
+      ? (resolveToolCallName(name, allowedToolNames, undefined, true) ?? undefined)
+      : undefined;
   }
   const accessProgram = asOptionalRecord(
     sessionRuntime.transport.effectiveExtraParams.accessPrograms,
@@ -301,11 +323,12 @@ export function completeEmbeddedAttemptResult(
     accessProgram === "daybreak_red"
       ? { cyberAccessProgram: accessProgram }
       : {}),
-    ...(textToolCallAttempt ? { textToolCallAttempt: true } : {}),
+    ...(textToolCallName ? { textToolCallAttempt: true, textToolCallName } : {}),
     ...state,
     ...evidence,
     ...(attempt.inputAlreadyDelivered ? { inputAlreadyDelivered: true as const } : {}),
     preparedTerminalReply: keptReply,
+    ...(finalPresentation ? { finalPresentation } : {}),
     sandboxRuntime: input.setup.sandboxRuntime,
     ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
     replayMetadata,

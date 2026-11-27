@@ -15,6 +15,14 @@ Prepared repositories select their Node requirement from `.nvmrc`, `.node-versio
 
 Verified toolchains survive snapshot forks. Repository commands use the prepared HOME's `.local/bin` shims first. A declared `packageManager` gets user-writable Corepack shims without sudo. The OpenClaw runtime uses its own supported Node, independently of the repository's version. Custom profile Node installs remain supported. macOS and Windows need image- or setup-provided Node (and npm for explicit npm profiles); OpenClaw does not install them there.
 
+## Platform certificate trust
+
+Linux node enrollment refreshes the system certificate bundle with
+`/usr/sbin/update-ca-certificates` when available, including on snapshot forks.
+Non-root images need noninteractive sudo for that command. A failed refresh stops
+enrollment with repair guidance; runtime-only preparation does not change system
+trust. Bootstrap credentials are not passed to the certificate-update command.
+
 ## The setup command
 
 `settings.setup` runs on a cold machine after readiness and before repository preparation and enrollment. Provision replay can repeat it, so make it idempotent. Snapshot forks skip it because their compatible image already contains its filesystem results. Use repository `postStartCommand` for processes that must start on each new worker.

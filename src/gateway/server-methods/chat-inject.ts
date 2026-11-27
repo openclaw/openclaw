@@ -34,6 +34,8 @@ export type GatewayAssistantInjection = {
   sessionKey: string;
   agentId?: string;
   message: string;
+  /** Trusted in-process display content; never accepted from chat.inject wire params. */
+  content?: Array<Record<string, unknown>>;
   label?: string;
   idempotencyKey?: string;
   humanMentions?: readonly HumanMention[];
@@ -131,6 +133,7 @@ export async function injectGatewayAssistantMessage(
         return await appendInjectedAssistantMessageToTranscript({
           sessionKey,
           message: params.message,
+          content: params.content,
           label: params.label,
           idempotencyKey: params.idempotencyKey,
           humanMentions: params.humanMentions,
@@ -156,7 +159,7 @@ export async function injectGatewayAssistantMessage(
     return err(
       errorShape(
         ErrorCodes.UNAVAILABLE,
-        `failed to write transcript: ${appended.error ?? "unknown error"}`,
+        `failed to write chat history: ${appended.error ?? "unknown error"}`,
       ),
     );
   }

@@ -1,19 +1,32 @@
-const gatewayContextBindingOwnerKey = Symbol("gatewayContextBindingOwner");
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
-class GatewayContextBindingOwner {
-  readonly #owner: object;
+// Source-transformed plugins and native chunks must recognize the same private owner brand.
+const { gatewayContextBindingOwnerKey, GatewayContextBindingOwner } = resolveGlobalSingleton(
+  Symbol.for("openclaw.gatewayContextBindingOwner"),
+  () => {
+    class BindingOwner {
+      readonly #owner: object;
 
-  constructor(owner: object) {
-    this.#owner = owner;
-    Object.setPrototypeOf(this, null);
-  }
+      constructor(owner: object) {
+        this.#owner = owner;
+        Object.setPrototypeOf(this, null);
+      }
 
-  static read(value: unknown, owner: object): object | undefined {
-    return typeof value === "object" && value !== null && #owner in value && value.#owner === owner
-      ? value
-      : undefined;
-  }
-}
+      static read(value: unknown, owner: object): object | undefined {
+        return typeof value === "object" &&
+          value !== null &&
+          #owner in value &&
+          value.#owner === owner
+          ? value
+          : undefined;
+      }
+    }
+    return {
+      gatewayContextBindingOwnerKey: Symbol("gatewayContextBindingOwner"),
+      GatewayContextBindingOwner: BindingOwner,
+    };
+  },
+);
 
 export function getGatewayContextBindingSlot(owner: object): object | undefined {
   const slot: unknown = Object.getOwnPropertyDescriptor(

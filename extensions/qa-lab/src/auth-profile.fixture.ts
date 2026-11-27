@@ -2,7 +2,7 @@ import { readQaAuthProfiles, writeQaAuthProfiles } from "./providers/shared/auth
 
 export const QA_CODEX_OAUTH_PROFILE_ID = "openai:qa-oauth";
 export const QA_OPENAI_API_KEY_PROFILE_ID = "openai:media-api";
-export const QA_AUTH_PROFILE_STORE_VERSION = 1;
+const QA_AUTH_PROFILE_STORE_VERSION = 1;
 
 export type QaAuthProfileShape = "oauth-only" | "apikey-only" | "mixed";
 

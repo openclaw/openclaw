@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { userEvent } from "vitest/browser";
 import { normalizeAgentModelRefForConfig } from "../../../src/config/model-input.js";
-import { createPrimaryModelExclusion } from "../lib/agents/display.ts";
+import { createPrimaryModelExclusion } from "../lib/agents/model-options.ts";
 import { mountSolid } from "../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { MultiSelect } from "./multi-select.tsx";
@@ -273,6 +273,9 @@ it("stays inert while disabled", async () => {
   expect(isOpen(element)).toBe(false);
   expect(props.onOpen).not.toHaveBeenCalled();
 });
+
+// Geometry assertions measure the settled list, not the Select entry scale.
+document.documentElement.style.setProperty("--select-enter-duration", "0s");
 
 it("keeps the scroll position when the pointer highlights a clipped edge row", async () => {
   const { element } = await createMultiSelect({

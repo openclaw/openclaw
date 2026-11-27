@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CONFIG_COMMAND_MAX_BUFFER_BYTES,
   CONFIG_COMMAND_TIMEOUT_MS,
-  resolveScenarioConfigSteps,
   resolveUpgradeSurvivorConfigSteps as recipeSteps,
   resolveUpgradeSurvivorConfigStepsForBaseline as baselineSteps,
   resolveUpgradeSurvivorOpenClawCommand,
@@ -29,12 +28,22 @@ const configValue = (steps: ReturnType<typeof recipeSteps>, id: string) =>
 const RECIPE_PATH = "scripts/e2e/lib/upgrade-survivor/config-recipe.mts";
 const DOCKER_RUNNER_PATH = "scripts/e2e/upgrade-survivor-docker.sh";
 
-function runRecipeFixture(params: { version: string; scenario: string; failPath?: string }) {
+function runRecipeFixture(params: {
+  version: string;
+  scenario: string;
+  failPath?: string;
+  skillLibraryToolSplit?: true;
+  updateRestartMode?: "auto-auth";
+}) {
   const root = tempDirs.make("openclaw-upgrade-recipe-");
   const binDir = join(root, "bin");
   const logPath = join(root, "openclaw-argv.jsonl");
   const summaryPath = join(root, "summary.json");
   mkdirSync(binDir);
+  const configPath = join(root, "config.json");
+  writeJson(configPath, {
+    meta: { migrations: { skillLibraryToolSplit: params.skillLibraryToolSplit } },
+  });
   writeFileSync(
     join(binDir, "openclaw-log.js"),
     `
@@ -70,9 +79,10 @@ process.exit(failed ? 17 : 0);
       ...process.env,
       HOME: root,
       OPENCLAW_STATE_DIR: join(root, "state"),
-      OPENCLAW_CONFIG_PATH: join(root, "config.json"),
+      OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: params.scenario,
       OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL: "",
+      OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: params.updateRestartMode ?? "manual",
       RECIPE_FAIL_PATH: params.failPath ?? "",
       PATH: [binDir, join(process.cwd(), "node_modules/.bin"), process.env.PATH ?? ""].join(
         delimiter,
@@ -195,6 +205,16 @@ esac
     expect(updateChannels.at(-1)).toBe("beta");
   });
 
+  it("isolates restart-auth DM principals before the candidate Doctor runs", () => {
+    const { result, loggedArgs } = runRecipeFixture({
+      scenario: "base",
+      version: "2026.11.7",
+      updateRestartMode: "auto-auth",
+    });
+    expectSuccess(result);
+    expect(loggedArgs).toContainEqual(["config", "set", "session.dmScope", "per-channel-peer"]);
+  });
+
   it("enables private integrity file logging only for the base recipe before validation", () => {
     const { result, loggedArgs, summary } = runRecipeFixture({
       scenario: "base",
@@ -240,6 +260,7 @@ esac
       ["config", "validate"],
     ]);
     expect(loggedArgs.some((args) => args[2]?.startsWith("logging.console"))).toBe(false);
+    expect(loggedArgs.some((args) => args[2] === "session.dmScope")).toBe(false);
     expect(
       recipeSteps("tilde-log-path")
         .filter((step) => step.intent === "logging")
@@ -270,7 +291,43 @@ esac
     expect(configValue(steps, "plugins").allow).toEqual(
       expect.arrayContaining(Object.keys(providers)),
     );
+
+    const stable = configValue(baselineSteps("base", "2026.10.10"), "agents").defaults;
+    const beta = configValue(baselineSteps("base", "2026.11.5-beta.1"), "agents").defaults;
+    expect(stable.heartbeat).toEqual({ every: "0m" });
+    expect(beta).not.toHaveProperty("heartbeat");
+    expect(beta.model).toEqual(stable.model);
   });
+
+  it.each([
+    ["2026.11.10", "plugins.entries.skill-workshop.config"],
+    ["2026.10.9", "skills.workshop"],
+    ["2026.10.5", "skills.workshop"],
+    ["2026.10.4", undefined],
+  ] as const)(
+    "seeds Workshop settings in the published baseline's schema (%s)",
+    (version, configPath) => {
+      const steps = baselineSteps("configured-plugin-installs", version);
+      const settingsIndex = steps.findIndex((step) => step.id === "skill-workshop-settings");
+      if (!configPath) {
+        expect(settingsIndex).toBe(-1);
+        return;
+      }
+      expect(steps[settingsIndex]?.argv).toEqual([
+        "config",
+        "set",
+        configPath,
+        JSON.stringify({ autonomous: { mode: "off" }, maxSkillBytes: 8000 }),
+        "--strict-json",
+      ]);
+      if (configPath.startsWith("plugins.")) {
+        expect(settingsIndex).toBeGreaterThan(
+          steps.findIndex((step) => step.id === "plugins-configured-installs"),
+        );
+      }
+      expect(settingsIndex).toBeLessThan(steps.findIndex((step) => step.id === "validate"));
+    },
+  );
 
   it("uses password auth for mobile pairing reconnect coverage", () => {
     const steps = baselineSteps("mobile-pairing-reconnect", "2026.6.34");
@@ -281,12 +338,6 @@ esac
       mode: "password",
       password: { source: "env", provider: "default", id: "GATEWAY_AUTH_PASSWORD_REF" },
     });
-  });
-
-  it("composes configured plugin installs into the SQLite volume scenario", () => {
-    expect(resolveScenarioConfigSteps("sqlite-volume")).toEqual(
-      resolveScenarioConfigSteps("configured-plugin-installs"),
-    );
   });
 
   it.each(["2026.7.1-2"])("authors one version-correct recovery roster for %s", (version) => {
@@ -322,7 +373,12 @@ esac
 
   it("authors Tool Search through the baseline CLI", () => {
     const version = "2026.9.7";
-    const { result, summary, loggedArgs } = runRecipeFixture({ scenario: "base", version });
+    const { result, summary, loggedArgs } = runRecipeFixture({
+      scenario: "base",
+      version,
+      skillLibraryToolSplit: true,
+    });
+    expect(summary).toHaveProperty("baselineSkillLibraryToolSplit", true);
     expectSuccess(result);
     expect(summary.baselineVersion).toBe(version);
     expect(summary.acceptedIntents).toContain("tool-search");

@@ -1,13 +1,11 @@
 import { generateKeyPairSync } from "node:crypto";
-import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import vm from "node:vm";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { getRuntimeConfig } from "../../config/config.js";
 import {
   setRuntimeConfigSnapshot,
   clearRuntimeConfigSnapshot,
@@ -17,45 +15,24 @@ import {
   areDiagnosticsEnabledForProcess,
   setDiagnosticsEnabledForProcess,
 } from "../../infra/diagnostic-events.js";
-import {
-  NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
-  NODE_WORKER_PREPARED_WORKSPACE_VERSION,
-} from "../../infra/node-runner-inventory.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
-import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
-import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
-import type { NodeWorkerPreparedWorkspaceResult } from "../../worker/node-workspace-prepared-protocol.js";
 import * as publicationAvailability from "../github-publication-availability.js";
-import {
-  createNodeRegistryRuntime,
-  updateNodeRunnerInventory,
-  type NodeWorkerSupervisorNodeProof,
-} from "../node-registry-private.js";
-import { NodeRegistry } from "../node-registry.js";
-import { makeClient } from "../node-registry.test-helpers.js";
 import { sessionLog } from "../session-log.js";
-import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import type { EnvironmentRecipe } from "./environment-recipe.js";
-import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
-import { createHarness } from "./placement-dispatch-test-harness.js";
-import { WORKER_PROTOCOL_FEATURES } from "./placement-lifecycle.test-support.js";
-import type { WorkerPlacementExecutionMode } from "./placement-record.js";
-import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
-import type { WorkerProjectPreparationIdentity } from "./preparation-identity.schema.js";
 import { prepareRepositoryGitHubIdentity } from "./repository-github-identity.js";
 import {
   createPreparedRepositoryNodeFixture,
+  createRepositoryNodeFixture,
   createRepositoryPolicySource,
+  createManagedRepositoryProfile,
 } from "./repository-policy-node.test-support.js";
 import * as support from "./service.test-support.js";
 import {
   readSessionRepositoryArtifacts,
   stageSessionRepositoryCheckpoint,
 } from "./session-repository-checkpoints.js";
-import type { WorkerProjectSnapshot } from "./workspace-git-base.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
@@ -71,285 +48,10 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
 }));
 
 const PREPARATION_KEY = "c".repeat(64);
-const FEATURES = [...WORKER_PROTOCOL_FEATURES];
+import { FEATURES, preparedHarness } from "./placement-dispatch-prepared.test-support.js";
 
 function expectBefore(log: string[], before: string, after: string) {
   expect(log.indexOf(before)).toBeLessThan(log.indexOf(after));
-}
-
-async function preparedHarness(
-  options: {
-    reserve?: boolean;
-    protocolFeatures?: string[];
-    executionMode?: WorkerPlacementExecutionMode;
-    emptyWorkspace?: boolean;
-    repository?: SessionRepositoryWorkspaceRecord & { baseCommit: string };
-    recipe?: EnvironmentRecipe;
-    lifecycleFailure?: boolean;
-    boundWorkspace?: Pick<
-      NodeWorkerPreparedWorkspaceResult,
-      "workspaceDir" | "sourceManifestRef" | "preparedManifestRef"
-    >;
-  } = {},
-) {
-  const protocolFeatures = options.protocolFeatures ?? FEATURES;
-  const executionMode = options.executionMode ?? "worker-turn";
-  const reserve = options.reserve !== false;
-  let nodeCurrent = true;
-  const placements = createWorkerSessionPlacementStore({
-    database: support.testState.stateDb,
-    now: () => support.testState.nowMs,
-  });
-  const harness = await createHarness(support.testState.stateDb, placements, {
-    ...(options.repository
-      ? {
-          requiresNodeEnrollment: true,
-          resolveWorkspace: async () => ({ kind: "repository", repository: options.repository! }),
-        }
-      : {}),
-    isCurrentNodePlacement: (proof, requirement, mode) =>
-      nodeCurrent &&
-      transport.isCurrent(
-        proof,
-        requirement.consumesWorkerSlot,
-        requirement.requiredNodeCommands,
-        mode === "worker-turn",
-      ),
-  });
-  const environmentId = reserve ? "prepared-spare" : harness.ready.environmentId;
-  const preparation: WorkerProjectPreparationIdentity = {
-    key: PREPARATION_KEY,
-    cacheKey: "a".repeat(64),
-    contractVersion: 1,
-    target: { machineClass: "standard", platform: "linux", arch: "x64" },
-    artifacts: {
-      nodeBootstrapSha256: "f".repeat(64),
-      enabledPluginIds: [],
-      workerBundleHash: support.BUNDLE_HASH,
-      workerArchiveSha256: "b".repeat(64),
-      openclawVersion: support.BOOTSTRAP_RECEIPT.openclawVersion,
-      protocolFeatures,
-    },
-  };
-  const project: WorkerProjectSnapshot = options.repository
-    ? {
-        key: "d".repeat(64),
-        baseCommit: options.repository.baseCommit,
-        source: {
-          kind: "repository",
-          url: options.repository.url,
-          repositoryId: "R_dispatch_fixture",
-          owner: {
-            agent: { agentId: REQUEST.agentId, provenance: null },
-            identity: { source: "anonymous" },
-          },
-        },
-      }
-    : { key: "d".repeat(64), baseCommit: "e".repeat(40), root: "/gateway/workspace" };
-  const profile = { settings: { region: "test" }, executionMode };
-  const intent: WorkerProviderPreparedIntent = {
-    providerId: "fake",
-    profileSnapshot: options.emptyWorkspace
-      ? { ...profile, runtimePreparation: { ...preparation, source: "empty" } }
-      : {
-          ...profile,
-          project: {
-            ...project,
-            preparation: {
-              ...preparation,
-              ...(options.recipe
-                ? { recipe: options.recipe, setupRecipe: options.recipe.identity }
-                : {}),
-            },
-          },
-        },
-  };
-  const store = support.testState.store;
-  await store.createIntent({
-    environmentId,
-    profileId: REQUEST.profileId,
-    providerId: intent.providerId,
-    profileSnapshot: intent.profileSnapshot,
-    provisionOperationId: `provision:${environmentId}`,
-    ...(reserve
-      ? {
-          preparation: {
-            purpose: "reserve",
-            key: PREPARATION_KEY,
-            demandAtMs: 900,
-            expiresAtMs: 10_000,
-          },
-        }
-      : {}),
-  });
-  await store.transition({ environmentId, from: "requested", to: "provisioning" });
-  const ready = await store.transition({
-    environmentId,
-    from: "provisioning",
-    to: "ready",
-    patch: {
-      leaseId: `lease:${environmentId}`,
-      nodeDeviceId: "prepared-node",
-      sharedHost: false,
-      ...support.readyPatch(environmentId, {
-        ...support.BOOTSTRAP_RECEIPT,
-        protocolFeatures,
-      }),
-    },
-  });
-  vi.mocked(support.testState.prepareInstallation).mockResolvedValue({
-    ...support.BUNDLE_ARTIFACT,
-    protocolFeatures,
-  });
-  const workerService = support.createService(support.createProvider());
-  const projected = workerService.get(environmentId)!;
-  const ordinaryGet = vi.mocked(harness.environments.get).getMockImplementation()!;
-  vi.mocked(harness.environments.get).mockImplementation(
-    (id) => workerService.get(id) ?? ordinaryGet(id),
-  );
-  vi.mocked(harness.environments.prepareProjectIntent).mockResolvedValue(intent);
-  vi.mocked(harness.environments.getPreparedCandidates).mockReturnValue(reserve ? [projected] : []);
-  const ordinaryAttach = vi.mocked(harness.environments.attachSession).getMockImplementation()!;
-  vi.mocked(harness.environments.attachSession).mockImplementation(async (request) => {
-    const credential =
-      request.environmentId === environmentId
-        ? await workerService.attachSession(request)
-        : undefined;
-    const ordinary = await ordinaryAttach(request);
-    return credential ?? ordinary;
-  });
-  const ordinaryDestroy = vi.mocked(harness.environments.destroy).getMockImplementation()!;
-  vi.mocked(harness.environments.destroy).mockImplementation(async (id) =>
-    id === environmentId ? await workerService.destroy(id) : await ordinaryDestroy(id),
-  );
-  const ordinaryTunnel = vi.mocked(harness.environments.startTunnel).getMockImplementation()!;
-  vi.mocked(harness.environments.startTunnel).mockImplementation(async (request) => {
-    const tunnel = await ordinaryTunnel(request);
-    if (options.recipe) {
-      vi.spyOn(tunnel, "runWorkspaceCommand").mockImplementation(async (command) => {
-        command.assertCurrent?.();
-        const process = Object.assign(new EventEmitter(), {
-          env: { PATH: "/worker/bin", HOME: "/worker/home" },
-          cwd: () => "/worker/workspace",
-          kill: vi.fn(),
-          exitCode: 0,
-        });
-        let stderr = "";
-        const spawn = (executable: string) => {
-          harness.log.push(`lifecycle:${executable}`);
-          const child = Object.assign(new EventEmitter(), {
-            pid: 123,
-            stderr: Object.assign(new EventEmitter(), { destroy: vi.fn() }),
-          });
-          queueMicrotask(() => {
-            if (options.lifecycleFailure) {
-              child.stderr.emit("data", Buffer.from("fixture failure"));
-            }
-            child.emit("exit", options.lifecycleFailure ? 1 : 0);
-            child.emit("close", options.lifecycleFailure ? 1 : 0);
-          });
-          return child;
-        };
-        await vm.runInNewContext(command.argv[2]!, {
-          Buffer,
-          process,
-          require: () => ({ spawn }),
-          performance: { now: () => 0 },
-          setTimeout: vi.fn(),
-          clearTimeout: vi.fn(),
-          console: {
-            error: (message: string) => {
-              stderr = message;
-            },
-          },
-        });
-        return createCommandResult({ stderr, code: process.exitCode });
-      });
-    }
-    return { ...tunnel, environmentId: request.environmentId };
-  });
-  const bindPreparedWorkspace = vi.mocked(harness.environments.bindPreparedWorkspace);
-  const ordinaryBind = bindPreparedWorkspace.getMockImplementation()!;
-  bindPreparedWorkspace.mockImplementation(async (request) => {
-    request.assertCurrent();
-    harness.log.push("workspace:bind-prepared");
-    return { ...(await ordinaryBind(request)), ...options.boundWorkspace };
-  });
-  if (!reserve) {
-    vi.mocked(harness.environments.createWithRequest).mockResolvedValue(projected);
-  }
-  const node: NodeWorkerSupervisorNodeProof = createNodeWorkerBundleTestNode({
-    nodeId: "prepared-node",
-    workerHost: {
-      capacity: { total: 1, available: 1 },
-      environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
-      preparedWorkspace: NODE_WORKER_PREPARED_WORKSPACE_VERSION,
-      capturedExecPolicy: true,
-      promptContext: 1,
-    },
-    commands: ["codex.exec-server.stdio.v1"],
-  });
-  const { nodeRegistry, nodeWorkerSupervisorTransport: transport } = createNodeRegistryRuntime(
-    () => new NodeRegistry({ getConfig: getRuntimeConfig }),
-  );
-  const connectNode = () =>
-    nodeRegistry.register(
-      makeClient(node.connId, node.nodeId, [], {
-        clientId: node.clientId,
-        version: "test",
-        platform: "linux",
-        commands: [...node.commands],
-      }),
-      { pairingIdentity: node.pairingIdentity, pairingGeneration: node.pairingGeneration },
-    );
-  const setHostingAvailable = (available: boolean, reconnect = false) => {
-    if (reconnect) {
-      node.connId = "reconnected-without-hosting";
-      connectNode();
-    }
-    updateNodeRunnerInventory({
-      registry: nodeRegistry,
-      nodeId: node.nodeId,
-      connId: node.connId,
-      declaration: {
-        protocolFeatures: [node.protocolFeature],
-        workerHost: available ? node.workerHost : { enabled: false },
-      },
-    });
-  };
-  connectNode();
-  setHostingAvailable(true);
-  onTestFinished(() => {
-    nodeRegistry.unregister(node.connId);
-  });
-  const resolveAvailability = vi.fn(async () => ({
-    available: true,
-    node: (await transport.listCurrentNodes())[0],
-  }));
-  bindDeviceWorkerAvailability(harness.environments, resolveAvailability);
-  const request = {
-    ...REQUEST,
-    executionMode,
-    setupAuthorized: true,
-    devicePlacement: {
-      requiredNodeCommands: executionMode === "remote-exec" ? ["codex.exec-server.stdio.v1"] : [],
-      consumesWorkerSlot: executionMode === "worker-turn",
-    },
-  };
-  return {
-    harness,
-    placements,
-    store,
-    workerService,
-    ready,
-    request,
-    transport,
-    resolveAvailability,
-    setHostingAvailable,
-    revokeNode: () => {
-      nodeCurrent = false;
-    },
-  };
 }
 
 describe("prepared worker dispatch", () => {
@@ -513,12 +215,15 @@ describe("prepared worker dispatch", () => {
     postStart: ["post-start"],
   };
 
-  it.each([true, false])(
-    "runs first-binding lifecycle after session sync and before activation (reserve=%s)",
-    async (reserve) => {
+  it.each([true, false, "disabled"] as const)(
+    "runs admitted lifecycle after sync before activation (reserve=%s)",
+    async (reserveMode) => {
+      const reserve = reserveMode === true;
+      const runSetupScript = reserveMode !== "disabled";
       const { harness, request, ready, store } = await preparedHarness({
         reserve,
         recipe: lifecycleRecipe,
+        runSetupScript,
       });
       const previousDiagnostics = areDiagnosticsEnabledForProcess();
       setDiagnosticsEnabledForProcess(true);
@@ -550,6 +255,16 @@ describe("prepared worker dispatch", () => {
 
       const active = await harness.service.dispatch(request);
 
+      const effects = path.join(
+        support.testState.root,
+        "lifecycle-workspace",
+        "lifecycle-effects.txt",
+      );
+      if (runSetupScript) {
+        expect(await fs.readFile(effects, "utf8")).toBe("post-create\npost-start\n");
+      } else {
+        await expect(fs.readFile(effects)).rejects.toMatchObject({ code: "ENOENT" });
+      }
       const phases = [
         "workspace:bind-prepared",
         "sync",
@@ -574,7 +289,9 @@ describe("prepared worker dispatch", () => {
           }),
         }),
       );
-      expect(harness.log.filter((phase) => phases.includes(phase))).toEqual(phases);
+      expect(harness.log.filter((phase) => phases.includes(phase))).toEqual(
+        phases.filter((phase) => runSetupScript || !phase.startsWith("lifecycle:")),
+      );
       const tunnel = await vi.mocked(harness.environments.startTunnel).mock.results[0]!.value;
       expect(tunnel.launchTurn).not.toHaveBeenCalled();
     },
@@ -821,6 +538,171 @@ describe("prepared worker dispatch", () => {
     expect(harness.environments.destroy).toHaveBeenCalledWith(ready.environmentId);
     expect(harness.environments.schedulePreparedRefill).not.toHaveBeenCalled();
   });
+  it.each([
+    ["allowed", undefined, true],
+    ["profile-disabled", false, true],
+    ["non-admin", undefined, false],
+    ["revoked-before-setup", undefined, true],
+  ] as const)(
+    "enforces %s setup policy through real runtime-image checkout commands",
+    async (scenario, runSetupScript, admin) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", support.testState.root);
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+      });
+      const nativeIdentity = await vi.importActual<
+        typeof import("./repository-github-identity.js")
+      >("./repository-github-identity.js");
+      vi.mocked(prepareRepositoryGitHubIdentity).mockImplementation(
+        nativeIdentity.prepareRepositoryGitHubIdentity,
+      );
+      const profileId = "ghp_77777777777777777777777777777777";
+      const config: OpenClawConfig = {
+        ...support.testState.config,
+        tools: { github: { profileId } },
+      };
+      setRuntimeConfigSnapshot(config);
+      vi.spyOn(publicationAvailability, "currentGitHubPublicationConfig").mockReturnValue(config);
+      await createManagedRepositoryProfile({
+        stateDir: support.testState.root,
+        agentId: REQUEST.agentId,
+        profileId,
+        token: "synthetic-setup-token",
+      });
+      vi.stubGlobal(
+        "fetch",
+        async () =>
+          new Response(JSON.stringify({ id: 777, login: "setup-fixture", type: "User" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json", "x-oauth-scopes": "repo" },
+          }),
+      );
+      const root = path.join(support.testState.root, `checkout-${scenario}`);
+      const seed = path.join(root, "seed");
+      const nodeHome = path.join(root, "node");
+      await fs.mkdir(path.join(seed, ".openclaw"), { recursive: true });
+      await fs.writeFile(path.join(seed, "tracked.txt"), "source\n");
+      const effectFile = path.join(root, "setup-effect.txt");
+      await fs.writeFile(
+        path.join(seed, ".openclaw", "worktree-setup.sh"),
+        `#!/bin/sh
+printf executed > ${JSON.stringify(effectFile)}
+`,
+        { mode: 0o755 },
+      );
+      await requireWorkspaceResultGit(seed, ["init", "-b", "main"]);
+      await requireWorkspaceResultGit(seed, ["add", "."]);
+      await requireWorkspaceResultGit(seed, [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "-m",
+        "source",
+      ]);
+      const baseCommit = await requireWorkspaceResultGit(seed, ["rev-parse", "HEAD"]);
+      const repositoryStore = getSessionRepositoryWorkspaceStore();
+      const accepted = await repositoryStore.create({
+        agentId: REQUEST.agentId,
+        sessionKey: REQUEST.sessionKey,
+        url: "https://github.com/example/runtime-checkout",
+        requestedRef: "main",
+        runSetupScript: true,
+        assertCurrent: () => {},
+      });
+      const { harness, request, ready, store } = await preparedHarness({
+        emptyWorkspace: true,
+        runSetupScript,
+        repository: { ...accepted, baseCommit },
+      });
+      let current = true;
+      const assertCurrent = () => {
+        if (!current) {
+          throw new Error("Setup operator revoked");
+        }
+      };
+      const identity = {
+        gatewayNamespace: "checkout-gateway",
+        environmentId: ready.environmentId,
+      };
+      const { runtime, workspaceTransfer, gatewayUrl } = await createRepositoryNodeFixture({
+        nodeHome,
+        store,
+      });
+      const commands: string[] = [];
+      const ordinaryTunnel = vi.mocked(harness.environments.startTunnel).getMockImplementation()!;
+      vi.mocked(harness.environments.startTunnel).mockImplementation(async (params) => {
+        const tunnel = await ordinaryTunnel(params);
+        const actions = createNodeWorkerWorkspaceActions({
+          environmentId: ready.environmentId,
+          ownerEpoch: params.ownerEpoch,
+          sessionId: request.sessionId,
+          ownerSignal: new AbortController().signal,
+          isOwnerCurrent: () => current,
+          workspaceTransfer,
+          runWorkspaceCommand: async (command) => {
+            const setup = command.argv.some((arg) => arg.includes("worktree-setup.sh"));
+            if (setup && scenario === "revoked-before-setup") {
+              current = false;
+            }
+            command.assertCurrent?.();
+            commands.push(setup ? "setup" : command.argv[0]!);
+            const argv = command.argv.map((arg) =>
+              arg === accepted.url ? pathToFileURL(seed).href : arg,
+            );
+            return runtime.exec(
+              {
+                ...identity,
+                argv,
+                sessionId: request.sessionId,
+                sessionKey: command.sessionKey,
+                generation: params.ownerEpoch,
+                input: command.input,
+                timeoutMs: command.timeoutMs,
+                resetWorkspace: command.resetWorkspace,
+                seed: command.seed,
+                transfer: command.transfer,
+              },
+              undefined,
+              { url: gatewayUrl },
+            );
+          },
+        });
+        vi.spyOn(tunnel, "syncWorkspace").mockImplementation(actions.syncWorkspace);
+        vi.spyOn(tunnel, "reconcileWorkspace").mockImplementation(actions.reconcileWorkspace);
+        return tunnel;
+      });
+      const dispatch = harness.service.dispatch(
+        {
+          ...request,
+          runSetupScript: admin,
+        },
+        undefined,
+        assertCurrent,
+      );
+      if (scenario === "non-admin" || scenario === "revoked-before-setup") {
+        await expect(dispatch).rejects.toThrow(
+          scenario === "non-admin" ? "administrator" : /revoked|authority|owner/i,
+        );
+      } else {
+        await dispatch;
+      }
+      if (scenario === "allowed") {
+        expect(await fs.readFile(effectFile, "utf8")).toBe("executed");
+      } else {
+        await expect(fs.readFile(effectFile)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      }
+      expect(commands.filter((command) => command === "setup")).toHaveLength(
+        scenario === "allowed" ? 1 : 0,
+      );
+    },
+  );
+
   it.each([
     ["allowed", true],
     ["allowed", false],

@@ -10,6 +10,7 @@ import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js"
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
   finishSuccessfulPackageSwitch,
   validConfigSnapshot,
@@ -84,23 +85,26 @@ it.each(["cli", "api"] as const)(
 
     await withUpdateCommandTerminalResult(async (registerRun) => {
       registerRun(run);
-      await withOwnedManagedUpdateEnv(serviceEnv, () =>
-        finishSuccessfulPackageSwitch(
-          { packageRoot, run, json: true },
-          {
-            coreAlreadyCurrent: true,
-            mutationStarted: false,
-            shouldRestart: false,
-            installKindChanged: false,
-            downgradeRisk: false,
-            ownedManagedUpdateEnv: serviceEnv,
-            controlPlaneUpdateSentinelMeta: { runId: run.runId },
-          },
-        ),
-      );
-      expect(process.env.OPENCLAW_STATE_DIR).toBe(callerEnv.OPENCLAW_STATE_DIR);
-      // The terminal owner has not published yet; the outer scope is already restored.
-      expect(await readRestartSentinelReadOnly(serviceEnv)).toBeNull();
+      await withUpdateCommandExecutor(run.runId, async (executor) => {
+        run.executorFence = await executor.enter(packageRoot);
+        await withOwnedManagedUpdateEnv(serviceEnv, () =>
+          finishSuccessfulPackageSwitch(
+            { packageRoot, run, json: true },
+            {
+              coreAlreadyCurrent: true,
+              mutationStarted: false,
+              shouldRestart: false,
+              installKindChanged: false,
+              downgradeRisk: false,
+              ownedManagedUpdateEnv: serviceEnv,
+              controlPlaneUpdateSentinelMeta: { runId: run.runId },
+            },
+          ),
+        );
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(callerEnv.OPENCLAW_STATE_DIR);
+        // The terminal owner has not published yet; the outer scope is already restored.
+        expect(await readRestartSentinelReadOnly(serviceEnv)).toBeNull();
+      });
     });
 
     expect(await readRestartSentinelReadOnly(callerEnv)).toEqual(callerBefore);

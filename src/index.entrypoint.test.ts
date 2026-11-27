@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CLI_PARENT_BOUND_PRELOAD } from "../cli-parent-lifetime.mjs";
+import { captureCliUncaughtExceptionListener } from "./cli/failure-output.test-support.js";
 import { runCliWithExitFinalization } from "./cli/one-shot-exit.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { isMainModule } from "./infra/is-main.js";
@@ -31,14 +32,23 @@ vi.mock("node:module", async (importOriginal) => {
   });
 });
 
-vi.mock("node:fs", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:fs")>()),
-  existsSync: vi.fn(() => false),
-}));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = { existsSync: vi.fn(() => false) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 
 // mock-isolation: Exercise entrypoint dispatch without running the CLI.
 vi.mock("./cli/run-main.js", () => ({ runCli: vi.fn(async () => undefined) }));
 const lifecycleImports = vi.hoisted(() => ({ failureOutput: vi.fn() }));
+
+// mock-isolation: The process listener keeps the same terminal boundary across entry module resets.
+vi.mock("./runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime.js")>()),
+  restoreRuntimeTerminalState: vi.fn(),
+}));
 
 // mock-isolation: Keep one-shot finalization from terminating the test process.
 vi.mock("./cli/one-shot-exit.js", () => ({ runCliWithExitFinalization: vi.fn() }));
@@ -175,28 +185,17 @@ describe("legacy package executable entrypoint", () => {
   });
 
   it("passes uncaught exception cause to the process exit owner", async () => {
-    const listeners = new Set(process.listeners("uncaughtException"));
     const runtime = await import("./runtime.js");
-    vi.spyOn(runtime, "restoreRuntimeTerminalState").mockImplementation(() => {});
     const { registerSignalExitOwner } = await import("./cli/signal-exit-barrier.js");
     const owner = vi.fn();
     const releaseOwner = registerSignalExitOwner(owner);
     try {
-      await loadEntry();
-      const handler = process.listeners("uncaughtException").find((entry) => !listeners.has(entry));
-      if (!handler) {
-        throw new Error("uncaughtException handler was not registered");
-      }
+      const handler = await captureCliUncaughtExceptionListener(() => loadEntry());
       handler(new Error("owned failure"), "uncaughtException");
       expect(owner).toHaveBeenCalledExactlyOnceWith(1, "uncaught exception");
       expect(runtime.restoreRuntimeTerminalState).toHaveBeenCalledWith("uncaught exception");
     } finally {
       releaseOwner();
-      for (const listener of process.listeners("uncaughtException")) {
-        if (!listeners.has(listener)) {
-          process.off("uncaughtException", listener);
-        }
-      }
     }
   });
 

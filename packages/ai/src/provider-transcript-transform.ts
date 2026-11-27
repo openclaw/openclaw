@@ -1,6 +1,6 @@
 import type {
   Api,
-  AssistantMessage,
+  AssistantHistoryMessage,
   ModelInputContent,
   ProviderMessage,
   ProviderModel,
@@ -17,7 +17,7 @@ export function transformProviderMessages<TApi extends Api>(
   normalizeToolCallId?: (
     id: string,
     model: CanonicalModel<TApi>,
-    source: AssistantMessage,
+    source: AssistantHistoryMessage,
   ) => string,
 ): Message[] {
   const target: CanonicalModel<TApi> = {
@@ -31,7 +31,9 @@ export function transformProviderMessages<TApi extends Api>(
       }
       const content = message.content;
       const supportsImages = model.input.includes("image");
-      const supportsVideo = model.api === "openai-completions" && model.input.includes("video");
+      const supportsVideo =
+        (model.api === "openai-completions" || model.api === "google-interactions") &&
+        model.input.includes("video");
       const result: ModelInputContent[] = [];
       for (const block of content) {
         const supported =

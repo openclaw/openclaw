@@ -67,7 +67,6 @@ suite.define(() => {
       expect(observed.mountedPane).toBe(false);
       expect(await page.locator("openclaw-chat-pane").count()).toBe(0);
       expect(observed.text).not.toContain("private pending draft");
-      await display.evaluate((value) => value.stop());
       expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.messages.subscribe")).toHaveLength(0);
       const settings = await page.evaluate(() =>
@@ -84,9 +83,15 @@ suite.define(() => {
         runStarted: true,
         runId: "late-run",
       });
+      // The accepted session can appear as an active rail row without reviving its canceled view.
+      const narration = await gateway.waitForRequest("sessions.messages.subscribe");
+      expect(narration.params).toMatchObject({ key: params.key, mode: "narration" });
       expect(page.url()).toBe(targetUrl);
+      expect((await display.evaluate((value) => value.read())).mountedPane).toBe(false);
+      expect(await page.locator("openclaw-chat-pane").count()).toBe(0);
+      await display.evaluate((value) => value.stop());
       expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
-      expect(await gateway.getRequests("sessions.messages.subscribe")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.messages.subscribe")).toHaveLength(1);
     } finally {
       releaseRoute();
       await browser.close();

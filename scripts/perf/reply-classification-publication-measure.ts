@@ -7,22 +7,18 @@
  * to that log. Never use traced/sampled timings as untraced latency/GC evidence.
  */
 import assert from "node:assert/strict";
-import { writeSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
-import {
-  constants,
-  monitorEventLoopDelay,
-  PerformanceObserver,
-  type PerformanceEntry,
-} from "node:perf_hooks";
+import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { retainReplyToolAuthorityClassification } from "../../src/auto-reply/reply/reply-tool-authority-cohort.js";
 import { publishRetainedSessionEntryChange } from "../../src/config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 
 const { values } = parseArgs({
   options: {
@@ -96,16 +92,11 @@ function distribution(samples: number[]) {
   };
 }
 const profilePath = `${values.output}.heapprofile`;
-const marker = (phase: string) =>
-  writeSync(
-    1,
-    `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-  );
 if (values["gc-log"]) {
   assert(global.gc, "Tracing requires --expose-gc");
-  marker("identify-start");
+  writeGatewayGcTraceMarker("identify-start", profilePath);
   global.gc();
-  marker("identify-stop");
+  writeGatewayGcTraceMarker("identify-stop", profilePath);
 }
 for (let i = 0; i < 10_000; i++) {
   publish(i);
@@ -113,32 +104,20 @@ for (let i = 0; i < 10_000; i++) {
 await nextTurn();
 const inspector = new Session();
 if (values.allocations) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32768);
 }
 const collections: { kind: number; ms: number }[] = [];
 let start = Infinity;
 let end = Infinity;
-const observer = new PerformanceObserver((list) => {
-  for (const entry of list.getEntries()) {
-    if (entry.startTime >= start && entry.startTime < end) {
-      collections.push({
-        kind: (entry as PerformanceEntry & { detail: { kind: number } }).detail.kind,
-        ms: entry.duration,
-      });
-    }
-  }
-});
+const observer = new PerformanceObserver((list) =>
+  recordGcCollections(list.getEntries(), collections, start, end),
+);
 observer.observe({ entryTypes: ["gc"] });
 const loop = monitorEventLoopDelay({ resolution: 1 });
 loop.enable();
 const latencies: number[] = [];
 const cpuStart = process.cpuUsage();
-marker("heap-start");
+writeGatewayGcTraceMarker("heap-start", profilePath);
 start = performance.now();
 for (let i = 0; i < operations; i++) {
   const began = performance.now();
@@ -149,7 +128,7 @@ for (let i = 0; i < operations; i++) {
   }
 }
 end = performance.now();
-marker("heap-stop");
+writeGatewayGcTraceMarker("heap-stop", profilePath);
 const cpu = process.cpuUsage(cpuStart);
 loop.disable();
 await nextTurn();

@@ -1,11 +1,13 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { githubRepositoryUrl } from "../agents/github-host.js";
 import { isAbortError } from "../infra/abort-signal.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
 import type { GitHubPublicationExecutionRow } from "../state/github-publication-read.types.js";
-import { prepareGitHubPublicationContent } from "./github-publication-content.js";
+import {
+  prepareGitHubPublicationContent,
+  publicationParticipantDisplayName,
+} from "./github-publication-content.js";
+import { readCreatedGitHubPullRequestUrl } from "./github-publication-execution-effects.js";
 import {
   createGitHubPublicationExecutionIdentity,
   GitHubPublicationAuthorityLostError,
@@ -32,9 +34,7 @@ import {
   createGitHubPublicationCommandRunner,
   githubPublicationApiArgs,
   githubPublicationPushArgs,
-  githubPublicationRemoteHeadArgs,
   githubPublicationUpdateRefArgs,
-  hasGitHubPublicationWorkflowChanges,
   hasGitHubPublicationMessageFooter,
   readGitHubPublicationCoauthorTrailers,
   readGitHubPublicationBaseSha,
@@ -42,6 +42,7 @@ import {
   requirePublicationCommand as requireCommand,
   runPublicationCommand as runCommand,
 } from "./github-publication-git-transport.js";
+import { assertParticipantPullRequestReuse } from "./github-publication-inspect.js";
 import {
   findGitHubPublicationPullRequest,
   reconcileGitHubPublicationPullRequest,
@@ -49,6 +50,7 @@ import {
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
 import {
   reconcileGitHubPublication,
+  observeGitHubPublicationRemoteHead,
   prepareGitHubPublicationWorkspaceRecovery,
   type GitHubPublicationRecoveryResult,
 } from "./github-publication-recovery.js";
@@ -57,7 +59,7 @@ import {
   prepareBoundGitHubPublication,
   prepareGitHubPublicationExecutionTarget,
 } from "./github-publication-target.js";
-import { prepareGitHubPublicationWorkflowGuard } from "./github-publication-workflows.js";
+import * as publicationWorkflows from "./github-publication-workflows.js";
 import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 
@@ -263,9 +265,8 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     if (preparation.status === "reconcile") {
       return await reconcileObservedPublication();
     }
-    const { target } = preparation;
-    const { pushRepository, repository, branch, baseBranch, pushOwner, githubHost } = target;
-    const { publishedPullRequest } = target;
+    const { pushRepository, repository, branch, baseBranch } = preparation.target;
+    const { pushOwner, githubHost, publishedPullRequest } = preparation.target;
     const remoteBaseSha = await readGitHubPublicationBaseSha(
       run,
       repository,
@@ -275,19 +276,19 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     );
     await step(() => assertSafeGitPublicationWorkspace(worktree.path, runCommand));
     identity = await refreshIdentity();
-    const baseTransportEnv = {
-      ...identity.env,
-      GIT_CONFIG_GLOBAL: gitNullConfigPath(),
-      GIT_CONFIG_SYSTEM: gitNullConfigPath(),
-    };
     await requireGitHubPublicationCommit(
       run,
       repository,
       remoteBaseSha,
       githubHost,
       worktree.path,
-      baseTransportEnv,
+      {
+        ...identity.env,
+        GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+        GIT_CONFIG_SYSTEM: gitNullConfigPath(),
+      },
       "GitHub publication workspace base could not be materialized.",
+      { baseBranch },
     );
     // Reflogs can expire or restart when a branch is recreated; commits own its history.
     const lineage = await run(["git", "merge-base", sourceHeadCommit, remoteBaseSha], {
@@ -335,6 +336,8 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         host: githubHost,
         headCommit,
         marker: pullRequestMarker,
+        assertReuse: (url) =>
+          assertParticipantPullRequestReuse(params.requester?.(), url, assertCurrent),
         refreshIdentity,
         recordObserved: async (url) => {
           await params.recordEffect?.("pull_request", { url });
@@ -342,14 +345,24 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         },
         assertCurrent,
       });
-    const markerPresent = currentMessage.split(/\r?\n/u).includes(marker);
+    const messageLines = currentMessage.split(/\r?\n/u);
+    const markerPresent = messageLines.includes(marker);
     if (markerPresent) {
       if (parents!.split(" ", 1)[0] !== sourceHeadCommit || currentTree !== workspaceTree) {
         throw new GitHubPublicationWorkspaceChangedError(
           "GitHub publication workspace changed after its accepted snapshot.",
         );
       }
-    } else if (headCommit !== sourceHeadCommit) {
+    }
+    const sourceHeadChanged = !markerPresent && headCommit !== sourceHeadCommit;
+    if (
+      sourceHeadChanged &&
+      (row.head_commit !== null ||
+        row.identity_source === "personal" ||
+        currentTree !== workspaceTree ||
+        parents!.split(" ", 1)[0] !== sourceHeadCommit ||
+        !messageLines.some((line) => line.startsWith(`${PUBLICATION_MARKER}: `)))
+    ) {
       throw new GitHubPublicationWorkspaceChangedError(
         "GitHub publication workspace changed after its accepted snapshot.",
       );
@@ -361,28 +374,8 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       GIT_CONFIG_GLOBAL: gitNullConfigPath(),
       GIT_CONFIG_SYSTEM: gitNullConfigPath(),
     };
-    const observeRemoteHead = async () => {
-      const result = await run(githubPublicationRemoteHeadArgs(httpsRemote, branch), {
-        cwd: worktree.path,
-        env: transportEnv,
-      });
-      if (result.code !== 0) {
-        throw new Error("GitHub publication remote branch could not be verified.");
-      }
-      const observed = result.stdout.toString("utf8").trim();
-      if (!observed) {
-        return "";
-      }
-      const fields = observed.split(/\s+/u);
-      if (
-        fields.length !== 2 ||
-        fields[1] !== `refs/heads/${branch}` ||
-        !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/iu.test(fields[0]!)
-      ) {
-        throw new Error("GitHub publication remote branch could not be verified.");
-      }
-      return fields[0]!;
-    };
+    const observeRemoteHead = () =>
+      observeGitHubPublicationRemoteHead(run, httpsRemote, branch, worktree.path, transportEnv);
     // Observe ancestry before creating bookkeeping commits or installing the accepted index.
     // Fetch objects only: do not move local refs, FETCH_HEAD, or the working tree.
     const expectedRemoteHead = await step(observeRemoteHead);
@@ -396,6 +389,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         worktree.path,
         transportEnv,
         "GitHub publication remote branch could not be verified.",
+        { baseBranch },
       );
       const ancestry = await run(["git", "merge-base", "--is-ancestor", remoteHead, headCommit], {
         cwd: worktree.path,
@@ -410,36 +404,28 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       }
     }
     const existingPullRequest = await step(findPullRequest);
-    const assertWorkflowAuthority = await prepareGitHubPublicationWorkflowGuard(
-      params.assertWorkflowChangesAllowed,
-      () =>
-        hasGitHubPublicationWorkflowChanges({
-          cwd: worktree.path,
-          comparisonCommit: expectedRemoteHead || lineage.stdout.toString("utf8").trim(),
-          ancestryCommit: expectedRemoteHead || sourceHeadCommit,
-          targetCommit: remoteBaseSha,
-          workspaceTree,
-          run,
-        }),
-    );
+    const assertWorkflowAuthority =
+      await publicationWorkflows.prepareGitHubPublicationWorkflowGuard(
+        params.assertWorkflowChangesAllowed,
+        () =>
+          publicationWorkflows.hasGitHubPublicationWorkflowChanges({
+            cwd: worktree.path,
+            comparisonCommit: expectedRemoteHead || lineage.stdout.toString("utf8").trim(),
+            ancestryCommit: expectedRemoteHead || sourceHeadCommit,
+            targetCommit: remoteBaseSha,
+            accepted: { sourceCommit: sourceHeadCommit, tree: workspaceTree },
+            run,
+          }),
+      );
     const assertPublicationAction = () => {
       assertWorkflowAuthority();
       assertCurrent();
     };
     assertPublicationAction();
-    row = await params.updatePublishingFacts({
-      row,
-      repository,
-      branch,
-      baseBranch,
-      sourceHeadCommit,
-      workspaceTree,
-      headCommit,
-    });
-
     const content = await prepareGitHubPublicationContent({
       row,
       requesterProfileId: params.requesterProfileId?.(),
+      participantDisplayName: publicationParticipantDisplayName(params.requester?.()),
       storePath: loaded.storePath,
       accountId: identity.account.accountId,
       host: githubHost,
@@ -469,12 +455,14 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     ) {
       throw new GitHubPublicationCreditChangedError();
     }
-    const messageLines = currentMessage.split(/\r?\n/u);
+    let reusablePullRequest: string | undefined;
     if (
       existingPullRequest &&
       remoteHead === headCommit &&
       currentTree === workspaceTree &&
-      sourceIndexTree === workspaceTree &&
+      (sourceIndexTree === workspaceTree ||
+        (sourceHeadChanged &&
+          (await command(["git", "write-tree"], { cwd: worktree.path })) === workspaceTree)) &&
       messageLines.some((line) => line.startsWith(`${PUBLICATION_MARKER}: `))
     ) {
       // Text in prose or an earlier paragraph is not Git co-author credit.
@@ -489,8 +477,27 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         // The owned open PR already exposes this exact attributed tree. A new request
         // needs a receipt, not a new commit marker or index transaction. First publication
         // and missing contributor credit still use the request-owned recovery marker below.
-        return await completePublished(existingPullRequest, headCommit);
+        reusablePullRequest = existingPullRequest;
       }
+    }
+    // An earlier queued request can publish the exact frozen tree above. Otherwise,
+    // a moved head still refuses before changing local history, the index, or GitHub.
+    if (sourceHeadChanged && !reusablePullRequest) {
+      throw new GitHubPublicationWorkspaceChangedError(
+        "GitHub publication workspace changed after its accepted snapshot.",
+      );
+    }
+    row = await params.updatePublishingFacts({
+      row,
+      repository,
+      branch,
+      baseBranch,
+      sourceHeadCommit,
+      workspaceTree,
+      headCommit,
+    });
+    if (reusablePullRequest) {
+      return await completePublished(reusablePullRequest, headCommit);
     }
     const previousBranchHead = headCommit;
     let updateBranchRef: (() => Promise<void>) | undefined;
@@ -653,16 +660,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         },
       );
       if (created.code === 0) {
-        let value: unknown;
-        try {
-          value = JSON.parse(created.stdout.toString("utf8"));
-        } catch (error) {
-          throw new Error("GitHub pull request creation returned invalid JSON", { cause: error });
-        }
-        if (!isRecord(value)) {
-          throw new Error("GitHub pull request creation returned an invalid response");
-        }
-        pullRequestUrl = readNonBlankString(value.html_url);
+        pullRequestUrl = readCreatedGitHubPullRequestUrl(created.stdout.toString("utf8"));
       }
       await params.recordEffect?.("pull_request", pullRequestUrl ? { url: pullRequestUrl } : {});
       if (!pullRequestUrl) {

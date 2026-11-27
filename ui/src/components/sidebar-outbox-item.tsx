@@ -81,14 +81,7 @@ export function renderSidebarOutboxItem(
       data-outbox-id={params.entry.id}
     >
       <div class="sidebar-issues-panel__summary sidebar-outbox-row">
-        <span
-          class={[
-            "sidebar-issues-panel__icon",
-            "sidebar-outbox-row__icon",
-            `sidebar-outbox-row__icon--${params.entry.severity}`,
-          ]}
-          aria-hidden="true"
-        >
+        <span class="sidebar-issues-panel__icon" aria-hidden="true">
           <Icon name="alertTriangle" />
         </span>
         <div class="sidebar-issues-panel__content">

@@ -68,7 +68,6 @@ export function ComposerAddServerDialog(props: {
             disabled={props.submitBlockedReason !== null}
             blockedReason={props.submitBlockedReason}
             autofocus
-            presentation="modal"
             error={props.error}
             onSubmit={props.onSubmit}
             onCancel={props.onCancel}

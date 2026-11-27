@@ -73,6 +73,7 @@ const WORKSPACE_PACKAGE_ALIAS_SUBPATHS = [
       "model-catalog-normalize",
       "model-catalog-pricing",
       "model-catalog-types",
+      "model-inference-capabilities",
       "provider-id",
       "provider-model-id-normalization",
       "provider-model-id-normalize",

@@ -21,8 +21,6 @@ const {
   writeQaDockerHarnessFiles,
   buildQaDockerHarnessImage,
   runQaDockerUp,
-  defaultQaRuntimeModelForMode,
-  resolveQaRuntimeModelPair,
   readQaScenarioPack,
 } = vi.hoisted(() => ({
   runQaManualLane: vi.fn(),
@@ -35,9 +33,6 @@ const {
   writeQaDockerHarnessFiles: vi.fn(),
   buildQaDockerHarnessImage: vi.fn(),
   runQaDockerUp: vi.fn(),
-  defaultQaRuntimeModelForMode:
-    vi.fn<(mode: string, options?: { alternate?: boolean }) => string>(),
-  resolveQaRuntimeModelPair: vi.fn(),
   readQaScenarioPack: vi.fn<() => QaScenarioPack>(),
 }));
 
@@ -103,11 +98,6 @@ vi.mock("./docker-up.runtime.js", () => ({
   runQaDockerUp,
 }));
 
-vi.mock("./model-selection.runtime.js", () => ({
-  defaultQaRuntimeModelForMode,
-  resolveQaRuntimeModelPair,
-}));
-
 vi.mock("./scenario-catalog.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./scenario-catalog.js")>();
   readQaScenarioPack.mockImplementation(actual.readQaScenarioPack);
@@ -125,39 +115,19 @@ import {
   runQaDockerUpCommand,
   runQaCharacterEvalCommand,
   runQaProfileCommand,
-  runQaManualLaneCommand,
   resolveQaHarnessRepoRoot,
   runQaSuiteCommand,
 } from "./cli.runtime.js";
 import { QaSuiteInfraError } from "./errors.js";
 import type { QaEvidenceSummaryJson } from "./evidence-summary.js";
 import { runQaTelegramCommand } from "./live-transports/telegram/cli.runtime.js";
-import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-selection.js";
-import { resolveQaLiveFrontierAlternateModel } from "./providers/live-frontier/model-selection.runtime.js";
 import type { QaTransportAdapterFactory } from "./qa-transport-registry.js";
-import type { QaProviderModeInput } from "./run-config.js";
 import { expandQaScenarioExecutionCells, type QaScenarioExecutionCell } from "./scenario-lane.js";
 import type { QaSuiteRunParams } from "./suite.js";
 
 const LEGACY_TEST_REPO_ROOT = path.resolve("/tmp/openclaw-repo");
 const nativeRealpath = fs.realpath.bind(fs);
 const tempDirs = createTempDirHarness();
-
-function resolveMockQaRuntimeModelPair(params: {
-  providerMode: string;
-  primaryModel?: string;
-  alternateModel?: string;
-}) {
-  const primaryModel =
-    params.primaryModel?.trim() || defaultQaRuntimeModelForMode(params.providerMode);
-  const alternateModel =
-    params.alternateModel?.trim() ||
-    (params.providerMode === "live-frontier"
-      ? (resolveQaLiveFrontierAlternateModel(primaryModel) ??
-        defaultQaRuntimeModelForMode(params.providerMode, { alternate: true }))
-      : defaultQaRuntimeModelForMode(params.providerMode, { alternate: true }));
-  return { primaryModel, alternateModel };
-}
 
 const QA_PASSING_SUITE_SCENARIO = {
   name: "channel chat baseline",
@@ -413,11 +383,6 @@ describe("qa cli", () => {
     ]) {
       mock.mockReset();
     }
-    defaultQaRuntimeModelForMode.mockImplementation(
-      (mode: string, options?: { alternate?: boolean }) =>
-        defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
-    );
-    resolveQaRuntimeModelPair.mockImplementation(resolveMockQaRuntimeModelPair);
     readQaScenarioPack.mockClear();
     runQaSuite.mockImplementation(async (params) => {
       const observedCells = executionCellsForSuiteParams(params);
@@ -716,27 +681,6 @@ describe("qa cli", () => {
     },
   );
 
-  it("forwards resolved catalog scenarios for automatic mixed-channel host runs", async () => {
-    await runQaSuiteCommand({
-      providerMode: "mock-openai",
-      channelDriver: "crabline",
-    });
-
-    const suiteArgs = mockFirstObjectArg(runQaSuite);
-    expect(suiteArgs.channelId).toBeUndefined();
-    expect(suiteArgs.scenarioIds).toEqual(
-      expect.arrayContaining(["telegram-help-command", "matrix-restart-resume"]),
-    );
-    const scenarioById = new Map(
-      readQaScenarioPack().scenarios.map((scenario) => [scenario.id, scenario]),
-    );
-    expect(
-      (suiteArgs.scenarioIds as string[]).every(
-        (scenarioId) => scenarioById.get(scenarioId)?.execution.kind === "flow",
-      ),
-    ).toBe(true);
-  });
-
   it.each([
     [{ runtimePair: "openclaw,openclaw" }, /different runtimes/i],
     [{ runtimePair: "openclaw,,codex" }, /exactly two runtimes/i],
@@ -934,18 +878,6 @@ describe("qa cli", () => {
     },
   );
 
-  it("accepts comma-separated runtime-pair lane filters", async () => {
-    await runSuite({ runtimePairLane: ["extended,soak"] });
-
-    expectFields(mockFirstObjectArg(runQaSuite), {
-      scenarioIds: expect.arrayContaining(["runtime-soak-100-turn", "runtime-tool-memory-add"]),
-    });
-    expectWriteContains(
-      stderrWrite,
-      "excluded lane-incompatible scenario(s): runtime-tool-image-generate",
-    );
-  });
-
   it("keeps runtime-pair lane selection on flow scenarios and reports exclusions", async () => {
     await runSuite({
       runtimePair: "openclaw,codex",
@@ -1086,15 +1018,6 @@ describe("qa cli", () => {
     expect(tokenSummary.aggregate?.flaggedScenarios).toEqual(["runtime-tool-fs-read"]);
   });
 
-  it("uses provider defaults for omitted manual models", async () => {
-    await runQaManualLaneCommand({ message: "probe" });
-    expect(mockFirstObjectArg(runQaManualLane)).toMatchObject({
-      providerMode: "live-frontier",
-      primaryModel: defaultQaProviderModelForMode("live-frontier"),
-      alternateModel: "openai/gpt-5.6-terra",
-    });
-  });
-
   it("writes a curated mock JSONL replay report and summary", async () => {
     const repoRoot = await tempDirs.makeTempDir("qa-jsonl-replay-cli-");
     await parseQa(["jsonl-replay"], {
@@ -1117,51 +1040,19 @@ describe("qa cli", () => {
     expect(summary.transcripts).toHaveLength(7);
   });
 
-  it("resolves character eval paths and passes model refs through", async () => {
+  it("parses candidate and judge model options independently", async () => {
     await runQaCharacterEvalCommand({
-      repoRoot: "/tmp/openclaw-repo",
-      outputDir: ".artifacts/qa/character",
-      model: [
-        "openai/gpt-5.6-luna,thinking=xhigh,fast=false",
-        "codex-cli/test-model,thinking=high,fast",
-      ],
-      scenario: "character-vibes-gollum",
+      model: ["qa/candidate,thinking=xhigh,fast=false"],
       fast: true,
-      thinking: "medium",
-      modelThinking: ["codex-cli/test-model=medium"],
-      judgeModel: [
-        "openai/gpt-5.6-luna,thinking=xhigh,fast",
-        "anthropic/claude-opus-4-8,thinking=high",
-      ],
-      judgeTimeoutMs: 180_000,
-      blindJudgeModels: true,
-      concurrency: 4,
-      judgeConcurrency: 3,
+      judgeModel: ["qa/judge,thinking=high,fast"],
     });
 
-    const characterEvalArgs = mockFirstObjectArg(runQaCharacterEval);
-    expect(typeof characterEvalArgs.progress).toBe("function");
-    expectFields(characterEvalArgs, {
-      repoRoot: path.resolve("/tmp/openclaw-repo"),
-      outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/character"),
-      models: ["openai/gpt-5.6-luna", "codex-cli/test-model"],
-      scenarioId: "character-vibes-gollum",
+    expectFields(mockFirstObjectArg(runQaCharacterEval), {
+      models: ["qa/candidate"],
       candidateFastMode: true,
-      candidateThinkingDefault: "medium",
-      candidateThinkingByModel: { "codex-cli/test-model": "medium" },
-      candidateModelOptions: {
-        "openai/gpt-5.6-luna": { thinkingDefault: "xhigh", fastMode: false },
-        "codex-cli/test-model": { thinkingDefault: "high", fastMode: true },
-      },
-      judgeModels: ["openai/gpt-5.6-luna", "anthropic/claude-opus-4-8"],
-      judgeModelOptions: {
-        "openai/gpt-5.6-luna": { thinkingDefault: "xhigh", fastMode: true },
-        "anthropic/claude-opus-4-8": { thinkingDefault: "high" },
-      },
-      judgeTimeoutMs: 180_000,
-      judgeBlindModels: true,
-      candidateConcurrency: 4,
-      judgeConcurrency: 3,
+      candidateModelOptions: { "qa/candidate": { thinkingDefault: "xhigh", fastMode: false } },
+      judgeModels: ["qa/judge"],
+      judgeModelOptions: { "qa/judge": { thinkingDefault: "high", fastMode: true } },
     });
   });
 

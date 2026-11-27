@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { createSignal, flush } from "solid-js";
 import { expect, it, vi } from "vitest";
+import type { GatewaySessionRow } from "../../../api/types.ts";
 import "../chat-details-mobile-host-content.tsx";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
@@ -103,6 +104,35 @@ it("retains Outputs demand across publications and returns navigation origins wi
   expect(releaseReplacement).toHaveBeenCalledOnce();
 });
 
+it("hides the mobile Subagents section for ordinary subsessions and retains native navigation", () => {
+  const parent = "agent:main:details";
+  const ordinary: GatewaySessionRow = {
+    key: "agent:main:acp:coder",
+    label: "Coding subsession",
+    kind: "direct",
+    parentSessionKey: parent,
+    status: "done",
+  };
+  const native = { ...ordinary, key: "agent:main:subagent:review", label: "Native review" };
+  const [value, setValue] = createSignal(
+    details({
+      subagentSessions: [ordinary],
+      subagentSessionsHydrated: true,
+    }),
+  );
+  const content = rootContent();
+  const view = mountSolid(() => (
+    <ChatDetailsMobileContent details={value()} presented page={{ kind: "root", content }} />
+  ));
+  expect(view.container.querySelector('[data-details-group="subagents"]')).toBeNull();
+  setValue(details({ subagentSessions: [ordinary, native], subagentSessionsHydrated: true }));
+  flush();
+  expect(view.container.textContent).not.toContain("Coding subsession");
+  view.getByRole("button", { name: /Native review/ }).click();
+  expect(content.subagents.onOpenSubagent).toHaveBeenCalledWith(native.key);
+  view.unmount();
+});
+
 async function mountMobileHost(value: ChatDetailsProps) {
   const navigate = vi.fn<(destination: MobileHostDestination) => void>();
   const host: ChatMobileHost = createChatMobileHostFixture("mobile-pr-session", {
@@ -186,6 +216,32 @@ it("replaces the People activation owner while retaining the mobile host content
   }
   expect(release).toHaveBeenCalledOnce();
   expect(releaseReplacement).toHaveBeenCalledOnce();
+});
+
+it("links a task PR without claiming an unverified GitHub state", async () => {
+  const request = pullRequest();
+  const { query, navigate } = await mountMobileHost(
+    details({ displayPullRequests: [{ ...request, state: undefined }] }),
+  );
+  const link = query('[data-details-page="root"] a.chat-pr-mobile__row');
+  expect(link?.getAttribute("href")).toBe(request.url);
+  expect(link?.hasAttribute("data-state")).toBe(false);
+  expect(navigate).not.toHaveBeenCalled();
+});
+
+it("keeps a verified task PR readable without checkout-owned CI actions", async () => {
+  const request = pullRequest({ title: "Task PR", headSha: "a".repeat(40) });
+  const { element, navigate, show, query } = await mountMobileHost(
+    details({ pullRequests: [], displayPullRequests: [{ ...request, taskOnly: true }] }),
+  );
+  query('[data-details-page="root"] .chat-pr-mobile__row')!.click();
+  expect(navigate).toHaveBeenCalledOnce();
+  await show(navigate.mock.calls[0]![0]);
+  await vi.dynamicImportSettled();
+  await settle(element);
+  const actions = query('[data-details-page="pull-request"] .chat-pr-mobile__actions');
+  expect(actions?.querySelector("a")?.getAttribute("href")).toBe(request.url);
+  expect(actions?.textContent).not.toMatch(/Checks|CI monitoring/);
 });
 
 it("routes current mobile PRs to Checks and rejects hidden or superseded navigation", async () => {

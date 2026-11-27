@@ -35,11 +35,11 @@ import { coordinateWorkerPlacementDispatch } from "./worker-environments/placeme
 import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { writePlacementEnvironmentFixture } from "./worker-environments/placement-test-fixtures.js";
-import { prepareRepositoryGitHubIdentity } from "./worker-environments/repository-github-identity.js";
-import { createRepositoryPolicySource } from "./worker-environments/repository-policy-node.test-support.js";
+import {
+  createRepositoryPolicyReconciler,
+  createRepositoryPolicySource,
+} from "./worker-environments/repository-policy-node.test-support.js";
 import { deriveEnvironmentIntent } from "./worker-environments/service-contract.js";
-import { captureWorkspaceManifest } from "./worker-environments/workspace-manifest-worker.js";
-import { serializeWorkerWorkspaceManifest } from "./worker-environments/workspace-manifest.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 afterEach(() => {
@@ -51,7 +51,7 @@ afterEach(() => {
 
 // Actual RPC admission/creation and dispatch owners, with native Git/checkpoint effects.
 // Provider allocation and remote transport/account responses remain synthetic.
-test.each(["allowed", "policy", "source", "stop", "caller"] as const)(
+test.each(["allowed", "policy", "source", "stop"] as const)(
   "required repository sessions.create retains authority after ACK: %s",
   async (scenario) => {
     const { dir, storePath } = await createSessionStoreDir();
@@ -143,10 +143,9 @@ test.each(["allowed", "policy", "source", "stop", "caller"] as const)(
     harness.environments.prepareProjectIntent = async (selected, request) => {
       entered.resolve();
       await resume.promise;
-      await prepareRepositoryGitHubIdentity("main", request!.assertCurrent!, {
-        repositoryUrl: "https://github.com/example/repository",
-        readNativeCredential: request?.readNativeCredential,
-      });
+      expect(request).toMatchObject({ imageReserve: true });
+      expect(request).not.toHaveProperty("readNativeCredential");
+      // Delay runtime allocation only; real repository startup owns identity admission.
       return originalIntent(selected, request);
     };
     const originalCreate = harness.environments.createWithRequest;
@@ -207,37 +206,7 @@ test.each(["allowed", "policy", "source", "stop", "caller"] as const)(
           baseManifestRef: prepared.result.manifestRef,
         };
       },
-      reconcileWorkspace: async (input) => {
-        if (input.source.kind !== "repository") {
-          throw new Error("Expected repository");
-        }
-        const manifest = await captureWorkspaceManifest({
-          root: input.remoteWorkspaceDir,
-          baseCommit,
-        });
-        const checkpoint = await input.source.prepareCheckpoint({
-          stagingRoot: input.remoteWorkspaceDir,
-          baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
-          currentManifestRaw: serializeWorkerWorkspaceManifest(manifest.manifest),
-          baseManifestRef: base.manifestRef,
-          currentManifestRef: manifest.manifestRef,
-        });
-        return {
-          manifestRef: manifest.manifestRef,
-          changed: false,
-          verifyStable: async () => {
-            expect(
-              (await captureWorkspaceManifest({ root: input.remoteWorkspaceDir, baseCommit }))
-                .manifestRef,
-            ).toBe(manifest.manifestRef);
-          },
-          verifyLocalStable: () => checkpoint.verify(),
-          publishStagedResult: async () => {
-            await checkpoint.publish();
-          },
-          discardPreparedStagedResult: () => checkpoint.discard(),
-        };
-      },
+      reconcileWorkspace: createRepositoryPolicyReconciler({ base, baseCommit }),
     });
     const originalDispatch = harness.service.dispatch;
     harness.service.dispatch = (...args) => {
@@ -299,9 +268,6 @@ test.each(["allowed", "policy", "source", "stop", "caller"] as const)(
       if (scenario === "policy") {
         policyCurrent = false;
       }
-      if (scenario === "caller") {
-        client.connect.scopes = [];
-      }
       if (scenario === "source") {
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: key, storePath },
@@ -334,6 +300,7 @@ test.each(["allowed", "policy", "source", "stop", "caller"] as const)(
       await stop;
       if (scenario === "allowed") {
         expect(outcome, String(outcome)).toMatchObject({ state: "active" });
+        expect(verify).toHaveBeenCalledTimes(1);
         const placement = (
           await placements.readProjection([entry()!.sessionId], { current: true })
         ).placements.get(entry()!.sessionId)!;

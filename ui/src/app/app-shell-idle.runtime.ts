@@ -1,9 +1,9 @@
 import { routeIdFromPath, isSessionRouteId, type RouteId } from "../app-route-paths.ts";
-import { hasIdleWarmups, takeIdleWarmups } from "../lib/idle-warmup.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { ShellOwner } from "./app-host.tsx";
 import type { ApplicationContext } from "./context.ts";
 import { connectControlUiFavicon } from "./control-ui-favicon-status.runtime.ts";
+import { trackForegroundActivity } from "./foreground-activity.ts";
 
 function canPreload(): boolean {
   // SAFETY: Network Information is optional and is not in TypeScript's DOM library.
@@ -59,8 +59,7 @@ export function connectShellIdle(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let idle: number | undefined;
   let intent: string | undefined;
-  // Explicit intent wins. A declared next interaction owns this route's idle work;
-  // routes without one fall back to New Session.
+  // Explicit intent wins. Chat warms its controls before the existing New Session warmup.
   const nextPending = () => {
     if (intent && pending.has(intent)) {
       return intent;
@@ -72,8 +71,11 @@ export function connectShellIdle(
         : currentRoute
           ? `${currentRoute}-next`
           : undefined;
-    if (currentNext && manifest?.[currentNext]) {
-      return pending.has(currentNext) ? currentNext : undefined;
+    if (currentNext && pending.has(currentNext)) {
+      return currentNext;
+    }
+    if (currentRoute !== "chat" && currentNext && manifest?.[currentNext]) {
+      return undefined;
     }
     return pending.has("new-session") ? "new-session" : undefined;
   };
@@ -98,7 +100,7 @@ export function connectShellIdle(
   };
   const schedule = () => {
     cancel();
-    if (!available() || running || (manifest && !nextPending() && !hasIdleWarmups())) {
+    if (!available() || running || (manifest && !nextPending())) {
       return;
     }
     // Readiness can precede first paint. Leave a quiet window, then ask for idle
@@ -139,13 +141,6 @@ export function connectShellIdle(
       if (!ready()) {
         return;
       }
-      // Current-page menu bodies precede next-route guesses; navigation intent still wins.
-      const warmups = intent ? [] : takeIdleWarmups();
-      if (warmups.length) {
-        // Speculation only; opening the surface owns any load failure.
-        await Promise.all(warmups.map((load) => load().catch(() => undefined)));
-        return;
-      }
       const currentRoute = router.getState().matches[0]?.routeId;
       if (currentRoute) {
         pending.delete(currentRoute);
@@ -169,9 +164,13 @@ export function connectShellIdle(
         }
         seen.add(href);
         const link = document.createElement("link");
-        link.rel = file.endsWith(".css") ? "preload" : "modulepreload";
+        const entryOnly = key === "chat-session-menu" || key === "sidebar-menus";
+        link.rel = file.endsWith(".css") || entryOnly ? "preload" : "modulepreload";
         if (file.endsWith(".css")) {
           link.as = "style";
+        } else if (entryOnly) {
+          // Cache the entry bytes without asking the browser to prepare its dependencies.
+          link.as = "script";
         }
         link.crossOrigin = "";
         link.fetchPriority = "low";
@@ -204,7 +203,7 @@ export function connectShellIdle(
           }),
         );
       }
-      await Promise.all(loads);
+      await trackForegroundActivity(Promise.all(loads));
     } catch {
       // Speculation never triggers stale-chunk recovery; navigation owns failures.
       manifest = {};
@@ -243,6 +242,16 @@ export function connectShellIdle(
   };
   const onIntent = (event: Event) => {
     if (!(event.target instanceof Element)) {
+      return;
+    }
+    if (event.type === "pointerdown") {
+      if (
+        event instanceof MouseEvent &&
+        event.button === 2 &&
+        event.target.closest(".sidebar--rail [data-session-key]")
+      ) {
+        prioritize("sidebar-menus");
+      }
       return;
     }
     const anchor = event.target.closest<HTMLAnchorElement>("a[href]");
@@ -285,11 +294,15 @@ export function connectShellIdle(
       ? "palette"
       : event.target.closest(".chat-controls__model-trigger")
         ? "model-picker"
-        : event.target.closest('[data-value="command:settings"]')
-          ? "appearance"
-          : event.target.closest('[data-value="command:debug-overlay"]')
-            ? "debug"
-            : undefined;
+        : event.target.closest(".chat-header-session-menu__trigger")
+          ? "chat-session-menu"
+          : event.target.closest(".sidebar-identity-card, [data-sidebar-session-menu]")
+            ? "sidebar-menus"
+            : event.target.closest('[data-value="command:settings"]')
+              ? "appearance"
+              : event.target.closest('[data-value="command:debug-overlay"]')
+                ? "debug"
+                : undefined;
     if (key) {
       prioritize(key);
       if (key === "appearance" && ready()) {
@@ -305,6 +318,7 @@ export function connectShellIdle(
     context.theme.subscribe(schedule),
     listen(shell, "pointerover", onIntent),
     listen(shell, "pointerout", onIntent),
+    listen(shell, "pointerdown", onIntent, { passive: true }),
     listen(shell, "focusin", onIntent),
     listen(shell, "focusout", onIntent),
     listen(shell, "touchstart", onIntent, { passive: true }),

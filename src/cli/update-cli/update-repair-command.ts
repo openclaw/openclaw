@@ -7,14 +7,18 @@ import {
 } from "../../config/config.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
+import { compareSemverStrings } from "../../infra/npm-registry-spec.js";
 import { readPackageVersion } from "../../infra/package-json.js";
-import { settlePendingPackageActivation } from "../../infra/package-update-activation.js";
+import {
+  readPackageActivationRepairLease,
+  settlePendingPackageActivation,
+} from "../../infra/package-update-activation.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
 } from "../../infra/update-channels.js";
-import { compareSemverStrings, resolveNpmChannelTag } from "../../infra/update-check.js";
+import { resolveNpmChannelTag } from "../../infra/update-check.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
@@ -29,7 +33,9 @@ import {
   isFreshUnacknowledgedAbandonedUpdateRun,
   recordedUpdateRunDrivers,
 } from "../../infra/update-run-activity.js";
+import { listUnverifiedDataAtRisk } from "../../infra/update-run-data-at-risk.js";
 import { inspectUpdateRunDriver } from "../../infra/update-run-driver.js";
+import { findUpdateGatewayStop } from "../../infra/update-run-gateway-stop.js";
 import {
   acknowledgeAbandonedUpdateRun,
   createUpdateRun,
@@ -44,6 +50,7 @@ import {
   isUnacknowledgedPackageOwnerRefusal,
 } from "../../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
+import type { UpdateRecoveryFence } from "../../infra/update-run-recovery-types.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -84,7 +91,6 @@ export function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<void> 
 }
 
 async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
-  // Recovery refusal precedes discovery; later mutation checks still revalidate.
   await assertUpdateRecoveryAdmission({ env: process.env });
   const discoveredRoot = await resolveUpdateRoot();
   await refuseHostOwnedUpdate(discoveredRoot, opts);
@@ -101,6 +107,26 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
   let activeRuns = listUpdateRuns({ active: true, limit: 100 }, options);
   const inheritedRunId = env[UPDATE_RUN_ID_ENV];
   let admission = inspectUpdateRepairDriverAdmission(activeRuns, inheritedRunId);
+  const reconcileUnderRepairOwnership = async (repairOwnership: UpdateRecoveryFence) => {
+    // Settle independently: an unresolved sibling must not discard proven progress.
+    for (const run of activeRuns) {
+      const reconciled = await reconcileAbandonedUpdateRunsAsync(
+        { explicit: true, runIds: [run.runId] },
+        { ...options, repairOwnership },
+      );
+      for (const retired of reconciled) {
+        const hosts = recordedUpdateRunDrivers(retired)
+          .map((driver) => driver.host)
+          .join(", ");
+        const age = Math.max(0, Math.floor((Date.now() - retired.createdAtMs) / 1_000));
+        defaultRuntime.error(
+          `Warning: abandoned update ${retired.runId} on ${hosts || "an unrecorded host"} (age ${age}s); retired under exclusive update and state ownership.`,
+        );
+      }
+    }
+    activeRuns = listUpdateRuns({ active: true, limit: 100 }, options);
+    admission = inspectUpdateRepairDriverAdmission(activeRuns, inheritedRunId);
+  };
   if (
     admission.kind === "conflict" &&
     !inheritedRunId &&
@@ -117,25 +143,8 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
             { cause: error },
           );
         });
-      // Settle independently: an unresolved sibling must not discard proven progress.
-      for (const run of activeRuns) {
-        const reconciled = await reconcileAbandonedUpdateRunsAsync(
-          { explicit: true, runIds: [run.runId] },
-          { ...options, repairOwnership },
-        );
-        for (const retired of reconciled) {
-          const hosts = recordedUpdateRunDrivers(retired)
-            .map((driver) => driver.host)
-            .join(", ");
-          const age = Math.max(0, Math.floor((Date.now() - retired.createdAtMs) / 1_000));
-          defaultRuntime.error(
-            `Warning: abandoned update ${retired.runId} on ${hosts || "an unrecorded host"} (age ${age}s); retired under exclusive update and state ownership.`,
-          );
-        }
-      }
+      await reconcileUnderRepairOwnership(repairOwnership);
     });
-    activeRuns = listUpdateRuns({ active: true, limit: 100 }, options);
-    admission = inspectUpdateRepairDriverAdmission(activeRuns, inheritedRunId);
   }
   if (admission.kind === "conflict") {
     throw new Error(admission.message);
@@ -146,11 +155,20 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     // Admission keys custody by the canonical installation, not a lexical slot.
     const root = resolveUpdateInstallRoot(await resolveUpdateRoot());
     try {
+      const packageLease = await readPackageActivationRepairLease(root);
       const repair = await (
-        await prepareManagedHandoffLeaseStore()
+        await prepareManagedHandoffLeaseStore(
+          packageLease
+            ? {
+                databasePath: packageLease.databasePath,
+                existingIdentity: packageLease,
+                serviceManagerEnv: resolveServiceManagerEnv(),
+              }
+            : undefined,
+        )
       ).prepareRepair(root, env, timeoutMs);
       const legacy = resolveLegacyGatewayManagedUpdateLeaseDatabasePath();
-      if (repair || !legacy || !fs.existsSync(legacy)) {
+      if (packageLease || repair || !legacy || !fs.existsSync(legacy)) {
         return repair;
       }
       // An earlier macOS Gateway's handoff stays in its own store until repaired.
@@ -177,6 +195,11 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     validChannel
       ? await prepareHandoffRepair()
       : null;
+  if (handoff) {
+    defaultRuntime.error(
+      "Warning: Reclaiming a dead managed handoff lease under exclusive repair ownership.",
+    );
+  }
   if (validChannel) {
     // Repair's claim now owns the installation; fresh admission would be refused.
     const settlement = await settlePendingPackageActivation(
@@ -198,7 +221,7 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
               trigger: "cli",
               settlement: {
                 reason: settled.reason,
-                detail: `${settled.detail} Operation ${settled.operationId}; evidence retained at ${settled.retained}.`,
+                detail: `${settled.detail} Operation ${settled.operationId}${settled.retained ? `; evidence retained at ${settled.retained}` : ""}.`,
               },
             },
             options,
@@ -210,6 +233,14 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     );
     if (settlement?.warning) {
       defaultRuntime.error(`Warning: ${settlement.warning}`);
+    }
+    // Includes the healthy-history shortcut below; diagnostics never enter this repair path.
+    const { repairLegacyGitReleaseLauncher } = await import("../../update/repair-launcher.js");
+    const launcher = await repairLegacyGitReleaseLauncher({ root: discoveredRoot, env });
+    if (launcher) {
+      defaultRuntime.error(
+        `Repaired the legacy release launcher ${launcher}: status checks no longer count as Gateway starts.`,
+      );
     }
   }
   // Capture Doctor-visible history before finalization admits its own newer run.
@@ -281,11 +312,15 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     ? Math.min(...recoveryRuns.map((run) => run.createdAtMs))
     : undefined;
   const history = inspectNewerRecoveryHistory(recoverySinceMs, recentRuns);
+  const interruptedGateway = findUpdateGatewayStop(recentRuns);
   const recoveryRunIds = [
     ...new Set(
       [...recoveryRuns, ...historicalRuns, ...history.postCoreRuns].map((run) => run.runId),
     ),
   ];
+  if (interruptedGateway && !recoveryRunIds.includes(interruptedGateway.runId)) {
+    recoveryRunIds.push(interruptedGateway.runId);
+  }
   const finalizeRepair = async () => {
     try {
       // Driver death is a historical fact; maintenance completion is acknowledged separately.
@@ -303,13 +338,16 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
 
   if (
     handoff ||
+    interruptedGateway ||
     opts.channel !== undefined ||
     opts.acceptCapabilities ||
     recoverySinceMs === undefined ||
     recoveryRunIds.length !== recoveryRuns.length ||
     recoveryRuns.some(needsPostCoreRepair) ||
     history.postCoreRuns.length > 0 ||
-    history.incomplete
+    history.incomplete ||
+    // Finalization verifies a recorded data-at-risk mark before acknowledging it.
+    listUnverifiedDataAtRisk(recentRuns).length > 0
   ) {
     return await finalizeRepair();
   }
@@ -366,7 +404,7 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     currentHistory.incomplete
   ) {
     throw new Error(
-      `Update history changed during inspection and now needs post-core maintenance. Retry ${formatCliCommand("openclaw update repair", env)}; if the managed Gateway cannot stop, run ${formatCliCommand("openclaw gateway stop", env)} first.`,
+      `Update history changed during inspection and now needs post-core maintenance. Retry ${formatCliCommand("openclaw update repair", env)}; if the managed Gateway cannot stop, run ${formatCliCommand("openclaw gateway stop --force", env)} first.`,
     );
   }
   const reconciled = activeRuns.length

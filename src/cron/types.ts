@@ -7,6 +7,7 @@ import type {
   CronUpdateParams as CronUpdateParamsWire,
 } from "../../packages/gateway-protocol/src/schema/cron.types.js";
 import type { AgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.types.js";
+import type { AgentTerminalSnapshot } from "../agents/agent-terminal-snapshot.js";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 /** Cron scheduling, delivery, diagnostics, and store data contracts. */
 import type { FailoverReason } from "../agents/failover/signal.js";
@@ -87,6 +88,7 @@ type CronCompletionDestination = {
 type CronFailureDestination = {
   channel?: CronMessageChannel;
   to?: string;
+  threadId?: string | number;
   accountId?: string;
   mode?: "announce" | "webhook";
 };
@@ -150,6 +152,8 @@ export type CronRunTelemetry = Pick<CronRunLogWireEntry, "model" | "provider" | 
 
 /** Scheduler lifecycle event projected to Gateway clients and notification adapters. */
 export type CronEvent = {
+  /** Transient content-free facts from the selected failed agent attempt. */
+  agentTerminal?: AgentTerminalSnapshot;
   jobId: string;
   action: "added" | "updated" | "removed" | "started" | "finished" | "scheduled";
   /** Snapshot of the job at the time of the event. Present for all actions where the job is accessible. */
@@ -191,21 +195,29 @@ export type CronRunDiagnostics = NonNullable<CronRunLogWireEntry["diagnostics"]>
 export type CronRunErrorClassification =
   | { kind: "reason"; reason: FailoverReason }
   | { kind: "permanent" }
+  | { kind: "session-conflict" }
   /** Operator cancellation or lifecycle retirement, never an execution timeout. */
   | { kind: "aborted" };
 
 /** Closed producer-authored facts allowed in operator-facing failure notifications. */
 export type CronFailureNotificationDetail =
+  | { kind: "invalid-target" }
   | { kind: "command-exit"; exitCode: number }
   | { kind: "command-timeout"; mode: "wall-clock" | "no-output" }
   | {
       kind: "script-failure";
       source: "payload" | "trigger";
       code: CronTriggerFailureCode;
-    };
+    }
+  /** A deterministic setup refusal: the operator must record the intended account. */
+  | { kind: "inference-account-unrecorded" }
+  /** A stuck-session recovery aborted the run for a known semantic cause (e.g. `blocked_tool_call`). */
+  | { kind: "agent-stall"; classification: string };
 
 /** Execution result used to author persisted state, run logs, and isolated turn results. */
 export type CronRunOutcome = {
+  /** Transient selected-attempt observations; omitted for other terminal owners. */
+  agentTerminal?: AgentTerminalSnapshot;
   status: CronRunStatus;
   error?: string;
   /** True once agent execution begins; retries after this point can replay side effects. */
@@ -253,7 +265,6 @@ export type CronTriggerEvalOutcome = {
   fired: boolean;
   stateChanged: boolean;
   state?: unknown;
-  busy?: true;
 };
 
 export type CronJobExecutionResult = CronRunOutcome &
@@ -346,18 +357,24 @@ export type CronJobState = Omit<
   queuedAtMs?: number;
   /** Exact receipt awaiting scheduler reconciliation, even after execution authority closes. */
   runningReceiptId?: string;
+  /** Receipt of the active run while its condition is still being evaluated; see the run queue. */
+  conditionCheckReceiptId?: string;
+  /** Receipt of an active run waiting for a slot after a condition or provider check. */
+  runSlotWaitReceiptId?: string;
+  /** Resolved provider, valid only with the wait receipt above. */
+  runSlotWaitProvider?: string;
+  /** Receipt that was granted a slot past the fixed floor. */
+  extraRunSlotReceiptId?: string;
   /** Nonce for a committed schedule edit during the pending run. */
   runningScheduleChangeId?: string;
   /**
-   * Unresolved recovery scope and last notified signature, when an alert was requested.
-   * `repair` records the owner-conversation repair request that replaced the streak's first
-   * alert, and `alerted` that its fallback alert was sent. It lasts until the job succeeds,
-   * so a streak is repaired at most once.
+   * Unresolved recovery scope and last notified signature, when a failure notice was sent.
+   * It lasts until the job succeeds. Stores from 2026.10 may still carry an unread `repair`
+   * marker; the next notice or success drops it.
    */
   failureAlertIncident?: {
     signature?: string;
     scope: "run" | "trigger";
-    repair?: { atMs: number; deadlineAtMs?: number; settledAtMs?: number; alerted?: true };
   };
   /** Fences notification settlement when multiple cycles share a timestamp. */
   lastFailureNotificationId?: string;
@@ -391,7 +408,6 @@ export type CronTriggerFailureCode =
 /** Result union returned by the cron trigger-script evaluator. */
 export type CronTriggerEvaluationResult =
   | { kind: "evaluated"; fire: boolean; message?: string; state?: unknown }
-  | { kind: "busy" }
   | { kind: "error"; code: CronTriggerFailureCode; error: string };
 
 /** Public cron job contract with spec fields and mutable run state. */
@@ -412,6 +428,8 @@ export type CronJob = CronJobBase<
    * schedule keeps its reserved agentTurn sentinel in `payload` for existing readers.
    */
   payloadSource?: { kind: "pluginCommand"; pluginId: string; command: string };
+  /** Human allowed to manage this automation; separate from its execution envelope. */
+  ownerProfileId?: string;
   owner?: {
     agentId?: string;
     sessionKey?: string;
@@ -457,6 +475,8 @@ export type CronStoredJob = Omit<CronJob, "streamExecutionHost" | "payloadSource
     source: import("../gateway/operator-run-recovery-source.codec.js").RestartRecoveryOperatorSource;
     executionRevision: string;
   };
+  /** A human transfer retired inference authority; only fresh capture clears this marker. */
+  ownerTransferPending?: true;
   /** Captured inference owner; private and independent of scheduled tool authority. */
   inferenceBinding?: import("./inference-binding.js").CronInferenceBinding;
   /** Creation-bound destination for isolated results when no external route exists. */
@@ -465,6 +485,8 @@ export type CronStoredJob = Omit<CronJob, "streamExecutionHost" | "payloadSource
     sessionId: string;
     lifecycleRevision?: string;
   };
+  /** Original native process grant, independent of mutable payload authority; store-private. */
+  streamOperatorSource?: import("../gateway/operator-run-recovery-source.codec.js").OperatorRunRecoverySnapshot;
   /** Trusted logical sandbox and original access basis, never public create/patch input. */
   streamSandbox?: CronStreamSandboxTarget;
   /** Immutable revisions inherited from the authorized creator session, never human mutation authority. */
@@ -492,10 +514,15 @@ type CronJobStateInput = Partial<
     CronJobState,
     | "lastMeaningfulResult"
     | "autoDisabled"
+    | "admissionDeferred"
     | "scheduleActivatedAtMs"
     | "streamSourceIdentity"
     | "sourceIdentity"
     | "runningReceiptId"
+    | "conditionCheckReceiptId"
+    | "runSlotWaitReceiptId"
+    | "runSlotWaitProvider"
+    | "extraRunSlotReceiptId"
     | "runningScheduleChangeId"
     | "pluginCommandRuns"
     | "pluginCommandBinding"
@@ -510,6 +537,7 @@ export type CronJobCreate = Omit<
   | "updatedAtMs"
   | "state"
   | "scheduledToolPolicy"
+  | "ownerProfileId"
   | "streamExecutionHost"
   | "payloadSource"
 > & {
@@ -537,6 +565,7 @@ export type CronJobPatch = Partial<
     | "pacing"
     | "activeHours"
     | "idleOnly"
+    | "cyberAccessProgram"
     | "trigger"
   >
 > & {
@@ -544,6 +573,7 @@ export type CronJobPatch = Partial<
   pacing?: CronPacing | null;
   activeHours?: CronActiveHours | null;
   idleOnly?: boolean | null;
+  cyberAccessProgram?: CronJob["cyberAccessProgram"] | null;
   trigger?: CronTrigger | null;
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;

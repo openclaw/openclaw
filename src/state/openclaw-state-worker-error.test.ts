@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { MessageChannel } from "node:worker_threads";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { renderStorageFailureSummary } from "../agents/failover/assistant-request-failure-copy.js";
 import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
+import { SandboxStateOwnerRequiredError } from "../agents/sandbox/state-owner-path.js";
 import { WorktreeRemovalContentionError } from "../agents/worktrees/errors.js";
 import { SqliteTranscriptMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
 import {
@@ -10,6 +11,13 @@ import {
   type TranscriptAppendRefusal,
 } from "../config/sessions/session-transcript-writer-claim-error.js";
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
+import {
+  StateDatabaseAccessError,
+  StateDatabaseAdmissionPendingError,
+  StateDatabaseMaintenanceScopeError,
+  StateDatabaseOfflineMaintenanceError,
+} from "../infra/gateway-state-owner-errors.js";
+import { isStateDatabaseMaintenanceContention } from "../infra/gateway-state-owner-record.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import {
   classifyGatewayStorageFailure,
@@ -76,6 +84,33 @@ function roundTrip(error: Error): Error {
   expect(decoded).toMatchObject({ name: error.name, message: error.message });
   return decoded;
 }
+
+it.each([
+  [new StateDatabaseAccessError("state access refused"), false],
+  [new StateDatabaseMaintenanceScopeError("/fixture/state.sqlite"), false],
+  [new StateDatabaseAdmissionPendingError("/fixture/state.sqlite", "schema pending"), true],
+  [new StateDatabaseOfflineMaintenanceError("/fixture/state.sqlite", "maintenance pending"), true],
+] as const)("preserves state access identity and retry classification: %s", (error, retryable) => {
+  const decoded = roundTrip(error);
+  expect(decoded).toBeInstanceOf(StateDatabaseAccessError);
+  expect(isStateDatabaseMaintenanceContention(decoded)).toBe(retryable);
+  if ("databasePath" in error) {
+    expect(decoded).toMatchObject({ databasePath: error.databasePath });
+  }
+  expect(isStateDatabaseMaintenanceContention(new AggregateError([decoded]))).toBe(retryable);
+  expect(
+    isStateDatabaseMaintenanceContention(new AggregateError([decoded, new Error("other")])),
+  ).toBe(false);
+});
+
+it("shares the state access error family across module copies", async () => {
+  vi.resetModules();
+  const copy = await import("../infra/gateway-state-owner-errors.js");
+  expect(copy.StateDatabaseAccessError).toBe(StateDatabaseAccessError);
+  expect(
+    new copy.StateDatabaseAdmissionPendingError("/fixture/state.sqlite", "pending"),
+  ).toBeInstanceOf(StateDatabaseAccessError);
+});
 
 it("retains canonical uncertainty on an ordinary diagnostic wrapper", () => {
   const error = retainSqliteWorkerErrorCode(
@@ -358,6 +393,11 @@ describe("shared-state worker error transport", () => {
       causeType: Error,
     },
     { error: new GatewayStateOwnerContentionError(path), fields: { databasePath: path } },
+    {
+      error: new SandboxStateOwnerRequiredError(syntaxCause),
+      fields: { code: "GATEWAY_STATE_OWNER_REQUIRED", cause: { message: syntaxCause.message } },
+      causeType: SyntaxError,
+    },
   ];
   it.each(cases)(
     "preserves $error.name identity and recovery fields: $fields",

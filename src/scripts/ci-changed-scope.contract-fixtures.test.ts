@@ -12,7 +12,20 @@ describe("shared native contract fixture CI scope", () => {
       runAndroid: true,
       runWindows: false,
       runSkillsPython: false,
-      runChangedSmoke: false,
+      runControlUiI18n: false,
+      runUiTests: false,
+    });
+  });
+
+  it("runs Android and Node checks for the realtime relay fixture only", () => {
+    expect(detectChangedScope(["test/fixtures/talk-realtime-relay-contract.json"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runMacosNode: false,
+      runIosBuild: false,
+      runAndroid: true,
+      runWindows: false,
+      runSkillsPython: false,
       runControlUiI18n: false,
       runUiTests: false,
     });

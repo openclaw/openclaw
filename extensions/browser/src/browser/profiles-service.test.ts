@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { BrowserProfileConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
@@ -213,16 +214,21 @@ describe("BrowserProfilesService", () => {
     expect(writtenBrowserConfig().defaultProfile).toBe("imported");
   });
 
-  it("allocates local ports from a gateway port changed during config rebase", async () => {
-    const { state, service } = createCtx();
-    vi.mocked(getRuntimeConfig)
-      .mockReturnValueOnce({ browser: { profiles: {} } })
-      .mockReturnValue({ gateway: { port: 30000 }, browser: { profiles: {} } });
-    const result = await service.createProfile({ name: "work" });
-
-    expect(result.cdpPort).toBe(30012);
-    expect(state.resolved.profiles.work?.cdpPort).toBe(30012);
-    expect(writtenProfiles().work?.cdpPort).toBe(30012);
+  it("rebases the local range and skips a port already used by another listener", async () => {
+    await withServer(
+      (_request, response) => response.end(),
+      async (baseUrl) => {
+        const occupiedPort = Number(new URL(baseUrl).port);
+        const { state, service } = createCtx();
+        vi.mocked(getRuntimeConfig)
+          .mockReturnValueOnce({ browser: { profiles: {} } })
+          .mockReturnValue({ gateway: { port: occupiedPort - 12 }, browser: { profiles: {} } });
+        const result = await service.createProfile({ name: "work" });
+        expect(result.cdpPort).toBeGreaterThan(occupiedPort);
+        expect(state.resolved.profiles.work?.cdpPort).toBe(result.cdpPort);
+        expect(writtenProfiles().work?.cdpPort).toBe(result.cdpPort);
+      },
+    );
   });
 
   it("redacts CDP credentials from create responses while preserving profile auth", async () => {

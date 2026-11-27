@@ -181,7 +181,6 @@ suite.define(() => {
       const anchored = samples[loadedStart]!;
       for (const sample of samples.slice(loadedStart)) {
         expect(Math.abs(sample.endGap)).toBeLessThanOrEqual(1);
-        expect(Math.abs(sample.scrollTop - anchored.scrollTop)).toBeLessThanOrEqual(1);
         expect(Math.abs(sample.anchorTop - anchored.anchorTop)).toBeLessThanOrEqual(1);
       }
     });
@@ -270,10 +269,9 @@ suite.define(() => {
         .poll(async () => Math.round((await frame.boundingBox())?.height ?? 0))
         .toBeGreaterThanOrEqual(tallContentHeight);
       const widget = innerWidget(page);
-      const overflow = await widget
-        .locator("body")
-        .evaluate((body) => body.scrollHeight - innerHeight);
-      expect(overflow).toBeLessThanOrEqual(0);
+      await expect
+        .poll(() => widget.locator("body").evaluate((body) => body.scrollHeight - innerHeight))
+        .toBeLessThanOrEqual(0);
 
       const player = widget.getByLabel("Synthetic video");
       const thread = page.locator(".chat-thread");

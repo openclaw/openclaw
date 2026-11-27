@@ -128,7 +128,7 @@ export function createModalDialogTestFixture(
 export function waitForConfirmDialogActions(): Promise<HTMLElement> {
   return waitForDialog(() =>
     expectDefined(
-      document.body.querySelector<HTMLElement>("openclaw-modal-dialog .exec-approval-actions"),
+      document.body.querySelector<HTMLElement>("openclaw-modal-dialog openclaw-modal-actions"),
       "open confirm dialog",
     ),
   );

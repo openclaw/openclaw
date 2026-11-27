@@ -260,7 +260,7 @@ defineDiscordVoiceTests(
         original.bridgeParams.onTranscript?.("assistant", "Budget comes first.", true);
         agentCommandMock.mockImplementationOnce(async () => {
           const input = lastAgentCommandArgs();
-          expect(input.senderIsOwner).toBe(false);
+          expect(input).toMatchObject({ runContext: { senderId: "u-guest" } });
           expect(bindRun).toHaveBeenCalledOnce();
           const binding = bindRun.mock.calls[0]![0];
           expect(input.runId).toBe(binding.runId);

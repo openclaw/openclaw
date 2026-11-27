@@ -47,6 +47,8 @@ import type {
 import type { PluginProviderRegistration } from "./provider-plugin.types.js";
 import type {
   ContextEngineRegistration,
+  LearnContributionRegistration,
+  MemoryBackendRegistration,
   MemoryCorpusSupplementRegistration,
   MemoryPluginCapabilityRegistration,
   MemoryPromptPreparationRegistration,
@@ -147,16 +149,12 @@ export type PluginAgentToolResultMiddlewareRegistration = PluginRegistrationOwne
   runtimes: AgentToolResultMiddlewareRuntime[];
   scopes?: AgentToolResultMiddlewareScope[];
 };
-export type PluginAgentToolResultMiddlewareOwner = {
-  pluginId: string;
-  runtimes: AgentToolResultMiddlewareRuntime[];
-  manifest: PluginManifestRecord;
-};
 export type PluginServiceRegistration = PluginRegistrationOwner & {
   readonly id: string;
   service:
     | import("./types.js").OpenClawPluginService
-    | import("./types.js").OpenClawPluginServiceV2;
+    | import("./types.js").OpenClawPluginServiceV2
+    | import("./types.js").OpenClawPluginServiceV3;
   origin: PluginOrigin;
   trustedOfficialInstall?: boolean;
 };
@@ -194,6 +192,8 @@ export type PluginRecord = {
   /** Manifest opt-in; the replacement owner also checks registered resource surfaces. */
   generationOverlap?: boolean;
   nativeSessionCatalog?: PluginManifestNativeSessionCatalogSetup;
+  /** Manifest per-agent learned-skill folder name; the host resolves skill authoring roots from it. */
+  agentSkillsDir?: string;
   name: string;
   packageVersion?: string;
   version?: string;
@@ -262,6 +262,8 @@ export type PluginRecord = {
   uiCapabilities?: PluginManifestRecord["uiCapabilities"];
   mcpServers?: Record<string, PluginManifestMcpServer>;
   memorySlotSelected?: boolean;
+  /** Operator opted this non-owner memory plugin in as a passive backend for the slot owner. */
+  memoryBackend?: boolean;
   dependencyStatus?: PluginDependencyStatus;
 };
 
@@ -330,7 +332,6 @@ export type PluginRegistry = {
   migrationProviders: PluginOwnedProviderRegistration<
     import("./types.js").MigrationProviderPlugin
   >[];
-  agentToolResultMiddlewareOwners: PluginAgentToolResultMiddlewareOwner[];
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
   agentHarnesses: (PluginRegistrationOwner & {
     harness: AgentHarness;
@@ -349,9 +350,11 @@ export type PluginRegistry = {
     handler: InternalHookHandler;
   }[];
   memoryCapabilities: MemoryPluginCapabilityRegistration[];
+  memoryBackends: MemoryBackendRegistration[];
   memoryCorpusSupplements: MemoryCorpusSupplementRegistration[];
   memoryPromptPreparations: MemoryPromptPreparationRegistration[];
   memoryPromptSupplements: MemoryPromptSupplementRegistration[];
+  learnContributions: LearnContributionRegistration[];
   sessionDiscussionProviders: Map<
     string,
     {

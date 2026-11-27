@@ -7,6 +7,10 @@ import { resolveExecutablePath } from "./executable-path.js";
 import type { ImmutableRecoveryRuntimeReference } from "./package-update-activation-immutable-recovery-schema.js";
 import type { PackageActivationRuntime } from "./package-update-activation-runtime.types.js";
 import type { PackageActivationRecord } from "./package-update-activation-schema.js";
+import {
+  packageStatMetadataOnlyDrift,
+  packageStatUnchanged,
+} from "./package-update-integrity-drift.js";
 import { packageUpdateRefusal } from "./package-update-refusal.js";
 import type { ImmutableInstallDescriptor } from "./update-immutable-install-schema.js";
 
@@ -89,6 +93,7 @@ export function packageActivationIdentity(
 export function privatePackageActivationIdentity(
   file: string,
   role: "anchor" | "control" | "journal" | "helper" | "rollback-journal",
+  repairPermissions = true,
 ): string {
   const directory = role === "anchor" || role === "control";
   const value = packageActivationIdentity(file, directory);
@@ -103,6 +108,9 @@ export function privatePackageActivationIdentity(
     throw refusal("expected nlink=1. Run openclaw doctor --fix.");
   }
   if ((stat.mode & 0o077n) !== 0n) {
+    if (!repairPermissions) {
+      throw refusal("expected owner-only permissions. Run openclaw doctor --fix.");
+    }
     // POSIX ACL masks occupy the group mode bits. chmod clears their effective
     // grants too; getfacl is optional and only improves the repair diagnostic.
     const acl =
@@ -141,11 +149,9 @@ export function repairPackagePermissions(file: string, stat: fs.BigIntStats, mod
   );
   try {
     const opened = fs.fstatSync(fd, { bigint: true });
-    if (
-      (["dev", "ino", "mode", "uid", "gid", "nlink", "size", "mtimeNs", "ctimeNs"] as const).some(
-        (field) => opened[field] !== stat[field],
-      )
-    ) {
+    // fchmod changes only this inode's mode, so an attribute or hard-link change
+    // since the observation does not change what is repaired.
+    if (!packageStatUnchanged(stat, opened) && !packageStatMetadataOnlyDrift(stat, opened)) {
       throw new Error("object changed before permission repair");
     }
     fs.fchmodSync(fd, mode);

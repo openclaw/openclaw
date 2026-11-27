@@ -49,6 +49,7 @@ async function removalHarness(apiKey: unknown = "__OPENCLAW_REDACTED__", withAcc
             provider: "openai",
             authProvider: "openai",
             apiKey: { source: "config" },
+            oauthAccountActions: { disconnect: { label: "Disconnect OpenAI Account" } },
             profiles:
               withAccount && !removedAccount
                 ? [
@@ -86,7 +87,7 @@ async function removalHarness(apiKey: unknown = "__OPENCLAW_REDACTED__", withAcc
   async function confirm() {
     row.querySelector<HTMLButtonElement>(".provider-row__remove")!.click();
     await waitForSolid(() =>
-      expect(document.body.querySelector(".exec-approval-actions button.danger")).not.toBeNull(),
+      expect(document.body.querySelector("openclaw-modal-actions button.danger")).not.toBeNull(),
     );
     const { modal } = await getRenderedModalDialog(document.body);
     const copy = modal.textContent ?? "";
@@ -109,6 +110,30 @@ async function removalHarness(apiKey: unknown = "__OPENCLAW_REDACTED__", withAcc
     confirm,
   };
 }
+
+it("reloads a conflicting config without replaying the confirmed deletion", async () => {
+  const h = await removalHarness();
+  const original = h.request.getMockImplementation()!;
+  let changed = false;
+  h.request.mockImplementation(async (method) => {
+    if (method === "config.patch") {
+      changed = true;
+      throw new Error("config changed since last load; re-run config.get and retry");
+    }
+    if (method === "config.get" && changed) {
+      return { config: { models: { providers: { replacement: {} } } }, valid: true, hash: "newer" };
+    }
+    return original(method);
+  });
+  const selector = 'button[aria-label="Remove provider: OpenAI"]';
+  h.row.querySelector<HTMLButtonElement>(selector)!.click();
+  const { modal } = await getRenderedModalDialog(document.body);
+  modal.querySelector<HTMLButtonElement>("button.danger")!.click();
+  await waitForSolid(() => expect(h.runtimeConfig.state.configSnapshot?.hash).toBe("newer"));
+  await waitForSolid(() => expect(h.page.querySelector(selector)).toBeNull());
+  expect(requestCount(h.request, "config.patch")).toBe(1);
+  expect(requestCount(h.request, "models.authLogout")).toBe(0);
+});
 
 it.each(["agent", "reconnect", "access"] as const)(
   "does not send another removal after %s changes during the first command",
@@ -138,9 +163,37 @@ it.each(["agent", "reconnect", "access"] as const)(
     await completion;
     await h.page.updateComplete;
     expect(requestCount(h.request, "models.authLogout")).toBe(1);
-    expect(h.toast.toast?.message ?? "").not.toContain("Logged out.");
+    expect(h.toast.toasts[0]?.options.message ?? "").not.toContain("Signed out");
   },
 );
+
+it("retries a refused disconnect only for the agent that asked for it", async () => {
+  const h = await removalHarness();
+  h.logout.mockRejectedValueOnce(new Error("OpenAI could not revoke access."));
+  h.row
+    .querySelector<HTMLButtonElement>(
+      '[aria-label="Disconnect OpenAI Account: work@example.invalid"]',
+    )!
+    .click();
+  const { modal } = await getRenderedModalDialog(document.body);
+  modal.querySelector<HTMLButtonElement>("button.danger")!.click();
+  await waitForSolid(() =>
+    expect(h.toast.toasts[0]?.options.message).toBe("Couldn’t disconnect work@example.invalid"),
+  );
+  expect(h.request).toHaveBeenCalledWith("models.authLogout", {
+    provider: "openai",
+    profileIds: ["openai:work"],
+    revoke: true,
+    agentId: "writer",
+  });
+  h.settingsAgentSelection.state.selectedId = "main";
+  h.settingsAgentSelection.state.scopeId = "main";
+  h.notifySelection();
+  await h.page.updateComplete;
+  h.toast.toasts[0]!.options.onAction!();
+  await h.page.updateComplete;
+  expect(requestCount(h.request, "models.authLogout")).toBe(1);
+});
 
 it.each([true, false])(
   "explains the removal scope and completes every authorized step (saved account: %s)",
@@ -150,12 +203,13 @@ it.each([true, false])(
     if (withAccount) {
       expect(copy).toContain("other agents");
     } else {
-      expect(copy).not.toContain("Active runs");
+      expect(copy).not.toContain("Active replies");
     }
     expect(copy).toContain("OpenAI");
     expect(copy).toContain("configured aliases");
     expect(copy).not.toContain("Runs using it stop");
-    await waitForSolid(() => expect(h.toast.toast?.message).toContain("Logged out."));
+    await h.runtimeConfig.runExternalMutation.mock.results.at(-1)!.value;
+    expect(h.toast.toasts[0]?.options.message ?? "").not.toContain("Signed out");
     expect(h.logout.mock.calls.map(([target]) => target)).toEqual([
       ...(withAccount ? [{ provider: "openai", agentId: "writer" }] : []),
       { provider: "OpenAI", credentialType: "api_key", agentId: "writer" },
@@ -180,15 +234,15 @@ it.each([false, true])(
     }
     await h.confirm();
     await waitForSolid(() =>
-      expect(h.toast.toast?.message).toContain("Synthetic key removal failure"),
+      expect(h.toast.toasts[0]?.options.message).toContain("Synthetic key removal failure"),
     );
-    expect(h.toast.toast?.message).toContain("removed so far: 1");
+    expect(h.toast.toasts[0]?.options.message).toContain("removed so far: 1");
     if (failRefresh) {
-      expect(h.toast.toast?.message).toContain("Synthetic refresh failure");
+      expect(h.toast.toasts[0]?.options.message).toContain("Synthetic refresh failure");
     } else {
       expect(h.page.querySelector('[data-profile-id="openai:work"]')).toBeNull();
     }
-    expect(h.toast.toast?.message).not.toContain("Logged out.");
+    expect(h.toast.toasts[0]?.options.message).not.toContain("Signed out");
     expect(requestCount(h.request, "models.authLogout")).toBe(2);
   },
 );
@@ -213,7 +267,8 @@ it("names the retained secret reference when saved accounts can be removed", asy
   });
   const copy = await h.confirm();
   expect(copy).toContain("Secret references in OpenAI");
-  await waitForSolid(() => expect(h.toast.toast?.message).toContain("Logged out."));
+  await h.runtimeConfig.runExternalMutation.mock.results.at(-1)!.value;
+  expect(h.toast.toasts[0]?.options.message ?? "").not.toContain("Signed out");
   expect(h.logout.mock.calls.map(([target]) => target)).toEqual([
     { provider: "openai", agentId: "writer" },
   ]);

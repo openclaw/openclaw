@@ -63,7 +63,7 @@ describe("config write coordinator", () => {
     },
   );
 
-  it("surfaces an operator.admin reason when config mutations are out of scope", async () => {
+  it("names the required access without exposing scopes when config mutations are denied", async () => {
     const server = createConfigServerMock();
     const { runtimeConfig, publish, state } = await loadHarness(server.request);
     publish(true, undefined, {
@@ -76,7 +76,7 @@ describe("config write coordinator", () => {
     await expect(
       runtimeConfig.patch({ raw: { count: 2 }, note: "out-of-scope patch" }),
     ).resolves.toBe(false);
-    expect(state.lastError).toBe("Configuration changes require operator.admin access.");
+    expect(state.lastError).toBe("You need admin access to change settings.");
     expect(server.submissions).toHaveLength(0);
     runtimeConfig.dispose();
   });

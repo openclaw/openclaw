@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { withTempWorkspace } from "@openclaw/fs-safe/temp";
+import { prepareWorkspaceReconciliation } from "../gateway/worker-environments/workspace-manifest-comparison.js";
 import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceReconciliationJournal,
@@ -12,6 +12,8 @@ import {
   NODE_WORKSPACE_EMPTY_MANIFEST,
   NODE_WORKSPACE_EMPTY_MANIFEST_REF,
 } from "../worker/node-workspace-transfer-protocol.js";
+import type { NodeWorkerCommandIsolation } from "./node-worker-command-filesystem.js";
+import { withNodeWorkerTempWorkspace } from "./node-worker-workspace-admission.js";
 import { readWorkspaceManifest, runWorkspaceCommand } from "./node-worker-workspace-commands.js";
 
 export async function readNodeRepositoryCheckpointBase(params: {
@@ -48,7 +50,7 @@ export async function applyNodeRepositoryCheckpoint(params: {
     stagingRoot: params.stagingRoot,
     baseManifestRef: params.baseManifestRef,
     currentManifestRef: params.currentManifestRef,
-    base: params.base,
+    reconciliation: prepareWorkspaceReconciliation(params.base, params.current),
     current: params.current,
     acceptance: { kind: "reconcile" },
     journal: {
@@ -79,13 +81,14 @@ export async function withNodeRepositoryPublication<T>(
     baseCommit: string;
     baseManifestRef: string;
     signal?: AbortSignal;
+    isolation?: NodeWorkerCommandIsolation;
   },
   upload: (root: string) => Promise<T>,
 ): Promise<T> {
   if (params.baseManifestRef !== NODE_WORKSPACE_EMPTY_MANIFEST_REF) {
     throw new Error("Publication transfer baseline is invalid");
   }
-  return await withTempWorkspace(
+  return await withNodeWorkerTempWorkspace(
     {
       rootDir: path.join(params.manifestHome, ".openclaw-worker", "publication"),
       prefix: "worker-publication-",
@@ -94,6 +97,8 @@ export async function withNodeRepositoryPublication<T>(
       await runWorkspaceCommand({
         workspaceDir: params.workspaceDir,
         homeDir: params.manifestHome,
+        isolation: params.isolation,
+        outputDirectories: [publication.dir],
         argv: [
           process.execPath,
           ...resolveRuntimeWorkerArgv(

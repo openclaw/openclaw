@@ -1,9 +1,12 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { forceFullGc } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadGitHubDetail } from "./detail.js";
 import type { ControlUiGitHubPreviewIdentity } from "./preview-contract.js";
 import {
   githubJson as json,
+  pngResponse,
   queuedFetch as fetchResponses,
   githubRedirect as redirect,
   requestUrl,
@@ -166,25 +169,53 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it.each(["issue", "pull", "commit"] as const)(
+  "releases the raw %s response while keeping the complete document cached",
+  async (kind) => {
+    const payload = kind === "commit" ? commit() : item();
+    const body = JSON.stringify(payload);
+    const responses: WeakRef<object>[] = [];
+    const parse = JSON.parse;
+    const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+      const result: unknown = parse(text, reviver);
+      if (text === body && result !== null && typeof result === "object") {
+        responses.push(new WeakRef(result));
+      }
+      return result;
+    });
+    const input = target(kind);
+    const fetcher = publicFetch(payload);
+    const document = await loadGitHubDetail(input, undefined, fetcher);
+    spy.mockRestore();
+    expect(responses).toHaveLength(1);
+    await nextTurn();
+    forceFullGc();
+    expect(responses[0]?.deref()).toBeUndefined();
+    const requests = fetcher.mock.calls.length;
+    expect(await loadGitHubDetail(input, undefined, fetcher)).toBe(document);
+    expect(fetcher).toHaveBeenCalledTimes(requests);
+  },
+);
+
 describe("GitHub detail selected read identity", () => {
   it.each(["pull", "commit"] as const)("authenticates %s and refresh", async (kind) => {
     const payload = kind === "commit" ? commit({}, 1) : fullPull();
     const { selected, fetchMock, read } = fixture(kind, payload);
     const first = await read();
+    expect(selected.revalidate).toHaveBeenCalledTimes(fetchMock.mock.calls.length + 1);
     expect(first.partial).toBe(false);
     expect(first.body).toBe(kind === "pull" ? item().body : commit().commit.message);
     expect(first.comments).toHaveLength(kind === "pull" ? 2 : 1);
     if (kind === "pull") {
       expect(first.checks).toMatchObject({ state: "neutral", commit: sha, items: [] });
-      expect(first.metadata).toEqual(
-        expect.arrayContaining([
-          { label: "Files", value: "1" },
-          { label: "Comments", value: "1" },
-        ]),
-      );
+      // Section counts belong to navigation, not to the change metadata.
+      expect(first).toMatchObject({ filesTotal: 1, commentsTotal: 2 });
+      expect(first.metadata?.map(({ label }) => label)).not.toContain("Files");
     }
     expect(await read()).toBe(first);
+    expect(selected.revalidate).toHaveBeenCalledTimes(fetchMock.mock.calls.length + 2);
     await read(undefined, true);
+    expect(selected.revalidate).toHaveBeenCalledTimes(fetchMock.mock.calls.length + 3);
     for (const [, options] of fetchMock.mock.calls) {
       expect(options?.headers).toHaveProperty("Authorization", "Bearer " + selected.token);
     }
@@ -228,6 +259,20 @@ describe("GitHub detail selected read identity", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[1]?.headers).toHaveProperty("Authorization");
   });
+
+  it.each([false, true])(
+    "rejects changed credentials before dispatch (cached: %s)",
+    async (cached) => {
+      const { selected, fetchMock, read } = fixture();
+      if (cached) {
+        await read();
+      }
+      fetchMock.mockClear();
+      vi.mocked(selected.revalidate).mockRejectedValue(new Error("credential changed"));
+      await expect(read()).rejects.toThrow("credential changed");
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { name: "private", repository: { id: 123, private: true, visibility: "private" } },
@@ -382,7 +427,7 @@ describe("GitHub detail public read boundary", () => {
 
   it("expires cached visibility failures", async () => {
     const input = target();
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
     const fetchMock = fetchResponses(json({}, 404), json(publicRepo), json(item()));
     await expectStatus(loadGitHubDetail(input, undefined, fetchMock), 404);
     now.mockReturnValue(32_000);
@@ -607,6 +652,37 @@ describe("progressive GitHub documents", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("adds the author's picture to the overview without holding the document for it", async () => {
+    const author = { login: "octocat", avatar_url: "https://avatars.githubusercontent.com/u/7" };
+    const picture = createDeferred<Response>();
+    const pictures: string[] = [];
+    const { read } = fixture("pull", { ...fullPull(), user: author }, (path, options) => {
+      if (path !== "/u/7") {
+        return undefined;
+      }
+      // Public bytes: the selected identity's token never travels to the avatar host.
+      pictures.push(new Headers(options?.headers).get("authorization") ?? "anonymous");
+      return pictures.length === 1 ? pngResponse() : picture.promise;
+    });
+    expect((await read("overview")).imageUrl).toBe("data:image/png;base64,iVBORw==");
+    // Sections reuse the overview's header and never read the picture again.
+    expect((await read("discussion")).imageUrl).toBeUndefined();
+    expect(pictures).toEqual(["anonymous"]);
+
+    // A stalled avatar host spends only the picture's own budget.
+    const timeout = AbortSignal.timeout.bind(AbortSignal);
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) =>
+      ms === 500 ? AbortSignal.abort() : timeout(ms),
+    );
+    const slow = fixture("pull", { ...fullPull(), user: author }, (path) =>
+      path === "/u/7" ? picture.promise : undefined,
+    );
+    const document = await slow.read("overview");
+    picture.resolve(pngResponse());
+    expect(document).toMatchObject({ title: "Read me", author: "octocat" });
+    expect(document.imageUrl).toBeUndefined();
   });
 
   it("loads independent sections and retires old heads", async () => {

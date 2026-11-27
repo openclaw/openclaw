@@ -110,7 +110,6 @@ describe("bot-native-command-menu sync lifecycle", () => {
     ];
 
     await sync(commands);
-    expect(setMyCommands).toHaveBeenCalledTimes(4);
 
     expect(deleteMyCommands).toHaveBeenCalledTimes(2);
     expect(setMyCommands.mock.calls.map(([payload, options]) => [payload, options])).toEqual([

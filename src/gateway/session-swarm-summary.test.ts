@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
+import { buildSessionSwarmSummary } from "../agents/subagents/registry/subagent-session-swarm-summary.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -17,7 +18,6 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
-import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
 
 const parent = "agent:main:dashboard:research";
 const groupId = `swarm:${parent}:turn`;
