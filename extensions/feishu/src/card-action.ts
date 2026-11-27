@@ -5,6 +5,7 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
@@ -18,6 +19,7 @@ import {
 } from "./card-ux-approval.js";
 import { resolveFeishuChatType } from "./chat-type.js";
 import { createFeishuClient } from "./client.js";
+import { FEISHU_QUESTION_ACTION, parseFeishuQuestionEnvelope } from "./question-callback.js";
 import { sendCardFeishu, sendMessageFeishu } from "./send.js";
 
 export type FeishuCardActionEvent = {
@@ -265,6 +267,37 @@ export async function handleFeishuCardAction(params: {
 
       if (envelope.a === FEISHU_APPROVAL_CANCEL_ACTION) {
         await sendNotice("Cancelled.");
+        return;
+      }
+
+      if (envelope.a === FEISHU_QUESTION_ACTION) {
+        const question = parseFeishuQuestionEnvelope(envelope);
+        if (!question) {
+          await sendInvalidInteractionNotice("malformed");
+          return;
+        }
+        const result = await questionGatewayRuntime.resolveOption({
+          cfg,
+          questionId: question.questionId,
+          ...(question.customInput
+            ? { customInput: true as const }
+            : { optionIndex: question.optionIndex }),
+          senderId: event.operator.open_id,
+          clientDisplayName: "Feishu question",
+        });
+        if (question.customInput) {
+          await sendNotice(
+            result.status === "already-terminal"
+              ? "This question was already answered."
+              : "Reply with your own answer.",
+          );
+          return;
+        }
+        await sendNotice(
+          result.status === "answered"
+            ? "Answer submitted."
+            : "This question was already answered.",
+        );
         return;
       }
 

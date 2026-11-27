@@ -6,7 +6,7 @@ export function buildFeishuMessageToolHints(
   return [
     "- Feishu targeting: omit `target` to reply to the current conversation (auto-inferred). Explicit targets: `user:open_id` or `chat:chat_id`.",
     "- Feishu supports interactive cards plus native image, file, audio, and video/media delivery.",
-    "- Feishu buttons support command and URL actions. Generic callbacks and `ask_user` choice buttons are not supported; ask questions in plain text.",
+    "- Feishu renders `ask_user` choice buttons in DMs and allowlisted groups; if a question control cannot be rendered it falls back to plain text.",
     "- Feishu supports `send`, `read`, `edit`, `thread-reply`, pins, and channel/member lookup, plus reactions when enabled.",
     ...(actions?.includes("sticker")
       ? [

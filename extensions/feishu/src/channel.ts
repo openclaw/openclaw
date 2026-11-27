@@ -747,6 +747,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       },
       agentPrompt: {
         customInlineButtonHint: true,
+        questionInputMode: "buttons",
         messageToolHints: ({ cfg, accountId }) =>
           buildFeishuMessageToolHints(describeFeishuMessageTool({ cfg, accountId }).actions),
       },
