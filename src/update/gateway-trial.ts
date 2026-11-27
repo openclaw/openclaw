@@ -72,9 +72,15 @@ async function maintainTrialPlugins(trial: Trial): Promise<{ nextAction?: string
       }
       // The child released its lease; the batch owner verifies its exact published install hashes.
       const application = await reload(targets);
-      if (application.restartRequired || application.warnings?.length) {
+      if (application.restartRequired) {
         throw new Error(
           application.warnings?.join("\n") || "Gateway restart required to load edited code.",
+        );
+      }
+      if (application.warnings?.length) {
+        step.detail = redactSensitiveText(
+          [step.detail, ...application.warnings].filter(Boolean).join("\n"),
+          { mode: "tools" },
         );
       }
     }
