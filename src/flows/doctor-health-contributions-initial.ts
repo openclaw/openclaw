@@ -20,8 +20,10 @@ import {
   checkLegacyPluginSourceCapturesContributionPending,
   checkLegacyRuntimeFilesContributionPending,
   checkLegacyStatePending,
+  checkPluginRegistryContributionPending,
   checkSessionTranscriptHeadersContributionPending,
   checkSessionTranscriptLabelsContributionPending,
+  checkTelegramGeneralTopicConversationsPending,
   runAgentMemorySchemaHealth,
   runCodexSessionRouteHealth,
   runConfiguredPluginInstallReleaseHealth,
@@ -358,15 +360,7 @@ export function resolveInitialDoctorHealthContributions(params: {
           ).map(pluginRegistryIssueToRepairEffect);
         }, "legacy doctor plugin registry contribution owns registry repairs"),
       },
-      async pending(ctx) {
-        const { checkPluginRegistryRepairPending } =
-          await import("../commands/doctor-plugin-registry.js");
-        return checkPluginRegistryRepairPending({
-          config: ctx.cfg,
-          env: process.env,
-          prompter: ctx.prompter,
-        });
-      },
+      pending: checkPluginRegistryContributionPending,
       async run(ctx) {
         const { maybeRepairPluginRegistryState } =
           await import("../commands/doctor-plugin-registry.js");
@@ -548,6 +542,7 @@ export function resolveInitialDoctorHealthContributions(params: {
       {
         healthCheckIds: ["core/doctor/telegram-general-topic-conversations"],
         ...coreHealthContribution("core/doctor/telegram-general-topic-conversations"),
+        pending: checkTelegramGeneralTopicConversationsPending,
       },
     ),
     createDoctorHealthContribution("doctor:session-transcript-headers", "Chat history headers", {
