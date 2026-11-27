@@ -38,15 +38,18 @@ keeps its configured behavior, including `true`, an object, or `false`. Known
 hosted Ollama routes and the OpenAI-compatible transport keep the general default.
 
 When enabled for OpenClaw runs, the model automatically receives a bounded
-directory of the available trusted tool names and descriptions, plus the
-structured `tool_search`, `tool_describe`, and `dispatch_action` controls. Setting
-`tools.toolSearch: true` or an object without a mode selects this structured
-surface. Direct-only tools remain visible alongside the controls. On the default
-OpenClaw runner, an admitted `progress_card` also appears with its full schema
-in the first model request, so the agent can update the card without searching.
+directory of the available trusted tool names, plus the structured
+`tool_search`, `tool_describe`, and `dispatch_action` controls. The directory
+lists names only: `tool_search` returns input signatures and `tool_describe`
+full schemas on demand, so descriptions are not repeated on every request.
+Setting `tools.toolSearch: true` or an object without a mode selects this
+structured surface. Direct-only tools remain visible alongside the controls. On
+the default OpenClaw runner, an admitted `progress_card` also appears with its
+full schema in the first model request, so the agent can update the card
+without searching.
 
-The directory scales with the active model's context window. When space is tight,
-descriptions shorten before tool names are omitted; every authorized catalog
+The directory scales with the active model's context window. When space is
+tight, trailing names are omitted and counted; every authorized catalog
 entry remains searchable and callable. Invalid arguments for OpenClaw-owned
 tools include a bounded expected input signature when one can be rendered,
 plus the received type at the rejected field. Short scalar previews can show
@@ -60,7 +63,7 @@ to the skill’s complete instructions instead of sending the model through tool
 
 The optional [usage-ranked tool index](/concepts/experimental-features#usage-ranked-tool-index)
 can prioritize frequently and recently used tools in the embedded runtime’s
-deferred-schema directory and [MCP tool directory](#mcp-tool-directory). It is
+deferred tool directory and [MCP tool directory](#mcp-tool-directory). It is
 off by default and keeps the existing budgets, reserves room for newcomers, and
 freezes the selection preference for the prompt series. It does not rank search
 results, change permissions, or affect Codex-native surfaces.

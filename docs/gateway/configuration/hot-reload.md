@@ -180,8 +180,12 @@ Reload planning classifies each changed path as one of three outcomes:
   scheduling a reload action for that path. Consumers that read the current
   config can observe the new value on a later read.
 
-In `hybrid` mode, Gateway restarts happen automatically when required. The longest
-matching config prefix determines the outcome. Rules supplied by a plugin apply
+In `hybrid` mode, Gateway restarts happen automatically when required. Changes to
+`gateway.port` also take effect when an unmanaged Gateway restarts in-process.
+An explicit `--port` or launch-time `OPENCLAW_GATEWAY_PORT` still takes precedence
+over the configured port.
+
+The longest matching config prefix determines the outcome. Rules supplied by a plugin apply
 only while that plugin is loaded; a path that matches no rule defaults to a
 Gateway restart.
 

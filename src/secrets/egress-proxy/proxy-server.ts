@@ -5,7 +5,7 @@ import { Agent as HttpsAgent } from "node:https";
 import net, { type Socket } from "node:net";
 import path from "node:path";
 import { Readable, type Duplex, type Writable } from "node:stream";
-import { createSecureContext, createServer as createTlsServer, rootCertificates } from "node:tls";
+import { createSecureContext, createServer as createTlsServer, getCACertificates } from "node:tls";
 import { URL } from "node:url";
 import {
   createNodeProxyAgent,
@@ -245,14 +245,16 @@ export async function startSecretEgressProxyServer(params: {
   const { caPem } = certificates;
   // Adopt the released emSign ECC G3 root removal for PEM consumers too:
   // https://github.com/rustls/webpki-roots/releases/tag/v%2F1.0.10
-  // Runtime verifier blocks do not survive exporting tls.rootCertificates.
+  // Runtime verifier blocks do not survive exporting the effective CA set.
+  // OpenSSL-CA mode omits its store from "default"; retain our bundled trust
+  // baseline while adding configured extra/system CAs when Node exports them.
   const trustedCertificates = [
-    ...rootCertificates.filter(
+    caPem,
+    ...[...new Set([...getCACertificates("bundled"), ...getCACertificates("default")])].filter(
       (pem) =>
         new X509Certificate(pem).fingerprint256 !==
         "86:A1:EC:BA:08:9C:4A:8D:3B:BE:27:34:C6:12:BA:34:1D:81:3E:04:3C:F9:E8:A8:62:CD:5C:57:A3:6B:BE:6B",
     ),
-    caPem,
   ];
   const trustBundlePath = path.join(params.caDir, "trust-bundle.pem");
   fs.writeFileSync(trustBundlePath, trustedCertificates.join("\n"), { mode: 0o644 });

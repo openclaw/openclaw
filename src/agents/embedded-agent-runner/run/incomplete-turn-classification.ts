@@ -272,6 +272,7 @@ export function classifyAssistantTurn(params: {
     assistant,
     visibleText,
     silent:
+      !params.attempt.textToolCallAttempt &&
       prepared.terminalReply.disposition === "silent" &&
       assistant?.stopReason === "stop" &&
       !assistant.content.some((block) => block.type === "toolCall"),

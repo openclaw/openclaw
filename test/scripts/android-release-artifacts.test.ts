@@ -79,3 +79,29 @@ it.each([
   expect(result.status).toBe(success ? 0 : 1);
   expect(success ? result.stdout : result.stderr).toContain(message);
 });
+
+it.each(["third-party", "all", "store"])("plans the signed archive outputs for %s", (artifact) => {
+  const result = run(["--artifact", artifact, "--dry-run"]);
+
+  expect(result.status).toBe(0);
+  const version = result.stdout.match(/^Android versionName: (.+)$/mu)?.[1];
+  expect(version).toBeDefined();
+  const outputs = Array.from(result.stdout.matchAll(/^Output: (.+)$/gmu), (match) => match[1]);
+  expect(outputs).toEqual([
+    ...(artifact !== "third-party"
+      ? [`openclaw-${version}-wear-release.aab`, `openclaw-${version}-play-release.aab`]
+      : []),
+    ...(artifact === "store"
+      ? []
+      : [
+          `openclaw-${version}-third-party-release.apk`,
+          `openclaw-${version}-third-party-release-armeabi-v7a.apk`,
+          `openclaw-${version}-third-party-release-arm64-v8a.apk`,
+          `openclaw-${version}-third-party-release-x86.apk`,
+          `openclaw-${version}-third-party-release-x86_64.apk`,
+        ]),
+  ]);
+  expect(result.stdout.includes("Gradle task: :app:assembleThirdPartyRelease")).toBe(
+    artifact !== "store",
+  );
+});

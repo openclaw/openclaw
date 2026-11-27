@@ -6,7 +6,7 @@ import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
-import { inspectPluginCohortRecoveriesAsync } from "../infra/update-run-recovery-store.js";
+import { loadPluginCohortRecoveryAsync } from "../infra/update-run-recovery-store.js";
 import { pluginCohortRecoveryMatchesSource } from "../infra/update-run-recovery.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../infra/update-run-timeouts.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
@@ -28,9 +28,7 @@ export async function commitRestartPluginCohort(
   },
 ): Promise<void> {
   params.assertCurrent();
-  const pair = (await inspectPluginCohortRecoveriesAsync({ env: params.env })).find(
-    (entry) => entry.cohort.runId === runId,
-  );
+  const pair = await loadPluginCohortRecoveryAsync(runId, { env: params.env });
   params.assertCurrent();
   if (!pair) {
     return;

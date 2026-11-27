@@ -1467,6 +1467,7 @@ src/infra/update-failure-result.ts
 src/infra/update-immutable-install-schema.ts
 src/infra/update-immutable-protection-schema.ts
 src/infra/update-maintenance.ts
+src/infra/update-managed-service-handoff-boot-schema.ts
 src/infra/update-managed-service-handoff-boot.ts
 src/infra/update-managed-service-handoff-cancellation.ts
 src/infra/update-managed-service-handoff-children.ts
@@ -1942,7 +1943,6 @@ src/plugins/slots.ts
 src/plugins/status-dependencies-core.ts
 src/plugins/toggle-config.ts
 src/plugins/update-cohort-artifacts.ts
-src/plugins/update-cohort-protected-artifacts.ts
 src/plugins/web-search-install-catalog.ts
 src/process/child-memory.ts
 src/process/child-process-tree.ts

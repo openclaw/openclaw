@@ -352,8 +352,11 @@ it("preserves same-route text delivery dedupe across refresh", async () => {
 it("reacquires generations while preserving run authority, committed work, and one terminal", async () => {
   const { getPluginRuntimeGatewayRequestScope, withPluginRuntimeGatewayRequestScope } =
     await import("../../plugins/runtime/gateway-request-scope.js");
-  const { getPluginRuntimeGenerationRegistry, withPluginRuntimeGenerationScope } =
+  const { withPluginRuntimeGenerationScope } =
     await import("../../plugins/runtime/generation-scope.js");
+  // Load alongside the scope after the integration harness resets its module graph.
+  const { getPluginRuntimeGenerationRegistry } =
+    await import("../../plugins/runtime/generation-state.js");
   const {
     getPreparedModelRuntimeBorrowedSnapshot,
     getPreparedModelRuntimePluginGeneration,

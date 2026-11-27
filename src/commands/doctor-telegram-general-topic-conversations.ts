@@ -87,6 +87,16 @@ function resolveRepairScopes(cfg: OpenClawConfig, env: NodeJS.ProcessEnv) {
   });
 }
 
+/** The existing agent databases the detection reads. */
+export function listTelegramGeneralTopicConversationDatabasePaths(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  return resolveRepairScopes(cfg, env).map(
+    ({ scope, storePath }) => toDatabaseOptions(scope).path ?? storePath,
+  );
+}
+
 /** Finds stale General-topic rows without creating or migrating agent databases. */
 export async function detectTelegramGeneralTopicConversationRepairs(params: {
   cfg: OpenClawConfig;

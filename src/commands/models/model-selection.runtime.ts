@@ -4,10 +4,8 @@ import { modelKey, type ModelRef } from "../../agents/model-ref-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import { resolvePluginProviderRegistryCore } from "../../plugins/providers.runtime.js";
-import {
-  getPluginRuntimeGenerationRegistry,
-  withPluginRuntimeGenerationScope,
-} from "../../plugins/runtime/generation-scope.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-state.js";
 
 export function withModelCommandProviderRuntime<T>(
   params: {

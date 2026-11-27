@@ -29,7 +29,10 @@ import { ChatSubagentsMobileList, type ChatSubagentMobileItem } from "./chat-sub
 import "./chat-session-panels.css";
 import "./chat-subagents-panel.css";
 import { ChatSubagentsNative } from "./chat-subagents-native.tsx";
-import { ChatSubagentsPanelDesktop } from "./chat-subagents-panel-desktop.tsx";
+import {
+  ChatSubagentsPanelDesktop,
+  pausedSubagentStatus,
+} from "./chat-subagents-panel-desktop.tsx";
 import { createSubagentsPresentation } from "./chat-subagents-presentation.ts";
 
 registerEnglishCatalog(registerChatSessionOptionalEnglish);
@@ -267,7 +270,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
           : status === "running"
             ? t("common.running")
             : status === "waiting"
-              ? t("chat.waitingOnSubagents")
+              ? (pausedSubagentStatus(row.session) ?? t("chat.waitingOnSubagents"))
               : status === "failed"
                 ? t("common.failed")
                 : status === "stopped"
