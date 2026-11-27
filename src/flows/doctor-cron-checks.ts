@@ -21,19 +21,22 @@ export const cronInferenceCheck: CoreHealthCheck = {
   async detect(ctx) {
     const { maybeRepairCronInferenceBindings } =
       await import("../commands/doctor/cron/inference-binding-migration.js");
-    const { warnings } = await maybeRepairCronInferenceBindings({
+    const { warnings, notices } = await maybeRepairCronInferenceBindings({
       cfg: ctx.cfg,
       env: ctx.env,
       shouldRepair: false,
     });
-    return warnings.map((message): HealthFinding => ({
+    const path = resolveOpenClawStateSqlitePath(ctx.env);
+    return [...warnings, ...notices].map((message, index): HealthFinding => ({
       checkId: "core/doctor/cron-inference-accounts",
       severity: "warning",
-      category: "fix-now",
+      category: index < warnings.length ? "fix-now" : "recommended",
       message,
-      path: resolveOpenClawStateSqlitePath(ctx.env),
+      path,
       requirement: "cron-inference-account",
-      fixHint: "Run openclaw doctor --fix to convert saved automation accounts.",
+      ...(index < warnings.length
+        ? { fixHint: "Run openclaw doctor --fix to convert saved automation accounts." }
+        : {}),
     }));
   },
 };

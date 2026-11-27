@@ -526,6 +526,7 @@ export const CronJobSchema = closedObject({
   name: NonEmptyString,
   description: Type.Optional(Type.String()),
   enabled: Type.Boolean(),
+  inferenceAccountPauseReason: Type.Optional(Type.String()),
   deleteAfterRun: Type.Optional(Type.Boolean()),
   createdAtMs: CronDateTimestampMsSchema,
   updatedAtMs: CronDateTimestampMsSchema,

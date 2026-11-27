@@ -23,6 +23,8 @@ import {
   isLegacyCronInferenceBinding,
 } from "../../../cron/legacy-inference-account.js";
 import { normalizeCronJobCreate } from "../../../cron/normalize.js";
+import { getInvalidPersistedCronJobReason } from "../../../cron/persisted-shape.js";
+import { decodeStoredCronJobConfig } from "../../../cron/store/job-config-codec.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { PluginDoctorCronJob } from "../../../plugins/doctor-contract-module.js";
 import { prepareProviderModelPolicySurfaces } from "../../../plugins/provider-model-routes.js";
@@ -36,29 +38,40 @@ import {
   type CronInferenceBindingRepair,
 } from "./store-repair.js";
 
+class CronInferenceMigrationPause extends Error {}
+
 export async function maybeRepairCronInferenceBindings(params: {
   cfg: OpenClawConfig;
   shouldRepair: boolean;
   env?: NodeJS.ProcessEnv;
   trialBackupPath?: string;
-}): Promise<{ changes: string[]; warnings: string[] }> {
+}): Promise<{ changes: string[]; notices: string[]; warnings: string[] }> {
   const env = params.env ?? process.env;
   const changes: CronInferenceBindingRepair[] = [];
   const descriptions: string[] = [];
+  const notices: string[] = [];
+  const paused: string[] = [];
   const retained: AuthProfileAuthorization[] = [];
   try {
     const inventory = await inspectCronJobsForDoctor({ env });
+    const labelFor = ({ definition, id }: PluginDoctorCronJob) =>
+      `${typeof definition?.name === "string" ? definition.name : id} (${id})`;
+    for (const job of inventory.jobs) {
+      const reason = job.definition?.inferenceAccountPauseReason;
+      if (job.definition?.enabled === false && typeof reason === "string") {
+        notices.push(`Automation ${labelFor(job)}: ${reason}`);
+      }
+    }
     const pending = inventory.jobs.filter(
       ({ definition }) => definition && hasLegacyCronInferenceAccount(definition),
     );
     if (pending.length === 0) {
-      return { changes: [], warnings: [] };
+      return { changes: [], notices, warnings: [] };
     }
-    const labelFor = ({ definition, id }: PluginDoctorCronJob) =>
-      `${typeof definition?.name === "string" ? definition.name : id} (${id})`;
     if (!params.shouldRepair) {
       return {
         changes: [],
+        notices,
         warnings: pending.map(
           (job) =>
             `Automation ${labelFor(job)}: run openclaw doctor --fix to move the saved account to the model selection.`,
@@ -78,12 +91,21 @@ export async function maybeRepairCronInferenceBindings(params: {
       let authorization: AuthProfileAuthorization | undefined;
       try {
         if (ownerTransferPending !== undefined) {
-          throw new Error("its owner changed and the new owner needs to choose the account");
+          throw new CronInferenceMigrationPause(
+            "its owner changed and the new owner needs to choose the account",
+          );
         }
         if (!isLegacyCronInferenceBinding(binding)) {
-          throw new Error("its saved account is incomplete");
+          throw new CronInferenceMigrationPause("its saved account is incomplete");
         }
-        const input = normalizeCronJobCreate(definition);
+        if (
+          isRecord(definition.payload) &&
+          definition.payload.kind === "accessAgentTurn" &&
+          getInvalidPersistedCronJobReason(definition)
+        ) {
+          throw new CronInferenceMigrationPause("its stored Access job definition is invalid");
+        }
+        const input = normalizeCronJobCreate(decodeStoredCronJobConfig(definition));
         const job = input && { ...input, id: stored.id, createdAtMs: 0, updatedAtMs: 0, state: {} };
         if (
           job?.payload.kind !== "agentTurn" ||
@@ -91,11 +113,13 @@ export async function maybeRepairCronInferenceBindings(params: {
           definition.pluginCommand !== undefined ||
           !isRecord(definition.payload)
         ) {
-          throw new Error("this job does not support an explicit model selection");
+          throw new CronInferenceMigrationPause(
+            "this job does not support an explicit model selection",
+          );
         }
         const agentId = tryResolveCronJobEffectiveAgentId(job, tryResolveAmbientOwnerAgentId(cfg));
         if (!agentId) {
-          throw new Error("its execution agent could not be determined");
+          throw new CronInferenceMigrationPause("its execution agent could not be determined");
         }
         const session = await prepareCronInferenceDiagnosticSession({
           cfg,
@@ -104,7 +128,7 @@ export async function maybeRepairCronInferenceBindings(params: {
           runtimePinned: Boolean(binding.runtime),
         });
         if (session.initialSessionEntry?.modelSelectionLocked) {
-          throw new Error("its session owns the model selection");
+          throw new CronInferenceMigrationPause("its session owns the model selection");
         }
         const selected = await resolveCronModelSelection({
           cfg,
@@ -117,18 +141,24 @@ export async function maybeRepairCronInferenceBindings(params: {
           isGmailHook: job.payload.externalContentSource === "gmail",
         });
         if (!selected.ok || selected.provider !== binding.provider) {
-          throw new Error("the current model no longer matches the saved account’s provider");
+          throw new CronInferenceMigrationPause(
+            "the current model no longer matches the saved account’s provider",
+          );
         }
         if (
           selected.configuredProfileId &&
           selected.modelSource === "payload" &&
           selected.configuredProfileId !== binding.profileId
         ) {
-          throw new Error("the existing model and saved account name different accounts");
+          throw new CronInferenceMigrationPause(
+            "the existing model and saved account name different accounts",
+          );
         }
         const model = `${selected.provider}/${selected.model}@${binding.profileId}`;
         if (splitTrailingAuthProfile(model).profile !== binding.profileId) {
-          throw new Error("the saved account cannot be represented as a model suffix");
+          throw new CronInferenceMigrationPause(
+            "the saved account cannot be represented as a model suffix",
+          );
         }
         const payload = {
           ...job.payload,
@@ -159,7 +189,7 @@ export async function maybeRepairCronInferenceBindings(params: {
             .map((candidate) => candidate.provider + "/" + candidate.model);
           const pinned = resolveCronPreflightCandidates({ ...preflight, job: { ...job, payload } });
           if (!isDeepStrictEqual(before, pinned)) {
-            throw new Error("its fallback models cannot be preserved");
+            throw new CronInferenceMigrationPause("its fallback models cannot be preserved");
           }
         }
         const store = await loadAuthProfileStoreForRuntimeAsync(selected.owner.agentDir, {
@@ -176,7 +206,9 @@ export async function maybeRepairCronInferenceBindings(params: {
             authFlow: credential.type === "oauth" ? credential.authFlow : undefined,
           }).authRequirement !== binding.authRequirement
         ) {
-          throw new Error("its saved account is missing or no longer uses the same billing route");
+          throw new CronInferenceMigrationPause(
+            "its saved account is missing or no longer uses the same billing route",
+          );
         }
         authorization = await captureAuthProfileAuthorization({
           profileId: binding.profileId,
@@ -208,10 +240,17 @@ export async function maybeRepairCronInferenceBindings(params: {
           `Automation ${label}: pinned ${model}${binding.runtime ? ` on ${binding.runtime}` : ""}.`,
         );
       } catch (error) {
-        changes.push({ job: stored, definition: { ...definition, enabled: false }, paused: true });
-        descriptions.push(
-          `Automation ${label}: paused because ${formatErrorMessage(error)}. Review its model and account before enabling it.`,
-        );
+        const cause =
+          error instanceof CronInferenceMigrationPause
+            ? error.message
+            : "its saved account couldn’t be verified";
+        const reason = `Paused because ${cause}. Review its model and account before enabling it.`;
+        changes.push({
+          job: stored,
+          definition: { ...definition, enabled: false, inferenceAccountPauseReason: reason },
+          paused: true,
+        });
+        paused.push(`Automation ${label}: ${reason}`);
       } finally {
         authorization?.dispose();
       }
@@ -243,11 +282,13 @@ export async function maybeRepairCronInferenceBindings(params: {
             ]
           : []),
       ],
+      notices: [...notices, ...paused],
       warnings: result.warnings ?? [],
     };
   } catch (error) {
     return {
       changes: [],
+      notices,
       warnings: [`Automation account migration was not committed: ${formatErrorMessage(error)}`],
     };
   } finally {

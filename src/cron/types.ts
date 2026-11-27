@@ -421,6 +421,7 @@ export type CronJob = CronJobBase<
 > & {
   declarationKey?: string;
   displayName?: string;
+  inferenceAccountPauseReason?: string;
   /** Read-only execution placement derived from the stored stream target. */
   streamExecutionHost?: "gateway" | "sandbox";
   /**
@@ -536,6 +537,7 @@ export type CronJobCreate = Omit<
   | "ownerProfileId"
   | "streamExecutionHost"
   | "payloadSource"
+  | "inferenceAccountPauseReason"
 > & {
   /** Internal callers can reserve a durable id before creation; public cron.add omits this. */
   id?: string;
@@ -548,6 +550,7 @@ export type CronJobPatch = Partial<
     CronJob,
     | "id"
     | "createdAtMs"
+    | "inferenceAccountPauseReason"
     | "state"
     | "payload"
     | "delivery"

@@ -178,7 +178,7 @@ export async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise
     }),
   );
   noteDoctorRepairResult(inference);
-  recordDoctorHealthWarnings(ctx, [], inference.warnings);
+  recordDoctorHealthWarnings(ctx, [], [...inference.warnings, ...inference.notices]);
   await measureGatewayBootstrapStep("doctor.legacy-cron.store", () =>
     maybeRepairLegacyCronStore({
       cfg: ctx.cfg,

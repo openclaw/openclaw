@@ -29,10 +29,7 @@ import {
   type SubagentKillSession,
 } from "./subagent-control-session.js";
 import { isSubagentDeliveryClosed } from "./subagent-delivery-state.js";
-import {
-  SUBAGENT_ENDED_REASON_COMPLETE,
-  SUBAGENT_ENDED_REASON_KILLED,
-} from "./subagent-lifecycle-events.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { getLatestSubagentRunForChild } from "./subagent-registry-queries.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
@@ -398,15 +395,11 @@ async function confirmProvisionalSubagentKill(
     completion.endedAt > completionDeadline
       ? completionDeadline
       : undefined;
-  const completionCanOverrideCancellation =
-    runs.get(runId)?.killReconciliation?.taskCancellationAccepted !== true ||
-    (completionEndedAt ?? Number.POSITIVE_INFINITY) < killedAt;
   const completionBelongsToGeneration =
     nextRunCreatedAt === undefined || (completion != null && completion.endedAt < nextRunCreatedAt);
   if (
     completion &&
     completionEndedAt !== undefined &&
-    completionCanOverrideCancellation &&
     completionBelongsToGeneration &&
     (completion.reason !== SUBAGENT_ENDED_REASON_KILLED ||
       killedSnapshotExpiredDeadline !== undefined)
@@ -416,13 +409,10 @@ async function confirmProvisionalSubagentKill(
       {
         runId,
         startedAt: completion.startedAt,
-        endedAt: killedSnapshotExpiredDeadline ?? completion.endedAt,
-        outcome:
-          killedSnapshotExpiredDeadline !== undefined ? { status: "timeout" } : completion.outcome,
-        reason:
-          killedSnapshotExpiredDeadline !== undefined
-            ? SUBAGENT_ENDED_REASON_COMPLETE
-            : completion.reason,
+        // Terminal completion owns deadline normalization and cancellation precedence.
+        endedAt: completion.endedAt,
+        outcome: completion.outcome,
+        reason: completion.reason,
         sendFarewell: true,
         accountId: entry.requesterOrigin?.accountId,
         triggerCleanup: !hasNewerGeneration,

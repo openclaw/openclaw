@@ -260,9 +260,10 @@ while the response is pending.
 Automations use the normal account selection for the agent and model. To pin an
 account, append `@<profileId>` to the model in the editor or use
 `openclaw automations edit <jobId> --model 'openai/gpt-4.1@openai:work'`.
-Remove the suffix to return to normal selection for that model. Use
-`openclaw models auth list --agent <agentId>` to find profile IDs. Tool and
-delivery accounts are separate.
+Remove the suffix to return to normal selection for that model. While the Gateway
+is running, use `openclaw gateway call models.authStatus` to find profile IDs. For
+a specific agent, add `--params '{"agentId":"<agentId>"}'`. Tool and delivery
+accounts are separate.
 
 The pin applies only to its provider. A deleted or revoked account makes
 candidates on that provider fail rather than charge another account. Configured

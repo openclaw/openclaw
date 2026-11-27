@@ -207,7 +207,12 @@ describe.skipIf(!connection)("PostgreSQL canonical startup migration", () => {
         return JSON.parse(rows[0]!.job_json);
       };
       const { ownerTransferPending: _pending, ...definition } = legacyJob;
-      expect(await readJob(namespace)).toEqual({ ...definition, enabled: false });
+      expect(await readJob(namespace)).toEqual({
+        ...definition,
+        enabled: false,
+        inferenceAccountPauseReason:
+          "Paused because its owner changed and the new owner needs to choose the account. Review its model and account before enabling it.",
+      });
       expect(await readJob(rollback.namespace)).toEqual(legacyJob);
       expect(
         fs.readdirSync(path.dirname(statePath)).filter((name) => name.includes(".doctor-cron-")),

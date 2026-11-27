@@ -225,7 +225,12 @@ it.each([
       const { inferenceBinding: _legacyBinding, ...definition } = currentJob;
       using migrated = new DatabaseSync(file, { readOnly: true });
       expect(migrated.prepare("SELECT job_json FROM cron_jobs").get()?.job_json).toBe(
-        JSON.stringify({ ...definition, enabled: false }),
+        JSON.stringify({
+          ...definition,
+          enabled: false,
+          inferenceAccountPauseReason:
+            "Paused because the current model no longer matches the saved account’s provider. Review its model and account before enabling it.",
+        }),
       );
       const restore = JSON.parse(fs.readFileSync(manifest, "utf8"));
       const preimage = restore.files.find(

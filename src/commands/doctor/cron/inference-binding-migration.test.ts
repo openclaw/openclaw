@@ -6,7 +6,9 @@ import { persistAuthProfileBatch } from "../../../agents/auth-profiles/upsert-wi
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hashCronJobDefinition } from "../../../cron/definition-hash.js";
+import { cronJobReadView } from "../../../cron/job-read-view.js";
 import { resolveCronOperatorExecutionRevision } from "../../../cron/service/jobs-tool-policy.js";
+import { applyJobPatch } from "../../../cron/service/jobs.js";
 import { loadCronJobsStore, saveCronJobsStore } from "../../../cron/store.js";
 import { getCronStoreKysely } from "../../../cron/store/schema.js";
 import type { CronStoredJob } from "../../../cron/types.js";
@@ -26,7 +28,14 @@ it("backs up captured accounts, converts exact routes, and pauses mismatches wit
   await withOpenClawTestState({ label: "cron-pin-migration" }, async (state) => {
     const cfg: OpenClawConfig = {
       agents: {
-        entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
+        entries: {
+          main: { agentDir: state.agentDir(), workspace: state.workspaceDir },
+          mismatch: {
+            agentDir: state.agentDir("mismatch"),
+            workspace: state.workspaceDir,
+            model: "anthropic/claude-sonnet-4-6",
+          },
+        },
         defaults: { model: { primary: "openai/gpt-4.1", fallbacks: ["openai/gpt-4.1-mini"] } },
       },
     };
@@ -87,8 +96,12 @@ it("backs up captured accounts, converts exact routes, and pauses mismatches wit
       jobs: [
         job("inherit"),
         job("revoked"),
+        { ...job("mismatch"), agentId: "mismatch" },
         job("unbound"),
-        job("explicit", "openai/gpt-4.1-mini@openai:reports"),
+        {
+          ...job("explicit", "openai/gpt-4.1-mini@openai:reports"),
+          cyberAccessProgram: "daybreak_blue",
+        },
       ],
     });
     const original = await inspectCronJobsForDoctor({ env: process.env });
@@ -129,9 +142,12 @@ it("backs up captured accounts, converts exact routes, and pauses mismatches wit
     const pending = await inspectCronJobsForDoctor({ env: process.env });
     expect(
       (await maybeRepairCronInferenceBindings({ cfg, shouldRepair: false })).warnings,
-    ).toHaveLength(3);
+    ).toHaveLength(4);
     expect(await inspectCronJobsForDoctor({ env: process.env })).toEqual(pending);
     const changes: string[] = [];
+    const pauseReason =
+      "Paused because the current model no longer matches the saved account’s provider. Review its model and account before enabling it.";
+    const pauseNotice = `Automation mismatch (mismatch): ${pauseReason}`;
     const notes = vi.spyOn(noteModule, "note").mockImplementation((message) => {
       changes.push(...String(message).split("\n"));
     });
@@ -139,6 +155,7 @@ it("backs up captured accounts, converts exact routes, and pauses mismatches wit
       await withDoctorConfigMaintenance(async () => {
         await using ctx = await prepareDoctorContext(state.configPath);
         await runLegacyCronHealth(ctx);
+        expect(ctx.updateWarnings ?? []).toEqual(expect.arrayContaining([pauseNotice]));
       });
     } finally {
       notes.mockRestore();
@@ -152,7 +169,8 @@ it("backs up captured accounts, converts exact routes, and pauses mismatches wit
         expect.stringContaining(
           "explicit (explicit): pinned openai/gpt-4.1-mini@openai:reports on openclaw",
         ),
-        expect.stringContaining("revoked (revoked): paused because"),
+        expect.stringMatching(/revoked \(revoked\): [Pp]aused because/u),
+        pauseNotice,
       ]),
     );
     const backup = result.changes.find((line) => line.startsWith("Saved pre-repair cron backup: "));
@@ -161,7 +179,7 @@ it("backs up captured accounts, converts exact routes, and pauses mismatches wit
       (await fs.stat(backup!.replace("Saved pre-repair cron backup: ", ""))).size,
     ).toBeGreaterThan(0);
     const saved = (await loadCronJobsStore(storePath)).jobs;
-    expect(saved).toHaveLength(4);
+    expect(saved).toHaveLength(5);
     for (const migrated of saved) {
       expect(migrated).not.toHaveProperty("inferenceBinding");
       expect(migrated.state.lastRunAtMs).toBe(123);
@@ -175,8 +193,28 @@ it("backs up captured accounts, converts exact routes, and pauses mismatches wit
       source,
       executionRevision: resolveCronOperatorExecutionRevision(inherited),
     });
+    expect(saved.find(({ id }) => id === "explicit")).toMatchObject({
+      enabled: true,
+      cyberAccessProgram: "daybreak_blue",
+      payload: {
+        kind: "agentTurn",
+        model: "openai/gpt-4.1-mini@openai:reports",
+        modelRuntime: "openclaw",
+      },
+    });
     expect(saved.find(({ id }) => id === "revoked")).toMatchObject({ enabled: false });
+    const mismatch = saved.find(({ id }) => id === "mismatch")!;
+    expect(cronJobReadView(mismatch)).toMatchObject({
+      enabled: false,
+      inferenceAccountPauseReason: pauseReason,
+      state: { lastRunAtMs: 123, lastRunStatus: "ok" },
+    });
+    expect(mismatch.payload).not.toHaveProperty("model");
     const repaired = await inspectCronJobsForDoctor({ env: process.env });
+    expect(repaired.jobs.find(({ id }) => id === "explicit")?.definition).toMatchObject({
+      cyberAccessProgram: "daybreak_blue",
+      payload: { kind: "accessAgentTurn", model: "openai/gpt-4.1-mini@openai:reports" },
+    });
     expect(repaired.jobs.find(({ id }) => id === "unbound")).toEqual(
       original.jobs.find(({ id }) => id === "unbound"),
     );
@@ -184,6 +222,19 @@ it("backs up captured accounts, converts exact routes, and pauses mismatches wit
       await withDoctorConfigMaintenance(() =>
         maybeRepairCronInferenceBindings({ cfg, shouldRepair: true }),
       ),
-    ).toEqual({ changes: [], warnings: [] });
+    ).toMatchObject({
+      changes: [],
+      notices: expect.arrayContaining([pauseNotice]),
+      warnings: [],
+    });
+    applyJobPatch(mismatch, {
+      enabled: true,
+      payload: {
+        kind: "agentTurn",
+        message: "Prepare the weekly report",
+        model: "openai/gpt-4.1@openai:reports",
+      },
+    });
+    expect(cronJobReadView(mismatch)).not.toHaveProperty("inferenceAccountPauseReason");
   });
 });

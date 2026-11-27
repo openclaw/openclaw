@@ -964,10 +964,10 @@ function convertMessages(
 
         const toolResults = group.map((resultMessage) => createBedrockToolResult(resultMessage));
 
-        // GPT-5.6 Sol accepts user images but rejects images nested in tool results.
-        // Keep all tool outputs contiguous before labeled images, without rewriting history.
+        // Only Claude keeps tool-result images nested; other routes reject or do not document them.
+        // Keep tool outputs contiguous before labeled images, without rewriting history.
         const attachedImages: ContentBlock[] = [];
-        const userContent: ContentBlock[] = model.id.includes("openai.gpt-5.6-sol")
+        const userContent: ContentBlock[] = !isAnthropicClaudeModel(model)
           ? toolResults.map((block): ContentBlock => {
               const images: ContentBlock[] = [];
               const content = (block.toolResult.content ?? []).filter((part) => {
