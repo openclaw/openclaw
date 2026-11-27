@@ -46,6 +46,7 @@ it("puts a published namespace back in the shared map after a prune", async () =
         }
         admission.finish({ ...receipt, signature: "republish-2" });
         const current = [...nativeAdmissionStateFor().receipts.values()].at(-1)!;
+        expect(Object.keys(current.nativeNamespaces)).toHaveLength(1);
         for (const id of Object.keys(current.nativeNamespaces)) {
           expect(nativeAdmissionStateFor().namespaces.has(id)).toBe(true);
         }
