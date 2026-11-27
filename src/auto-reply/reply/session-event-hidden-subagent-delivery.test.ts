@@ -54,7 +54,7 @@ const destinations: Record<
   },
 };
 
-it.each(Object.keys(destinations))(
+it.for(Object.keys(destinations))(
   "sends a background wake reply to the requester chat only from an interactive session: %s",
   async (name, { signal, onTestFinished }) => {
     const destination = destinations[name];
