@@ -70,13 +70,13 @@ through Codex tool search under that namespace. This keeps the initial model
 context smaller. A small set of tools stay directly callable regardless of
 `codexDynamicToolsLoading`, because Codex tool search can be unavailable or
 resolve a connector-only universe: `agents_list`, `sessions_spawn`, and
-`sessions_yield`. Developer instructions still steer normal Codex subagents
-toward native `spawn_agent` for work using only Codex-native tools. New delegated
-work that needs OpenClaw tools uses the available `sessions_spawn` route with
-`runtime="subagent"` when its schema exposes that selector. Native children can
-inherit dynamic tool schemas without an OpenClaw executor. Existing native
-children keep their native follow-up path; tool failures do not migrate them
-to managed workers. Explicit ACP delegation still uses `sessions_spawn`.
+`sessions_yield`. `sessions_spawn` is the only subagent tool: OpenClaw turns off
+Codex native multi-agent (`agents.enabled`, `features.multi_agent`,
+`features.multi_agent_v2`) on every thread it starts or resumes, because native
+children cannot run OpenClaw tools and the native tools would duplicate
+`sessions_spawn` in every request. A parent resumed this way no longer has
+native collaboration tools; OpenClaw still observes native children that were
+already running and routes their results to the parent.
 Message-tool-only source replies also stay direct, since that is a
 turn-control contract.
 
