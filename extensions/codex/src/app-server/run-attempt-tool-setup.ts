@@ -99,11 +99,13 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     yieldMessage?: string;
     yieldAcknowledgment?: string;
     persistentWebSearchAllowed?: boolean;
+    webSearchRequested?: boolean;
     webSearchAllowed: boolean;
   } = {
     yieldDetected: false,
     yieldAcknowledgment: undefined,
     persistentWebSearchAllowed: undefined,
+    webSearchRequested: undefined,
     webSearchAllowed: false,
   };
   const toolOutcomeOrdinals = new Map<string, number>();
@@ -325,6 +327,9 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       cronCreatorToolAllowlistCaptureRef,
       onPersistentWebSearchPolicyResolved: (allowed) => {
         toolState.persistentWebSearchAllowed = allowed;
+      },
+      onWebSearchRequestedResolved: (requested) => {
+        toolState.webSearchRequested = requested;
       },
       onWebSearchPolicyResolved: (allowed) => {
         toolState.webSearchAllowed = allowed;
