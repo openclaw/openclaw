@@ -10,7 +10,6 @@ import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import * as secretEgressRuntime from "openclaw/plugin-sdk/secret-egress-runtime";
 import { beforeEach, expect, it, vi } from "vitest";
 import { ensureManagedCrabboxBinary, type CrabboxBinary } from "./crabbox-managed-binary.js";
-import { crabboxState } from "./crabbox-state.test-support.js";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
 import {
