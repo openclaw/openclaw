@@ -1302,7 +1302,9 @@ describe("talk realtime gateway relay", () => {
     resetContinuity(request);
     resetContinuity(request);
 
-    expect(fixture.abortController.signal.aborted).toBe(true);
+    expect(fixture.abortController.signal.aborted).toBe(false);
+    expect(relay.activeAgentRuns.size).toBe(0);
+    expect(relay.activeAgentToolCalls.size).toBe(0);
     expect(handleBargeIn).not.toHaveBeenCalled();
     expect(bridge.close).not.toHaveBeenCalled();
     expect(submitToolResult).toHaveBeenCalledTimes(1);

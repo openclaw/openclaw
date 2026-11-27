@@ -561,7 +561,8 @@ export function resetTalkRealtimeRelayContinuity(
   session.pendingWorkingToolResults.clear();
   session.forcedTerminalProviderResults.clear();
   session.harness.forcedConsults.clear();
-  retireRelayAgentRuns(session, reason);
+  // Reconnecting resets provider audio/tool state, not accepted agent work.
+  retireRelayAgentRuns(session);
   const turnId = session.harness.talk.activeTurnId;
   session.harness.flushOutput(noFallbackRelayOutputFlush);
   session.harness.finishOutputAudio(reason);
