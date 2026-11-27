@@ -7,6 +7,7 @@ import {
   AgentKindSchema,
   AgentOwnershipSchema,
 } from "./agent-summary-enums.js";
+import { AgentSummarySchema } from "./agent-summary-schema.js";
 import { AgentsListPlacementProperties } from "./agents-list-session-placement.js";
 import { closedObject } from "./closed-object.js";
 import {
@@ -69,48 +70,7 @@ export type {
  * shared by gateway RPC, CLI, and UI clients.
  */
 
-/** Condensed agent record returned by list APIs. */
-export const AgentSummarySchema = closedObject({
-  id: NonEmptyString,
-  /** Effective explicit utility model; absent for automatic or disabled utility routing. */
-  utilityModel: Type.Optional(NonEmptyString),
-  status: Type.Optional(Type.Literal("degraded")),
-  admissionRefusal: Type.Optional(AgentDatabaseAdmissionRefusalSchema),
-  kind: Type.Optional(AgentKindSchema),
-  createdVia: Type.Optional(AgentCreatedViaSchema),
-  creatorAgentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  createdAt: Type.Optional(Type.Integer({ minimum: 0 })),
-  name: Type.Optional(NonEmptyString),
-  description: Type.Optional(NonEmptyString),
-  recommendedPrompts: Type.Optional(RecommendedPromptsSchema),
-  identity: Type.Optional(
-    closedObject({
-      name: Type.Optional(NonEmptyString),
-      theme: Type.Optional(NonEmptyString),
-      emoji: Type.Optional(NonEmptyString),
-      avatar: Type.Optional(NonEmptyString),
-      avatarUrl: Type.Optional(NonEmptyString),
-    }),
-  ),
-  workspace: Type.Optional(NonEmptyString),
-  workspaceGit: Type.Optional(Type.Boolean()),
-  model: Type.Optional(
-    closedObject({
-      primary: Type.Optional(NonEmptyString),
-      fallbacks: Type.Optional(Type.Array(NonEmptyString)),
-    }),
-  ),
-  agentRuntime: Type.Optional(GatewayAgentRuntimeSchema),
-  thinkingLevels: Type.Optional(Type.Array(GatewayThinkingLevelOptionSchema)),
-  thinkingOptions: Type.Optional(Type.Array(NonEmptyString)),
-  thinkingDefault: Type.Optional(NonEmptyString),
-  /** Only with an agent-level thinkingDefault: the level clearing it would resolve to. */
-  thinkingInheritedDefault: Type.Optional(NonEmptyString),
-  // Configured posture for display only, never an authorization decision.
-  defaultPermissionMode: Type.Optional(SessionPermissionModeSchema),
-  /** Explicit default for new attended sessions; existing-session Default keeps tool policy. */
-  newSessionPermissionMode: Type.Optional(SessionPermissionModeSchema),
-});
+export { AgentSummarySchema } from "./agent-summary-schema.js";
 
 export const AgentsListResultSchema = closedObject({
   ...AgentsListPlacementProperties,

@@ -172,7 +172,7 @@ export type TuiSessionRow = Omit<SessionInfo, "effectiveResponseUsage"> & {
 
 export type { SessionScope } from "../config/types.base.js";
 
-export type AgentSummary = Pick<GatewayAgentSummary, "id" | "kind" | "name">;
+export type AgentSummary = Pick<GatewayAgentSummary, "id" | "kind" | "name" | "hidden">;
 
 export type GatewayStatusSummary = {
   runtimeVersion?: string | null;

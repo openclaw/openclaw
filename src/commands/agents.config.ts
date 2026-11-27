@@ -46,6 +46,7 @@ export type AgentSummary = {
   creatorAgentId?: string | null;
   createdAt?: number;
   isDefault: boolean;
+  hidden?: boolean;
 };
 
 type AgentEntry = AgentConfig;
@@ -107,6 +108,7 @@ export async function buildAgentSummaries(cfg: OpenClawConfig): Promise<AgentSum
           resolvePrimaryStringValue(cfg.agents?.defaults?.model),
         bindings: bindingCounts.get(id) ?? 0,
         isDefault: defaultAgentId !== undefined && id === normalizeAgentId(defaultAgentId),
+        hidden: agentConfig?.picker?.hidden === true || undefined,
       };
       if (identityAvatarUrl) {
         summary.identityAvatarUrl = identityAvatarUrl;

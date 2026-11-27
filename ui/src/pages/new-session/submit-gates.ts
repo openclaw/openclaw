@@ -3,6 +3,7 @@
 // derive from this walk, so a gate cannot block silently.
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { listSelectableAgents } from "../../lib/agents/display.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import {
   readSessionMethodAccess,
@@ -337,7 +338,10 @@ export function resolveNewSessionSubmitBlock(
   if (modelUnavailableMessage) {
     return { gate: "model-unavailable", reason: modelUnavailableMessage };
   }
-  if (place.agents().length === 0) {
+  // Check if there's at least one selectable agent (including hidden) OR a valid selected agent
+  const allAgents = snapshot.context?.agents.state.agentsList?.agents ?? [];
+  const selectableAgents = listSelectableAgents(allAgents);
+  if (selectableAgents.length === 0 && !place.selectedAgent()) {
     return { gate: "agents", reason: t("newSession.agentsUnavailable") };
   }
   if (!catalog.allowsSelectedAgent(snapshot.data, place.selectedAgent())) {

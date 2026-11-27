@@ -122,7 +122,7 @@ export class DraftPlaceState {
   }
   readonly cloudMachines = new DraftCloudMachineState();
   agentsHydrated = false;
-  private agentSelectedByUser = false;
+  agentSelectedByUser = false;
   private routeModelIntentActive = true;
 
   private readonly selection = createDraftPlaceRestoreState();
