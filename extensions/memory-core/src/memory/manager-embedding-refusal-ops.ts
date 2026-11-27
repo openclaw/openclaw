@@ -136,12 +136,13 @@ export abstract class MemoryEmbeddingRefusalOps extends MemoryManagerEmbeddingOp
 
   /**
    * Only the provider's own identity says whether a recorded refusal covers today's endpoint.
-   * Creating the provider sends no request; a covered endpoint stays refused.
+   * Creating the provider sends no request; a covered endpoint stays refused. A writable
+   * manager skips this: its explicit probe re-checks the endpoint and clears the record.
    */
   protected async withStatusRefusalIdentity<T extends { embeddingRefusal?: unknown }>(
     snapshot: T,
   ): Promise<T> {
-    if (snapshot.embeddingRefusal) {
+    if (snapshot.embeddingRefusal && this.publishedDatabase.readOnly) {
       await this.ensureProviderInitializedOrRefused();
     }
     return snapshot;

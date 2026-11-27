@@ -100,9 +100,9 @@ async function searchOnce(cfg: OpenClawConfig, query: string) {
   }
 }
 
-// What a later `openclaw memory status --deep` reports for this agent.
-async function readRecordedStatus(cfg: OpenClawConfig) {
-  const { manager } = await getMemorySearchManager({ cfg, agentId: "main", purpose: "status" });
+// What a later `openclaw memory status --deep` (or `--index`, purpose "cli") reports.
+async function readRecordedStatus(cfg: OpenClawConfig, purpose: "status" | "cli" = "status") {
+  const { manager } = await getMemorySearchManager({ cfg, agentId: "main", purpose });
   try {
     const refusal = (await readMemorySearchManagerStatus(manager!)).custom?.embeddingRefusal;
     const probe = await manager!.probeEmbeddingAvailability();
@@ -156,6 +156,10 @@ it("remembers an endpoint without embeddings and keeps keyword search working", 
   const movedStatus = await readRecordedStatus(implicitConfig(moved.baseUrl));
   expect(movedStatus.refusal).toBeUndefined();
   expect(movedStatus.probe).toMatchObject({ ok: true });
+  // `memory status --index` on the restored endpoint re-checks it and clears the record.
+  endpoint.setMode("serve");
+  expect((await readRecordedStatus(cfg, "cli")).probe).toMatchObject({ ok: true });
+  expect((await readRecordedStatus(cfg)).refusal).toBeUndefined();
 });
 
 it("keeps semantic search through an implicit endpoint that serves embeddings", async () => {
