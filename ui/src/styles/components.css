@@ -587,6 +587,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 /* Dictation review shares the card, field, preview and wrapping action styles. */
 .dictation-formatting {
   grid-column: 1 / -1;
+  grid-auto-rows: max-content;
   min-width: 0;
   max-height: 60dvh;
   overflow: auto;

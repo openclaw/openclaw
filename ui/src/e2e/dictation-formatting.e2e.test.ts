@@ -433,6 +433,7 @@ suite.define(() => {
 
   it("blocks New Session submission during finalization, then reviews and undoes paragraphs", () =>
     suite.withPage(desktopMicrophone, async ({ page }) => {
+      await page.setViewportSize({ width: 1200, height: 820 });
       const fixture = await open(page, { route: "new", explicit: true });
       const draft = "Keep this draft until review";
       await fixture.textarea.fill(draft);
@@ -451,28 +452,21 @@ suite.define(() => {
       await fixture.emit(text, true);
       await fixture.close();
       const panel = review(page);
-      expect(await panel.getByRole("region", { name: "Semantic preview" }).textContent()).toBe(
-        text,
-      );
+      const preview = panel.getByRole("region", { name: "Semantic preview" });
+      expect(await preview.textContent()).toBe(text);
       await capture(page, "after-needs-review", fixture.shell, panel.getByRole("checkbox"));
       await panel.getByRole("checkbox").focus();
       await page.keyboard.press("Space");
       await button(panel, "Interpret selected commands").focus();
       await page.keyboard.press("Enter");
-      await expect
-        .poll(() => panel.getByRole("region", { name: "Semantic preview" }).locator("p").count())
-        .toBe(2);
+      await expect.poll(() => preview.locator("p").count()).toBe(2);
+      expect(await preview.evaluate((node) => node.scrollHeight <= node.clientHeight)).toBe(true);
       expect(
         await panel
           .getByRole("combobox", { name: "Preview format" })
           .evaluate((element) => document.activeElement === element),
       ).toBe(true);
-      await capture(
-        page,
-        "after-confirmed-paragraphs",
-        fixture.shell,
-        panel.getByRole("region", { name: "Semantic preview" }),
-      );
+      await capture(page, "after-confirmed-paragraphs", fixture.shell, preview);
       await button(panel, "Use formatted text").click();
       await expect
         .poll(() => fixture.textarea.inputValue())
