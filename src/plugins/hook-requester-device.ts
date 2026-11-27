@@ -27,30 +27,58 @@ export function recordRunInjectedInputDevice(
   injectedInputDevices.set(runId, entry);
 }
 
+function inputCameOnlyFrom(runId: string | undefined, deviceId: string): boolean {
+  const entry = runId ? injectedInputDevices.get(runId) : undefined;
+  return !entry || [...entry.devices].every((device) => device === deviceId);
+}
+
+type ExecOwner = { runId: string; ownerDeviceId?: string };
 type DeviceBearingContext = {
   runId?: string;
   requesterDeviceId?: string;
   requester?: { deviceId?: string };
+  execRequestOwners?: readonly ExecOwner[];
 };
 
-/** Drops the reported device from a hook context when the run holds input from another source. */
+/**
+ * Drops each device a hook context reports for a run that holds input from another source:
+ * the current run's requester device and the device of every exec request owner it continues.
+ */
 export function projectHookRequesterDevice<T>(ctx: T): T {
   // SAFETY: agent and tool hook contexts are plain objects; the fields read here are optional.
   const context = ctx as DeviceBearingContext | undefined;
-  const entry = context?.runId ? injectedInputDevices.get(context.runId) : undefined;
-  if (!entry || !context) {
+  if (!context) {
     return ctx;
   }
   const reported = context.requesterDeviceId ?? context.requester?.deviceId;
-  if (!reported || [...entry.devices].every((device) => device === reported)) {
+  const dropReported = reported ? !inputCameOnlyFrom(context.runId, reported) : false;
+  const owners = context.execRequestOwners;
+  const dropOwnerDevice = owners?.some(
+    (owner) => owner.ownerDeviceId && !inputCameOnlyFrom(owner.runId, owner.ownerDeviceId),
+  );
+  if (!dropReported && !dropOwnerDevice) {
     return ctx;
   }
-  const { requesterDeviceId: _agentDevice, ...rest } = context;
-  if (!rest.requester?.deviceId) {
-    // SAFETY: rest is ctx without its optional requesterDeviceId, so it still satisfies T.
-    return rest as T;
+  const { requesterDeviceId, requester, execRequestOwners, ...rest } = context;
+  const projected: DeviceBearingContext = { ...rest };
+  if (requesterDeviceId && !dropReported) {
+    projected.requesterDeviceId = requesterDeviceId;
   }
-  const { deviceId: _toolDevice, ...requester } = rest.requester;
-  // SAFETY: only the optional requesterDeviceId and requester.deviceId fields are removed from ctx.
-  return { ...rest, requester } as T;
+  if (requester) {
+    const { deviceId, ...withoutDevice } = requester;
+    projected.requester = deviceId && !dropReported ? requester : withoutDevice;
+  }
+  if (execRequestOwners) {
+    projected.execRequestOwners = Object.freeze(
+      execRequestOwners.map((owner) => {
+        if (!owner.ownerDeviceId || inputCameOnlyFrom(owner.runId, owner.ownerDeviceId)) {
+          return owner;
+        }
+        const { ownerDeviceId: _steered, ...withoutDevice } = owner;
+        return Object.freeze(withoutDevice);
+      }),
+    );
+  }
+  // SAFETY: projected is ctx with only optional device fields removed, so it still satisfies T.
+  return projected as T;
 }

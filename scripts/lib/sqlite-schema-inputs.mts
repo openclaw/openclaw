@@ -30,6 +30,7 @@ import { withLegacyAgentStorageSchema } from "../../src/state/openclaw-agent-sto
 import { DEPLOYED_FTS_ROWS_SCHEMA } from "../../src/state/openclaw-agent-transcript-fts-schema-source.js";
 import { withLegacyWorkspaceBootstrapDeferred } from "../../src/state/openclaw-state-db-schema-v40-lazy-additions.js";
 import { withLegacyWorkerProvisionSource } from "../../src/state/openclaw-state-db-schema-v40-worker-provision-source.js";
+import { withLegacyApprovalProfile } from "../../src/state/openclaw-state-db-schema-v41-approval-profile.js";
 import {
   getOpenClawStateFeatureSchemaSql,
   listOpenClawStateFeatureSchemas,
@@ -41,6 +42,7 @@ import {
 import {
   getOpenClawStateRuntimeSchema,
   getOpenClawStatePredecessorSchema,
+  withLegacyWorkshopActivity,
 } from "../../src/state/openclaw-state-schema-runtime.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../src/state/openclaw-state-schema.js";
 
@@ -59,11 +61,15 @@ export function listSqliteSchemaInputs(): SqliteSchemaInput[] {
     inputs.push({ id, store, sql });
   };
   add("state", "state", OPENCLAW_STATE_SCHEMA_SQL);
-  for (const version of [40, 39, 38, 37, 36, 35, 31, 27, 26]) {
+  for (const version of [42, 41, 40, 39, 38, 37, 36, 35, 31, 27, 26]) {
     add(`state-before-v${version}`, "state", getOpenClawStatePredecessorSchema(version - 1));
   }
   // An already-loaded updater can read replacement catalog assets after a build swap.
-  const beforeProvisionSource = withLegacyWorkerProvisionSource(OPENCLAW_STATE_SCHEMA_SQL);
+  const beforeWorkshopActivity = withLegacyWorkshopActivity(getOpenClawStatePredecessorSchema(42));
+  add("state-before-workshop-activity", "state", beforeWorkshopActivity);
+  const beforeWorkerLoss = getOpenClawStatePredecessorSchema(41);
+  const beforeApprovalProfile = withLegacyApprovalProfile(beforeWorkerLoss);
+  const beforeProvisionSource = withLegacyWorkerProvisionSource(beforeApprovalProfile);
   add("state-before-provision-source", "state", beforeProvisionSource);
   const beforeBootstrap = withLegacyWorkspaceBootstrapDeferred(beforeProvisionSource);
   add("state-before-bootstrap-deferred", "state", beforeBootstrap);
@@ -150,6 +156,9 @@ export function listSqliteSchemaInputs(): SqliteSchemaInput[] {
         }),
       );
       for (const [era, schema] of [
+        ["before-workshop-activity", beforeWorkshopActivity],
+        ["before-v42", beforeWorkerLoss],
+        ["before-v41", beforeApprovalProfile],
         ["before-provision-source", beforeProvisionSource],
         ["before-bootstrap-deferred", beforeBootstrap],
         ["before-v40", getOpenClawStatePredecessorSchema(39)],

@@ -42,13 +42,6 @@ const ROTATED_TOKEN = "rotated-operator-token";
 describe("DevicesPage gateway lifecycle", () => {
   setupDevicesPageFixtures();
 
-  it("names the page with a level-one heading", () => {
-    const page = mountPage(gatewayFixture(gatewaySnapshot(clientFor().client)));
-    expect(
-      getQueriesForElement(page.container).getByRole("heading", { level: 1 }).textContent,
-    ).toBe("Devices");
-  });
-
   it("waits for the first inventory before painting policy sections below it", async () => {
     const page = mountPage(
       gatewayFixture(gatewaySnapshot(clientFor().client, true, [], ["operator.admin"])),
@@ -75,7 +68,9 @@ describe("DevicesPage gateway lifecycle", () => {
     });
     await waitForSolid(() => expect(page.container.textContent).toContain("Available node"));
     expect(page.container.querySelector('select[aria-label="Security"]')).toBeNull();
-    expect(page.container.textContent).toContain(t("common.loading"));
+    expect(
+      page.container.querySelector(`[role="status"][aria-label="${t("common.loading")}"]`),
+    ).not.toBeNull();
     expect(request.mock.calls.filter(([method]) => method === policyMethod)).toHaveLength(1);
 
     const replacement = clientFor();

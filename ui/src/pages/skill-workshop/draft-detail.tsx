@@ -192,7 +192,11 @@ export function DraftContent(props: { reads: WorkshopReads }) {
                 <div class="sw-well">
                   <MarkdownHtml
                     class="sw-markdown chat-text"
-                    markdown={splitFrontmatter(viewer().result.content).body}
+                    markdown={
+                      viewer().target.filePath === "SKILL.md"
+                        ? splitFrontmatter(viewer().result.content).body
+                        : viewer().result.content
+                    }
                     options={{ mode: "document" }}
                   />
                 </div>

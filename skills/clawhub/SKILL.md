@@ -46,7 +46,8 @@ openclaw skills install my-skill --version 1.2.3
 
 ## Discover and add Templates
 
-Use **Pages → Templates** or fetch the public ClawHub registry:
+Use **Customize → Templates** (find **Customize** in **Pages** if unpinned),
+or fetch the public ClawHub registry:
 
 ```text
 GET https://clawhub.ai/api/v1/packages?family=template&limit=100
@@ -60,16 +61,18 @@ categories and representative entries with package names and short descriptions;
 distinguish category filters from categories with published entries. Discovery
 is read-only; the `plugins` tool searches plugins, not Templates.
 
-When asked to install a Template, select its published release in **Pages →
-Templates → Add**. The page requires **Settings → Labs → Templates**; public
-registry reads do not. Explain that prerequisite if disabled. Review workspace
+When asked to install a Template, select its published release in **Customize →
+Templates → Add**. Templates are available by default, without a Labs switch.
+An explicit `gateway.controlUi.experimental.templates: false` remains an advanced
+opt-out; ask the administrator to enable it if disabled. Public registry reads
+are independent of that setting. Review workspace
 files, skills/plugins, MCP servers, and automations, and complete required
 trust/capability consent. Verify the new agent and report any remaining setup.
 
 For a reviewed local package, use `openclaw templates inspect <path>`, then
 `openclaw templates add <path> --dry-run --json` to preview and
 `openclaw templates add <path>` to apply. The CLI accepts a local package directory
-or `CLAW.md` path, not ClawHub package coordinates. See
+or `CLAW.md` path, or a ClawHub Template reference (`@publisher/slug`). See
 [Template review and Add details](https://docs.openclaw.ai/cli/templates).
 
 ## Manage installed skills

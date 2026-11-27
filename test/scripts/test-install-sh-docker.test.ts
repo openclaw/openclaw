@@ -815,10 +815,12 @@ fs.appendFileSync(process.env.CONTAINER_RECEIPTS, JSON.stringify({ args, env: Ob
       "unset HOME; source scripts/docker/install-sh-common/version-parse.sh; resolve_npm_config_path_value '~/.npmrc'",
     );
     expect(noHomeResult.status, noHomeResult.stderr).toBe(0);
+    const noHomeEnv = { ...process.env };
+    delete noHomeEnv.HOME;
     const nativeHomeResult = runCommand(
       process.execPath,
-      ["-e", "delete process.env.HOME; process.stdout.write(require('node:os').homedir())"],
-      { env: process.env },
+      ["-e", "process.stdout.write(require('node:os').homedir())"],
+      { env: noHomeEnv },
     );
     expect(nativeHomeResult.status, nativeHomeResult.stderr).toBe(0);
     expect(noHomeResult.stdout).toBe(join(nativeHomeResult.stdout, ".npmrc"));

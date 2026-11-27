@@ -36,6 +36,11 @@ review, CI, security approval, release review, or the native maintainer workflow
 Maintainers may request missing review or validation evidence before reviewing
 a contributor PR.
 
+Every route reviews against the repository's `AGENTS.md` rules. Report as P1
+any change that checks authority again after a turn or request starts, such as
+an `assertCurrent()`-style re-check or a tool-time owner check. The rule and its
+exceptions are "Decide authority once" in the root `AGENTS.md`.
+
 ### Set up a local reviewer
 
 - **Autoreview:** follow the public [shared setup](https://github.com/openclaw/agent-skills#shared-autoreview)

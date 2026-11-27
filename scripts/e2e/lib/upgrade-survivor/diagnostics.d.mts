@@ -19,14 +19,3 @@ export function publishDiagnostics(
   redact: Redactor,
   outcome?: string,
 ): Omit<FailureCoordinates, "outcome"> | undefined;
-export function publishInstalledRecoveryDiagnostics(
-  artifactRoot: string,
-  destination: string,
-  redact: Redactor,
-  observation: {
-    cut: string;
-    exitStatus: number;
-    timedOut: boolean;
-    packageSha256: string;
-  },
-): Omit<FailureCoordinates, "outcome"> | undefined;

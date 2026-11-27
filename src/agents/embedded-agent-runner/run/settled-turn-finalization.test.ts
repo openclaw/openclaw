@@ -128,6 +128,11 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       usage: { input: 100, cost: { total: 0, totalOrigin: "provider-billed" } },
       expected: 0,
     },
+    {
+      name: "recorded paid",
+      usage: { input: 100, cost: { total: 0.007, totalOrigin: "provider-billed" } },
+      expected: 0.007,
+    },
     { name: "final unknown", usage: { input: 100, costStatus: "unavailable" } },
   ])("settles $name before optional pricing", async ({ usage, expected }) => {
     using source = vi.spyOn(modelsConfig, "captureModelsJsonCostSource");
@@ -137,6 +142,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     mergeUsageIntoAccumulator(input.terminalBase.usageAccumulator, usage);
     const result = await finalize(input);
     expect(result.prepared.agentMeta.costUsd).toBe(expected);
+    expect(result.prepared.agentMeta.usage?.cost).toEqual(usage.cost);
     expect(source).not.toHaveBeenCalled();
     expect(backendMocks.finalize).not.toHaveBeenCalled();
   });

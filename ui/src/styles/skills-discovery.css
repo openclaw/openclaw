@@ -53,6 +53,16 @@
   color: color-mix(in srgb, var(--text) 42%, transparent);
 }
 
+/* The list stays mounted behind a skill page. Its wrapper only hides it; the page keeps
+   laying out the list's sections, so their spacing is the page's own. */
+.skills-list-surface {
+  display: contents;
+}
+
+.skills-list-surface[hidden] {
+  display: none;
+}
+
 /* One shrinkable track: long names truncate inside their rows instead of widening the page. */
 .skill-discovery .plugin-catalog-results__body {
   grid-template-columns: minmax(0, 1fr);
@@ -183,6 +193,10 @@
 }
 
 @media (max-width: 640px) {
+  .skill-discovery .plugin-catalog-chip {
+    flex-shrink: 0;
+  }
+
   .plugin-catalog-results--rows .plugin-catalog-row__main > .skill-tile {
     margin-top: 1px;
   }

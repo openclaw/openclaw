@@ -126,6 +126,12 @@ function commandFixture(groups: string[] = ["Team"]) {
   return {
     config,
     commands,
+    listWithLinks: async () =>
+      JSON.parse(
+        await commands
+          .find((command) => command.command === "openclaw.sessions.catalog.list.v1")!
+          .handle(JSON.stringify({ includeOriginalPath: true })),
+      ) as { sessions: Array<SessionCatalogSession & { originalPath?: string }> },
     list: async (params: Record<string, unknown> = {}) =>
       JSON.parse(await list.handle(JSON.stringify(params))) as SessionPage,
     read: async (threadId: string, params: Record<string, unknown> = {}) =>
@@ -532,9 +538,14 @@ describe("session-share receiver identity integration", () => {
         invoke.mockImplementation(async ({ command }) =>
           command === commands[0] ? { sessions: [human, agent, unmatched] } : transcript,
         );
-        const namespacedHuman = remoteHuman(human.threadId, "4242", hostId);
-        const namespacedUnmatched = remoteHuman(unmatched.threadId, "9999", hostId);
-        expect(await refresh()).toEqual([namespacedHuman, agent, namespacedUnmatched]);
+        const exportPolicy = { origin: "federated", automatic: false };
+        const namespacedHuman = { ...remoteHuman(human.threadId, "4242", hostId), exportPolicy };
+        const namespacedUnmatched = {
+          ...remoteHuman(unmatched.threadId, "9999", hostId),
+          exportPolicy,
+        };
+        const namespacedAgent = { ...agent, exportPolicy };
+        expect(await refresh()).toEqual([namespacedHuman, namespacedAgent, namespacedUnmatched]);
         expect(
           (await catalog.read({ hostId, threadId: nativeSession.threadId })).items[0]?.sender
             ?.identity,
@@ -548,7 +559,9 @@ describe("session-share receiver identity integration", () => {
           config = nodeConfig({ [nodeId]: identityConfig });
           const rows = await refresh();
           expect(rows[linksHumans ? 0 : 1]?.createdActor).toMatchObject(linkedActor(profile.id));
-          expect(rows[linksHumans ? 1 : 0]).toEqual(linksHumans ? agent : namespacedHuman);
+          expect(rows[linksHumans ? 1 : 0]).toEqual(
+            linksHumans ? namespacedAgent : namespacedHuman,
+          );
           expect(rows[2]).toEqual(namespacedUnmatched);
         }
         const page = await catalog.read({ hostId, threadId: nativeSession.threadId });
@@ -576,3 +589,21 @@ describe("session-share receiver identity integration", () => {
     });
   });
 });
+
+it("adds source paths only to the optional command while keeping selection and read-only authority", () =>
+  withCommands(async ({ list, listWithLinks }) => {
+    await writeSession("shared");
+    await writeSession("private", { category: "Private" });
+    const plain = await list();
+    const linked = await listWithLinks();
+    expect(plain.sessions).toHaveLength(1);
+    expect(plain.sessions[0]).not.toHaveProperty("originalPath");
+    expect(linked.sessions).toHaveLength(1);
+    expect(linked.sessions[0]).toMatchObject({
+      threadId: "agent:main:shared",
+      originalPath: "/chat/main/shared",
+      canContinue: false,
+      canArchive: false,
+      canOpenTerminal: false,
+    });
+  }));

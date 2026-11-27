@@ -8,6 +8,7 @@ import type {
   loadMemoryEmbeddingCache,
   MemoryEmbeddingCacheEvictionPreference,
 } from "./manager-embedding-cache.js";
+import type { MemoryEmbeddingRefusal } from "./manager-embedding-refusal.js";
 import type { MemoryRebuildEmbeddingQuery } from "./manager-rebuild-embeddings.js";
 import type { MemoryIndexMeta, MemoryIndexProviderIdentity } from "./manager-reindex-state.js";
 import type { MemoryDatabaseFacts } from "./manager-retrieval-read.js";
@@ -86,6 +87,10 @@ export type MemoryPublicationOperations = {
     output: MemoryPublicationResult<boolean>;
   };
   "index.writeMetadata": { input: MemoryIndexMeta; output: MemoryPublicationResult<void> };
+  "index.writeEmbeddingRefusal": {
+    input: MemoryEmbeddingRefusal | null;
+    output: MemoryPublicationResult<void>;
+  };
   "schema.admit": {
     input: Pick<
       Parameters<typeof ensureMemoryIndexSchema>[0],
@@ -160,7 +165,10 @@ export type MemoryPublicationOperations = {
   };
   "stage.discard": { input: undefined; output: void };
   "source.replace": {
-    input: { state: MemoryPublicationState };
+    input: {
+      state: MemoryPublicationState;
+      verifiedFile?: MemorySourceIndexHeader["verifiedFile"];
+    };
     output: MemoryPublicationResult<boolean>;
   };
   "source.replace.group": {

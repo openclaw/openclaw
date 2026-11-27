@@ -10,11 +10,11 @@ import {
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import type { TranscriptsSummary } from "./summary.js";
 import type {
   TranscriptSessionDescriptor,
   TranscriptSourceLocator,
   TranscriptUtterance,
+  TranscriptsSummary,
 } from "./types.js";
 
 type MeetingTranscriptsDatabase = Pick<

@@ -489,7 +489,9 @@ export function createTelegramCallbackRouter({
           const safePage = Math.max(1, Math.min(page, totalPages));
           const currentModel =
             sessionState.model ||
-            `${activeResolvedDefault.provider}/${activeResolvedDefault.model}`;
+            (activeResolvedDefault
+              ? `${activeResolvedDefault.provider}/${activeResolvedDefault.model}`
+              : undefined);
           const availability = modelData.modelMenu?.byProvider.get(provider);
           const buttons = buildModelsKeyboard({
             provider,
@@ -532,8 +534,8 @@ export function createTelegramCallbackRouter({
             agentId: sessionState.agentId,
           });
           const isDefaultSelection =
-            selection.provider === resolvedDefault.provider &&
-            selection.model === resolvedDefault.model;
+            selection.provider === resolvedDefault?.provider &&
+            selection.model === resolvedDefault?.model;
           const persistedSessionEntry = sessionState.sessionEntry;
           const sessionEntryMissing = persistedSessionEntry === undefined;
           const sessionEntry = persistedSessionEntry ?? {
@@ -560,10 +562,10 @@ export function createTelegramCallbackRouter({
               sessionEntry,
               sessionStore,
               allowCreate: sessionEntryMissing,
-              defaultProvider: resolvedDefault.provider,
-              defaultModel: resolvedDefault.model,
-              currentProvider: currentSelection.provider,
-              currentModel: currentSelection.model,
+              defaultProvider: resolvedDefault?.provider ?? selection.provider,
+              defaultModel: resolvedDefault?.model,
+              currentProvider: currentSelection?.provider,
+              currentModel: currentSelection?.model,
               modelCatalog: modelData.modelCatalog,
               canPersistStickyModelSelection: false,
               request: {

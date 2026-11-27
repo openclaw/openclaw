@@ -4,7 +4,14 @@ import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { root as fsRoot } from "../infra/fs-safe.js";
+import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
+import { createHostWorkspaceEditTool, createHostWorkspaceWriteTool } from "./agent-tools.read.js";
+import { resolvePatchFileOps } from "./apply-patch-file-ops.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
+import { prepareParticipationTestRun } from "./participation-ceiling.test-support.js";
+import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
+import { writeHostWorkspaceFile } from "./workspace-file-ops.js";
 import { git, initializeGitFixture } from "./worktrees/git-fixture.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -12,6 +19,124 @@ afterEach(() => __setFsSafeTestHooksForTest());
 
 const repository = (parent: string, name: string) =>
   initializeGitFixture(parent, name, "seed.txt", "fixture\n");
+
+it("contains participant file tools to the invited worktree and read-only session attachments", async () => {
+  const fixture = await fs.realpath(tempDirs.make("openclaw-participant-worktrees-"));
+  const repo = await repository(fixture, "repo");
+  const invited = path.join(fixture, "invited");
+  const unrelated = path.join(fixture, "unrelated");
+  await git(repo, "worktree", "add", "--quiet", "--detach", invited);
+  await git(repo, "worktree", "add", "--quiet", "--detach", unrelated);
+  const attachmentReadRoot = path.join(fixture, "session-attachments");
+  await fs.mkdir(attachmentReadRoot);
+  const attachment = path.join(attachmentReadRoot, "seed.txt");
+  await fs.writeFile(attachment, "fixture\n");
+  const foreignAttachments = path.join(fixture, "other-session-attachments");
+  await fs.mkdir(foreignAttachments);
+  await fs.writeFile(path.join(foreignAttachments, "seed.txt"), "fixture\n");
+  const policy = structuredClone(
+    prepareCoreToolPolicy({
+      ...prepareParticipationTestRun({
+        kind: "send",
+        profileId: "guest",
+        sessionKey: "agent:main:invited",
+      }),
+      sessionPermissionPolicy: { root: invited, mode: "full" },
+    }),
+  );
+  const tools = createCoreCodingTools({
+    ...policy,
+    codingRoot: invited,
+    containmentRoot: invited,
+    attachmentReadRoot,
+    includeBaseCodingTools: true,
+    shellTools: "patch-only",
+    skillReadResources: [
+      {
+        ...createCanonicalFixtureSkill({
+          name: "outside",
+          description: "Outside the invited session",
+          filePath: path.join(foreignAttachments, "seed.txt"),
+          baseDir: foreignAttachments,
+          source: "test",
+        }),
+        readContent: "prepared outside content",
+      },
+    ],
+    execDefaults: {},
+    processDefaults: {},
+  });
+  const execute = (name: string, args: Record<string, unknown>) =>
+    tools.find((tool) => tool.name === name)!.execute(name, args);
+  for (const root of [invited, unrelated, attachmentReadRoot, foreignAttachments]) {
+    const target = path.join(root, "seed.txt");
+    for (const [name, args] of [
+      ["read", { path: target }],
+      ["ls", { path: root }],
+      ["write", { path: target, content: "changed\n" }],
+      ["edit", { path: target, edits: [{ oldText: "fixture", newText: "changed" }] }],
+      [
+        "apply_patch",
+        {
+          input: `*** Begin Patch\n*** Update File: ${target}\n@@\n-fixture\n+changed\n*** End Patch`,
+        },
+      ],
+    ] as const) {
+      await fs.writeFile(target, "fixture\n");
+      const allowed = root === invited || (root === attachmentReadRoot && name === "read");
+      if (allowed) {
+        const result = await execute(name, args);
+        if (name === "read") {
+          expect(result.content).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ text: expect.stringContaining("fixture") }),
+            ]),
+          );
+        }
+      } else {
+        await expect
+          .soft(execute(name, args), `${name} outside invited root`)
+          .rejects.toThrow(/escapes .*root/);
+      }
+      await expect
+        .soft(fs.readFile(target, "utf8"))
+        .resolves.toBe(allowed && name !== "read" && name !== "ls" ? "changed\n" : "fixture\n");
+    }
+  }
+  // Exercise effect owners without the outer path guard: they must not select the sibling.
+  const target = path.join(unrelated, "seed.txt");
+  const added = path.join(unrelated, "nested", "added.txt");
+  for (const tool of [
+    createHostWorkspaceWriteTool(invited, policy),
+    createHostWorkspaceEditTool(invited, policy),
+  ]) {
+    await expect(
+      tool.execute("effect", {
+        path: tool.name === "write" ? added : target,
+        content: "changed\n",
+        edits: [{ oldText: "fixture", newText: "changed" }],
+      }),
+    ).rejects.toThrow(/escapes .*root/);
+  }
+  await expect(
+    writeHostWorkspaceFile(
+      invited,
+      fsRoot,
+      target,
+      "changed\n",
+      undefined,
+      undefined,
+      policy.strictWorkspaceRoot,
+    ),
+  ).rejects.toThrow(/escapes .*root/);
+  const patch = await resolvePatchFileOps({ ...policy, cwd: invited });
+  await expect(patch.readFile(target)).rejects.toThrow(/boundary read/);
+  await expect(patch.writeFile(target, "changed\n")).rejects.toThrow(/escapes .*root/);
+  await expect(patch.createFileExclusive(added, "changed\n")).rejects.toThrow(/escapes .*root/);
+  await expect(patch.remove(target)).rejects.toThrow(/escapes .*root/);
+  await expect(fs.readFile(target, "utf8")).resolves.toBe("fixture\n");
+  expect((await fs.readdir(unrelated)).toSorted()).toEqual([".git", "seed.txt"]);
+});
 
 function fileTools(root: string, attachmentReadRoot?: string) {
   const tools = createCoreCodingTools({

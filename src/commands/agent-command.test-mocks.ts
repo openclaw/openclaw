@@ -72,7 +72,7 @@ vi.mock("../agents/model-selection.js", async (importOriginal) => {
     normalizeStoredOverrideModel,
     resolvePersistedSelectedModelRef,
   } = await importOriginal<typeof import("../agents/model-selection.js")>();
-  const { normalizeModelRef } = await import("../agents/model-ref-shared.js");
+  const { normalizeModelRef } = await import("../agents/model-selection-normalize.js");
   const { parseModelRef: parseModelRefImpl } =
     await import("../agents/model-selection-normalize.js");
   type ConfigWithModels = {

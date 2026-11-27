@@ -428,7 +428,6 @@ These are intentionally guarded by the `ci-workflow-guards`,
   Frozen targets retain their original separate rows.
 - CI matrix caps: fast/check lanes at 12, Node test shards at 130 only for
   same-repository PR first attempts on a non-frozen Blacksmith or hybrid Node plan, and otherwise 96. When selected outside ordinary PRs, Windows stays at 5.
-  Android uses 4 for canonical Blacksmith push/same-repository PR first attempts, otherwise 2.
   Hosted plans, RunsOn, retries, main, and all manual/qualification dispatches
   retain 96. This removes a second admission wave for 97–130-row PRs without
   adding jobs or planned vCPU-minutes. Keep the 130/70 final PR/main row caps and 90 native/96 hosted compact
@@ -478,11 +477,9 @@ These are intentionally guarded by the `ci-workflow-guards`,
   builds retain full debugger metadata.
 - Android regular CI uses four test/lint rows, including benchmark compilation
   in the Kotlin-lint row when benchmark/build/dependency inputs change or the
-  changed-path manifest is unusable. Full manual validation retains all six
-  rows and memory-bounded phone/Wear/benchmark builds without duplicate lint.
-  Canonical Blacksmith push/same-repository PR first attempts overlap four rows.
-  The GitHub override, retries, manual dispatches, schedules, and noncanonical
-  repositories retain two; frozen task contracts and npm native deferral are unchanged.
+  changed-path manifest is unusable. The matrix admits up to four jobs
+  concurrently regardless of runner backend, trigger, or attempt. Frozen task
+  contracts and npm native deferral are unchanged.
 - iOS admitted main pushes and PR `release_gate` CI run one required Debug build
   and Swift lint smoke; hourly main-tier CI retains the tests phase. Ordinary
   PRs defer both. Ordinary full-scope manual validation retains Release

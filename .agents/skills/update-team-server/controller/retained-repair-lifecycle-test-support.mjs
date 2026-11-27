@@ -73,7 +73,7 @@ export function refuse(f, action, record, extra={}, pattern) {
 export function lease() {return {status:"ready",suspensionId:randomUUID(),expiresAtMs:Date.now()+120000,activeCount:0,blockers:[],writeCustody:[]};}
 export function toBound(f) {return lifecycle(f,"bind",prepared(f),{instance:"fixture-original-instance"});}
 export function status(response) {return {status:"ready",expiresAtMs:response.expiresAtMs,writeCustody:[]};}
-export function toStopIntent(f) {let record=toBound(f);f.response=lease();record=lifecycle(f,"suspend",record,{response:f.response});return lifecycle(f,"stop-intent",record,{response:status(f.response),suspensionId:f.response.suspensionId});}
+function toStopIntent(f) {let record=toBound(f);f.response=lease();record=lifecycle(f,"suspend",record,{response:f.response});return lifecycle(f,"stop-intent",record,{response:status(f.response),suspensionId:f.response.suspensionId});}
 // Execute the unchanged production bridge and repair_step bodies, not a JSON facsimile.
 // Only transport/native process observations come from this explicitly synthetic fixture.
 export function shellSuspensionStep(f, action, record, prepare, response=prepare, suspensionId=prepare.suspensionId) {
@@ -91,7 +91,7 @@ export function shellSuspensionStep(f, action, record, prepare, response=prepare
   return spawnSync("bash",["-c",'exec 9<>"$OPENCLAW_TEAM_LOCK_FILE"; flock -n 9 || exit 75; exec bash -c "$1"',"repair-shell-bridge",script],
     {env:f.env,encoding:"utf8",timeout:30000});
 }
-export function toStopped(f) {const record=toStopIntent(f);f.stop();return lifecycle(f,"stopped",record);}
+function toStopped(f) {const record=toStopIntent(f);f.stop();return lifecycle(f,"stopped",record);}
 export function toStartIntent(f) {let record=toStopped(f);record=lifecycle(f,"select-intent",record);record=lifecycle(f,"select",record);return lifecycle(f,"start-intent",record,{verificationSeconds:600});}
 function nativeStub() {
   const fs=require("node:fs"),path=require("node:path"),file=process.env.REPAIR_TEST_NATIVE,s=JSON.parse(fs.readFileSync(file,"utf8")),a=process.argv.slice(2);

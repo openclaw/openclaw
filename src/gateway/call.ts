@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-client/src/readiness.js";
 import { resolvePreauthHandshakeTimeoutMs } from "../../packages/gateway-client/src/timeouts.js";
 import {
@@ -12,7 +10,6 @@ import {
   ConnectErrorDetailCodes,
   readConnectErrorDetailCode,
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
-import { readMissingScopeErrorDetails } from "../../packages/gateway-protocol/src/gateway-error-details.js";
 import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
@@ -37,6 +34,7 @@ import {
   GatewayStoredDeviceAuthUnavailableError,
   loadStoredOperatorDeviceAuthToken,
   resolveGatewayCallDeviceAuth,
+  withEdgeAuthPairingHint,
 } from "./call-device-auth.js";
 import type {
   CallGatewayBaseOptions,
@@ -45,6 +43,7 @@ import type {
   GatewayRequestFunction,
 } from "./call-options.js";
 import { ensureGatewaySupportsRequiredFeatures } from "./call-required-features.js";
+import { fitScopesToStoredDeviceGrant, resolveCliScopeRetry } from "./call-scopes.js";
 import { isReadOnlyGatewayCliCall } from "./cli-read-policy.js";
 import {
   ensureExplicitGatewayAuth,
@@ -64,6 +63,7 @@ import {
   projectGatewayUrlForDiagnostics,
   type GatewayConnectionDetails,
 } from "./connection-details.js";
+import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 import {
   isGatewaySecretRefUnavailableError,
   resolveExplicitGatewayAuth,
@@ -74,7 +74,6 @@ import {
   gatewayEdgeAuthValueForTarget,
   normalizeEdgeAuthHeadersConfig,
   resolveEdgeAuthHeaders,
-  type EdgeAuthHeadersConfig,
 } from "./edge-auth.js";
 import {
   canSkipGatewayConfigLoad,
@@ -82,7 +81,7 @@ import {
   resolveGatewayConnectionAuth,
 } from "./explicit-connection-policy.js";
 import { assertGatewayCliMessageContext } from "./operator-cli-message-input.js";
-import { ADMIN_SCOPE, WRITE_SCOPE, type OperatorScope } from "./operator-scopes.js";
+import { ADMIN_SCOPE, type OperatorScope } from "./operator-scopes.js";
 import {
   type GatewayTransportErrorKind,
   createGatewayCloseTransportError,
@@ -400,10 +399,9 @@ async function resolveGatewayCallContext(
   };
 }
 
-/** Whether the caller selected the configured local Gateway without a URL override. */
-export async function isImplicitLocalGatewayTarget(
+async function resolveImplicitLocalGatewayConfig(
   opts: GatewayTargetClassificationOptions,
-): Promise<boolean> {
+): Promise<OpenClawConfig | undefined> {
   const urlOverride = resolveGatewayUrlOverride({
     gatewayUrl: opts.url,
     env: process.env,
@@ -411,10 +409,32 @@ export async function isImplicitLocalGatewayTarget(
     localPortOverride: opts.localPortOverride,
   });
   if (urlOverride.url) {
-    return false;
+    return undefined;
   }
   const config = opts.config ?? (await loadGatewayConfig());
-  return opts.localPortOverride !== undefined || config.gateway?.mode !== "remote";
+  return opts.localPortOverride !== undefined || config.gateway?.mode !== "remote"
+    ? config
+    : undefined;
+}
+
+/** Whether the caller selected the configured local Gateway without a URL override. */
+export async function isImplicitLocalGatewayTarget(
+  opts: GatewayTargetClassificationOptions,
+): Promise<boolean> {
+  return (await resolveImplicitLocalGatewayConfig(opts)) !== undefined;
+}
+
+/** Bind one local operation to its target and shared auth before a Gateway restart. */
+export async function prepareLocalGatewayRestartConnection() {
+  const config = await resolveImplicitLocalGatewayConfig({});
+  // Reading config can populate OPENCLAW_GATEWAY_URL in the command environment.
+  if (!config || resolveGatewayUrlOverride({}).url) {
+    return undefined;
+  }
+  const localPortOverride = resolveGatewayPort(config);
+  const auth = await resolveGatewayCredentialsWithSecretInputs({ config });
+  // Keep local TLS and auth-mode inference without rereading config or shared auth on reconnect.
+  return { config, localPortOverride, ...auth, skipImplicitAuth: true };
 }
 
 function gatewayCallBootstrapOptions(
@@ -458,7 +478,7 @@ function ensureRemoteModeUrlConfigured(params: {
   );
 }
 
-export { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
+export { resolveGatewayCredentialsWithSecretInputs };
 
 function createGatewayRequestAbortError(method: string): Error {
   return createAbortError(`gateway request aborted for ${method}`);
@@ -483,7 +503,7 @@ function isAllowlistedGatewayConnectRequestError(err: Error): boolean {
 async function callGatewayWithScopes<T = Record<string, unknown>>(
   input: CallGatewayBaseOptions,
   scopes: OperatorScope[] | undefined,
-  localCliAbort = false,
+  { localCliAbort = false, explicitScopes = false } = {},
 ): Promise<T> {
   const context = await resolveGatewayCallContext(input);
   const { timeoutMs, startupTimeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(
@@ -560,12 +580,11 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     }
   }
   const tlsFingerprint = bootstrap.tlsFingerprint;
-  const edgeAuthConfig: EdgeAuthHeadersConfig | undefined = normalizeEdgeAuthHeadersConfig(
-    gatewayEdgeAuthValueForTarget({ config: context.config, targetUrl: url }),
-  );
   const edgeAuthHeaders = await resolveEdgeAuthHeaders({
     config: context.config,
-    value: edgeAuthConfig,
+    value: normalizeEdgeAuthHeadersConfig(
+      gatewayEdgeAuthValueForTarget({ config: context.config, targetUrl: url }),
+    ),
     targetUrl: url,
     env: process.env,
   });
@@ -593,8 +612,8 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     (resolvedAuth.mode === "token" || resolvedAuth.mode === "password") &&
     !token &&
     !password &&
-    !opts.approvalRuntimeToken &&
-    !resolvedAuth.allowTailscale
+    // gateway.remote.edgeAuth authenticates at the proxy; first connects then pair.
+    !(opts.approvalRuntimeToken || resolvedAuth.allowTailscale || edgeAuthHeaders)
   ) {
     const availableAuth =
       storedAuth === undefined
@@ -611,6 +630,18 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
       });
     }
   }
+  const requestScopes = await fitScopesToStoredDeviceGrant({
+    opts,
+    scopes,
+    keepRequest: explicitScopes || useStoredDeviceAuth || Boolean(token || password),
+    loadGrant: async () =>
+      storedAuth ??
+      (await loadStoredOperatorDeviceAuthToken(
+        deviceIdentity,
+        deviceAuthScope,
+        opts.sharedStateMode,
+      )),
+  });
   // A one-shot shared-auth CLI connection cannot match an earlier run's owner.
   // Request admin authority for cancellation; the Gateway still validates it.
   const effectiveScopes: OperatorScope[] | undefined =
@@ -620,7 +651,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
         ? undefined
         : localCliAbort && omitDeviceIdentity && !deviceIdentity
           ? [ADMIN_SCOPE]
-          : scopes;
+          : requestScopes;
   const surfaceGatewayClientRequestErrors =
     useStoredDeviceAuth ||
     opts.requireLocalBackendSharedAuth === true ||
@@ -760,7 +791,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
             if (opts.onResponse) {
               const onResponse = opts.onResponse;
               responseWork = Promise.resolve().then(() =>
-                onResponse(client.request.bind(client), startAbort.signal),
+                onResponse(client.request.bind(client), startAbort.signal, result),
               );
               await responseWork;
             }
@@ -769,7 +800,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
             if (settled || dispatchGeneration !== connectionGeneration) {
               return;
             }
-            stop(err as Error);
+            stop(withEdgeAuthPairingHint(err as Error, edgeAuthHeaders, deviceIdentity, opts.url));
           }
         })();
       },
@@ -894,27 +925,6 @@ export async function buildGatewayProbeConnectionDetails(
   };
 }
 
-function shouldEscalateSessionCreateCwdScope(params: {
-  opts: CallGatewayBaseOptions;
-  scopes: readonly OperatorScope[];
-  error: unknown;
-}): boolean {
-  if (
-    params.opts.method !== "sessions.create" ||
-    !isRecord(params.opts.params) ||
-    !normalizeOptionalString(params.opts.params.cwd) ||
-    params.scopes.length !== 1 ||
-    params.scopes[0] !== WRITE_SCOPE
-  ) {
-    return false;
-  }
-  const errorRecord = isRecord(params.error) ? params.error : undefined;
-  const missingScope = readMissingScopeErrorDetails(errorRecord?.details);
-  return (
-    missingScope?.missingScope === ADMIN_SCOPE && missingScope.requiredScopes.includes(ADMIN_SCOPE)
-  );
-}
-
 async function callGatewayWithScopeEscalation<T>(
   opts: CallGatewayBaseOptions,
   scopes: OperatorScope[],
@@ -922,12 +932,11 @@ async function callGatewayWithScopeEscalation<T>(
   try {
     return await callGatewayWithScopes<T>(opts, scopes);
   } catch (error) {
-    // sessions.create checks filesystem-backed cwd containment before mutation.
-    // Retry only that structured, pre-mutation escalation on an admin connection.
-    if (!shouldEscalateSessionCreateCwdScope({ opts, scopes, error })) {
+    const retry = await resolveCliScopeRetry({ opts, scopes, error });
+    if (!retry) {
       throw error;
     }
-    return await callGatewayWithScopes<T>(opts, [ADMIN_SCOPE]);
+    return await callGatewayWithScopes<T>(retry.opts, retry.scopes);
   }
 }
 
@@ -947,7 +956,7 @@ export async function callGatewayCli<T = Record<string, unknown>>(
       : undefined;
   const opts = signal ? { ...input, signal } : input;
   if (Array.isArray(input.scopes)) {
-    return await callGatewayWithScopes(opts, input.scopes);
+    return await callGatewayWithScopes(opts, input.scopes, { explicitScopes: true });
   }
   const {
     CLI_DEFAULT_OPERATOR_SCOPES,
@@ -958,7 +967,7 @@ export async function callGatewayCli<T = Record<string, unknown>>(
     ? resolveLeastPrivilegeOperatorScopesForMethod(input.method, input.params)
     : CLI_DEFAULT_OPERATOR_SCOPES;
   if (input.method === "chat.abort" || input.method === "sessions.abort") {
-    return await callGatewayWithScopes(opts, scopes, true);
+    return await callGatewayWithScopes(opts, scopes, { localCliAbort: true });
   }
   return await callGatewayWithScopeEscalation(opts, scopes);
 }
@@ -981,7 +990,7 @@ export async function callGateway<T = Record<string, unknown>>(
   }
   const input = { ...opts, mode: callerMode, clientName: callerName };
   return Array.isArray(opts.scopes)
-    ? await callGatewayWithScopes(input, opts.scopes)
+    ? await callGatewayWithScopes(input, opts.scopes, { explicitScopes: true })
     : await callGatewayLeastPrivilege(input);
 }
 

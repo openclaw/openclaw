@@ -140,8 +140,11 @@ export class DraftRepositoryStateOwner {
 
   get currentCheckoutUnavailable(): "checking" | "unavailable" | "worktree" | undefined {
     const snapshot = this.read();
-    if (!snapshot.selectedProject || snapshot.remotePlacement) {
+    if (snapshot.remotePlacement) {
       return undefined;
+    }
+    if (!snapshot.selectedProject) {
+      return this.requiresWorktree ? "worktree" : undefined;
     }
     const options = this.checkoutOptions;
     if (!this.matchesProjectCheckout() || !options || options === "loading") {
@@ -186,8 +189,16 @@ export class DraftRepositoryStateOwner {
     }
   }
 
+  private get requiresWorktree(): boolean {
+    return (
+      this.repositoryValue.kind === "git" &&
+      this.repositoryValue.requiresWorktree === true &&
+      this.matchesCurrentRepo()
+    );
+  }
+
   get worktree(): boolean {
-    return this.worktreeValue;
+    return this.worktreeValue || this.requiresWorktree;
   }
 
   get preferenceWorktree(): boolean {
@@ -298,7 +309,7 @@ export class DraftRepositoryStateOwner {
 
   select(value: boolean): boolean {
     if (
-      this.worktreeValue === value ||
+      this.worktree === value ||
       this.read().remotePlacement ||
       (value ? !this.available() : Boolean(this.currentCheckoutUnavailable))
     ) {

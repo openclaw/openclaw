@@ -1,3 +1,4 @@
+import { serialize } from "node:v8";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -363,12 +364,16 @@ const readers: Readers & ThisType<ReaderContext> = {
       !input.limits || streamSelection ? receiveChunk : undefined,
     );
   },
-  async readPreparedCompaction(input, signal) {
+  async readPreparedCompaction(input, signal, options) {
     return await this.runRequest(
       () => ({ kind: "compaction-preparation", ...input }),
-      JSON.stringify(input).length * 2,
+      // Plan requests can carry a whole window of preflight facts: charge the structured clone
+      // that crosses the worker boundary, not a UTF-16 JSON string as large as the window.
+      serialize(input).byteLength,
       (value) => value,
       signal,
+      undefined,
+      options,
     );
   },
   readMaintenance: reader(
@@ -526,18 +531,33 @@ function sessionDiscoveryConfig({ agents, acp, session }: OpenClawConfig) {
 export function prepareSessionStoreTargetDiscovery(request: SessionStoreTargetPreparationRequest) {
   const prepared =
     "config" in request ? { ...request, config: sessionDiscoveryConfig(request.config) } : request;
-  return {
-    request: prepared,
-    inputBytes:
-      "inventory" in prepared
-        ? measureSessionStoreTargetInventoryInputBytes(prepared)
-        : "observePaths" in prepared && prepared.observePaths.inventory
-          ? measureSessionStoreTargetInventoryInputBytes({
-              ...prepared,
-              paths: prepared.observePaths.inventory.paths,
-            })
-          : JSON.stringify(prepared).length * 2,
-  };
+  if ("inventory" in prepared) {
+    return {
+      request: prepared,
+      inputBytes: measureSessionStoreTargetInventoryInputBytes(prepared),
+    };
+  }
+  if ("observePaths" in prepared && prepared.observePaths.inventory) {
+    const { inventory } = prepared.observePaths;
+    // Observation returns physical facts only. The resolved state directory is enough
+    // to recognize the incognito sentinel; keep the original pending-byte charge.
+    return {
+      request: {
+        observePaths: {
+          ...prepared.observePaths,
+          inventory: {
+            ...inventory,
+            env: { OPENCLAW_STATE_DIR: inventory.env.OPENCLAW_STATE_DIR },
+          },
+        },
+      },
+      inputBytes: measureSessionStoreTargetInventoryInputBytes({
+        ...prepared,
+        paths: inventory.paths,
+      }),
+    };
+  }
+  return { request: prepared, inputBytes: JSON.stringify(prepared).length * 2 };
 }
 
 export function createSessionStoreTargetReaders(

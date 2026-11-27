@@ -256,7 +256,12 @@ describe("handleBashChatCommand", () => {
     createExecToolMock.mockReturnValue({
       execute: vi.fn().mockResolvedValue({
         content: [],
-        details: { status: "completed", exitCode: 0, aggregated: "done" },
+        details: {
+          status: "completed",
+          exitCode: 0,
+          aggregated: "done",
+          warningText: "pid 7 keeps running",
+        },
       }),
     });
     const params = buildParams("/bash echo done");
@@ -271,6 +276,8 @@ describe("handleBashChatCommand", () => {
     });
 
     expect(result.text).toContain("Exit: code 0");
+    // The reply shows the output and what OpenClaw reported about the run.
+    expect(result.text).toContain("pid 7 keeps running\n\ndone");
     expect(createExecToolMock).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "target", sessionKey: "global" }),
     );

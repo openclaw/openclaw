@@ -83,7 +83,7 @@ export function createPlacementSessionToolOperationKernel(runtime: {
   };
   const exactWorkerClaim = (claim: WorkerSessionTurnClaim): void => {
     if (!currentWorkerClaim(claim)) {
-      throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
+      throw new Error(`Session ${claim.sessionId} worker turn ended. Start a new turn.`);
     }
   };
   const hasToolAuthority = (claim: WorkerSessionTurnClaim, toolName: string) => {
@@ -170,7 +170,7 @@ export function createPlacementSessionToolOperationKernel(runtime: {
     clear(claim: WorkerSessionTurnClaim): boolean {
       const current = getRequired(db, required(claim.sessionId, "session id"));
       if (!isCurrentPlacementTurnClaim(current, claim)) {
-        throw new Error(`Session ${claim.sessionId} turn authority changed`);
+        throw new Error(`Session ${claim.sessionId} turn ended. Start a new turn.`);
       }
       if (executeSqliteQuerySync(db, runningOperations(db, claim).limit(1)).rows.length) {
         return false;

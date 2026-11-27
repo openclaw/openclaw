@@ -13,7 +13,6 @@ import {
   clearArtifactDownloads,
   createManagedArtifactDownload,
 } from "./artifact-download-grants.js";
-import { bindHttpResponseAuthority } from "./http-request-authority.js";
 import {
   createFixture,
   prepareManagedSessionStore,
@@ -84,9 +83,7 @@ describe("managed thumbnail conditional HTTP", () => {
       vi.clearAllMocks();
       clients.clear();
       mocks.config.mockReturnValue({ session: { store: path.join(prepared, "sessions.sqlite") } });
-      mocks.authorize.mockImplementation(async ({ res }) =>
-        bindHttpResponseAuthority({ authMethod: "token" }, res, () => true),
-      );
+      mocks.authorize.mockResolvedValue({ authMethod: "token" });
       mocks.scopes.mockReturnValue(["operator.read"]);
       mocks.owner.mockReturnValue(true);
     },
@@ -196,9 +193,11 @@ describe("managed thumbnail conditional HTTP", () => {
     const first = await request(fixture.url);
     expect(first.headers.etag).toBeTypeOf("string");
     for (let index = 0; index < 129; index++) {
-      await resolveManagedImageThumbnail(`conditional-eviction-${index}`, async () =>
-        Buffer.alloc(1),
-      );
+      await resolveManagedImageThumbnail(`conditional-eviction-${index}`, async () => ({
+        data: Buffer.alloc(1),
+        extension: ".webp",
+        mimeType: "image/webp",
+      }));
     }
     const regenerated = await request(fixture.url);
     expect(regenerated.body).toEqual(first.body);
@@ -224,9 +223,7 @@ describe("managed thumbnail conditional HTTP", () => {
     expect(invalid.status).toBe(404);
     expect(invalid.headers.etag).toBeUndefined();
     expect(mocks.authorize).not.toHaveBeenCalled();
-    mocks.authorize.mockImplementation(async ({ res }) =>
-      bindHttpResponseAuthority({ authMethod: "device-token" }, res, () => true),
-    );
+    mocks.authorize.mockResolvedValue({ authMethod: "device-token" });
     mocks.owner.mockReturnValue(false);
     const denied = await request(fixture.url, "GET", "*");
     expect(denied.status).toBe(403);

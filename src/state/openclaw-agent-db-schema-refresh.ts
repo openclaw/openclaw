@@ -14,16 +14,14 @@ import {
 import { AgentDatabaseSchemaAdmissionChangedError } from "./agent-database-admission-error.js";
 import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import type { OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
+import { agentDatabaseIntegrityBeforeMutationSteps } from "./openclaw-agent-db-schema-admission.js";
 import {
   assertSupportedAgentSchemaVersion,
   assertCurrentAgentSchemaMetadata,
   assertCanonicalAgentPersistenceVersion,
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-read.js";
-import {
-  agentDatabaseIntegrityBeforeMutationSteps,
-  ensureOpenClawAgentSchema,
-} from "./openclaw-agent-db-schema.js";
+import { ensureOpenClawAgentSchema } from "./openclaw-agent-db-schema.js";
 import {
   adoptOpenClawAgentDatabaseSchema,
   getOpenClawAgentDatabaseValidation,
@@ -93,7 +91,7 @@ export function refreshOpenClawAgentDatabaseSchema(
     }
     return refreshed;
   } catch (error) {
-    invalidateOpenClawAgentDatabaseValidation(pathname);
+    invalidateOpenClawAgentDatabaseValidation(pathname, "a failed schema refresh");
     throw error;
   }
 }

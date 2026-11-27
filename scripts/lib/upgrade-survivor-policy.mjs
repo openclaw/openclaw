@@ -49,6 +49,7 @@ const scenarioMinimumBaselines = new Map([
 // release harness and treat the selected tree only as the package under test.
 const TRUSTED_HARNESS_OWNED_SCENARIOS = new Set([
   "git-release",
+  "release-update",
   "mobile-pairing-reconnect",
   "abandoned-update",
   "projects-doctor",
@@ -72,6 +73,7 @@ const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
   (scenario) =>
     scenario !== "abandoned-update" &&
     scenario !== "git-release" &&
+    scenario !== "release-update" &&
     scenario !== "backup-schedule" &&
     scenario !== "session-share" &&
     scenario !== "missing-configured-plugin-migration" &&

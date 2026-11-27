@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, flush } from "solid-js";
+import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
@@ -22,7 +22,6 @@ afterEach(cleanupSolid);
 const detailProps = (result = createDiscoveryDetail(), overrides: Partial<Props> = {}): Props => ({
   connected: true,
   result,
-  read: { receipt: () => null, value: () => null },
   backHref: "/plugins",
   onBack: vi.fn(),
   onRetry: vi.fn(),
@@ -85,24 +84,19 @@ it("renders complete catalog content in capability order", () => {
   expect(container.textContent).not.toMatch(/internal-dispatch|heygen-alias/);
 });
 
-it("retains catalog controls while refreshing the same accepted plugin", async () => {
-  const pending = Promise.withResolvers<void>();
-  onTestFinished(() => pending.resolve());
+it("retains catalog controls when the same accepted plugin is enriched", async () => {
   let refresh = () => {};
   const initialResult = createDiscoveryDetail(createPlugin({ installed: false }));
   const onInstall = vi.fn();
   const view = mountSolid(() => {
     const [result, setResult] = createSignal(initialResult);
-    const [receipt, setReceipt] = createSignal({ result: Promise.resolve() });
-    const value = createMemo(async () => {
-      await receipt().result;
-      return null;
-    });
     refresh = () => {
-      setResult({ ...initialResult });
-      setReceipt({ result: pending.promise });
+      setResult({
+        ...initialResult,
+        detail: { ...initialResult.detail, readme: "Updated content" },
+      });
     };
-    return <Detail {...detailProps(result(), { read: { receipt, value }, onInstall })} />;
+    return <Detail {...detailProps(result(), { onInstall })} />;
   });
   await waitForSolid(() => expect(view.container.querySelector("button.primary")).not.toBeNull());
   const button = view.container.querySelector<HTMLButtonElement>("button.primary")!;
@@ -124,8 +118,7 @@ function render(content: () => JSX.Element, container = document.createElement("
 const notice = {
   code: "deprecated-sdk-api" as const,
   severity: "info" as const,
-  message:
-    "Uses OpenClaw APIs that retire on Dec 31, 2026. It keeps working until then; check for a plugin update.",
+  message: "Uses older OpenClaw APIs. Migration date: Dec 31, 2026. Check for a plugin update.",
   removalDate: "2026-12-31",
   migrationGuideUrl: "https://docs.openclaw.ai/plugins/sdk-migration",
   apis: [],
@@ -140,7 +133,7 @@ it("localizes a mounted compatibility notice from its structured removal date", 
   const translation = vi.spyOn(i18n, "t").mockImplementation((key, params) => {
     if (i18n.getLocale() === "de") {
       if (key === "pluginsPage.compatibilityDeprecatedDated") {
-        return `Verwendet OpenClaw-APIs bis ${params?.date}.`;
+        return `Verwendet ältere OpenClaw-APIs. Migrationsdatum: ${params?.date}.`;
       }
       if (key === "pluginsPage.compatibilityDetails") {
         return "Mehr erfahren";
@@ -152,11 +145,13 @@ it("localizes a mounted compatibility notice from its structured removal date", 
   await i18n.setLocale("en");
   const { container } = renderNotice({ message: "Server-only English fallback" });
   expect(container.textContent).toBe(
-    "Uses OpenClaw APIs that retire on Dec 31, 2026. It keeps working until then; check for a plugin update. Details",
+    "Uses older OpenClaw APIs. Migration date: Dec 31, 2026. Check for a plugin update. Details",
   );
   await i18n.setLocale("de");
   flush();
-  expect(container.textContent).toBe("Verwendet OpenClaw-APIs bis 31. Dez. 2026. Mehr erfahren");
+  expect(container.textContent).toBe(
+    "Verwendet ältere OpenClaw-APIs. Migrationsdatum: 31. Dez. 2026. Mehr erfahren",
+  );
 });
 
 it("uses catalog copy when a compatibility notice has no removal date", () => {

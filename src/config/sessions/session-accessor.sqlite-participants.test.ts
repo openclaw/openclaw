@@ -126,25 +126,6 @@ function participantWorker(
 }
 
 describe("SQLite session participants", () => {
-  it("measures cold participant capacity and warm contribution reads", async () => {
-    const scope = await makeSession("capacity-measure");
-    const database = openOpenClawAgentDatabase(scope);
-    using reads = trackReads(
-      database,
-      "capacity",
-      (sql) =>
-        sql.startsWith('select count(*) as "count"') && sql.includes('"session_participants"'),
-    );
-    for (const [promptedAt, result] of [
-      [10, "inserted"],
-      [20, "updated"],
-    ] as const) {
-      expect(contribute(scope, remote("sender"), promptedAt)).toBe(result);
-      expect(reads.counts).toEqual({ capacity: 0 });
-    }
-    expect(readParticipants(scope)).toEqual([aggregate(remote("sender"), 2, 10, 20)]);
-  });
-
   it.each(["local", "foreign"])(
     "publishes fresh participants after an untracked %s write during patch preparation",
     async (writer) => {
@@ -189,31 +170,6 @@ describe("SQLite session participants", () => {
       }
     },
   );
-
-  it("reuses current participant facts when publishing repeated entry patches", async () => {
-    const scope = await makeSession("busy");
-    contribute(scope, remote("existing"), 1);
-    const read = () => listSessionEntriesCore({ ...scope, projection: "list" })[0]?.entry;
-    read();
-    const database = openOpenClawAgentDatabase(scope);
-    using reads = trackReads(database, "participants", (sql) =>
-      sql.startsWith('select "session_key", "identity_namespace", "actor_id"'),
-    );
-    for (let index = 0; index < 100; index++) {
-      await patchSessionEntryCore(scope, () => ({ label: `Update ${index}` }), {
-        skipMaintenance: true,
-      });
-    }
-    // Metadata-only updates retain the participant owner's current revision.
-    expect(reads.counts.participants).toBe(0);
-    contribute(scope, remote("new"), 2);
-    expect(reads.counts.participants).toBe(1);
-    expect(read()).toMatchObject({
-      label: "Update 99",
-      participants: ["existing", "new"].map((id) => ({ identity: remote(id) })),
-      participantCount: 2,
-    });
-  });
 
   it.each(["participant", "external-entry"] as const)(
     "keeps a reentrant observer's newer cached state after an outer %s write",

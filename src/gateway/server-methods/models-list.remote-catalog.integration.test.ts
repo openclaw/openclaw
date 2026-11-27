@@ -19,7 +19,10 @@ import * as bundledStamp from "../../model-catalog/bundled-catalog-stamp.js";
 import * as pricing from "../../model-catalog/pricing.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../../model-catalog/remote-overlay.test-support.js";
 import { refreshRemoteModelCatalog } from "../../model-catalog/remote-refresh.js";
-import { captureModelCostPricing, resolveModelCostConfig } from "../../utils/usage-format.js";
+import {
+  captureModelCostPricing,
+  resolveModelCostConfig,
+} from "../../model-catalog/usage-pricing.js";
 import {
   createCatalogState,
   createCatalogModel,

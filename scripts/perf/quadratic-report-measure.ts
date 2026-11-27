@@ -22,6 +22,7 @@ import type { buildSystemPromptReport } from "../../src/agents/system-prompt-rep
 import type { ToolSearchCatalogEntry } from "../../src/agents/tool-search-types.js";
 import type { AnyAgentTool } from "../../src/agents/tools/common.js";
 import type { buildAllPluginInspectReports } from "../../src/plugins/status.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 
 const { values } = parseArgs({
@@ -122,12 +123,7 @@ try {
   await nextTurn();
   const inspector = new Session();
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 16384,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 16384);
   }
   const collections: { kind: number; ms: number }[] = [];
   let start = Infinity;

@@ -95,8 +95,8 @@ const LIVE_MODEL_PROVIDERS = [
     providers: "opencode-go",
     // The release workspace does not enable Global regions, so the default high-signal
     // selection includes DeepSeek routes that reject every request. Keep this list aligned
-    // with models proven reachable from the release workspace.
-    models: "opencode-go/glm-5.2,opencode-go/glm-5.3",
+    // with the authenticated catalog; the live lane must still verify real inference.
+    models: "opencode-go/glm-5.3",
     max_models: "2",
     profiles: "full",
   },

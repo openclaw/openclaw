@@ -13,6 +13,10 @@ import type {
   SubagentRunMaintenanceRecord,
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
+import {
+  hasPendingRequesterTurnResult,
+  isSubagentPausedByYield,
+} from "./subagent-requester-turn-custody.js";
 
 export function resetRequesterSettleWakeRetry(
   wake?: RequesterSettleWakeState,
@@ -30,7 +34,7 @@ export function resetRequesterSettleWakeRetry(
 /** A pause uses the existing retry owner, but never consumes the completion cohort. */
 export function consumeSubagentPauseNotice(entry: SubagentRunRecord): boolean {
   const wake = entry.requesterSettleWake;
-  if (entry.pauseReason !== "sessions_yield" || !wake?.pauseNotice) {
+  if (!isSubagentPausedByYield(entry) || !wake?.pauseNotice) {
     return false;
   }
   const { pauseNotice: _notice, ...completionWake } = wake;
@@ -129,8 +133,21 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
   entry.requesterTurnRunId = requesterTurnRunId;
   entry.requesterTurnYielded =
     requesterTurnRunId && entry.requesterTurnYielded === true ? true : undefined;
-  entry.retireAfterRequesterTurn =
-    requesterTurnRunId && entry.retireAfterRequesterTurn === true ? true : undefined;
+  // Rows persisted before the single retirement fact carried it on the wake or under the
+  // old row name. Remove this fold once no supported build can leave such rows.
+  // SAFETY: both fields are optional, read only with `=== true`, and deleted here.
+  const legacy = entry as {
+    retireAfterRequesterTurn?: boolean;
+    requesterSettleWake?: { retireAfterSettle?: boolean };
+  };
+  entry.retireAfterSettle =
+    entry.retireAfterSettle === true ||
+    legacy.retireAfterRequesterTurn === true ||
+    legacy.requesterSettleWake?.retireAfterSettle === true
+      ? true
+      : undefined;
+  delete legacy.retireAfterRequesterTurn;
+  delete legacy.requesterSettleWake?.retireAfterSettle;
   entry.generation = asPositiveSafeInteger(entry.generation);
   entry.deleteCleanupDispatchedAt = Number.isFinite(entry.deleteCleanupDispatchedAt)
     ? entry.deleteCleanupDispatchedAt
@@ -222,10 +239,7 @@ export function recordRequesterDelivery(
   if (delivery.requesterDelivery?.state !== "consumed") {
     delivery.requesterDelivery = fact;
   }
-  if (
-    delivery.disposition !== "ambiguous" &&
-    (delivery.status === "pending" || delivery.status === "in_progress")
-  ) {
+  if (delivery.status === "pending" || delivery.status === "in_progress") {
     delivery.disposition = undefined;
     delivery.lastError = undefined;
   }
@@ -236,54 +250,12 @@ export function hasConsumedRequesterInput(entry: SubagentRunRecord): boolean {
   return entry.delivery?.requesterDelivery?.state === "consumed";
 }
 
-/** Captured private findings stay internal unless their admitted wake owes a visible final. */
-export function hasPrivateRequesterInput(entry: SubagentRunRecord): boolean {
-  return (
-    entry.requesterSettleWake?.yieldedFinalDeliverable !== true &&
-    (entry.completionTarget === "parent" || entry.requesterSettleWake?.privateInput !== undefined)
-  );
-}
-
-/** A committed private result can settle delivery when there is no uncertain send to resolve. */
-export function hasConsumedPrivateRequesterInput(entry: SubagentRunRecord): boolean {
-  return (
-    entry.delivery?.disposition !== "ambiguous" &&
-    hasConsumedRequesterInput(entry) &&
-    hasPrivateRequesterInput(entry)
-  );
-}
-
-// The requester turn itself stopped; no answer exists to deliver.
-const REQUESTER_TURN_FAILURES = new Set<SubagentAnnounceDeliveryResult["reason"]>([
-  "requester_aborted",
-  "requester_timed_out",
-  "requester_preparation_changed",
-  "requester_state_conflict",
-  "requester_transcript_conflict",
-  "visible_reply_missing",
-]);
-
-/**
- * A committed result can cover a turn that failed before answering. An unconfirmed
- * channel send keeps its own outcome even when the requester received the input.
- */
+/** A result committed to the requester transcript is delivered, whatever the turn did next. */
 export function resolveRequesterDeliveryOutcome(
   entries: readonly SubagentRunRecord[],
-  outcome: SubagentAnnounceDeliveryResult | undefined,
-): SubagentAnnounceDeliveryResult | undefined {
-  const turnFailedBeforeAnswer =
-    outcome?.finalAssistantVisibleText === undefined &&
-    (outcome?.reason === undefined || REQUESTER_TURN_FAILURES.has(outcome.reason));
-  return outcome &&
-    !outcome.delivered &&
-    outcome.disposition !== "ambiguous" &&
-    entries.length > 0 &&
-    entries.every(
-      (entry) =>
-        entry.delivery?.disposition !== "ambiguous" &&
-        (hasConsumedPrivateRequesterInput(entry) ||
-          (turnFailedBeforeAnswer && hasConsumedRequesterInput(entry))),
-    )
+  outcome: SubagentAnnounceDeliveryResult,
+): SubagentAnnounceDeliveryResult {
+  return !outcome.delivered && entries.length > 0 && entries.every(hasConsumedRequesterInput)
     ? { delivered: true, path: "direct" }
     : outcome;
 }
@@ -296,20 +268,51 @@ export function recordRequesterHandoff(entry: SubagentRunRecord, blockingRunId?:
   });
 }
 
-export function isDeliverySuspended(entry: Pick<SubagentRunRecord, "delivery">): boolean {
-  return entry.delivery?.status === "suspended" && typeof entry.delivery.suspendedAt === "number";
-}
-
-/** A finished requester without its required reply receipt must not execute again implicitly. */
-export function isCompletedRequesterDeliveryBlocked(
-  entry: Pick<SubagentRunRecord, "delivery">,
+export function isDeliveryTerminalForRequesterSettle(
+  entry: Pick<SubagentRunRecord, "delivery" | "pauseReason" | "requesterSettleWake">,
 ): boolean {
   return (
-    isDeliverySuspended(entry) &&
-    entry.delivery?.suspendedReason === "permanent_failure" &&
-    (entry.delivery.lastDropReason === "message_tool_delivery_missing" ||
-      entry.delivery.lastDropReason === "visible_reply_missing")
+    entry.delivery?.status === "delivered" ||
+    (entry.delivery?.status === "not_required" && !isSubagentPausedByYield(entry)) ||
+    entry.delivery?.status === "discarded" ||
+    entry.delivery?.disposition === "delivered" ||
+    // A yielded requester's batch owns an ended child's delivery; the earlier per-child
+    // attempt may target the aborted turn and must not keep that batch unsettled.
+    entry.requesterSettleWake?.afterRequesterYield === true
   );
+}
+
+/**
+ * Older builds parked undelivered results as suspended or failed; nothing writes either now.
+ * The sweeper settles each one into requester history once.
+ */
+export function isDeliverySuspended(
+  entry: Pick<SubagentRunRecord, "delivery" | "expectsCompletionMessage">,
+): boolean {
+  return (
+    entry.delivery?.status === "suspended" ||
+    (entry.delivery?.status === "failed" && entry.expectsCompletionMessage !== false)
+  );
+}
+
+type SubagentDeliverySuppressionFacts = Pick<
+  SubagentRunRecord,
+  "suppressCompletionDelivery" | "killIntent" | "killReconciliation"
+>;
+
+/** Accepted closure: the result stays withheld even if a pending kill is rolled back. */
+export function isSubagentDeliveryClosed(
+  entry: SubagentDeliverySuppressionFacts | null | undefined,
+) {
+  return (
+    entry?.suppressCompletionDelivery === true ||
+    entry?.killReconciliation?.suppressTaskDelivery === true
+  );
+}
+
+/** Closed, or a pending kill asked to withhold delivery while it settles. */
+export function isSubagentDeliveryWithheld(entry: SubagentDeliverySuppressionFacts) {
+  return isSubagentDeliveryClosed(entry) || entry.killIntent?.suppressTaskDelivery === true;
 }
 
 export function getDeliveryLastError(entry: SubagentRunRecord): string | undefined {
@@ -317,18 +320,12 @@ export function getDeliveryLastError(entry: SubagentRunRecord): string | undefin
   return typeof error === "string" && error.trim() ? error : undefined;
 }
 
-export const markRequesterSettleWakePending = (
-  entry: SubagentRunRecord,
-  options?: { retireAfterSettle?: boolean },
-) => {
+export const markRequesterSettleWakePending = (entry: SubagentRunRecord) => {
   const existing = entry.requesterSettleWake;
   entry.requesterSettleWake = {
     ...existing,
     status: existing?.status ?? "pending",
     attemptCount: existing?.attemptCount ?? 0,
-    ...(existing?.retireAfterSettle === true || options?.retireAfterSettle === true
-      ? { retireAfterSettle: true }
-      : {}),
   } satisfies RequesterSettleWakeState;
 };
 
@@ -378,30 +375,29 @@ export const loadPendingFinalDeliveryPayload = (
 
 export function transitionRequesterSettleWakeState(
   entry: SubagentRunRecord,
-  state: Omit<RequesterSettleWakeState, "retireAfterSettle">,
+  state: RequesterSettleWakeState,
 ): void {
   entry.requesterSettleWake = {
     ...state,
     ...(entry.requesterSettleWake?.progressOperationId
       ? { progressOperationId: entry.requesterSettleWake.progressOperationId }
       : {}),
-    ...(entry.requesterSettleWake?.retireAfterSettle === true ? { retireAfterSettle: true } : {}),
   };
 }
 
+/**
+ * The one retirement rule: a row that cleanup marked retires once nothing still owes
+ * its requester, meaning no settle wake and no open requester turn awaiting its result.
+ */
+export function isSubagentRetirementSettled(entry: SubagentRunRecord): boolean {
+  return (
+    entry.retireAfterSettle === true &&
+    entry.requesterSettleWake === undefined &&
+    !hasPendingRequesterTurnResult(entry)
+  );
+}
+
 export function completeRequesterSettleWakeState(entry: SubagentRunRecord): boolean {
-  let retire = false;
-  if (entry.pauseReason !== "sessions_yield") {
-    if (entry.requesterTurnRunId && entry.expectsCompletionMessage === true) {
-      entry.retireAfterRequesterTurn =
-        entry.retireAfterRequesterTurn === true ||
-        entry.requesterSettleWake?.retireAfterSettle === true
-          ? true
-          : undefined;
-    } else {
-      retire = entry.requesterSettleWake?.retireAfterSettle === true;
-    }
-  }
   entry.requesterSettleWake = undefined;
-  return retire;
+  return !isSubagentPausedByYield(entry) && isSubagentRetirementSettled(entry);
 }

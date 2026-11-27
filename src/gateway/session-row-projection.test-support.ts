@@ -321,6 +321,7 @@ export function createSessionRowProjectionFixture(params: {
       throw new Error("Indexed lookup requires a real session row projection");
     },
     onSelectionChange: revisions.onSelectionChange,
+    onMembershipChange() {},
     onFactsChange: revisions.onFactsChange,
     readTaskPublicationRevision: revisions.taskPublication,
     hasLogicalChildEntries: (parent) => selectEntries({ parentSessionKey: parent }).length > 0,
@@ -328,8 +329,8 @@ export function createSessionRowProjectionFixture(params: {
     readPreparedSpawnedBy(query) {
       const row = describe(query);
       return row
-        ? projectGatewaySessionRunState({ key: row.key, now: Date.now(), rowContext })
-            .subagentOwner || row.storedEntry?.spawnedBy
+        ? projectGatewaySessionRunState({ key: row.key, now: Date.now(), rowContext }).subagent
+            ?.ownerSessionKey || row.storedEntry?.spawnedBy
         : undefined;
     },
     capture: describe,
@@ -438,6 +439,7 @@ export function createSessionRowProjectionFixture(params: {
       const target = projection.sharingTarget(query);
       return target ? { status: "ready", target } : { status: "missing" };
     },
+    memberAccess: () => undefined,
     hasMembership: (path, key, identity) =>
       [...rows.values()].some(
         (row) =>

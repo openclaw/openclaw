@@ -27,7 +27,6 @@ import { createFollowupRun } from "./agent-runner-execution.test-support.js";
 import { enqueueFollowupRun } from "./queue.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
-import { createTypingController } from "./typing.js";
 
 const { state, terminalEvents } = await setupExecutionSuite();
 // Load these modules after fixture mocks are installed; static imports execute too early.
@@ -190,9 +189,7 @@ it("records revoked Discord followups once without model or channel effects", as
         assert(admitted.status === "owned");
       }
       const predecessor = admitted?.status === "owned" ? admitted.operation : undefined;
-      const typing = createTypingController({});
       const runner = createFollowupRunner({
-        typing,
         typingMode: "never",
         defaultModel: "anthropic/claude",
         sessionKey,
@@ -301,7 +298,6 @@ it("records revoked Discord followups once without model or channel effects", as
         predecessor?.complete();
         stop();
         await Promise.all(writes);
-        typing.cleanup();
       }
     }
   });

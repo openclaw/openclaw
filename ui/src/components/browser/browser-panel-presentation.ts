@@ -10,9 +10,10 @@ import {
   BROWSER_PANEL_TOGGLE_EVENT,
   type BrowserPanelToggleDetail,
 } from "../panel-toggle-contract.ts";
-import { browserRequestReferencedTabs, type BrowserDashboardTarget } from "./browser-client.ts";
+import type { BrowserDashboardTarget } from "./browser-client.ts";
 import { createBrowserPanel, type BrowserPanelHost } from "./browser-panel-owner.ts";
 import { browserPanelHostedTabs } from "./browser-panel-tabs.ts";
+import { browserRequestReferencedTabs } from "./browser-session-tab-list.ts";
 import {
   browserTabKey,
   readBrowserTabTarget,

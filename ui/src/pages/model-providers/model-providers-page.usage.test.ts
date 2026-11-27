@@ -32,6 +32,55 @@ afterEach(() => {
 });
 
 describe("ModelProvidersPage usage convergence", () => {
+  it("refreshes only expired provider usage on activation and retains the displayed plan", async () => {
+    vi.useFakeTimers();
+    focusDocument();
+    const visibility = vi.spyOn(document, "visibilityState", "get");
+    const harness = createHarness("main");
+    const replacement = deferred<unknown>();
+    const request = harness.request.getMockImplementation()!;
+    harness.request.mockImplementation((method, ...args) =>
+      method === "usage.status" ? replacement.promise : request(method, ...args),
+    );
+    const plans = (plan: string) => ({
+      updatedAt: Date.now(),
+      providers: [{ provider: "openai", displayName: "OpenAI", plan, windows: [] }],
+    });
+    const page = createPage(harness.context);
+    mountPage(page);
+    const loadedAt = Date.now();
+    publishRouteData(page, {
+      ...createApiKeyProviderData(),
+      updatedAt: loadedAt,
+      providerUsage: plans("Original"),
+    });
+    const plan = () => page.querySelector(".provider-row__plan")?.textContent;
+    await waitForSolid(() => expect(plan()).toBe("Original"));
+    await waitForProviders(page);
+    expect(requestCount(harness.request, "usage.status")).toBe(0);
+    harness.request.mockClear();
+
+    const activate = () => window.dispatchEvent(new Event("focus"));
+    vi.setSystemTime(loadedAt + 300_000 - 1);
+    activate();
+    expect(harness.request).not.toHaveBeenCalled();
+
+    vi.setSystemTime(loadedAt + 300_000);
+    visibility.mockReturnValue("hidden");
+    activate();
+    expect(harness.request).not.toHaveBeenCalled();
+    visibility.mockReturnValue("visible");
+    activate();
+    activate();
+    expect(harness.request.mock.calls.map(([method]) => method)).toEqual(["usage.status"]);
+    expect(plan()).toBe("Original");
+
+    replacement.resolve(plans("Updated"));
+    await waitForSolid(() => expect(plan()).toBe("Updated"));
+    activate();
+    expect(harness.request.mock.calls.map(([method]) => method)).toEqual(["usage.status"]);
+  });
+
   it("keeps account quotas during config saves and refreshes them from the page", async () => {
     const { context, request, snapshot, runtimeConfig, notifyRuntimeConfig } =
       createHarness("main");
@@ -83,9 +132,11 @@ describe("ModelProvidersPage usage convergence", () => {
     const bars = openai.querySelector(".model-providers__usage-bars")!;
     const refresh = () =>
       page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
-    await vi.waitFor(() =>
-      expectContent(bars, ["Signed-in account: Offline", "Access token: Loading"]),
-    );
+    await vi.waitFor(() => expectContent(bars, ["Signed-in account: Offline", "Loading…"]));
+    expect([...bars.querySelectorAll('[role="status"]')].map((node) => node.textContent)).toEqual([
+      "Loading…",
+      "Signed-in account: Offline · Refresh to try again.",
+    ]);
     // Opening the pending account adds credential actions, not a second copy of the grid outcome.
     bars.querySelectorAll<HTMLButtonElement>(".model-providers__segment-name")[1]!.click();
     const expanded = () =>
@@ -107,7 +158,7 @@ describe("ModelProvidersPage usage convergence", () => {
     await vi.waitFor(() => expect(segments().map((el) => el.textContent)).toEqual(["90%", "—"]));
     slow.resolve();
     await vi.waitFor(() => expectLimits(90));
-    expectAbsent(bars, "small[role=status]");
+    expect(bars.textContent).not.toContain("Refresh to try again");
     expect(expanded()).not.toBeNull();
     expect(expanded()!.textContent).not.toMatch(/Timed out|Loading|90%/u);
     expect(accountRequests.slice(2)).toEqual([
@@ -263,6 +314,7 @@ describe("ModelProvidersPage usage convergence", () => {
     expectNoProviderReads();
     page.loaderPending = true;
     publishRouteData(page, createApiKeyProviderData());
+    page.routeData = { ...page.routeData!, provider: "openai" };
     await waitForSolid(() => expectPresent(page, '[data-provider-id="openai"]'));
     expect(usageReads).toBe(0);
     expect(requestCount(harness.request, "sessions.usage")).toBe(0);

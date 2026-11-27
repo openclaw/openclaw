@@ -245,10 +245,10 @@ suite.define(() => {
       await page.getByRole("button", { name: "Skill settings", exact: true }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/skills");
       await page.getByRole("button", { name: "Open Deploy Helper details" }).click();
-      const skillDialog = page.locator("openclaw-modal-dialog", { hasText: "Deploy Helper" });
-      const globalSkillToggle = skillDialog.getByRole("switch");
+      const skillPage = page.locator(".skill-page", { hasText: "Deploy Helper" });
+      const globalSkillToggle = skillPage.getByRole("switch");
       await expectDenied(globalSkillToggle, gateway, "skills.update");
-      const install = skillDialog.getByRole("button", { name: "Install Deploy Helper" });
+      const install = skillPage.getByRole("button", { name: "Install Deploy Helper" });
       await expectDenied(install, gateway, "skills.install");
 
       await page.goto(`${suite.server.baseUrl}skills/workshop`);
@@ -256,6 +256,9 @@ suite.define(() => {
       await page.getByText("tightened the review step").waitFor();
       expect(await page.getByRole("button", { name: "Undo", exact: true }).count()).toBe(0);
       await page.getByRole("button", { name: "read-only-skill" }).first().click();
+      await page.locator(".sw-timeline").getByText("tightened the review step").waitFor();
+      expect(await page.getByRole("button", { name: "Undo", exact: true }).count()).toBe(0);
+      await page.getByRole("button", { name: "Instructions", exact: true }).click();
       await gateway.waitForRequest("skills.workshop.read");
       await expect
         .poll(() => page.locator(".sw-markdown").textContent())
@@ -310,7 +313,7 @@ suite.define(() => {
         .click();
       await page.getByRole("button", { name: "Open Deploy Helper details" }).click();
       const install = page
-        .locator("openclaw-modal-dialog", { hasText: "Deploy Helper" })
+        .locator(".skill-page", { hasText: "Deploy Helper" })
         .getByRole("button", { name: "Install Deploy Helper" });
       await expectDenied(install, gateway, "skills.install");
     });

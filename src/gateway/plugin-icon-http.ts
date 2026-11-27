@@ -16,11 +16,8 @@ import { LruCache } from "../infra/lru-cache.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
 import { isBlockedHostnameOrIp } from "../infra/net/ssrf.js";
 import { readRemoteMediaBuffer } from "../media/fetch.js";
-import {
-  createImageProcessor,
-  MAX_IMAGE_INPUT_PIXELS,
-  readImageMetadataFromHeader,
-} from "../media/image-ops.js";
+import { readImageMetadataFromHeader } from "../media/image-header-metadata.js";
+import { createImageProcessor, MAX_IMAGE_INPUT_PIXELS } from "../media/image-ops.js";
 import { resolveClawHubCatalogIconUrl } from "../plugins/catalog-icon-registry.js";
 import {
   resolveManagedPluginIconSources,
@@ -239,15 +236,9 @@ async function loadCatalogIcon(params: {
   }
 }
 
-async function loadLinkFavicon(
-  hostname: string,
-  assertCurrent: () => void,
-): Promise<HttpImageRepresentation | null> {
+async function loadLinkFavicon(hostname: string): Promise<HttpImageRepresentation | null> {
   const signal = AbortSignal.timeout(PLUGIN_ICON_REQUEST_TIMEOUT_MS);
-  const beforeRequest = () => {
-    signal.throwIfAborted();
-    assertCurrent();
-  };
+  const beforeRequest = () => signal.throwIfAborted();
   const loadIcon = (iconUrl: string) =>
     loadCatalogIcon({
       iconUrl,
@@ -388,7 +379,6 @@ export async function handlePluginIconHttpRequest(
   if (!requestAuth) {
     return true;
   }
-  requestAuth.assertCurrent();
 
   if (
     activityRequest.matched &&
@@ -414,7 +404,6 @@ export async function handlePluginIconHttpRequest(
           pluginId,
         })
     : undefined;
-  requestAuth.assertCurrent();
   const remoteIconUrl = catalogIconUrl
     ? (resolveManagedSetupCatalogIconUrl({
         config: opts.config,
@@ -452,7 +441,7 @@ export async function handlePluginIconHttpRequest(
             activity: activityRequest.matched,
           })
         : faviconHostname
-          ? loadLinkFavicon(faviconHostname, () => requestAuth.assertCurrent())
+          ? loadLinkFavicon(faviconHostname)
           : loadCatalogIcon({ iconUrl: remoteIconUrl! });
   const icon = cached
     ? await cached.promise
@@ -466,7 +455,6 @@ export async function handlePluginIconHttpRequest(
           Date.now() + PLUGIN_ICON_CACHE_TTL_MS,
           faviconHostname ? LINK_FAVICON_NEGATIVE_CACHE_TTL_MS : undefined,
         );
-  requestAuth.assertCurrent();
   if (!icon) {
     sendNotFound(res);
     return true;

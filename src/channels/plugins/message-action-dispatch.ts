@@ -338,7 +338,9 @@ function prepareMessageActionReadContext(
           assertDashboardReadCurrent?.();
           scheduledAccess?.assertCurrent();
           if (!authority?.()) {
-            throw new Error(`Plugin ${ctx.channel} read authority is no longer active.`);
+            throw new Error(
+              `Plugin ${ctx.channel} was reloaded during the read. Retry the action.`,
+            );
           }
         }
       : undefined;
@@ -361,7 +363,9 @@ function prepareMessageActionReadContext(
           ? undefined
           : resolveChannelPluginRegistration(ctx.channel, { loadedOnly: true });
       if (current?.plugin !== registration.plugin || current.origin !== registration.origin) {
-        throw new Error(`Plugin ${ctx.channel} alias authority is no longer active.`);
+        throw new Error(
+          `Plugin ${ctx.channel} was reloaded during alias resolution. Retry the action.`,
+        );
       }
     },
   };
@@ -674,7 +678,7 @@ export async function dispatchChannelMessageAction(
   const assertCurrent = () => {
     if (!open) {
       throw new Error(
-        `Scheduled ${context.channel}:${context.action} invocation is no longer active.`,
+        `Scheduled ${context.channel}:${context.action} invocation ended. Retry the action.`,
       );
     }
     context.assertDirectAdapterHandoff?.();

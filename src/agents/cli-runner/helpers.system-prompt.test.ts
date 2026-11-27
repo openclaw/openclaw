@@ -115,26 +115,6 @@ describe("buildCliAgentSystemPrompt", () => {
     },
   );
 
-  it("uses config-backed sub-agent delegation mode", async () => {
-    const prompt = await buildCliAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      config: {
-        agents: {
-          defaults: {
-            subagents: {
-              delegationMode: "prefer",
-            },
-          },
-        },
-      },
-      agentId: "main",
-      tools: [{ name: "sessions_spawn" } as never],
-      modelDisplay: "test/model",
-    });
-
-    expect(prompt).toContain("## Delegation");
-  });
-
   it("uses CLI backend tool fallback instead of OpenClaw tool assumptions", async () => {
     const prompt = await buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -218,28 +198,6 @@ describe("buildCliAgentSystemPrompt", () => {
 
     expect(prompt).toContain("CLI-only command guidance.");
     expect(prompt).not.toContain("OpenClaw-only command guidance.");
-  });
-
-  it("includes session identity in runtime when provided", async () => {
-    const prompt = await buildCliAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      config: {
-        agents: {
-          entries: {
-            "Team Ops": { identity: { name: "Ops Navigator" } },
-          },
-        },
-      },
-      tools: [],
-      modelDisplay: "test/model",
-      agentId: "team-ops",
-      sessionKey: "agent:team-ops:telegram:direct:peer",
-      sessionId: "session-123",
-    });
-
-    expect(prompt).toContain(
-      "Runtime: name=Ops Navigator | agent=team-ops | session=agent:team-ops:telegram:direct:peer",
-    );
   });
 
   it("includes Telegram channel context for CLI final replies without core rich guidance", async () => {

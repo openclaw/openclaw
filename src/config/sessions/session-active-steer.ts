@@ -5,29 +5,52 @@ import { getSessionControllerOperation } from "../../sessions/session-controller
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 
-/** The session owner binds steering to one existing backend, never its successor. */
-export function captureSessionActiveSteerTarget(input: {
-  activeRunScopeKey: string;
+/** Read only the physical controller owner, never a catalog projection or successor. */
+export function captureSessionSteeringTarget(input: {
+  activeRunScopeKey?: string;
   storePath: string;
   sessionKey: string;
   agentId: string;
   backingSessionId?: string;
   sessionId?: string;
-  runId: string;
 }) {
   const operation = getSessionControllerOperation(
-    input.activeRunScopeKey,
+    input.activeRunScopeKey ?? input.sessionKey,
     captureSessionTarget({
       storeScope: input.storePath,
       sessionKey: input.sessionKey,
       agentId: input.agentId,
-      incarnation: input.backingSessionId,
+      incarnation: input.backingSessionId ?? input.sessionId,
     }),
   );
-  const target = captureReplyMessageInjectionTarget(operation);
-  return target?.runId === input.runId && operation?.sessionId === input.sessionId
-    ? target
+  return operation?.sessionId === input.sessionId
+    ? captureReplyMessageInjectionTarget(operation)
     : undefined;
+}
+
+/** Bind steering to one existing backend, never its successor. */
+export function captureSessionActiveSteerTarget(
+  input: Parameters<typeof captureSessionSteeringTarget>[0] & { runId: string },
+) {
+  const target = captureSessionSteeringTarget(input);
+  return target?.runId === input.runId ? target : undefined;
+}
+
+export function matchesSessionSteeringSource(
+  target: { sessionKey: string; sessionId: string },
+  current:
+    | { storePath: string; canonicalKey: string; entry: { sessionId?: string } }
+    | null
+    | undefined,
+  admitted: { storePath: string } | null | undefined,
+) {
+  return Boolean(
+    admitted &&
+    current &&
+    current.storePath === admitted.storePath &&
+    current.canonicalKey === target.sessionKey &&
+    current.entry.sessionId === target.sessionId,
+  );
 }
 
 export function matchesSessionSteeringTarget(target: { sessionId?: string }, sessionId: string) {

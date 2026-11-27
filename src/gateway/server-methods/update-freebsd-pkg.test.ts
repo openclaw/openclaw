@@ -19,7 +19,6 @@ import {
 const sqliteHostPlatform = process.platform;
 const existingHostUri = nodeSqlite.resolveExistingSqliteFileUri;
 const immutableHostUri = nodeSqlite.resolveImmutableSqliteFileUri;
-
 beforeEach(() => {
   // Platform simulation must not change the real process identity shared with SQLite workers.
   const namespace = gatewayLockPayload.readGatewayLockProcessNamespace();
@@ -74,6 +73,8 @@ describe("system package RPC admission", () => {
   ] as const)(
     "preserves $platform update admission (inspection unavailable=$unavailable)",
     async ({ platform, unavailable }) => {
+      mockGlobalInstallSurface();
+      detectRespawnSupervisorMock.mockReturnValue("launchd");
       // Platform simulation does not change the real ledger's SQLite VFS.
       vi.spyOn(nodeSqlite, "resolveExistingSqliteFileUri").mockImplementation((file) =>
         existingHostUri(file, sqliteHostPlatform),

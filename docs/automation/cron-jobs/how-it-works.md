@@ -27,6 +27,7 @@ How the Gateway scheduler runs a job, what it keeps between runs, and how a repe
 - On Gateway startup, overdue jobs that require agent execution are rescheduled instead of replayed immediately, keeping model/tool execution out of scheduler startup. This includes migrated monitors and main-session system events. Startup catch-up delays survive label or payload-content reconciliation and another restart; changing the schedule starts a new scheduling decision.
 - Jobs whose agents are still preparing remain queued without blocking healthy agents. They resume when their Gateway's preparation finishes.
 - Up to eight jobs run at once. While all eight are busy and more are due, each time the queue is drained (when a run ends or a job comes due) it starts one more job if at least 1 GiB of memory is free, up to 16. The reading is Node's available memory, which counts a container's memory limit. Running jobs are never stopped, and condition checks do not use these slots.
+- A provider rate limit or overload can pause extra runs for that provider when automation and hook turns sharing its budget hold more than eight agent sessions. The eight default slots stay available. When a job resolves to a provider in backoff and needs an extra slot, its occurrence waits without holding a slot or repeating a completed condition check. Jobs using other providers and command or script jobs can use the free slot. Running jobs continue, and an extra run that falls back to another provider counts against that provider from then on. Running jobs fill freed default slots first, so only work above that floor uses extra slots. Each quiet minute restores one extra slot for the provider at the next queue drain. A Gateway warning records each reduction, and a restart clears the backoff.
 - A scheduled occurrence of a job that runs inside the conversation that created it (`session:<key>`) waits until that conversation is idle. While it waits it stays queued and holds neither a run slot nor a condition check, so other jobs keep running.
 - A timed job deferred before execution retains its pending occurrence and retries after 30 seconds, doubling the delay up to five minutes. Waiting does not occupy a running slot or change the previous run's outcome. Job state records the reason, when waiting began, the attempt count, and the next retry; the Automations page shows a warning after five deferred attempts. Retries replace the episode's unstarted receipt instead of appending skipped receipts. A restart preserves the wait, and completion (including a condition check that does not fire), cancellation, or a scheduling change clears it.
 - Cron slots that pass during a successful or skipped scheduled run are not replayed at restart. Slots missed after that run finishes remain eligible for catch-up. Forced runs still leave their scheduled occurrence pending.
@@ -104,8 +105,7 @@ On confirmation the agent:
 
 The job is created **enabled**, not disabled-pending-approval, and that is a
 deliberate safety choice. The scheduler supervises enabled jobs: a failing one
-raises a failure notification and is auto-disabled after repeated errors, with
-the reason recorded and the owner notified. Nothing supervises a disabled job.
+stays scheduled, records the error, and notifies its owner. Nothing supervises a disabled job.
 A job left disabled waiting for a confirmation that never arrives is invisible
 to every guard, hidden from the default `automations list`, and will never fire
 or explain itself — a silent non-outcome, which is a worse failure than a job

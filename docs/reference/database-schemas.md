@@ -82,7 +82,13 @@ the exact SQLite database has a verified live owner. This bounded read does not
 copy the database. Ordinary artifact-preserving shared-state inspection also
 reads directly and read-only when that database has a verified live owner;
 offline inspection retains private copies to avoid creating or changing sidecars.
-Explicit frozen inspection scopes, including `openclaw update status`, and Doctor's
+After Doctor's backup boundary admits native maintenance reads, its checks reuse
+that held custody and read shared state directly, including legacy-state discovery
+and transcript inspection. Pre-admission inspection and recovery retain private copies.
+Admitted in-process readers reuse the owner's published path custody without
+filesystem identity polling. Owner loss, release, and maintenance clear that fact;
+CLI and worker readers without local custody still verify the persisted owner.
+Outside admitted maintenance, explicit frozen inspection scopes, including `openclaw update status`, and Doctor's
 schema repair admission still use private snapshots.
 
 Borrowed worker transactions obtain their initial host grant before `BEGIN

@@ -45,6 +45,7 @@ it("allows approved pnpm patches together", () => {
     ["minizlib@3.1.0", "patches/minizlib@3.1.0.patch"],
     ["baileys@7.0.0-rc14", "patches/baileys@7.0.0-rc14.patch"],
     ["vitest@5.0.5", "patches/vitest@5.0.5.patch"],
+    ["tinyglobby@0.2.17", "patches/tinyglobby@0.2.17.patch"],
     ["matrix-js-sdk@44.0.0", "patches/matrix-js-sdk@44.0.0.patch"],
     ["ghostty-web@0.4.0", "patches/ghostty-web@0.4.0.patch"],
     ["@solidjs/web@2.0.0-rc.18", "patches/@solidjs__web@2.0.0-rc.18.patch"],
@@ -72,6 +73,8 @@ it.each([
   ["matrix-js-sdk@42.4.1", "patches/matrix-js-sdk@42.4.1.patch"],
   ["matrix-js-sdk@43.0.0", "patches/matrix-js-sdk@43.0.0.patch"],
   ["matrix-js-sdk@44.0.0", "patches/matrix-js-sdk@44.0.0-other.patch"],
+  ["tinyglobby@0.2.16", "patches/tinyglobby@0.2.16.patch"],
+  ["tinyglobby@0.2.17", "patches/tinyglobby@0.2.17-other.patch"],
 ])("rejects unapproved workspace patch %s -> %s", (specifier, patchPath) => {
   const dir = makeRepo();
   writePatches(dir, "pnpm-workspace.yaml", [[specifier, patchPath]]);

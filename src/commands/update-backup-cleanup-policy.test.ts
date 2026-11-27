@@ -250,6 +250,12 @@ it("removes a rolled-back update's backups after a later verified update and kee
     for (const file of [unmanifested, cron, unreceipted]) {
       expect(lines).toContainEqual(expect.stringContaining(`Kept: not provably ours: ${file} (`));
     }
+    // Cleanup refuses while the Gateway runs, so the hint names that step first.
+    expect(lines).toContainEqual(
+      expect.stringContaining(
+        "or stop the Gateway (openclaw gateway stop) and remove it yourself with openclaw update cleanup --include-unmanifested",
+      ),
+    );
     expect(lines.join("\n")).not.toContain(userBackup + " ");
     expect(summary).toContain("openclaw triage");
   });

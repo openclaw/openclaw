@@ -596,7 +596,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
     const agentRuntime = createConsultRuntime(runEmbeddedAgent);
     setConsultCall({ sessionKey: "voice:call:call-1" });
 
-    const handler = await startConsult(config, agentRuntime);
+    const handler = await startConsult(config, agentRuntime, {
+      agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
+    });
 
     await expect(handler({ question: "What should I say?" }, "call-1", {})).resolves.toEqual({
       text: "Per-call consult answer.",

@@ -170,3 +170,18 @@ it("prefers backend skill mounts over an overlapping host workspace path", async
   );
   expect(validateWorkdir).toHaveBeenCalledWith(`${containerRoot}/demo`);
 });
+
+it("confines backend participant cwd independently of its local placeholder", async () => {
+  const config = backend({ workdirRoots: ["/agent"] });
+  const run = (workdir: string) =>
+    resolveExecWorkdir({
+      host: "sandbox",
+      workdir,
+      sandbox: config,
+      participationRoot: workspaceDir,
+    });
+  await expect(run("/agent/project")).rejects.toThrow("participation root");
+  await expect(run("/remote/workspace/build")).resolves.toEqual(
+    resolved(workspaceDir, "/remote/workspace/build"),
+  );
+});

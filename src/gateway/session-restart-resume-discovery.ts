@@ -90,8 +90,7 @@ async function prepareRestartStore(
         if (
           child.requesterSettleWake ||
           child.delivery?.status === "pending" ||
-          child.delivery?.status === "in_progress" ||
-          child.delivery?.disposition === "retryable"
+          child.delivery?.status === "in_progress"
         ) {
           return true;
         }
@@ -208,7 +207,7 @@ export function resolveStartupRestartMarker(
         selected.status === "interrupted" &&
         selected.updatedAt <= performance.timeOrigin &&
         selected.updatedAt >= performance.timeOrigin - LEGACY_RESTART_RESUME_WINDOW_MS)
-        ? createRestartResumeMarker({})
+        ? createRestartResumeMarker(orphanedRun ? { sourceRunId: orphanedRun } : {})
         : undefined));
   return { orphanedRun, stale, marker };
 }

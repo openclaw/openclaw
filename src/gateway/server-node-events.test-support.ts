@@ -1,6 +1,8 @@
 import { vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import type { SessionEventReceipt } from "../auto-reply/reply/session-event-contract.js";
+import type { captureSessionEventTargetForHost } from "../auto-reply/reply/session-event-handoff.js";
 import type { DurableMessageBatchSendResult } from "../channels/message/runtime.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -37,13 +39,15 @@ const runtimeMocks = vi.hoisted(() => ({
   agentCommandFromGatewayIngress: vi.fn().mockResolvedValue(undefined),
   deleteMediaBuffer: vi.fn(async () => {}),
   enqueueSystemEventEntry: vi.fn(),
-  captureSessionEventTargetForHost: vi.fn(async (agentId: string, sessionKey: string) => ({
-    agentId,
-    sessionKey,
-    sessionId: `sid-${sessionKey}`,
-    generation: "node-event-test-generation",
-  })),
-  enqueueSessionEventForHost: vi.fn(() => ({
+  captureSessionEventTargetForHost: vi.fn<typeof captureSessionEventTargetForHost>(
+    async (agentId, sessionKey) => ({
+      agentId,
+      sessionKey,
+      sessionId: `sid-${sessionKey}`,
+      generation: "node-event-test-generation",
+    }),
+  ),
+  enqueueSessionEventForHost: vi.fn((): SessionEventReceipt => ({
     id: "node-event-test-receipt",
     cancel: () => true,
     accepted: Promise.resolve({ ok: true as const }),

@@ -10,6 +10,7 @@ export type EmbeddedRunTerminalRetryState = {
   reasoningOnlyAttempts: number;
   emptyResponseAttempts: number;
   textToolCallAttempts: number;
+  pendingTextToolCallName?: string;
   missingAssistantAttempts: number;
   compactionContinuationAttempts: number;
   beforeFinalizeRevisionAttempts: number;

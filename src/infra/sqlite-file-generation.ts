@@ -1,8 +1,17 @@
+import { createHash } from "node:crypto";
 import fs, { type BigIntStats } from "node:fs";
 import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { sameFileMutationFingerprint, type FileMutationFingerprint } from "./file-descriptor.js";
-import { hashPublishedFileSync, sameFileStatFingerprint } from "./sqlite-snapshot-file.js";
+import {
+  hashFileDescriptorSync,
+  sameFileMutationFingerprint,
+  type FileMutationFingerprint,
+} from "./file-descriptor.js";
+import {
+  hashPublishedFileSync,
+  sameFileStatFingerprint,
+  type SqliteFileContent,
+} from "./sqlite-snapshot-file.js";
 import { assertDatabaseFileIdentity, type DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
 export function readSqliteIntegrityFileIdentity(
@@ -74,9 +83,45 @@ function timestampNs(nanoseconds: bigint | undefined, milliseconds: bigint | num
   );
 }
 
+// SQLite stores no content in the 512 lock bytes at 1 GiB, and Windows enforces the byte-range
+// locks it takes there: while any connection holds EXCLUSIVE (the update migration owner, or a
+// last-close checkpoint), reading them fails with EBUSY. Hash them as the zeros SQLite leaves,
+// so digests stay the same as a full read. Nonzero bytes a foreign tool wrote there hash as zeros.
+const SQLITE_LOCK_BYTES_START = 0x4000_0000;
+const SQLITE_LOCK_BYTES_END = SQLITE_LOCK_BYTES_START + 512;
+
+function hashSqliteDatabaseDescriptorSync(fd: number): SqliteFileContent {
+  const size = fs.fstatSync(fd).size;
+  if (size <= SQLITE_LOCK_BYTES_START) {
+    return hashFileDescriptorSync(fd);
+  }
+  const lockEnd = Math.min(SQLITE_LOCK_BYTES_END, size);
+  const hash = createHash("sha256");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  let position = 0;
+  for (;;) {
+    if (position >= SQLITE_LOCK_BYTES_START && position < lockEnd) {
+      hash.update(Buffer.alloc(lockEnd - position));
+      position = lockEnd;
+      continue;
+    }
+    const length =
+      position < SQLITE_LOCK_BYTES_START
+        ? Math.min(buffer.length, SQLITE_LOCK_BYTES_START - position)
+        : buffer.length;
+    const count = fs.readSync(fd, buffer, 0, length, position);
+    if (count === 0) {
+      return { sha256: hash.digest("hex"), sizeBytes: position };
+    }
+    hash.update(buffer.subarray(0, count));
+    position += count;
+  }
+}
+
 function fingerprintFile(
   pathname: string,
   verified: Map<string, SqliteFileFingerprint>,
+  database = false,
 ): SqliteFileFingerprint {
   const observedAtNs = BigInt(Date.now()) * 1_000_000n;
   const fd = fs.openSync(pathname, "r");
@@ -101,7 +146,11 @@ function fingerprintFile(
         return previous;
       }
     }
-    const { sha256 } = hashPublishedFileSync(fs.realpathSync.native(pathname), before);
+    const { sha256 } = hashPublishedFileSync(
+      fs.realpathSync.native(pathname),
+      before,
+      database ? hashSqliteDatabaseDescriptorSync : undefined,
+    );
     const after = fs.fstatSync(fd, { bigint: true });
     const current = fs.statSync(pathname, { bigint: true });
     if (!sameFileStatFingerprint(before, after) || !sameFileStatFingerprint(after, current)) {
@@ -153,7 +202,7 @@ function readOptionalFile(
 export function createSqliteFileGenerationReader() {
   const verified = new Map<string, SqliteFileFingerprint>();
   return (pathname: string): SqliteFileGeneration => {
-    const database = fingerprintFile(pathname, verified);
+    const database = fingerprintFile(pathname, verified, true);
     const journal = readOptionalFile(`${pathname}-journal`, verified);
     const wal = readOptionalFile(`${pathname}-wal`, verified);
     return {

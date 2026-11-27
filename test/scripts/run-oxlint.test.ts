@@ -398,8 +398,33 @@ describe("run-oxlint", () => {
     expect(reads).toEqual(["/repo/src"]);
   });
 
-  it("preserves the published updater's automatic full-lint plan on constrained Linux CI", () => {
-    const env = { CI: "true" };
+  it.each([
+    {
+      name: "the published updater",
+      env: { CI: "true" },
+      targets: [
+        ["src/agents", "src/zeta"],
+        ["src/alpha", "src/root.ts"],
+        ["src/beta", "ui"],
+        ["src/gateway", "packages"],
+        ["src/infra"],
+      ],
+    },
+    {
+      name: "remote full gates",
+      env: { CI: "1", OPENCLAW_TESTBOX_REMOTE_RUN: "1" },
+      targets: [
+        ["src/zeta"],
+        ["src/agents"],
+        ["src/alpha", "src/root.ts"],
+        ["src/beta"],
+        ["ui"],
+        ["packages"],
+        ["src/gateway"],
+        ["src/infra"],
+      ],
+    },
+  ])("bounds the automatic full-lint plan for $name on constrained Linux", ({ env, targets }) => {
     const platform = "linux";
     const hostResources = CONSTRAINED_HOST;
     const directories = ["agents", "alpha", "beta", "gateway", "infra", "zeta"];
@@ -411,13 +436,7 @@ describe("run-oxlint", () => {
       hostResources,
     });
 
-    expect(shards.map((shard) => shard.args.slice(2))).toEqual([
-      ["src/agents", "src/zeta"],
-      ["src/alpha", "src/root.ts"],
-      ["src/beta", "ui"],
-      ["src/gateway", "packages"],
-      ["src/infra"],
-    ]);
+    expect(shards.map((shard) => shard.args.slice(2))).toEqual(targets);
     expect(shards.every((shard) => shard.args[1] === "config/tsconfig/oxlint.core.json")).toBe(
       true,
     );
