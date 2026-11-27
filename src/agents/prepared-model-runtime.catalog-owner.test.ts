@@ -55,7 +55,7 @@ const fixture = usePreparedModelRuntimeHarness(undefined, () => {
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
-const { mocks } = fixture;
+const { mocks, holdCatalogWrite } = fixture;
 
 function makeCatalog(
   entries: ModelCatalogEntry[],
@@ -75,29 +75,6 @@ function setCatalogApiKey(
     authModes: { [provider]: "api_key" },
     credentials: { [provider]: { type: "api_key", key } },
   });
-}
-
-function holdCatalogWrite() {
-  const started = createDeferred();
-  const result = createDeferred<Record<string, never>>();
-  const pending: Promise<unknown>[] = [];
-  const release = () => result.resolve({});
-  mocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => {
-    started.resolve();
-    return await result.promise;
-  });
-  return {
-    started: started.promise,
-    release,
-    track<T>(promise: Promise<T>) {
-      pending.push(promise);
-      return promise;
-    },
-    async [Symbol.asyncDispose]() {
-      release();
-      await Promise.allSettled(pending);
-    },
-  };
 }
 
 function publishStandaloneCatalog() {

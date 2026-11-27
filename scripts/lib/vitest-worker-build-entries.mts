@@ -110,7 +110,6 @@ import { nativeWorkerTestEntrypoint } from "../../src/worker/native-worker-entry
 import { workerBackgroundExecEntrypoints } from "../../src/worker/worker-runtime-background-exec-entrypoints.test-support.ts";
 import { qaOtelSmokeEntrypoint } from "../../test/e2e/qa-lab/runtime/qa-otel-smoke-entrypoint.test-support.ts";
 import { channelIngressGatewayRestartEntrypoint } from "../../test/fixtures/channel-ingress-gateway-restart-entrypoint.ts";
-import { toolingNativeRuntimeEntrypoints } from "../../test/scripts/tooling-native-runtime.test-support.ts";
 import { toolingProbeRuntimeEntrypoints } from "../../test/scripts/tooling-probe-runtime.test-support.mts";
 import { benchSessionHistoryEntrypoint } from "../bench-session-history-runtime.test-support.ts";
 import { runtimeProcessBuildEntrypoints } from "./runtime-process-build-entries.mts";
@@ -322,7 +321,6 @@ export const vitestWorkerBuildEntries = {
     ...Object.values(externalProxyTestEntrypoints),
     ...Object.values(workspaceProcessTestEntrypoints),
     clackPrompterProcessEntrypoint,
-    ...Object.values(toolingNativeRuntimeEntrypoints),
     toolingProbeRuntimeEntrypoints.buildArtifactCache,
     toolingProbeRuntimeEntrypoints.buildIdentity,
     ...Object.values(discordAudioTestEntrypoints),

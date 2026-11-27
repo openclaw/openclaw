@@ -148,7 +148,7 @@ export function createReadinessChecker(
       };
     }
     const pluginReload = deps.getPluginReloadStatus?.();
-    if (pluginReload) {
+    if (pluginReload && pluginReload.phase !== "reloading") {
       cachedState = null;
       return { ready: false, coreReady: false, failing: ["plugin-reload"], pluginReload, uptimeMs };
     }
