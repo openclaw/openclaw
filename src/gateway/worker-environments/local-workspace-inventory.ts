@@ -24,7 +24,10 @@ import {
   type WorkspaceManifestPathPolicy,
 } from "./workspace-manifest.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
-import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
+import {
+  buildCacheInputPaths,
+  IGNORED_WORKSPACE_BUILD_OUTPUT_ROOTS,
+} from "./workspace-path-exclusions.js";
 
 export function createLocalWorkspaceManifestReader(params: {
   store: LocalWorkspaceStore;
@@ -143,6 +146,8 @@ export async function readLocalWorkspaceGitExclusions(
     "--exclude-standard",
     "--directory",
     "-z",
+    "--",
+    ...IGNORED_WORKSPACE_BUILD_OUTPUT_ROOTS,
   ]);
   return { paths: new Set(decodeLocalWorkspaceGitPaths(listed)), retainedPaths };
 }
