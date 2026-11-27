@@ -63,7 +63,9 @@ describe.skipIf(skipBrokerTests)("spawn broker startup failure", () => {
       },
     });
     await using cleanup = new AsyncDisposableStack();
-    cleanup.defer(() => source.close());
+    cleanup.defer(async () => {
+      await source.retireIdleBroker();
+    });
     const resource = await source.captureIndependentResource(
       new URL(
         "data:text/javascript,export function createNativeWorkerResource(port) { port.on('message', value => port.postMessage(value)); return { close() { port.close() } } }",
