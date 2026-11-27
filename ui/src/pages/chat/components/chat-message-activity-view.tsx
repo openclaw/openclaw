@@ -18,7 +18,10 @@ import {
   describeToolGroup,
 } from "../../../lib/chat/tool-call-grouping.ts";
 import { resolveToolCallInput } from "../../../lib/chat/tool-call-input.ts";
-import { resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
+import {
+  projectToolCardActivityOutcome,
+  resolveToolCardOutcome,
+} from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { ownSessionLaunchCalls, readSubagentCancellation } from "../chat-spawned-subagent.ts";
@@ -114,12 +117,7 @@ function prepareActivityGroup(
           title: resolveToolDisplayIdentity(call.name).label,
           kind: "tool",
           phase: card.completed ? "end" : "start",
-          status:
-            outcome === "succeeded"
-              ? "completed"
-              : outcome === "unrecorded" || outcome === "unknown"
-                ? undefined
-                : outcome,
+          ...projectToolCardActivityOutcome(outcome),
         };
         activityKeys.set(
           item,
