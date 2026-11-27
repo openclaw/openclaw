@@ -291,7 +291,7 @@ describe("mcp connection resolver helpers", () => {
             });
             return { restartChannels: new Set(), activeChannels: new Set(), runtime };
           },
-          logHooks: reloadLog,
+
           logChannels: reloadLog,
           logCron: reloadLog,
           logReload: reloadLog,

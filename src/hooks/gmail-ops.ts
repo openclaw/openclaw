@@ -1,39 +1,5 @@
 import { randomBytes } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  buildDefaultHookUrl,
-  buildGogWatchStartArgs,
-  buildTopicPath,
-  DEFAULT_GMAIL_LABEL,
-  DEFAULT_GMAIL_MAX_BYTES,
-  DEFAULT_GMAIL_RENEW_MINUTES,
-  DEFAULT_GMAIL_SERVE_BIND,
-  DEFAULT_GMAIL_SERVE_PORT,
-  DEFAULT_GMAIL_SUBSCRIPTION,
-  DEFAULT_GMAIL_TOPIC,
-  GMAIL_INSECURE_TOKEN_ARGS_WARNING,
-  type GmailHookOverrides,
-  mergeHookPresets,
-  normalizeHooksPath,
-  normalizeServePath,
-  parseTopicPath,
-  resolveGmailHookRuntimeConfig,
-} from "../../extensions/gmail/api.js";
-import {
-  ensureDependency,
-  ensureGcloudAuth,
-  ensureSubscription,
-  ensureTailscaleEndpoint,
-  ensureTopic,
-  type GogInspection,
-  inspectGog,
-  inspectGogUpgrade,
-  resolveProjectIdFromGogCredentials,
-  runGcloud,
-  startGmailWatcherService,
-  stopGmailWatcher,
-  upgradeGog,
-} from "../../extensions/gmail/runtime-api.js";
 import { stylePromptMessage } from "../../packages/terminal-core/src/prompt-style.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -45,12 +11,23 @@ import {
   resolveGatewayPort,
   validateConfigObjectWithPlugins,
 } from "../config/config.js";
+import {
+  type GmailHookOverrides,
+  DEFAULT_GMAIL_LABEL,
+  DEFAULT_GMAIL_TOPIC,
+  DEFAULT_GMAIL_SUBSCRIPTION,
+  DEFAULT_GMAIL_SERVE_BIND,
+  DEFAULT_GMAIL_SERVE_PORT,
+  DEFAULT_GMAIL_MAX_BYTES,
+  DEFAULT_GMAIL_RENEW_MINUTES,
+} from "../config/gmail-hook.js";
 import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { formatCommandResult } from "../process/command-error.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { displayPath } from "../utils.js";
+import { loadGmailApi, loadGmailRuntime, type GogInspection } from "./gmail-plugin.js";
 
 type GmailCommonOptions = Omit<
   GmailHookOverrides,
@@ -82,6 +59,7 @@ async function offerGogUpgrade(
   if (inspection.support === "supported" || !process.stdin.isTTY || !process.stdout.isTTY) {
     return inspection;
   }
+  const { inspectGog, inspectGogUpgrade, upgradeGog } = loadGmailRuntime();
   const upgrade = await inspectGogUpgrade(inspection, { signal });
   signal?.throwIfAborted();
   if (!upgrade.eligible) {
@@ -109,6 +87,26 @@ async function offerGogUpgrade(
 }
 
 export async function runGmailSetup(opts: GmailSetupOptions) {
+  const {
+    buildDefaultHookUrl,
+    buildGogWatchStartArgs,
+    buildTopicPath,
+    GMAIL_INSECURE_TOKEN_ARGS_WARNING,
+    mergeHookPresets,
+    normalizeHooksPath,
+    normalizeServePath,
+    parseTopicPath,
+  } = loadGmailApi();
+  const {
+    ensureDependency,
+    ensureGcloudAuth,
+    ensureSubscription,
+    ensureTailscaleEndpoint,
+    ensureTopic,
+    inspectGog,
+    resolveProjectIdFromGogCredentials,
+    runGcloud,
+  } = loadGmailRuntime();
   await ensureDependency("gcloud", ["--cask", "gcloud-cli"]);
   await ensureDependency("gog", ["gogcli"]);
   const signal = getAsyncWorkSignal();
@@ -311,6 +309,8 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
 }
 
 export async function runGmailService(opts: GmailRunOptions) {
+  const { resolveGmailHookRuntimeConfig } = loadGmailApi();
+  const { ensureDependency, startGmailWatcherService, stopGmailWatcher } = loadGmailRuntime();
   await ensureDependency("gog", ["gogcli"]);
   const config = await captureRuntimeConfigAsyncReader()();
 

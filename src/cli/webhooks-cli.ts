@@ -9,7 +9,7 @@ import {
   DEFAULT_GMAIL_SERVE_PORT,
   DEFAULT_GMAIL_SUBSCRIPTION,
   DEFAULT_GMAIL_TOPIC,
-} from "../../extensions/gmail/api.js";
+} from "../config/gmail-hook.js";
 import { danger } from "../globals.js";
 import { type GmailRunOptions, runGmailService, runGmailSetup } from "../hooks/gmail-ops.js";
 import { formatErrorMessage } from "../infra/errors.js";

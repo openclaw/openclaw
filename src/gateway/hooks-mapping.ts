@@ -7,7 +7,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveGmailHookMaxBytes } from "../../extensions/gmail/api.js";
+import { resolveGmailHookMaxBytes } from "../config/gmail-hook.js";
 import { resolveConfigPathCandidate } from "../config/paths.js";
 import type { HookMappingConfig, HooksConfig, HookSessionMode } from "../config/types.hooks.js";
 import { resolveFunctionModuleExport } from "../hooks/module-loader.js";

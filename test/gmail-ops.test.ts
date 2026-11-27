@@ -6,11 +6,11 @@ import {
   commandGate,
   createGmailConfig,
   WatcherChild,
-} from "./gmail.test-support.js";
+} from "../extensions/gmail/test-api.js";
 
 const mocks = vi.hoisted(() => ({
   ensureDependency: vi.fn(),
-  ensureTailscaleEndpoint: vi.fn(),
+  runTailscale: vi.fn(),
   readRuntimeConfig: vi.fn(),
   runCommandWithTimeout: vi.fn(),
   runUtf8CommandWithTimeout: vi.fn(),
@@ -23,8 +23,10 @@ const mocks = vi.hoisted(() => ({
   defaultRuntime: { log: vi.fn(), error: vi.fn(), writeJson: vi.fn(), exit: vi.fn() },
 }));
 
-// mock-isolation: capture watcher logging without writing host log files.
-vi.mock("../../../src/logging/subsystem.js", () => ({ createSubsystemLogger: () => mocks.log }));
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  createSubsystemLogger: () => mocks.log,
+}));
 
 vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
@@ -34,17 +36,32 @@ vi.mock("node:child_process", async () => {
   );
 });
 
-// mock-isolation: all command completion and cancellation is controlled by this fixture.
-vi.mock("../../../src/process/exec.js", () => ({
-  runCommandWithTimeout: mocks.runCommandWithTimeout,
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
+  runCommandWithTimeout: (argv: string[], options: { signal?: AbortSignal }) =>
+    argv[0] === "tailscale"
+      ? mocks.runTailscale(argv, options)
+      : mocks.runCommandWithTimeout(argv, options),
   runUtf8CommandWithTimeout: mocks.runUtf8CommandWithTimeout,
+  killProcessTree: mocks.killProcessTree,
+  resolveExecutable: (name: string) => name,
+  resolveExecutablePath: (name: string) => name,
 }));
 
-vi.mock("./gmail-gog.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./gmail-gog.js")>()),
-  inspectGogUpgrade: mocks.inspectGogUpgrade,
-  upgradeGog: mocks.upgradeGog,
-}));
+// Vite loads the public plugin modules in the same test runtime as the process fixtures.
+vi.mock("../src/hooks/gmail-plugin.js", async () => {
+  const api = await import("../extensions/gmail/api.js");
+  const runtime = await import("../extensions/gmail/runtime-api.js");
+  return {
+    loadGmailApi: () => api,
+    loadGmailRuntime: () => ({
+      ...runtime,
+      ensureDependency: mocks.ensureDependency,
+      inspectGogUpgrade: mocks.inspectGogUpgrade,
+      upgradeGog: mocks.upgradeGog,
+    }),
+  } satisfies typeof import("../src/hooks/gmail-plugin.js");
+});
 
 // mock-isolation: control terminal upgrade answers without opening an interactive prompt.
 vi.mock("@clack/prompts", () => ({
@@ -52,13 +69,9 @@ vi.mock("@clack/prompts", () => ({
   isCancel: (value: unknown) => typeof value === "symbol",
 }));
 
-// mock-isolation: terminate only the fixture's fake child processes.
-vi.mock("../../../src/process/kill-tree.js", () => ({ killProcessTree: mocks.killProcessTree }));
-
-vi.mock("../../../src/config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../src/config/config.js")>(
-    "../../../src/config/config.js",
-  );
+vi.mock("../src/config/config.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../src/config/config.js")>("../src/config/config.js");
   return {
     ...actual,
     captureRuntimeConfigAsyncReader: () => mocks.readRuntimeConfig,
@@ -66,27 +79,10 @@ vi.mock("../../../src/config/config.js", async () => {
 });
 
 // mock-isolation: capture service output and exit instead of affecting this test process.
-vi.mock("../../../src/runtime.js", () => ({ defaultRuntime: mocks.defaultRuntime }));
+vi.mock("../src/runtime.js", () => ({ defaultRuntime: mocks.defaultRuntime }));
 
-// mock-isolation: simulate prerequisites without installing tools or configuring endpoints.
-vi.mock("./gmail-setup-utils.js", () => ({
-  ensureDependency: mocks.ensureDependency,
-  ensureGcloudAuth: vi.fn(),
-  ensureSubscription: vi.fn(),
-  ensureTailscaleEndpoint: mocks.ensureTailscaleEndpoint,
-  ensureTopic: vi.fn(),
-  resolveProjectIdFromGogCredentials: vi.fn(),
-  runGcloud: vi.fn(),
-}));
-
-// mock-isolation: resolve fixture executables without inspecting the host installation.
-vi.mock("../../../src/infra/executable-path.js", () => ({
-  resolveExecutable: vi.fn((name: string) => name),
-  resolveExecutablePath: vi.fn((name: string) => name),
-}));
-
-const { runGmailService } = await import("../../../src/hooks/gmail-ops.js");
-const { stopGmailWatcher } = await import("../runtime-api.js");
+const { runGmailService } = await import("../src/hooks/gmail-ops.js");
+const { stopGmailWatcher } = await import("../extensions/gmail/runtime-api.js");
 
 const ttyDescriptors = [process.stdin, process.stdout].map((stream) =>
   Object.getOwnPropertyDescriptor(stream, "isTTY"),
@@ -136,7 +132,7 @@ beforeEach(() => {
   signalBaselines = new Map(signals.map((signal) => [signal, process.rawListeners(signal)]));
   children = [];
   mocks.ensureDependency.mockReset().mockResolvedValue(undefined);
-  mocks.ensureTailscaleEndpoint.mockReset().mockResolvedValue(undefined);
+  mocks.runTailscale.mockReset().mockResolvedValue(undefined);
   mocks.readRuntimeConfig.mockResolvedValue(createGmailConfig(undefined, 1, { mode: "off" }));
   mocks.runCommandWithTimeout.mockReset().mockResolvedValue(commandSuccess);
   mocks.runUtf8CommandWithTimeout.mockReset().mockResolvedValue(gogSchemaSuccess);
@@ -266,7 +262,7 @@ it.each([
   async ({ signal, boundary }) => {
     const pending = commandGate();
     if (boundary === "tailscale") {
-      mocks.ensureTailscaleEndpoint.mockImplementation(pending.run);
+      mocks.runTailscale.mockImplementation((_argv, options) => pending.run(options));
     } else {
       mocks.runCommandWithTimeout.mockImplementation((_args, options: { signal: AbortSignal }) =>
         pending.run(options),
@@ -288,7 +284,7 @@ it.each([
 
 it.each(["tailscale", "spawn"])("cleans up signals after %s startup failure", async (boundary) => {
   if (boundary === "tailscale") {
-    mocks.ensureTailscaleEndpoint.mockRejectedValueOnce(new Error("fixture setup failed"));
+    mocks.runTailscale.mockRejectedValueOnce(new Error("fixture setup failed"));
   } else {
     mocks.spawn.mockImplementationOnce(() => {
       throw new Error("fixture setup failed");

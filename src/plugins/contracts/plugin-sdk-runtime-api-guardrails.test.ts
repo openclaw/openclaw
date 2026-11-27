@@ -23,6 +23,11 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
   [runtimeApiPluginFile("amazon-bedrock")]: [
     'export { createConverseStreamFn } from "./stream.runtime.js";',
   ],
+  [runtimeApiPluginFile("gmail")]: [
+    'export { inspectGog, inspectGogUpgrade, upgradeGog, type GogInspection } from "./src/gmail-gog.js";',
+    'export { ensureDependency, ensureGcloudAuth, ensureSubscription, ensureTailscaleEndpoint, ensureTopic, resolveProjectIdFromGogCredentials, runGcloud } from "./src/gmail-setup-utils.js";',
+    'export { startGmailWatcherService, stopGmailWatcher } from "./src/gmail-watcher.js";',
+  ],
   [runtimeApiPluginFile("facetime")]: [
     'export { createFaceTimeRuntime, type FaceTimeRuntime } from "./src/runtime.js";',
   ],

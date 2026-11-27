@@ -213,7 +213,7 @@ describe("Discord admission through Gateway policy publication", () => {
       reloadPlugins: async () => {
         throw new Error("policy edit must not reload plugins");
       },
-      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+
       logChannels: { info: vi.fn(), error: vi.fn() },
       logCron: { error: vi.fn() },
       logReload: { info: vi.fn(), warn: vi.fn() },

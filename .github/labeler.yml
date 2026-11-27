@@ -15,6 +15,12 @@
           - "extensions/gbrain/**"
           - "docs/plugins/gbrain.md"
           - "docs/plugins/reference/gbrain.md"
+"plugin: gmail":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/gmail/**"
+          - "docs/automation/cron-jobs/gmail.md"
+          - "docs/plugins/reference/gmail.md"
 "plugin: geolocation":
   - changed-files:
       - any-glob-to-any-file:

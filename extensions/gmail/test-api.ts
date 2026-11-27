@@ -1,8 +1,8 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
 
 export const commandSuccess = {
   code: 0,

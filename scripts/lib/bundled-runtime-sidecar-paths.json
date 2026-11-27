@@ -4,6 +4,7 @@
   "dist/extensions/canvas/runtime-api.js",
   "dist/extensions/cloudflare/runtime-api.js",
   "dist/extensions/copilot-proxy/runtime-api.js",
+  "dist/extensions/gmail/runtime-api.js",
   "dist/extensions/google/runtime-api.js",
   "dist/extensions/lmstudio/runtime-api.js",
   "dist/extensions/memory-core/runtime-api.js",
