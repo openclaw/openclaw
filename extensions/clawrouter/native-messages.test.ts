@@ -200,6 +200,52 @@ beforeEach(() => {
   vi.stubEnv("ANTHROPIC_API_KEY", "synthetic-never-upstream");
 });
 
+it.each(["Accept, x-ClAwRoUtEr-ClIeNt", "*"])(
+  "reads the ordinary Messages representation when the catalog varies by %s",
+  async (vary) => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const clients: Array<string | string[] | undefined> = [];
+    await withServer(
+      (request, response) => {
+        const client = request.headers["x-clawrouter-client"];
+        clients.push(client);
+        response.setHeader("content-type", "application/json");
+        response.setHeader("vary", vary);
+        const body = catalog();
+        response.end(
+          JSON.stringify({
+            ...body,
+            observedAt: new Date().toISOString(),
+            scope: { authType: "proxy_key", credentialId: "fixture-profile" },
+            providers: client === "openclaw" ? [] : body.providers,
+          }),
+        );
+      },
+      async (origin) => {
+        const key = "synthetic-router-key";
+        const result = await provider.catalog?.run?.({
+          config: {
+            models: { providers: { clawrouter: { baseUrl: origin + "/v1", models: [] } } },
+          },
+          env: {},
+          resolveProviderAuth: () => ({
+            apiKey: key,
+            discoveryApiKey: key,
+            mode: "api_key",
+            source: "profile",
+          }),
+          resolveProviderApiKey: () => ({ apiKey: key }),
+        });
+        expect(result).toMatchObject({
+          provider: { models: [expect.objectContaining({ id: selected })] },
+          outcomes: [{ status: "ready", capabilityModels: [] }],
+        });
+        expect(clients).toEqual(["openclaw", undefined]);
+      },
+    );
+  },
+);
+
 it("observes the selected account on each discovery while reusing ordinary Messages rows", async () => {
   const body = {
     ...catalog(),

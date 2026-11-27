@@ -184,6 +184,16 @@ export type ClawRouterCatalogObservation = {
   response: Response;
 };
 
+function variesByClawRouterClient(response: Response): boolean {
+  const fields =
+    response.headers
+      .get("vary")
+      ?.toLowerCase()
+      .split(",")
+      .map((name) => name.trim()) ?? [];
+  return fields.includes("*") || fields.includes("x-clawrouter-client");
+}
+
 export async function fetchClawRouterCapabilityOffers(params: {
   context: ReturnType<typeof resolveClawRouterCapabilityHttpContext>;
   timeoutMs: () => number;
@@ -227,7 +237,12 @@ export async function fetchClawRouterCapabilityOffers(params: {
         `ClawRouter capability catalog failed (HTTP ${response.status}). Check the ClawRouter key, grants and budget.`,
       );
     }
-    if (params.onDirectCatalog && finalUrl === catalogUrl && !context.dispatcherPolicy) {
+    if (
+      params.onDirectCatalog &&
+      finalUrl === catalogUrl &&
+      !context.dispatcherPolicy &&
+      !variesByClawRouterClient(response)
+    ) {
       ordinaryPage = response.clone();
     }
     const body = await readProviderJsonResponse(response, "clawrouter.capability-catalog", {
