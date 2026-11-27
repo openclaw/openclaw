@@ -437,17 +437,11 @@ function shouldAlwaysBundleDependency(id: string): boolean {
   );
 }
 
-// Single-file helper processes inline lazily imported graphs, so tree-shaking can leave a
-// bare import of a package after removing every consumer, and each spawn still loads it.
-// Only these audited imports may be dropped; every other external keeps its side effects.
-const STANDALONE_RUNTIME_UNUSED_IMPORT_RULES = [
-  // Both packages declare `"sideEffects": false`.
-  /^@openclaw\/(?:fs-safe|proc-safe)(?:\/|$)/u,
-  /^json5$/u,
-  /^typebox\/(?:schema|guard|compile)$/u,
-  // `internal/runtime` installs the process-global default AI runtime on import. No helper
-  // process calls the AI runtime, so skipping that setup is intended for these entries only.
-  /^@openclaw\/ai\/(?:internal\/runtime|internal\/shared|diagnostics)$/u,
+// Single-file relays keep some external imports after their last binding is removed.
+// These audited subpaths belong to packages that declare sideEffects: false.
+const RELAY_UNUSED_IMPORT_RULES = [
+  /^@openclaw\/fs-safe\/(?:advanced|durability|errors|output|root|secure-file|walk)$/u,
+  /^@openclaw\/proc-safe\/(?:errors|identity|inspect|reaper)$/u,
 ].map((test) => ({ test, external: true, sideEffects: false }));
 
 function listBundledPluginEntrySources(
@@ -940,7 +934,12 @@ const configs: UserConfig[] = [
             shouldAlwaysBundleDependency(id) || shouldBundleRuntimeSqliteDependency(id),
         },
         outputOptions: { codeSplitting: false },
-        treeshake: { moduleSideEffects: STANDALONE_RUNTIME_UNUSED_IMPORT_RULES },
+        ...([
+          "process/supervisor/service-child-relay",
+          "agents/harness/native-hook-relay-client.worker",
+        ].includes(name)
+          ? { treeshake: { moduleSideEffects: RELAY_UNUSED_IMPORT_RULES } }
+          : {}),
         plugins: [createStateSchemaInlinePlugin()],
       },
       false,

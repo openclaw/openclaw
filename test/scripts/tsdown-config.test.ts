@@ -109,36 +109,20 @@ function listBindinglessPackageImports(source: string): string[] {
   return specifiers;
 }
 
-const SQLITE_READONLY_CHILD_ENTRY = "infra/sqlite-readonly-location.worker";
-// Kept only for side effects after tree-shaking removed their consumers; each spawn of the
-// child would otherwise load TypeBox and the AI runtime that nothing in it calls.
-const SQLITE_READONLY_CHILD_UNUSED_IMPORTS = new Set([
-  "@openclaw/fs-safe/output",
-  "@openclaw/fs-safe/secure-file",
-  "@openclaw/fs-safe/walk",
-  "typebox/schema",
-  "typebox/guard",
-  "typebox/compile",
-  "@openclaw/ai/internal/runtime",
-  "@openclaw/ai/internal/shared",
-  "@openclaw/ai/diagnostics",
-]);
+const SERVICE_RELAY_ENTRY = "process/supervisor/service-child-relay";
+const HOOK_RELAY_ENTRY = "agents/harness/native-hook-relay-client.worker";
 
-async function listStandaloneHelperBindinglessImports(
-  entryName: string,
-  entrySource: string,
-): Promise<string[]> {
-  const childSource = standaloneRuntimeProcessBuildEntries[SQLITE_READONLY_CHILD_ENTRY];
+async function buildRelayImports(entryName: string, fixture?: string) {
+  const entrySource = standaloneRuntimeProcessBuildEntries[entryName];
   const selected =
-    childSource &&
-    configs.find((config) => hasWorkerEntry(config, SQLITE_READONLY_CHILD_ENTRY, childSource));
+    entrySource && configs.find((config) => hasWorkerEntry(config, entryName, entrySource));
   if (!selected) {
     throw new Error("Missing standalone runtime process build config");
   }
   const { bundles } = await build({
     ...selected,
     config: false,
-    entry: { [entryName]: entrySource },
+    ...(fixture ? { entry: { [entryName]: fixture } } : {}),
     outDir: fs.realpathSync(createTempDir("openclaw-standalone-helper-")),
     logLevel: "silent",
   });
@@ -149,7 +133,7 @@ async function listStandaloneHelperBindinglessImports(
     if (chunk?.type !== "chunk") {
       throw new Error(`Missing standalone helper chunk: ${entryName}`);
     }
-    return listBindinglessPackageImports(chunk.code);
+    return { bare: listBindinglessPackageImports(chunk.code), all: chunk.imports };
   } finally {
     for (const bundle of bundles) {
       await bundle[Symbol.asyncDispose]();
@@ -1287,28 +1271,29 @@ console.log("relocated session card renders with bundled fonts");
     }
   });
 
-  it("keeps unused package imports out of every read-only SQLite child spawn", async () => {
-    const source = standaloneRuntimeProcessBuildEntries[SQLITE_READONLY_CHILD_ENTRY];
-    if (!source) {
-      throw new Error("Missing read-only SQLite child entry");
-    }
-    const imports = await listStandaloneHelperBindinglessImports(
-      SQLITE_READONLY_CHILD_ENTRY,
-      source,
-    );
-    expect(
-      imports.filter((specifier) => SQLITE_READONLY_CHILD_UNUSED_IMPORTS.has(specifier)),
-    ).toEqual([]);
-  });
+  it.each([SERVICE_RELAY_ENTRY, HOOK_RELAY_ENTRY])(
+    "omits unused fs-safe and proc-safe imports from %s",
+    async (entry) => {
+      const { bare } = await buildRelayImports(entry);
+      expect(bare.filter((id) => /^@openclaw\/(?:fs-safe|proc-safe)\//u.test(id))).toEqual([]);
+    },
+  );
 
-  it("keeps unaudited package side-effect imports in standalone helpers", async () => {
-    const root = fs.realpathSync(createTempDir("openclaw-standalone-helper-fixture-"));
+  it("preserves relay imports with live bindings and third-party side effects", async () => {
+    const require = createRequire(import.meta.url);
+    for (const dependency of ["@openclaw/fs-safe", "@openclaw/proc-safe"]) {
+      expect(require(`${dependency}/package.json`)).toMatchObject({ sideEffects: false });
+    }
+    const root = fs.realpathSync(createTempDir("openclaw-relay-imports-"));
     fs.symlinkSync(fs.realpathSync("node_modules"), path.join(root, "node_modules"), "dir");
-    const entry = path.join(root, "helper.ts");
-    fs.writeFileSync(entry, 'import "dotenv/config";\nimport "typebox/schema";\n');
-    expect(await listStandaloneHelperBindinglessImports("helper", entry)).toEqual([
-      "dotenv/config",
-    ]);
+    const entry = path.join(root, "relay.ts");
+    fs.writeFileSync(
+      entry,
+      'import "dotenv/config";\nimport "@openclaw/ai/internal/runtime";\nimport "@openclaw/fs-safe/walk";\nexport { readProcessIdentity } from "@openclaw/proc-safe/identity";\n',
+    );
+    const { bare, all } = await buildRelayImports(SERVICE_RELAY_ENTRY, entry);
+    expect(bare.toSorted()).toEqual(["@openclaw/ai/internal/runtime", "dotenv/config"]);
+    expect(all).toContain("@openclaw/proc-safe/identity");
   });
 
   it("keeps excluded plugins out of the unified graph without dropping host helpers", () => {
