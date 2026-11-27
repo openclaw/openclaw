@@ -650,6 +650,7 @@ if (args[0] === 'run' && args.includes('-i') && process.env.CHECK_WRITABLE_PREFI
   if (mode !== 0o007) throw new Error('npm prefix is inaccessible to the container user: ' + mode);
 }
 fs.appendFileSync(process.env.DOCKER_CALLS, JSON.stringify(args) + '\\n');
+if (args.includes('appuser:appuser')) process.exit(Number(process.env.OUTPUT_SETUP_EXIT_CODE || 0));
 if (args.includes('--cidfile')) process.exit(Number(process.env.SUITE_EXIT_CODE || 0));
 if (args.includes('/output')) process.exit(Number(process.env.ARTIFACT_EXIT_CODE || 0));
 `,
@@ -675,8 +676,37 @@ if (args.includes('/output')) process.exit(Number(process.env.ARTIFACT_EXIT_CODE
         .map((line) => JSON.parse(line) as string[])
         .filter((args) => args[0] === "run")
     : [];
-  return { root, candidate, result, runs };
+  return {
+    root,
+    candidate,
+    result,
+    allRuns: runs,
+    runs: runs.filter((args) => !args.includes("appuser:appuser")),
+  };
 }
+
+it("hands the artifact directory to the non-root suite before using it", () => {
+  const { root, result, allRuns } = captureDocker();
+  expect(result.status, result.stderr).toBe(0);
+  const setup = allRuns[0]!;
+  expect(setup).toEqual(expect.arrayContaining(["--network", "none", "--user", "0:0"]));
+  expect(setup.flatMap((arg, index) => (arg === "-v" ? [setup[index + 1]] : []))).toEqual([
+    `${path.join(root, "output")}:/output`,
+  ]);
+  expect(setup.slice(-4)).toEqual(["chown", "-h", "appuser:appuser", "/output"]);
+  expect(setup.some((arg) => arg.startsWith("OPENCLAW_QA_CONVEX_SECRET_"))).toBe(false);
+  expect(allRuns.find((args) => args.includes("--cidfile"))).toContain(
+    `${path.join(root, "output")}:/app/.artifacts/qa-e2e/npm-telegram-live-output`,
+  );
+});
+
+it("does not start the suite when the output handoff fails", () => {
+  const { result, allRuns } = captureDocker({ OUTPUT_SETUP_EXIT_CODE: "23" });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("Could not prepare Telegram artifacts for the container user.");
+  expect(allRuns.some((args) => args.includes("--cidfile"))).toBe(false);
+  expect(allRuns.at(-1)).toContain("find");
+});
 
 it("makes the disposable npm prefix writable to the container user", () => {
   const { result } = captureDocker({ CHECK_WRITABLE_PREFIX: "1" });

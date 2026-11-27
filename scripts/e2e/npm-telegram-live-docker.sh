@@ -261,6 +261,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Hand only the output mount root to the image's non-root user. Preserve its
+# mode; the EXIT trap returns the output to the host uploader.
+if ! docker_e2e_docker_with_timeout 30s run --rm --network none --user 0:0 \
+  -v "$OUTPUT_DIR_HOST:/output" "$IMAGE_NAME" chown -h appuser:appuser /output; then
+  echo "Could not prepare Telegram artifacts for the container user." >&2
+  exit 1
+fi
+
 docker_env=(
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0
   -e OPENCLAW_E2E_COMMAND_TIMEOUT="${OPENCLAW_E2E_COMMAND_TIMEOUT:-300s}"
