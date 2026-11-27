@@ -6,6 +6,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../packages/gateway-protocol/src/startup-unavailable.js";
 import { withinTest } from "../../test/helpers/promise.js";
+import { isAgentRunResumableRestartAbortReason } from "../agents/run-termination.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
@@ -44,6 +45,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import * as gatewayDispatch from "./server-in-process-dispatch.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
+import { createRestartResumeMarks } from "./server-run-shutdown.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import {
   persistRunningSessionsForRestart,
@@ -610,6 +612,9 @@ it("marks ordinary conversations without inheriting cron or external execution o
         },
       },
       { sessionKey: "agent:main:external-harness", entry: { modelSelectionLocked: true } },
+      // Under global scope every agent's main session has the literal key "global".
+      { sessionKey: "global", resumable: true },
+      { sessionKey: "global", automation: true },
     ];
     const claims: Array<[string, string | undefined]> = [];
     try {
@@ -631,7 +636,7 @@ it("marks ordinary conversations without inheriting cron or external execution o
             }),
           );
         }
-        const runId = `live:${sessionKey}`;
+        const runId = `live:${agentId}:${sessionKey}`;
         claims.push([
           runId,
           claimAgentRunContext(
@@ -648,14 +653,17 @@ it("marks ordinary conversations without inheriting cron or external execution o
           ),
         ]);
       }
-      await persistRunningSessionsForRestart({ cfg: {} });
+      const marks = createRestartResumeMarks();
+      await persistRunningSessionsForRestart({ cfg: {}, onMarked: marks.mark });
+      // A stop target without an agent is interrupted as before.
+      expect(marks.reasonFor(undefined, "global")).toBeUndefined();
       for (const { sessionKey, resumable } of cases) {
-        const entry = loadExactSessionEntry({
-          agentId: resumable ? "other" : "main",
-          sessionKey,
-        })?.entry;
+        const agentId = resumable ? "other" : "main";
+        const entry = loadExactSessionEntry({ agentId, sessionKey })?.entry;
         expect(entry).toBeDefined();
         expect(entry?.resumeAfterRestart, sessionKey).toEqual(resumable ? {} : undefined);
+        const reason = marks.reasonFor(agentId, sessionKey);
+        expect(isAgentRunResumableRestartAbortReason(reason), sessionKey).toBe(Boolean(resumable));
       }
     } finally {
       for (const [runId, claim] of claims) {

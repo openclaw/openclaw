@@ -2,7 +2,10 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
-import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
+import {
+  isAgentRunRestartAbortReason,
+  isAgentRunResumableRestartAbortReason,
+} from "../agents/run-termination.js";
 import { deleteSubagentSessionForCleanup } from "../agents/subagents/registry/subagent-session-cleanup.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { callGateway } from "./call.js";
@@ -259,6 +262,8 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
           expect(beforeEmergencyRelease).not.toContain("dependencies stopped");
           expect(beforeFinalizerRelease).not.toContain("dependencies stopped");
           expect(isAgentRunRestartAbortReason(runSignal?.reason)).toBe(true);
+          // The marked root session tells its harness the next Gateway resumes it.
+          expect(isAgentRunResumableRestartAbortReason(runSignal?.reason)).toBe(true);
           expect(terminalPayload).toMatchObject({
             status: "timeout",
             stopReason: "restart",

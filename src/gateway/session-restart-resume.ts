@@ -66,6 +66,8 @@ import { prepareSessionSystemTurnAuthority } from "./session-sharing-authorizati
 export async function persistRunningSessionsForRestart(params: {
   cfg: OpenClawConfig;
   signal?: AbortSignal;
+  /** Called once a session's restart marker is committed. */
+  onMarked?: (agentId: string, sessionKey: string) => void;
 }): Promise<void> {
   const summary = createRestartResumeSummary("shutdown");
   const publish = () => summary.publish();
@@ -164,6 +166,7 @@ async function persistRunningSessions(
       for (const { session, preserve } of preserveQueued) {
         if (session.needsResume) {
           summary.record(session.agentId, session.sessionKey, "marked");
+          params.onMarked?.(session.agentId, session.sessionKey);
         }
         preserve();
       }

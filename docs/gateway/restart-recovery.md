@@ -24,6 +24,18 @@ session's owner or another participant cannot replace it. A revoked or unavailab
 source fails recovery rather than falling back to another person. Older markers
 without a captured source keep the session-principal recovery policy.
 
+A Codex turn in a session that receives a marker, running in an app-server that
+the Gateway reaches over a WebSocket or Unix socket rather than one it started,
+is not interrupted: it keeps running, as it does after a crash. The next
+Gateway's recovery input waits up to two minutes for that turn to finish, then
+continues from its result. A final Gateway stop also leaves such a turn
+running until it ends by itself; its result is used only if a Gateway starts
+again and resumes the session. To end it, stop the turn first, or stop the
+app-server. A turn in a session without a marker, one in a
+[sandboxed session](/gateway/config-agents/sandbox), one in a worker-hosted
+app-server, or one still waiting on the stopping Gateway (an approval, a
+question, or an OpenClaw tool call) is interrupted as before.
+
 Scheduled automation retains its cron owner, even when it runs in an ordinary
 conversation. Shutdown does not turn an interrupted occurrence into an operator
 resume request or an operator-authority failure notice. The cron scheduler owns

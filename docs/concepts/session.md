@@ -315,7 +315,8 @@ Opt into automatic resets globally, then override them per chat type or channel:
 ## Gateway restart recovery
 
 A graceful Gateway stop or restart writes one small marker for each running root
-session, then aborts work promptly. A root is running when its agent loop, one of
+session, then aborts work promptly (a marked session's Codex turn in an app-server
+the Gateway did not start keeps running). A root is running when its agent loop, one of
 its descendant sub-agents, or one of its background processes is active. At startup,
 the Gateway clears the marker and sends one ordinary system input asking the agent
 to check current files, processes, sub-agents, and external actions before continuing.

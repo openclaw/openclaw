@@ -242,7 +242,7 @@ export function activateCodexAttemptTurn(
   );
   const activeProjector = projectorRef.current;
   let activationFailed = false;
-  const abortListener = () => {
+  const abortListener = turnRuntime.keepResumableRemoteTurn(() => {
     state.abortCleanup = interruptTurn(activeTurnId).then(async (confirmed) => {
       if (
         !activationFailed &&
@@ -279,7 +279,7 @@ export function activateCodexAttemptTurn(
       embeddedAgentLog.warn("codex app-server cancellation cleanup failed", { error });
       completeTurn();
     });
-  };
+  });
   const notifyUserMessagePersisted = createCodexAppServerUserMessagePersistenceNotifier(params);
   const bindProjection = async (promptMirrorPromise: Promise<void>) => {
     state.activeLocalProjections += 1;

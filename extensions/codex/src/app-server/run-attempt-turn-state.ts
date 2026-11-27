@@ -2,7 +2,10 @@ import {
   createAgentHarnessAttemptDeadlineController,
   type AgentHarnessAttemptTimeout,
 } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  embeddedAgentLog,
+  isAgentRunResumableRestartAbortReason,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createAgentHarnessToolExecutionRegistry } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -63,6 +66,27 @@ class CodexAttemptState {
   currentTurnHadNonTerminalDynamicToolResult = false;
 }
 
+/**
+ * A Gateway stop leaves a resumable turn in an app-server it did not start running, as a
+ * crash does; the next Gateway's restart input waits for it. Open requests to it end, and
+ * so do commands the Gateway admits itself, so such a turn is interrupted as before.
+ */
+export function keepsCodexTurnAtGatewayStop(turn: {
+  abortReason: unknown;
+  transport: string;
+  workerHostedCloud?: boolean;
+  requiresProcessAdmission?: boolean;
+  openTurnRequests: number;
+}): boolean {
+  return (
+    isAgentRunResumableRestartAbortReason(turn.abortReason) &&
+    turn.transport !== "stdio" &&
+    !turn.workerHostedCloud &&
+    !turn.requiresProcessAdmission &&
+    turn.openTurnRequests === 0
+  );
+}
+
 export function createCodexAttemptTurnState(resources: StartedCodexAttemptResources) {
   const {
     prompt,
@@ -95,6 +119,21 @@ export function createCodexAttemptTurnState(resources: StartedCodexAttemptResour
     steeringQueueRef.current?.cancel();
     deadlines.beginSettlement(Date.now());
     resolveCompletion();
+  };
+  const keepResumableRemoteTurn = (interrupt: () => void) => () => {
+    if (
+      keepsCodexTurnAtGatewayStop({
+        abortReason: runAbortController.signal.reason,
+        transport: connection.appServer.start.transport,
+        workerHostedCloud: connection.workerHostedCloud,
+        requiresProcessAdmission: resources.nativeProcessAuthority?.requiresProcessAdmission,
+        openTurnRequests: state.activeAppServerTurnRequests,
+      })
+    ) {
+      completeTurn();
+    } else {
+      interrupt();
+    }
   };
   const interruptTurn = async (
     turnId: string,
@@ -242,6 +281,7 @@ export function createCodexAttemptTurnState(resources: StartedCodexAttemptResour
     steeringQueueRef,
     completeTurn,
     interruptTurn,
+    keepResumableRemoteTurn,
     noteProgress,
     deadlines,
   };
