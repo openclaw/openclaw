@@ -227,12 +227,14 @@ it("sends distinct history and split-turn summary formats", async () => {
   expect(providerPrompts[0]).toContain("[User]: summarize me");
   expect(providerPrompts[0]).toContain("receipt_90210");
   expect(providerPrompts[0]).toContain("Keep the deployment decision.");
-  expect(providerPrompts[0]).toContain("Preserve all opaque identifiers exactly");
+  expect(providerPrompts[0]).toContain("preserve literal values exactly as seen");
+  expect(providerPrompts[0]).not.toContain("Preserve all opaque identifiers exactly");
   expect(providerPrompts[0]).not.toContain("## Goal");
   expect(providerPrompts[0]).not.toContain("## Constraints & Preferences");
   expect(providerPrompts[0]).toContain("## Pending user asks");
   expect(providerPrompts[0]).not.toContain("## Original Request");
   expect(providerPrompts[1]).toContain("## Original Request");
+  expect(providerPrompts[1]).toContain("Preserve all opaque identifiers exactly");
   expect(providerPrompts[1]).not.toContain("## Pending user asks");
   expect(providerBudgets).toEqual([3_200, 2_000]);
 });

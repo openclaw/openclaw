@@ -18,6 +18,8 @@ const scope = [
   "memory_index_sources",
   "schema_meta",
   "session_creation_operations",
+  "session_members",
+  "session_nodes",
   "session_pending_inputs",
   "session_transcript_active_event_facts",
   "session_transcript_cold_archive_chunks",

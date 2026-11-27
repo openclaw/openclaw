@@ -5,18 +5,27 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
+  createOperationalRunInstanceRef,
+  getAdmittedRunDelegatedAuthority,
+  prepareAgentRunAdmission,
+} from "../../agents/admitted-run-context.js";
+import {
   bindCronManagementGrant,
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
 import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import { updateCronJobFromAgentTool } from "../../agents/tools/cron-tool-write.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
 import {
   applyLegacyCronStoreRepair,
   loadLegacyCronRepairState,
 } from "../../commands/doctor/cron/legacy-repair.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  bindCronJobAdmittedRun,
+  clearCronJobActive,
+  markCronJobActive,
+} from "../../cron/active-jobs.js";
 import { cronRunLogEntryToDetail } from "../../cron/run-history-detail.js";
 import { CronService } from "../../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../../cron/service.test-harness.js";
@@ -316,7 +325,7 @@ describe("cron method validation", () => {
     ["cron.get", false, "channel-owner", true],
     ["cron.update", false, "channel-owner", false],
     ["cron.run", false, "channel-owner", true],
-    ["cron.remove", true, "control-ui-admin", true],
+    ["cron.remove", true, "operator", true],
   ] as const)(
     "%s manages a foreign automation (close after commit: %s, source: %s, trusted: %s)",
     async (method, closeAfterCommit, source, trusted) => {
@@ -328,16 +337,7 @@ describe("cron method validation", () => {
       const scope = createCronCreatorAuthorityRunScope(
         identity.operationalRunInstance.runId,
         source === "channel-owner" ? { kind: "external", channel: "discord" } : { kind: "local" },
-        source === "channel-owner"
-          ? {
-              source,
-              isCurrent: () =>
-                isConfiguredCommandOwner(getRuntimeConfig(), {
-                  channel: "discord",
-                  senderId: "owner-1",
-                }),
-            }
-          : { source },
+        { source },
       );
       const job = createCronJob({
         agentId: "telegram-agent",
@@ -929,30 +929,6 @@ describe("cron method validation", () => {
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
-  it("keeps wake mutation at zero when delegated authority closes during preparation", async () => {
-    let authorityActive = true;
-    const held = createDeferred<undefined>();
-    const context = createCronContext();
-    context.cron.prepareWake.mockImplementationOnce(async () => await held.promise);
-    context.validateAgentRuntimeApprovalAuthority = () => authorityActive;
-
-    const invocation = invokeCron(
-      "wake",
-      { mode: "now", text: "ping", agentId: "ops" },
-      { context, client: callerClient("ops") },
-    );
-    await vi.waitFor(() => expect(context.cron.prepareWake).toHaveBeenCalledOnce());
-    authorityActive = false;
-    held.resolve(undefined);
-    const { respond } = await invocation;
-
-    expect(context.cron.wake).toHaveBeenCalledOnce();
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "agent runtime authority is no longer active",
-    });
-  });
-
   it("stamps declaration ownership from the trusted caller and scopes key lookup", async () => {
     const { context, respond } = await invokeCronAdd(
       agentTurnCronParams({
@@ -1039,7 +1015,7 @@ describe("cron method validation", () => {
         const replay = await invokeCron(`cron.${method}`, params, { context, client });
         expectResponseError(replay.respond, {
           code: "INVALID_REQUEST",
-          messageIncludes: "Configured MCP cron authority is no longer active",
+          messageIncludes: "This run's MCP cron access has ended",
         });
         expect(committed).toHaveLength(1);
       } finally {
@@ -1059,7 +1035,7 @@ describe("cron method validation", () => {
     });
     expectResponseError(mismatch.respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "Configured MCP cron authority is no longer active",
+      messageIncludes: "This run's MCP cron access has ended",
     });
     expect(context.committedAdds).toHaveLength(0);
 
@@ -1100,7 +1076,7 @@ describe("cron method validation", () => {
       });
       expectResponseError(respond, {
         code: "INVALID_REQUEST",
-        messageIncludes: "Configured MCP cron authority is no longer active",
+        messageIncludes: "This run's MCP cron access has ended",
       });
       expect(context.committedAdds).toHaveLength(0);
       expect(context.committedUpdates).toHaveLength(0);
@@ -1140,63 +1116,6 @@ describe("cron method validation", () => {
       });
       expect(context.committedAdds).toHaveLength(0);
       expect(context.committedUpdates).toHaveLength(0);
-    },
-  );
-
-  it("checks a direct Cron caller again at the add commit boundary", async () => {
-    const context = createCronContext();
-    const result = await invokeCron("cron.add", agentTurnCronParams(), {
-      context,
-      hasCurrentClientAuthority: () => context.cron.add.mock.calls.length === 0,
-    });
-    expect(context.cron.add).toHaveBeenCalledOnce();
-    expect(context.committedAdds).toHaveLength(0);
-    expectResponseError(result.respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "Gateway caller authority is no longer active",
-    });
-  });
-
-  it.each([
-    ["cron.scratch.set", { id: "cron-1", content: "notes" }, "writeScratch"],
-    ["cron.remove", { id: "cron-1" }, "remove"],
-    ["cron.run", { id: "cron-1", mode: "force" }, "enqueueRun"],
-  ] as const)(
-    "revalidates delegated authority at the %s commit owner",
-    async (method, params, owner) => {
-      const context = createCronContext(createCronJob({ agentId: "ops" }));
-      let authorityActive = true;
-      context.validateAgentRuntimeApprovalAuthority = () => authorityActive;
-      if (owner === "writeScratch") {
-        context.cron.writeScratch.mockImplementationOnce(async (_id, write) => {
-          authorityActive = false;
-          write.commitGuard?.();
-          throw new Error("unreachable");
-        });
-      } else if (owner === "remove") {
-        context.cron.remove.mockImplementationOnce(async (_id, options) => {
-          authorityActive = false;
-          options?.commitGuard?.();
-          throw new Error("unreachable");
-        });
-      } else {
-        context.cron.enqueueRun.mockImplementationOnce(async (_id, _mode, options) => {
-          authorityActive = false;
-          options?.commitGuard?.();
-          throw new Error("unreachable");
-        });
-      }
-
-      const { respond } = await invokeCron(method, params, {
-        context,
-        client: callerClient("ops"),
-      });
-
-      expect(context.cron[owner]).toHaveBeenCalledOnce();
-      expectResponseError(respond, {
-        code: "INVALID_REQUEST",
-        messageIncludes: "agent runtime authority is no longer active",
-      });
     },
   );
 
@@ -1529,12 +1448,35 @@ describe("cron method validation", () => {
     });
     expect(context.cron.enqueueRun).not.toHaveBeenCalled();
 
-    const remove = await invokeCron(
-      "cron.remove",
-      { id: accountJob.id },
-      { context, client: runClient },
-    );
-    expect(remove.respond).toHaveBeenCalledWith(true, { ok: true, removed: true }, undefined);
+    const admission = prepareAgentRunAdmission({
+      cfg: {},
+      operationalRunInstance: createOperationalRunInstanceRef("run-current-job-self-management"),
+      facts: {
+        runId: "run-current-job-self-management",
+        agentId: "ops",
+        ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
+      },
+    });
+    const marker = markCronJobActive(accountJob.id);
+    try {
+      const admitted = await admission.admit("embedded");
+      const identity = expectDefined(runClient.internal?.agentRuntimeIdentity, "scheduled caller");
+      identity.operationalRunInstance = admitted.operationalRunInstance;
+      identity.delegatedAuthority = {
+        kind: "local",
+        ...expectDefined(getAdmittedRunDelegatedAuthority(admitted), "scheduled admission"),
+      };
+      bindCronJobAdmittedRun(marker, admitted, new AbortController().signal);
+      const remove = await invokeCron(
+        "cron.remove",
+        { id: accountJob.id },
+        { context, client: runClient },
+      );
+      expect(remove.respond).toHaveBeenCalledWith(true, { ok: true, removed: true }, undefined);
+    } finally {
+      clearCronJobActive(accountJob.id, marker);
+      admission.close();
+    }
 
     cronRunRecordsOverride.mockImplementationOnce(async () => {
       runClient.internal!.agentRuntimeIdentity!.cronSelfManagementContext!.expiresAtMs =
@@ -1990,128 +1932,40 @@ describe("cron method validation", () => {
     },
   );
 
-  const failureAlertChannelError = {
-    code: "INVALID_REQUEST",
-    messageIncludes: "failureAlert.channel",
-  } as const;
-
-  function globalFailureAlertConfig(
-    config: OpenClawConfig,
-    failureAlert: NonNullable<OpenClawConfig["cron"]>["failureAlert"],
-  ): OpenClawConfig {
-    return { ...config, cron: { failureAlert } };
-  }
-
-  function createRoutedCronJob(
-    channel: string,
-    to: string,
-    overrides: Pick<Partial<CronJob>, "failureAlert"> = {},
-  ): CronJob {
-    return createCronJob({ delivery: { mode: "announce", channel, to }, ...overrides });
-  }
-
-  function failureAlertUpdateAccepted(
-    title: string,
-    patch: Record<string, unknown>,
-    currentJob: CronJob = createCronJob(),
-    config: OpenClawConfig = telegramSlackConfig(),
-  ): void {
-    it(title, async () => {
-      setRuntimeConfig(config);
-      const { context, respond } = await invokeCronUpdate({ id: "cron-1", patch }, currentJob);
-      expect(context.cron.update).toHaveBeenCalled();
+  it.each([true, false, null])(
+    "updates the failure-alert switch without changing the result destination (%j)",
+    async (failureAlert) => {
+      setRuntimeConfig(telegramSlackConfig());
+      const delivery = { mode: "announce" as const, channel: "telegram", to: "telegram:1" };
+      const { context, respond } = await invokeCronUpdate(
+        { id: "cron-1", patch: { failureAlert } },
+        createCronJob({ delivery }),
+      );
+      expect(context.cron.update).toHaveBeenCalledExactlyOnceWith("cron-1", { failureAlert });
       expectCronSuccess(respond);
-    });
-  }
-
-  function failureAlertUpdateRejected(
-    title: string,
-    patch: Record<string, unknown>,
-    currentJob: CronJob = createCronJob(),
-    config: OpenClawConfig = telegramSlackConfig(),
-  ): void {
-    it(title, async () => {
-      setRuntimeConfig(config);
-      const { context, respond } = await invokeCronUpdate({ id: "cron-1", patch }, currentJob);
-      expect(context.cron.update).not.toHaveBeenCalled();
-      expectResponseError(respond, failureAlertChannelError);
-    });
-  }
-
-  function failureAlertAddRejected(
-    title: string,
-    params: Record<string, unknown>,
-    config: OpenClawConfig,
-  ): void {
-    it(title, async () => {
-      setRuntimeConfig(config);
-      const { context, respond } = await invokeCronAdd(params);
-      expect(context.cron.add).not.toHaveBeenCalled();
-      expectResponseError(respond, failureAlertChannelError);
-    });
-  }
-
-  // An explicit job channel selects announce routing ahead of the global
-  // webhook destination, so the canonical resolver must validate it.
-  failureAlertUpdateRejected(
-    "validates an explicit failureAlert channel ahead of a global webhook on cron.update",
-    { failureAlert: { channel: "C0EXAMPLE01", to: "https://example.invalid/hook" } },
-    createCronJob(),
-    globalFailureAlertConfig(telegramSlackConfig(), { enabled: true, mode: "webhook" }),
-  );
-
-  failureAlertAddRejected(
-    "validates an explicit failureAlert channel ahead of a global webhook on cron.add",
-    agentTurnCronParams({
-      name: "inherited webhook alert",
-      failureAlert: { channel: "C0EXAMPLE01", to: "https://example.invalid/hook" },
-    }),
-    globalFailureAlertConfig(slackConfig(), { enabled: true, mode: "webhook" }),
-  );
-
-  // Route-backed alerts are already active by default, so a threshold-only edit
-  // must not revalidate a legacy channel that the patch does not change.
-  failureAlertUpdateAccepted(
-    "does not revalidate a route-backed legacy channel for a threshold-only edit",
-    { failureAlert: { after: 3 } },
-    createRoutedCronJob("c0legacyinvalid", "123"),
+    },
   );
 
   it.each([
-    {
-      name: "provider-alias recipient",
-      delivery: { mode: "announce", channel: "slack", to: "slack:C123" },
-      alertTo: "tg:123",
-    },
-  ] as const)("lets a $name select its own alert channel", async ({ delivery, alertTo }) => {
-    setRuntimeConfig(telegramSlackConfig());
-
-    const { context, respond } = await invokeCronUpdate(
-      { id: "cron-1", patch: { failureAlert: { to: alertTo } } },
-      createCronJob({ delivery }),
-    );
-
-    expect(context.cron.update).toHaveBeenCalled();
-    expectCronSuccess(respond);
+    { failureAlert: { after: 3 } },
+    { failureAlert: { channel: "telegram", to: "telegram:1" } },
+    { delivery: { failureDestination: { channel: "telegram", to: "telegram:1" } } },
+  ])("rejects retired alert settings on cron.update (%j)", async (patch) => {
+    const { context, respond } = await invokeCronUpdate({ id: "cron-1", patch }, createCronJob());
+    expect(context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "invalid cron.update",
+    });
   });
 
-  failureAlertUpdateAccepted(
-    "does not inherit a primary recipient for another explicit failure-alert channel",
-    { failureAlert: { channel: "slack" } },
-    createRoutedCronJob("telegram", "telegram:1"),
-  );
-
-  failureAlertAddRejected(
-    "rejects an unconfigured inherited global failure-alert channel",
-    agentTurnCronParams({
-      delivery: { mode: "announce", channel: "telegram", to: "telegram:1" },
-    }),
-    globalFailureAlertConfig(telegramConfig(), {
-      enabled: true,
-      channel: "slack",
-      to: "slack:C123",
-    }),
-  );
+  it("rejects retired alert settings on cron.add", async () => {
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({ failureAlert: { channel: "telegram", to: "telegram:1" } }),
+    );
+    expect(context.cron.add).not.toHaveBeenCalled();
+    expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "invalid cron.add" });
+  });
 
   // Creation records no host inference account for a CLI-backed model, so an
   // edit must accept the same model ref instead of demanding a stored account.

@@ -201,8 +201,8 @@ async function transportFailureAlert(
       to: params.route.to,
       mode: params.route.mode,
       accountId: params.route.accountId,
-      ...(params.route.target ? { target: params.route.target } : {}),
-      ...(params.route.directPolicy ? { directPolicy: params.route.directPolicy } : {}),
+      target: params.route.target,
+      directPolicy: params.route.directPolicy,
       threadId: params.route.threadId,
       ...(params.route.alternateRoute ? { inheritSessionThread: false as const } : {}),
       onDeliverySettled: async (outcome) => {
@@ -218,6 +218,10 @@ async function transportFailureAlert(
             params.payload.text ?? "",
             "failure-alert",
             routing,
+            {
+              privateFallback:
+                params.route.target === "owner" || params.route.directPolicy === "block",
+            },
           );
         }
       },

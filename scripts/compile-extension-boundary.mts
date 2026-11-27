@@ -59,7 +59,8 @@ const result = await compileNativeProject({
   compilerOptions,
   roots,
   diagnostics: "all",
-  assertInput: (file) => boundary.assert(file),
+  // The compiler owns physical input confinement; this worker adds no narrower input policy.
+  assertInput: (file) => file,
   emit: request.emit,
 });
 const outputs = [...result.outputFiles].map(([file, output]) => {

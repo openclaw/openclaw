@@ -233,6 +233,54 @@ class CalendarHandlerTest : NodeHandlerRobolectricTest() {
   }
 
   @Test
+  fun handleCalendarAdd_keepsAllDayDateWrittenWithPositiveOffset() {
+    val source = FakeCalendarDataSource(canRead = true, canWrite = true)
+    val handler = CalendarHandler(appContext(), source)
+
+    val result =
+      handler.handleCalendarAdd(
+        """{"title":"Holiday","startISO":"2026-07-05T00:00:00+10:00","endISO":"2026-07-06T00:00:00+10:00","isAllDay":true}""",
+      )
+
+    assertTrue(result.ok)
+    val request = source.addedRequest ?: error("missing add request")
+    assertEquals(Instant.parse("2026-07-05T00:00:00Z").toEpochMilli(), request.startMs)
+    assertEquals(Instant.parse("2026-07-06T00:00:00Z").toEpochMilli(), request.endMs)
+  }
+
+  @Test
+  fun handleCalendarAdd_acceptsUtcEndOfDayForAllDayEvents() {
+    val source = FakeCalendarDataSource(canRead = true, canWrite = true)
+    val handler = CalendarHandler(appContext(), source)
+
+    val result =
+      handler.handleCalendarAdd(
+        """{"title":"Holiday","startISO":"2026-07-05T00:00:00Z","endISO":"2026-07-05T24:00:00Z","isAllDay":true}""",
+      )
+
+    assertTrue(result.ok)
+    val request = source.addedRequest ?: error("missing add request")
+    assertEquals(Instant.parse("2026-07-05T00:00:00Z").toEpochMilli(), request.startMs)
+    assertEquals(Instant.parse("2026-07-06T00:00:00Z").toEpochMilli(), request.endMs)
+  }
+
+  @Test
+  fun handleCalendarAdd_keepsLeapSecondDateAndOffsetEndDateForAllDayEvents() {
+    val source = FakeCalendarDataSource(canRead = true, canWrite = true)
+    val handler = CalendarHandler(appContext(), source)
+
+    val result =
+      handler.handleCalendarAdd(
+        """{"title":"Holiday","startISO":"2016-12-31T23:59:60Z","endISO":"2017-01-02T00:00:00+10:00","isAllDay":true}""",
+      )
+
+    assertTrue(result.ok)
+    val request = source.addedRequest ?: error("missing add request")
+    assertEquals(Instant.parse("2016-12-31T00:00:00Z").toEpochMilli(), request.startMs)
+    assertEquals(Instant.parse("2017-01-02T00:00:00Z").toEpochMilli(), request.endMs)
+  }
+
+  @Test
   fun handleCalendarAdd_preservesTimedInstantsAndDeviceTimezone() {
     val source = FakeCalendarDataSource(canRead = true, canWrite = true)
     val handler = CalendarHandler(appContext(), source)
@@ -248,6 +296,68 @@ class CalendarHandlerTest : NodeHandlerRobolectricTest() {
     assertEquals(TimeZone.getDefault().id, request.timeZoneId)
     assertEquals(Instant.parse("2026-07-05T09:15:00Z").toEpochMilli(), request.startMs)
     assertEquals(Instant.parse("2026-07-05T10:45:00Z").toEpochMilli(), request.endMs)
+  }
+
+  @Test
+  fun timedAddAndEventsAcceptLeapSecondAndEndOfDay() {
+    assertTimedBounds(
+      startISO = "2016-12-31T23:59:60Z",
+      endISO = "2016-12-31T24:00:00Z",
+      expectedStart = "2016-12-31T23:59:59Z",
+      expectedEnd = "2017-01-01T00:00:00Z",
+    )
+  }
+
+  @Test
+  fun timedAddAndEventsPreserveNumericOffsets() {
+    assertTimedBounds(
+      startISO = "2026-07-05T23:30:00-04:00",
+      endISO = "2026-07-06T07:45+03:00",
+      expectedStart = "2026-07-06T03:30:00Z",
+      expectedEnd = "2026-07-06T04:45:00Z",
+    )
+  }
+
+  @Test
+  fun invalidStartRejectsTimedAddAndDefaultsEventsToNow() {
+    val source = FakeCalendarDataSource(canRead = true, canWrite = true)
+    val handler = CalendarHandler(appContext(), source)
+    val end = "2026-07-06T00:00:00Z"
+
+    val add = handler.handleCalendarAdd("""{"title":"Call","startISO":"invalid","endISO":"$end"}""")
+    assertEquals("INVALID_REQUEST", add.error?.code)
+    assertNull(source.addedRequest)
+
+    val before = Instant.now().toEpochMilli()
+    assertTrue(handler.handleCalendarEvents("""{"startISO":"invalid","endISO":"$end"}""").ok)
+    val after = Instant.now().toEpochMilli()
+    val query = source.eventsRequest ?: error("missing events request")
+    assertTrue(query.startMs in before..after)
+    assertEquals(Instant.parse(end).toEpochMilli(), query.endMs)
+  }
+
+  private fun assertTimedBounds(
+    startISO: String,
+    endISO: String,
+    expectedStart: String,
+    expectedEnd: String,
+  ) {
+    val source = FakeCalendarDataSource(canRead = true, canWrite = true)
+    val handler = CalendarHandler(appContext(), source)
+    val startMs = Instant.parse(expectedStart).toEpochMilli()
+    val endMs = Instant.parse(expectedEnd).toEpochMilli()
+
+    val addResult = handler.handleCalendarAdd("""{"title":"Call","startISO":"$startISO","endISO":"$endISO"}""")
+    assertTrue(addResult.ok)
+    val add = source.addedRequest ?: error("missing add request")
+    assertEquals(startMs, add.startMs)
+    assertEquals(endMs, add.endMs)
+
+    val queryResult = handler.handleCalendarEvents("""{"startISO":"$startISO","endISO":"$endISO"}""")
+    assertTrue(queryResult.ok)
+    val query = source.eventsRequest ?: error("missing events request")
+    assertEquals(startMs, query.startMs)
+    assertEquals(endMs, query.endMs)
   }
 
   private fun registerCalendarProvider(vararg calendars: TestCalendar): TestCalendarProvider {
@@ -365,6 +475,8 @@ private class FakeCalendarDataSource(
     ),
   private val addError: Throwable? = null,
 ) : CalendarDataSource {
+  var eventsRequest: CalendarEventsRequest? = null
+    private set
   var addedRequest: CalendarAddRequest? = null
     private set
 
@@ -372,7 +484,10 @@ private class FakeCalendarDataSource(
 
   override fun hasWritePermission(): Boolean = canWrite
 
-  override fun events(request: CalendarEventsRequest): List<CalendarEventRecord> = events
+  override fun events(request: CalendarEventsRequest): List<CalendarEventRecord> {
+    eventsRequest = request
+    return events
+  }
 
   override fun add(request: CalendarAddRequest): CalendarEventRecord {
     addError?.let { throw it }

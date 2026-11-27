@@ -29,6 +29,19 @@ describe("tool-authored source replies", () => {
     expect(extractMessagingToolSourceReplyPayload(result)).toBeUndefined();
   });
 
+  it("marks the callback controls of a tool-authored reply as agent-owned", () => {
+    const buttons = (value: string) => ({
+      blocks: [
+        { type: "buttons", buttons: [{ label: "Pick", action: { type: "callback", value } }] },
+      ],
+    });
+    expect(
+      extractToolAuthoredSourceReplyPayload({
+        details: { sourceReply: { text: "Pick one", presentation: buttons(":pick:a") } },
+      }),
+    ).toEqual({ text: "Pick one", presentation: buttons(":::pick:a") });
+  });
+
   it("admits a media-only reply", () => {
     expect(
       extractToolAuthoredSourceReplyPayload({

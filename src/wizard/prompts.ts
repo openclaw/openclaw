@@ -1,3 +1,5 @@
+import type { ProviderAuthFailureReason } from "../plugins/provider-auth-failure.js";
+
 export type WizardSelectOption<T = string> = {
   value: T;
   label: string;
@@ -45,7 +47,11 @@ type WizardConfirmParams = {
 };
 
 export type WizardProgress = {
-  update: (message: string) => void;
+  /**
+   * `reason` marks a recoverable sign-in failure reported while the step stays open, such as a
+   * browser refusal; it still reaches the open prompt after `stop`.
+   */
+  update: (message: string, reason?: ProviderAuthFailureReason) => void;
   stop: (message?: string) => void;
 };
 

@@ -270,8 +270,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
         body: {
           jobId: job.id,
           jobName: "60-second monitor",
-          message:
-            'Automation "60-second monitor" failed 2 times in a row\nLast error: monitor failed',
+          message: 'Automation "60-second monitor" failed\nLast error: monitor failed',
         },
       });
       await expectState(storePath, job.id, {

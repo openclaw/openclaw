@@ -125,10 +125,14 @@ export function createAutomationResultRecorder(
     if (!run) {
       throw new Error("record_result is only available to the currently running automation");
     }
+    const normalized = parseAutomationResult(result);
     if (run.result) {
+      // Repeating the accepted result changes nothing, so it is not a failure.
+      if (normalized?.outcome === run.result.outcome && normalized.summary === run.result.summary) {
+        return run.result;
+      }
       throw new Error("record_result already accepted for this automation run");
     }
-    const normalized = parseAutomationResult(result);
     if (!normalized) {
       throw new Error(
         "record_result requires a valid outcome and trimmed summary of 1–2000 characters (optional only for no_change)",

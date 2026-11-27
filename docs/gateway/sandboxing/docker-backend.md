@@ -12,6 +12,19 @@ The Docker backend runs tools locally through the `docker` CLI. Its selection an
 
 Defaults: `network: "none"` (no egress), `readOnlyRoot: true`, `capDrop: ["ALL"]`, image `openclaw-sandbox:trixie-slim`.
 
+The agent Git wrapper records a stable absolute native Git path when prepared.
+It validates the target with realpath and skips script shims and their symlink
+aliases. Calls use that stored path without searching PATH. Replacing Git behind
+a stable package-manager symlink keeps working; if the recorded path disappears,
+the wrapper repeats the same validation once to find an available native Git.
+Docker/Podman prepare their own script in writable temporary storage, including
+private persistent-execution containers. An executable launcher on the read-only
+resource mount sources that script, preserving the default `noexec` protection
+on `/tmp` even with read-only workspaces. Host launchers are prepared at Gateway
+startup. Git credentials, egress, identity, and maintenance settings are unchanged.
+If no native Git is available, Git calls report an error; other sandbox tools
+remain available.
+
 Tmpfs mounts without an explicit `size=` option are capped at 1 GiB for `/tmp`,
 4 GiB for the managed dependency store at `/tmp/openclaw-deps`, and 256 MiB for
 other paths. Existing explicit sizes are preserved. These are capacity limits,
@@ -161,13 +174,25 @@ settings. Increasing a workspace result limit does not fix cache exhaustion.
 
 Workspace capture and transfer omit exact tool-owned cache roots left by older
 sandboxes: `.npm/_cacache`, `.npm/_logs`, `.cache/pip`, `.cache/uv`, `.pnpm-store`,
-`.bun/install/cache`, `.cargo/registry`, `.cargo/git`, and `.gradle/caches`.
+`.bun/install/cache`, `.cargo/registry`, `.cargo/git`, `.gradle/caches`,
+`.local/share/NuGet/http-cache`, `.local/share/NuGet/v3-cache`, `.nuget/packages`,
+and `.cache/convex/binaries`. NuGet HTTP caches can be relocated with
+`NUGET_HTTP_CACHE_PATH`, and its global packages with `NUGET_PACKAGES`.
 Cargo and Gradle retain their workspace configuration; their cache subdirectories
 use this exclusion policy. Files elsewhere in `.npm`, `.cache`, `.cargo`, and
 `.gradle`, nested project fixtures, and staged inputs remain workspace data.
 Caches already on disk are not deleted. Large user files still hit the result
 size guard; a recognized cache in a nested project names its cache class and the
 environment setting for moving it outside the workspace before recovery.
+
+Android Gradle Plugin output under `build/intermediates`, `build/outputs/apk`,
+and `build/outputs/bundle` is also omitted at any module depth. Other `build/`
+paths, including source files and reports, remain workspace data.
+
+.NET output under `bin/Debug`, `bin/Release`, `obj/Debug`, and `obj/Release` is
+also omitted at any project depth. Other `bin/` and `obj/` paths remain workspace
+data, including authored scripts, custom configurations such as `bin/Staging`,
+and platform layouts such as `bin/x64/Debug`.
 
 ### Docker daemon
 

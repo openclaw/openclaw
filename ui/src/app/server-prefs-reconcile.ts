@@ -563,7 +563,7 @@ export async function loadProfileAppearancePrefs(
 function loadLocalNavigationPreferences(
   gatewayUrl: string,
   profileId?: string | null,
-): Partial<Pick<UiSettings, "sidebarEntries" | "personalSessionGroups">> | null {
+): Pick<UiSettings, "sidebarEntries"> | null {
   if (!profileId) {
     // The connection owner has adopted profileless identity before reconciliation.
     return loadUiPreferences(gatewayUrl || undefined);
@@ -573,12 +573,7 @@ function loadLocalNavigationPreferences(
       readSettingsForGateway(getSafeLocalStorage(), gatewayUrl)?.parsed,
       profileId,
     );
-    return navigation
-      ? {
-          sidebarEntries: navigation.railShortcuts,
-          personalSessionGroups: navigation.personalSessionGroups,
-        }
-      : null;
+    return navigation?.railShortcuts ? { sidebarEntries: navigation.railShortcuts } : null;
   } catch {
     return null;
   }

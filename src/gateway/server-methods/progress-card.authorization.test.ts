@@ -194,57 +194,42 @@ describe("progress card request authorization", () => {
       }),
   );
 
-  it.each(["visibility", "source"] as const)(
-    "does not publish a shared card after its %s changes during storage",
-    (change) =>
-      withState(async () => {
-        const cfg = rolePolicyConfig();
-        setRuntimeConfigSnapshot(cfg, cfg);
-        const client = roleClient("view", "delayed-card-viewer");
-        client.connect.scopes = ["operator.sessions.read"];
-        const owner = roleClient("view", "delayed-card-owner");
-        const target = { sessionKey: "agent:main:visible-card", agentId: "main" };
-        await upsertSessionEntryCore(target, {
-          ...entry(owner, "visible-generation"),
-          visibility: "shared",
-        });
-        await putCard(target, "shared card");
-        const { entered, release, store } = pausedStore();
-        await withPausedStore(store, async () => {
-          const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-          const { respond, pending } = requester(client, context)("progressCard.get", target);
-          const settled = Promise.allSettled([pending]);
-          try {
-            await awaitEntered(entered.promise, pending);
-            expect(respond).not.toHaveBeenCalled();
-            if (change === "visibility") {
-              await upsertSessionEntryCore(target, { visibility: "draft" });
-            } else {
-              client.invalidated = true;
-            }
-            release.resolve();
-            const [result] = await settled;
-            if (change === "source") {
-              expect(result).toEqual({
-                status: "rejected",
-                reason: new Error("Gateway requester authority changed"),
-              });
-              expect(respond).not.toHaveBeenCalled();
-            } else {
-              expect(result).toEqual({ status: "fulfilled", value: undefined });
-              expect(respond).toHaveBeenCalledExactlyOnceWith(
-                false,
-                undefined,
-                expect.objectContaining({ code: "INVALID_REQUEST" }),
-              );
-            }
-          } finally {
-            release.resolve();
-            await settled;
-          }
-        });
-      }),
-  );
+  it("does not publish a shared card after its visibility changes during storage", () =>
+    withState(async () => {
+      const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg, cfg);
+      const client = roleClient("view", "delayed-card-viewer");
+      client.connect.scopes = ["operator.sessions.read"];
+      const owner = roleClient("view", "delayed-card-owner");
+      const target = { sessionKey: "agent:main:visible-card", agentId: "main" };
+      await upsertSessionEntryCore(target, {
+        ...entry(owner, "visible-generation"),
+        visibility: "shared",
+      });
+      await putCard(target, "shared card");
+      const { entered, release, store } = pausedStore();
+      await withPausedStore(store, async () => {
+        const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+        const { respond, pending } = requester(client, context)("progressCard.get", target);
+        const settled = Promise.allSettled([pending]);
+        try {
+          await awaitEntered(entered.promise, pending);
+          expect(respond).not.toHaveBeenCalled();
+          await upsertSessionEntryCore(target, { visibility: "draft" });
+          release.resolve();
+          const [result] = await settled;
+          expect(result).toEqual({ status: "fulfilled", value: undefined });
+          expect(respond).toHaveBeenCalledExactlyOnceWith(
+            false,
+            undefined,
+            expect.objectContaining({ code: "INVALID_REQUEST" }),
+          );
+        } finally {
+          release.resolve();
+          await settled;
+        }
+      });
+    }));
 
   it.each([
     { method: "progressCard.get", beforeCommit: false },

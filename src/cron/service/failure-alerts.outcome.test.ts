@@ -367,6 +367,7 @@ function createFixture() {
   const state = createCronRegressionState({
     storePath: store.storePath,
     nowMs: () => clock.now,
+    cronConfig: { failureAlert: { channel: "last", after: 1, cooldownMs: 60_000 } },
     sendCronFailureAlert,
     runIsolatedAgentJob: vi.fn(),
   });

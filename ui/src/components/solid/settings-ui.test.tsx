@@ -1,7 +1,8 @@
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
-import { SettingsSegmented, SettingsToggle, SettingsToggleRow } from "./settings-ui.tsx";
+import { SettingsSegmented, SettingsToggleRow } from "./settings-ui.tsx";
+import { Switch } from "./switch.tsx";
 
 afterEach(cleanup);
 const options = [
@@ -10,7 +11,7 @@ const options = [
 ] as const;
 
 it.each([
-  ["standalone", SettingsToggle],
+  ["standalone", Switch],
   ["row", SettingsToggleRow],
 ] as const)(
   "%s uses the current activation callback synchronously and restores rejected changes",
@@ -54,9 +55,7 @@ it.each([
 it("preserves native toggle activation while its label refreshes", () => {
   const [label, setLabel] = createSignal("Initial label");
   const onChange = vi.fn();
-  const view = render(() => (
-    <SettingsToggle ariaLabel={label()} checked={false} onChange={onChange} />
-  ));
+  const view = render(() => <Switch ariaLabel={label()} checked={false} onChange={onChange} />);
   const input = view.container.querySelector<HTMLInputElement>('input[role="switch"]')!;
   input.addEventListener(
     "click",

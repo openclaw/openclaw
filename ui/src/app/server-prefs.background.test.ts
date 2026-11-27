@@ -103,7 +103,7 @@ it("normalizes metadata without retaining bytes, URLs, or unknown fields", () =>
   const placement = { showOnNewSession: false, showInSessions: true, visibility: 0.2 };
   expect(selectBackgroundSource(replacement, { ...custom, ...placement })).toMatchObject(placement);
   expect(DEFAULT_BACKGROUND_PREFERENCE).toMatchObject({
-    source: { kind: "theme" },
+    source: { kind: "none" },
     showInSessions: true,
   });
   expect(selectBackgroundSource({ kind: "theme" }).showInSessions).toBe(true);

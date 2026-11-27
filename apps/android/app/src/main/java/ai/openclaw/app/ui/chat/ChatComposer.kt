@@ -9,7 +9,7 @@ import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES
 import ai.openclaw.app.chat.OUTBOX_MAX_VIDEO_COMMAND_ATTACHMENT_BYTES
 import ai.openclaw.app.chat.VoiceNoteRecorderState
-import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.saveable.listSaver
 import kotlinx.coroutines.CancellationException
 
@@ -36,37 +36,35 @@ internal class ChatComposerTextDraftStore(
   initial: ChatComposerDraftSnapshot = ChatComposerDraftSnapshot(),
   private val onSnapshotChanged: (ArrayList<String>) -> Unit = {},
 ) {
-  private val drafts = mutableStateMapOf<ChatComposerOwner, String>()
-  private val recency = ArrayDeque<ChatComposerOwner>()
+  private val drafts = mutableStateListOf<Pair<ChatComposerOwner, String>>()
   private val pendingSends = LinkedHashMap<String, PendingChatComposerSend>()
 
   init {
     initial.drafts.forEach { (owner, text) ->
-      drafts[owner] = text
-      recency.addLast(owner)
+      drafts.add(owner to text)
     }
     initial.pendingSends.forEach { pending -> pendingSends[pending.commandId] = pending }
   }
 
-  operator fun get(owner: ChatComposerOwner): String = drafts[owner].orEmpty()
+  operator fun get(owner: ChatComposerOwner): String = draftText(owner).orEmpty()
+
+  private fun draftText(owner: ChatComposerOwner): String? = drafts.firstOrNull { it.first == owner }?.second
 
   operator fun set(
     owner: ChatComposerOwner,
     value: String,
   ) {
-    recency.remove(owner)
+    val existed = drafts.removeAll { it.first == owner }
     if (value.isEmpty()) {
-      drafts.remove(owner)
       onSnapshotChanged(snapshot())
       return
     }
-    if (owner !in drafts) {
+    if (!existed) {
       while (drafts.size >= CHAT_COMPOSER_MAX_DRAFT_OWNERS) {
-        drafts.remove(recency.removeFirst())
+        drafts.removeAt(0)
       }
     }
-    drafts[owner] = value
-    recency.addLast(owner)
+    drafts.add(owner to value)
     onSnapshotChanged(snapshot())
   }
 
@@ -75,8 +73,9 @@ internal class ChatComposerTextDraftStore(
     to: ChatComposerOwner,
   ) {
     if (from == to) return
-    val draft = drafts.remove(from)
-    val existing = drafts[to]
+    val draft = draftText(from)
+    drafts.removeAll { it.first == from }
+    val existing = draftText(to)
     var changed = false
     pendingSends.toMap().forEach { (commandId, pending) ->
       if (pending.owner == from) {
@@ -88,7 +87,6 @@ internal class ChatComposerTextDraftStore(
       if (changed) onSnapshotChanged(snapshot())
       return
     }
-    recency.remove(from)
     this[to] =
       requireNotNull(mergeChatComposerDraftText(existing, draft))
   }
@@ -99,7 +97,7 @@ internal class ChatComposerTextDraftStore(
     mainSessionKey: String,
   ): Set<ChatComposerOwner> {
     val sources =
-      (recency + pendingSends.values.map(PendingChatComposerSend::owner))
+      (drafts.map { it.first } + pendingSends.values.map(PendingChatComposerSend::owner))
         .filterTo(linkedSetOf()) { source -> shouldMigrateComposerDraft(source, to, mainSessionKey) }
     sources.forEach { source -> migrate(from = source, to = to) }
     return sources
@@ -118,9 +116,8 @@ internal class ChatComposerTextDraftStore(
       (pendingSends.values + pending).sumOf { pendingSendCheckpointEntry(it, includeInput = true).sumOf(String::length) }
     if (checkpointChars > CHAT_COMPOSER_DRAFT_SNAPSHOT_MAX_CHARS) return false
     pendingSends[commandId] = pending
-    if (drafts[owner] == inputSnapshot) {
-      drafts.remove(owner)
-      recency.remove(owner)
+    if (draftText(owner) == inputSnapshot) {
+      drafts.removeAll { it.first == owner }
     }
     onSnapshotChanged(snapshot())
     return true
@@ -132,13 +129,12 @@ internal class ChatComposerTextDraftStore(
     admitted: Boolean,
   ): PendingChatComposerSend? {
     val pending = pendingSends.remove(commandId) ?: return null
-    val current = drafts[pending.owner]
+    val current = draftText(pending.owner)
     if (!admitted) {
       val restored = mergeChatComposerDraftText(pending.inputSnapshot, current)
       if (restored != null) {
-        drafts[pending.owner] = restored
-        recency.remove(pending.owner)
-        recency.addLast(pending.owner)
+        drafts.removeAll { it.first == pending.owner }
+        drafts.add(pending.owner to restored)
       }
     }
     onSnapshotChanged(snapshot())
@@ -150,11 +146,10 @@ internal class ChatComposerTextDraftStore(
   fun pendingAdmission(commandId: String): PendingChatComposerSend? = pendingSends[commandId]
 
   fun removeOwners(matches: (ChatComposerOwner) -> Boolean) {
-    val owners = drafts.keys.filterTo(linkedSetOf(), matches)
+    val owners = drafts.map { it.first }.filterTo(linkedSetOf(), matches)
     val removedPending = pendingSends.entries.removeAll { matches(it.value.owner) }
     if (owners.isEmpty() && !removedPending) return
-    owners.forEach(drafts::remove)
-    recency.removeAll(owners::contains)
+    drafts.removeAll { it.first in owners }
     onSnapshotChanged(snapshot())
   }
 
@@ -177,8 +172,7 @@ internal class ChatComposerTextDraftStore(
     val retainedNewestFirst = mutableListOf<List<String>>()
     // SavedStateHandle is written into the Activity transaction. Keep the full in-memory drafts,
     // but checkpoint only the newest complete entries that fit the bounded process-death budget.
-    for (owner in recency.reversed()) {
-      val text = drafts.getValue(owner)
+    for ((owner, text) in drafts.asReversed()) {
       val entry = listOf(CHAT_COMPOSER_DRAFT_RECORD) + owner.toCheckpointValues() + listOf("", text)
       val entryChars = entry.sumOf(String::length)
       if (entryChars > remainingChars) continue

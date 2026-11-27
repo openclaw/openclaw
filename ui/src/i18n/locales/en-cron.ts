@@ -11,31 +11,36 @@ const enCron = {
       script: "Script: {script}",
       agent: "Agent: {message}",
     },
+    linkUnavailable: "Couldn’t open this automation. Reload this page to try again.",
     missingConfigRevision:
       "This automation is missing its configuration revision. Refresh and try again.",
     changedOnGateway:
       "This automation changed on the Gateway. The latest definition is loaded; review it before retrying.",
     changedOnGatewayLoadFailed:
       "This automation changed on the Gateway, but the latest definition could not be loaded. Refresh before retrying.",
+    saveConflictReloaded:
+      "This automation changed before your edits could be saved. Review the latest settings shown here, then reapply your edits.",
+    saveConflictReloadFailed:
+      "This automation changed before your edits could be saved. Copy your edits before reloading the page, then review the latest settings in Edit before reapplying them.",
     runQueued: "Run queued. Run ID: {runId}",
     adminRequired: "Only the owner with automation access or an admin can change this automation.",
     runNotStarted: {
       alreadyRunning: "This automation is already running.",
       recoveryPending: "The scheduler is recovering. Try again shortly.",
-      invalidSpec: "Couldn’t start this automation. Check its schedule and instructions.",
+      invalidSpec: "OpenClaw couldn’t start this automation with its saved settings.",
       stopped: "The scheduler is stopped.",
       unknown: "Couldn’t start this automation. Try again.",
     },
     errors: {
-      nameRequired: "Name is required.",
       activeHoursTime: "Enter HH:MM (24:00 is allowed only for the end).",
       activeHoursTimezone: "Enter a valid IANA time zone, local, or user.",
       scheduleAtInvalid: "Enter a valid date and time.",
       everyAmountInvalid: "Interval must be greater than 0.",
       triggerIntervalTooShort:
         "Set an interval of at least 30 seconds for condition-triggered automations.",
-      cronExprRequired: "Cron expression is required.",
-      cronExprInvalid: "Enter 5 fields like 0 9 * * * or 6 fields like 0 0 9 * * *.",
+      cronExprRequired: "Enter a cron expression, such as 0 7 * * *.",
+      cronExprInvalid:
+        "Check the cron expression. For example, 0 7 * * * means every day at 7:00 AM.",
       cronTzInvalid: "Enter a valid IANA timezone, such as America/New_York.",
       staggerAmountInvalid: "Stagger must be greater than 0.",
       triggerScriptRequired: "Trigger script is required when the condition trigger is enabled.",
@@ -45,11 +50,16 @@ const enCron = {
         "Condition triggers require an interval, cron, or stream schedule.",
       systemTextRequired: "System text is required.",
       agentMessageRequired: "Agent message is required.",
+      payloadThinkingUnsupported:
+        "This reasoning level is not available for the selected model. Choose an available level or Default.",
+      payloadThinkingUnsupportedExisting:
+        "This automation’s saved reasoning level is not available for the selected model. You can still update other settings or pause it.",
       timeoutInvalid: "If set, timeout must be 0 or greater (0 disables this timeout).",
-      deliveryModeRequired:
-        "Choose where to send results, or run openclaw doctor --fix to repair older settings.",
-      webhookUrlRequired: "Webhook URL is required.",
-      webhookUrlInvalid: "Webhook URL must be a valid http(s):// URL without embedded credentials.",
+      deliveryModeRequired: "Choose an option before saving.",
+      webhookUrlRequired: "Enter the URL where OpenClaw should send results.",
+      webhookUrlProtocol: "Start the URL with https:// or http://.",
+      webhookUrlInvalid: "OpenClaw can’t read this URL. Check it for typos.",
+      webhookUrlWithCredentials: "Use a webhook URL with no username or password in the address.",
       invalidRunTime: "Invalid run time.",
       invalidIntervalAmount: "Invalid interval amount.",
       cronExprRequiredShort: "Cron expression required.",
@@ -96,6 +106,13 @@ const enCron = {
       moreJob: "More actions for {name}",
     },
 
+    result: {
+      progress: "Progress",
+      done: "Completed",
+      blocked: "Blocked",
+      needs_attention: "Needs attention",
+      no_change: "No change",
+    },
     attention: {
       title: "Last run failed",
       autoDisabledTitle: "Automatically stopped",
@@ -153,6 +170,13 @@ const enCron = {
       emptyConditionUnchecked:
         "The condition has not been checked yet. Scheduled checks with no match are not listed here.",
       loadMore: "Load more activity",
+      failure: {
+        load: "Couldn’t load run history.",
+        more: "Couldn’t load more runs.",
+        readAccess: "Ask an admin for read access to view run history.",
+        accessDenied: "You don’t have access to this run history.",
+        automationUnavailable: "This automation isn’t available.",
+      },
       loading: "Loading runs…",
       runStatusOk: "Completed",
       runStatusError: "Error",
@@ -262,6 +286,7 @@ const enCron = {
       advancedConditions: "Conditions",
       advancedTiming: "Timing",
       advancedResults: "Results",
+      advancedNotifications: "Notifications",
       conditionTrigger: "Check a condition first",
       conditionTriggerHelp:
         "Before each scheduled run, a script checks something without using the model. The task runs only when it says so.",
@@ -300,18 +325,12 @@ const enCron = {
       includeReasoningHelp: "Adds the model’s reasoning to the results when it’s available.",
       model: "Model",
       customModel: "Custom model…",
-      modelPlaceholder: "openai/gpt-5.2",
-      modelHelp:
-        "Start typing to pick a known model, or enter a custom one. Routine jobs (summaries, triage, classification) run well on a lighter model — cheaper and faster than your default.",
       thinking: "Reasoning",
-      thinkingPlaceholder: "low",
-      thinkingHelp: "Use a suggested level or enter a provider-specific value.",
-      advancedNotifications: "Notifications",
       failureAlerts: "Failure alerts",
       failureAlertsHelp:
         "Notify the owning conversation or use the configured failure route or result destination. Pausing for safety is always reported.",
       cantAddYet: "Can’t save yet",
-      fillRequired: "Fill in the required fields below to save.",
+      fillRequired: "Select a field below to fix it.",
       fixFields: "Fix {count} field to continue.",
       fixFieldsPlural: "Fix {count} fields to continue.",
       saving: "Saving…",
@@ -383,6 +402,7 @@ const enCron = {
       unavailable:
         "MCP Events is unavailable. Enable and configure the plugin to manage this source.",
       discoveryFailed: "Couldn’t load events. Refresh the catalog before saving.",
+      catalogUnavailable: "Couldn’t load events. Try {action}. Details: {error}",
       catalogMismatch: "The event catalog returned a different server. Refresh and try again.",
       catalogCursor: "The event catalog repeated a page. Check the MCP server and refresh.",
       catalogLimit:

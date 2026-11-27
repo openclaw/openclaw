@@ -2,7 +2,6 @@ import { expect, it, vi, type Mock } from "vitest";
 import { ServiceStartRefusalError } from "../../daemon/service-inspection-error.js";
 import type { readGatewayServiceState } from "../../daemon/service.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import {
@@ -121,7 +120,7 @@ export function registerCurrentCoreRuntimeRefreshTests(
       if (mode === "operator-restart") {
         expect(mocks.stop).not.toHaveBeenCalled();
         const run = getUpdateRun(params.opts.run!.runId, { env: params.opts.run!.env });
-        expect(renderUpdateRunReport(run!).markdown).toContain(restartCommand);
+        expect(run?.origin.nextAction).toContain(restartCommand);
       }
     },
   );

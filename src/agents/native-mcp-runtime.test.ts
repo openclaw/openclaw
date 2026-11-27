@@ -202,7 +202,9 @@ describe("private MCP projection operations at the session owner", () => {
     const admittedAt = runtime.lastUsedAt + 10_000;
     const clock = vi.spyOn(Date, "now").mockReturnValue(admittedAt);
     try {
-      expect(await inspect(noRoots)).toMatchObject({ capabilities: {}, roots: { roots: [] } });
+      expect(await inspect(noRoots)).toEqual(
+        expect.objectContaining({ capabilities: {}, roots: { roots: [] } }),
+      );
       expect(runtime.lastUsedAt).toBe(admittedAt);
       expect(runtime.activeLeases).toBe(0);
     } finally {
@@ -214,15 +216,17 @@ describe("private MCP projection operations at the session owner", () => {
     await withinTest(receipts.waitForExit(file + ":" + processId(isolated)), signal);
     await expect(callTool(other, "probe", signal)).rejects.toThrow("released");
     const ordinaryCatalog = await runtime.getCatalog();
-    expect(ordinaryCatalog.tools[0]?.description).toBe(
-      JSON.stringify({ roots: { roots: [] }, capabilities: {} }),
-    );
+    const ordinaryContext = {
+      roots: { roots: [] },
+      capabilities: { elicitation: { url: {} } },
+    };
+    expect(ordinaryCatalog.tools[0]?.description).toBe(JSON.stringify(ordinaryContext));
     const ordinaryResult = await runtime.callTool("fixture", "probe", {});
     const ordinaryText = ordinaryResult.content[0];
     if (ordinaryText?.type !== "text") {
       throw new Error("Expected ordinary MCP tool text");
     }
-    expect(JSON.parse(ordinaryText.text)).toMatchObject({ roots: { roots: [] }, capabilities: {} });
+    expect(JSON.parse(ordinaryText.text)).toEqual(expect.objectContaining(ordinaryContext));
     expect((await fs.readFile(file + ".log", "utf8")).match(/^started /gm)).toHaveLength(6);
     expect(await inspect(first)).toEqual(original);
     await first.release();

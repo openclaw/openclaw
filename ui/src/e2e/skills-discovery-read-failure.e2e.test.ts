@@ -12,13 +12,19 @@ suite.define(() => {
   it("does not claim empty discovery after the installed inventory fails", () =>
     suite.withPage({ viewport: { width: 1280, height: 1000 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
-        deferredMethods: ["skills.status"],
+        // This scenario observes the page while its initial inventory is still pending.
+        awaitInitialRoster: false,
+        deferredMethods: ["skills.status", "skills.search"],
         methodResponses: { "skills.status": empty, "skills.search": { results: [] } },
       });
       await page.goto(suite.server.baseUrl + "skills");
       await gateway.waitForRequest("skills.status");
       await page.getByRole("searchbox", { name: "Search skills", exact: true }).waitFor();
       await gateway.waitForRequest("skills.search");
+      const searching = page.getByRole("status", { name: "Searching…", exact: true });
+      await searching.waitFor();
+      await gateway.resolveDeferred("skills.search");
+      await searching.waitFor({ state: "hidden" });
       const emptyClaim = page.getByText("No skills yet. Search ClawHub to add one.", {
         exact: true,
       });
@@ -31,9 +37,6 @@ suite.define(() => {
         .getByRole("alert")
         .filter({ hasText: "Synthetic installed inventory unavailable" })
         .waitFor();
-      await expect
-        .poll(() => page.locator(".skill-discovery .plugin-catalog-grid").getAttribute("aria-busy"))
-        .toBe("false");
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
         const file = `${suite.artifactDir}/failed-installed-status.png`;
         await page.screenshot({ path: file });
@@ -47,16 +50,21 @@ suite.define(() => {
       ).toBe(true);
       await page.reload();
       await gateway.waitForRequest("skills.status");
+      await gateway.waitForRequest("skills.search");
+      await gateway.resolveDeferred("skills.search");
       await gateway.resolveDeferred("skills.status", {
         ...empty,
         skills: [createSkill({ name: "Recovered Skill", skillKey: "recovered" })],
       });
+      await page.locator(".skill-installed-shelf").click();
       await page
         .getByRole("button", { name: "Open Recovered Skill details", exact: true })
         .waitFor();
       expect(await emptyClaim.count()).toBe(0);
       await page.reload();
       await gateway.waitForRequest("skills.status");
+      await gateway.waitForRequest("skills.search");
+      await gateway.resolveDeferred("skills.search");
       await gateway.resolveDeferred("skills.status", empty);
       await emptyClaim.waitFor();
       expect(await gateway.getRequests("skills.install")).toHaveLength(0);

@@ -71,7 +71,6 @@ export async function prepareCodexAttemptContext(
     const messages = await readMirroredSessionHistoryMessages({
       ...activeTranscriptTarget,
       signal: connection.runAbortController.signal,
-      contextTokenBudget: effectiveContextTokenBudget,
       ...(transcriptReadFence ? { admission: transcriptReadFence } : {}),
     });
     connection.runAbortController.signal.throwIfAborted();
@@ -190,6 +189,7 @@ export async function prepareCodexAttemptContext(
     attempt: runtimeParams,
     skillsPrompt: params.skillsSnapshot?.prompt,
     dynamicTools: toolBridge.availableSpecs,
+    remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
   });
   // This section uses the existing native thread carrier only when there is no
   // managed parent-local inference route; it is separate from immutable policy.
@@ -198,6 +198,7 @@ export async function prepareCodexAttemptContext(
       skillsInstructions,
       workspaceBootstrapContext.sharedPersonaInstructions,
       workspaceBootstrapContext.memoryInstructions,
+      workspaceBootstrapContext.sessionProjectGuidance,
     ) || undefined;
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(runtimeParams, {

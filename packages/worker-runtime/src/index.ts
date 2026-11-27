@@ -12,6 +12,7 @@ export type {
   WorkerTaskHost,
   WorkerRetirementReason,
   ResourceOwningPool,
+  WorkerPoolMemoryBudget,
 } from "./worker-task-host.js";
 export type {
   WorkerTaskInput,

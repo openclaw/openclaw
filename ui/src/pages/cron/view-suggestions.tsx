@@ -2,14 +2,10 @@ import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/strin
 import { createMemo, For } from "solid-js";
 import type { CronProps } from "./view-types.ts";
 export function CronSuggestionLists(
-  props: Pick<
-    CronProps,
-    "thinkingSuggestions" | "timezoneSuggestions" | "deliveryToSuggestions" | "accountSuggestions"
-  >,
+  props: Pick<CronProps, "timezoneSuggestions" | "deliveryToSuggestions" | "accountSuggestions">,
 ) {
   const lists = createMemo(() =>
     Object.entries({
-      "cron-thinking-suggestions": props.thinkingSuggestions,
       "cron-tz-suggestions": props.timezoneSuggestions,
       "cron-delivery-to-suggestions": props.deliveryToSuggestions,
       "cron-delivery-account-suggestions": props.accountSuggestions,

@@ -9,6 +9,7 @@ import {
 } from "../../tools/sessions-helpers.js";
 import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
 import { isSubagentRunVisibleToSession } from "./subagent-control-scope.js";
+import { isSubagentDeliveryWithheld } from "./subagent-delivery-state.js";
 import { buildSubagentList, captureSubagentListReadContext } from "./subagent-list.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
@@ -34,9 +35,7 @@ function hasOutstandingCompletion(entry: SubagentRunRecord): boolean {
   if (
     entry.execution.status !== "terminal" ||
     !Number.isFinite(entry.execution.endedAt) ||
-    entry.suppressCompletionDelivery === true ||
-    entry.killReconciliation?.suppressTaskDelivery === true ||
-    entry.killIntent?.suppressTaskDelivery === true
+    isSubagentDeliveryWithheld(entry)
   ) {
     return false;
   }
@@ -49,7 +48,6 @@ function hasOutstandingCompletion(entry: SubagentRunRecord): boolean {
   }
   return (
     entry.completion?.required === true &&
-    entry.delivery?.disposition !== "intentional_non_delivery" &&
     ["pending", "in_progress", "failed", "suspended"].includes(entry.delivery?.status ?? "pending")
   );
 }

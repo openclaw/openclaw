@@ -28,6 +28,7 @@ import type {
 } from "../../src/config/sessions/session-actor-contract.js";
 import { createSessionActorMemoryState } from "../../src/config/sessions/session-actor-memory-state.js";
 import { createSessionActorCommittedOutcome } from "../../src/config/sessions/session-actor-receipt.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -165,12 +166,7 @@ async function workload(phased: boolean, count: number, measure: boolean) {
   observer.observe({ entryTypes: ["gc"] });
   const inspector = new Session();
   if (measure && values.allocation) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 1024,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 1024);
   }
   const memoryBefore = process.memoryUsage(),
     hostLoadBefore = loadavg();

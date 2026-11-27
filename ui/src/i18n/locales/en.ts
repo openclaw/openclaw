@@ -5,7 +5,6 @@ import * as agentEn from "./en-agents.ts";
 
 type EnglishCatalog = TranslationMap & {
   languages: TranslationMap;
-  onboarding: TranslationMap & { memoryImport: TranslationMap };
   execApproval: TranslationMap & { labels: TranslationMap; scope: TranslationMap };
   sessionProgressCard: TranslationMap & {
     refresh: TranslationMap;
@@ -247,7 +246,7 @@ type EnglishCatalog = TranslationMap & {
     failureGuidance: TranslationMap;
   };
   newSession: TranslationMap &
-    Record<"title" | "hint" | "placementReloadBlocked" | "discardUnsavedAndReload", string>;
+    Record<"title" | "placementReloadBlocked" | "discardUnsavedAndReload", string>;
   commandPalette: TranslationMap;
   palette: TranslationMap & {
     placeholder: string;
@@ -266,7 +265,9 @@ type EnglishCatalog = TranslationMap & {
       | "automationPrefix"
       | "actionRequiresConnection"
       | "actionUnavailable"
-      | "actionRequiresScope"
+      | "actionPermissionDenied"
+      | "movePermissionDenied"
+      | "createPermissionDenied"
       | "actionRequiresOwnership"
       | "draftCleanupFailed"
       | "createdBy"
@@ -567,6 +568,12 @@ const startupEnglish = {
     description: "The agent is getting ready. This view will load automatically.",
     short: "Starting up…",
   },
+  routeNotFound: {
+    title: "Page not found",
+    description:
+      "This link is invalid or no longer available. Check the address or return to chat.",
+    goToChat: "Go to chat",
+  },
   lazyView: {
     errorTitle: "Couldn’t load this panel.",
     genericSubtitle: "Try again.",
@@ -682,7 +689,6 @@ const startupEnglish = {
   agentScope: agentEn.agentScope,
   newSession: {
     title: "New session",
-    hint: "Pick where this session works.",
     placementReloadBlocked: "Recovery needs a reload. Unsaved starts will be lost.",
     discardUnsavedAndReload: "Discard unsaved starts and reload",
   },
@@ -701,7 +707,9 @@ const startupEnglish = {
     automationPrefix: "Automation:",
     actionRequiresConnection: "Connect to the Gateway to change sessions.",
     actionUnavailable: "This Gateway does not support this session action.",
-    actionRequiresScope: "This action requires {scope} access.",
+    actionPermissionDenied: "You don’t have permission to do this.",
+    movePermissionDenied: "You don’t have permission to move this session.",
+    createPermissionDenied: "You don’t have permission to create a session.",
     actionRequiresOwnership: "Only the session creator or an admin can make this change.",
     draftCleanupFailed: "Session deleted; browser draft remains. Clear site data.",
     createdBy: "Created by {name}",
@@ -907,6 +915,7 @@ const startupEnglish = {
   skillsPage: {},
   skillStatus: {},
   nav: {
+    automationFailure: "An automation needs attention",
     gateway: {
       sectionLabel: "Gateway",
       primaryTag: "primary",
@@ -925,6 +934,7 @@ const startupEnglish = {
     settings: "Settings",
     askOpenClaw: "Ask OpenClaw",
     askBrand: "Ask {brand}",
+    settingsGroupPreferences: "Preferences",
     settingsGroupDevice: "This Mac",
     settingsGroupThisComputer: "This computer",
     settingsGroupThisIPhone: "This iPhone",
@@ -932,10 +942,11 @@ const startupEnglish = {
     settingsGroupThisDevice: "This device",
     settingsGroupConnections: "Connections",
     settingsGroupAgents: "Agents & Tools",
+    settingsGroupTeam: "Team",
     settingsGroupSecurity: "Privacy & security",
     settingsGroupSystem: "System",
     settingsSearchLabel: "Search settings",
-    settingsSearchPlaceholder: "Search settings…",
+    settingsSearchPlaceholder: "Search",
     settingsSearchNoResults: "No settings match your search.",
     settingsSearchClear: "Clear settings search",
     settingsLoadFailed: "Settings navigation could not load.",
@@ -947,6 +958,7 @@ const startupEnglish = {
     pin: "Pin",
     unpin: "Unpin",
     customize: "Edit pinned items",
+    installedPlugins: "Installed",
   },
   terminal: {
     title: "Terminal",
@@ -1016,8 +1028,10 @@ const startupEnglish = {
     apps: "Apps",
     portals: "Portals",
     approvals: "Approvals",
+    roles: "Roles",
     workboard: "Workboard",
     worktrees: "Worktrees",
+    projects: "Projects",
     channels: "Channels",
     connection: "Gateway",
     sessions: "Sessions",
@@ -1112,11 +1126,6 @@ const startupEnglish = {
     providerConnected: {},
   },
   memoryImport: {},
-  onboarding: {
-    memoryImport: {
-      title: "Bring your agent memory with you",
-    },
-  },
   assistantPanel: {
     title: "Assistant sidebar",
     home: "Home",
@@ -1163,17 +1172,14 @@ const startupEnglish = {
     install: "Install",
   },
   labsPage: {
-    sectionDescription:
-      "Changes save without restarting the Gateway. Code Mode and Tool Search apply to future replies.",
+    sectionDescription: "Changes save without restarting the Gateway.",
     restartRequired: "Gateway restart required.",
     saveErrorTitle: "Couldn’t save this setting. Try again.",
     saveFailed: "The feature setting could not be saved.",
     decisionAssistance: {},
     usageRankedToolIndex: {},
-    codeMode: {},
 
     swarm: {},
-    toolSearch: {},
 
     hostDesktop: {},
     openclawId: {},
@@ -1238,6 +1244,7 @@ const startupEnglish = {
       viewingNow: "Viewing now",
       recentSessions: "Recent sessions",
       noRecentSessions: "No recent visible sessions.",
+      recentSessionsUnavailable: "Recent sessions unavailable.",
       viewActivity: "View activity",
       web: "Web app",
       cli: "Command line",
@@ -1534,10 +1541,8 @@ const startupEnglish = {
       manage: "Manage saved accounts…",
     },
     mentions: {},
-    cloudWorkerFailed: "Couldn’t continue this session. Check its device and try again. {error}",
     errorDetails: "Error details",
     errorSummary: "Couldn’t complete this action. Try again.",
-    errorReplySummary: "Couldn't finish this reply. Check the conversation before trying again.",
     errorReplyTitle: "Couldn’t finish this reply",
     historyUnavailableTitle: "Couldn’t load this conversation",
     historyUnavailableBody: "Try again to load its messages.",
@@ -1551,11 +1556,12 @@ const startupEnglish = {
       openModels: "Open Models",
       failedRepeatCount: "{count} times",
       tryAgain: "Try again",
+      startNewSession: "Start a new session",
+      harnessUpdatePrompt:
+        "My last message in another session failed with this error:\n\n{summary}\n\nDo the update it asks for on this machine, confirm the installed version, and tell me if I still need to restart the OpenClaw Gateway.",
       continuePrompt:
         "Continue from where you stopped. Check which actions already completed before retrying anything.",
     },
-    errorBusySummary: "OpenClaw is busy. Check status before trying again.",
-    errorSignInSummary: "Couldn't sign in to the AI service. Sign in again under Models.",
     errorStartSummary: "Couldn’t start this session. Try again.",
     checkStatus: "Check status",
     details: "Details",
@@ -1692,6 +1698,9 @@ const startupEnglish = {
     codeBlock: {},
     workspaceConflict: {},
     compaction: {
+      running: "Compacting",
+      completed: "Compacted context",
+      duration: "Duration: {duration}",
       savedTokensWithPercent: "saved {count} tokens ({percent}%)",
     },
     sessionReset: {

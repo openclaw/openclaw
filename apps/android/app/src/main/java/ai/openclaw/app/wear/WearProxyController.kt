@@ -1,12 +1,12 @@
 package ai.openclaw.app.wear
 
 import ai.openclaw.app.GatewayAgentSummary
-import ai.openclaw.app.node.asArrayOrNull
+import ai.openclaw.app.asArrayOrNull
 import ai.openclaw.app.parseGatewayModelCatalog
+import ai.openclaw.app.providerQualifiedRef
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.takeCodePoints
 import ai.openclaw.app.takeUtf8Bytes
-import ai.openclaw.app.ui.chat.providerQualifiedRef
 import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearProxyCapability
 import ai.openclaw.wear.shared.WearRealtimeTalkCodec

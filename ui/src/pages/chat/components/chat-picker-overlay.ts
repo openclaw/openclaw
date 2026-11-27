@@ -36,6 +36,11 @@ function bindChatPickerOverlay(
     onEscape: clearChatModelSearchOnEscape,
   });
   trigger.id = `${overlay.id}-trigger`;
+  const desktopPlacement = details.closest("[data-picker-below]")
+    ? placement === "top"
+      ? "bottom"
+      : "bottom-end"
+    : placement;
   trigger.setAttribute("aria-haspopup", "dialog");
   trigger.setAttribute("aria-controls", overlay.id);
   surface.id = overlay.id;
@@ -50,7 +55,7 @@ function bindChatPickerOverlay(
     ).matches;
     anchor.update(
       mobile ? (details.closest<HTMLElement>(".agent-chat__input") ?? trigger) : trigger,
-      mobile ? "top-end" : placement,
+      mobile ? "top-end" : desktopPlacement,
     );
     if (!overlay.request(details.open)) {
       details.open = overlay.open;

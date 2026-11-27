@@ -13,6 +13,8 @@ import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types
 type ComposerKeyDownDeps = {
   prediction?: { text: string | null; dismiss: () => void };
   acceptPrediction?: () => void;
+  /** True when a plugin proposal replaced the draft. */
+  acceptProposal?: () => boolean;
   state: ChatComposerState;
   props: ChatComposerProps;
   skillMenuHost: SkillMenuHost;
@@ -34,6 +36,7 @@ type ComposerKeyDownDeps = {
 export function createComposerKeyDownHandler({
   prediction,
   acceptPrediction,
+  acceptProposal,
   state,
   props,
   skillMenuHost,
@@ -98,6 +101,25 @@ export function createComposerKeyDownHandler({
         state.slashMenu.handleKeydown(event, slashMenuHost, sendShortcut))
     ) {
       return;
+    }
+
+    if (state.tasks()?.card?.kind === "proposal") {
+      if (
+        event.key === "Tab" &&
+        !event.shiftKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        acceptProposal?.()
+      ) {
+        event.preventDefault();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        state.tasks()?.dismiss();
+        return;
+      }
     }
 
     if (prediction?.text && !target.value) {

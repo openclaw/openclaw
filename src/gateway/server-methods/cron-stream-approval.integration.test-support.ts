@@ -16,6 +16,7 @@ import { withoutGatewayToolCallerIdentity } from "../../agents/tools/gateway-cal
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  registerAgentRunDelegatedAuthorityClosedHandler,
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
@@ -33,6 +34,7 @@ import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { dispatchGatewayRequestInProcess } from "../server-in-process-dispatch.js";
 import { createRequestGatewayMethodRegistry } from "../server-methods.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
+import { cancelAgentRuntimeBoundApprovals } from "./approval-run-cancellation.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import {
   SESSION,
@@ -138,6 +140,19 @@ export async function withStreamApprovalFixture(
   const deliveries: ExecApprovalRequest[] = [];
   const inbox: ExecApprovalRequest[] = [];
   const operations: Promise<unknown>[] = [];
+  const authorityClosures: Promise<number>[] = [];
+  const unregisterAuthorityClosed = registerAgentRunDelegatedAuthorityClosedHandler(
+    (authority, reason) => {
+      const closed = cancelAgentRuntimeBoundApprovals({
+        authority,
+        reason,
+        manager,
+        publish: () => {},
+      });
+      authorityClosures.push(closed);
+      void closed.catch(() => undefined);
+    },
+  );
   let waiter: ReturnType<typeof createDeferred<ExecApprovalRequest>> | undefined;
   fixture.context.forwardExecApprovalRequest = async (event) => {
     deliveries.push(event);
@@ -316,7 +331,9 @@ export async function withStreamApprovalFixture(
       }
     });
   } finally {
+    unregisterAuthorityClosed();
     try {
+      await Promise.all(authorityClosures);
       await manager.drain();
     } finally {
       imageInspection?.mockRestore();

@@ -7,31 +7,20 @@ import {
 describe("resolveAdmittedCronCompletionStatus", () => {
   it("fails a stale-suppressed required delivery so the one-shot is retained (#131491)", () => {
     // The stale-run guard records a plain not-delivered outcome with no
-    // suppression reason; requested delivery is required unless explicitly
-    // best-effort, so discarding the run's only deliverable can never resolve
+    // suppression reason; requested delivery is required, so discarding the run's only deliverable can never resolve
     // to a successful completion that would retire the one-shot.
-    expect(resolveAdmittedCronCompletionStatus({ delivery: {} }, "ok", "not-delivered")).toBe(
-      "failed",
-    );
+    expect(resolveAdmittedCronCompletionStatus("ok", "not-delivered")).toBe("failed");
   });
 
   it("keeps intentional silence successful without claiming delivery", () => {
-    expect(
-      resolveAdmittedCronCompletionStatus({ delivery: {} }, "ok", "not-delivered", "silent"),
-    ).toBe("succeeded");
+    expect(resolveAdmittedCronCompletionStatus("ok", "not-delivered", "silent")).toBe("succeeded");
   });
 
   it("keeps delivered and error outcomes unchanged", () => {
-    expect(resolveAdmittedCronCompletionStatus({ delivery: {} }, "ok", "delivered")).toBe(
-      "succeeded",
-    );
-    expect(resolveAdmittedCronCompletionStatus({ delivery: {} }, "error", "not-delivered")).toBe(
-      "failed",
-    );
-    expect(resolveAdmittedCronCompletionStatus({ delivery: {} }, "ok", "unknown")).toBe("unknown");
-    expect(resolveAdmittedCronCompletionStatus({ delivery: {} }, "ok", "not-requested")).toBe(
-      "succeeded",
-    );
+    expect(resolveAdmittedCronCompletionStatus("ok", "delivered")).toBe("succeeded");
+    expect(resolveAdmittedCronCompletionStatus("error", "not-delivered")).toBe("failed");
+    expect(resolveAdmittedCronCompletionStatus("ok", "unknown")).toBe("unknown");
+    expect(resolveAdmittedCronCompletionStatus("ok", "not-requested")).toBe("succeeded");
   });
 });
 

@@ -5,6 +5,13 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronJob, CronRunResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../format-error.ts";
+import { DEFAULT_CRON_FORM } from "./editor-state.ts";
+import {
+  loadCronStatus,
+  retireCronSelectedJobRead,
+  retireCronStatusFeedback,
+  retireCronStatusRequest,
+} from "./editor-status.ts";
 import { hasUnchangedCronSchedule, buildCronSchedule } from "./form-schedule.ts";
 import {
   hasCronFormErrors,
@@ -13,21 +20,15 @@ import {
   normalizeCronFormState,
   validateCronForm,
 } from "./form.ts";
+import { patchCronJobDefinition } from "./job-definition.ts";
 import { loadCronJobsPage } from "./jobs-full.ts";
 import { retireCronJobsRequest } from "./jobs.ts";
 import { buildCronPayload } from "./payload.ts";
 import { cronRunNotStartedMessage, isCronRunNotStartedNotice } from "./run-feedback.ts";
 import { clearCronRunsPage, loadCronRuns, retireCronRunsRequest } from "./runs.ts";
-import {
-  DEFAULT_CRON_FORM,
-  loadCronStatus,
-  retireCronSelectedJobRead,
-  retireCronStatusFeedback,
-  retireCronStatusRequest,
-} from "./state.ts";
 import type { CronFormState, CronState } from "./types.ts";
-
-export { createInitialCronState, loadCronStatus } from "./state.ts";
+export { createInitialCronState } from "./editor-state.ts";
+export { loadCronStatus } from "./editor-status.ts";
 export { loadCronScopeStats } from "./scope.ts";
 export { loadCronJobsPage } from "./jobs-full.ts";
 
@@ -78,13 +79,6 @@ async function withCronBusy(
     }
   }
   return undefined;
-}
-
-function requireCronConfigRevision(revision: string | null | undefined): string {
-  if (revision) {
-    return revision;
-  }
-  throw new Error(t("cron.missingConfigRevision"));
 }
 
 function clearCronEditState(state: CronState) {
@@ -216,7 +210,8 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
     const sessionKeyRaw = form.sessionKey.trim();
     const sessionKey = sessionKeyRaw || (editingJob?.sessionKey ? null : undefined);
     const job: Record<string, unknown> = {
-      name: form.name.trim(),
+      // Without a name, cron.add names a new automation from its prompt and an edit keeps the old one.
+      name: form.name.trim() || undefined,
       description: form.description.trim(),
       agentId: agentId === null ? null : agentId || undefined,
       sessionKey,
@@ -310,11 +305,7 @@ async function updateCronJobDefinition(
   const selectedJob = state.cronEditingJob;
   const ownsEditor = () => state.cronEditingJob === job && state.cronForm === form;
   try {
-    const updatedJob = await client.request<CronJob>("cron.update", {
-      id: job.id,
-      expectedConfigRevision: requireCronConfigRevision(job.configRevision),
-      patch,
-    });
+    const updatedJob = await patchCronJobDefinition(client, job, patch);
     if (!isCurrent()) {
       return false;
     }
@@ -348,11 +339,17 @@ async function updateCronJobDefinition(
       const latestJob = await client.request<CronJob>("cron.get", { id: job.id });
       if (isCurrent() && ownsEditor()) {
         startCronEdit(state, latestJob);
-        state.cronError = t("cron.changedOnGateway");
+        state.cronError = t(
+          operation === "save" ? "cron.saveConflictReloaded" : "cron.changedOnGateway",
+        );
       }
     } catch {
       if (isCurrent() && ownsEditor()) {
-        state.cronError = t("cron.changedOnGatewayLoadFailed");
+        state.cronError = t(
+          operation === "save"
+            ? "cron.saveConflictReloadFailed"
+            : "cron.changedOnGatewayLoadFailed",
+        );
       }
     }
     return false;

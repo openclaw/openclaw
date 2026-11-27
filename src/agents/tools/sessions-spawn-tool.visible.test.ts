@@ -1,5 +1,5 @@
-import "./sessions-spawn-tool.mocks.test-support.js";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "./sessions-spawn-tool.mocks.test-support.js";
 import {
   bindChildSessionPublication,
   admitChildSessionPublication,
@@ -10,7 +10,7 @@ import {
   resolveConversationCapabilityProfile,
 } from "../conversation-capability-profile.js";
 import { createSubagentRunRecord } from "../subagent-test-fixtures.test-helpers.js";
-import { countActiveRunsForSessionFromRuns } from "../subagents/registry/subagent-registry-queries.js";
+import { countActiveSubagentRunsForSession as countActiveRunsForSessionFromRuns } from "../subagents/registry/subagent-registry-state.js";
 import {
   expectRegisteredSubagentRun,
   supportedSpawnModelChoice,

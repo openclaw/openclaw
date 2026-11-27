@@ -44,6 +44,8 @@ type GoogleManifest = {
         models?: Array<{
           id?: string;
           name?: string;
+          status?: string;
+          statusReason?: string;
         }>;
       }
     >;
@@ -157,14 +159,15 @@ describe("google manifest model catalog", () => {
     expect(manifest.modelCatalog?.providers?.["google-vertex"]).toBeUndefined();
   });
 
-  it("offers Google AI Studio API keys without consumer CLI OAuth", () => {
+  it("offers Gemini API keys without consumer CLI OAuth", () => {
     const choices = loadManifest().providerAuthChoices ?? [];
 
     expect(choices).toEqual([
       expect.objectContaining({
         provider: "google",
         method: "api-key",
-        choiceLabel: "Google AI Studio API key",
+        choiceLabel: "Gemini API key",
+        groupLabel: "Gemini API key",
         choiceHint: "Supported API-key access from aistudio.google.com/apikey",
         groupHint: "Supported API-key setup",
       }),
@@ -203,6 +206,23 @@ describe("google manifest model catalog", () => {
     expect(suppressionRefs).not.toContain("google/gemini-2.5-flash-lite");
     expect(suppressionRefs).not.toContain("google/gemini-2.5-pro");
     expect(suppressionRefs).not.toContain("google/gemini-3.1-pro-preview");
+  });
+
+  it("marks rerouted Gemini 2.5 rows deprecated without aliasing their ids", () => {
+    const manifest = loadManifest();
+    const rows = manifest.modelCatalog?.providers?.google?.models ?? [];
+    const aliases = manifest.modelIdNormalization?.providers?.google?.aliases ?? {};
+
+    for (const [id, servedAs] of [
+      ["gemini-2.5-pro", "gemini-3.8-flash"],
+      ["gemini-2.5-flash", "gemini-3.5-flash-lite"],
+    ] as const) {
+      const row = rows.find((model) => model.id === id);
+      expect(row?.status).toBe("deprecated");
+      expect(row?.statusReason).toContain(`as ${servedAs} from Dec 1, 2026`);
+      expect(aliases[id]).toBeUndefined();
+    }
+    expect(rows.find((model) => model.id === "gemini-2.5-flash-lite")?.status).toBeUndefined();
   });
 
   it("normalizes retired Gemini 3 Pro aliases for all Google chat providers", () => {

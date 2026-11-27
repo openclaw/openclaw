@@ -10,6 +10,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import { requireNodeSqlite } from "../node-sqlite.js";
 import { interruptedRunFixture } from "../update-run-fixture.test-support.js";
 import { persistInterruptedUpdateObservation } from "../update-run-interruption-store.js";
+import { UPDATE_RUN_TRUNCATED_STEP } from "../update-run-omission.js";
 import { readUpdateRunRecord } from "../update-run-read.kernel.js";
 import { withEngineStoreAdmission as admit } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
@@ -86,7 +87,13 @@ describe.each(engines)("%s interrupted update cleanup", (engine) => {
       const stored = readUpdateRunRecord(db, fixture.id)!;
       expect(returned).toEqual(stored);
       expect(Buffer.byteLength(JSON.stringify(returned.steps))).toBeLessThanOrEqual(16 * 1024);
-      expect(returned.steps.length).toBeLessThan(expected.steps.length);
+      const retainedRows = returned.steps.filter(({ step }) => step !== UPDATE_RUN_TRUNCATED_STEP);
+      expect(retainedRows.length).toBeLessThan(expected.steps.length);
+      expect(returned.steps).toContainEqual({
+        step: UPDATE_RUN_TRUNCATED_STEP,
+        status: "completed",
+        detail: String(expected.steps.length - retainedRows.length),
+      });
       const cleanup = returned.steps.find((step) => step.step === "reconcile:settle")!;
       expect(cleanup).toMatchObject({
         status: "failed",

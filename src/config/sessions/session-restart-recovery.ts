@@ -1,0 +1,137 @@
+import { isDeepStrictEqual } from "node:util";
+import { sha256Base64Url } from "../../infra/crypto-digest.js";
+import {
+  applySessionEntryOperation,
+  patchSessionEntryCore,
+} from "./session-accessor.sqlite-entry.js";
+import { captureSessionEntrySourceAssertion } from "./session-entry-source-authority.js";
+import {
+  selectPendingRestartShellCalls,
+  type PendingSessionShellCalls,
+} from "./session-restart-resume-scope.js";
+import type { InternalSessionEntry } from "./types.js";
+type Target = { agentId: string; sessionKey: string; storePath: string; env?: NodeJS.ProcessEnv };
+type Marker = NonNullable<InternalSessionEntry["resumeAfterRestart"]>;
+
+export async function acknowledgeRestartResumeMarker(
+  target: Target,
+  entry: InternalSessionEntry,
+  marker: Marker,
+  assertCurrent: () => void,
+) {
+  // A second shutdown can replace custody without rotating the chat or changing the original run.
+  await patchSessionEntryCore(
+    target,
+    (current) =>
+      current.sessionId === entry.sessionId &&
+      current.lifecycleRevision === entry.lifecycleRevision &&
+      isDeepStrictEqual(current.resumeAfterRestart, marker)
+        ? { resumeAfterRestart: undefined }
+        : null,
+    { requireWriteSuccess: true, skipMaintenance: true, assertCommitAllowed: assertCurrent },
+  );
+}
+
+export async function recordInterruptedShellNotice(params: {
+  target: Target;
+  entry: InternalSessionEntry;
+  marker: Marker;
+  assertCurrent: () => void;
+  text: string;
+  deliver?: (
+    route: NonNullable<PendingSessionShellCalls["notice"]>,
+    idempotencyKey: string,
+    check: () => void,
+  ) => Promise<void>;
+}): Promise<boolean> {
+  const { target, entry, marker, assertCurrent } = params;
+  const selected = selectPendingRestartShellCalls(entry, marker);
+  if (!selected) {
+    return false;
+  }
+  const runId = selected.runId;
+  const expected = { sessionId: entry.sessionId, lifecycleRevision: entry.lifecycleRevision };
+  const options = {
+    skipMaintenance: true,
+    preserveActivity: true,
+    requireWriteSuccess: true,
+    assertCommitAllowed: assertCurrent,
+  };
+  // The writer compares pending calls with accepted terminal results in one transaction.
+  const checked = await applySessionEntryOperation(
+    target,
+    { kind: "shell-call", runId, expected },
+    options,
+  );
+  if (
+    !checked ||
+    checked.sessionId !== entry.sessionId ||
+    checked.lifecycleRevision !== entry.lifecycleRevision ||
+    !isDeepStrictEqual(checked.resumeAfterRestart, marker)
+  ) {
+    throw new Error("Session changed while checking interrupted shell results");
+  }
+  const pending = checked.pendingShellCalls;
+  if (!pending?.calls.length) {
+    return false;
+  }
+  const scope = sha256Base64Url(
+    JSON.stringify([target.agentId, target.sessionKey, entry.sessionId, runId]),
+  );
+  const idempotencyKey = `main-session-restart-recovery:shell-uncertain:${scope}`;
+  const prepared = await captureSessionEntrySourceAssertion({
+    scope: target,
+    expected: checked,
+    fields: ["sessionId", "lifecycleRevision", "resumeAfterRestart", "pendingShellCalls"],
+    assertCurrent,
+    assertHostCurrent: assertCurrent,
+    refuse: () => {
+      throw new Error("The interrupted turn no longer owns this notice");
+    },
+  }).prepareSessionSource();
+  try {
+    const check = () => {
+      assertCurrent();
+      prepared.assertCurrent();
+    };
+    check();
+    const { appendAssistantMessageToSessionTranscript } = await import("./transcript.js");
+    const saved = await appendAssistantMessageToSessionTranscript({
+      ...target,
+      expectedSessionId: entry.sessionId,
+      expectedLifecycleRevision: entry.lifecycleRevision ?? null,
+      text: params.text,
+      idempotencyKey,
+      assertCurrent: check,
+    });
+    if (!saved.ok) {
+      throw new Error(saved.reason);
+    }
+    const route = pending.notice;
+    if (
+      route &&
+      (!marker.operatorSource || isDeepStrictEqual(route.operatorSource, marker.operatorSource))
+    ) {
+      await params.deliver?.(route, idempotencyKey, check);
+    }
+    check();
+    // Revalidate the exact pending set and marker in the acknowledgement transaction.
+    const acknowledged = await applySessionEntryOperation(
+      target,
+      { kind: "shell-call", runId, expected, acknowledged: { marker, pending } },
+      options,
+    );
+    if (
+      !acknowledged ||
+      acknowledged.sessionId !== expected.sessionId ||
+      acknowledged.lifecycleRevision !== expected.lifecycleRevision ||
+      acknowledged.resumeAfterRestart ||
+      acknowledged.pendingShellCalls
+    ) {
+      throw new Error("The interrupted turn no longer owns its acknowledgement");
+    }
+    return true;
+  } finally {
+    await prepared.release?.();
+  }
+}

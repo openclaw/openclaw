@@ -1522,11 +1522,11 @@ describe("loadGatewayPlugins", () => {
 
     validateAgentRuntimeApprovalAuthority.mockReturnValue(false);
 
-    await expect(channel.send(Uint8Array.of(1))).rejects.toThrow(/authority.*no longer current/i);
+    await expect(channel.send(Uint8Array.of(1))).rejects.toThrow("delegated run ended");
     expect(invokeSignal?.aborted).toBe(true);
     expect(sendInvokeInput).not.toHaveBeenCalled();
-    await expect(channel.closed).rejects.toThrow(/authority.*no longer current/i);
-    expect(() => channel.onMessage(vi.fn())).toThrow(/authority.*no longer current/i);
+    await expect(channel.closed).rejects.toThrow("delegated run ended");
+    expect(() => channel.onMessage(vi.fn())).toThrow("delegated run ended");
   });
 
   test("cancels an open node duplex invocation before retiring its plugin runtime", async () => {

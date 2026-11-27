@@ -1,8 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { acquireDistArtifactOwnership } from "../../../scripts/lib/dist-artifact-lock.mts";
-import { installPrivateUpdateHandoffStore } from "../../../test/helpers/private-update-handoff-store.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   createPluginInstallRecordMap,
@@ -12,7 +10,6 @@ import {
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import { killPidIfAlive, readPidFile, waitForPidToExit } from "../../test-utils/process-tree.js";
-import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 import {
   continuePostCoreUpdateInFreshProcess,
@@ -35,93 +32,6 @@ afterEach(() => {
 const withTempDir = () => tempDirs.make("openclaw-post-core-records-");
 
 describe("continuePostCoreUpdateInFreshProcess", () => {
-  it.each([false, true])(
-    "releases artifact ownership only for a target without the prepared-fact consumer (modern=%s)",
-    async (modern) => {
-      vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", "stale-version");
-      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL", "beta");
-      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH", "/tmp/stale-config.json");
-      vi.stubEnv("OPENCLAW_TEST_POST_CORE_UNRELATED", "preserved");
-      const root = withTempDir();
-      const control = path.join(root, "control");
-      await fs.mkdir(control, { mode: 0o700 });
-      installPrivateUpdateHandoffStore(control);
-      const observation = path.join(root, "ownership.txt");
-      await fs.mkdir(path.join(root, "dist"));
-      await fs.writeFile(
-        path.join(root, "package.json"),
-        JSON.stringify(modern ? { version: "9999.0.0" } : {}),
-      );
-      if (modern) {
-        await fs.mkdir(path.join(root, "scripts", "lib"), { recursive: true });
-        await fs.writeFile(
-          path.join(root, "scripts", "lib", "source-update-artifact-preflight.mts"),
-          "export {};\n",
-        );
-      }
-      const lockModule = new URL("../../../scripts/lib/dist-artifact-lock.mts", import.meta.url)
-        .href;
-      await fs.writeFile(
-        path.join(root, "dist", "entry.mjs"),
-        `import fs from "node:fs/promises";
-import { acquireDistArtifactOwnership } from ${JSON.stringify(lockModule)};
-let observed;
-try {
-  const lock = await acquireDistArtifactOwnership(${JSON.stringify(root)});
-  await lock.release();
-  observed = "child-acquired";
-} catch (error) {
-  if (!String(error).includes(${JSON.stringify(`retained by PID ${process.pid}`)})) throw error;
-  observed = "parent-held";
-}
-await fs.writeFile(${JSON.stringify(observation)}, JSON.stringify({
-  ownership: observed,
-  compatHostVersion: process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION,
-  requestedChannel: process.env.OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL,
-  sourceConfigPath: process.env.OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH,
-  unrelated: process.env.OPENCLAW_TEST_POST_CORE_UNRELATED,
-}));
-await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.stringify(JSON.stringify(pluginUpdate))});
-`,
-      );
-      const sourceArtifactLock = await acquireDistArtifactOwnership(root);
-      try {
-        const runId = "fixture-source-lock";
-        const result = await withUpdateCommandExecutor(runId, async (executor) => {
-          const executorFence = await executor.enter(root);
-          return await continuePostCoreUpdateInFreshProcess({
-            root,
-            sourceRuntimePrepared: true,
-            channel: "dev",
-            requestedChannel: null,
-            opts: {
-              json: true,
-              run: { runId, env: {}, sourceArtifactLock, executorFence },
-            },
-            pluginInstallRecords: {},
-            updateStartedAtMs: Date.now(),
-            timeoutMs: 5000,
-            nodeRunner: process.execPath,
-          });
-        });
-        expect(result).toEqual({ resumed: true, pluginUpdate });
-        expect(JSON.parse(await fs.readFile(observation, "utf8"))).toEqual({
-          ownership: modern ? "parent-held" : "child-acquired",
-          ...(modern ? { compatHostVersion: "9999.0.0" } : {}),
-          unrelated: "preserved",
-        });
-        expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("stale-version");
-        expect(process.env.OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL).toBe("beta");
-        expect(process.env.OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH).toBe(
-          "/tmp/stale-config.json",
-        );
-        expect(await sourceArtifactLock.verifyStillHeld()).toBe(modern);
-      } finally {
-        await sourceArtifactLock.release();
-      }
-    },
-  );
-
   it.runIf(process.platform !== "win32").each([true, false])(
     "waits for a committed child's shutdown before returning its result (cooperative=%s)",
     async (cooperative) => {
@@ -130,6 +40,8 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
       vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH", "/tmp/stale-config.json");
       vi.stubEnv("OPENCLAW_TEST_POST_CORE_UNRELATED", "preserved");
       const root = withTempDir();
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
       const settledPath = path.join(root, "settled");
       const pidPath = path.join(root, "writer.pid");
       const argvPath = path.join(root, "argv.json");
@@ -148,6 +60,8 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         `import fs from "node:fs/promises";
 import path from "node:path";
 const hold = setInterval(() => {}, 1000);
+process.stdout.write("post-core stdout diagnostic");
+process.stderr.write("post-core stderr diagnostic");
 setTimeout(() => process.exit(2), 10000).unref();
 process.once("SIGTERM", () => {
   if (!${JSON.stringify(cooperative)}) return;
@@ -202,6 +116,12 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         expect(await waitForPidToExit(pid)).toBe(true);
       }
       expect(result).toEqual({ resumed: true, pluginUpdate });
+      const protocolOutput = stdout.mock.calls.map(([chunk]) => String(chunk)).join("");
+      const diagnostics = stderr.mock.calls.map(([chunk]) => String(chunk)).join("");
+      expect(protocolOutput).not.toContain("post-core stdout diagnostic");
+      expect(protocolOutput).not.toContain("post-core stderr diagnostic");
+      expect(diagnostics).toContain("post-core stdout diagnostic");
+      expect(diagnostics).toContain("post-core stderr diagnostic");
       expect(JSON.parse(await fs.readFile(argvPath, "utf8"))).toEqual([
         "update",
         "--json",

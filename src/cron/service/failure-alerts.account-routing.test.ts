@@ -84,7 +84,7 @@ it("routes required delivery failure outside the failed topic", async () => {
     {
       delivery: primaryDelivery,
     },
-    { cronConfig: { failureAlert: failureDestination } },
+    { cronConfig: { failureAlert: { ...failureDestination, threadId: 84 } } },
   );
   apply({
     status: "ok",
@@ -99,7 +99,7 @@ it("routes required delivery failure outside the failed topic", async () => {
   expect(send).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({
       ...failureDestination,
-      threadId: undefined,
+      threadId: 84,
       inheritSessionThread: false,
       payload: expect.objectContaining({
         text: 'Automation "Topic-routed job" delivery failed\nCheck automation history for details.',

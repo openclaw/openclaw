@@ -436,10 +436,13 @@ export function readConnectPairingRequiredMessage(
   };
 }
 
+// A remote client's own approve call hits the same pairing gate, so name the Gateway host.
 const PAIRING_APPROVAL_REMEDIATION =
-  "Run `openclaw devices approve --latest` to preview the pending request, then rerun the printed " +
-  "`openclaw devices approve <requestId>` command and reconnect (pass the same --url and " +
-  "--token/--password flags if you connected with explicit credentials).";
+  "Approve this request from the Gateway host: run " +
+  "`openclaw devices approve --latest` there to preview the pending request, then run the printed " +
+  "`openclaw devices approve <requestId>` command (add --url and --token/--password if that " +
+  "CLI needs them to reach the Gateway), or approve it in the Gateway's Control UI " +
+  "(Settings -> Devices). Then reconnect.";
 const DEVICE_TOKEN_REMEDIATION =
   "Rotate the paired-device token with `openclaw devices rotate --device <deviceId> --role operator`, then reconnect.";
 const SHARED_TOKEN_REMEDIATION =

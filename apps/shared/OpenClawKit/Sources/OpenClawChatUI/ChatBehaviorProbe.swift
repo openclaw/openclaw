@@ -10,19 +10,31 @@ import UIKit
 /// mark events. Timestamps are Unix milliseconds so the host script can line them up with its own
 /// actions. Every entry point is a no-op otherwise.
 @MainActor
-enum ChatBehaviorProbe {
+public enum ChatBehaviorProbe {
     static func countBody(_ name: String) {
         #if DEBUG && os(iOS)
         ChatBehaviorRecorder.shared?.event(["e": "body", "k": name])
         #endif
     }
 
-    /// Timestamps an app-side action (`send`) so the host can measure from it.
-    static func mark(_ name: String) {
+    /// Timestamps an app-side action (`send`, `drawer-pan:…`) so the host can measure from it.
+    public static func mark(_ name: String) {
         #if DEBUG && os(iOS)
         ChatBehaviorRecorder.shared?.event(["e": "mark", "k": name])
         #endif
     }
+
+    #if DEBUG && os(iOS)
+    static var isRecording: Bool {
+        ChatBehaviorRecorder.shared != nil
+    }
+
+    /// A transcript scroller offset write (ChatScrollInstrumentation.swift): `k` the writer,
+    /// `v` "<oldY>-><newY>".
+    static func offset(_ writer: String, _ value: String) {
+        ChatBehaviorRecorder.shared?.event(["e": "offset", "k": writer, "v": value])
+    }
+    #endif
 }
 
 /// A tagged view. Typed rather than string keys: string literals passed to a View helper read as
@@ -51,7 +63,7 @@ extension View {
         if let recorder = ChatBehaviorRecorder.shared {
             let key = target.key
             onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { recorder.update(key, $0) }
-                .onAppear { recorder.event(["e": "mount", "k": key]) }
+                .onAppear { recorder.mount(key) }
                 .onDisappear { recorder.unmount(key) }
         } else {
             self
@@ -85,6 +97,9 @@ private final class ChatBehaviorRecorder: NSObject {
         ProcessInfo.processInfo.arguments.contains("--openclaw-behavior-probe") ? ChatBehaviorRecorder() : nil
 
     private var frames: [String: CGRect] = [:]
+    /// Last frame each key reported, kept across unmounts: List remounts a row whose geometry did
+    /// not change, and `onGeometryChange` then reports nothing.
+    private var lastFrames: [String: CGRect] = [:]
     private var written: [String: CGRect] = [:]
     private var buffer = Data()
     private var lastFlush = CACurrentMediaTime()
@@ -124,6 +139,13 @@ private final class ChatBehaviorRecorder: NSObject {
 
     func update(_ key: String, _ rect: CGRect) {
         self.frames[key] = rect
+        self.lastFrames[key] = rect
+    }
+
+    /// A remounted row is on screen again at its last frame until its geometry changes.
+    func mount(_ key: String) {
+        if let rect = self.lastFrames[key] { self.frames[key] = rect }
+        self.event(["e": "mount", "k": key])
     }
 
     func unmount(_ key: String) {

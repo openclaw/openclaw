@@ -242,7 +242,7 @@ They cannot be set and cleared in the same command.
 
 ### Failure delivery
 
-Use `--failure-alert` or `--no-failure-alert` with `openclaw automations add` or `edit`. Without either flag, a new job uses the Gateway default and an edit leaves the setting unchanged. The owning conversation gets the repair turn when eligible; otherwise the configured global failure route or the automation's result destination gets the notice. Turning alerts off does not hide auto-disable safety notices.
+Use `--failure-alert` or `--no-failure-alert` with `openclaw automations add` or `edit`. Without either flag, a new job uses the Gateway default and an edit leaves the setting unchanged. The owning conversation gets the repair turn when eligible; otherwise the configured global failure route or the automation's result destination gets the notice. Turning alerts off does not hide schedule-error safety notices.
 
 Repeated failures with the same cause stay grouped into one incident across Gateway restarts. A changed cause or destination can notify after the cooldown. Successful completion clears the incident silently; the recovery stays in automation history. Skipped runs and unknown delivery outcomes do not count as recovery. If script setup cannot refresh tools after a plugin reload, the alert explains that automatic recovery failed before the script ran.
 
@@ -273,10 +273,10 @@ Invalid `--tz` values are rejected before saving a job; use an IANA timezone suc
 daylight-saving transition are reported separately as `--at` errors.
 
 <Note>
-One-shot jobs delete only after `completionStatus: "succeeded"`. Required-delivery failure or unknown completion keeps the job disabled, with no next run, so restarts do not replay payload side effects. Intentional silence complete and delete normally. Use `--keep-after-run` to preserve successful jobs too.
+One-shot jobs delete only after `completionStatus: "succeeded"`. Required-delivery failure or unknown completion keeps the job disabled, with no next run, so restarts do not replay payload side effects. Intentional silence completes and deletes normally. Use `--keep-after-run` to preserve successful jobs too.
 </Note>
 
-An `at` job records a terminal execution failure after a permanent error or exhausted retries. An `on-exit` job fired by its watcher is terminal on any execution error, including a transient one, because retrying would rerun the watched command. These failures record `state.autoDisabled`, which `openclaw doctor` reports. Manually force-running a paused `on-exit` job preserves its pause without recording an auto-disable.
+An `at` job ends after a permanent error or exhausted retries. An `on-exit` job fired by its watcher ends on any execution error, including a transient one, because retrying would rerun the watched command. Its owner is notified of that final failure; the job records no auto-disable reason.
 
 ### Recurring jobs
 
@@ -364,7 +364,7 @@ Isolated automation turns require a final deliverable rather than an interim sta
 
 ### Silent token suppression
 
-For text-only isolated automation announcements, only a completed final whose entire text trims to uppercase `NO_REPLY` suppresses direct outbound delivery and the fallback queued summary path. The terminal producer records this decision; delivery does not reparse the reply.
+For text-only isolated automation announcements, only a completed final whose entire text trims to uppercase `NO_REPLY` suppresses direct outbound delivery and the fallback queued summary path. Reasoning the model closes with a tag such as `</think>` before that exact token counts as the same silent final. The terminal producer records this decision; delivery does not reparse the reply.
 
 For example, this final reply sends no chat message:
 

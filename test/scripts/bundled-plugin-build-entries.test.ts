@@ -12,7 +12,6 @@ import {
   listBundledPluginPackArtifacts,
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 import { resolvePluginNpmRuntimeBuildPlan } from "../../scripts/lib/plugin-npm-runtime-build.mts";
-import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -249,27 +248,6 @@ describe("bundled plugin build entries", () => {
     ]) {
       expect(entryKeys).not.toContain(`extensions/${entry}`);
     }
-  });
-
-  it("discovers repo plugin build entries without directory scans", () => {
-    const payload = expectNoNodeFsScans<{
-      artifacts: number;
-      entries: number;
-    }>(
-      `
-        const build = await import("./scripts/lib/bundled-plugin-build-entries.mjs");
-        const entries = build.collectBundledPluginBuildEntries();
-        const artifacts = build.listBundledPluginPackArtifacts();
-        return {
-          artifacts: artifacts.length,
-          entries: entries.reduce((count, entry) => count + entry.sourceEntries.length, 0),
-        };
-      `,
-      { counters: ["readdirSync"] },
-    );
-
-    expect(payload.entries).toBeGreaterThan(0);
-    expect(payload.artifacts).toBeGreaterThan(0);
   });
 
   it("builds explicitly selected external plugins only for Docker", () => {

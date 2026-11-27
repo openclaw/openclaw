@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { symlink, link, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { planTemplateAddForGateway } from "./gateway-add-plan.js";

@@ -6,8 +6,12 @@ export type InlineCodeState = {
   open: boolean;
   /** Backtick run length required to close the current inline code span. */
   ticks: number;
+  /** Cursor before a trailing backtick run that the next chunk may extend. */
+  pendingRun?: { length: number; open: boolean; ticks: number };
   /** Whether the previous chunk ended in prose with an unpaired backslash. */
   escaped?: boolean;
+  /** Inline cursor before the unfinished delimiter line, if it needs to be reclassified. */
+  beforePendingFence?: Pick<InlineCodeState, "open" | "ticks" | "escaped">;
 };
 
 /** Creates the carry-forward state used when scanning inline code across chunks. */
@@ -19,15 +23,34 @@ type CodeSpan = Pick<FenceSpan, "start" | "end">;
 
 /** Builds a lookup for fenced and inline code spans while preserving scanner state. */
 export function buildCodeSpanIndex(
-  text: string,
+  buffer: string,
   inlineState?: InlineCodeState,
   fenceState?: FenceScanState,
 ) {
-  const { spans: fenceSpans, state: nextFenceState } = scanFenceSpans(text, fenceState);
-  const initialState = inlineState ?? createInlineCodeState();
+  // A carried marker may switch between inline and fenced code. Replay both
+  // scanners from the same line boundary before classifying this buffer.
+  const carried = fenceState?.pendingLine;
+  const text = carried ? carried.text + buffer : buffer;
+  const offset = carried?.text.length ?? 0;
+  const { spans: fenceSpans, state: nextFenceState } = scanFenceSpans(
+    text,
+    carried ? { atLineStart: true, open: carried.open } : fenceState,
+  );
+  const initialState =
+    (carried ? (inlineState?.beforePendingFence ?? inlineState) : inlineState) ??
+    createInlineCodeState();
+  const pendingStart = nextFenceState.pendingLine
+    ? text.length - nextFenceState.pendingLine.text.length
+    : -1;
+  let beforePendingFence: InlineCodeState["beforePendingFence"];
   const inlineSpans: CodeSpan[] = [];
-  let open = initialState.open;
-  let ticks = initialState.ticks;
+  // Fence replay already includes its trailing markers. Only extend an inline
+  // run when the next chunk actually starts with another backtick.
+  const continuation = !carried && text.startsWith("`") ? inlineState?.pendingRun : undefined;
+  const cursor = continuation ?? initialState;
+  let open = cursor.open;
+  let ticks = cursor.ticks;
+  let pendingRun = text.length === 0 ? inlineState?.pendingRun : undefined;
   let openStart = open ? 0 : -1;
   // Outside code, a backslash escapes the next backtick (CommonMark); inside code it is literal.
   let escaped = !open && initialState.escaped === true;
@@ -37,6 +60,9 @@ export function buildCodeSpanIndex(
   // Retire each fence once instead of searching all prior fences at every character.
   let fenceIndex = 0;
   while (i < text.length) {
+    if (pendingStart >= 0 && i >= pendingStart && !beforePendingFence) {
+      beforePendingFence = { open, ticks, escaped };
+    }
     const fence = fenceSpans[fenceIndex];
     if (fence && i >= fence.start) {
       i = fence.end;
@@ -64,10 +90,14 @@ export function buildCodeSpanIndex(
     }
 
     const runStart = i;
-    let runLength = 0;
+    let runLength = runStart === 0 ? (continuation?.length ?? 0) : 0;
     while (i < text.length && text[i] === "`") {
       runLength += 1;
       i += 1;
+    }
+
+    if (i === text.length) {
+      pendingRun = { length: runLength, open, ticks };
     }
 
     if (!open) {
@@ -90,12 +120,22 @@ export function buildCodeSpanIndex(
   }
 
   return {
-    inlineState: { open, ticks, ...(escaped ? { escaped } : {}) },
+    inlineState: {
+      open,
+      ticks,
+      ...(escaped ? { escaped } : {}),
+      ...(pendingRun ? { pendingRun } : {}),
+      ...(pendingStart >= 0
+        ? { beforePendingFence: beforePendingFence ?? { open, ticks, escaped } }
+        : {}),
+    },
     fenceState: nextFenceState,
     // Each scanner emits ordered, disjoint spans; inline spans can enclose fences.
     // Search separately so overlap between the lists cannot hide a containing span.
     isInside: (index: number) =>
-      isInsideSpan(index, fenceSpans) || isInsideSpan(index, inlineSpans),
+      index >= 0 &&
+      index < buffer.length &&
+      (isInsideSpan(offset + index, fenceSpans) || isInsideSpan(offset + index, inlineSpans)),
   };
 }
 

@@ -15,13 +15,13 @@ import {
   type MediaFactInput,
 } from "../media/media-facts.js";
 import { applyInputProvenanceToUserMessage } from "./input-provenance.js";
-import { buildPersistedUserTurnMetadata } from "./user-turn-transcript.metadata.js";
 import type {
   PersistedUserTurnMediaInput,
   PersistedUserTurnMessage,
   UserTurnInput,
-  UserTurnMessagePersistenceParams,
-} from "./user-turn-transcript.types.js";
+} from "./user-turn-input.types.js";
+import { buildPersistedUserTurnMetadata } from "./user-turn-transcript.metadata.js";
+import type { UserTurnMessagePersistenceParams } from "./user-turn-transcript.types.js";
 
 /** Approved text replacement invalidates annotations tied to the prior text. */
 export function applyUserTurnReplacementText(

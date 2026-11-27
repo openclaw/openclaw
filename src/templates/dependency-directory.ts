@@ -2,7 +2,7 @@ import { lstat, mkdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { hasErrnoCode } from "../infra/errno.js";
 import { root as fsSafeRoot, walkDirectory } from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";

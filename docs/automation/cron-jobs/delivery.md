@@ -21,6 +21,8 @@ Where a finished run sends its output, what happens when a run or a delivery fai
 
 A successful primary webhook run with no nonblank summary intentionally skips the POST and records `deliverySuppressionReason: "empty"`, matching announce delivery's optional-output contract. Execution errors still send the error event even without a summary.
 
+When a Gateway restart interrupts a running script before webhook delivery, OpenClaw sends the usual `finished` / `error` POST by default. Its error says that the Gateway restarted during the run and the script was not rerun. The run remains failed; the script is not replayed. This terminal notice has a five-second delivery budget during shutdown and uses the existing webhook destination and outbound policy. Operator cancellation does not send this notice, and a webhook already in progress is not resent. A hard process kill or an unavailable receiver can still prevent delivery; restart recovery does not retry the notice.
+
 Primary webhooks record delivery after an HTTP 2xx acknowledgment. An HTTP rejection
 records **Not delivered**. If the request may have reached the receiver but its
 response is lost or times out, delivery stays **Unknown**; the transport does not
@@ -45,7 +47,7 @@ A newly committed visible result refreshes the destination's idle freshness, so 
 - `none` and `webhook` do not write a conversation result.
 
 If the destination chat belongs to a different agent, the result is sent but not added to either agent’s conversation.
-Channel-native payloads without a text projection are sent without a conversation entry and record a warning.
+Channel-native payloads without a text projection are sent without a conversation entry and record a warning. Without an external route, they are **Not delivered**.
 
 Execution context is separate: `isolated` starts without conversation history, `current` reads bounded creating-conversation context in a child run of that conversation, and `session:<key>` uses a persistent execution session. The private run transcript and tool history are not copied into the destination.
 When a persistent execution session is already the destination conversation, its final assistant message is the result; OpenClaw does not append a second copy.
@@ -184,13 +186,22 @@ final-output delivery.
 
 ### Failure notifications
 
-Each automation has one **Failure alerts** switch. It starts from the Gateway default unless you explicitly turn it on or off. An eligible automation first asks the agent in the owning conversation to investigate. If that turn cannot start, or the job has no eligible owner conversation, it uses the global failure route when configured; otherwise it uses the automation's result destination. A job without a conversation or a destination records the failure in its run history.
+Each automation has one **Failure alerts** switch. It starts from the Gateway default unless you explicitly turn it on or off. An eligible automation first asks the agent in the owning conversation to investigate. If that turn cannot start, or the job has no eligible owner conversation, it uses the global failure route when configured; otherwise it uses the automation's result destination. A partial global announce route keeps the result recipient when the channel matches, and keeps its account and thread when that recipient still matches. A job without a conversation or a destination records the failure in its run history.
+
+Failure-alert webhooks stay **Unknown** when the request may have reached the
+receiver but its response is lost. An explicit HTTP rejection or a failure proven
+to precede sending records **Not delivered** and allows the in-app fallback
+notification, including when Gateway work admission refuses an alert before its
+transport starts. An unknown outcome does not trigger that fallback.
+When an alert on an owner-targeted route or a route with `directPolicy: "block"` is
+recorded as Not delivered, its fallback turn stays in-session: it is not delivered
+automatically and has no current external conversation for implicit sends.
 
 The [Gateway failure-alert policy](/gateway/config-automation#cronfailurealert) controls the threshold, cooldown, route, and whether to alert on skipped runs. By default, alerts begin at the first failure with a one-hour cooldown between different failures. The same unresolved failure repeats at most daily, or less often if the cooldown is longer. Successful completion clears the incident without sending a notice. A local-provider preflight outage follows the threshold and cooldown even when other skips are excluded.
 
 Failed required delivery stays failed even when the work succeeded. It does not increment the execution-failure streak. Delivery alerts use the owning conversation or a different global failure route, bypass the threshold, and honor the cooldown. They do not resend to the result destination that just failed.
 
-Auto-disable safety notices bypass the threshold and cooldown, even when failure alerts are off. Operator cancellation and Gateway restart retirement remain quiet.
+A timed one-shot job that ends after a permanent failure or exhausted retries notifies on that final failure without waiting for the consecutive-failure threshold or the cooldown. A watcher-fired `on-exit` job ends on any execution error, including a transient one: retrying would rerun the watched command. Eligible owned jobs receive a repair request in their owner conversation; other jobs use the enabled failure-alert route. Operator cancellations and runs retired by a Gateway restart send no repair or alert.
 
 #### Owner-conversation repair
 
@@ -212,7 +223,9 @@ Script setup refreshes retired tools after a plugin reload before execution begi
 
 A provider rejection of an unsupported model records `model_not_found` in the job state and run history. The failure notice points to `openclaw doctor --fix` for provider-declared retirements, or changing/removing the automation's model override. Known retired automation model routes fail before another inference request. Doctor replaces an override with the provider's declared successor when the agent's model policy allows it. Without a declared successor, it clears the override so the job inherits the agent default. If a pinned override's successor is disallowed, Doctor retains the reference and reports the required policy change. A missing account catalog entry or a discovery outage alone does not authorize a migration.
 
-The scheduler also provides a safety backstop. A time-based recurring job is auto-disabled after 10 consecutive execution failures; a successful run resets that streak. On the terminal recurring failure, the auto-disable notice is sent directly through the job's failure route: the threshold and cooldown do not hold it back, and no repair turn or other model turn is involved, so it still arrives when the failing model provider is the cause. A job with alerts off or no failure route hands the notice to its owning agent as a system event. Repeated schedule-computation failures auto-disable after 3 errors. Terminal one-shot execution failures also record `state.autoDisabled`, without adding a safety notice when a repair request or failure alert owns the notification. The job records `state.autoDisabled.reason` as `consecutive-failures` or `schedule-errors`, which `openclaw doctor` reports. Raw errors stay in automation history. After fixing the cause, run `openclaw automations enable <jobId>`; enabling clears the recorded reason and failure streaks. Because disabled jobs are hidden by the default list, use `openclaw automations list --all` to inspect them. Operator cancellations, restart retirements, and manual force-runs of paused `on-exit` jobs do not record an auto-disable.
+When a run is refused because its automation has no recorded inference account, direct chat failure alerts name the cause and repair without naming the stored account. Owner-conversation repair requests still include the last error so the agent can identify and repair the account selection; generated repair replies are not covered by the direct-alert redaction. Automation history keeps the full refusal; webhook failure routes receive the raw last error as before.
+
+A failed run never turns a job off. A recurring job keeps its schedule, waits out its error backoff, and records the last error; a successful run resets the failure streak. A one-shot job ends after its final attempt. Only repeated schedule-computation failures auto-disable a job: after 3 errors it records `state.autoDisabled.reason` as `schedule-errors`, which `openclaw doctor` reports, and its owning agent receives a notice. Jobs disabled by earlier releases can still carry `consecutive-failures`. Raw errors stay in automation history. After fixing the cause, run `openclaw automations enable <jobId>`; enabling clears the recorded reason and failure streaks. Because disabled jobs are hidden by the default list, use `openclaw automations list --all` to inspect them.
 
 A job linked to the exact conversation that created it pauses when that conversation is gone. If the conversation was removed or archived, or its bound worktree no longer exists, the next occurrence runs nothing: no trigger script, payload, or session turn. The job is disabled, and its owning agent receives one notice that names the conversation and the `openclaw automations enable <jobId>` command. A failure-alert route that includes skipped runs does not send a second notification. The pause is not an auto-disable, so it records no `state.autoDisabled` reason; the skip reason stays in automation history. Re-enabling does not detach the job, so the next occurrence pauses again while the conversation is still gone. Resetting the conversation with `/new` does not pause the job, and command jobs never pause. Jobs without an exact conversation link are unaffected. Automatic [session maintenance](/gateway/config-agents/sessions) does not archive a conversation while an enabled job it created depends on it, so only an explicit archive or removal pauses the job.
 
