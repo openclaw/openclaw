@@ -338,6 +338,72 @@ it("keeps accepted inputs separate, bounded, and addressable by their own cursor
   expect(Value.Check(tool.outputSchema!, details)).toBe(true);
 });
 
+it("bounds oversized pending input ids before allocating message budget", async () => {
+  const items = Array.from({ length: 20 }, (_, index) => ({
+    id:
+      index === 0
+        ? "x".repeat(5000)
+        : index === 1
+          ? `${"x".repeat(62)}-1`
+          : `pending-${"x".repeat(5000)}-${index}`,
+    state: "queued",
+    acceptedAt: 1_700_000_000_000,
+    message: { role: "user", content: "queued input" },
+  }));
+  const { tool } = historyFixture({
+    messages: [],
+    pendingInputs: { items, total: items.length },
+  });
+
+  const result = await tool.execute("oversized-pending-id", { sessionKey: "main" });
+  const details = result.details as {
+    pendingInputs: { items: Array<{ id: string }>; total: number };
+    bytes: number;
+    truncated: boolean;
+  };
+
+  expect(details.pendingInputs.total).toBe(items.length);
+  expect(details.pendingInputs.items).toHaveLength(items.length);
+  expect(new Set(details.pendingInputs.items.map((item) => item.id)).size).toBe(items.length);
+  expect(
+    details.pendingInputs.items.every((item) => Buffer.byteLength(item.id, "utf8") <= 64),
+  ).toBe(true);
+  expect(Buffer.byteLength(JSON.stringify(details.pendingInputs), "utf8")).toBeLessThanOrEqual(
+    4096,
+  );
+  expect(details.bytes).toBeLessThanOrEqual(80 * 1024);
+  expect(details.truncated).toBe(true);
+  expect(Value.Check(tool.outputSchema!, details)).toBe(true);
+});
+
+it("reports truncation when only a pending input id is shortened", async () => {
+  const { tool } = historyFixture({
+    messages: [],
+    pendingInputs: {
+      items: [
+        {
+          id: `pending-${"x".repeat(5000)}`,
+          state: "queued",
+          acceptedAt: 1_700_000_000_000,
+          message: { role: "user", content: "ok" },
+        },
+      ],
+      total: 1,
+    },
+  });
+
+  const result = await tool.execute("oversized-pending-id-only", { sessionKey: "main" });
+  const details = result.details as {
+    contentTruncated: boolean;
+    pendingInputs: { items: Array<{ id: string }> };
+    truncated: boolean;
+  };
+
+  expect(details.pendingInputs.items[0]?.id).toHaveLength(64);
+  expect(details.contentTruncated).toBe(true);
+  expect(details.truncated).toBe(true);
+});
+
 it.each([
   { args: { limit: 0 }, error: "limit must be a positive integer" },
   { args: { offset: "1abc" }, error: "offset must be a non-negative integer" },
