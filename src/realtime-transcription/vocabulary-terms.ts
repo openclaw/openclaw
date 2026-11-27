@@ -59,7 +59,7 @@ function canonicalLocale(input: unknown): string {
 
 function stringList(input: unknown, maximum: number, normalize: (value: unknown) => string) {
   if (input === undefined) {
-    return Object.freeze<string>([]);
+    return Object.freeze<string[]>([]);
   }
   if (!Array.isArray(input)) {
     throw new VocabularyError("invalid-input");
@@ -362,7 +362,7 @@ export function resolveEffectiveVocabulary(params: {
           ...first.term,
           aliases: mergeStrings(preferred.map((candidate) => candidate.term.aliases)),
           locales: preferred.some((candidate) => !candidate.term.locales.length)
-            ? Object.freeze<string>([])
+            ? Object.freeze<string[]>([])
             : mergeStrings(preferred.map((candidate) => candidate.term.locales)),
         }),
         sources: Object.freeze([...sources.values()]),
@@ -376,7 +376,7 @@ export function selectVocabularyHints(
   effective: EffectiveVocabulary,
   capability: VocabularyHintCapability,
 ): VocabularyHints {
-  const empty = Object.freeze<string>([]);
+  const empty = Object.freeze<string[]>([]);
   if (capability.kind === "unsupported") {
     return Object.freeze({
       status: "unsupported",
