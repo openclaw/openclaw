@@ -136,7 +136,7 @@ export type DoctorHealthContribution = {
  * repair mode and fails when one changes a store. A function is the owner's read-only check
  * and must decide with the same predicate as `run`.
  */
-export type DoctorContributionPending =
+type DoctorContributionPending =
   | "diagnostic-only"
   | ((
       ctx: DoctorHealthFlowContext,
