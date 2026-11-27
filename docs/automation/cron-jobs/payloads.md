@@ -491,7 +491,7 @@ Script payloads can call configured MCP server tools as `MCP.<server>.<tool>({ .
 
 The script may return an object with these optional fields:
 
-- `notify`: Text delivered through the job's `announce`, `webhook`, or `none` delivery mode. If omitted, nothing is delivered. For an explicit conversation target, the text becomes a system event in that conversation.
+- `notify` supplies the result text. Announce delivery uses the configured destination, and webhook delivery includes the text in its payload. For an explicit conversation target without an announcement destination, OpenClaw queues the text as a system event in that conversation.
 - `wake`: `"now"` requests immediate session processing of `notify` (or a compact completion event). The legacy `"next-heartbeat"` value assigns the notice to an eligible scheduled automation; a missing target is reported.
 - `state`: JSON state, capped at 16 KB and persisted only after a successful run. The next run receives a frozen copy as `trigger.state`, matching trigger scripts. Because that namespace has one persisted owner, a script payload cannot be combined with a condition trigger on the same job.
 - `nextCheck`: A duration such as `"15m"`. It is valid only for jobs with pacing enabled and uses the same pacing clamp as agent-turn proposals.

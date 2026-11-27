@@ -99,7 +99,9 @@ export async function executeScriptCronJob(
 
   const continuationKey = resolveCronSessionTargetSessionKey(job.sessionTarget);
   const notify = result.notify?.trim() ? result.notify : undefined;
-  if ((continuationKey && notify) || result.wake) {
+  const conversationNotify =
+    continuationKey && !result.wake && !result.deliveryAttempted ? notify : undefined;
+  if (conversationNotify || result.wake) {
     const target = {
       agentId:
         expectedTarget?.agentId ??
@@ -111,16 +113,15 @@ export async function executeScriptCronJob(
         ? (expectedTarget?.sessionKey ?? continuationKey)
         : job.sessionKey,
     };
-    const deliveryContext =
-      continuationKey && notify && !result.wake
-        ? (expectedTarget?.deliveryContext ??
-          (await state.deps.resolveOriginDeliveryContext?.(target)))
-        : undefined;
+    const deliveryContext = conversationNotify
+      ? (expectedTarget?.deliveryContext ??
+        (await state.deps.resolveOriginDeliveryContext?.(target)))
+      : undefined;
     await options?.assertRunCurrent?.();
     abortSignal?.throwIfAborted();
     options?.deliveryAttemptFence?.assertCurrent();
-    if (continuationKey && notify && !result.wake) {
-      state.deps.enqueueSystemEvent(notify, {
+    if (conversationNotify) {
+      state.deps.enqueueSystemEvent(conversationNotify, {
         ...target,
         ...(deliveryContext ? { deliveryContext } : {}),
         contextKey: `cron:${job.id}:script`,

@@ -1509,6 +1509,10 @@ describe("buildGatewayCronService", () => {
 
   registerGatewayCronCompletionTests({
     createCronConfig,
+    createTriggerConfig,
+    withCronService,
+    addScriptJob,
+    enqueueSystemEventMock: mocks.enqueue,
     createCronService,
     getCronDeps,
     loadConfigMock: mocks.config,
@@ -1798,70 +1802,6 @@ describe("buildGatewayCronService", () => {
       expect(finishedEvent(job.id)).toMatchObject({ status: "ok", completionStatus: "failed" });
     });
   });
-
-  it.each([
-    { notify: "queue changed", expected: "queue changed" },
-    { notify: "NO_REPLY", expected: undefined },
-    { notify: "NO_REPLY\nNO_REPLY", expected: "NO_REPLY" },
-    { notify: "NO_REPLY.", expected: "NO_REPLY." },
-  ])(
-    "prepares isolated script notify $notify before announcement",
-    async ({ notify, expected }) => {
-      const cfg = createTriggerConfig("server-cron-script-announce");
-      cfg.gateway = {
-        publicOrigin: "https://gateway.example",
-        controlUi: { basePath: "/control" },
-      };
-
-      mocks.script.mockResolvedValueOnce({
-        kind: "completed",
-        notify,
-        stateChanged: false,
-      });
-
-      await withCronService(cfg, async (state) => {
-        const job = await addScriptJob(
-          state,
-          "script-announce",
-          "return { notify: 'queue changed' }",
-          {
-            deleteAfterRun: false,
-            delivery: { mode: "announce", channel: "telegram", to: "123", threadId: 456 },
-          },
-        );
-
-        await state.cron.run(job.id, "force");
-
-        expect(mocks.script).toHaveBeenCalledWith(
-          expect.objectContaining({
-            job: expect.objectContaining({
-              id: job.id,
-              payload: expect.objectContaining({
-                script: "return { notify: 'queue changed' }",
-                timeoutSeconds: 300,
-                toolBudget: 50,
-              }),
-            }),
-          }),
-        );
-        if (expected === undefined) {
-          expect(mocks.announce).not.toHaveBeenCalled();
-          expect(state.cron.getJob(job.id)?.state.deliverySuppressionReason).toBe("silent");
-        } else {
-          expect(mocks.announce).toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({
-              jobId: job.id,
-              payload: [{ text: expected }],
-              inspectionUrl: `https://gateway.example/control/automations?job=${job.id}&run=cron%3A${job.id}%3A${state.cron.getJob(job.id)?.state.lastRunAtMs}`,
-              target: expect.objectContaining({ threadId: 456 }),
-            }),
-          );
-          expect(state.cron.getJob(job.id)?.state.deliverySuppressionReason).toBeUndefined();
-        }
-        expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
-      });
-    },
-  );
 
   it("keeps script failure detail transient while preserving structured error payloads", async () => {
     const cfg = createTriggerConfig("server-cron-script-failure-detail");

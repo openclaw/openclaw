@@ -10,6 +10,7 @@ import {
   resolveCronDeliveryDefaultsScope,
   resolveCronDeliveryMode,
 } from "../cron/delivery-defaults.js";
+import { hasExplicitCronDeliveryTarget } from "../cron/delivery-target-validation.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { normalizeDirectCronDeliveryPayloads } from "../cron/isolated-agent/delivery-payload-normalization.js";
 import {
@@ -100,8 +101,12 @@ export async function finalizeCronCompletionAnnouncement(params: {
     delivery: { ...delivery, delivered: deliveryState.delivered },
     ...(diagnostics ? { diagnostics } : {}),
   });
+  const useConversationNotice =
+    params.job.payload.kind === "script" &&
+    params.job.sessionTarget !== "isolated" &&
+    !hasExplicitCronDeliveryTarget(plan);
   const normalized = normalizeDirectCronDeliveryPayloads({
-    deliveryPayloads: [{ text: params.text }],
+    deliveryPayloads: [{ text: useConversationNotice ? undefined : params.text }],
   });
   if (normalized.kind === "suppress") {
     deliveryState.deliverySuppressionReason = params.suppressionReason ?? normalized.reason;
