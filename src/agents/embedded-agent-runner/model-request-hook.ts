@@ -4,10 +4,7 @@ import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import type { PluginHookModelRequestKind } from "../../plugins/hook-model.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
-import {
-  RUNTIME_CONTEXT_DATA_RANGES,
-  type RuntimeContextDataRange,
-} from "../internal-runtime-context.js";
+import { getRuntimeContextDataRanges } from "../runtime-context-data-ranges.js";
 import type { StreamFn } from "../runtime/index.js";
 import { wrapStreamFnWithProviderPromptState } from "./provider-prompt-state.js";
 import { buildEmbeddedAgentHookContext } from "./run/agent-hook-context.js";
@@ -52,11 +49,7 @@ function collectContextSpans(messages: Context["messages"]) {
       return [];
     }
     const { content } = message;
-    // Only the host's operator-message projection sets this symbol.
-    const ranges: readonly RuntimeContextDataRange[] | undefined = Reflect.get(
-      message,
-      RUNTIME_CONTEXT_DATA_RANGES,
-    );
+    const ranges = getRuntimeContextDataRanges(message);
     if (!ranges?.length) {
       return [];
     }

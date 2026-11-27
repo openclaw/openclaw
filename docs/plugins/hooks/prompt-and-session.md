@@ -550,7 +550,11 @@ The event is `{ runtime, requestKind, payload, provider, model, messages, contex
   in-history system updates. Each entry has `containerText` and UTF-16 `start`
   (inclusive) and `end` (exclusive) offsets. Match the carrier against the final
   payload before screening. OpenClaw records the ranges while rendering the
-  data, so adjacent runtime instructions are outside the spans.
+  data, so adjacent runtime instructions are outside the spans. Ordinary
+  provider text replacements move the offsets with the quote. A rewrite that
+  crosses a quote boundary or copies other text can leave a span unavailable.
+  Older updates have no spans. Missing spans do not mean the text is trusted;
+  the plugin still receives the full payload.
 - Some requests resend history as text, so `messages` does not map one to one
   onto `payload`. A `"compaction"` summary request is the summary call itself:
   the older history is serialized into one user message inside `payload`, and

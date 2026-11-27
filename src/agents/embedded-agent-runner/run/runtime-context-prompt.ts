@@ -17,15 +17,17 @@ import { PROJECTED_PROMPT_UPDATE } from "../../embedded-agent-helpers/turns.js";
 import {
   isOpenClawSystemUpdateMessage,
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
-  RUNTIME_CONTEXT_DATA_RANGES,
   STEERING_RUNTIME_CONTEXT,
   SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
   RUNTIME_EVENT_USER_PROMPT,
   projectRuntimeContextFragments,
   type CurrentInboundPromptContext,
-  type RuntimeContextDataRange,
   type RuntimeContextFragment,
 } from "../../internal-runtime-context.js";
+import {
+  setRuntimeContextDataRanges,
+  type RuntimeContextDataRange,
+} from "../../runtime-context-data-ranges.js";
 import type { AgentMessage } from "../../runtime/index.js";
 
 const RETAIN_STEERING_RUNTIME_CONTEXT = Symbol.for("openclaw.retainSteeringRuntimeContext");
@@ -282,7 +284,6 @@ export function projectSystemUpdateMessage(
   }
   const projected: UserMessage & {
     [PROJECTED_PROMPT_UPDATE]?: true;
-    [RUNTIME_CONTEXT_DATA_RANGES]?: RuntimeContextDataRange[];
   } = {
     role: "user",
     content: message.content,
@@ -291,7 +292,7 @@ export function projectSystemUpdateMessage(
   if (inHistorySystemUpdates) {
     projected.operatorMessage = { turnScoped };
     if (kind === "runtime-context" && dataRanges?.length) {
-      projected[RUNTIME_CONTEXT_DATA_RANGES] = dataRanges;
+      setRuntimeContextDataRanges(projected, dataRanges);
     }
   } else {
     projected[PROJECTED_PROMPT_UPDATE] = true;
