@@ -6,6 +6,7 @@ import { ensureCliLiveSessionMemory } from "../agents/cli-runner/cli-live-sessio
 import {
   captureCgroupV2WorkingSetReader,
   captureDelegatedMemoryPressureReader,
+  captureServiceAvailableMemoryReader,
   isMemoryPressureHigh,
   readCgroupV2MemoryLimits,
   readEffectiveMemoryLimit,
@@ -383,6 +384,24 @@ it("keeps a delegated leaf and its controller files in the same cgroup view", ()
   expect(readCgroupV2MemoryLimits(["memory.max"])).toEqual({ "memory.max": 900 });
   files.set("/proc/self/cgroup", "0::/pod-other");
   expect(readCgroupV2MemoryLimits(controllers)).toEqual({});
+});
+
+it("samples native cron headroom without looking up an ordinary mount again", () => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  delete (process.versions as { bun?: string }).bun;
+  const native = vi.spyOn(process, "availableMemory").mockReturnValue(GiB);
+  const reads = mockCgroupFiles(
+    new Map([
+      ["/proc/self/cgroup", "0::/service"],
+      ["/proc/self/mountinfo", "30 1 0:27 / /sys/fs/cgroup rw - cgroup2 cgroup rw"],
+    ]),
+  );
+  const read = captureServiceAvailableMemoryReader();
+  reads.mockClear();
+  expect(read()).toBe(GiB);
+  native.mockReturnValue(0);
+  expect(read()).toBe(0);
+  expect(reads).not.toHaveBeenCalled();
 });
 
 it("follows the delegated leaf's raw charge across moves without consulting a second controller", () => {
