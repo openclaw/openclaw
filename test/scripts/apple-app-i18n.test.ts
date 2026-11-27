@@ -122,13 +122,13 @@ it("packages the full Gateway alert keys and preserves existing translations", a
         "Could Not Change Primary Gateway",
         "an unencrypted private-network connection",
       ]) {
-        const unit = expectDefined(
+        const translation = expectDefined(
           catalog.strings?.[key]?.localizations?.[locale]?.stringUnit,
           key,
         );
-        expect(unit.state).toBe("translated");
-        expect(unit.value).not.toBe(key);
-        expect(strings).toContain(`${JSON.stringify(key)} = ${JSON.stringify(unit.value)};`);
+        expect(translation.state).toBe("translated");
+        expect(translation.value).not.toBe(key);
+        expect(strings).toContain(`${JSON.stringify(key)} = ${JSON.stringify(translation.value)};`);
       }
     }
   } finally {
