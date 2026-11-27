@@ -232,7 +232,7 @@ it("reports rejected and unconfirmed input without retiring the session", async 
   await openSession();
   const act = () => conn.input("s1", "typed");
   client.nextResponse = null;
-  await expect(act()).rejects.toThrow("delivery could not be confirmed");
+  await expect(act()).rejects.toThrow("Couldn’t confirm input delivery");
   const request = vi.spyOn(client, "request").mockRejectedValueOnce(new Error("offline"));
   await expect(act()).rejects.toThrow("offline");
   expect(conn.size).toBe(1);

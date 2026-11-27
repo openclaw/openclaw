@@ -347,10 +347,17 @@ export function sessionPullRequestsForGateway(
         );
         next = {
           ...next,
-          // Membership is authoritative even when passive reads omit GitHub metadata.
-          taskPullRequests: snapshot.taskPullRequests?.map((task) =>
-            Object.assign({}, task, { pullRequest: task.pullRequest ?? retained.get(task.url) }),
-          ),
+          // Membership is authoritative even when passive reads omit GitHub metadata. Passive
+          // state chips replace richer retained details only when the state changed.
+          taskPullRequests: snapshot.taskPullRequests?.map((task) => {
+            const prior = retained.get(task.url);
+            return Object.assign({}, task, {
+              pullRequest:
+                prior && prior.state === (task.pullRequest?.state ?? prior.state)
+                  ? prior
+                  : task.pullRequest,
+            });
+          }),
         };
       }
       snapshots.set(sessionKey, next);

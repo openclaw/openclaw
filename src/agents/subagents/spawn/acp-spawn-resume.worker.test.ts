@@ -338,7 +338,7 @@ it("resolves resume ownership off-thread, preserving backend, order, and lifecyc
       expect(result.ok, mutation).toBe(mutation === "unchanged");
       const revalidate = expectDefined(retained.revalidateResume, "resume authorization callback");
       await expect(revalidate()).rejects.toThrow(
-        mutation === "retired" ? "request retired" : "ACP resume source authority changed",
+        mutation === "retired" ? "request retired" : "The ACP resume source session changed",
       );
       if (result.ok) {
         expect(ensureSession).toHaveBeenCalledExactlyOnceWith(
@@ -356,7 +356,7 @@ it("resolves resume ownership off-thread, preserving backend, order, and lifecyc
           mutation === "retired"
             ? "request retired"
             : mutation === "snapshot-reassigned"
-              ? "ACP resume source authority changed"
+              ? "The ACP resume source session changed"
               : "previously recorded for this requester",
         );
         expect(ensureSession).not.toHaveBeenCalled();

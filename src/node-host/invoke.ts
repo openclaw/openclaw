@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { z } from "zod";
 import { validateSystemRunExecutionContext } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
 import {
   McpSdkCompatibilityError,
@@ -69,6 +70,7 @@ import type { NodeInvokeRequestPayload, SystemRunParams } from "./invoke-types.j
 import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
 import { buildNodeEventParams } from "./node-event-params.js";
 import type { NodeWorkerBundleInstallerControl } from "./node-worker-bundle-installer.js";
+import type { NodeWorkerMcpSession } from "./node-worker-mcp.js";
 import { invokeNodeWorkerSupervisorCommand } from "./node-worker-supervisor-commands.js";
 import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contract.js";
 import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
@@ -86,6 +88,7 @@ type NodeHostPrivateInvokeRuntime = NodeHostInvokeRuntime & {
   flushPluginCommandIo?: () => Promise<void>;
   workerBundleInstaller?: NodeWorkerBundleInstallerControl;
   workerSupervisor?: NodeWorkerSupervisorControl;
+  localMcp?: NodeWorkerMcpSession;
   workerWorkspace?: NodeWorkerWorkspaceRuntime;
   workerComputer?: NodeWorkerComputer;
 };
@@ -145,13 +148,13 @@ async function buildSystemRunAllowAlwaysCoverage(params: {
       .map((candidate) => candidate.sourceSegment);
     complete = segments.length === candidates.length;
   } else {
-    const analysis = analyzeArgvCommand({ argv: params.argv, cwd, env: params.env });
+    const analysis = await analyzeArgvCommand({ argv: params.argv, cwd, env: params.env });
     if (!analysis.ok) {
       return { complete: false, patterns: [] };
     }
     segments = analysis.segments;
   }
-  const coverage = resolveAllowAlwaysPatternCoverage({
+  const coverage = await resolveAllowAlwaysPatternCoverage({
     segments,
     cwd,
     env: params.env,
@@ -289,6 +292,7 @@ export async function handleInvoke(
       paramsJSON: frame.paramsJSON,
       bundleInstaller: runtime.workerBundleInstaller,
       supervisor: runtime.workerSupervisor,
+      localMcp: runtime.localMcp,
       workspace: runtime.workerWorkspace,
       gatewayUrl: runtime.gatewayUrl,
       gatewayTlsFingerprint: runtime.gatewayTlsFingerprint,
@@ -562,7 +566,7 @@ export async function handleInvoke(
           params.strictInlineEval === true ||
           execPolicy.agentExec?.strictInlineEval === true ||
           execPolicy.globalExec?.strictInlineEval === true;
-        const prepared = buildSystemRunApprovalPlan(params, bindApproval);
+        const prepared = await buildSystemRunApprovalPlan(params, bindApproval);
         if (!prepared.ok) {
           await response.error(
             "INVALID_REQUEST",
@@ -674,9 +678,11 @@ function decodeMcpToolsCallParams(raw?: string | null) {
   if (value.arguments !== undefined && !isRecord(value.arguments)) {
     throw new Error("INVALID_REQUEST: arguments must be an object");
   }
+  const elicitationId = z.uuid().optional().parse(value.elicitationId);
   return {
     server,
     tool,
+    ...(elicitationId ? { elicitationId } : {}),
     ...(value.arguments ? { arguments: value.arguments } : {}),
   };
 }

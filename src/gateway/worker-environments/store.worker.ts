@@ -11,6 +11,8 @@ import type {
   WorkerOperationContext,
   WorkerOperationHandlers,
 } from "../../state/worker-operation-registry.js";
+import type { LegacyOpenClawIdMemberRoleImport } from "../openclaw-id/member-source-role-import.js";
+import { importLegacyEnvironmentMemberSources } from "./member-source-role-import.worker.js";
 import { readWorkerPlacementsInDatabase } from "./placement-row-codec.js";
 import { createWorkerEnvironmentCommitAdmission } from "./store-commit-authority.js";
 import { reconcileAttachedSessionOwners } from "./store-mutations.js";
@@ -24,13 +26,15 @@ import type {
 } from "./store.types.js";
 import { pruneTerminalWorkerEnvironments } from "./terminal-environment-retention.js";
 
-type Method = keyof WorkerEnvironmentMutationMethods | "initialize";
+type Method = keyof WorkerEnvironmentMutationMethods | "initialize" | "importLegacyMemberSources";
 type Input<Name extends Method> = {
   nowMs?: number;
   publicationIncarnation: string;
 } & (Name extends keyof WorkerEnvironmentMutationMethods
   ? { input: WorkerEnvironmentMutationInput<Name> }
-  : unknown);
+  : Name extends "importLegacyMemberSources"
+    ? { input: LegacyOpenClawIdMemberRoleImport }
+    : unknown);
 type MutationContext = {
   db: OpenClawStateDatabase["db"];
   store: ReturnType<typeof createWorkerEnvironmentStoreKernel>;
@@ -44,6 +48,9 @@ function mutation<Name extends Method, Result>(
 ) {
   return (input: Input<Name>, { open }: WorkerOperationContext) => {
     const database = open();
+    if (name === "importLegacyMemberSources") {
+      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+    }
     return runOpenClawStateWriteTransaction(
       (transactionDatabase) => {
         const { db } = transactionDatabase;
@@ -105,6 +112,10 @@ function environmentMutation<Name extends EnvironmentMethod, Result>(
 }
 
 export const workerEnvironmentOperations = {
+  "workerEnvironments.importLegacyMemberSources": mutation(
+    "importLegacyMemberSources",
+    ({ input }, { db, touch }) => importLegacyEnvironmentMemberSources(db, input, touch),
+  ),
   "workerEnvironments.initialize": mutation("initialize", (_input, { db, now, touch }) => {
     for (const id of reconcileAttachedSessionOwners(db, now())) {
       touch(id);
@@ -113,6 +124,22 @@ export const workerEnvironmentOperations = {
   }),
   "workerEnvironments.createIntent": environmentMutation("createIntent", (input, store) =>
     store.createIntent(input),
+  ),
+  "workerEnvironments.recordResourceReceipt": environmentMutation(
+    "recordResourceReceipt",
+    (input, store) => store.recordResourceReceipt(input),
+  ),
+  "workerEnvironments.beginRetentionOperation": environmentMutation(
+    "beginRetentionOperation",
+    (input, store) => store.beginRetentionOperation(input),
+  ),
+  "workerEnvironments.recordRetentionObservation": environmentMutation(
+    "recordRetentionObservation",
+    (input, store) => store.recordRetentionObservation(input),
+  ),
+  "workerEnvironments.setRetentionRuntimeAdmission": environmentMutation(
+    "setRetentionRuntimeAdmission",
+    (input, store) => store.setRetentionRuntimeAdmission(input),
   ),
   "workerEnvironments.ensureNodeEnrollment": mutation(
     "ensureNodeEnrollment",
@@ -167,6 +194,10 @@ export const workerEnvironmentOperations = {
   "workerEnvironments.requestPreparedDestroy": environmentMutation(
     "requestPreparedDestroy",
     (input, store) => store.requestPreparedDestroy(input),
+  ),
+  "workerEnvironments.refreshPreparedProject": environmentMutation(
+    "refreshPreparedProject",
+    (input, store) => store.refreshPreparedProject(input),
   ),
   "workerEnvironments.createSessionAttachmentIntent": mutation(
     "createSessionAttachmentIntent",

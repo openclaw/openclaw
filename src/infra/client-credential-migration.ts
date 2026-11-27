@@ -20,6 +20,8 @@ import {
 } from "./client-credential-readiness.js";
 import {
   CLIENT_CREDENTIAL_LEGACY_KEYS,
+  isSameClientCredentialFile,
+  isSameIndependentClientCredentialIdentity,
   readClientCredentialFileIdentity,
   serializeClientCredentialReceipt,
   type ClientCredentialReceipt,
@@ -29,7 +31,11 @@ import {
   CLIENT_CREDENTIAL_SOURCE_TABLES,
   type ClientCredentialDatabase,
 } from "./client-credential-schema.js";
-import { openClientCredentialCustody } from "./client-credential-store.js";
+import {
+  openClientCredentialCustody,
+  openClientCredentialCustodyAsync,
+  type ClientCredentialCustody,
+} from "./client-credential-store.js";
 import { readEngineAnchor } from "./database-engine/open.js";
 import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
 import {
@@ -44,7 +50,7 @@ import {
   beginUpdateSqliteCompanion,
   getDoctorMigrationBackup,
   getUpdateDoctorMigrationSource,
-} from "./update-doctor-migration-attribution.js";
+} from "./update-doctor-migration-context.js";
 
 export type ClientCredentialMigrationCapture = {
   path: string;
@@ -140,10 +146,58 @@ function isPristineSqliteBootstrap(
   );
 }
 
+/** Doctor prepares the local owner before entering the shared source transaction. */
+export async function prepareClientCredentialMigrationCustody(options: {
+  path: string;
+  env: NodeJS.ProcessEnv;
+  fromVersion: number;
+}): Promise<ClientCredentialCustody | undefined> {
+  const env = resolveStateClientCredentialEnvironment(options);
+  return env
+    ? openClientCredentialCustodyAsync(env, {
+        createIfMissing: options.fromVersion < CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
+        migration: true,
+      })
+    : undefined;
+}
+
+type PreparedClientCredentialRecovery = {
+  kind: "existing" | "replacement";
+  custody: ClientCredentialCustody;
+};
+
+/** Missing-store replacement remains an explicitly requested Doctor recovery decision. */
+export async function prepareClientCredentialRecoveryCustody(options: {
+  path: string;
+  env: NodeJS.ProcessEnv;
+  rebindMissing?: boolean;
+}): Promise<PreparedClientCredentialRecovery | undefined> {
+  const env = resolveStateClientCredentialEnvironment(options);
+  if (!env) {
+    return undefined;
+  }
+  const existing = await openClientCredentialCustodyAsync(env, { migration: true });
+  if (existing) {
+    return { kind: "existing", custody: existing };
+  }
+  if (!options.rebindMissing) {
+    return undefined;
+  }
+  const replacement = await openClientCredentialCustodyAsync(env, {
+    createIfMissing: true,
+    migration: true,
+  });
+  if (!replacement?.created) {
+    replacement?.close();
+    throw new Error("Local credentials appeared during recovery; retry without rebinding.");
+  }
+  return { kind: "replacement", custody: replacement };
+}
+
 /** Fresh shared bootstrap binds existing local-only credentials without replacing them. */
 export function bindFreshClientCredentialStore(
   source: EngineConnection,
-  options: { path: string; env: NodeJS.ProcessEnv },
+  options: { path: string; env: NodeJS.ProcessEnv; custody?: ClientCredentialCustody | null },
 ): void {
   if (!source.isTransaction || !hasSqlitePostCommitScope(source)) {
     throw new Error("Client credential bootstrap has no source commit lifecycle.");
@@ -155,14 +209,21 @@ export function bindFreshClientCredentialStore(
   }
   // A fresh PG anchor exists before its first network connection or schema metadata.
   const postgres = postgresBootstrapProvenance(source);
-  const target = openClientCredentialCustody(env, {
-    createIfMissing: true,
-    migration: true,
-  });
+  const target =
+    options.custody === undefined
+      ? openClientCredentialCustody(env, {
+          createIfMissing: true,
+          migration: true,
+        })
+      : options.custody;
   if (!target) {
     throw new Error("Cannot acquire local credentials during shared bootstrap.");
   }
-  const close = () => target.close();
+  const close = () => {
+    if (options.custody === undefined) {
+      target.close();
+    }
+  };
   try {
     const publication = beginUpdateSqliteCompanion(target.database, target.path, target.created);
     const previous = readClientCredentialReceipt(target.database);
@@ -177,10 +238,7 @@ export function bindFreshClientCredentialStore(
     }
     const previousSource = previous?.receipt.source;
     const previousFile = previous?.receipt.sharedFile;
-    const sameSharedFile =
-      previousFile?.path === sharedFile.path &&
-      previousFile.dev === sharedFile.dev &&
-      previousFile.ino === sharedFile.ino;
+    const sameSharedFile = isSameClientCredentialFile(previousFile, sharedFile);
     const samePostgresBootstrap =
       postgres &&
       previousSource?.kind === postgres.kind &&
@@ -264,7 +322,13 @@ export function bindFreshClientCredentialStore(
 /** Resume publication after the shared transaction committed but its local completion did not. */
 export function recoverClientCredentialStore(
   source: EngineConnection,
-  options: { path: string; env: NodeJS.ProcessEnv; rebindMissing?: boolean },
+  options: {
+    path: string;
+    env: NodeJS.ProcessEnv;
+    rebindMissing?: boolean;
+    custody?: ClientCredentialCustody | null;
+    recovery?: PreparedClientCredentialRecovery;
+  },
 ): "rebound" | void {
   const metadata = source
     .prepare("SELECT created_at FROM schema_meta WHERE meta_key = 'primary'")
@@ -281,12 +345,22 @@ export function recoverClientCredentialStore(
   if (!env) {
     return;
   }
-  const target = openClientCredentialCustody(env, {
-    createIfMissing: false,
-    migration: true,
-  });
+  const target =
+    options.recovery?.kind === "replacement"
+      ? undefined
+      : (options.recovery?.custody ??
+        (options.custody === undefined
+          ? openClientCredentialCustody(env, {
+              createIfMissing: false,
+              migration: true,
+            })
+          : options.custody));
   if (!target) {
-    if (options.rebindMissing === true && isPostgresSqlConnection(source)) {
+    if (
+      options.rebindMissing === true &&
+      isPostgresSqlConnection(source) &&
+      (options.custody === undefined || options.recovery)
+    ) {
       const sharedFile = readClientCredentialFileIdentity(options.path);
       if (!sharedFile) {
         throw new Error("Shared credential source is missing; restore its matching backup.");
@@ -301,23 +375,32 @@ export function recoverClientCredentialStore(
       for (const key of CLIENT_CREDENTIAL_LEGACY_KEYS) {
         receipt.legacyImports[key] = { sha256: null };
       }
-      using replacement = openClientCredentialCustody(env, {
-        createIfMissing: true,
-        migration: true,
-      });
-      if (!replacement?.created) {
-        throw new Error("Local credentials appeared during recovery; retry without rebinding.");
+      const replacement =
+        options.recovery?.kind === "replacement"
+          ? options.recovery.custody
+          : openClientCredentialCustody(env, {
+              createIfMissing: true,
+              migration: true,
+            });
+      try {
+        if (!replacement?.created) {
+          throw new Error("Local credentials appeared during recovery; retry without rebinding.");
+        }
+        const publication = beginUpdateSqliteCompanion(
+          replacement.database,
+          replacement.path,
+          replacement.created,
+        );
+        replacement.transaction(() =>
+          writeClientCredentialReceipt(replacement.database, receipt, "complete"),
+        );
+        publication?.complete();
+        return "rebound";
+      } finally {
+        if (!options.recovery) {
+          replacement?.close();
+        }
       }
-      const publication = beginUpdateSqliteCompanion(
-        replacement.database,
-        replacement.path,
-        replacement.created,
-      );
-      replacement.transaction(() =>
-        writeClientCredentialReceipt(replacement.database, receipt, "complete"),
-      );
-      publication?.complete();
-      return "rebound";
     }
     throw new Error(
       isPostgresSqlConnection(source)
@@ -336,8 +419,7 @@ export function recoverClientCredentialStore(
     }
     const provenance = stored.receipt.source;
     const original = stored.receipt.sharedFile;
-    const sameFile =
-      original?.path === file.path && original.dev === file.dev && original.ino === file.ino;
+    const sameFile = isSameClientCredentialFile(original, file);
     if (!provenance && !sameFile) {
       throw new Error(
         "Local credentials do not match the shared database; restore their matched backup.",
@@ -364,7 +446,14 @@ export function recoverClientCredentialStore(
         provenance.identity = identity;
       }
     }
-    if (stored.phase === "complete" && sameFile && !sameNativeBootstrap && provenance) {
+    // A renumbered device falls through so recovery records the current binding.
+    if (
+      stored.phase === "complete" &&
+      sameFile &&
+      original?.dev === file.dev &&
+      !sameNativeBootstrap &&
+      provenance
+    ) {
       return;
     }
     // A bootstrap interrupted after source commit still has the original file fence.
@@ -374,7 +463,9 @@ export function recoverClientCredentialStore(
       writeClientCredentialReceipt(target.database, stored.receipt, "complete"),
     );
   } finally {
-    target.close();
+    if (options.custody === undefined && !options.recovery) {
+      target.close();
+    }
   }
 }
 
@@ -386,6 +477,7 @@ export function prepareClientCredentialMigration(
     env: NodeJS.ProcessEnv;
     fromVersion: number;
     capture?: ClientCredentialMigrationCapture;
+    custody?: ClientCredentialCustody | null;
   },
 ): void {
   if (
@@ -480,14 +572,21 @@ export function prepareClientCredentialMigration(
       authTablePresent,
     }),
   };
-  const target = openClientCredentialCustody(env, {
-    createIfMissing: true,
-    migration: true,
-  });
+  const target =
+    options.custody === undefined
+      ? openClientCredentialCustody(env, {
+          createIfMissing: true,
+          migration: true,
+        })
+      : options.custody;
   if (!target) {
     throw new Error("Client credential migration could not acquire local custody.");
   }
-  const close = () => target.close();
+  const close = () => {
+    if (options.custody === undefined) {
+      target.close();
+    }
+  };
   try {
     const publication = beginUpdateSqliteCompanion(target.database, target.path, target.created);
     runSqliteImmediateTransactionSync(target.database, () => {
@@ -501,11 +600,9 @@ export function prepareClientCredentialMigration(
         previous?.phase === "complete" &&
         previous.receipt.source?.kind === "independent" &&
         nativeBootstrap &&
-        previous.receipt.source.identity === `${file.dev}:${file.ino}` &&
+        isSameIndependentClientCredentialIdentity(previous.receipt.source.identity, file) &&
         previous.receipt.source.sha256 === receipt.source!.sha256 &&
-        previous.receipt.sharedFile?.path === file.path &&
-        previous.receipt.sharedFile.dev === file.dev &&
-        previous.receipt.sharedFile.ino === file.ino;
+        isSameClientCredentialFile(previous.receipt.sharedFile, file);
       if (independent) {
         writeClientCredentialReceipt(database, receipt, "copied");
         return;

@@ -301,22 +301,6 @@ describe("diagnostic-events", () => {
     expect(freeze.mock.calls.filter(([value]) => value === prepared[0])).toHaveLength(1);
   });
 
-  it("shares owned events with immutable plain leaves without cloning", async () => {
-    const clone = vi.spyOn(globalThis, "structuredClone");
-    const cycleTrackers = vi.spyOn(globalThis, "WeakSet");
-    const trace = Object.freeze({ ...diagnosticTraceInput });
-    const received = collectEvents(onInternal);
-    emitTrusted(Object.freeze({ ...modelStartedEvent(), trace }));
-    emitTrusted({ ...modelStartedEvent(), trace });
-    await drain();
-
-    expect(received[0]?.trace).toBe(trace);
-    expect(received[1]?.trace).toBe(trace);
-    expect(Object.isFrozen(received[0])).toBe(true);
-    expect(clone).not.toHaveBeenCalled();
-    expect(cycleTrackers).not.toHaveBeenCalled();
-  });
-
   it("keeps cyclic frozen graphs with mutable descendants isolated", async () => {
     const leaf = { value: "original" };
     const root: { child?: object; leaf: typeof leaf } = { child: undefined, leaf };
@@ -792,10 +776,18 @@ describe("queued runtime diagnostic phases", () => {
     const bound = withTrace(trace, phaseEmitter)!;
     const parentless = withTrace(undefined, phaseEmitter)!;
     const details = { threadCpuMs: 3 };
+    const clone = vi.spyOn(globalThis, "structuredClone");
     withTrace(trace, () => {
       parentless({ ...phase, name: "runtime.parentless" });
       bound({ ...phase, details });
     });
+    expect(
+      clone.mock.calls.some(
+        ([value]) =>
+          value && typeof value === "object" && "details" in value && value.details === details,
+      ),
+    ).toBe(true);
+    clone.mockRestore();
     details.threadCpuMs = 999;
     expect(events).toHaveLength(1);
     await drain();

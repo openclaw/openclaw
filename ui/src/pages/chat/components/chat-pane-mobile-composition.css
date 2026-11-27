@@ -6,14 +6,14 @@
   & .chat-pane__workspace-chip {
     display: block;
     max-width: 100%;
-    min-height: 18px;
+    min-height: 14px;
     padding: 0;
     /* Desktop draws its hover padding outside the crumb; mobile has no padding. */
     margin-inline: 0;
     border: 0;
     background: transparent;
     color: var(--muted);
-    font: 500 12px/18px var(--font-body);
+    font: 500 12px/14px var(--font-body);
     text-align: start;
   }
   & .chat-pane__workspace-chip > span {

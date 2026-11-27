@@ -1,7 +1,14 @@
+// Named imports let the Control UI use these features without the full server catalog.
+export const BOARD_WIDGET_PUT_CANVAS_DOC = "board-widget-put-canvas-doc";
+export const SESSION_APPROVAL_RECIPIENTS = "session-approval-recipients-v1";
+export const SYSTEM_AGENT_WIZARD_CANCEL = "openclaw-chat-wizard-cancel";
+
 /** Stable feature names advertised in Gateway hello responses. */
 export const GATEWAY_SERVER_CAPS = {
   AGENT_SESSION_ID_CREATE: "agent-session-id-create-v1",
-  BOARD_WIDGET_PUT_CANVAS_DOC: "board-widget-put-canvas-doc",
+  BOARD_WIDGET_PUT_CANVAS_DOC,
+  /** Queue modes and exact input receipts, not active-backend injection availability. */
+  CHAT_INPUT_CUSTODY: "chat-input-custody-v1",
   CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
   CONTROL_UI_BROWSER_FOCUS: "control-ui-browser-focus",
   GATEWAY_RESTART_TARGET_SAFE: "gateway-restart-target-safe-v1",
@@ -24,6 +31,7 @@ export const GATEWAY_SERVER_CAPS = {
   NODE_WORKER_BUNDLE_RETENTION: "node-worker-bundle-retention-v1",
   NODE_WORKER_BUNDLE_STATUS: "node-worker-bundle-status-v1",
   NODE_WORKER_CAPTURED_EXEC_POLICY: "node-worker-captured-exec-policy",
+  NODE_WORKER_EXEC_MEMORY_BOUNDARY: "node-worker-exec-memory-boundary",
   NODE_WORKER_WORKSPACE_RESULT: "node-worker-workspace-result-v2",
   NODE_WORKER_WORKSPACE_QUIESCENCE: "node-worker-workspace-quiescence-v1",
   NODE_WORKER_DEVICE_FOLDERS: "node-worker-device-folders-v1",
@@ -38,15 +46,19 @@ export const GATEWAY_SERVER_CAPS = {
   PUBLISHED_MODEL_CATALOG: "published-model-catalog",
   PROFILE_BINDING: "profile-binding-v1",
   PROGRESS_CARD_AGENT_SCOPE: "progress-card-agent-scope-v1",
+  SESSION_APPROVAL_RECIPIENTS,
   SESSION_SCOPED_CHAT_METADATA: "session-scoped-chat-metadata",
   SESSION_SCOPED_MODEL_CATALOG: "session-scoped-model-catalog",
+  PERSONAL_SESSION_PINS: "personal-session-pins",
+  SESSION_ARCHIVE_UNDO: "session-archive-undo-v1",
   SESSION_UNREAD_ACK_CONTRACT: "session-unread-ack-contract",
   SESSION_GOAL_START: "session-goal-start-v1",
   SESSION_SETTINGS_CONTRACT: "session-settings-contract",
   SESSION_SETTINGS_CAS: "session-settings-cas-v1",
   SENDER_RESTRICTED_HIDDEN_HELPERS: "sender-restricted-hidden-helpers-v1",
-  SYSTEM_AGENT_WIZARD_CANCEL: "openclaw-chat-wizard-cancel",
+  SYSTEM_AGENT_WIZARD_CANCEL,
   SYSTEM_AGENT_SETUP_MODEL_REF: "openclaw-setup-model-ref",
   TASK_SUGGESTIONS_ACCEPT_MODES: "taskSuggestions.acceptModes",
   TALK_SESSION_CLOSE_DISPOSITION: "talk-session-close-disposition",
+  UPDATE_RUN_CONSENT_IDENTITY: "update-run-consent-identity-v1",
 } as const;

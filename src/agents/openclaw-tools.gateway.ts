@@ -20,8 +20,9 @@ export function createHostedGatewayTools(
   return [
     createPresenceTool({ runId: options?.runId }),
     createGatewayTool({
-      allowConfigReads: options?.gatewayConfigReadAllowed === true,
+      allowManagementActions: options?.gatewayManagementActionsAllowed === true,
       senderIsOwner: options?.senderIsOwner,
+      operatorAuthority: options?.pluginExecutionAuthority,
       requesterSenderId: options?.requesterSenderId,
     }),
     createPluginsTool({

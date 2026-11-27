@@ -3,15 +3,15 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runClientCredentialOperationAsync } from "./client-credential-async.js";
 import {
   generateStoredDeviceIdentity,
+  identityFromCredentialResult,
+  type DeviceIdentity,
   storedDeviceIdentityToRow,
 } from "./device-identity-material.js";
 import {
-  identityFromCredentialResult,
   resolveDeviceIdentityEnvironment,
   resolveDeviceIdentityStore,
-  type DeviceIdentity,
   type DeviceIdentityStoreOptions,
-} from "./device-identity-store.js";
+} from "./device-identity-store-options.js";
 import { deriveCanonicalEd25519PrivateKeyRaw } from "./ed25519-signature.js";
 import { pruneMapToMaxSize } from "./map-size.js";
 

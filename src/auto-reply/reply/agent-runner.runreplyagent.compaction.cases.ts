@@ -7,6 +7,7 @@ import {
   createAuthProfileStoreFixture,
   oauthCred,
 } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
+import { prepareSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.js";
 import { setRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles/runtime-snapshots.js";
 import {
   clearRuntimeAuthProfileStoreSnapshot,
@@ -14,7 +15,7 @@ import {
 } from "../../agents/auth-profiles/store.js";
 import { normalizeMessagesForLlmBoundary } from "../../agents/embedded-agent-runner/run/attempt-llm-boundary.js";
 import { submitEmbeddedAttemptPrompt } from "../../agents/embedded-agent-runner/run/attempt-prompt-submit.js";
-import { createChatGPTV2CompactionBoundary } from "../../agents/embedded-agent-runner/run/chatgpt-v2-compaction.js";
+import { createRequestBoundaryCompaction } from "../../agents/embedded-agent-runner/run/request-boundary-compaction.js";
 import { createToolResultPromptProjectionState } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { prepareAgentRuntimeAuth } from "../../agents/runtime-plan/prepare-auth.js";
 import {
@@ -26,10 +27,11 @@ import { agentSessionDeferThresholdCompaction } from "../../agents/sessions/agen
 import { withSessionManagerWrite } from "../../agents/sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { SettingsManager } from "../../agents/sessions/settings-manager.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import type { ReplyPayload } from "../types.js";
+import { registerAccessProgramNoticeCases } from "./agent-runner.runreplyagent.access-notice.cases.js";
 import type { FollowupRun } from "./queue.js";
 
 type CompactionFixture = {
@@ -57,6 +59,8 @@ export function registerReplyCompactionCases({
   tempDirs,
   state,
 }: CompactionFixture): void {
+  // Shares this fixture: Access notices ride the same final-payload path as compaction notices.
+  registerAccessProgramNoticeCases({ createMinimalRun, makeSessionFixture, state });
   registerAgentSessionLoopTestLifecycle();
   describe("runReplyAgent compaction ownership", () => {
     it.each([
@@ -132,7 +136,7 @@ export function registerReplyCompactionCases({
         const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
           totalTokens: 190_000,
           totalTokensFresh: true,
-          totalTokensVersion: 1,
+          totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
           agentRuntimeOverride: "openclaw",
           ...(plannerFails
             ? { authProfileOverride: "openai:missing", authProfileOverrideSource: "user" as const }
@@ -227,14 +231,15 @@ export function registerReplyCompactionCases({
               attempt: { sessionId: session.sessionId },
               activeSession: session,
               contextTokenBudget: 200_000,
-              compactBeforeRequest: createChatGPTV2CompactionBoundary({
+              compactBeforeRequest: createRequestBoundaryCompaction({
+                variant: "native-checkpoint",
                 session,
                 contextTokenBudget: 200_000,
                 reserveTokens: 20_000,
                 timeoutMs: 30_000,
                 assertActive: () => {},
                 withTranscriptWrite,
-                onFallback: () => order.push("native-fallback"),
+                onPrecheck: () => order.push("native-fallback"),
               }),
               images: [],
               modelPrompt: "Current request.",
@@ -289,6 +294,7 @@ export function registerReplyCompactionCases({
             ],
           },
         });
+        await prepareSharedAuthStoreOwnership();
         setRuntimeAuthProfileStoreSnapshot(
           createAuthProfileStoreFixture({
             [`${provider}:fixture`]:
@@ -324,7 +330,8 @@ export function registerReplyCompactionCases({
             });
           }
           const result = await run();
-          expect(order).toEqual(native ? ["attempt"] : ["client-compaction", "attempt"]);
+          // Every route compacts at the attempt's request boundary.
+          expect(order).toEqual(["attempt"]);
           // Surface the embedded attempt's own failure before asserting its output.
           expect(attemptError).toBeUndefined();
           expect(result).toMatchObject({ text: "done" });
@@ -335,7 +342,7 @@ export function registerReplyCompactionCases({
               "compaction",
             ]);
           } else {
-            expect(state.compactEmbeddedAgentSessionMock).toHaveBeenCalledOnce();
+            expect(state.compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
             expect(requests).toHaveLength(0);
           }
         } finally {

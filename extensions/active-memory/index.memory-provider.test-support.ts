@@ -1,7 +1,9 @@
 import type { MemorySearchHit } from "openclaw/plugin-sdk/memory-host-search";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { expect, it, vi, type Mock } from "vitest";
 
 type MemoryProviderTestParams = {
+  logger: OpenClawPluginApi["logger"];
   memoryCapability: {
     deterministicRecallToolName: string | undefined;
     recallToolNames: readonly string[] | undefined;
@@ -49,6 +51,25 @@ export function registerActiveMemoryProviderTests(params: MemoryProviderTestPara
     params.getActiveMemoryProvider.mockResolvedValue(lookup);
     return lookup.provider.search;
   }
+  it.each([
+    ["group", {}, "not-private-destination"],
+    ["direct", { allowedChatIds: ["other"] }, "chat-id-not-allowed"],
+    ["direct", { deniedChatIds: ["owner"] }, "chat-id-not-allowed"],
+  ])("explains skipped trigger recall for %s (%j)", async (kind, policy, reason) => {
+    params.registerPluginConfig({ mode: "off", logging: false, ...policy });
+    expect(
+      await params.runPromptBuild(
+        { prompt: "Help when booking a flight" },
+        { ...ownerContext, sessionKey: `agent:main:telegram:${kind}:owner` },
+      ),
+    ).toBeUndefined();
+    const line = `active-memory: lane-1 skipped reason=${reason}`;
+    expect(params.logger.debug).toHaveBeenCalledWith(line);
+    expect(params.logger.info).not.toHaveBeenCalledWith(line);
+    expect(params.getActiveMemorySearchManager).not.toHaveBeenCalled();
+    expect(params.getActiveMemoryProvider).not.toHaveBeenCalled();
+  });
+
   it("keeps native and deep recall scoped to the live audience", async () => {
     const search = nativeProvider({ mode: "always", cacheTtlMs: 1_000 }, [
       {
@@ -168,8 +189,11 @@ export function registerActiveMemoryProviderTests(params: MemoryProviderTestPara
     expect(params.runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
-  it("skips native trigger recall when tool policy denies a declared recall tool", async () => {
-    params.memoryCapability.recallToolNames = ["record_find", "record_get"];
+  it.each([
+    [["record_find", "record_get"], "recall-tool-not-allowed"],
+    [[], "no-recall-tools"],
+  ])("explains skipped native trigger recall (%j)", async (tools, reason) => {
+    params.memoryCapability.recallToolNames = tools;
     params.useNativeProvider();
     await params.runPromptBuild(
       { prompt: "Help when booking a flight" },
@@ -183,28 +207,39 @@ export function registerActiveMemoryProviderTests(params: MemoryProviderTestPara
       },
     );
     expect(params.getActiveMemoryProvider).not.toHaveBeenCalled();
+    const line = `active-memory: lane-1 skipped reason=${reason}`;
+    expect(params.logger.debug).toHaveBeenCalledWith(line);
+    expect(params.logger.info).toHaveBeenCalledWith(line);
   });
 
-  it.each([["denies the deterministic recall tool", "memory_search", "memory_search"]])(
-    "skips legacy trigger recall when the owner %s",
-    async (_label, toolName, denied) => {
-      params.memoryCapability.deterministicRecallToolName = toolName;
-      await params.runPromptBuild(
-        { prompt: "Help when booking a flight" },
-        {
-          sessionKey: "agent:main:telegram:direct:owner",
-          sessionId: "owner-session",
-          messageProvider: "telegram",
-          channelId: "owner",
-          toolAuthority: {
-            fingerprint: "legacy-policy",
-            allows: (name: string) => name !== denied,
-            assertActive: () => undefined,
-          },
+  it.each([
+    [
+      "denies the deterministic recall tool",
+      "memory_search",
+      "memory_search",
+      "recall-tool-not-allowed",
+    ],
+    ["declares no deterministic recall tool", undefined, undefined, "no-recall-tools"],
+  ])("skips legacy trigger recall when the owner %s", async (_label, toolName, denied, reason) => {
+    params.memoryCapability.deterministicRecallToolName = toolName;
+    await params.runPromptBuild(
+      { prompt: "Help when booking a flight" },
+      {
+        sessionKey: "agent:main:telegram:direct:owner",
+        sessionId: "owner-session",
+        messageProvider: "telegram",
+        channelId: "owner",
+        toolAuthority: {
+          fingerprint: "legacy-policy",
+          allows: (name: string) => name !== denied,
+          assertActive: () => undefined,
         },
-      );
-      expect(params.getActiveMemorySearchManager).not.toHaveBeenCalled();
-      expect(params.getActiveMemoryProvider).not.toHaveBeenCalled();
-    },
-  );
+      },
+    );
+    expect(params.getActiveMemorySearchManager).not.toHaveBeenCalled();
+    expect(params.getActiveMemoryProvider).not.toHaveBeenCalled();
+    const line = `active-memory: lane-1 skipped reason=${reason}`;
+    expect(params.logger.debug).toHaveBeenCalledWith(line);
+    expect(params.logger.info).toHaveBeenCalledWith(line);
+  });
 }

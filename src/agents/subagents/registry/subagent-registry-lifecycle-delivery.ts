@@ -18,7 +18,11 @@ import {
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
-import { ensureCompletionState, ensureDeliveryState } from "./subagent-delivery-state.js";
+import {
+  ensureCompletionState,
+  ensureDeliveryState,
+  recordRequesterHandoff,
+} from "./subagent-delivery-state.js";
 import { capFrozenResultText } from "./subagent-registry-helpers.js";
 import type {
   SubagentLifecycleCommonContext,
@@ -29,6 +33,7 @@ import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import { resolveYieldedRunContinuation } from "./subagent-registry-run-pause.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { compareSubagentRunGeneration, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
@@ -58,17 +63,8 @@ export const recordAnnounceDeliveryResult = (
   if (typeof delivery.enqueuedAt === "number") {
     deliveryState.enqueuedAt ??= delivery.enqueuedAt;
   }
-  if (!delivery.delivered && delivery.disposition !== "intentional_non_delivery") {
-    if (delivery.reason === "message_tool_delivery_missing") {
-      deliveryState.lastDropReason = "message_tool_delivery_missing";
-    } else if (
-      delivery.reason === "steer_dropped" ||
-      delivery.phases?.some((phase) => phase.reason === "steer_dropped")
-    ) {
-      deliveryState.lastDropReason = "steer_dropped";
-    } else if (delivery.path === "none") {
-      deliveryState.lastDropReason = "sink_unavailable";
-    }
+  if (!delivery.delivered && delivery.path === "none") {
+    deliveryState.lastDropReason = "sink_unavailable";
   }
   if (delivery.delivered) {
     deliveryState.deliveredAt =
@@ -103,8 +99,14 @@ export const recordAnnounceDeliveryResult = (
       }
     }
   }
-  deliveryState.disposition =
-    delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable");
+  deliveryState.disposition = delivery.delivered
+    ? "delivered"
+    : delivery.path === "queued"
+      ? "session_queued"
+      : undefined;
+  if (delivery.reason === "completion_handoff_pending") {
+    recordRequesterHandoff(entry);
+  }
 };
 
 export const hasPriorRequesterDeliveryMirror = async (
@@ -206,7 +208,7 @@ export const captureSubagentRunResult = async (
     // A yield pauses capture only while a continuation could still extend the transcript.
     return (
       current !== undefined &&
-      (current.pauseReason !== "sessions_yield" ||
+      (!isSubagentPausedByYield(current) ||
         resolveYieldedRunContinuation(current).state === "unreachable") &&
       !context.newerGenerationOwnsSession(current)
     );
@@ -249,7 +251,7 @@ export const captureSubagentRunResult = async (
             outcome,
             ...(sessionTarget ? { sessionTarget } : {}),
             // Only unreachable yielded collectors need a historical execution window.
-            ...(entry.collect === true && entry.pauseReason === "sessions_yield"
+            ...(entry.collect === true && isSubagentPausedByYield(entry)
               ? {
                   completedCollectorTurn: {
                     startedAt: outcome.startedAt ?? entry.execution.startedAt ?? entry.createdAt,
@@ -310,7 +312,7 @@ export const refreshFrozenResultFromSession = async (
       entry.expectsCompletionMessage === true &&
       typeof entry.execution.endedAt === "number" &&
       typeof entry.cleanupCompletedAt !== "number" &&
-      entry.pauseReason !== "sessions_yield" &&
+      !isSubagentPausedByYield(entry) &&
       entry.execution.outcome?.status !== "error",
   );
   const entry = candidates.toSorted(compareSubagentRunGeneration).at(-1);
@@ -322,7 +324,7 @@ export const refreshFrozenResultFromSession = async (
   const previousCapturedAt = entry.completion?.capturedAt;
   const isCurrent = (current = getCurrentSubagentRunOwner(params.runs, entry)) =>
     current !== undefined &&
-    current.pauseReason !== "sessions_yield" &&
+    !isSubagentPausedByYield(current) &&
     current.cleanupCompletedAt === undefined &&
     current.completion?.resultText === previousResultText &&
     current.completion?.capturedAt === previousCapturedAt &&

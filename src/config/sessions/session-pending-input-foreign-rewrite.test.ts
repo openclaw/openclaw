@@ -102,7 +102,7 @@ it.each([false, true])(
         }
         expect(await sourceSnapshot()).toEqual(before);
       } finally {
-        receipt.finish("interrupted");
+        receipt.finish("interrupted", "failed");
         await receipt.settled?.();
       }
     });

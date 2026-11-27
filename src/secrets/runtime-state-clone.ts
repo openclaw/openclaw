@@ -18,7 +18,7 @@ export type PreparedSecretsRuntimeSnapshot = {
   webTools: RuntimeWebToolsMetadata;
 };
 
-/** Return mutable copies; the publication owner freezes its source revision separately. */
+/** Return mutable copies; the publication owner freezes its config revisions separately. */
 export function cloneSecretsRuntimeSnapshot(
   snapshot: PreparedSecretsRuntimeSnapshot,
   authStores: PreparedSecretsRuntimeSnapshot["authStores"],

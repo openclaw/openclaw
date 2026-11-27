@@ -1,4 +1,3 @@
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   createTestRegistry,
   resetPluginRuntimeStateForTest,
@@ -6,11 +5,7 @@ import {
   type PluginRuntime,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import {
-  chunkMarkdownTextWithMode,
-  resolveChunkMode,
-  resolveTextChunkLimit,
-} from "openclaw/plugin-sdk/reply-chunking";
+import { chunkMarkdownTextWithMode, resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { matrixPlugin } from "../../channel.js";
@@ -75,8 +70,6 @@ beforeEach(() => {
   setMatrixRuntime({
     channel: {
       text: {
-        resolveMarkdownTableMode,
-        resolveTextChunkLimit,
         resolveChunkMode,
         chunkMarkdownTextWithMode,
       },

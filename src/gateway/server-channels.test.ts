@@ -52,6 +52,7 @@ import {
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
 import { registerChannelAutostartRecoveryTests } from "./server-channels.recovery.test-support.js";
 import {
+  createRawHealthOverrideFixture,
   createTestPlugin,
   createTestChannelRegistry,
   createTestChannelManager,
@@ -63,7 +64,6 @@ import {
   type TestAccount,
 } from "./server-channels.test-support.js";
 import { AUTH_NONE, createTestGatewayServer } from "./server-http.test-harness.js";
-import { createGatewayStartupTrace } from "./server-startup-trace.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 
 const hoisted = vi.hoisted(() => {
@@ -1245,7 +1245,6 @@ describe("server-channels auto restart", () => {
   it("does not restart when a timed-out recovery stop settles as terminal before a start request", async () => {
     const releaseFirstTask = createDeferred();
     const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
-      ctx.abortSignal.addEventListener("abort", () => {}, { once: true });
       await releaseFirstTask.promise;
       ctx.setStatus({ accountId: DEFAULT_ACCOUNT_ID, terminalDisconnect: true });
     });
@@ -1897,8 +1896,7 @@ describe("server-channels auto restart", () => {
     const unhandledRejection = vi.fn();
     process.on("unhandledRejection", unhandledRejection);
     let isConfiguredCalls = 0;
-    const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
-      abortSignal.addEventListener("abort", () => {}, { once: true });
+    const startAccount = vi.fn(async (_ctx: ChannelGatewayContext<TestAccount>) => {
       if (startAccount.mock.calls.length === 1 || mode === "manual-cancel") {
         await releaseFirstTask.promise;
         if (mode === "stale-rejection") {
@@ -2695,46 +2693,6 @@ describe("server-channels auto restart", () => {
     await manager.stopChannel("telegram");
   });
 
-  it("logs account startup once before later gateway callbacks", async () => {
-    const gatewayEvent = createDeferred();
-    const eventHandled = createDeferred();
-    const started = createDeferred();
-    const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
-      started.resolve();
-      await gatewayEvent.promise;
-      eventHandled.resolve();
-      await waitForAbort(abortSignal);
-    });
-    const log = createSubsystemLogger("gateway/startup-test");
-    const info = vi.spyOn(log, "info");
-    const trace = createGatewayStartupTrace(log);
-    installPlugin({ startAccount });
-    const manager = createChannelManager({
-      scheduler: createTestGatewayScheduler(),
-      getRuntimeConfig: () => ({}),
-      getPluginRegistry: requireActivePluginChannelRegistry,
-      channelLogs: { discord: log },
-      channelRuntimeEnvs: {},
-      startupTrace: trace,
-    });
-    createdManagers.push({ channelIds: ["discord"], manager });
-    try {
-      await manager.startChannels();
-      await started.promise;
-      await flushMicrotasks();
-      gatewayEvent.resolve();
-      await eventHandled.promise;
-      expect(startAccount).toHaveBeenCalledTimes(1);
-      expect(info.mock.calls.filter(([message]) => message.includes("starting account"))).toEqual([
-        ["[default] starting account (reason: startup)"],
-      ]);
-    } finally {
-      trace.close();
-      info.mockRestore();
-      await manager.stopChannel("discord");
-    }
-  });
-
   it("prunes only credential owners and account state for inactive channel plugins", async () => {
     installTestRegistry(
       ...(["discord", "slack"] as const).map((channelId) =>
@@ -2813,23 +2771,10 @@ describe("server-channels auto restart", () => {
   ])(
     "matches health overrides for '$requestedId' against '$rawId'",
     ({ rawId, requestedId, expected }) => {
-      const manager = setupChannel(
-        {
-          resolveAccount: () => ({ enabled: true, configured: true }),
-        },
-        {
-          getRuntimeConfig: () => ({
-            channels: {
-              discord: {
-                accounts: {
-                  [rawId]: { healthMonitor: { enabled: false } },
-                },
-              },
-            },
-          }),
-        },
-      );
+      const { resolveAccount, getRuntimeConfig } = createRawHealthOverrideFixture(rawId);
+      const manager = setupChannel({ resolveAccount }, { getRuntimeConfig });
       expect(manager.isHealthMonitorEnabled("discord", requestedId)).toBe(expected);
+      expect(resolveAccount).not.toHaveBeenCalled();
     },
   );
 

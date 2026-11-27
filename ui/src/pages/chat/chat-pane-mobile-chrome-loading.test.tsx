@@ -20,6 +20,7 @@ it("reserves the live mobile header and optional grabber while their chunk is pe
   const initial: ChatMobileHost = {
     scopeKey: "synthetic-mobile-chrome",
     open: true,
+    exiting: false,
     suspended: false,
     mode: "dock",
     height: undefined,

@@ -1,5 +1,7 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.ErrorShape
+import ai.openclaw.app.gateway.GatewayRequestRejected
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -9,6 +11,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -290,4 +293,131 @@ class ChatControllerCatalogTest {
       val last = requests.last { it.first == "sessions.list" }.second!!
       assertEquals(JsonPrimitive(400), chatControllerTestJson.parseToJsonElement(last).jsonObject["limit"])
     }
+
+  @Test
+  fun metadataRejectionNamesMetadataAndKeepsModelChoices() =
+    runTest {
+      var metadataRejected = false
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("chat.metadata") {
+            if (metadataRejected) throw supersededMetadataRead()
+            """{"commands":[]}"""
+          }
+          respond("models.list", """{"models":[{"id":"current","name":"Current","provider":"fixture"}]}""")
+        }
+      controller.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      val acceptedChoices = controller.modelCatalog.value
+      assertEquals(listOf("current"), acceptedChoices.map { it.id })
+      val catalogReads = requests.count { it.first == "models.list" }
+
+      metadataRejected = true
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+      assertEquals("Could not refresh chat metadata. Tap Refresh to try again.", controller.errorText.value)
+      assertEquals("A rejected metadata read never reaches the catalog", catalogReads, requests.count { it.first == "models.list" })
+      assertEquals(acceptedChoices, controller.modelCatalog.value)
+
+      metadataRejected = false
+      controller.refresh()
+      advanceUntilIdle()
+      assertNull(controller.errorText.value)
+      assertEquals(acceptedChoices, controller.modelCatalog.value)
+    }
+
+  @Test
+  fun catalogFailuresReplaceRecoveredMetadataNotice() =
+    runTest {
+      var metadataRejected = false
+      var catalog = "ok"
+      val controller =
+        createScriptedChatController {
+          respond("chat.metadata") {
+            if (metadataRejected) throw supersededMetadataRead()
+            """{"commands":[]}"""
+          }
+          respond("models.list") {
+            if (catalog == "throws") error("catalog unavailable")
+            """{"refreshFailed":${catalog == "refreshFailed"},"models":[{"id":"current","name":"Current","provider":"fixture"}]}"""
+          }
+        }
+      controller.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      val acceptedChoices = controller.modelCatalog.value
+
+      metadataRejected = true
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+      assertEquals("Could not refresh chat metadata. Tap Refresh to try again.", controller.errorText.value)
+
+      metadataRejected = false
+      catalog = "refreshFailed"
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+      assertEquals(
+        "Some models could not be refreshed. Available models can still be selected. Tap Refresh to retry.",
+        controller.errorText.value,
+      )
+      assertEquals(acceptedChoices, controller.modelCatalog.value)
+
+      catalog = "ok"
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+      assertNull(controller.errorText.value)
+
+      catalog = "throws"
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+      assertEquals("Could not refresh models. Tap Refresh to try again.", controller.errorText.value)
+      assertEquals(acceptedChoices, controller.modelCatalog.value)
+    }
+
+  @Test
+  fun catalogDiagnosticsKeepChoicesAndClearOnRecovery() =
+    runTest {
+      val model = """{"id":"current","name":"Current","provider":"fixture","available":true}"""
+      var response = """{"models":[$model]}"""
+      val controller = createScriptedChatController { respond("models.list") { response } }
+      controller.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      val acceptedChoices = controller.modelCatalog.value
+      assertEquals(1, acceptedChoices.size)
+
+      for ((diagnostics, warning) in listOf(
+        """"refreshFailures":[{"acquisition":"provider","provider":"fixture"}]""" to
+          "Some models could not be refreshed (fixture). Available models can still be selected. Tap Refresh to retry.",
+        """"refreshFailures":[{"acquisition":"native"}]""" to
+          "Native model discovery failed. Available models can still be selected. Tap Refresh to retry.",
+        """"refreshFailures":[{"acquisition":"provider"}],"providerOutcomes":[{"provider":"hidden","status":"unavailable"}]""" to
+          "Some models could not be refreshed. Available models can still be selected. Tap Refresh to retry.",
+        """"providerOutcomes":[{"provider":"fixture","status":"unavailable"}]""" to
+          "Some models could not be refreshed (fixture). Available models can still be selected. Tap Refresh to retry.",
+        """"providerOutcomes":[{"provider":"sibling","status":"unavailable"}]""" to
+          "Some models could not be refreshed. Available models can still be selected. Tap Refresh to retry.",
+      )) {
+        response = """{"models":[$model],"refreshFailed":true,$diagnostics}"""
+        controller.handleGatewayEvent("chat.metadata.changed", "{}")
+        advanceUntilIdle()
+        assertEquals(warning, controller.errorText.value)
+        assertEquals(acceptedChoices, controller.modelCatalog.value)
+      }
+
+      response = """{"models":[$model],"providerOutcomes":[{"provider":"fixture","status":"auth-rejected"}]}"""
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+      assertNull(controller.errorText.value)
+      assertEquals(acceptedChoices, controller.modelCatalog.value)
+
+      response = """{"models":[],"refreshFailed":true}"""
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+      assertEquals("Could not refresh models. Tap Refresh to try again.", controller.errorText.value)
+      assertTrue(controller.modelCatalog.value.isEmpty())
+    }
+
+  private fun supersededMetadataRead() =
+    GatewayRequestRejected(
+      ErrorShape("UNAVAILABLE", "Session changed while preparing its metadata. Retry the request."),
+    )
 }

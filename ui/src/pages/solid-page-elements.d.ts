@@ -26,6 +26,7 @@ declare module "@solidjs/web" {
       "openclaw-skill-workshop-page": HTMLAttributes<HTMLElement>;
       "openclaw-terminal-page": HTMLAttributes<HTMLElement>;
       "openclaw-worktrees-page": HTMLAttributes<HTMLElement>;
+      "openclaw-projects-page": HTMLAttributes<HTMLElement>;
     }
   }
 }

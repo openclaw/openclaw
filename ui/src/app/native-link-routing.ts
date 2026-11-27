@@ -86,25 +86,26 @@ function trustedExternalAppUrl(event: MouseEvent): { anchor: HTMLAnchorElement; 
   return url && (url.protocol === "mailto:" || url.protocol === "tel:") ? { anchor, url } : null;
 }
 
-function postNativeLink(postMessage: NativeLinkPoster, url: URL): boolean {
+function postNativeLink(postMessage: NativeLinkPoster, url: URL | string): boolean {
   try {
-    postMessage({ type: "open-link", url: url.href, target: "external" });
+    postMessage({
+      type: "open-link",
+      url: typeof url === "string" ? new URL(url).href : url.href,
+      target: "external",
+    });
     return true;
   } catch {
     return false;
   }
 }
 
+export function hasNativeExternalLink(): boolean {
+  return getNativeLinkPoster() !== undefined;
+}
+
 export function postNativeExternalLink(url: string): boolean {
   const poster = getNativeLinkPoster();
-  if (!poster) {
-    return false;
-  }
-  try {
-    return postNativeLink(poster, new URL(url));
-  } catch {
-    return false;
-  }
+  return poster ? postNativeLink(poster, url) : false;
 }
 
 export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}) {
@@ -247,6 +248,19 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}) {
     listen(window, "auxclick", handleClick),
     listen(window, NATIVE_UPDATE_DECLINED_EVENT, handleNativeUpdateDeclined),
   ];
+  if (hasNativeBrowserBridge()) {
+    stops.push(
+      listen(window, "openclaw:native-new-browser-tab", () => {
+        if (options.canPresentBrowserPanel?.() !== false) {
+          window.dispatchEvent(
+            new CustomEvent<BrowserPanelToggleDetail>(BROWSER_PANEL_TOGGLE_EVENT, {
+              detail: { open: true, newTab: true },
+            }),
+          );
+        }
+      }),
+    );
+  }
   // Capture keeps message-level context menus from replacing native link actions.
   if (postMessage) {
     stops.push(listen(document, "contextmenu", handleContextMenu, true));

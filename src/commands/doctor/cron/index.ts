@@ -14,11 +14,11 @@ import {
   maybeRepairCronStoreSelection,
   readCronStoreSelectionForDoctor,
 } from "./default-store-selection.js";
+import type { LegacyCronRepairState } from "./legacy-repair-plan.js";
 import {
   applyLegacyCronStoreRepair,
   loadLegacyCronRepairState,
   readLegacyCronStorePath,
-  type LegacyCronRepairState,
 } from "./legacy-repair.js";
 import {
   formatLegacyIssuePreview,
@@ -339,7 +339,7 @@ export async function maybeRepairLegacyCronStore(params: {
     return;
   }
   noteCronModelOverrides({ cfg: params.cfg, jobs: rawJobs });
-  noteCronDeliveryTargetAdvisory({ cfg: params.cfg, jobs: rawJobs });
+  await noteCronDeliveryTargetAdvisory({ cfg: params.cfg, jobs: rawJobs });
 
   const { inFlightCount, chronicFailureCount, autoDisabledJobs } = inspectCronJobHealth(rawJobs);
   if (inFlightCount > 0) {

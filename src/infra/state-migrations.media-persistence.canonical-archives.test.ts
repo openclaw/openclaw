@@ -520,8 +520,8 @@ describe("media migration of canonical SQLite transcript archives", () => {
         .prepare("UPDATE session_transcript_archives SET archive_blob = ?")
         .run(Buffer.from("corrupt"));
     }
-    expect((await migrateLegacyMediaPersistence({ env: f.env })).warnings.join("\n")).toContain(
-      "Canonical SQLite transcript archive is corrupt",
+    expect((await migrateLegacyMediaPersistence({ env: f.env })).warnings.join("\n")).toMatch(
+      /Failed migrating transcript archive \([^)]+\): Canonical SQLite transcript archive is corrupt \[/u,
     );
   });
 

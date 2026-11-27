@@ -118,6 +118,59 @@ describe("cron project: runCronIsolatedAgentTurn CLI ownership", () => {
     }
   });
 
+  it.each([
+    { provider: "codex-cli", program: "daybreak_blue" },
+    { provider: "codex-cli", program: "daybreak_red" },
+    { provider: "openai", program: "daybreak_blue" },
+    { provider: "openai", program: "daybreak_red" },
+  ] as const)("rejects $program before $provider CLI execution", async ({ provider, program }) => {
+    const ref = { provider, model: "test-model" };
+    harness.resolveConfiguredModelRefMock.mockReturnValue(ref);
+    harness.resolveAllowedModelRefMock.mockReturnValue({ ref });
+    harness.isCliProviderMock.mockReturnValue(true);
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        job: makeIsolatedAgentJobFixture({
+          cyberAccessProgram: program,
+          payload: { kind: "agentTurn", message: "summarize", model: provider + "/test-model" },
+          delivery: { mode: "none" },
+        }),
+      }),
+    );
+    expect(harness.runCliAgentMock).not.toHaveBeenCalled();
+    expect(harness.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("Daybreak access is unsupported by this CLI runtime"),
+    });
+  });
+
+  it.each([
+    { provider: "codex-cli", program: "standard" },
+    { provider: "openai", program: "standard" },
+    { provider: "test-cli", program: "daybreak_blue" },
+  ] as const)("preserves $provider CLI execution for $program", async ({ provider, program }) => {
+    const ref = { provider, model: "test-model" };
+    harness.resolveConfiguredModelRefMock.mockReturnValue(ref);
+    harness.resolveAllowedModelRefMock.mockReturnValue({ ref });
+    harness.isCliProviderMock.mockReturnValue(true);
+    harness.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "summary done" }],
+      meta: { agentMeta: { provider, model: "test-model" } },
+    });
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        job: makeIsolatedAgentJobFixture({
+          cyberAccessProgram: program,
+          payload: { kind: "agentTurn", message: "summarize", model: provider + "/test-model" },
+          delivery: { mode: "none" },
+        }),
+      }),
+    );
+    expect(harness.runCliAgentMock).toHaveBeenCalledOnce();
+    expect(result.status, result.error).toBe("ok");
+  });
+
   it("preserves handle cancellation as a terminal abort when the CLI rejects", async () => {
     harness.runCliAgentMock.mockImplementationOnce(async (params) => {
       expect(params.abortSignal.aborted).toBe(false);

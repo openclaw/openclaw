@@ -51,6 +51,7 @@ import {
   type SessionPage,
   type ToolCall,
 } from "./chrome-mcp.test-support.js";
+import { REDACTED_FIELD_VALUE } from "./sensitive-field-values.js";
 
 const { mockChromeMcpProcesses } = await vi.hoisted(
   () => import("./chrome-mcp-process.test-support.js"),
@@ -435,6 +436,69 @@ describe("chrome MCP page parsing", () => {
     );
     await clickChromeMcpElement({ ...targetA, uid: secondRef ?? "" });
     expect(clickedUids).toEqual(["1_2", "1_2"]);
+  });
+
+  it("masks sensitive snapshot values while preserving a benign field", async () => {
+    const evaluateArgs: unknown[] = [];
+    const { targets } = await setupSnapshotSession((call) => {
+      if (call.name === "take_snapshot") {
+        return snapshotResult(
+          snapshotWithControls(
+            { id: "email", role: "textbox", name: "Email", value: "visible@example.test" },
+            { id: "otp", role: "textbox", name: "Code", value: "123456" },
+            {
+              id: "card",
+              role: "textbox",
+              name: "Card",
+              value: "4242424242424242",
+              children: [{ id: "card-text", role: "StaticText", name: "4242424242424242" }],
+            },
+          ),
+        );
+      }
+      if (call.name === "evaluate_script") {
+        evaluateArgs.push(call.arguments?.args);
+        return textResult(
+          JSON.stringify([
+            { tagName: "INPUT", type: "email", autocomplete: "username" },
+            { tagName: "INPUT", type: "text", autocomplete: "one-time-code" },
+            { tagName: "INPUT", type: "text", autocomplete: "cc-number" },
+          ]),
+        );
+      }
+      return undefined;
+    });
+
+    const root = await takeChromeMcpSnapshot(targets[0]!);
+    expect(evaluateArgs).toEqual([["root", "email", "otp", "card"]]);
+    expect(root.children?.map(({ value }) => value)).toEqual([
+      "visible@example.test",
+      REDACTED_FIELD_VALUE,
+      REDACTED_FIELD_VALUE,
+    ]);
+    expect(root.children?.[2]?.children?.[0]?.name).toBe(REDACTED_FIELD_VALUE);
+  });
+
+  it("masks valued fields when Chrome MCP cannot describe their DOM attributes", async () => {
+    const { targets } = await setupSnapshotSession((call) => {
+      if (call.name === "take_snapshot") {
+        return snapshotResult(
+          snapshotWithControls({
+            id: "detached",
+            role: "textbox",
+            name: "Detached",
+            value: "secret",
+          }),
+        );
+      }
+      if (call.name === "evaluate_script") {
+        return textResult("element no longer exists", true);
+      }
+      return undefined;
+    });
+
+    const root = await takeChromeMcpSnapshot(targets[0]!);
+    expect(root.children?.[0]?.value).toBe(REDACTED_FIELD_VALUE);
   });
 
   it("wraps deeply nested snapshot refs without recursive traversal", async () => {

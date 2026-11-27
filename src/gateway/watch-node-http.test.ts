@@ -272,13 +272,10 @@ describe("watch node HTTP transport", () => {
   it.each([{ destroyTarget: "socket", delivery: "raw" }] as const)(
     "rejects $delivery delivery when the active watch poll $destroyTarget is destroyed",
     async ({ destroyTarget, delivery }) => {
-      let resolvePollReady: (response: ServerResponse) => void = () => undefined;
-      const pollReady = new Promise<ServerResponse>((resolve) => {
-        resolvePollReady = resolve;
-      });
+      const pollReady = createDeferred<ServerResponse>();
       const { identity, issued, nodeRegistry, disconnectedNodes, runtime, baseUrl } =
         await createWatchNodeFixture("openclaw-watch-node-destroyed-poll-", {
-          onPollReady: resolvePollReady,
+          onPollReady: pollReady.resolve,
         });
       const connectResponse = await connectWatchNode({
         baseUrl,
@@ -303,7 +300,7 @@ describe("watch node HTTP transport", () => {
         request.end();
       });
       try {
-        const response = await pollReady;
+        const response = await pollReady.promise;
         const socket = response.socket;
         expect(socket).not.toBeNull();
         if (destroyTarget === "socket") {

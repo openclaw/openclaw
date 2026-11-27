@@ -361,6 +361,7 @@ export async function createHarness(
     recordError: vi.fn((record) => record),
     supportsProviderExecutionMode: vi.fn(() => true),
     fenceWorkerTurnForRecovery: vi.fn(),
+    ensureRetainedRunning: vi.fn(async () => {}),
     assertPreparedIntentCurrent: vi.fn(),
     prepareProjectIntent: vi.fn(async (_profileId, request) => {
       const {
@@ -374,6 +375,14 @@ export async function createHarness(
       };
     }),
     getPreparedCandidates: vi.fn(() => []),
+    refreshPreparedEnvironment: vi.fn(async (request) => {
+      request.assertCurrent();
+      const environment = environments.get(request.environmentId);
+      if (!environment) {
+        throw new Error("Missing prepared test environment");
+      }
+      return environment;
+    }),
     bindPreparedWorkspace: vi.fn(async (request) => ({
       assertCurrent: request.assertCurrent,
       gatewayNamespace: "dispatch-fixture",

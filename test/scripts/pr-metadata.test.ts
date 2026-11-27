@@ -218,10 +218,11 @@ require("node:module").syncBuiltinESMExports();
   script(
     "gh",
     `#!/usr/bin/env node
-const fs = require("node:fs");
-const path = require("node:path");
+import fs from "node:fs";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
 const args = process.argv.slice(2);
-const root = __dirname;
+const root = import.meta.dirname;
 const fixture = JSON.parse(process.env.FAKE_GH_FIXTURE);
 fs.appendFileSync(path.join(root, "trace"), JSON.stringify(args) + "\\n");
 const inputPath = args.find(arg => arg.startsWith("--input="))?.slice("--input=".length)
@@ -279,7 +280,7 @@ if (args[0] === "browse") {
     throw new Error("Repository discovery must not open the configured browser");
   }
   if (fixture.probeGit) {
-    const git = require("node:child_process").execFileSync("git", ["--version"], {encoding:"utf8"});
+    const git = execFileSync("git", ["--version"], {encoding:"utf8"});
     if (git.trim() !== "selected fixture Git") throw new Error("Wrong Git reached default repository resolver");
   }
   const repoFlag = args.indexOf("--repo");

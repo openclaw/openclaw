@@ -1,10 +1,13 @@
-/* @vitest-environment jsdom */
 // Contract for full-message eligibility: the Gateway marks every display-
 // capped projection; pending inputs share assistant expansion without gaining
 // transcript mutation actions.
 import { For } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
+/* @vitest-environment jsdom */
+import {
+  prepareChatMessageRender,
+  resolveMessageDisplayMarkdown,
+} from "../../../lib/chat/message-display.ts";
 import { extractText } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import * as toolCards from "../../../lib/chat/tool-cards.ts";
@@ -16,10 +19,7 @@ import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { prepareGroupedMessage } from "./chat-message-bubble-presentation.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
-import {
-  prepareChatMessageRender,
-  resolveMessageActionDetails,
-} from "./chat-message-markdown-view.tsx";
+import { resolveMessageActionDetails } from "./chat-message-markdown-view.tsx";
 import { MessageMarkdown } from "./chat-message-text-view.tsx";
 
 const cappedMeta = { id: "msg-1", truncated: true, reason: "display-cap" };
@@ -338,10 +338,18 @@ describe("user message disclosure", () => {
     }
   });
 
+  const fortyLines = Array.from({ length: 40 }, (_, index) => `line ${index + 1}`);
   it.each([
-    { name: "exactly 1200 UTF-16 code units", markdown: "a".repeat(1_200) },
-    { name: "forty short lines", markdown: Array(40).fill("a").join("\n") },
-  ])("keeps $name fully visible", ({ markdown }) => {
+    { name: "exactly 1200 UTF-16 code units", markdown: "a".repeat(1_200), folded: false },
+    { name: "forty LF lines", markdown: fortyLines.join("\n"), folded: false },
+    { name: "forty CRLF lines", markdown: fortyLines.join("\r\n"), folded: false },
+    {
+      name: "forty-one bare CR lines",
+      markdown: ["first", ...fortyLines].join("\r"),
+      folded: true,
+    },
+    { name: "forty-one mixed lines", markdown: `first\r${fortyLines.join("\n")}`, folded: true },
+  ])("applies the disclosure threshold to $name", ({ markdown, folded }) => {
     const container = document.createElement("div");
 
     mountSolid(
@@ -355,8 +363,8 @@ describe("user message disclosure", () => {
       container,
     );
 
-    expect(container.querySelector(".chat-message-disclosure")).toBeNull();
-    for (const line of markdown.split("\n").filter(Boolean)) {
+    expect(container.querySelector(".chat-message-disclosure") !== null).toBe(folded);
+    for (const line of markdown.split(/[\r\n]+/)) {
       expect(container.textContent).toContain(line);
     }
   });

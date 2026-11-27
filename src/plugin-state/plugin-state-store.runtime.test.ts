@@ -161,6 +161,7 @@ describe("plugin-state-store.authority", () => {
           subagent: {
             complete: unexpectedRuntimeCall,
             forkSession: unexpectedRuntimeCall,
+            runForkedTurn: unexpectedRuntimeCall,
             run: unexpectedRuntimeCall,
             waitForRun: unexpectedRuntimeCall,
             getSessionMessages: unexpectedRuntimeCall,

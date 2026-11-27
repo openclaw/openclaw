@@ -13,6 +13,7 @@ const FETCH_TIMEOUT_MS = 10 * 60_000;
 export async function prepareRepositoryWorkerGitPack(params: {
   url: string;
   baseCommit: string;
+  retainedCommit?: string;
   token: string;
   temporaryRoot: string;
   signal: AbortSignal;
@@ -23,6 +24,9 @@ export async function prepareRepositoryWorkerGitPack(params: {
   }
   if (!/^[a-f0-9]{40}$/u.test(params.baseCommit)) {
     throw new Error("Repository preparation requires an exact GitHub commit");
+  }
+  if (params.retainedCommit !== undefined && !/^[a-f0-9]{40}$/u.test(params.retainedCommit)) {
+    throw new Error("Repository preparation requires an exact retained GitHub commit");
   }
   if (!params.token.trim()) {
     throw new Error("Private repository preparation requires a current GitHub credential");
@@ -89,20 +93,31 @@ export async function prepareRepositoryWorkerGitPack(params: {
   await command(["init", "--bare", "--quiet", "--template=", "--object-format=sha1"]);
   // Depth bounds history, not incoming disk bytes. The existing pack owner caps
   // the emitted snapshot; the temporary fetch also has a finite command deadline.
-  await command(
-    [
-      "fetch",
-      "--depth=1",
-      "--no-tags",
-      "--no-recurse-submodules",
-      "--no-auto-maintenance",
-      "--no-write-fetch-head",
-      "--",
-      params.url,
-      params.baseCommit,
-    ],
-    true,
-  );
+  const fetch = (commits: string[]) =>
+    command(
+      [
+        "fetch",
+        "--depth=1",
+        "--no-tags",
+        "--no-recurse-submodules",
+        "--no-auto-maintenance",
+        "--no-write-fetch-head",
+        "--",
+        params.url,
+        ...commits,
+      ],
+      true,
+    );
+  try {
+    await fetch([params.baseCommit, ...(params.retainedCommit ? [params.retainedCommit] : [])]);
+  } catch (error) {
+    assertCurrent();
+    if (!params.retainedCommit) {
+      throw error;
+    }
+    // Rewritten remote history can retire the donor; keep the full snapshot fallback.
+    await fetch([params.baseCommit]);
+  }
   if ((await command(["cat-file", "-t", params.baseCommit])) !== "commit") {
     throw new Error("The pinned repository object is not a commit");
   }
@@ -110,6 +125,7 @@ export async function prepareRepositoryWorkerGitPack(params: {
   const pack = await prepareWorkerWorkspaceGitPack({
     root: repository,
     baseCommit: params.baseCommit,
+    retainedCommit: params.retainedCommit,
     temporaryRoot: params.temporaryRoot,
     signal: params.signal,
     baseEnv,

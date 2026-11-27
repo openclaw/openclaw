@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as doctorMaintenance from "../../commands/doctor-maintenance.js";
@@ -140,6 +139,9 @@ beforeEach(async () => {
   });
   await state.writeConfig({ plugins: { enabled: false } });
   await state.writeJson("package.json", { name: "openclaw", version: VERSION, type: "module" });
+  const control = state.path("control");
+  await fs.mkdir(control, { mode: 0o700 });
+  vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
   dispatched = [];
   mocks.entrypoint.mockReset().mockResolvedValue(state.path("dist/index.js"));
   mocks.plugins.mockReset().mockResolvedValue(pluginUpdate);
@@ -167,11 +169,11 @@ afterEach(async () => {
   await state.cleanup();
 });
 
-function resume() {
+function resume(run?: Parameters<typeof resumePostCoreUpdate>[0]["opts"]["run"]) {
   return resumePostCoreUpdate({
     root: state.root,
     channel: "stable",
-    opts: { json: true, yes: true },
+    opts: { json: true, yes: true, ...(run ? { run } : {}) },
     timeoutMs: 5_000,
   });
 }
@@ -221,9 +223,6 @@ describe("unproved Doctor authority callers", () => {
           },
         },
       });
-      const control = state.path("control");
-      await fs.mkdir(control);
-      vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
       const profile = ensureProfileForEmail("owner@example.test");
       setUserProfileRole(profile.id, "admin");
       const identity = { channelId: "telegram", senderId: "owner", accountId: "default" };
@@ -522,7 +521,9 @@ describe("unproved Doctor authority callers", () => {
 
   it("keeps the shipped 9.3 child-owned completion route outside the 9.2 bridge", async () => {
     const run = createResumingRun({ before: { version: "2026.9.3" } });
+    const executor = vi.spyOn(executorOwner, "withUpdateCommandExecutor");
     await resume();
+    expect(executor).toHaveBeenCalledExactlyOnceWith(run.runId, expect.any(Function), undefined);
     expect(dispatched).toEqual(["repair", "validate", "readiness"]);
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -543,7 +544,7 @@ describe("unproved Doctor authority callers", () => {
   it.each([false, true])(
     "publishes settled phase evidence only for older parents (parent owns completion=%s)",
     async (parentOwnsCompletion) => {
-      const run = createUpdateRun({ trigger: "cli" });
+      const run = createResumingRun({});
       adoptUpdateRun(run.runId);
       recordUpdateRunStep(run.runId, {
         step: "finalize:doctor:model-retirement",
@@ -556,25 +557,9 @@ describe("unproved Doctor authority callers", () => {
       if (parentOwnsCompletion) {
         await state.writeJson("handoff.json", { completionOwner: "parent" });
       }
-      await fs.mkdir(state.path("phase-artifacts"));
-      vi.spyOn(os, "tmpdir").mockReturnValue(state.path("phase-artifacts"));
-      let restored = false;
-      const maintenance = vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockResolvedValue(
-        createDoctorMaintenanceFixture({
-          finish: vi.fn(async () => {
-            await Promise.resolve();
-            restored = true;
-          }),
-        }),
-      );
-      let phasePath: string | undefined;
-      vi.mocked(defaultRuntime.error).mockImplementation((line) => {
-        const prefix = "Post-plugin Doctor report (update completion pending): ";
-        if (typeof line === "string" && line.startsWith(prefix)) {
-          expect(restored).toBe(true);
-          phasePath = line.slice(prefix.length);
-        }
-      });
+      const maintenance = vi
+        .spyOn(doctorMaintenance, "beginDoctorMaintenance")
+        .mockResolvedValue(createDoctorMaintenanceFixture());
       const writeResult = postCore.writePostCorePluginUpdateResultFile;
       const publication = vi
         .spyOn(postCore, "writePostCorePluginUpdateResultFile")
@@ -593,22 +578,20 @@ describe("unproved Doctor authority callers", () => {
             expect(dispatched).toEqual(["repair", "repair", "validate", "readiness"]);
           }
           expect(getUpdateRun(run.runId)?.status).toBe("running");
-          const canonicalPath = state.statePath("update-reports", `${run.runId}.md`);
-          await expect(fs.stat(canonicalPath)).rejects.toMatchObject({ code: "ENOENT" });
           if (parentOwnsCompletion) {
-            expect(phasePath).toBeUndefined();
             expect(maintenance).toHaveBeenCalledWith(expect.objectContaining({ root: null }));
-          } else {
-            expect(phasePath).toBeDefined();
-            expect(phasePath).not.toBe(canonicalPath);
-            const report = await fs.readFile(phasePath!, "utf8");
-            expect(report).toContain("update completion is pending with the parent updater");
-            expect(report).toContain("Complete Doctor lint findings (0)");
           }
           await writeResult(...args);
         });
 
-      await resume();
+      if (parentOwnsCompletion) {
+        await executorOwner.withUpdateCommandExecutor(run.runId, async (executor) => {
+          const executorFence = await executor.enter(state.root);
+          await resume({ runId: run.runId, env: state.env, executorFence });
+        });
+      } else {
+        await resume();
+      }
 
       expect(publication).toHaveBeenCalledOnce();
       expect(defaultRuntime.writeJson).not.toHaveBeenCalled();

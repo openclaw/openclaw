@@ -1,13 +1,16 @@
 import { spawn, type SpawnOptions } from "node:child_process";
 import { once, type EventEmitter } from "node:events";
+import { writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
 import { spawnAndWait } from "../spawn-utils.js";
 import { runWithSpawnBroker } from "./context.js";
@@ -156,6 +159,46 @@ it.skipIf(process.platform === "win32").each(bootstrapModes)(
   "settles %s bootstrap and native close",
   runBootstrapFixture,
   20_000,
+);
+
+it.skipIf(skipBrokerTests)(
+  "starts, spawns, and closes without Gateway runtime recovery or logging",
+  async () => {
+    const preload = path.join(tempDirs.make("openclaw-broker-cold-"), "preload.mjs");
+    writeFileSync(
+      preload,
+      `import {registerHooks} from 'node:module';
+     if (/\\/spawn-broker\\/worker\\.(?:ts|js)$/.test(process.argv[1] ?? '')) {
+       registerHooks({resolve(specifier, context, nextResolve) {
+         const resolved = nextResolve(specifier, context);
+         if (/\\/(?:child-runtime-viability\\.[^/]+|logging\\/)/.test(resolved.url)) {
+           throw new Error('broker loaded Gateway recovery or logging: ' + resolved.url);
+         }
+         return resolved;
+       }});
+     }`,
+    );
+    const host = await withEnvAsync(
+      { NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(preload).href}` },
+      async () => {
+        const broker = createSpawnBrokerHost({
+          workerUrl: pathToFileURL(path.resolve("src/process/spawn-broker/worker.ts")),
+        });
+        onTestFinished(() => broker.close());
+        await broker.ready();
+        return broker;
+      },
+    );
+    const child = host.spawn(process.execPath, ["-e", 'process.stdout.write("broker-output")'], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    await child.ready();
+    const output = capture(child.stdout);
+    await child.waitForClose();
+    expect(child.exitCode).toBe(0);
+    expect(output()).toBe("broker-output");
+    await host.close();
+  },
 );
 
 describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {

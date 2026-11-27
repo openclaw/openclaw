@@ -1,16 +1,21 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import * as stringCoerce from "@openclaw/normalization-core/string-coerce";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { SessionRunStatusSchema } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+import * as harnessPolicy from "../agents/harness/policy.js";
 import { registerAgentHarness } from "../agents/harness/registry.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
-import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions/types.js";
+import {
+  isTerminalSessionStatus,
+  SESSION_TOTAL_TOKENS_VERSION,
+  type SessionEntry,
+} from "../config/sessions/types.js";
 import type { ProviderNormalizeModelIdContext } from "../plugins/provider-runtime.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { formatAgentRuntimeLabel } from "../shared/agent-runtime-display.js";
+import * as searchCase from "../shared/search-case.js";
 import { formatGoalSummary } from "../shared/session-goal-display.js";
 import { isSessionRunStateActive } from "../shared/session-run-state.js";
 import { normalizeSessionSearchText } from "../shared/session-search-text.js";
@@ -97,14 +102,14 @@ test("unchanged goal searches normalize only the query and refresh with the entr
       updatedAt: now,
       totalTokens: 1200,
       totalTokensFresh: true,
-      totalTokensVersion: 1,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       goal: createSessionGoalFixture(`goal-${index}`, "Investigate 日本語 🦞 MiXeD", {
         tokenBudget: 2000,
       }),
     },
   ]);
   const { params, targets } = searchFixture(rows, { modelSearchMayMatch: () => false });
-  using lower = vi.spyOn(stringCoerce, "normalizeLowercaseStringOrEmpty");
+  using lower = vi.spyOn(searchCase, "foldSearchCase");
   for (const search of ["日本語", "🦞", "MIXED", "Pursuing goal (1.2k/2k)"]) {
     params.opts = { search };
     expect(searchKeys(params)).toEqual(rows.map(([key]) => key));
@@ -167,6 +172,44 @@ test("non-status vocabulary misses skip per-row run state and model facts", () =
   });
 });
 
+test("sigma searches reach literal goals and prepared model identities", () => {
+  const goalKey = "agent:main:goal";
+  const modelKey = "agent:main:model";
+  const { params } = searchFixture(
+    [
+      [
+        goalKey,
+        {
+          sessionId: "goal",
+          updatedAt: now,
+          goal: createSessionGoalFixture("goal", "ΕΛΕΓΧΟΣ — Cafe\u0301"),
+        },
+      ],
+      [modelKey, { sessionId: "model", updatedAt: now }],
+    ],
+    { cfg: { agents: { defaults: { model: "fixture/default" }, entries: { main: {} } } } },
+    (key) => ({
+      preparedRuntimeOwnership:
+        key === modelKey
+          ? {
+              model: "native",
+              auth: "native",
+              modelRef: { provider: "fixture", model: "ΟΔΗΓΟΣ" },
+            }
+          : null,
+      preparedAcpMeta: null,
+    }),
+  );
+  for (const search of ["Σ", "σ", "ς"]) {
+    params.opts = { search };
+    expect(searchKeys(params), search).toEqual([goalKey, modelKey]);
+  }
+  for (const search of ["café", "ελεγχος cafe"]) {
+    params.opts = { search };
+    expect(searchKeys(params), search).toEqual([]);
+  }
+});
+
 test("reuses model search vocabulary until the row facts owner publishes a change", () => {
   const key = "agent:main:search";
   const entry = {
@@ -223,6 +266,7 @@ test("reuses model search vocabulary until the row facts owner publishes a chang
 });
 
 test("native models and prepared runtime labels outside the catalog retain their matches", () => {
+  using policies = vi.spyOn(harnessPolicy, "resolveAgentHarnessPolicy");
   const cfg = {
     agents: {
       defaults: { model: "short", models: { "openai/gpt-4.1": { alias: "short" } } },
@@ -289,6 +333,7 @@ test("native models and prepared runtime labels outside the catalog retain their
   acp.backend = "agent:fixture-runtime";
   params.opts = { search: acp.backend };
   expect(searchKeys(params)).toEqual([key]);
+  expect(policies).not.toHaveBeenCalled();
 });
 
 // The original eager predicate is the oracle for query gates and per-call memo keys.
@@ -346,9 +391,9 @@ function eagerSearchFields(params: SessionListFilterParams, key: string, entry: 
           allowPluginNormalization: false,
           configuredDefaultModelByAgent: rowContext.configuredDefaultModelByAgent,
         },
-      ),
+      ) ?? {},
     );
-    modelFields(source.selectedModel);
+    modelFields(source.selectedModel ?? {});
     modelFields(source.rowModelIdentity);
   }
   models.push(formatAgentRuntimeLabel(source.thinkingProjection.agentRuntime));
@@ -529,4 +574,36 @@ test("search preserves the eager predicate's rows and order across vocabulary su
       .map(([key]) => key);
     expect(searchKeys(params), search).toEqual(expected);
   }
+});
+
+test("title-only search finds an archived title beyond metadata matches without exposing private rows", () => {
+  const rows: [string, SessionEntry][] = [
+    ...Array.from({ length: 10 }, (_, index): [string, SessionEntry] => [
+      `agent:main:metadata-${index}`,
+      {
+        sessionId: `metadata-${index}`,
+        updatedAt: now - index,
+        model: "gpt-model",
+        label: "Other work",
+        archivedAt: now,
+      },
+    ]),
+    [
+      "agent:main:private",
+      { sessionId: "private", updatedAt: now - 11, label: "GPT private plan", archivedAt: now },
+    ],
+    [
+      "agent:main:target",
+      { sessionId: "target", updatedAt: now - 12, displayName: "GPT migration", archivedAt: now },
+    ],
+  ];
+  const { params } = searchFixture(rows, {
+    opts: { search: "gpt", archived: true, searchTitlesOnly: true },
+    entryFilter: (key) => key !== "agent:main:private",
+  });
+  const result = filterSessionEntries(params, { offset: 0, limit: 10, ownerLimit: 0 });
+  expect(result.entries.map(([key]) => key)).toEqual(["agent:main:target"]);
+  expect(result.totalCount).toBe(1);
+  params.opts = { search: "gpt", archived: true };
+  expect(searchKeys(params)).toHaveLength(11);
 });

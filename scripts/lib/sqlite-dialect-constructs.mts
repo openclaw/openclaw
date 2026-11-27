@@ -17,6 +17,8 @@ export const SQLITE_PRIMITIVE_OWNERS: readonly string[] = [
   "src/daemon/runtime-pin-store.ts",
   // SQLite-only local client owner; it never opens the selected Gateway engine.
   "src/infra/client-credential-store.ts",
+  // Startup migration owner: local SQLite preimages and existing schema migration admission.
+  "src/state/state-upgrade.ts",
 ];
 // SQLite physical-layout DDL; PostgreSQL generation/migrations retain ordinary tables.
 export const SQLITE_PHYSICAL_LAYOUT_OWNERS: readonly string[] = [

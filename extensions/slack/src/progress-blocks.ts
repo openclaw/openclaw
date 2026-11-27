@@ -11,6 +11,7 @@ import {
 import { SLACK_MAX_BLOCKS } from "./blocks-input.js";
 import { normalizeSlackOutboundText } from "./format.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
+import { isSlackReasoningCardLine } from "./progress-reasoning.js";
 import { SLACK_SESSION_LINK_ACTION_ID } from "./reply-action-ids.js";
 import { applyAppendOnlyStreamUpdate } from "./stream-mode.js";
 import { truncateSlackText } from "./truncate.js";
@@ -20,6 +21,9 @@ const DEFAULT_SLACK_PROGRESS_DETAIL_MAX_CHARS = 120;
 const DEFAULT_SLACK_PROGRESS_TASK_DETAIL_MAX_CHARS = 48;
 const SLACK_PROGRESS_CHUNK_TEXT_MAX = 256;
 const SLACK_PROGRESS_TASK_TITLE_MAX = 120;
+// Reasoning cards carry the text in the title. The cap is ours, chosen below the
+// 256 characters Slack documents per task_update field.
+const SLACK_PROGRESS_REASONING_TITLE_MAX = 250;
 const SLACK_PROGRESS_PLAN_FALLBACK_TITLE = "Thinking";
 const SLACK_PROGRESS_LINE_DELTA_RE = /(?:^|\s)\+(\d+)\s+[−-](\d+)(?=\s|$)/u;
 // Work IDs cannot contain hyphens; this namespace marks transient attention.
@@ -107,6 +111,9 @@ function lineDetailParts(line: ChannelProgressDraftLine): string[] {
 }
 
 function lineTaskTitle(line: ChannelProgressDraftLine): string {
+  if (isSlackReasoningCardLine(line)) {
+    return compactTitle(line.text, SLACK_PROGRESS_REASONING_TITLE_MAX);
+  }
   const label = line.label.replace(/\s+/g, " ").trim() || line.toolName || line.kind || "Update";
   const fallback = line.text.replace(/\s+/g, " ").trim();
   if (fallback && fallback !== label) {
@@ -162,12 +169,26 @@ function stableTaskIdPart(value: string, slugValue = value): string {
   return `${(slug || "task").slice(0, 48)}_${suffix}`;
 }
 
+/** Native task id of a line that carries its own id; content-keyed lines have none until rendered. */
+export function resolveSlackNativeLineTaskId(
+  line: Pick<ChannelProgressDraftLine, "id">,
+): string | undefined {
+  return line.id?.trim() ? stableTaskIdPart(line.id) : undefined;
+}
+
+/** 1-based card number behind a native task id minted for a `reasoning:<n>` line. */
+export function resolveSlackReasoningTaskIndex(id: string): number | undefined {
+  const match = /^reasoning_(\d+)_[0-9a-f]{8}$/u.exec(id);
+  return match ? Number(match[1]) : undefined;
+}
+
 function resolveLineTaskIdentity(
   line: ChannelProgressDraftLine,
   contentIdOccurrences: Map<string, number>,
 ): string {
-  if (line.id?.trim()) {
-    return stableTaskIdPart(line.id);
+  const ownId = resolveSlackNativeLineTaskId(line);
+  if (ownId) {
+    return ownId;
   }
   const contentKey = [line.kind, line.toolName, line.label, line.text].join("\0");
   const id = stableTaskIdPart(contentKey, line.toolName ?? line.kind ?? line.label);
@@ -204,11 +225,15 @@ export function buildSlackProgressStreamChunks(params: {
   finalInProgressStatus?: "complete" | "error";
   diffStat?: SlackProgressDiffStat;
   sessionLinks?: readonly SlackProgressSessionLink[];
+  /** Plan title when neither a headline nor a work row supplies one. */
+  fallbackTitle?: string;
 }): AnyChunk[] | undefined {
   const approvals = params.lines.filter((line) => line.kind === "approval");
-  const taskLines = params.summaryRow
-    ? []
-    : params.lines.filter((line) => line.kind !== "approval");
+  // The quiet card shows no tool rows, but the reasoning it was asked to show
+  // still renders as rows below its summary row.
+  const taskLines = params.lines.filter(
+    (line) => line.kind !== "approval" && (!params.summaryRow || isSlackReasoningCardLine(line)),
+  );
   // Native tasks follow the full plan or compositor window. Block Kit's block
   // limit does not apply here: truncation hides late failures and shifts plan IDs.
   // Slack cannot remove native rows. Position-keyed plan IDs let snapshots
@@ -223,9 +248,14 @@ export function buildSlackProgressStreamChunks(params: {
     DEFAULT_SLACK_PROGRESS_TASK_DETAIL_MAX_CHARS,
   );
   const taskContentIdOccurrences = new Map<string, number>();
+  // Reasoning cards never lend their text to the plan headline.
+  const reasoningTaskIds = new Set<string>();
   for (const line of taskLines) {
     const id = resolveLineTaskIdentity(line, taskContentIdOccurrences);
     const task: SlackPlanTask = { id, title: lineTaskTitle(line), status: lineTaskStatus(line) };
+    if (isSlackReasoningCardLine(line)) {
+      reasoningTaskIds.add(id);
+    }
     // Native tasks append details/output; keep details stable and put results in
     // output so a status change cannot repeat the command.
     const detail = line.detail
@@ -262,11 +292,12 @@ export function buildSlackProgressStreamChunks(params: {
       : params.finalInProgressStatus === "complete" || !params.summaryRow
         ? "Completed"
         : "Working";
-  const newest = tasks.at(-1);
+  const newest = tasks.findLast((task) => !reasoningTaskIds.has(task.id));
   const title = compactTitle(
     headline ||
       (newest?.details ? `${newest.title} — ${newest.details}` : newest?.title) ||
       (params.summaryRow ? summaryTitle : attention.at(-1)?.title) ||
+      params.fallbackTitle ||
       SLACK_PROGRESS_PLAN_FALLBACK_TITLE,
     SLACK_PROGRESS_CHUNK_TEXT_MAX,
   );
@@ -274,10 +305,14 @@ export function buildSlackProgressStreamChunks(params: {
     params.diffStat && (params.diffStat.added > 0 || params.diffStat.removed > 0)
       ? `+${params.diffStat.added} −${params.diffStat.removed}`
       : undefined;
-  if (tasks.length === 0 && (params.summaryRow || params.sessionLinks?.length || diffOutput)) {
+  const hasWorkRows = params.summaryRow
+    ? tasks.some((task) => !reasoningTaskIds.has(task.id))
+    : tasks.length > 0;
+  if (!hasWorkRows && (params.summaryRow || params.sessionLinks?.length || diffOutput)) {
     // Native rows cannot be removed, so the quiet card owns one replaceable
-    // summary row for the whole turn; detailed cards add it only as a receipt.
-    tasks.push({
+    // summary row for the whole turn, above its reasoning rows; detailed cards
+    // add it only as a receipt.
+    tasks.unshift({
       id: "openclaw_summary",
       title: params.summaryRow ? compactTitle(title) : summaryTitle,
       status: params.finalInProgressStatus ?? (params.summaryRow ? "in_progress" : "complete"),

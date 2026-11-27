@@ -1,5 +1,4 @@
 // Manual facade. Keep loader boundary explicit.
-import path from "node:path";
 import { createConfiguredProviderLocalServiceAcquirer } from "../agents/provider-local-service.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type {
@@ -8,17 +7,12 @@ import type {
   RepairShortTermPromotionArtifactsResult,
   ShortTermAuditSummary,
   ShortTermDreamingStats,
-} from "../memory-host-sdk/dreaming.js";
+} from "../memory-host-sdk/dreaming-report-types.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
-import type { PluginStateOperationModuleSource } from "../plugin-state/plugin-state-store.native-binding.js";
-import { isTypeScriptPackageEntry } from "../plugins/package-entrypoints.js";
 import { getPluginValueInstance } from "../plugins/plugin-instance-scope.js";
 import { capturePluginStateOperationModuleSource } from "../plugins/plugin-state-operation-source.js";
 // Memory core bundled runtime helpers load the internal memory plugin through SDK facades.
-import {
-  loadBundledPluginPublicSurfaceModuleSyncCore,
-  resolveBundledPublicSurfaceLocation,
-} from "./facade-loader.js";
+import { loadBundledPluginPublicSurfaceModuleSyncCore } from "./facade-loader.js";
 import type {
   MemoryEmbeddingProvider,
   MemoryEmbeddingProviderCreateOptions,
@@ -136,35 +130,9 @@ function loadFacadeModule<Artifact extends keyof FacadeModules>(
   });
   const instance = getPluginValueInstance(module);
   const assertCurrent = instance ? () => instance.run(() => {}) : undefined;
-  let moduleSource: PluginStateOperationModuleSource | undefined;
-  if (instance && assertCurrent) {
-    moduleSource = capturePluginStateOperationModuleSource(instance, assertCurrent);
-  } else {
-    // CLI facades have process-stable code; capture their selected family before yielding.
-    const facade = resolveBundledPublicSurfaceLocation({
-      dirName: "memory-core",
-      artifactBasename,
-    });
-    const operation = resolveBundledPublicSurfaceLocation({
-      dirName: "memory-core",
-      artifactBasename: "recall-operation-api.js",
-    });
-    const operationModule =
-      facade?.origin === "bundled" &&
-      operation?.origin === "bundled" &&
-      path.dirname(facade.modulePath) === path.dirname(operation.modulePath) &&
-      isTypeScriptPackageEntry(facade.modulePath) === isTypeScriptPackageEntry(operation.modulePath)
-        ? { ...operation, pluginId: "memory-core", origin: "bundled" as const }
-        : undefined;
-    moduleSource = {
-      resolve(moduleName) {
-        if (moduleName !== "recall-operation-api.js" || !operationModule) {
-          throw new Error("Memory recall operation is absent from its selected facade family");
-        }
-        return operationModule;
-      },
-    };
-  }
+  const moduleSource = assertCurrent
+    ? capturePluginStateOperationModuleSource(instance, assertCurrent)
+    : undefined;
   module.configureMemoryCoreDreamingState(<Value>(options: OpenKeyedStoreOptions) =>
     createPluginStateKeyedStore<Value>("memory-core", options, assertCurrent, moduleSource),
   );

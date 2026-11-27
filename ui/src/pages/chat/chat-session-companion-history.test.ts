@@ -63,7 +63,12 @@ describe("Side chat turn history", () => {
         if (settle === "retry") {
           const ask = vi.fn(answered("Recovered", 1));
           await threads.submit("one", failed, ask);
-          expect(ask).toHaveBeenCalledWith("one", "Explain this image", [original]);
+          expect(ask).toHaveBeenCalledWith(
+            "one",
+            "Explain this image",
+            [original],
+            expect.any(String),
+          );
         } else {
           await hydrate(threads, [exchange("Explain this image", "Recovered", 1)]);
         }

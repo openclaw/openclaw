@@ -40,6 +40,7 @@ export function registerStatusConfigReadTests(params: {
             customBindHost: "10.0.0.5",
             controlUi: { enabled: true },
           },
+          agents: { defaults: { model: { primary: "openai/gpt-5" } } },
         }),
         async (configPath) => {
           const status = await gatherStatus();

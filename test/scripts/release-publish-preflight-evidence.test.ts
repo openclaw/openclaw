@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { constants, cpSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import corePackagePolicy from "../../scripts/lib/npm-core-release-packages.json" with { type: "json" };
 import {
   createPublishPreflightEvidenceClient,
@@ -13,12 +13,16 @@ import {
   type PublishPreflightGh,
 } from "../../scripts/lib/release-publish-preflight-evidence.mts";
 import { createPluginSdkApiReleaseEvidence } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
+import * as releaseEvidence from "../../scripts/release-ci-summary.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeJsonFile } from "../helpers/temp-repo.js";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
+import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
 import { fixtureGit } from "./release-publish.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sourceTemplates = useAutoCleanupTempDirTracker(afterAll);
+let sourceTemplate: { source: string; targetSha: string } | undefined;
 const version = "2026.9.5";
 const repo = "openclaw/openclaw";
 const api = (endpoint: string) => ["api", `repos/${repo}/${endpoint}`, "--method", "GET"];
@@ -27,6 +31,7 @@ const sha256 = (bytes: string | Uint8Array) => createHash("sha256").update(bytes
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("protected tooling tag resolution", () => {
@@ -209,11 +214,8 @@ describe("publish preflight optional Telegram evidence", () => {
   });
 });
 
-function coreEvidenceFixture() {
-  const source = tempDirs.make("publish-preflight-source-");
-  const artifacts = tempDirs.make("publish-preflight-artifacts-");
-  const writeArtifact = (name: string, bytes: string | Uint8Array) =>
-    writeFileSync(join(artifacts, name), bytes);
+function buildCoreEvidenceSource() {
+  const source = sourceTemplates.make("publish-preflight-source-");
   writeJsonFile(join(source, "package.json"), {
     name: "openclaw",
     version,
@@ -229,8 +231,38 @@ function coreEvidenceFixture() {
   const git = fixtureGit(source, "Release fixture", "release-fixture@example.invalid");
   git("init", "--quiet");
   git("add", ".");
-  git("commit", "--quiet", "-m", "release source fixture");
+  git(
+    "-c",
+    "maintenance.auto=false",
+    "-c",
+    "gc.auto=0",
+    "commit",
+    "--quiet",
+    "-m",
+    "release source fixture",
+  );
   const targetSha = git("rev-parse", "HEAD");
+  return { source, targetSha };
+}
+
+function coreEvidenceFixture(sdkEntry?: string) {
+  sourceTemplate ??= buildCoreEvidenceSource();
+  const source = tempDirs.make("publish-preflight-source-");
+  // Mutable Git state belongs to each case; only the pristine source seed is reused.
+  cpSync(sourceTemplate.source, source, {
+    recursive: true,
+    mode: constants.COPYFILE_FICLONE,
+  });
+  const { targetSha } = sourceTemplate;
+  const candidate = candidatePublicationFixture({
+    candidateSha: targetSha,
+    candidateVersion: version,
+  });
+  // Replace external evidence reads, not the admission/authentication owners.
+  vi.spyOn(releaseEvidence, "createReleaseEvidenceClient").mockReturnValue(candidate.client);
+  const artifacts = tempDirs.make("publish-preflight-artifacts-");
+  const writeArtifact = (name: string, bytes: string | Uint8Array) =>
+    writeFileSync(join(artifacts, name), bytes);
   vi.stubEnv("GIT_DIR", join(source, ".git"));
   vi.stubEnv("GIT_WORK_TREE", source);
   const corePackages = corePackagePolicy.map((policy) => {
@@ -244,7 +276,7 @@ function coreEvidenceFixture() {
       tarballSha256: sha256(bytes),
     };
   });
-  const rootBytes = Buffer.from("synthetic immutable openclaw");
+  const rootBytes = Buffer.from(candidate.npmBytes);
   writeArtifact("openclaw.tgz", rootBytes);
   writeArtifact(
     "core-packages-SHA256SUMS",
@@ -252,7 +284,7 @@ function coreEvidenceFixture() {
   );
   const payload = { entrypointsAdded: [], entrypointsRemoved: [], exports: [] };
   const manifest = {
-    version: 1,
+    ...candidate.npmManifest,
     releaseTag: `v${version}`,
     releaseSha: targetSha,
     packageVersion: version,
@@ -270,25 +302,77 @@ function coreEvidenceFixture() {
     }),
   };
   const manifestPath = join(artifacts, "preflight-manifest.json");
-  const writeManifest = () => writeJsonFile(manifestPath, manifest);
+  const writeManifest = () => {
+    writeJsonFile(manifestPath, manifest);
+    candidate.npmQualified.manifestSha256 = sha256(readFileSync(manifestPath));
+    const archive = makeStoredZip(
+      Object.fromEntries(
+        readdirSync(artifacts)
+          .filter((name) => name !== "bin")
+          .map((name) => [name, readFileSync(join(artifacts, name))]),
+      ),
+    );
+    candidate.npmArtifact.id = 90;
+    candidate.npmArtifact.digest = `sha256:${sha256(archive)}`;
+    candidate.npmArtifact.size_in_bytes = archive.length;
+    candidate.npmQualified.artifact.id = "90";
+    candidate.npmQualified.artifact.digest = sha256(archive);
+  };
   writeManifest();
+  let downloadedArtifacts: unknown[] = [];
+  if (sdkEntry) {
+    const files = Object.fromEntries(
+      readdirSync(artifacts).map((name) => [name, readFileSync(join(artifacts, name))]),
+    );
+    const archives = [
+      makeStoredZip(files),
+      makeStoredZip({
+        "plugin-sdk-api-release-diff.json": "{}",
+        "plugin-sdk-api-release-evidence.json": JSON.stringify(
+          sdkEntry === "evidence mismatch" ? {} : manifest.pluginSdkApi,
+        ),
+        [sdkEntry.endsWith(".md") ? sdkEntry : "plugin-sdk-api-release-diff.md"]: "# SDK diff",
+      }),
+    ];
+    const bin = join(artifacts, "bin");
+    mkdirSync(bin);
+    downloadedArtifacts = archives.map((bytes, index) => {
+      writeFileSync(join(bin, String(index + 90) + ".zip"), bytes);
+      return {
+        id: index + 90,
+        name:
+          index === 0
+            ? "openclaw-npm-preflight-v" + version
+            : `plugin-sdk-api-release-diff-${candidate.runId}-1`,
+        expired: false,
+        size_in_bytes: bytes.length,
+        digest:
+          "sha256:" +
+          (sdkEntry === "digest mismatch" && index === 1 ? "0".repeat(64) : sha256(bytes)),
+      };
+    });
+    const script = [
+      "#!" + process.execPath,
+      'const fs = require("node:fs");',
+      "const endpoint = process.argv[3];",
+      'const id = endpoint.split("/").at(-2);',
+      'if (!["90", "91"].includes(id) || !endpoint.endsWith("/zip")) throw new Error("Unexpected archive request");',
+      'process.stdout.write(fs.readFileSync(require("node:path").join(__dirname, id + ".zip")));',
+    ].join(String.fromCharCode(10));
+    writeFileSync(join(bin, "gh"), script, { mode: 0o755 });
+    vi.stubEnv("PATH", bin + delimiter + (process.env.PATH ?? ""));
+  }
   const runGh = (args: string[]) => {
-    if (args[1]?.includes("/compare/")) {
-      return JSON.stringify({ status: "identical" });
-    }
-    if (args[1] === "repos/openclaw/openclaw/actions/runs/2") {
+    if (sdkEntry && args[1]?.includes("/artifacts?")) {
       return JSON.stringify({
-        id: 2,
-        path: ".github/workflows/openclaw-npm-release.yml",
-        status: "completed",
-        conclusion: "success",
-        event: "workflow_dispatch",
-        head_branch: "main",
-        head_sha: targetSha,
-        run_attempt: 1,
+        artifacts: downloadedArtifacts,
+        total_count: downloadedArtifacts.length,
       });
     }
-    throw new Error(`Unexpected GitHub request: ${args.join(" ")}`);
+    if (args[1] === "repos/openclaw/openclaw/actions/artifacts/90") {
+      return JSON.stringify(candidate.npmArtifact);
+    }
+    return candidate.runGh(args);
   };
   return {
     writeArtifact,
@@ -301,23 +385,41 @@ function coreEvidenceFixture() {
           repo: "openclaw/openclaw",
           tag: `v${version}`,
           targetSha,
-          toolingSha: targetSha,
-          workflowRef: `release-publish/${targetSha.slice(0, 12)}-123`,
+          toolingSha: candidate.p,
+          workflowRef: candidate.publisherFullRef.replace(/^refs\/(?:heads|tags)\//u, ""),
           npmDistTag: "latest",
-          preflightRunId: "2",
-          fullReleaseValidationRunId: "1",
+          preflightRunId: candidate.runId,
+          fullReleaseValidationRunId: candidate.runId,
+          fullManifest: candidate.manifest,
           fullReleaseValidationRunAttempt: "1",
           pluginSdkApiAcknowledgement: "",
           currentSelectorRef: `v${version}`,
           currentSelectorSha: targetSha,
           runGh,
         },
-        { npmManifest: manifest, npmManifestPath: manifestPath },
+        sdkEntry ? {} : { npmManifest: manifest, npmManifestPath: manifestPath },
       ),
   };
 }
 
 describe("publish preflight immutable npm evidence", () => {
+  it.skipIf(process.platform === "win32").each([
+    ["plugin-sdk-api-release-diff.md", undefined],
+    ["unexpected.md", "Unexpected, duplicate, or aliased"],
+    ["nested/plugin-sdk-api-release-diff.md", "Unexpected, duplicate, or aliased"],
+    ["../plugin-sdk-api-release-diff.md", "path"],
+    ["PLUGIN-SDK-API-RELEASE-DIFF.md", "Unexpected, duplicate, or aliased"],
+    ["digest mismatch", "archive size or digest"],
+    ["evidence mismatch", "SDK evidence differs"],
+  ])("validates downloaded SDK archive: %s", async (entry, error) => {
+    const fixture = coreEvidenceFixture(entry);
+    if (error) {
+      await expect(fixture.verify()).rejects.toThrow(error);
+    } else {
+      expect((await fixture.verify()).corePackages).toEqual(fixture.corePackages);
+    }
+  });
+
   it("qualifies the complete prepared core package set against exact source metadata", async () => {
     const fixture = coreEvidenceFixture();
     expect((await fixture.verify()).corePackages).toEqual(fixture.corePackages);

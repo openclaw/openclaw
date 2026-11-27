@@ -1,37 +1,33 @@
 import { createMemo, createUniqueId, Errored, For, Loading, onSettled, Show } from "solid-js";
-import { normalizeAgentModelRefForConfig } from "../../../../src/config/model-input.js";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
   AgentsListResult,
 } from "../../api/types.ts";
 import { AgentEmojiPicker } from "../../components/agent-emoji-picker.tsx";
-import { MultiSelect } from "../../components/multi-select.tsx";
 import { createOverlayAnchor } from "../../components/overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "../../components/overlay-lifecycle.ts";
 import { failPanelRefresh } from "../../components/panel-refresh-status-state.ts";
 import "../../components/tooltip.ts";
-import { DecisionModelPicker } from "../../components/solid/decision-model-picker.tsx";
 import { useAvatarGatewayContext } from "../../components/solid/identity-avatar-view.ts";
 import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
-import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { PanelRefreshStatus as PanelRefreshNotice } from "../../components/solid/panel-refresh-status.tsx";
-import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
+import {
+  SettingsNavRow,
+  SettingsRow,
+  SettingsSection,
+  SettingsValue,
+} from "../../components/solid/settings-ui.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import "../../components/solid/overlay.css";
 import {
   type AgentContext,
   buildAgentContext,
-  buildModelOptions,
-  createPrimaryModelExclusion,
-  resolveAgentConfig,
   resolveAgentTextAvatar,
-  resolveEffectiveModelFallbacks,
-  resolveModelFallbacks,
-  resolveModelPrimary,
 } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
+import type { AgentSettingsAccess } from "../../lib/agents/settings-access.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createIdentityAvatars } from "../../lib/identity-avatar-loader.ts";
@@ -39,16 +35,16 @@ import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
+import { AgentModelSettings } from "./agent-model-settings.tsx";
 import type { AgentsPageView } from "./agents-page-state.ts";
 import { AvatarPicker } from "./avatar-picker.tsx";
-import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
 import type { AgentIdentityOutcome } from "./identity-actions.ts";
-import { renderAgentPanelFacts } from "./panel-ui.tsx";
+import { renderAgentPanelFacts, type AgentConfigState } from "./panel-ui.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
 export function AgentOverview(
-  params: AgentConfigActions &
+  params: AgentConfigState &
     Omit<AgentsPageView["overview"], "modelSelectionPolicy" | "modelCatalogRetired"> &
     Partial<Pick<AgentsPageView["overview"], "modelSelectionPolicy" | "modelCatalogRetired">> &
     Pick<AgentsPageView, "readData"> & {
@@ -58,7 +54,7 @@ export function AgentOverview(
       agentFilesList: AgentsFilesListResult | null;
       agentIdentity: AgentIdentityResult | null;
       canUpdateIdentity: boolean;
-      identitySavePending: boolean;
+      panelAccess: AgentSettingsAccess["panels"];
       onSelectPanel: (panel: AgentsPanel) => void;
     },
 ) {
@@ -95,58 +91,6 @@ export function AgentOverview(
       params.defaultId,
       params.agentIdentity,
     ),
-  );
-  const isDefault = createMemo(() => context().isDefault);
-  const primaryModelLabel = () => t(`agents.overview.primaryModel${isDefault() ? "Default" : ""}`);
-  const config = createMemo(() => resolveAgentConfig(configForm(), params.agent.id));
-  const agentModel = () => visibleAgent().model;
-  const entryPrimary = createMemo(() => resolveModelPrimary(config().entry?.model));
-  const inheritedPrimary = createMemo(() =>
-    resolveModelPrimary(config().defaults?.model ?? agentModel()),
-  );
-  const defaultPrimary = createMemo(
-    () =>
-      resolveModelPrimary(config().defaults?.model) ||
-      (inheritedPrimary() !== "-" ? inheritedPrimary() : null) ||
-      (configForm() ? null : resolveModelPrimary(agentModel())),
-  );
-  const effectivePrimary = createMemo(() => entryPrimary() ?? defaultPrimary() ?? null);
-  const selectedPrimary = createMemo(() => (isDefault() ? effectivePrimary() : entryPrimary()));
-  const primaryModelOptions = createMemo(() => {
-    const inherited = defaultPrimary();
-    return [
-      {
-        value: "",
-        label: isDefault()
-          ? t("agents.overview.notSet")
-          : inherited
-            ? t("agents.overview.inheritDefaultModel", { model: inherited })
-            : t("agents.overview.inheritDefault"),
-      },
-      ...buildModelOptions(
-        configForm(),
-        effectivePrimary() ?? undefined,
-        params.modelCatalog,
-        params.agent.id,
-      ),
-    ];
-  });
-  const decisionModel = createMemo(() => {
-    const value = config().entry?.decisionModel;
-    return typeof value === "string" ? value : undefined;
-  });
-  const inheritedDecisionModel = createMemo(() => {
-    const value = config().defaults?.decisionModel;
-    return typeof value === "string" ? value : undefined;
-  });
-  const modelFallbacks = createMemo(
-    () =>
-      resolveEffectiveModelFallbacks(config().entry?.model, config().defaults?.model) ??
-      (configForm() ? null : resolveModelFallbacks(agentModel())),
-  );
-  const fallbackChips = createMemo(() => modelFallbacks() ?? []);
-  const disabled = createMemo(
-    () => !params.canUpdateConfig || !configForm() || params.configLoading || params.configSaving,
   );
   const identityDraft = () => params.readData().identityDraft;
   const identityName = createMemo(
@@ -212,7 +156,7 @@ export function AgentOverview(
     avatarOverlay.bindTrigger(avatarTrigger);
     avatarOverlay.setParent(findOverlayParent(avatarTrigger));
     const anchor = createOverlayAnchor(avatarSurface, { sameRoot: true });
-    anchor.update(avatarTrigger, "right-start");
+    anchor.update(avatarTrigger, "bottom-start");
     // Retire the native overlay synchronously when upload authority is revoked.
     const unsubscribeConfig = applicationConfig?.subscribe((nextConfig) => {
       if (!nextConfig.uploadsEnabled) {
@@ -237,20 +181,31 @@ export function AgentOverview(
     />
   );
 
-  // Same catalog the primary picker offers; the field hides the effective
-  // primary and current chain itself. Order is preserved: a pick appends.
-  const fallbackOptions = createMemo(() =>
-    buildModelOptions(configForm(), null, params.modelCatalog, params.agent.id),
-  );
-  const isPrimaryModel = createMemo(() =>
-    createPrimaryModelExclusion(configForm(), effectivePrimary(), params.agent.id),
-  );
-
   return (
-    <>
+    <div class="settings-stack agent-overview">
       <SettingsSection
         title={t("agents.identity.title")}
-        description={t("agents.identity.subtitle")}
+        actions={
+          <>
+            <For
+              each={params.readData().identityOutcome ? [params.readData().identityOutcome] : []}
+            >
+              {(request) => (
+                <Errored
+                  fallback={(error) => (
+                    <div class="agent-identity-status agent-identity-status--error" role="alert">
+                      {formatUiError(error())}
+                    </div>
+                  )}
+                >
+                  <Loading>
+                    <IdentityCompletion request={request} />
+                  </Loading>
+                </Errored>
+              )}
+            </For>
+          </>
+        }
       >
         <div class="settings-row settings-row--stacked">
           <div class="agent-identity-editor">
@@ -271,76 +226,49 @@ export function AgentOverview(
                 </StrokeIcon>
               </span>
             </button>
-            <div class="agent-identity-editor__content">
-              <div class="agent-identity-editor__fields">
-                <label class="field">
-                  <span>{t("agents.identity.name")}</span>
+            <div class="agent-identity-editor__fields">
+              <label class="field">
+                <span>{t("agents.identity.name")}</span>
+                <input
+                  class="agent-identity-editor__name"
+                  type="text"
+                  maxlength="64"
+                  value={identityName()}
+                  placeholder={t("agents.identity.namePlaceholder")}
+                  disabled={identityBusy()}
+                  onInput={(event) =>
+                    params.onIdentityFieldChange("name", event.currentTarget.value)
+                  }
+                  onBlur={() => params.onIdentitySave()}
+                />
+              </label>
+              <div class="field agent-identity-editor__emoji">
+                <span>{t("agents.identity.emoji")}</span>
+                <div class="agent-identity-editor__emoji-control">
                   <input
                     type="text"
                     maxlength="64"
-                    value={identityName()}
-                    placeholder={t("agents.identity.namePlaceholder")}
+                    aria-label={t("agents.identity.emoji")}
+                    value={identityEmoji()}
                     disabled={identityBusy()}
-                    onInput={(event) =>
-                      params.onIdentityFieldChange("name", event.currentTarget.value)
-                    }
+                    onInput={(event: Event) => {
+                      if (event.currentTarget instanceof HTMLInputElement) {
+                        const emoji = limitEmoji(event.currentTarget.value);
+                        event.currentTarget.value = emoji;
+                        params.onIdentityFieldChange("emoji", emoji);
+                      }
+                    }}
                     onBlur={() => params.onIdentitySave()}
                   />
-                </label>
-                <div class="field agent-identity-editor__emoji">
-                  <span>{t("agents.identity.emoji")}</span>
-                  <div class="agent-identity-editor__emoji-control">
-                    <input
-                      type="text"
-                      maxlength="64"
-                      aria-label={t("agents.identity.emoji")}
-                      value={identityEmoji()}
-                      disabled={identityBusy()}
-                      onInput={(event: Event) => {
-                        if (event.currentTarget instanceof HTMLInputElement) {
-                          const emoji = limitEmoji(event.currentTarget.value);
-                          event.currentTarget.value = emoji;
-                          params.onIdentityFieldChange("emoji", emoji);
-                        }
-                      }}
-                      onBlur={() => params.onIdentitySave()}
-                    />
-                    <AgentEmojiPicker
-                      value={identityEmoji()}
-                      disabled={identityBusy()}
-                      onSelect={(emoji: string) =>
-                        params.onIdentityFieldChange("emoji", limitEmoji(emoji))
-                      }
-                    />
-                  </div>
+                  <AgentEmojiPicker
+                    value={identityEmoji()}
+                    disabled={identityBusy()}
+                    onSelect={(emoji: string) =>
+                      params.onIdentityFieldChange("emoji", limitEmoji(emoji))
+                    }
+                  />
                 </div>
               </div>
-              <Show when={params.identitySavePending}>
-                <span class="settings-row__desc" role="status">
-                  {t("common.saving")}
-                </span>
-              </Show>
-              <For
-                each={params.readData().identityOutcome ? [params.readData().identityOutcome] : []}
-              >
-                {(request) => (
-                  <Errored
-                    fallback={(error) => (
-                      <div
-                        class="settings-row__desc"
-                        role="alert"
-                        style={{ color: "var(--danger)" }}
-                      >
-                        {formatUiError(error())}
-                      </div>
-                    )}
-                  >
-                    <Loading>
-                      <IdentityCompletion request={request} />
-                    </Loading>
-                  </Errored>
-                )}
-              </For>
             </div>
             <div
               ref={(element) => (avatarSurface = element)}
@@ -374,35 +302,11 @@ export function AgentOverview(
           </div>
         </div>
       </SettingsSection>
-      <SettingsSection
-        title={t("agents.overview.title")}
-        description={t("agents.overview.subtitle")}
-      >
-        {renderAgentPanelFacts([
-          [
-            "agents.context.workspace",
-            <openclaw-tooltip prop:content={t("agents.context.openFilesTab")}>
-              <button
-                type="button"
-                class="workspace-link mono"
-                onClick={() => params.onSelectPanel("files")}
-                aria-label={t("agents.context.openFilesTab")}
-              >
-                {context().workspace}
-              </button>
-            </openclaw-tooltip>,
-          ],
-          ["agents.context.primaryModel", <code>{context().model}</code>],
-          ["agents.context.runtime", <code>{context().runtime}</code>],
-          ["agents.context.thinkingDefault", <code>{params.agent.thinkingDefault ?? "-"}</code>],
-          ["agents.context.skillsFilter", context().skillsLabel],
-        ])}
-      </SettingsSection>
-      {params.configDirty ? (
-        <div class="callout warn">{t("agents.overview.unsavedConfig")}</div>
-      ) : undefined}
-      <SettingsSection
-        title={t("agents.overview.modelSelection")}
+      <AgentModelSettings
+        {...params}
+        agent={visibleAgent()}
+        modelConfigForm={configForm()}
+        canUpdate={params.canUpdateConfig && !params.configLoading && !params.configSaving}
         notice={
           <For
             each={
@@ -435,57 +339,46 @@ export function AgentOverview(
             )}
           </For>
         }
-        actions={<AgentConfigButtons {...params} buttonType="button" />}
-      >
-        <SettingsRow
-          title={primaryModelLabel()}
-          control={
-            <ModelPicker
-              label={primaryModelLabel()}
-              value={selectedPrimary() ?? ""}
-              options={primaryModelOptions()}
-              disabled={disabled()}
-              onChange={(value) => params.onModelChange(params.agent.id, value || null)}
-              onOpen={params.onModelCatalogOpen}
+      />
+      <SettingsSection title={t("agents.context.title")}>
+        <Show
+          when={params.panelAccess.files === "available"}
+          fallback={
+            <SettingsRow
+              title={t("agents.context.workspace")}
+              control={<SettingsValue mono value={context().workspace} />}
             />
           }
-        />
-        <SettingsRow
-          title={t("chat.modelControls.decisionLabel")}
-          description={t("chat.modelControls.decisionAgentHelp")}
-          control={
-            <DecisionModelPicker
-              id="agent-decision-model"
-              models={params.decisionModels}
-              value={decisionModel()}
-              inherit={{ model: inheritedDecisionModel() }}
-              disabled={disabled()}
-              onChange={(value) => params.onDecisionModelChange(params.agent.id, value)}
-              onOpen={params.onModelCatalogOpen}
+        >
+          <SettingsNavRow
+            title={t("agents.context.workspace")}
+            description={<span class="agent-overview__workspace">{context().workspace}</span>}
+            onClick={() => params.onSelectPanel("files")}
+          />
+        </Show>
+        <Show
+          when={params.panelAccess.skills === "available"}
+          fallback={
+            <SettingsRow
+              title={t("agents.context.skillsFilter")}
+              control={<SettingsValue value={context().skillsLabel} />}
             />
           }
-        />
-        <SettingsRow
-          title={t("agents.overview.fallbacks")}
-          stacked={true}
-          control={
-            <MultiSelect
-              class="agent-fallbacks"
-              options={fallbackOptions()}
-              value={fallbackChips()}
-              isExcluded={isPrimaryModel()}
-              getValueKey={normalizeAgentModelRefForConfig}
-              placeholder={t("agents.overview.addFallback")}
-              accessibleLabel={t("agents.overview.fallbacks")}
-              allowCustom={!catalogOwnsChoices()}
-              disabled={disabled()}
-              onChange={(next: string[]) => params.onModelFallbacksChange(params.agent.id, next)}
-              onOpen={params.onModelCatalogOpen}
-            />
-          }
-        />
+        >
+          <SettingsNavRow
+            title={t("agents.context.skillsFilter")}
+            control={<SettingsValue value={context().skillsLabel} />}
+            onClick={() => params.onSelectPanel("skills")}
+          />
+        </Show>
+        <Show when={context().runtime !== "-"}>
+          <SettingsRow
+            title={t("agents.context.runtime")}
+            control={<SettingsValue mono value={context().runtime} />}
+          />
+        </Show>
       </SettingsSection>
-    </>
+    </div>
   );
 }
 

@@ -20,10 +20,11 @@ import { createUpdateRun } from "./update-run-ledger.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
-const now = Date.parse("2026-10-16T12:00:00Z");
+// Ages are relative to the real clock: the retention owner reads no injected time.
+const now = Date.now();
 
 function retire(f: ReturnType<typeof fixture>, keepRunId = "", assertCurrent = vi.fn()) {
-  return retireExpiredStandaloneDoctorCaptures({ ...f, now, keepRunId, assertCurrent });
+  return retireExpiredStandaloneDoctorCaptures({ ...f, keepRunId, assertCurrent });
 }
 
 function fixture() {
@@ -51,27 +52,26 @@ function fixture() {
 }
 
 it.each([
-  { ages: [5, 4, 3, 2, 1], retained: [false, false, true, true, true] },
+  { ages: [5, 4, 3, 2, 1], retained: [false, false, false, false, true] },
+  // An install that kept three under the former limit converges on one.
+  { ages: [3, 2, 1], retained: [false, false, true] },
   { ages: [40, 31], retained: [false, true] },
-])(
-  "retains recent captures up to the limit and always keeps the newest: $ages",
-  async ({ ages, retained }) => {
-    const f = fixture();
-    const captures = ages.map((age) => f.seal(age));
-    const result = await retire(f);
-    expect(result.warnings).toEqual([]);
-    expect(result.retired.toSorted()).toEqual(
-      captures.filter((_, index) => !retained[index]).toSorted(),
-    );
-    expect(captures.map(fs.existsSync)).toEqual(retained);
-  },
-);
+])("keeps only the newest sealed capture, whatever its age: $ages", async ({ ages, retained }) => {
+  const f = fixture();
+  const captures = ages.map((age) => f.seal(age));
+  const result = await retire(f);
+  expect(result.warnings).toEqual([]);
+  expect(result.retired.toSorted()).toEqual(
+    captures.filter((_, index) => !retained[index]).toSorted(),
+  );
+  expect(captures.map(fs.existsSync)).toEqual(retained);
+});
 
 it("protects an old capture referenced by active recovery and keeps all captures when recovery is unreadable", async () => {
   const f = fixture();
   const old = f.seal(40);
-  const superseded = f.seal(4);
-  [3, 2, 1].forEach((age) => f.seal(age));
+  const superseded = [4, 3, 2].map((age) => f.seal(age));
+  const newest = f.seal(1);
   const options = { env: f.env };
   const { runId } = createUpdateRun({ trigger: "cli" }, options);
   const runtime = { root: f.stateDir, nodePath: process.execPath, version: "1.0.0", buildId: null };
@@ -80,8 +80,9 @@ it("protects an old capture referenced by active recovery and keeps all captures
   record.checkpoint.ref.manifestPath = path.join(old, "manifest.json");
   storeRetainedUpdateRecovery(record, options);
   const retired = await retire(f);
-  expect(retired).toEqual({ retired: [superseded], warnings: [] });
-  expect(fs.existsSync(old)).toBe(true);
+  expect(retired.warnings).toEqual([]);
+  expect(retired.retired.toSorted()).toEqual(superseded.toSorted());
+  expect([old, newest].map(fs.existsSync)).toEqual([true, true]);
   const unreadableCandidate = f.seal(10);
   openOpenClawStateDatabase(options)
     .db.prepare("UPDATE config_machine_state SET value_json = ? WHERE state_key = ?")
@@ -92,10 +93,12 @@ it("protects an old capture referenced by active recovery and keeps all captures
   expect(fs.existsSync(unreadableCandidate)).toBe(true);
 });
 
-it("retires only expired sealed standalone Doctor captures and preserves incomplete or linked copies", async () => {
+it("retires superseded sealed standalone Doctor captures and preserves the current, incomplete, linked, and update copies", async () => {
   const f = fixture();
   const store = resolveUpdateCaptureRoot(f.stateDir);
-  const expired = f.seal(31);
+  const older = f.seal(31);
+  // The caller's own capture stays even when a newer one exists.
+  const current = f.seal(2);
   const recent = f.seal(1);
   const incomplete = path.join(store, `doctor-${randomUUID()}`);
   await fsPromises.mkdir(incomplete);
@@ -108,12 +111,12 @@ it("retires only expired sealed standalone Doctor captures and preserves incompl
   fs.writeFileSync(path.join(interrupted, "manifest.json.partial"), "unverified bytes");
   const assertCurrent = vi.fn();
 
-  const result = await retire(f, path.basename(recent), assertCurrent);
+  const result = await retire(f, path.basename(current), assertCurrent);
 
-  expect(result).toEqual({ retired: [expired], warnings: [] });
+  expect(result).toEqual({ retired: [older], warnings: [] });
   expect(assertCurrent).toHaveBeenCalled();
-  await expect(fsPromises.lstat(expired)).rejects.toMatchObject({ code: "ENOENT" });
-  for (const retained of [recent, incomplete, update, linkedTarget, interrupted]) {
+  await expect(fsPromises.lstat(older)).rejects.toMatchObject({ code: "ENOENT" });
+  for (const retained of [current, recent, incomplete, update, linkedTarget, interrupted]) {
     expect((await fsPromises.lstat(retained)).isDirectory()).toBe(true);
   }
   expect((await fsPromises.lstat(linked)).isSymbolicLink()).toBe(true);

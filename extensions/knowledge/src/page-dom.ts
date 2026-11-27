@@ -1,13 +1,13 @@
 /** DOM builders and display formatters shared by the Knowledge page views. */
 import type { FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
-import type { contract } from "./contract.js";
+import type { FullOutputContract } from "./contract.js";
 import { formatSourceDate } from "./temporal.js";
 import { icon, type IconName } from "./ui-icons.js";
 
-export type Summary = FeatureOutput<typeof contract, "records">["records"][number];
+export type Summary = FeatureOutput<FullOutputContract, "records_detail">["records"][number];
 export const isFullSummary = (r: { id: string }): r is Summary =>
   "path" in r && "revision" in r && "lifecycle" in r && "valid" in r;
-export type Detail = FeatureOutput<typeof contract, "record">;
+export type Detail = FeatureOutput<FullOutputContract, "record_detail">;
 export type RecordDetail = NonNullable<Detail["record"]>;
 export type ClaimPresentation = {
   record: Omit<NonNullable<Detail["record"]>, "metadata"> & {

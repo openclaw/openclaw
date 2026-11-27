@@ -11,6 +11,7 @@ import {
   readProviderJsonResponse as readJson,
   readProviderJsonObjectResponse as readJsonObject,
   readProviderTextResponse as readText,
+  readResponseTextLimited as readLimited,
   summarizeProviderTransportError,
 } from "./provider-http-errors.js";
 
@@ -58,6 +59,32 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it.each(["before", "during"])("cancels limited text reads aborted %s reading", async (when) => {
+  vi.useFakeTimers();
+  const controller = new AbortController();
+  const reason = new Error("caller stopped provider diagnostics");
+  const cancel = vi.fn();
+  if (when === "before") {
+    controller.abort(reason);
+  }
+  const observed = readLimited(stalledResponse(cancel), 128, { signal: controller.signal }).then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    if (when === "during") {
+      controller.abort(reason);
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(cancel).toHaveBeenCalledOnce();
+    await expect(observed).resolves.toEqual({ error: reason });
+  } finally {
+    await vi.runAllTimersAsync();
+    await observed;
+  }
+});
+
 it("matches only active credential values, including the redaction marker itself", () => {
   const empty = matcher({ Accept: "application/json" });
   expect(empty("Bearer demo application/json")).toBe(false);
@@ -85,16 +112,26 @@ it("matches the active values of configured headers without matching transport d
   expect(matches("request-key")).toBe(true);
   expect(matches("overridden-key application/json Bearer demo")).toBe(false);
 });
-it("redacts canonical JSON and URL encodings after removing a custom auth prefix", () => {
+it("isolates request redactors across repeated JSON, URL and partial diagnostics", () => {
   const value = 'synthetic-"quoted-token';
   const redact = textRedactor({
     headers: new Headers({ "X-Server-Key": "Token " + value }),
     request: { auth: { mode: "header", headerName: "X-Server-Key", prefix: "Token ", value } },
     defaultAuthHeader: "Authorization",
   });
+  const other = textRedactor({
+    headers: new Headers({ "X-API-Key": "separate +/credential" }),
+    configuredHeaderNames: ["X-API-Key"],
+    defaultAuthHeader: "Authorization",
+  });
   expect(redact(JSON.stringify({ model: value }))).toBe('{"model":"***"}');
+  expect(other('synthetic-"quoted-token separate +/credential')).toBe(
+    'synthetic-"quoted-token ***',
+  );
   expect(redact(encodeURIComponent(value))).toBe("***");
+  expect(other("later separate%20%2", { truncated: true })).toBe("later ***");
   expect(redact(value.slice(0, -3), { truncated: true })).toBe("***");
+  expect(redact('synthetic-"quoted-token separate +/credential')).toBe("*** separate +/credential");
 });
 it.each([
   ["string", "provider failure", undefined],

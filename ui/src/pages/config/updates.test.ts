@@ -60,10 +60,10 @@ function failedRun() {
 const checkFailure = {
   mode: "manual",
   tone: "warn",
-  text: "Could not check for updates: timeout",
+  text: "Couldn’t check for updates. timeout",
 } as const;
 const restartPending =
-  "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.";
+  "Update installed. A Gateway restart is already in progress; status will refresh after it reconnects.";
 const gitSchedule = (git: NonNullable<NonNullable<UpdateScheduleState["install"]>["git"]>) =>
   ({ channel: "dev", autoEnabled: false, install: { kind: "git", git } }) as const;
 
@@ -150,6 +150,22 @@ describe("renderUpdates", () => {
     expect(action.querySelector("button")?.classList.contains("primary")).toBe(false);
   });
 
+  it.each([
+    { canAdmin: false, refreshing: false, title: "Admin access required." },
+    { canAdmin: true, refreshing: true, title: "Checking for updates…" },
+  ])("explains a disabled retry as $title", ({ canAdmin, refreshing, title }) => {
+    renderUpdates({
+      canAdmin,
+      canUpdate: canAdmin,
+      update: { updateRun: failedRun(), updateStatusRefreshing: refreshing },
+    });
+    const retry = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Retry update",
+    )!;
+    expect(retry.disabled).toBe(true);
+    expect(retry.title).toBe(title);
+  });
+
   it.each(["Update Gateway…", "Retry update"])(
     "dispatches %s to the latest handler without replacing the button",
     (label) => {
@@ -230,8 +246,12 @@ describe("renderUpdates", () => {
     statusCase("update available", {}),
     statusCase(
       "real update failure",
-      { update: { updateStatusBanner: { tone: "danger", text: "Update error: build failed" } } },
-      "Update error: build failed",
+      {
+        update: {
+          updateStatusBanner: { tone: "danger", text: "Couldn’t update OpenClaw. build failed" },
+        },
+      },
+      "Couldn’t update OpenClaw. build failed",
       "danger",
     ),
     statusCase(
@@ -268,16 +288,18 @@ describe("renderUpdates", () => {
       renderUpdates({
         update: {
           updateStatusRefreshing: statusChecking,
-          updateStatusBanner: { tone: "danger", text: "Update error: build failed" },
+          updateStatusBanner: { tone: "danger", text: "Couldn’t update OpenClaw. build failed" },
           updateStatusCheckBanner: statusChecking
             ? null
-            : { mode: "manual", tone: "warn", text: "Could not check for updates: timeout" },
+            : { mode: "manual", tone: "warn", text: "Couldn’t check for updates. timeout" },
         },
       });
       expect(row("Status").textContent).toContain(
-        statusChecking ? "Checking for updates…" : "Could not check for updates: timeout",
+        statusChecking ? "Checking for updates…" : "Couldn’t check for updates. timeout",
       );
-      expect(row("Failure details").textContent).toContain("Update error: build failed");
+      expect(row("Failure details").textContent).toContain(
+        "Couldn’t update OpenClaw. build failed",
+      );
     },
   );
 
@@ -349,7 +371,7 @@ describe("renderUpdates", () => {
     const onAutomaticUpdatesChange = vi.fn();
     renderUpdates({ onAutomaticUpdatesChange });
     expect(text("Gateway version")).toContain("2026.8.1");
-    expect(text("Control UI commit")).toContain("0123456789ab");
+    expect(text("Web app commit")).toContain("0123456789ab");
     expect(
       ["Built", "Last commit"].map((title) => row(title).querySelector("time")?.dateTime),
     ).toEqual(["1970-01-01T00:00:00.000Z", "1970-01-01T00:00:00.000Z"]);
@@ -513,11 +535,11 @@ describe("renderUpdates", () => {
     expect(row("Installed").querySelector("time")?.getAttribute("datetime")).toBe(
       "2026-08-08T12:00:00.000Z",
     );
-    expect(row("Installed").textContent).toContain("2h ago");
+    expect(row("Installed").querySelector("time")?.title).toBe("2h ago");
     expect(row("Last commit").querySelector("time")?.getAttribute("datetime")).toBe(
       "2026-08-08T10:00:00.000Z",
     );
-    expect(row("Last commit").textContent).toContain("4h ago");
+    expect(row("Last commit").querySelector("time")?.title).toBe("4h ago");
 
     renderUpdates({
       configObject: { update: { channel: "dev" } },
@@ -530,7 +552,10 @@ describe("renderUpdates", () => {
     [{ status: "current" }, "Up to date"],
     [{ status: "ahead", commitsAhead: 2 }, "2 commits ahead of tracked upstream"],
     [{ status: "diverged", commitsAhead: 1, commitsBehind: 3 }, "Diverged · 1 ahead, 3 behind"],
-    [{ status: "unavailable", reason: "fetch-failed" }, "Could not fetch the tracked upstream"],
+    [
+      { status: "unavailable", reason: "fetch-failed" },
+      "Couldn’t check the update source. Try again.",
+    ],
   ] as const)("renders explicit %j git status without a dot", (git, label) => {
     renderUpdates({
       configObject: { update: { channel: "dev" } },

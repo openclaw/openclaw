@@ -57,13 +57,13 @@ it.each([
   );
 });
 
-it("flags safeBins that resolve outside trusted directories", () => {
+it("flags safeBins that resolve outside trusted directories", async () => {
   const tempDir = tempDirs.make("openclaw-safe-bin-");
   const binPath = join(tempDir, "custom-safe-bin");
   writeFileSync(binPath, "#!/bin/sh\nexit 0\n");
   chmodSync(binPath, 0o755);
   process.env.PATH = [tempDir, originalPath].filter((entry) => entry.length > 0).join(delimiter);
-  const hits = scanExecSafeBinTrustedDirHints(
+  const hits = await scanExecSafeBinTrustedDirHints(
     binConfig(["custom-safe-bin"], { "custom-safe-bin": {} }),
   );
   expect(hits).toStrictEqual([

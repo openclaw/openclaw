@@ -129,6 +129,7 @@ struct TalkModeGatewayConfigTests {
 
     @Test func `missing gateway config uses speech defaults without a realtime selection`() {
         let parsed = TalkModeGatewayConfigParser.parse(
+            defaultProvider: TalkModeRuntime.defaultTalkProvider,
             defaultModelIdFallback: "eleven_v3",
             defaultSilenceTimeoutMs: TalkDefaults.silenceTimeoutMs,
             envVoice: "",
@@ -142,7 +143,6 @@ struct TalkModeGatewayConfigTests {
         #expect(parsed.outputFormat == nil)
         #expect(parsed.referenceAudioPath == nil)
         #expect(parsed.referenceText == nil)
-        #expect(parsed.seamColorHex == nil)
         #expect(parsed.snapshot.realtime.provider == nil)
         #expect(parsed.snapshot.realtime.modelId == nil)
         #expect(parsed.snapshot.realtime.speakerVoice == nil)

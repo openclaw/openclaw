@@ -9,13 +9,14 @@ import {
   listNodes,
   resolveNodeIdFromList,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import * as archive from "openclaw/plugin-sdk/archive";
 import { listDirectoryTreeStrict } from "openclaw/plugin-sdk/file-access-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { handleDirList } from "../node-host/dir-list.js";
 import { handleFileFetch } from "../node-host/file-fetch.js";
@@ -492,9 +493,16 @@ it("reports unreadable extracted metadata instead of returning a partial manifes
   prepareArchive(createRawTarBuffer([{ path: "ok.txt", contents: "saved" }]));
   const stat = fs.stat;
   const failure = Object.assign(new Error("cannot read extracted metadata"), { code: "EIO" });
+  let extracted = false;
+  const extractArchive = archive.extractArchive;
+  const extraction = vi.spyOn(archive, "extractArchive").mockImplementation(async (...args) => {
+    await extractArchive(...args);
+    extracted = true;
+  });
   const metadata = vi
     .spyOn(fs, "stat")
     .mockImplementation((...args) =>
+      extracted &&
       String(args[0]).includes(`${path.sep}dir-fetch-`) &&
       path.basename(String(args[0])) === "ok.txt"
         ? Promise.reject(failure)
@@ -507,6 +515,7 @@ it("reports unreadable extracted metadata instead of returning a partial manifes
     );
   } finally {
     metadata.mockRestore();
+    extraction.mockRestore();
   }
 });
 

@@ -1,16 +1,15 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   MAX_DATE_TIMESTAMP_MS,
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
-import {
-  parseOAuthCallbackInput,
-  waitForLocalOAuthCallback,
-} from "openclaw/plugin-sdk/provider-auth-runtime";
+import { waitForLocalOAuthCallback } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   createOAuthRefreshError,
   createOAuthRefreshResponseError,
+  parseOAuthAuthorizationInput,
   readOAuthRefreshErrorReason,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -309,20 +308,19 @@ export async function waitForGoogleMeetAuthCode(params: {
   promptInput: (message: string) => Promise<string>;
   writeLine: (message: string) => void;
 }): Promise<string> {
+  // A paste that does not answer this sign-in asks again.
   async function readManualGoogleMeetAuthCode(): Promise<string> {
-    const { state, promptInput } = params;
-    const input = await promptInput("Paste the full redirect URL here: ");
-    const parsed = parseOAuthCallbackInput(input, {
-      missingState: "Missing 'state' parameter. Paste the full redirect URL.",
-      invalidInput: "Paste the full redirect URL, not just the code.",
-    });
-    if ("error" in parsed) {
-      throw new Error(parsed.error);
+    for (;;) {
+      const input = await params.promptInput("Paste the full redirect URL here: ");
+      try {
+        return parseOAuthAuthorizationInput(input, {
+          state: params.state,
+          signInUrl: params.authUrl,
+        }).code;
+      } catch (error) {
+        params.writeLine(formatErrorMessage(error));
+      }
     }
-    if (parsed.state !== state) {
-      throw new Error("OAuth state mismatch - please try again");
-    }
-    return parsed.code;
   }
   params.writeLine(`Open this URL in your browser:\n\n${params.authUrl}\n`);
   if (params.manual) {
@@ -335,7 +333,7 @@ export async function waitForGoogleMeetAuthCode(params: {
       port: 8085,
       callbackPath: "/oauth2callback",
       redirectUri: GOOGLE_MEET_REDIRECT_URI,
-      successTitle: "Google Meet OAuth complete",
+      successTitle: "Google Meet authorization received",
     });
     return callback.code;
   } catch (error) {

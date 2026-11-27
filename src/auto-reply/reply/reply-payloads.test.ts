@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import type { ReplyPayload } from "../types.js";
 import {
   filterMessagingToolMediaDuplicates,
@@ -38,30 +39,20 @@ const emptyEvidence = {
   useGlobalSentMediaUrlEvidenceFallback: false,
 };
 
-function targetsMatchTelegramReplySuppression(params: {
-  originTarget: string;
-  targetKey: string;
-  targetThreadId?: string;
-}): boolean {
-  const baseTarget = (value: string) =>
-    value
-      .replace(/^telegram:(group|channel):/u, "")
-      .replace(/^telegram:/u, "")
-      .replace(/:topic:.*$/u, "");
-  const originTopic = params.originTarget.match(/:topic:([^:]+)$/u)?.[1];
-  return (
-    baseTarget(params.originTarget) === baseTarget(params.targetKey) &&
-    (originTopic === undefined || originTopic === params.targetThreadId)
-  );
-}
-
-// mock-isolation: Keep bundled channel discovery isolated to the synthetic Telegram suppression fixture.
+// Telegram is reachable only through bundled discovery, never the active registry,
+// so these cases cover dedupe before the channel registers (#93107).
+const bundled = vi.hoisted(() => ({ telegram: undefined as unknown }));
+// mock-isolation: Bundled discovery serves only the real Telegram plugin.
 vi.mock("../../channels/plugins/bundled.js", () => ({
   getBundledChannelPlugin: (channel: string) =>
-    channel === "telegram"
-      ? { outbound: { targetsMatchForReplySuppression: targetsMatchTelegramReplySuppression } }
-      : undefined,
+    channel === "telegram" ? bundled.telegram : undefined,
 }));
+bundled.telegram = (
+  await loadBundledPluginFacade<{ telegramPlugin: unknown }>({
+    pluginId: "telegram",
+    artifactBasename: "api.ts",
+  })
+).telegramPlugin;
 
 describe("filterMessagingToolMediaDuplicates", () => {
   const [photo, other, a, b, c, voice] = [
@@ -139,21 +130,17 @@ describe("resolveMessagingToolPayloadDedupe route matching", () => {
   });
 
   it.each([
-    ["9007199254740993", "9007199254740993", true],
-    ["77", "88", false],
-    ["77", undefined, false],
-  ] as const)("matches topic %s against string thread %s: %s", (topic, threadId, expected) => {
-    expect(
-      matchesRoute(
-        { to: "-100123", ...(threadId === undefined ? {} : { threadId }) },
-        { originatingTo: `telegram:group:-100123:topic:${topic}` },
-      ),
-    ).toBe(expected);
-  });
+    ["telegram:group:-100123:topic:77", { to: "-100123", threadId: "77" }, true],
+    ["telegram:group:-100123:topic:77", { to: "-100123", threadId: "88" }, false],
+    ["telegram:group:-100123:topic:77", { to: "-100123" }, false],
+    ["telegram:group:-100123", { to: "-100123" }, true],
+  ] as const)(
+    "matches unregistered Telegram origin %s against %j: %s",
+    (origin, target, expected) => {
+      expect(matchesRoute(target, { originatingTo: origin })).toBe(expected);
+    },
+  );
 
-  it("matches telegram replies when chatId matches but target forms differ", () => {
-    expect(matchesRoute({ to: "-100123" }, { originatingTo: "telegram:group:-100123" })).toBe(true);
-  });
   it("dedupes by content when messaging tool target metadata is unavailable", () => {
     expect(dedupeRoute()).toEqual(emptyEvidence);
   });

@@ -2,16 +2,20 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { Result } from "@openclaw/normalization-core/result";
 import { formatErrorMessage } from "../infra/errors.js";
 import { finishCapabilityOperation } from "../plugins/capability-provider-acquisition.js";
-import type { SpeechSynthesisStreamResult } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable } from "./runtime-availability.js";
 import { normalizeSpeechText } from "./speech-text.js";
-import type { TtsStreamResult, TtsSynthesisStreamResult } from "./tts-runtime-types.js";
+import { resolveTtsSynthesisTarget } from "./tts-delivery.js";
+import type {
+  SpeechSynthesisStreamResult,
+  TtsStreamResult,
+  TtsSynthesisStreamResult,
+} from "./tts-runtime-types.js";
 import {
   executeTtsProviderAttempts,
   acquireTtsRequest,
   throwTtsProjectionError,
 } from "./tts-synthesis-support.js";
-import { resolveTtsSynthesisTarget, type synthesizeSpeech } from "./tts-synthesis.js";
+import type { synthesizeSpeech } from "./tts-synthesis.js";
 
 type SpeechSynthesisParams = Parameters<typeof synthesizeSpeech>[0];
 

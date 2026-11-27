@@ -11,6 +11,7 @@ import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import type { CronService } from "./service.js";
 import {
   createCronServiceWithStateForTest,
+  mockCronAvailableMemory,
   setupCronServiceSuite,
 } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
@@ -52,6 +53,8 @@ function createCron(params: Partial<CronServiceDeps>) {
 }
 
 function createQueueBlocker() {
+  // The scheduler captures this reader on first use, before the blockers run.
+  mockCronAvailableMemory(0);
   const started = createDeferred();
   const release = createDeferred();
   let active = 0;

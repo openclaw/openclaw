@@ -74,7 +74,7 @@ async function settleFrames(afterFrame?: () => void) {
 }
 
 describe("Workboard column window", () => {
-  it("bounds a large board while retaining menu and focus anchors and logical drop order", () => {
+  it("bounds a large board while retaining menu and focus anchors and logical drop order", async () => {
     const { state, container, renderView } = createWorkboardView({ canWrite: true });
     state.viewMode = "board";
     state.cards = Array.from({ length: 60 }, (_, index) =>
@@ -89,6 +89,14 @@ describe("Workboard column window", () => {
       column.querySelector<HTMLElement>(".workboard-column__cards"),
       "column viewport",
     );
+    Object.defineProperties(viewport, {
+      clientHeight: { configurable: true, value: 600 },
+      clientWidth: { configurable: true, value: 320 },
+    });
+    for (const observer of expectDefined(observers.get(viewport), "observed viewport")) {
+      observer.deliver(viewport, 600);
+    }
+    await settleFrames();
     const row = (id: string) =>
       column.querySelector<HTMLElement>(`.workboard-column__item[data-card-id="${id}"]`);
     expect(column.querySelectorAll(".workboard-card").length).toBeLessThan(20);

@@ -1,11 +1,13 @@
 import { resolveIsConfigReadOnly } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isOpenClawIdEnabled } from "../shared/openclaw-id-policy.js";
 import type { ControlUiBootstrapConfig } from "./control-ui-bootstrap-contract.js";
 
 /** Public presentation settings of the Gateway serving the UI, never model permissions. */
 export function resolveControlUiBootstrapPresentation(config: OpenClawConfig | undefined) {
   const configReadOnly = resolveIsConfigReadOnly();
   return {
+    ...(isOpenClawIdEnabled(config?.gateway?.openclawId) ? { openclawIdEnabled: true } : {}),
     embedSandbox: config?.gateway?.controlUi?.embedSandbox ?? "scripts",
     allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
     automaticallyFetchFavicons: config?.gateway?.controlUi?.automaticallyFetchFavicons !== false,

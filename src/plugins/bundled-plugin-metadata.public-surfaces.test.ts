@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 import {
   createGeneratedPluginTempRoot,
   installGeneratedPluginTempRootCleanup,
-  writeJson,
 } from "./generated-plugin-test-helpers.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
@@ -33,7 +33,7 @@ function fixture(config: object, built = false, preferOver?: readonly string[]) 
   const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-");
   const root = built ? path.join(tempRoot, "dist") : tempRoot;
   const pluginDir = path.join(root, "extensions", "alpha");
-  writeJson(path.join(pluginDir, "package.json"), {
+  writeJsonFile(path.join(pluginDir, "package.json"), {
     name: "@openclaw/alpha",
     openclaw: {
       extensions: ["./index.ts"],
@@ -41,7 +41,7 @@ function fixture(config: object, built = false, preferOver?: readonly string[]) 
       channel: { ...channel, preferOver },
     },
   });
-  writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
+  writeJsonFile(path.join(pluginDir, "openclaw.plugin.json"), {
     id: "alpha",
     configSchema: built ? { type: "object", properties: {} } : { type: "object" },
     channels: ["alpha"],

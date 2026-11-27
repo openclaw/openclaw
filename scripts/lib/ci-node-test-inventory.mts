@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import { matchesGlob } from "node:path";
 import {
   agentVitestProjectOwners,
@@ -26,15 +28,26 @@ import {
   filterFilesByPatterns,
   isPlainRepoRelativePath,
 } from "../../test/vitest/vitest.include-patterns.ts";
+import { markdownTestFiles } from "../../test/vitest/vitest.markdown-paths.mjs";
+import { isSharedVitestExcludedPath } from "../../test/vitest/vitest.pattern-file.ts";
 import {
   autoReplyCoreTestInclude,
   autoReplyCoreTestExclude,
   autoReplyTopLevelReplyTestInclude,
+  infraTestOwner,
+  runtimeConfigTestOwner,
   tuiPtyTestFiles,
 } from "../../test/vitest/vitest.test-shards.mjs";
+import { toolingIsolatedTestFiles } from "../../test/vitest/vitest.tooling-isolated-paths.mjs";
+import {
+  toolingDockerTestFiles,
+  toolingTestExclude,
+  toolingTestInclude,
+} from "../../test/vitest/vitest.tooling-paths.mjs";
 import {
   getUnitFastTestFiles,
   getUnitFastIsolatedTestFiles,
+  getUnitFastTimerTestFiles,
 } from "../../test/vitest/vitest.unit-fast-paths.mjs";
 import {
   boundaryTestFiles,
@@ -45,6 +58,36 @@ import { getCommandFilesByOwner } from "./ci-command-test-plan.mts";
 import { isStripeEligibleTestFile, listTrackedTestFiles } from "./list-test-files.mts";
 
 export const COMPACT_EMBEDDED_BASE_GROUP_NAME = "agentic-agents-embedded-base";
+
+export type NodeTestVolume = {
+  version: 1;
+  revision: string;
+  policy: "node" | "bun-all" | "dual-all";
+  entries: {
+    config: string;
+    runtime: "node" | "bun";
+    engine: "vitest" | "bun-test";
+    profile: string;
+    environment: string;
+    argsDigest: string;
+    full: { id: string; count: number; digest: string } | null;
+    selected: { count: number; digest: string } | null;
+  }[];
+};
+
+export type NodeTestTargetVolume = {
+  target: string;
+  configs: string[];
+  volume: NodeTestVolume;
+};
+
+export function summarizeNodeTestFiles(files: readonly string[]) {
+  const unique = [...new Set(files)].toSorted();
+  return {
+    count: unique.length,
+    digest: createHash("sha256").update(JSON.stringify(unique)).digest("hex"),
+  };
+}
 
 export function listScopedOwnerTestFiles(owner: {
   root: string;
@@ -151,6 +194,7 @@ const CONFIG_FILE_OWNERS = new Map<string, Parameters<typeof listScopedOwnerTest
   ],
 ]);
 const EXACT_CONFIG_FILES = new Map<string, string[]>([
+  ["test/vitest/vitest.markdown.config.ts", markdownTestFiles],
   ["test/vitest/vitest.boundary.config.ts", boundaryTestFiles],
   ["test/vitest/vitest.tui-pty.config.ts", tuiPtyTestFiles],
   ["test/vitest/vitest.gateway-server-isolated.config.ts", gatewayServerIsolatedTestFiles],
@@ -179,11 +223,60 @@ export function listNodeTestConfigFiles(config: string): string[] | undefined {
   return files;
 }
 
+/** Effective measurement ownership; timer/isolated runtime exception checks also use it. */
+export function listNodeTestVolumeConfigFiles(config: string): string[] | undefined {
+  if (config === "test/vitest/vitest.unit-fast.config.ts") {
+    const excluded = new Set([...getUnitFastTimerTestFiles(), ...getUnitFastIsolatedTestFiles()]);
+    return getUnitFastTestFiles().filter(
+      (file) => !excluded.has(file) && !isSharedVitestExcludedPath(file),
+    );
+  }
+  if (config === "test/vitest/vitest.unit-fast-fake-timers.config.ts") {
+    return getUnitFastTimerTestFiles().filter((file) => !isSharedVitestExcludedPath(file));
+  }
+  if (config === "test/vitest/vitest.unit-fast-isolated.config.ts") {
+    return getUnitFastIsolatedTestFiles().filter((file) => !isSharedVitestExcludedPath(file));
+  }
+  const scopedOwner =
+    config === "test/vitest/vitest.infra.config.ts"
+      ? infraTestOwner
+      : [agentVitestProjectOwners.core, agentVitestProjectOwners.support].find(
+          (owner) => owner.config === config,
+        );
+  if (scopedOwner) {
+    return listScopedOwnerTestFiles(scopedOwner).filter(
+      (file) => !isSharedVitestExcludedPath(file, scopedOwner.root === "." ? "" : scopedOwner.root),
+    );
+  }
+  if (config === "test/vitest/vitest.runtime-config.config.ts") {
+    return listScopedOwnerTestFiles(runtimeConfigTestOwner).filter(
+      (file) => !isSharedVitestExcludedPath(file, "src"),
+    );
+  }
+  if (config === "test/vitest/vitest.tooling.config.ts") {
+    return listScopedOwnerTestFiles({
+      root: ".",
+      include: toolingTestInclude,
+      exclude: toolingTestExclude,
+    }).filter((file) => !isSharedVitestExcludedPath(file));
+  }
+  const isolated = config === "test/vitest/vitest.tooling-isolated.config.ts";
+  if (isolated || config === "test/vitest/vitest.tooling-docker.config.ts") {
+    const declared = new Set(isolated ? toolingIsolatedTestFiles : toolingDockerTestFiles);
+    const unitFast = isolated ? new Set<string>() : new Set(getUnitFastTestFiles());
+    return listTrackedTestFiles(".").filter(
+      (file) => declared.has(file) && !unitFast.has(file) && !isSharedVitestExcludedPath(file),
+    );
+  }
+  return listNodeTestConfigFiles(config);
+}
+
 // Filtering coverage does not make a whole-config owner safe to split.
 const WHOLE_CONFIG_FILE_OWNERS = new Map<
   string,
   { listFiles: () => string[]; splitByFile?: false }
 >([
+  ["core-markdown", { listFiles: () => markdownTestFiles }],
   [
     "agentic-agents-tools",
     {
@@ -322,7 +415,7 @@ const WHOLE_CONFIG_FILE_OWNERS = new Map<
           include: ["src/gateway/server-methods/**/*.test.ts"],
           exclude: [...databaseWorkerCoreTestFiles, ...gatewayDatabaseWorkerTestFiles],
         }),
-        ...gatewayPluginTestFiles.filter((file) => !gatewayDatabaseWorkerTestFiles.includes(file)),
+        ...gatewayPluginTestFiles.filter((file) => !gatewayMethodsTestExclude.includes(file)),
       ],
     },
   ],
@@ -366,3 +459,83 @@ export function listWholeConfigSplitFiles(shardName: string): string[] | undefin
 export function canSplitWholeConfigGroup(shardName: string): boolean {
   return WHOLE_CONFIG_FILE_OWNERS.get(shardName)?.splitByFile !== false;
 }
+
+/** Git is authoritative: generated fixtures and non-Vitest suffixes still need an owner. */
+export function scheduledTrackedTestFiles(): string[] {
+  // Sparse preflight harnesses import this inventory without the source helpers.
+  // Coverage itself runs in a complete checkout; retain the existing Git owner.
+  const { listGitTrackedFiles }: typeof import("../../src/test-utils/repo-files.ts") =
+    createRequire(import.meta.url)("../../src/test-utils/repo-files.ts");
+  // Narrow before the Git owner checks existence; non-test paths cannot enter this census.
+  const files = listGitTrackedFiles({ pathspecs: ":(glob)**/*.test.*" });
+  if (!files) {
+    throw new Error("Scheduled test coverage requires git ls-files");
+  }
+  return files.filter((file) => /\.test\.(?:tsx?|mts|mjs|cjs|py)$/u.test(file));
+}
+
+export const SCHEDULED_COVERAGE_EXCEPTIONS: Array<{
+  pattern: string;
+  owner: string;
+  reason: string;
+}> = [
+  {
+    pattern: ".github/codeql/**/client-*.test.*",
+    owner: "@openclaw/openclaw-secops",
+    reason: "CodeQL query fixture inputs, not executable test suites.",
+  },
+  {
+    pattern: "test/fixtures/**/*.test.ts",
+    owner: "Developer tooling fixture owners",
+    reason:
+      "Source inputs for tooling regression suites; shared Vitest configuration deliberately excludes fixtures.",
+  },
+  {
+    pattern: ".agents/skills/update-team-server/controller/*.test.*",
+    owner: "Team server deployment controller",
+    reason:
+      "Standalone Node/Python controller self-tests use the operator skill's runner, not Vitest; no scheduled controller runner exists.",
+  },
+  {
+    pattern: ".agents/skills/plugin-sdk-impact/scripts/*.test.mjs",
+    owner: "Plugin SDK impact tooling",
+    reason:
+      "Standalone node:test skill self-tests have no scheduled runner and are not Vitest suites.",
+  },
+  {
+    pattern: ".agents/skills/openclaw-writing/scripts/*.test.mjs",
+    owner: "OpenClaw writing skill tooling",
+    reason:
+      "Standalone node:test skill self-tests have no scheduled runner and are not Vitest suites.",
+  },
+  {
+    pattern: "crates/openclaw-iroh-node/test/*.test.cjs",
+    owner: ".github/workflows/iroh-node.yml",
+    reason:
+      "Native binding node:test suites require the crate build; their owning workflow is path-triggered, not scheduled.",
+  },
+  {
+    pattern: "test/scripts/pr-darwin-process-identity.test.py",
+    owner: ".github/workflows/pr-tooling-darwin.yml",
+    reason:
+      "Darwin-only Python process identity proof runs in its path-triggered platform workflow, not the Linux Vitest runner.",
+  },
+  {
+    pattern: "packages/ai/**/*.live.test.ts",
+    owner: "AI provider live tests",
+    reason:
+      "Credentialed package live suites are outside test-live-shard discovery (src, test, extensions); the secretless every-file runner cannot supply provider credentials.",
+  },
+  {
+    pattern: "src/gateway/gateway-thinking-probe.live.test.ts",
+    owner: "Gateway live probe",
+    reason:
+      "test-live-shard explicitly excludes this operator-selected catalog probe, which refuses CI.",
+  },
+  {
+    pattern: "test/e2e/qa-lab/plugins/slack-crabline-roundtrip.candidate.e2e.test.mts",
+    owner: "QA Lab candidate proof",
+    reason:
+      "Requires operator-provided CRABLINE_CANDIDATE_ROOT, archive hashes and a private evidence directory for the candidate package, not the repository checkout.",
+  },
+];

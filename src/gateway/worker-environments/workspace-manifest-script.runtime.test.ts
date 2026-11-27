@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -90,3 +91,52 @@ it("keeps overlapping captures and their mutation authority bound to each invoca
     await pending.catch(() => undefined);
   }
 });
+
+it.skipIf(process.platform === "win32")(
+  "captures Git files without executing repository fsmonitor commands",
+  async () => {
+    const root = tempDirs.make("workspace-manifest-git-config-");
+    const workspace = path.join(root, "workspace");
+    const home = path.join(root, "home");
+    const hook = path.join(root, "fsmonitor");
+    await fs.mkdir(workspace);
+    await fs.mkdir(home);
+    await fs.writeFile(path.join(workspace, "file.txt"), "content");
+    const env = { PATH: process.env.PATH, HOME: home, GIT_CONFIG_NOSYSTEM: "1" };
+    const git = (args: string[]) => execFileSync("git", ["-C", workspace, ...args], { env });
+    git(["init", "--quiet"]);
+    git(["add", "file.txt"]);
+    await fs.writeFile(hook, '#!/bin/sh\nprintf called > "$0.called"\nprintf "token\\0"\n', {
+      mode: 0o700,
+    });
+    git(["config", "core.fsmonitor", `/bin/sh "${hook}"`]);
+    let stdout = "";
+    await runWorkspaceManifestProgram(
+      {
+        argv: [process.execPath, workspace, "a".repeat(40), "eligible"],
+        env: { HOME: home },
+        pid: process.pid,
+        platform: process.platform,
+        stdout: {
+          write: (value) => {
+            stdout += value;
+          },
+        },
+      },
+      () => "",
+      () => {},
+      async (cwd, args, maxBuffer) => execFileSync("git", ["-C", cwd, ...args], { env, maxBuffer }),
+      8192,
+    );
+    const manifest = JSON.parse(
+      await fs.readFile(
+        path.join(home, ".openclaw-worker", "manifests", `${stdout.trim().slice(7)}.json`),
+        "utf8",
+      ),
+    );
+    expect(manifest.entries).toMatchObject([
+      { path: "file.txt", size: 7, sha256: createHash("sha256").update("content").digest("hex") },
+    ]);
+    await expect(fs.access(`${hook}.called`)).rejects.toMatchObject({ code: "ENOENT" });
+  },
+);

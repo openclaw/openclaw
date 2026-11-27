@@ -9,7 +9,6 @@ import {
   getUpdateRun,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../../version.js";
 import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
@@ -184,7 +183,13 @@ export function registerGenerationRecoveryTests(
         expect(record.verification.serviceRunning).toBe(false);
         expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual(candidateConfig);
       } else {
-        expect(restores).toBe(1);
+        expect(
+          restores,
+          JSON.stringify({
+            result: error instanceof UpdateCommandFailure ? error.result : error,
+            ledgerReason: record.reason,
+          }),
+        ).toBe(1);
         expect(mocks.running).toBe(true);
         expect(mocks.stopAllowances).toEqual([undefined, "1"]);
         expect(record).toMatchObject({
@@ -196,9 +201,7 @@ export function registerGenerationRecoveryTests(
         expect(completedStatus).toBe("running");
         expect(record.downtimeMs).toBeGreaterThanOrEqual(0);
         expect(record.confirmedAtMs).toBeGreaterThanOrEqual(before.stoppedAtMs!);
-        expect(renderUpdateRunReport(record).headline).toBe(
-          `↩️ OpenClaw update rolled back to ${VERSION}: restart-unhealthy.`,
-        );
+        expect(record.reason).toBe("restart-unhealthy");
       }
     },
   );

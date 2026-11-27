@@ -6,6 +6,12 @@ import { POSIX_SHELL_WRAPPERS } from "../infra/shell-wrapper-resolution.js";
 import { detectRespawnSupervisor } from "../infra/supervisor-markers.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import { isSecretEgressProxyEnv } from "../secrets/egress-proxy/environment.js";
+import {
+  auditGatewayNodeVersionChange,
+  GATEWAY_NODE_PREFIX_SKEW,
+  GATEWAY_NODE_VERSION_INSPECT_FAILED,
+  GATEWAY_NODE_VERSION_MISSING,
+} from "./node-version-prefix.js";
 import { auditLaunchdDefinition } from "./service-audit-launchd.js";
 import { auditGatewayInstallPreservation } from "./service-audit-preservation.js";
 import { auditGatewayRuntime, SERVICE_RUNTIME_AUDIT_CODES } from "./service-audit-runtime.js";
@@ -18,6 +24,7 @@ import type {
   ServiceDefinitionDrift,
 } from "./service-audit-types.js";
 import { getMinimalServicePathPartsFromEnv, SERVICE_PROXY_ENV_KEYS } from "./service-env.js";
+import { resolveServiceEntrypoint } from "./service-layout.js";
 import {
   collectInlineManagedServiceEnvKeys,
   collectInlineServiceEnvKeys,
@@ -50,6 +57,9 @@ export const SERVICE_AUDIT_CODES = {
   ...SYSTEMD_SERVICE_AUDIT_CODES,
   gatewayCommandMissing: "gateway-command-missing",
   gatewayEntrypointMismatch: "gateway-entrypoint-mismatch",
+  gatewayNodePrefixSkew: GATEWAY_NODE_PREFIX_SKEW,
+  gatewayNodeVersionMissing: GATEWAY_NODE_VERSION_MISSING,
+  gatewayNodeVersionInspectFailed: GATEWAY_NODE_VERSION_INSPECT_FAILED,
   gatewayPathMissing: "gateway-path-missing",
   gatewayPathMissingDirs: "gateway-path-missing-dirs",
   gatewayPathNonMinimal: "gateway-path-nonminimal",
@@ -474,6 +484,15 @@ export async function auditGatewayServiceConfig(params: {
     platform,
     params.timeoutMs,
   );
+  if (params.command) {
+    const nodeVersionChange = await auditGatewayNodeVersionChange({
+      nodePath: params.command.programArguments[0],
+      entrypointPath: resolveServiceEntrypoint(params.command),
+    });
+    if (nodeVersionChange) {
+      issues.push(nodeVersionChange);
+    }
+  }
 
   if (platform === "linux") {
     definitionDriftError = await auditSystemdUnit(

@@ -1,23 +1,27 @@
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { listExecSessionsForCancellation } from "../agents/bash-process-registry.js";
 import { assertLocalSandboxWorkspaceBackend } from "../agents/sandbox/local-workspace.js";
 import type { SandboxContext } from "../agents/sandbox/types.js";
-import { listSubagentRunsForRequester } from "../agents/subagents/registry/subagent-registry-read.js";
-import { captureWorkspaceStateFilesystemGuard } from "../agents/workspace-state-guard.js";
-import { resolveCanonicalWorkspacePath } from "../agents/workspace-state-identity.js";
-import { requireGit } from "../agents/worktrees/git.js";
+import {
+  captureWorkspaceFilesystemEvidence,
+  createWorkspaceFilesystemSource,
+  validateWorkspaceFilesystemEvidence,
+} from "../agents/workspace-state-guard.js";
 import { readSessionTranscriptAnchorsAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
-import { isCompetingSessionControllerWorkActive } from "../sessions/session-controller.context.js";
 import {
   captureSessionTarget,
   runSessionMutation,
 } from "../sessions/session-controller.lifecycle.js";
+import type { ProjectRequester } from "./project-access.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { prepareSessionFileWorkspace } from "./session-file-workspace.js";
 import { commitPreparedSessionWorkspace } from "./session-lifecycle-preparation.js";
-import { resolveSessionWorkspaceRoots } from "./session-workspace-roots.js";
+import {
+  resolvePullRequestProjectSource,
+  resolveSessionProjectRootForRecord,
+} from "./session-project-source.js";
+import { describeSessionWorkspaceBlocker } from "./session-work-blocker.js";
 import { prepareSessionWorktree } from "./session-worktree-preparation.js";
 
 /** The yielded caller owns admission; siblings keep their original shared source. */
@@ -25,23 +29,20 @@ export async function adoptUnboundPullRequestWorkspace(params: {
   context: GatewayRequestContext;
   target: { agentId: string; sessionKey: string; storePath: string };
   entry: InternalSessionEntry;
-  sandbox?: SandboxContext;
-  localSource?: string;
+  sandbox: SandboxContext;
   assertCurrent: () => void;
   verifyBeforeBinding?: () => Promise<void>;
+  projectSource?: { host: string; repository: string; requester: ProjectRequester };
   signal?: AbortSignal;
 }) {
   const { context, target, entry, sandbox } = params;
-  if (sandbox) {
-    assertLocalSandboxWorkspaceBackend(sandbox.backendId);
-  } else if (!params.localSource) {
-    throw new Error("Workspace preparation requires an admitted source.");
-  }
+  assertLocalSandboxWorkspaceBackend(sandbox.backendId);
   const cfg = context.getRuntimeConfig();
-  const workspaceDir =
-    (!sandbox && resolveSessionWorkspaceRoots(cfg, target.agentId, entry).root) ||
-    resolveAgentWorkspaceDir(cfg, target.agentId);
-  const originalRoot = sandbox?.workspaceDir ?? workspaceDir;
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, target.agentId);
+  const filesystem = await captureWorkspaceFilesystemEvidence(workspaceDir);
+  params.signal?.throwIfAborted();
+  params.assertCurrent();
+  const originalRoot = sandbox.workspaceDir;
   const prior = entry.priorWorkspace;
   const recovering =
     prior?.worktreeId === entry.worktree?.id &&
@@ -58,61 +59,24 @@ export async function adoptUnboundPullRequestWorkspace(params: {
       entry.pendingProjectGitUrl ||
       (entry.sessionRoot !== undefined &&
         entry.sessionRoot !== workspaceDir &&
-        entry.sessionRoot !== resolveCanonicalWorkspacePath(workspaceDir)))
+        entry.sessionRoot !== filesystem.canonical))
   ) {
     throw new Error("This conversation already has another source. Its files were preserved.");
   }
-  const assertWorkspaceCurrent = captureWorkspaceStateFilesystemGuard(workspaceDir, false);
-  const identities = [target.sessionKey, entry.sessionId];
-  const assertIdle = () => {
+  const assertIdle = createWorkspaceFilesystemSource(filesystem, () => {
     params.signal?.throwIfAborted();
     params.assertCurrent();
-    assertWorkspaceCurrent();
-    // The handoff holds queued follow-ups; only competing execution blocks adoption.
-    const busy =
-      isCompetingSessionControllerWorkActive(target.storePath, identities, target.agentId) ||
-      isCompetingSessionControllerWorkActive(
-        `agent:${target.agentId}`,
-        identities,
-        target.agentId,
-      ) ||
-      listExecSessionsForCancellation().some(
-        (process) =>
-          process.agentId === target.agentId &&
-          (process.sessionKey === target.sessionKey || process.scopeKey === target.sessionKey) &&
-          (!process.exited ||
-            process.finalizing ||
-            process.cleanupUncertain ||
-            process.finalizationFailed ||
-            (process.backgrounded && !process.terminalPollObserved && !process.requestCancelled)),
-      ) ||
-      listSubagentRunsForRequester(target.sessionKey, {
-        requesterSessionId: entry.sessionId,
-        requesterLifecycleRevision: entry.lifecycleRevision,
-        requesterAgentId: target.agentId,
-        requesterStorePath: target.storePath,
-      }).some(
-        (child) =>
-          child.execution.endedAt === undefined ||
-          child.killReconciliation ||
-          child.requesterSettleWake ||
-          child.delivery?.status === "pending" ||
-          child.delivery?.status === "in_progress",
-      ) ||
-      Boolean(
-        context.terminalSessions?.listAgent({
-          kind: "agent",
-          agentId: target.agentId,
-          agentSessionKey: target.sessionKey,
-          agentSessionId: entry.sessionId,
-        }).length,
-      );
-    if (busy) {
+    const blocker = describeSessionWorkspaceBlocker({
+      context,
+      target,
+      sessionId: entry.sessionId,
+    });
+    if (blocker) {
       throw new Error(
-        "This conversation still has background work, a child or a terminal. Finish or observe that work, then retry workspace preparation; nothing was stopped or moved.",
+        `This conversation still has background work, a child or a terminal: ${blocker}. Finish that work, then retry workspace preparation; nothing was stopped or moved.`,
       );
     }
-  };
+  });
   assertIdle();
   if (recovering) {
     return entry;
@@ -127,7 +91,10 @@ export async function adoptUnboundPullRequestWorkspace(params: {
     policy: "allow-live",
     signal: params.signal,
     assertCurrent: assertIdle,
-    prepare: async () => assertIdle(),
+    prepare: async () => {
+      await validateWorkspaceFilesystemEvidence(filesystem);
+      assertIdle();
+    },
     run: async () => {
       const oldFiles = await prepareSessionFileWorkspace(
         cfg,
@@ -155,19 +122,25 @@ export async function adoptUnboundPullRequestWorkspace(params: {
           "The conversation's message boundary is unavailable; retry PR preparation.",
         );
       }
-      const source = params.localSource;
-      const gitOptions = { signal: params.signal, beforeRun: assertIdle };
-      if (source && (await requireGit(source, ["status", "--porcelain"], gitOptions))) {
-        throw new Error("Commit the task changes before publishing this checkout.");
-      }
-      const checkoutCommit = source
-        ? await requireGit(source, ["rev-parse", "HEAD"], gitOptions)
+      const source = params.projectSource;
+      const project = source ? await resolvePullRequestProjectSource(cfg, source) : undefined;
+      const projectRoot = project
+        ? await resolveSessionProjectRootForRecord(project, true)
         : undefined;
+      assertIdle();
+      if (projectRoot && !projectRoot.ok) {
+        throw new Error(projectRoot.error.message);
+      }
       const prepared = await prepareSessionWorktree({
         cfg,
-        target: { ...target, key: target.sessionKey, entry },
-        workspace: source ?? { kind: "empty" },
-        checkoutCommit,
+        target: {
+          ...target,
+          key: target.sessionKey,
+          entry,
+          projectId: project?.id,
+          sandboxRequired: true,
+        },
+        workspace: projectRoot?.value ?? { kind: "empty" },
         runSetupScript: false,
         signal: params.signal,
         commitGuard: assertIdle,
@@ -189,6 +162,8 @@ export async function adoptUnboundPullRequestWorkspace(params: {
       }
       const bound = await commitPreparedSessionWorkspace({
         prepared: prepared.value,
+        projectId: project?.id,
+        signal: params.signal,
         priorWorkspace: {
           worktreeId: worktree.id,
           sessionId: entry.sessionId,

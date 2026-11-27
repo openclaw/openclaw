@@ -1,8 +1,8 @@
 import { asFiniteNumber as readFiniteNumberValue } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecordValue } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
-import { stripOpenClawMcpToolPrefix } from "../../agents/cli-runner/tool-policy.js";
 import type { EmbeddedAgentEvent } from "../../agents/embedded-agent-subscribe.shared-types.js";
+import { stripOpenClawMcpToolPrefix } from "../../agents/tool-display-call.js";
 import { inferToolMetaFromArgsCore, isShellToolDisplayName } from "../../agents/tool-display.js";
 import type { GetReplyOptions } from "../types.js";
 

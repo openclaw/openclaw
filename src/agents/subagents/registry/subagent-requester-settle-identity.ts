@@ -1,7 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
+import { subagentCompletionForOutcome } from "../../../shared/subagent-completion.js";
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import {
   compareSubagentRunGeneration,
   isSameSubagentRun,
@@ -59,7 +61,7 @@ export function isRequesterSettleWakeForRun(params: {
   if (!wake) {
     return false;
   }
-  const pauseNotice = entry.pauseReason === "sessions_yield" && wake.pauseNotice;
+  const pauseNotice = isSubagentPausedByYield(entry) && wake.pauseNotice;
   // Dispatch selects the surviving members of its frozen generation. Retired
   // rows no longer contribute to the admitted wake's identity.
   const batchRunIds = pauseNotice
@@ -128,8 +130,6 @@ export function captureRequesterSettleRunIdentity(entry: SubagentRunRecord) {
     controllerSessionKey: entry.controllerSessionKey,
     controllerStorePath: entry.controllerStorePath,
     requesterTurnRunId: entry.requesterTurnRunId,
-    completionRequesterSessionId: entry.completionRequesterSessionId,
-    completionRequesterLifecycleRevision: entry.completionRequesterLifecycleRevision,
   };
 }
 
@@ -156,6 +156,7 @@ export function captureRequesterSettleWakeProgress(entry: SubagentRunRecord) {
       batchRunIds: wake.batchRunIds?.toSorted(),
       rearmGeneration: wake.rearmGeneration,
       requesterYieldBatch: wake.requesterYieldBatch === true,
+      requesterRunId: wake.requesterRunId,
       afterRequesterYield: wake.afterRequesterYield === true,
       yieldedFinalDeliverable: wake.yieldedFinalDeliverable === true,
       pauseNotice: wake.pauseNotice,
@@ -188,7 +189,7 @@ export function isRequesterCompletionCohortCurrent(
   ) => SubagentRunRecord | null,
 ): boolean {
   const taskRunId = entry.taskRunId ?? entry.runId;
-  const paused = entry.pauseReason === "sessions_yield";
+  const paused = isSubagentPausedByYield(entry);
   const owner = latestForSession(
     entry.childSessionKey,
     (candidate) =>
@@ -206,7 +207,7 @@ const requesterRetirementCustody = (current: SubagentRunRecord) => ({
   requester: captureRequesterSettleRunIdentity(current),
   expectsCompletionMessage: current.expectsCompletionMessage === true,
   suppressCompletionDelivery: current.suppressCompletionDelivery === true,
-  retireAfterRequesterTurn: current.retireAfterRequesterTurn === true,
+  retireAfterSettle: current.retireAfterSettle === true,
   hasRequesterSettleWake: current.requesterSettleWake !== undefined,
   killIntent: current.killIntent && {
     requestedAt: current.killIntent.requestedAt,
@@ -223,6 +224,7 @@ const requesterRetirementCustody = (current: SubagentRunRecord) => ({
     suppressTaskDelivery: current.killReconciliation.suppressTaskDelivery === true,
   },
   batchRunIds: current.requesterSettleWake?.batchRunIds?.toSorted(),
+  requesterRunId: current.requesterSettleWake?.requesterRunId,
   rearmGeneration: current.requesterSettleWake?.rearmGeneration,
   requesterYieldBatch: current.requesterSettleWake?.requesterYieldBatch === true,
   yieldedFinalDeliverable: current.requesterSettleWake?.yieldedFinalDeliverable === true,
@@ -288,8 +290,8 @@ export function resolveCurrentRequesterSettleWakeBatch(params: {
       !wake ||
       wake.rearmGeneration !== params.rearmGeneration ||
       (params.pause
-        ? entry.pauseReason !== "sessions_yield" || !wake.pauseNotice
-        : entry.pauseReason === "sessions_yield")
+        ? !isSubagentPausedByYield(entry) || !wake.pauseNotice
+        : isSubagentPausedByYield(entry))
     ) {
       return undefined;
     }
@@ -311,4 +313,16 @@ export function isRequesterYieldCohortMember(
     wake.batchRunIds?.length === batchRunIds.length &&
     wake.batchRunIds.every((runId, index) => runId === batchRunIds[index])
   );
+}
+
+/** Completion rows for a settled batch: one finished, failed, timed-out or stopped row per child. */
+export function settledCompletions(rows: readonly SubagentRunRecord[]) {
+  return rows.flatMap((entry) => {
+    const completion = subagentCompletionForOutcome(
+      { runId: entry.runId, sessionKey: entry.childSessionKey, label: entry.label },
+      entry.execution.outcome?.status,
+      entry.endedReason === SUBAGENT_ENDED_REASON_KILLED,
+    );
+    return completion ? [completion] : [];
+  });
 }

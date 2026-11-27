@@ -265,9 +265,11 @@ describe("check-workflows", () => {
       default: false,
       type: "boolean",
     });
-    expect(workflow.on.workflow_dispatch.inputs.runner_label?.default).toBe(
-      "blacksmith-16vcpu-windows-2025",
-    );
+    expect(workflow.on.workflow_dispatch.inputs.runner_label).toMatchObject({
+      default: "windows-2025",
+      options: ["blacksmith-16vcpu-windows-2025", "blacksmith-32vcpu-windows-2025", "windows-2025"],
+    });
+    expect(workflow.on.workflow_dispatch.inputs.keepalive_minutes?.default).toBe("0");
     expect(native).not.toBe(probe);
     expect(native.if).toBe(
       "${{ inputs.run_windows_ci && inputs.installed_startup_package == '' && !inputs.run_private_node_provisioning && !inputs.installed_repair_worker && inputs.windows_ci_replay == '' }}",
@@ -291,6 +293,12 @@ describe("check-workflows", () => {
       probe.steps.find((step) => step.name === "Keep runner alive for SSH inspection")?.if,
     ).toBe(
       "${{ always() && !cancelled() && !inputs.run_private_node_provisioning && inputs.windows_ci_replay == '' }}",
+    );
+    expectContains(
+      findStep(probe, "Keep runner alive for SSH inspection").run,
+      "$minutes = 0",
+      "$minutes = [int]$env:KEEPALIVE_MINUTES",
+      "$minutes = [Math]::Max(0, [Math]::Min($minutes, 60))",
     );
     expect(probe.steps.find((step) => step.name === "Enforce WSL2 requirement")?.if).toBe(
       "${{ always() && !cancelled() && inputs.require_wsl2 }}",
@@ -322,7 +330,6 @@ describe("check-workflows", () => {
     }
     for (const name of [
       "Checkout",
-      "Setup Node.js",
       "Setup pnpm",
       "Runtime versions",
       "Capture node path",
@@ -336,8 +343,8 @@ describe("check-workflows", () => {
       ref: "${{ inputs.target_ref || github.ref }}",
       "persist-credentials": false,
     });
-    expect(native.steps.find((step) => step.name === "Setup Node.js")?.env).toMatchObject({
-      REQUESTED_NODE_VERSION:
+    expect(native.steps.find((step) => step.name === "Setup pnpm")?.with).toMatchObject({
+      "node-version":
         "${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.22.1' }}",
     });
     expect(native.steps.find((step) => step.name === "Setup pnpm")?.uses).toBe(

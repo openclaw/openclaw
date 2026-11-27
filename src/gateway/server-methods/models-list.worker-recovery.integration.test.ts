@@ -1,11 +1,9 @@
-import { channel } from "node:diagnostics_channel";
 import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import { text as readText } from "node:stream/consumers";
-import { Worker } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it } from "vitest";
+import type { Worker } from "node:worker_threads";
+import { expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
@@ -14,6 +12,8 @@ import {
 } from "../../agents/prepared-model-runtime.js";
 import { registerPreparedModelRuntimePublicationListener } from "../../agents/prepared-model-runtime.publication-events.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import { UnresolvedSecretInputError } from "../../config/types.secrets.js";
+import * as workerCpu from "../../infra/worker-cpu.js";
 import type { ChatMetadataResult } from "./chat-metadata-contract.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
 import {
@@ -36,15 +36,23 @@ it("model reads recover a failed shared-worker publication and retain the failed
   const provider = "recovery-fixture";
   const sibling = "healthy-fixture";
   const providers = [provider, sibling];
+  const preparationFailure = new UnresolvedSecretInputError({
+    path: `models.providers.${provider}.apiKey`,
+    ref: { source: "env", provider: "default", id: "UNRESOLVED_FIXTURE_KEY" },
+  });
+  // Static preparation crosses native plugin and Vitest loaders; retain the host error identity.
+  const failureKey = `__catalog_recovery_${state.root}`;
+  Object.defineProperty(globalThis, failureKey, { configurable: true, value: preparationFailure });
   const events = new EventEmitter();
   const workers = new Map<number, Worker>();
-  const workerChannel = channel("worker_threads");
-  const recordWorker = (message: unknown) => {
-    if (isRecord(message) && message.worker instanceof Worker) {
-      workers.set(message.worker.threadId, message.worker);
-    }
-  };
-  workerChannel.subscribe(recordWorker);
+  const createWorker = workerCpu.createCpuTrackedWorker;
+  const observeWorkers = vi
+    .spyOn(workerCpu, "createCpuTrackedWorker")
+    .mockImplementation((...args) => {
+      const worker = createWorker(...args);
+      workers.set(worker.threadId, worker);
+      return worker;
+    });
   let requests = 0;
   let siblingRequests = 0;
   let heldThread = 0;
@@ -113,7 +121,7 @@ it("model reads recover a failed shared-worker publication and retain the failed
             staticCatalog: provider === ${JSON.stringify(provider)} ? {
               order: "simple", async run() {
                 const response = await fetch(${JSON.stringify(`${baseUrl}/prepare`)});
-                if (!response.ok) throw new Error("Fixture runtime preparation failed");
+                if (!response.ok) throw globalThis[${JSON.stringify(failureKey)}];
                 return null;
               },
             } : undefined,
@@ -207,11 +215,13 @@ it("model reads recover a failed shared-worker publication and retain the failed
       const worker = workers.get(heldThread);
       expect(worker).toBeDefined();
       expect(heldThread).toBeGreaterThan(0);
+      // Hold the discovery retry deadline still without faking Gateway I/O or RPC timers.
+      vi.useFakeTimers({ toFake: ["Date"] });
       // Fail real preparation after worker exit, without synthesizing publication events.
       failedPreparations = 1;
       await worker!.terminate();
       expect((await withinTest(recoveryFailed.promise, signal)).message).toContain(
-        "Fixture runtime preparation failed",
+        preparationFailure.message,
       );
       // Picker and chat must repair stale errors without a Gateway restart or plugin reload.
       const [rechecked, metadata] = await Promise.all([
@@ -265,11 +275,13 @@ it("model reads recover a failed shared-worker publication and retain the failed
       expect(catalogModelIds(refreshed, provider)).toEqual(["original", "recovered"]);
       expect(refreshed.refreshFailed).not.toBe(true);
     } finally {
+      vi.useRealTimers();
       releasePublication?.();
       releaseResponses();
     }
   } finally {
-    workerChannel.unsubscribe(recordWorker);
+    Reflect.deleteProperty(globalThis, failureKey);
+    observeWorkers.mockRestore();
     await Promise.all(providerWork);
   }
 }, 120_000);

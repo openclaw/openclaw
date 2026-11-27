@@ -54,9 +54,7 @@ export function buildLoginParams(
     opts?: HandleCommandsParams["opts"];
     sessionKey?: string;
     sessionEntry?: HandleCommandsParams["sessionEntry"];
-    sessionStore?: HandleCommandsParams["sessionStore"];
     storePath?: string;
-    agentId?: string;
     provider?: string;
   } = {},
 ): HandleCommandsParams {
@@ -80,7 +78,6 @@ export function buildLoginParams(
     { workspaceDir: "/tmp/openclaw-login-test" },
   );
   params.sessionKey = overrides.sessionKey ?? "agent:main:slack:channel:C123";
-  params.agentId = overrides.agentId ?? params.agentId;
   params.provider = overrides.provider ?? "openai";
   params.command = {
     ...params.command,
@@ -97,7 +94,7 @@ export function buildLoginParams(
   params.opts = overrides.opts;
   if (overrides.sessionEntry !== undefined) {
     params.sessionEntry = overrides.sessionEntry;
-    params.sessionStore = overrides.sessionStore ?? {
+    params.sessionStore = {
       [params.sessionKey]: overrides.sessionEntry,
     };
   }
@@ -138,7 +135,6 @@ export function setupLoginCommandTests() {
     runModelsAuthLoginFlowMock.mockReset();
     patchSessionEntryMock.mockReset();
     loginFlows.current?.logins.clear();
-    loginFlows.current?.modelAccess.clear();
   });
 
   afterEach(() => {

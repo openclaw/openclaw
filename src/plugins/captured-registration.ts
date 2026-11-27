@@ -1,7 +1,4 @@
-import {
-  normalizeStringEntries,
-  normalizeUniqueStringEntries,
-} from "@openclaw/normalization-core/string-normalization";
+import { normalizePluginCliRegistrationMetadata } from "../cli/program/command-descriptor-utils.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { StorageProvider } from "../storage/types.js";
 import type {
@@ -145,36 +142,13 @@ export function createCapturedPluginRegistration(params?: {
       resolvePath: (input) => input,
       handlers: {
         registerCli(registrar, opts) {
-          const parentPath = normalizeStringEntries(opts?.parentPath ?? []);
-          const rootRegistration = parentPath.length === 0;
-          const descriptors = (opts?.descriptors ?? [])
-            .map((descriptor) => {
-              const machineOutput = rootRegistration
-                ? (descriptor as OpenClawPluginCliRootCommandDescriptor).machineOutput
-                : undefined;
-              const normalized: OpenClawPluginCliRootCommandDescriptor = {
-                name: descriptor.name.trim(),
-                description: descriptor.description.trim(),
-                hasSubcommands: descriptor.hasSubcommands,
-              };
-              if (machineOutput) {
-                normalized.machineOutput = machineOutput;
-              }
-              return normalized;
-            })
-            .filter((descriptor) => descriptor.name && descriptor.description);
-          const commands = normalizeUniqueStringEntries([
-            ...(opts?.commands ?? []),
-            ...descriptors.map((descriptor) => descriptor.name),
-          ]);
-          if (commands.length === 0) {
+          const metadata = normalizePluginCliRegistrationMetadata(opts, () => {});
+          if (!metadata) {
             return;
           }
           captured.cliRegistrars.push({
             register: registrar,
-            parentPath,
-            commands,
-            descriptors,
+            ...metadata,
           });
         },
         registerProvider: captureInto(captured.providers),

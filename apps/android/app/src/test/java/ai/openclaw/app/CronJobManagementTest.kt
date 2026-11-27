@@ -1,7 +1,8 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayErrorDetails
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.ui.cronWakeModeLabel
 import ai.openclaw.app.ui.cronWakeModeOptions
 import kotlinx.serialization.json.Json
@@ -257,7 +258,7 @@ class CronJobManagementTest {
       Triple(null, "Automation run finished with an unknown status.", GatewayCronNoticeKind.Warning),
     ).forEach { (status, message, kind) ->
       assertEquals(
-        GatewayCronActionState.Notice(id = "job", message = message, kind = kind),
+        GatewayCronActionState.Notice(id = "job", message = nativeText(message), kind = kind),
         cronRunCompletionNotice("job", status),
       )
     }
@@ -288,7 +289,7 @@ class CronJobManagementTest {
   @Test
   fun mapsCronRevisionConflicts() {
     val conflict =
-      GatewaySession.ErrorShape(
+      ErrorShape(
         code = "INVALID_REQUEST",
         message = "changed",
         details =
@@ -423,7 +424,7 @@ class CronJobManagementTest {
     val success =
       GatewayCronActionState.Notice(
         id = original.id,
-        message = "Automation updated.",
+        message = nativeText("Automation updated."),
         kind = GatewayCronNoticeKind.Success,
       )
 

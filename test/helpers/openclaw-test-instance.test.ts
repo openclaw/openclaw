@@ -8,11 +8,9 @@ import { createServer } from "node:http";
 import net, { type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { PassThrough } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-process.mts";
 import { hasErrnoCode } from "../../src/infra/errno.js";
 import { createFileLockManager } from "../../src/infra/file-lock-manager.js";
 import {
@@ -23,6 +21,7 @@ import {
 import { resolveMaxOutputBytes } from "../../src/process/exec-output.js";
 import { withEnvAsync } from "../../src/test-utils/env.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import {
   createOpenClawTestInstance,
   formatGatewayReadinessDiagnostic,
@@ -73,7 +72,6 @@ type FakeGatewayControl = {
   url: string;
   reached: Promise<void>;
   launches: number[];
-  parents: number[];
   observers: { beforeRelease: () => void; onLaunch: () => void };
   unblock: () => void;
   release: () => Promise<void>;
@@ -163,7 +161,6 @@ async function createGatewayControl(): Promise<FakeGatewayControl> {
   const reached = createDeferred();
   const released = createDeferred();
   const launches: number[] = [];
-  const parents: number[] = [];
   const observers = { beforeRelease: () => {}, onLaunch: () => {} };
   const sockets = new Set<Socket>();
   const server = createServer((request, response) => {
@@ -178,7 +175,6 @@ async function createGatewayControl(): Promise<FakeGatewayControl> {
       released.resolve();
     } else if (url.pathname === "/launch") {
       launches.push(Number(url.searchParams.get("pid")));
-      parents.push(Number(url.searchParams.get("parent")));
       observers.onLaunch();
     }
     response.end("ok");
@@ -200,7 +196,6 @@ async function createGatewayControl(): Promise<FakeGatewayControl> {
     url,
     reached: reached.promise,
     launches,
-    parents,
     observers,
     unblock: () => released.resolve(),
     release: async () => {
@@ -280,7 +275,7 @@ function spawnInheritedWriter(stream, output) {
   recordFixtureProcess(delayed.pid);
   writeFileSync(tracePath + ".writer-pid", String(delayed.pid));
 }
-if (controlUrl) await waitForControl(controlUrl + "/launch?pid=" + process.pid + "&parent=" + process.ppid);
+if (controlUrl) await waitForControl(controlUrl + "/launch?pid=" + process.pid);
 const countPath = tracePath + ".count";
 let attempt = 1;
 try { attempt = Number(readFileSync(countPath, "utf8")) + 1; } catch {}
@@ -324,6 +319,17 @@ if (kind === "cli-json") {
   process.exit(0);
 }
 process.stdout.write("fake gateway attempt " + attempt + "\\n");
+if (kind === "held-ready-tree") {
+  const descendant = spawn(process.execPath, ["-e", 'process.send("ready");setInterval(() => {}, 1000);'], {
+    // Windows escapes libuv's inner Job; POSIX retains the owning process group.
+    detached: process.platform === "win32", stdio: ["ignore", "ignore", "ignore", "ipc"],
+  });
+  await new Promise((resolve) => descendant.once("message", resolve));
+  writeFileSync(tracePath + ".writer-pid", String(descendant.pid));
+  recordFixtureProcess(descendant.pid);
+  descendant.disconnect();
+  descendant.unref();
+}
 if (kind === "cli" || kind === "cli-drain") {
   process.stderr.write("cli diagnostic\\n");
   if (argv[0] === "wait") {
@@ -387,7 +393,7 @@ if (kind === "detached-stopped") {
 }
 const server = createServer(async (req, res) => {
   if (req.url === "/startupz") {
-    if (kind === "held-ready") await waitForControl(controlUrl + "/wait");
+    if (kind === "held-ready" || kind === "held-ready-tree") await waitForControl(controlUrl + "/wait");
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ ok: true, status: "started" }));
     return;
@@ -437,6 +443,7 @@ writeFileSync("dist/.runtime-postbuildstamp", "");
           kind === "late-refuse" ||
           kind === "late-legacy-refuse" ||
           kind === "startup-late-legacy-refuse" ||
+          kind === "held-ready-tree" ||
           kind === "cli-drain",
       )
       ? `${tracePath}.writer-pid`
@@ -1127,11 +1134,7 @@ describe("openclaw test instance", () => {
           expect(settledBeforeReady).toBe(false);
         }
         expect(control.launches).toHaveLength(interveningStop ? 2 : 1);
-        expect(instance.child?.pid).toBe(
-          (process.platform === "win32" ? control.parents : control.launches)[
-            interveningStop ? 1 : 0
-          ],
-        );
+        expect(instance.child?.pid).toBe(control.launches[interveningStop ? 1 : 0]);
         const response = await fetch(`http://127.0.0.1:${instance.port}/readyz`);
         expect(await response.json()).toEqual({ ready: true });
       } finally {
@@ -1179,19 +1182,25 @@ describe("openclaw test instance", () => {
     expect(await response.json()).toEqual({ ready: true });
   });
 
-  it.each(["pending probe", "readiness handoff"] as const)(
+  it.for(["pending probe", "readiness handoff"] as const)(
     "rolls back the real child after owner cancellation during %s",
-    async (phase) => {
+    async (phase, { signal }) => {
       const controller = new AbortController();
       const cancelled = new Error(`instance owner cancelled during ${phase}`);
       const pending = phase === "pending probe";
       const control = pending ? await createGatewayControl() : undefined;
-      const { instance } = await createFakeGateway(pending ? "held-ready" : "ready", {
-        control,
-        signal: controller.signal,
-      });
+      const { instance, tracePath } = await createFakeGateway(
+        pending ? "held-ready-tree" : "ready",
+        {
+          control,
+          signal: controller.signal,
+        },
+      );
+      // Cancellation owns this proof; native bootstrap must not consume its policy budget.
+      const { restoreClock } = freezePolicyClock(signal);
       const nativeFetch = globalThis.fetch;
       let child: typeof instance.child;
+      let descendantPid: number | undefined;
       const fetchSpy = pending
         ? undefined
         : vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
@@ -1207,28 +1216,43 @@ describe("openclaw test instance", () => {
             }
             return response;
           });
-      try {
-        const startup = trackOperation(instance.startGateway());
-        const outcome = startup.catch((error: unknown) => error);
-        if (control) {
-          await Promise.race([control.reached, startup]);
-          child = instance.child;
+      await runQaGatewayFixture(
+        async () => {
+          const startup = trackOperation(instance.startGateway());
+          const outcome = startup.catch((error: unknown) => error);
+          if (control) {
+            await Promise.race([control.reached, startup]);
+            child = instance.child;
+            expect(child).toBeDefined();
+            descendantPid = Number(await fs.readFile(`${tracePath}.writer-pid`, "utf8"));
+            expect(Number.isSafeInteger(descendantPid) && descendantPid > 1).toBe(true);
+            expect(isProcessAlive(descendantPid)).toBe(true);
+            controller.abort(cancelled);
+          }
+          expect(await outcome).toBe(cancelled);
           expect(child).toBeDefined();
-          controller.abort(cancelled);
-        }
-        expect(await outcome).toBe(cancelled);
-        expect(child).toBeDefined();
-        expect(instance.child).toBeUndefined();
-        expect(child?.stdout.closed).toBe(true);
-        expect(child?.stderr.closed).toBe(true);
-        expect(isProcessAlive(child!.pid!)).toBe(false);
-        if (pending) {
-          expect(inspectManagedProcessGroup(child!, { errorPolicy: "indeterminate" })).toBe("dead");
-          await expect(fs.stat(instance.state.root)).resolves.toBeDefined();
-        }
-      } finally {
-        fetchSpy?.mockRestore();
-      }
+          expect(instance.child).toBeUndefined();
+          expect(child?.stdout.closed).toBe(true);
+          expect(child?.stderr.closed).toBe(true);
+          expect(isProcessAlive(child!.pid!)).toBe(false);
+          if (pending) {
+            // Observe the detached descendant itself; the canonical adapter owns
+            // its Job/group, not the retired managed-child registry.
+            expect(isProcessAlive(descendantPid!)).toBe(false);
+            await expect(fs.stat(instance.state.root)).resolves.toBeDefined();
+          }
+        },
+        async () => {
+          restoreClock();
+          fetchSpy?.mockRestore();
+          // Rescue the detached fixture if the owner under test fails to stop it.
+          // Run after liveness assertions so cleanup cannot hide that regression.
+          killPidIfAlive(descendantPid);
+          if (descendantPid !== undefined) {
+            await waitForDead(descendantPid, AbortSignal.timeout(WRITER_CLEANUP_HANG_GUARD_MS));
+          }
+        },
+      );
     },
   );
 
@@ -1239,6 +1263,8 @@ describe("openclaw test instance", () => {
       control,
       signal: controller.signal,
     });
+    // The cancellation gate owns startup; keep command and cleanup deadlines separate.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const command = trackOperation(instance.cli(["wait"], { timeoutMs: 1_000 }));
     const outcome = command.catch((error: unknown) => error);
     try {
@@ -1252,6 +1278,7 @@ describe("openclaw test instance", () => {
       );
       const [attempt] = await readAttempts();
       expect(isProcessAlive(attempt!.pid)).toBe(true);
+      vi.useRealTimers();
       controller.abort(new Error("instance owner cancelled during CLI"));
       expect(await outcome).toMatchObject({ message: expect.stringContaining("aborted") });
       expect(isProcessAlive(attempt!.pid)).toBe(false);
@@ -1260,6 +1287,7 @@ describe("openclaw test instance", () => {
       await instance.cleanup();
       await expectPathMissing(instance.state.root);
     } finally {
+      vi.useRealTimers();
       controller.abort();
       control.unblock();
       await outcome;
@@ -1325,9 +1353,7 @@ describe("openclaw test instance", () => {
     expect(await response.json()).toEqual({ ready: true });
     expect(control.launches).toHaveLength(2);
     expect(control.launches[1]).not.toBe(firstPid);
-    expect(instance.child?.pid).toBe(
-      (process.platform === "win32" ? control.parents : control.launches)[1],
-    );
+    expect(instance.child?.pid).toBe(control.launches[1]);
     expect(isProcessAlive(firstPid as number)).toBe(false);
     await instance.stopGateway();
     expect(instance.child).toBeUndefined();
@@ -1800,156 +1826,6 @@ describe("openclaw test instance", () => {
       }
     },
   );
-
-  it.each([
-    { label: "joined closure", taskkillStatus: 0, closePipes: true, stopped: true },
-    { label: "held pipe", taskkillStatus: 0, closePipes: false, stopped: false },
-    { label: "unverified tree", taskkillStatus: 1, closePipes: true, stopped: false },
-    { label: "unverified exited leader", taskkillStatus: 1, closePipes: true, stopped: false },
-    { label: "exited forced tree", taskkillStatus: 1, closePipes: true, stopped: false },
-    { label: "exited closed pipes", taskkillStatus: 1, closePipes: true, stopped: false },
-    { label: "taskkill timeout", taskkillStatus: 1, closePipes: true, stopped: false },
-    { label: "taskkill exception", taskkillStatus: 1, closePipes: true, stopped: false },
-  ])("observes Windows $label after blocking termination", async (scenario) => {
-    const stdout = new PassThrough();
-    const stderr = new PassThrough();
-    const stopLog = testing.createBoundedStringLog();
-    const preclosed = scenario.label === "exited closed pipes";
-    const forceWindowsTree = scenario.label === "exited forced tree" || preclosed;
-    const exitedLeader = scenario.label === "unverified exited leader" || forceWindowsTree;
-    const heldPipe = scenario.label === "held pipe";
-    const processState = createGatewayProcessState({ exitCode: exitedLeader ? 7 : null });
-    const kill = vi.fn(() => true);
-    // SAFETY: The stub supplies every process and pipe member consumed by the stopper.
-    const child = Object.assign(processState, {
-      pid: process.pid,
-      kill,
-      stdout,
-      stderr,
-    }) as unknown as Parameters<typeof testing.stopWindowsGatewayProcess>[0];
-    if (preclosed) {
-      const closed = Promise.all([once(stdout, "close"), once(stderr, "close")]);
-      stdout.destroy();
-      stderr.destroy();
-      await closed;
-    }
-    const observed = createDeferred();
-    const now = Date.now.bind(Date);
-    let offset = 0;
-    let scheduled = false;
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + offset);
-    const runTaskkill = vi.fn(() => {
-      // A synchronous taskkill consumes wall time before Node can deliver exit/close.
-      offset += 1_000;
-      if (!scheduled) {
-        scheduled = true;
-        setImmediate(() => {
-          processState.exitCode = heldPipe ? null : 0;
-          processState.signalCode = heldPipe ? "SIGTERM" : null;
-          stdout.destroy();
-          if (scenario.closePipes) {
-            stderr.destroy();
-          }
-          observed.resolve();
-        });
-      }
-      if (scenario.label === "taskkill exception") {
-        throw Object.assign(new Error("private exception text must not be logged"), {
-          code: "EACCES",
-        });
-      }
-      if (scenario.label === "taskkill timeout" && runTaskkill.mock.calls.length === 2) {
-        return {
-          status: null,
-          signal: "SIGKILL" as const,
-          error: Object.assign(new Error("private timeout text must not be logged"), {
-            code: "ETIMEDOUT",
-          }),
-        };
-      }
-      return { status: scenario.taskkillStatus, signal: null };
-    });
-    try {
-      const stop = testing.stopWindowsGatewayProcess(
-        child,
-        Date.now() + 500,
-        250,
-        { runTaskkill, forceWindowsTree },
-        stopLog,
-      );
-      let stopped = false;
-      if (!scenario.stopped) {
-        await expect(stop).rejects.toBeInstanceOf(Error);
-        if (exitedLeader) {
-          await expect(stop).rejects.toMatchObject({ processTreeState: "indeterminate" });
-          expect(kill).not.toHaveBeenCalled();
-          expect([stdout.closed, stderr.closed]).toEqual([preclosed, preclosed]);
-        }
-      } else {
-        stopped = await stop;
-        expect(stopped).toBe(scenario.stopped);
-      }
-      const threw = scenario.label === "taskkill exception";
-      expect(runTaskkill).toHaveBeenCalledTimes(
-        exitedLeader ? 0 : scenario.taskkillStatus === 0 || threw ? 1 : 2,
-      );
-      if (!scenario.closePipes) {
-        expect(stderr.closed).toBe(false);
-      }
-      if (stopped) {
-        expect(child.exitCode).toBe(0);
-        expect(stdout.closed && stderr.closed).toBe(true);
-      }
-      expect(stopLog).toHaveLength(stopped ? 0 : 1);
-      if (!stopped) {
-        const prefix = "[openclaw-test-instance] Windows shutdown ";
-        expect(stopLog[0]?.startsWith(prefix)).toBe(true);
-        const diagnostic: { taskkill: Array<{ elapsedMs: number }> } = JSON.parse(
-          stopLog[0]!.slice(prefix.length),
-        );
-        const attempt = { force: false, elapsedMs: expect.any(Number) };
-        const taskkill: Record<string, unknown>[] = exitedLeader
-          ? []
-          : threw
-            ? [{ ...attempt, threw: true, errorCode: "EACCES" }]
-            : [{ ...attempt, status: scenario.taskkillStatus, signal: null }];
-        if (!exitedLeader && !heldPipe && !threw) {
-          taskkill.push({
-            ...attempt,
-            force: true,
-            ...(scenario.label === "taskkill timeout"
-              ? { status: null, signal: "SIGKILL", errorCode: "ETIMEDOUT" }
-              : { status: 1, signal: null }),
-          });
-        }
-        expect(diagnostic).toEqual({
-          reason: "exception",
-          pid: process.pid,
-          exitCode: exitedLeader ? 7 : null,
-          signalCode: heldPipe ? "SIGTERM" : null,
-          stdoutClosed: heldPipe || preclosed,
-          stderrClosed: preclosed,
-          elapsedMs: expect.any(Number),
-          taskkill,
-          errorCode: threw ? "EACCES" : "EPROCESSGROUP_CLEANUP_FAILED",
-        });
-        for (const entry of diagnostic.taskkill) {
-          expect(entry.elapsedMs).toBeGreaterThanOrEqual(1_000);
-        }
-        expect(Buffer.byteLength(stopLog[0]!)).toBeLessThan(1_024);
-      }
-    } finally {
-      if (scheduled) {
-        await observed.promise;
-      }
-      const closed = Promise.all(
-        [stdout, stderr].map((pipe) => (pipe.closed ? Promise.resolve() : once(pipe, "close"))),
-      );
-      stdout.destroy();
-      stderr.destroy();
-      await closed.finally(() => clock.mockRestore());
-    }
-  });
 
   describe("UTF-8 log trimming", () => {
     let exerciseTrimming: () => Promise<void>;

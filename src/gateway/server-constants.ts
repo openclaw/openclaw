@@ -1,5 +1,5 @@
 export const MAX_BUFFERED_BYTES = 50 * 1024 * 1024; // per-connection send buffer limit (2x max payload)
-export const MAX_PREAUTH_PAYLOAD_BYTES = 64 * 1024;
+export { MAX_PREAUTH_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/payload-limits.js";
 export const WEBSOCKET_OPEN_READY_STATE = 1;
 export const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 // Keep the consecutive lazy-load and async-handshake ingress queues equally bounded.

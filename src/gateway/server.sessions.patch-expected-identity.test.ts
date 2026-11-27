@@ -169,6 +169,20 @@ test("sessions.patch rejects a session replaced before restore reaches the SQLit
   }
 });
 
+test("sessions.patch persists explicit web search preferences and preserves unset semantics", async () => {
+  const { read, patch } = await seedSession("agent:main:web-search-preference");
+  for (const toolOverrides of [
+    { webSearch: true },
+    { webSearch: false },
+    { webSearch: true, skills: { docs: true } },
+    { skills: { docs: true } },
+    null,
+  ]) {
+    expect(await patch({ toolOverrides })).toMatchObject({ ok: true });
+    expect(read()?.toolOverrides).toEqual(toolOverrides ?? undefined);
+  }
+});
+
 test("sessions.patch preserves concurrent tool restrictions from a stale replacement", async () => {
   const original = { webSearch: false };
   const restricted = { ...original, mcpToolsDeny: { docs: ["delete"] } };
@@ -217,11 +231,11 @@ test.each([
     expected: { lastReadAt: expect.any(Number) },
   },
   {
-    name: "batch pin",
+    name: "batch color",
     method: "sessions.patchMany",
-    patch: { pinned: true },
+    patch: { color: "purple" },
     identity: {},
-    expected: { pinnedAt: expect.any(Number) },
+    expected: { color: "purple" },
   },
 ])("preserves $name and an interleaved lifecycle write", async (scenario) => {
   const { storePath } = await createSessionStoreDir();

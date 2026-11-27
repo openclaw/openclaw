@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readSandboxRuntimeIdsInDatabase } from "../../agents/sandbox/registry.kernel.js";
+import { sandboxRegistryReadOperations } from "../../agents/sandbox/registry.kernel.js";
 import { failedRecord } from "../../channels/message/ingress-queue.codec.js";
 import { listChannelIngressRowsInDatabase } from "../../channels/message/ingress-queue.kernel.js";
 import { readSelectedSessionEntryRows } from "../../config/sessions/session-accessor.sqlite-entry-select.js";
@@ -160,10 +160,10 @@ describe.each(mixedAgentConnection ? (["sqlite", "postgres"] as const) : (["sqli
           insert.run("other-scope", "other", "docker", 30);
         });
         expect(
-          readSandboxRuntimeIdsInDatabase(db, {
-            backendId: "docker",
-            scopeKey: "nullable-sandbox",
-          }),
+          sandboxRegistryReadOperations["sandboxRegistry.runtimeIds"](
+            { backendId: "docker", scopeKey: "nullable-sandbox" },
+            db,
+          ).runtimeIds,
         ).toEqual(["newest", "tie-a", "tie-b", "null-a", "null-z"]);
       }));
 

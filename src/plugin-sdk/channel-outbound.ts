@@ -128,10 +128,11 @@ export { resolveOutboundSendDep } from "../infra/outbound/send-deps.js";
 export type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
 export { sanitizeForPlainText } from "../infra/outbound/sanitize-text.js";
 export { logTypingFailure } from "../channels/logging.js";
+export { createChannelProgressDraftGate } from "../channels/progress-draft-gate.js";
+export { resolveChannelStreamingChunkMode } from "../channels/streaming-config-readers.js";
 export {
   buildChannelProgressDraftLine,
   buildChannelProgressDraftLineForEntry,
-  createChannelProgressDraftGate,
   formatChannelProgressDraftLine,
   formatChannelProgressDraftLineForEntry,
   formatChannelProgressDraftText,
@@ -150,7 +151,6 @@ export {
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingBlockCoalesce,
   resolveChannelStreamingBlockEnabled,
-  resolveChannelStreamingChunkMode,
   resolveChannelStreamingNativeTransport,
   resolveChannelStreamingPreviewCommandText,
   resolveChannelStreamingPreviewToolProgress,

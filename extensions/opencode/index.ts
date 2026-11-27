@@ -1,9 +1,15 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ProviderStreamOptions } from "openclaw/plugin-sdk/llm";
 import {
   describeImageWithModelPayloadTransform,
   describeImagesWithModelPayloadTransform,
   type MediaUnderstandingProvider,
 } from "openclaw/plugin-sdk/media-understanding";
+import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  buildOauthProviderAuthResult,
+  resolveOAuthApiKeyMarker,
+} from "openclaw/plugin-sdk/provider-auth";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { resolveFirstProviderCatalogAuth } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
@@ -31,6 +37,46 @@ import { registerOpenCodeSessionCatalog } from "./session-catalog-plugin.js";
 import { wrapOpencodeProviderStream } from "./stream.js";
 
 const PROVIDER_ID = "opencode";
+const loadConsoleOAuth = createLazyRuntimeModule(() => import("./console-oauth.js"));
+
+async function signInWithOpencodeConsole(ctx: ProviderAuthContext) {
+  const credentials = await (await loadConsoleOAuth()).loginOpencodeConsole(ctx);
+  const notes = [
+    "OpenClaw is signed in to the OpenCode Console workspace you picked. Tokens refresh automatically.",
+  ];
+  ctx.assertCurrent?.();
+  const credentialOnly = {
+    profiles: [
+      {
+        profileId: `${PROVIDER_ID}:default`,
+        credential: { type: "oauth" as const, provider: PROVIDER_ID, ...credentials },
+      },
+    ],
+    notes,
+  };
+  if (ctx.credentialOnly) {
+    return credentialOnly;
+  }
+  // The starter model only becomes the default when this workspace offers it.
+  const defaultModel = await resolveOpencodeZenStarterModel({
+    apiKey: credentials.access,
+    preferredModelRef: OPENCODE_ZEN_DEFAULT_MODEL_REF,
+    ...(ctx.signal ? { signal: ctx.signal } : {}),
+  });
+  ctx.assertCurrent?.();
+  if (!defaultModel) {
+    return credentialOnly;
+  }
+  return buildOauthProviderAuthResult({
+    providerId: PROVIDER_ID,
+    defaultModel,
+    access: credentials.access,
+    refresh: credentials.refresh,
+    expires: credentials.expires,
+    profileName: "default",
+    notes,
+  });
+}
 const MINIMAX_MODERN_MODEL_MATCHERS = ["minimax-m2.7"] as const;
 
 const stripDisabledResponsesReasoning: ProviderStreamOptions["onPayload"] = (payload) => {
@@ -98,6 +144,25 @@ export default defineSingleProviderPluginEntry({
       ].join("\n"),
       noteTitle: "OpenCode",
     },
+    extraAuth: [
+      {
+        id: "oauth",
+        label: "OpenCode Console browser sign-in",
+        hint: "Sign in with your browser and pick a Console workspace",
+        kind: "device_code",
+        wizard: {
+          choiceId: "opencode-console",
+          choiceLabel: "OpenCode Console (browser sign-in)",
+          choiceHint: "Sign in in your browser and pick an OpenCode Console workspace",
+          groupId: "opencode",
+          groupLabel: "OpenCode",
+          groupHint: "Browser sign-in or shared Zen + Go API key",
+        },
+        run: signInWithOpencodeConsole,
+      },
+    ],
+    refreshOAuth: async (credential) =>
+      (await loadConsoleOAuth()).refreshOpencodeConsoleCredential(credential),
     normalizeConfig: ({ providerConfig }) => normalizeZenBaseUrl(providerConfig),
     normalizeResolvedModel: ({ model }) => normalizeZenBaseUrl(model),
     normalizeTransport: ({ api, baseUrl }) => normalizeZenBaseUrl({ api, baseUrl }),
@@ -129,10 +194,18 @@ export default defineSingleProviderPluginEntry({
         if (ctx.providerIds !== undefined && !ctx.providerIds.includes(PROVIDER_ID)) {
           return null;
         }
-        const auth = resolveFirstProviderCatalogAuth(ctx.resolveProviderApiKey, [
-          PROVIDER_ID,
-          "opencode-go",
-        ]);
+        // A browser sign-in reaches catalogs only through resolveProviderAuth; API keys,
+        // including the key shared with opencode-go, keep the existing lookup.
+        const oauth = ctx.resolveProviderAuth(PROVIDER_ID, {
+          oauthMarker: resolveOAuthApiKeyMarker(PROVIDER_ID),
+        });
+        const auth =
+          oauth.mode === "oauth" && oauth.discoveryApiKey
+            ? oauth
+            : resolveFirstProviderCatalogAuth(ctx.resolveProviderApiKey, [
+                PROVIDER_ID,
+                "opencode-go",
+              ]);
         if (!auth) {
           return null;
         }

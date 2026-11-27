@@ -3,7 +3,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createAgentDatabaseInspectionRefusal } from "../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
+import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "../state/openclaw-agent-db-lease.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
@@ -31,10 +33,11 @@ it.each([
   vi.stubEnv("OPENCLAW_CONTAINER_HINT", undefined);
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-database-recovery-") };
   const pathname = openOpenClawAgentDatabase({ agentId, env }).path;
-  closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawAgentDatabaseByPathAsync(pathname, agentId);
   closeOpenClawStateDatabaseForTest();
   const damaged = fs.readFileSync(pathname);
   damaged.write("XXXXXXXXX", 0);
+  invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
   fs.writeFileSync(pathname, damaged);
   const command = `openclaw${profile ? ` --profile ${profile}` : ""} doctor --session-sqlite recover --session-sqlite-agent ${agentId}`;
   const config = { agents: { entries: { [agentId]: {} }, defaults: { systemAgent: { agentId } } } };

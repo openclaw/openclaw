@@ -12,6 +12,17 @@ import { MeetingsPage } from "./meetings-page.tsx";
 
 export const meetingPage = { ...paginatedMeetingPage, nextCursor: null };
 
+export function createMeetingsPageProvider(
+  gateway: ApplicationContext["gateway"],
+  onSearch?: (search: string) => void,
+) {
+  const navigate = vi.fn((_route: string, options: { search: string }) => {
+    onSearch?.(options.search);
+  });
+  const context = { basePath: "", navigate, gateway } as unknown as ApplicationContext;
+  return { provider: createSolidApplicationContextProvider(context), navigate };
+}
+
 export function mount(request: ReturnType<typeof vi.fn>, search = "", scopes = ["operator.admin"]) {
   const snapshot = {
     client: { request } as unknown as GatewayBrowserClient,
@@ -20,12 +31,8 @@ export function mount(request: ReturnType<typeof vi.fn>, search = "", scopes = [
   } as ApplicationGatewaySnapshot;
   const page = document.createElement("div");
   const [routeSearch, setSearch] = createSignal(search);
-  const navigate = vi.fn((_route: string, options: { search: string }) => {
-    setSearch(options.search);
-  });
   const { gateway, publish } = createApplicationGateway(snapshot);
-  const context = { basePath: "", navigate, gateway } as unknown as ApplicationContext;
-  const provider = createSolidApplicationContextProvider(context);
+  const { provider, navigate } = createMeetingsPageProvider(gateway, setSearch);
   document.body.append(page);
   const mounted = mountSolid(() => <MeetingsPage routeSearch={routeSearch()} />, {
     container: page,
@@ -47,7 +54,7 @@ export function mount(request: ReturnType<typeof vi.fn>, search = "", scopes = [
 
 export function button(page: Element, text: string) {
   const result = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
-    (entry) => entry.textContent?.trim() === text,
+    (entry) => entry.textContent?.trim() === text || entry.getAttribute("aria-label") === text,
   );
   if (!result) {
     throw new Error(`Missing button: ${text}`);

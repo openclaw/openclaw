@@ -55,7 +55,6 @@ describe("resolveCopilotAuth", () => {
 
   it("returns a stable sha256-prefixed 12-hex fingerprint", () => {
     expect(tokenFingerprint("hello")).toBe("sha256:2cf24dba5fb0");
-    expect(tokenFingerprint("hello")).toBe(tokenFingerprint("hello"));
   });
 
   it.each([

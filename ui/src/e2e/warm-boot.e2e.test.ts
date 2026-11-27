@@ -4,6 +4,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
+import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "../pages/chat/session-snapshot-record.ts";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { captureUiProofEnabled, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
@@ -402,7 +403,7 @@ suite.define(() => {
             }
           }, seeded.cacheKey),
         )
-        .toBe(13);
+        .toBe(CHAT_SNAPSHOT_PROJECTION_VERSION);
       await page.reload();
       await gateway.waitForRequest("connect");
       await gateway.resolveDeferred("connect");
@@ -580,7 +581,7 @@ suite.define(() => {
             (profile === "device-token" || profile === "trusted-proxy" ? "" : "#token=test-token"),
         );
         await gateway.waitForRequest("connect");
-        await page.locator(".connect-splash").waitFor();
+        await page.locator(".chat-pane__connection-state", { hasText: /^Connecting…$/u }).waitFor();
         await capture("cold-connecting.png");
         await gateway.resolveDeferred("connect");
         const sidebar = page.locator("openclaw-app-sidebar");
@@ -621,7 +622,12 @@ suite.define(() => {
           modules.release();
           await gateway.waitForRequest("connect");
           await sidebar.locator("aside.sidebar").waitFor();
-          expect(await sidebar.locator(".sidebar-rail__pin").count()).toBe(0);
+          // The rail keeps its default pins, not the legacy snapshot's order.
+          expect(
+            await sidebar
+              .locator(".sidebar-rail__pin")
+              .evaluateAll((pins) => pins.map((pin) => pin.getAttribute("data-sidebar-entry"))),
+          ).toEqual(["route:cron", "route:plugins", "route:usage"]);
           expect(await sidebar.locator("aside.sidebar").getAttribute("data-snapshot-state")).toBe(
             "live",
           );
@@ -786,6 +792,50 @@ suite.define(() => {
           sessionInfo: currentRow,
           metadata: { models: [] },
         });
+        const messages = [
+          ...olderMessages,
+          {
+            ...rememberedMessage,
+            __openclaw: {
+              ...rememberedMessage["__openclaw"],
+              senderProfileAvatarUrl: "/api/users/synthetic/avatar?v=2",
+            },
+          },
+        ];
+        const pageSize = imported ? 50 : 1_000;
+        const heldStart = messages.length - 80;
+        const firstStart = Math.max(0, heldStart - pageSize);
+        const firstPage = messages.slice(firstStart, heldStart);
+        if (profile === "large" || shortTail || imported) {
+          // Short tool-heavy tails can refill as soon as hello is released.
+          await gateway.setMethodResponse("chat.history", {
+            cases: [
+              {
+                match: { messageId: `older-${heldStart + 1}`, limit: 1 },
+                response: {
+                  messages: [messages[heldStart]],
+                  sessionId: currentRow.sessionId,
+                  olderCursor: "warm-before-held",
+                },
+              },
+              {
+                match: { cursor: "warm-before-held" },
+                response: {
+                  messages: firstPage,
+                  sessionId: currentRow.sessionId,
+                  ...(firstStart ? { olderCursor: "warm-before-first" } : {}),
+                },
+              },
+              {
+                match: { cursor: "warm-before-first" },
+                response: {
+                  messages: messages.slice(0, firstStart),
+                  sessionId: currentRow.sessionId,
+                },
+              },
+            ],
+          });
+        }
         if (profile === "different") {
           const client = isRecord(connect.params) ? connect.params.client : null;
           if (!isRecord(client) || typeof client.instanceId !== "string") {
@@ -841,57 +891,16 @@ suite.define(() => {
         await capture(`warm-${profile}-after-hello.png`);
         if (profile === "large" || shortTail || imported) {
           await waitForChatScrollIdle(page);
-          expect(await gateway.getRequests("chat.history")).toEqual([]);
-          const messages = [
-            ...olderMessages,
-            {
-              ...rememberedMessage,
-              __openclaw: {
-                ...rememberedMessage["__openclaw"],
-                senderProfileAvatarUrl: "/api/users/synthetic/avatar?v=2",
-              },
-            },
-          ];
-          const pageSize = imported ? 50 : 1_000;
-          const heldStart = messages.length - 80;
-          const firstStart = Math.max(0, heldStart - pageSize);
-          const firstPage = messages.slice(firstStart, heldStart);
-          await gateway.setMethodResponse("chat.history", {
-            // Disk trimming retains 80 groups but no certified page edge. Reopen
-            // that held source, then fetch strictly before it without replacing rows.
-            cases: [
-              {
-                match: { messageId: `older-${heldStart + 1}`, limit: 1 },
-                response: {
-                  messages: [messages[heldStart]],
-                  sessionId: currentRow.sessionId,
-                  olderCursor: "warm-before-held",
-                },
-              },
-              {
-                match: { cursor: "warm-before-held" },
-                response: {
-                  messages: firstPage,
-                  sessionId: currentRow.sessionId,
-                  ...(firstStart ? { olderCursor: "warm-before-first" } : {}),
-                },
-              },
-              {
-                match: { cursor: "warm-before-first" },
-                response: {
-                  messages: messages.slice(0, firstStart),
-                  sessionId: currentRow.sessionId,
-                },
-              },
-            ],
-          });
           const messageCount = () =>
             page
               .locator(".chat-pane-cache__pane--active")
               .evaluate((element) => Reflect.get(element, "state").chatMessages.length);
           const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
-          await thread.hover();
-          await page.mouse.wheel(0, -100_000);
+          if (!shortTail) {
+            expect(await gateway.getRequests("chat.history")).toEqual([]);
+            await thread.hover();
+            await page.mouse.wheel(0, -100_000);
+          }
           const history = await gateway.waitForRequest("chat.history", {
             match: { messageId: `older-${heldStart + 1}` },
           });
@@ -899,10 +908,14 @@ suite.define(() => {
           expect(history.params).not.toHaveProperty("offset");
           await gateway.waitForRequest("chat.history", { match: { cursor: "warm-before-held" } });
           await expect.poll(messageCount).toBe(firstPage.length + 80);
+          if (shortTail) {
+            expect(await gateway.getRequests("chat.history")).toHaveLength(2);
+          }
           await page
             .getByText(`Older history ${heldStart}`, { exact: true })
             .waitFor({ state: "attached" });
           await waitForChatScrollIdle(page);
+          await thread.hover();
           await page.mouse.wheel(0, -1_000_000);
           if (firstStart) {
             const older = await gateway.waitForRequest("chat.history", {

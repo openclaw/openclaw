@@ -2,28 +2,23 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { UserConfig } from "tsdown";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
 import { createStandaloneSourceEntries } from "../../scripts/lib/bun-standalone-source-entries.mjs";
 import {
   createPluginNpmRuntimeBuildOptions,
   resolvePluginNpmRuntimeBuildPlan,
 } from "../../scripts/lib/plugin-npm-runtime-build.mts";
+import type { createStandaloneRuntimeProcessEntrypoints } from "../../src/infra/runtime-process-manifest.ts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeJsonFile } from "../helpers/temp-repo.js";
 
-const roots: string[] = [];
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-source-entries-"));
-  roots.push(root);
+  const root = tempDirs.make("openclaw-source-entries-");
   fs.mkdirSync(path.join(root, "src"));
   fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
   const contents = "export const value: number = 42;\n";
@@ -32,6 +27,9 @@ function fixture() {
 }
 
 describe("standalone original-source entries", () => {
+  // A mixed Object.fromEntries projection must not erase every root descriptor to any.
+  expectTypeOf<ReturnType<typeof createStandaloneRuntimeProcessEntrypoints>>().not.toBeAny();
+
   it("assigns package-owned worker wrappers to their isolated plugin build", () => {
     const loader = pathToFileURL(path.resolve("scripts/lib/bun-standalone-source-entries.mjs"));
     const env = { ...process.env };

@@ -133,6 +133,7 @@ suite.define(() => {
       expect(cold.params).toHaveProperty("initialHistory");
       expect(cold.params).not.toHaveProperty("initialHistory.cursor");
       await gateway.resolveDeferred("sessions.messages.subscribe");
+      await gateway.resolveDeferred("chat.startup");
       await expectTranscript(page, ["Saved question", "Saved answer"]);
       expect(await gateway.getRequests("chat.startup")).toEqual([]);
       await waitForControlUiInitialRoster(page);
@@ -142,15 +143,12 @@ suite.define(() => {
       // The sidebar snapshot has its own deferred IndexedDB writer.
       await page
         .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
-        .waitFor();
+        .waitFor({ state: "attached" });
       const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
         sessionKey,
         sidebarView: "sessions",
         offRosterSession: true,
       };
-      await page
-        .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
-        .waitFor({ state: "attached" });
       const persisted = await page.evaluate(persistColdLoadWarmState, warmInput);
       expect(persisted.rosterContainsSession).toBe(false);
       expect(persisted.messages).toBe(2);
@@ -258,10 +256,16 @@ suite.define(() => {
         await gateway.waitForRequest("connect", { after: connects });
         await gateway.resolveDeferred("connect");
         await waitForControlUiGatewayReady(page);
-        await gateway.waitForRequest("sessions.messages.subscribe", {
-          match: { key: sessionKey },
-          after: subscriptions,
-        });
+        const replacementSubscription = await gateway.waitForRequest(
+          "sessions.messages.subscribe",
+          {
+            match: { key: sessionKey },
+            after: subscriptions,
+          },
+        );
+        const replacementSubscriptions = (
+          await gateway.getRequests("sessions.messages.subscribe", { key: sessionKey })
+        ).length;
         await gateway.resolveDeferred(
           "sessions.messages.subscribe",
           {
@@ -283,8 +287,20 @@ suite.define(() => {
           { match: warm.params, exactParams: true },
         );
         await gateway.resolveDeferred("sessions.messages.subscribe");
-        const scopedRefill = await gateway.waitForRequest("chat.startup");
-        expect(scopedRefill.params).not.toHaveProperty("cursor");
+        if (
+          isRecord(replacementSubscription.params) &&
+          isRecord(replacementSubscription.params.initialHistory)
+        ) {
+          await gateway.deferNext("chat.startup");
+          await gateway.resolveDeferred("chat.startup");
+        }
+        // The authenticated owner refresh carries history in its subscription reply.
+        const scopedRefill = await gateway.waitForRequest("sessions.messages.subscribe", {
+          match: { key: sessionKey },
+          after: replacementSubscriptions,
+        });
+        expect(scopedRefill.params).toHaveProperty("initialHistory");
+        expect(scopedRefill.params).not.toHaveProperty("initialHistory.cursor");
         for (const text of ["Next question", "Next answer"]) {
           expect(await page.locator(".chat-thread").getByText(text, { exact: true }).count()).toBe(
             0,
@@ -296,12 +312,16 @@ suite.define(() => {
           page,
           otherMessages.map((entry) => entry.content),
         );
-        expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
+        expect(await gateway.getRequests("chat.startup")).toEqual([]);
         return;
       }
       await expectTranscript(page, ["Saved question", "Saved answer"]);
       await updateSession(finalSession);
       await gateway.resolveDeferred("sessions.messages.subscribe");
+      if (reset) {
+        await gateway.deferNext("chat.startup");
+      }
+      await gateway.resolveDeferred("chat.startup");
       if (reset) {
         const refill = await gateway.waitForRequest("chat.startup");
         expect(refill.params).not.toHaveProperty("cursor");

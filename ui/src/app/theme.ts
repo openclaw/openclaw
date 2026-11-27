@@ -26,11 +26,9 @@ export function parseThemeSelection(
 export function resolveTheme(theme: ThemeName, mode: ThemeMode): ResolvedTheme {
   let resolvedMode = mode;
   if (resolvedMode === "system") {
-    resolvedMode =
-      typeof globalThis.matchMedia === "function" &&
-      globalThis.matchMedia("(prefers-color-scheme: light)").matches
-        ? "light"
-        : "dark";
+    resolvedMode = globalThis.matchMedia("(prefers-color-scheme: light)").matches
+      ? "light"
+      : "dark";
   }
   if (theme === "claw") {
     return resolvedMode;

@@ -111,7 +111,7 @@ export async function buildReplyPayloads(params: {
     let text = payload.text;
     if (payload.isError && text && BUN_FETCH_SOCKET_ERROR_RE.test(text)) {
       text =
-        "⚠️ Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
+        "⚠️ Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.";
     }
     if (text?.includes("HEARTBEAT_OK")) {
       const stripped = stripHeartbeatToken(text, { mode: "message" });

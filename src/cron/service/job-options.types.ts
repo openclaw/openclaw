@@ -18,13 +18,18 @@ export type CronAddOptions = {
   pluginCommandSourceDigest?: string;
   operatorSource?: NonNullable<CronStoredJob["operatorSource"]>["source"];
   operatorSourceExecutionRevision?: string;
-  inferenceBinding?: CronStoredJob["inferenceBinding"];
+  /** Null authorizes a native CLI account transition on explicit updates only. */
+  inferenceBinding?: CronStoredJob["inferenceBinding"] | null;
   sourceConversation?: CronStoredJob["sourceConversation"];
   /** Logical sandbox target captured from the admitted creator, never public input. */
   streamSandbox?: CronStoredJob["streamSandbox"];
+  /** Fresh native process grant captured only at an existing stream-exec authorization edge. */
+  streamOperatorSource?: CronStoredJob["streamOperatorSource"];
   /** Selected revisions captured from a validated caller session, never public input. */
   skillLibrarySelections?: CronStoredJob["skillLibrarySelections"];
   matchesExisting?: (job: CronJob) => boolean;
+  /** Internal create-only policy: an existing owned declaration is never rewritten. */
+  keepDeclarationFor?: { agentId: string; sessionKey: string; accountId: string };
   enabledExplicit?: boolean;
   /** Reserved declaration namespaces require trusted ownership at creation. */
   systemOwned?: boolean;

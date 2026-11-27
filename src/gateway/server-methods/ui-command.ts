@@ -20,7 +20,6 @@ import {
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { captureGatewayUiCommandTarget } from "../ui-command-target.js";
-import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import type {
   GatewayClient,
   GatewayRequestHandlerOptions,
@@ -104,6 +103,10 @@ export function dispatchUiCommandToRequester({
         ? { ...commandParams.command, sessionKey: canonicalSessionKey }
         : commandParams.command,
   };
+  const requiredCommandCapability =
+    normalizedParams.command.kind === "agent-github-settings"
+      ? GATEWAY_CLIENT_CAPS.UI_AGENT_GITHUB_SETTINGS
+      : undefined;
   const target = participant
     ? participant.gatewayUiCommandTarget
     : runtimeIdentity
@@ -121,7 +124,9 @@ export function dispatchUiCommandToRequester({
         !recipient.connectionSignal?.aborted &&
         (!target.profileId || recipient.authenticatedUserProfile?.profileId === target.profileId) &&
         recipient.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI &&
-        hasGatewayClientCap(recipient.connect.caps, GATEWAY_CLIENT_CAPS.UI_COMMANDS);
+        hasGatewayClientCap(recipient.connect.caps, GATEWAY_CLIENT_CAPS.UI_COMMANDS) &&
+        (!requiredCommandCapability ||
+          hasGatewayClientCap(recipient.connect.caps, requiredCommandCapability));
       if (selected) {
         selectedRecipient = recipient;
       }
@@ -174,7 +179,6 @@ export const uiCommandHandlers: GatewayRequestHandlers = {
     "ui.command",
     validateUiCommandParams,
     async (options) => {
-      assertActiveAgentRuntimeAuthority(options.client, options.context);
       const command = options.params.command;
       const requestId =
         command.kind === "panel" && command.panel === "portal" && command.open
@@ -202,7 +206,6 @@ export const uiCommandHandlers: GatewayRequestHandlers = {
       });
       if (result.ok) {
         const presentation = observation ? await observation : undefined;
-        assertActiveAgentRuntimeAuthority(options.client, options.context);
         resolveGatewayPersonalToolParticipant(
           options.client?.internal?.agentRuntimeIdentity,
         )?.assertCurrent();

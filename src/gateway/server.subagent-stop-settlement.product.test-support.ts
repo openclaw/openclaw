@@ -127,7 +127,8 @@ export function createSubagentModelConfig(
     provider: "synthetic",
     api: "openai-responses",
     baseUrl: options.baseUrl ?? "https://example.invalid/v1",
-    contextWindow: 4096,
+    // Lifecycle scenarios carry the full coding tool surface and system prompt.
+    contextWindow: 128_000,
     maxTokens: 1024,
   });
   return {

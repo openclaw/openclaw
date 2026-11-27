@@ -108,9 +108,7 @@ export function resolveAuthorizedGatewayStartupDreamingPluginIds(params: {
     pluginConfig: resolveMemoryDreamingPluginConfig(params.config),
     cfg: params.config,
   });
-  const dreamingSelectedPluginId = normalizeOptionalLowercaseString(
-    resolveMemoryDreamingPluginId(params.config),
-  );
+  const dreamingSelectedPluginId = resolveMemoryDreamingPluginId(params.config);
   const engineId = DEFAULT_MEMORY_DREAMING_PLUGIN_ID;
   if (
     !dreamingConfig.enabled ||
@@ -178,30 +176,13 @@ export function resolveMemorySlotStartupPluginId(params: {
   return normalizePluginId(configuredSlot);
 }
 
-export function resolveContextEngineSlotStartupPluginId(params: {
-  records: readonly { id: string; contextEngineIds?: readonly string[] }[];
-  activationSourceConfig: OpenClawConfig;
-  activationSourcePlugins: NormalizedPluginsConfig;
-  normalizePluginId: (pluginId: string) => string;
-}): string | undefined {
-  const { activationSourcePlugins, normalizePluginId } = params;
-  const configuredSlot = activationSourcePlugins.slots.contextEngine;
-  if (!configuredSlot) {
-    return undefined;
-  }
-  return resolveSelectedContextEnginePluginIdFromConfig(
-    activationSourcePlugins,
-    configuredSlot,
-    params.records,
-    normalizePluginId,
-  );
-}
-
 export function shouldConsiderForGatewayStartup(params: {
   plugin: InstalledPluginIndexRecord;
   manifest: PluginManifestRecord | undefined;
   startupDreamingPluginIds: ReadonlySet<string>;
   memorySlotStartupPluginId?: string;
+  /** Policy ids of opted-in memory backends that start beside the slot owner. */
+  memoryBackendStartupPolicyIds?: ReadonlySet<string>;
   contextEngineSlotStartupPluginId?: string;
 }): boolean {
   return (
@@ -209,7 +190,10 @@ export function shouldConsiderForGatewayStartup(params: {
     params.contextEngineSlotStartupPluginId === params.plugin.pluginId ||
     (params.plugin.startup.memory &&
       (params.startupDreamingPluginIds.has(params.plugin.pluginId) ||
-        params.memorySlotStartupPluginId === params.plugin.pluginId))
+        params.memorySlotStartupPluginId === params.plugin.pluginId ||
+        params.memoryBackendStartupPolicyIds?.has(
+          normalizePluginPolicyId(params.plugin.pluginId),
+        ) === true))
   );
 }
 
@@ -290,15 +274,12 @@ export function addConfiguredSlotPluginIds(
   if (memorySlot) {
     target.add(memorySlot);
   }
-  const contextEngineSlot = resolveContextEngineSlotStartupPluginId({
-    records: params.index.plugins.map((plugin) => ({
-      id: plugin.pluginId,
-      contextEngineIds: plugin.contextEngineIds,
-    })),
-    activationSourceConfig: params.activationSourceConfig,
-    activationSourcePlugins: params.activationSourcePlugins,
-    normalizePluginId: params.lookup.normalizePluginId,
-  });
+  const contextEngineSlot = resolveSelectedContextEnginePluginIdFromConfig(
+    params.activationSourcePlugins,
+    params.activationSourcePlugins.slots.contextEngine,
+    params.index.plugins,
+    params.lookup.normalizePluginId,
+  );
   if (contextEngineSlot) {
     target.add(contextEngineSlot);
   }

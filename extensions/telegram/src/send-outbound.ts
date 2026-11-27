@@ -33,7 +33,7 @@ import type {
   TelegramSendResult,
 } from "./send-message-types.js";
 import { recordSentMessage } from "./sent-message-cache.js";
-import { parseTelegramTarget } from "./targets.js";
+import { parseTelegramTarget, resolveTelegramTargetChatType } from "./targets.js";
 
 type PreparedTelegramOutbound = {
   chatId: string;
@@ -79,11 +79,27 @@ export function withTelegramMessageAction<T, TMessageId extends string | number 
   });
 }
 
+/** Forward effects only when the resolved target is a private chat. */
+export function resolveTelegramMessageEffectParams(
+  chatId: string,
+  messageEffectId: string | undefined,
+): { message_effect_id: string } | undefined {
+  if (!messageEffectId) {
+    return undefined;
+  }
+  if (resolveTelegramTargetChatType(chatId) !== "direct") {
+    return undefined;
+  }
+  return { message_effect_id: messageEffectId };
+}
+
 export function buildTelegramProviderDeliveryResult(params: {
   message: TelegramOutboundPromptContextMessage;
   messageId: string | number;
   fallbackChatId: string | number;
   successfulSendThread?: TelegramThreadSpec;
+  /** Null when the accepted request had no native reply, omitted when it was not observed. */
+  acceptedReplyToMessageId?: number | null;
   kind?: MessageReceiptPartKind;
   meta?: TelegramSendResult["meta"];
 }): TelegramSendResult {
@@ -93,18 +109,24 @@ export function buildTelegramProviderDeliveryResult(params: {
     message: params.message,
     successfulSendThread: params.successfulSendThread,
   });
+  const receipt =
+    providerThreadId !== undefined || params.acceptedReplyToMessageId !== undefined
+      ? createMessageReceiptFromOutboundResults({
+          results: [{ messageId, chatId }],
+          kind: params.kind,
+          threadId: providerThreadId?.toString(),
+          replyToId: params.acceptedReplyToMessageId?.toString(),
+        })
+      : undefined;
+  if (receipt && params.acceptedReplyToMessageId === null) {
+    for (const part of receipt.parts) {
+      part.nativeReplyAbsent = true;
+    }
+  }
   return {
     messageId,
     chatId,
-    ...(providerThreadId !== undefined
-      ? {
-          receipt: createMessageReceiptFromOutboundResults({
-            results: [{ messageId, chatId }],
-            ...(params.kind !== undefined ? { kind: params.kind } : {}),
-            threadId: String(providerThreadId),
-          }),
-        }
-      : {}),
+    ...(receipt ? { receipt } : {}),
     ...(params.meta ? { meta: params.meta } : {}),
   };
 }

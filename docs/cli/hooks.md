@@ -43,6 +43,10 @@ supported on install/update. See
 [Local, remote, and agent scope](/automation/hooks#local-remote-and-agent-scope)
 for the distinction between workspace inventory and Gateway loading.
 
+Invalid `--agent` usage prints its specific reason on stderr and exits with
+status `1`, including when the flag precedes the subcommand. The JSON error
+envelope is unchanged.
+
 ## List hooks
 
 ```bash

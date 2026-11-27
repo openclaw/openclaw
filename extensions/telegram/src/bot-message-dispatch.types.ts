@@ -179,6 +179,11 @@ export type TelegramDispatchTurn = TelegramDispatchTurnConfig &
     noVisibleReplyFallbackEligible: boolean;
     suppressSilentReplyFallback: boolean;
     hadErrorReplyFailureOrSkip: boolean;
-    progressContinuationAdopted?: boolean;
+    /**
+     * Another owner now delivers this turn's final: a follow-up adopted the progress card,
+     * or the delivery queue holds a flood-refused final and resends it. Either way the
+     * turn must not send a failure fallback or ask the user to resend.
+     */
+    finalHandoff?: "progress-continuation" | "delivery-queue";
     dispatchError?: unknown;
   };

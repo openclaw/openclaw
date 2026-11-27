@@ -129,7 +129,11 @@ struct OpenClawApp: App {
                 Button(String(localized: "Reload")) {
                     DashboardManager.shared.reloadDashboard()
                 }
-                .keyboardShortcut("r", modifiers: .command)
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+
+                Button("Systems") {
+                    AppNavigationActions.openSelectedWebRoute(DashboardRouteMap.systemsPagePath)
+                }
 
                 Divider()
 
@@ -344,9 +348,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let root = DeviceIdentityStore.stateDirectoryURL
                 let executionRoot = OpenClawPaths.stateDirURL
                 if BundledRuntime.isBundledApp {
-                    try await ClientCredentialStartup.prepare(
-                        executionRoot: executionRoot,
-                        configURL: OpenClawPaths.configURL)
+                    let prepare = {
+                        try await ClientCredentialStartup.prepare(
+                            executionRoot: executionRoot,
+                            configURL: OpenClawPaths.configURL)
+                    }
+                    if let replacement = await StaleGatewayServiceReplacement.detect() {
+                        self.credentialLogger
+                            .info("Replacing the previous build's Gateway service before credential preparation")
+                        if let error = try await replacement.run(prepareCredentials: prepare) {
+                            self.credentialLogger
+                                .error("Stale Gateway service replacement failed: \(error, privacy: .public)")
+                        }
+                    } else {
+                        try await prepare()
+                    }
                 }
                 try Task.checkCancellation()
                 // Independent native identities retain their native import owner.
@@ -379,26 +395,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard !Task.isCancelled else { return }
                 self.credentialLogger
                     .error("Credential startup failed: \(error.localizedDescription, privacy: .public)")
-                self.showCredentialStartupFailure()
+                self.showCredentialStartupFailure(schemaMismatch: error as? NewerStateSchemaError)
             }
         }
     }
 
-    private func showCredentialStartupFailure() {
-        let message = "Quit OpenClaw, run openclaw doctor --fix with the matching CLI, then reopen OpenClaw. " +
-            "If you restored a backup, restore its matching client credentials too."
-        self.credentialLogger
-            .error("Client credentials unavailable. Run openclaw doctor --fix before reopening the app.")
+    private func showCredentialStartupFailure(schemaMismatch: NewerStateSchemaError?) {
+        let title = schemaMismatch == nil
+            ? "OpenClaw client credentials need recovery"
+            : "OpenClaw app update required"
+        let message = schemaMismatch?.localizedDescription ??
+            ("Quit OpenClaw, run openclaw doctor --fix with the matching CLI, then reopen OpenClaw. " +
+                "If you restored a backup, restore its matching client credentials too.")
+        self.credentialLogger.error("\(title, privacy: .public). \(message, privacy: .public)")
         if AppLaunchRuntimePlan.current.allowsActivation {
             let alert = NSAlert()
             alert.alertStyle = .critical
-            alert.messageText = "OpenClaw client credentials need recovery"
+            alert.messageText = title
             alert.informativeText = message
-            AppActivation.shared.presentAlert(alert)
+            if schemaMismatch != nil, let releases = URL(string: "https://github.com/openclaw/openclaw/releases") {
+                // This path cannot depend on Sparkle or Gateway credentials having started.
+                alert.addButton(withTitle: "Open Downloads")
+                alert.addButton(withTitle: "Quit")
+                AppActivation.shared.presentAlert(alert) { response in
+                    if response == .alertFirstButtonReturn {
+                        AppActivation.shared.open(releases)
+                    }
+                }
+            } else {
+                AppActivation.shared.presentAlert(alert)
+            }
         } else {
-            fputs("OpenClaw client credentials need recovery. \(message)\n", stderr)
+            fputs("\(title). \(message)\n", stderr)
         }
-        NSApplication.shared.terminate(nil)
+        Self.requestTermination()
     }
 
     private func finishLaunchingWithCredentials(launchPlan: AppLaunchRuntimePlan) {
@@ -535,9 +565,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // startup completion must not reacquire custody during shutdown.
             await credentialStartup?.value
             async let hostedGatewayCleanup: Void = GatewayProcessManager.shared.shutdownAppHostedGateway()
+            async let composerDraftSave: Void = WebChatManager.shared.persistComposerDrafts()
             async let processCleanupResult: Void = Self.cleanUpProcesses()
             async let bridgeCleanupResult: Void = PeekabooBridgeHostCoordinator.shared.shutdown()
-            _ = await (hostedGatewayCleanup, processCleanupResult, bridgeCleanupResult)
+            _ = await (hostedGatewayCleanup, processCleanupResult, bridgeCleanupResult, composerDraftSave)
             self?.finishTerminationCleanup(for: sender)
         }
         self.terminationDeadlineTask = Task { @MainActor [weak self] in
@@ -561,21 +592,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func scheduleFirstRunOnboardingIfNeeded() async {
-        if await OnboardingController.shared.startFirstRunIfFresh() {
-            return
-        }
-        let connectionMode = AppStateStore.shared.connectionMode
-        let onboardingSeen = AppStateStore.shared.onboardingSeen
-        if connectionMode != .unconfigured, onboardingSeen {
-            OnboardingController.markComplete()
-            return
-        }
-        let seenVersion = AppDefaults.standard.integer(forKey: onboardingVersionKey)
-        let shouldShow = seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
-        guard shouldShow else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            guard !AppStateStore.shared.onboardingSeen else { return }
-            OnboardingController.shared.show()
-        }
+        OnboardingFirstRun.presentIfNeeded(
+            connectionMode: AppStateStore.shared.connectionMode,
+            onboardingSeen: AppStateStore.shared.onboardingSeen,
+            onboardingVersion: AppDefaults.standard.integer(forKey: onboardingVersionKey),
+            joinedClaw: MacOpenClawIDJoinCompletion.primaryIsJoinedClaw(
+                mode: AppStateStore.shared.connectionMode,
+                remoteUrl: AppStateStore.shared.remoteUrl),
+            removedClaw: MacOpenClawIDFeature.isEnabled && MacOpenClawIDDeviceStore.shared.lastRemoval() != nil,
+            markComplete: { OnboardingController.markComplete() },
+            show: {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    guard !AppStateStore.shared.onboardingSeen else { return }
+                    OnboardingController.shared.show()
+                }
+            },
+            openDashboard: { AppNavigationActions.openDashboard() },
+            showRemoval: { DashboardManager.shared.showFailure(OpenClawIDNodeTransportError.removed) })
     }
 }

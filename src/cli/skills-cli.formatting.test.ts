@@ -39,12 +39,16 @@ describe("skills descriptor formatting", () => {
     expect(row?.split(/[|│]/u)[3]?.trim()).toBe("left\\tright");
   });
 
-  it("preserves description and path whitespace in skills JSON output", async () => {
+  it.each([
+    "{openclaw: {emoji: lobster, homepage: https://example.test/skill}}",
+    "{openclaw:{emoji:'lobster',homepage:'https://example.test/skill'}}",
+    "\n  openclaw:\n    emoji: lobster\n    homepage: https://example.test/skill",
+  ])("preserves whitespace and metadata in skills JSON output: %s", async (metadata) => {
     const workspaceDir = tempDirs.make("json-whitespace-");
     const managedSkillsDir = path.join(workspaceDir, "managed\tlocal");
     const description = "First paragraph.\nSecond\tcolumn.\r\nThird paragraph.";
     await writeWorkspaceSkills(workspaceDir, [
-      { name: "json-whitespace", description: JSON.stringify(description) },
+      { name: "json-whitespace", description: JSON.stringify(description), metadata },
     ]);
     const report = buildWorkspaceSkillStatus(workspaceDir, {
       managedSkillsDir,
@@ -55,6 +59,12 @@ describe("skills descriptor formatting", () => {
     const list = JSON.parse(formatSkillsList(report, { json: true }));
     const info = JSON.parse(formatSkillInfo(report, "json-whitespace", { json: true }));
     const check = JSON.parse(formatSkillsCheck(report, { json: true }));
+    for (const skill of [list.skills[0], info]) {
+      expect(skill).toMatchObject({
+        emoji: "lobster",
+        homepage: "https://example.test/skill",
+      });
+    }
     expect(list.skills[0].description).toBe(description);
     expect(info.description).toBe(description);
     expect(list.managedSkillsDir).toBe(managedSkillsDir);

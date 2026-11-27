@@ -1,6 +1,10 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { pathForPluginSettings } from "../../app-route-paths.ts";
+import { isArchiveHeld, undoHeldArchive } from "../../components/session-archive-hold.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSessionNavigationEnglish } from "../../i18n/locales/en-session-navigation.ts";
+import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
+import { resolveChatModelSelectValues } from "../../lib/chat/model-select-state.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   readSessionMethodAccess,
@@ -15,19 +19,84 @@ import {
   resolveUiSessionNavigationParentKey,
 } from "../../lib/sessions/session-key.ts";
 import { pluginDetailLocation } from "../plugins/detail-tabs.ts";
+import { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-store.ts";
 import { isExpiredIncognitoSession, setChatError } from "./chat-history-state.ts";
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { resolveChatPaneParentSession } from "./chat-pane-header-identity.ts";
 import { ChatPaneRetainedPresentation } from "./chat-pane-retained-presentation.ts";
+import { createChatPaneRunRecoveryActions } from "./chat-pane-state.ts";
 import {
-  NEW_SESSION_ACTIVE_RUN_MESSAGE,
-  NEW_SESSION_LIST_LOADING_MESSAGE,
-} from "./chat-pane-shared.ts";
-import { canCreateChatSession } from "./chat-state-route.ts";
+  canCreateChatSession,
+  resolveChatAgentId,
+  selectedChatSessionRow,
+} from "./chat-state-route.ts";
+
+registerSessionNavigationEnglish();
 
 /** Creates or resets a conversation while guarding its asynchronous ownership. */
+registerSessionOrganizationSharedEnglish();
+
 export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentation {
-  readonly sessionCreation = { creatingIncognito: false };
+  readonly sessionCreation = { creatingIncognito: false, creatingHarnessUpdate: false };
+
+  private activeCatalogContinuation: symbol | null = null;
+
+  protected async continueCatalogSession(key: CatalogSessionKey) {
+    const scope = this.captureConnectionScope();
+    // Attachments count as composed content: an image-only continuation must
+    // send, not silently no-op while the send button looks live.
+    if (!scope || !this.history.catalogSession?.canContinue) {
+      return;
+    }
+    const { state, client } = scope;
+    const draft = state.chatMessage.trim();
+    const attachments = cloneChatAttachmentsForIndependentOwner(state.chatAttachments);
+    if (!draft && attachments.length === 0) {
+      return;
+    }
+    const sourceSessionKey = state.sessionKey;
+    const sourceAgentId = resolveChatAgentId(state);
+    const sourceCatalogGeneration = this.catalogLoadGeneration;
+    const sourceHomeId = this.history.catalogSession.sourceHomeId;
+    const continuation = Symbol("catalog-continuation");
+    this.activeCatalogContinuation = continuation;
+    const isCurrent = () =>
+      this.activeCatalogContinuation === continuation &&
+      this.isConnectionScopeCurrent(scope) &&
+      this.catalogLoadGeneration === sourceCatalogGeneration &&
+      state.sessionKey === sourceSessionKey &&
+      resolveChatAgentId(state) === sourceAgentId;
+    state.chatSending = true;
+    try {
+      const { continueCapturedCatalogSession } =
+        await import("./chat-pane-catalog-continuation.runtime.ts");
+      await continueCapturedCatalogSession({
+        state,
+        client,
+        context: this.context,
+        paneId: this.paneId,
+        key: { ...key, ...(sourceHomeId ? { sourceHomeId } : {}) },
+        agentId: sourceAgentId,
+        attachments,
+        draft,
+        isCurrent,
+        onSessionChange: (next) => this.onPaneSessionChange?.(this.paneId, next),
+      });
+    } catch (error) {
+      if (isCurrent()) {
+        state.lastError = formatUiError(error);
+      }
+    } finally {
+      // Loading and handoff can yield to a newer continuation or scoped send.
+      // Only the captured token may release its own unscoped sending flag.
+      if (this.activeCatalogContinuation === continuation) {
+        this.activeCatalogContinuation = null;
+        if (state.chatSendingScopeKey == null && state.chatSending) {
+          state.chatSending = false;
+        }
+      }
+    }
+  }
 
   protected catalogComposerReason(catalogKey: CatalogSessionKey | null) {
     const { catalogHost, catalogLoading, catalogSession } = this.history;
@@ -37,6 +106,12 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     }
     if (catalogHost?.kind === "node") {
       return { text: t("chat.catalog.remoteViewOnly") };
+    }
+    if (catalogSession?.continuationUnavailableReasonCode === "source-handoff-required") {
+      return { text: t("chat.catalog.sourceHandoffRequired") };
+    }
+    if (catalogSession?.continuationUnavailableReason) {
+      return { text: catalogSession.continuationUnavailableReason };
     }
     // Archivable local Codex rows withhold continuation only when supervision is off.
     if (catalogKey.catalogId !== "codex" || catalogSession?.canArchive !== true) {
@@ -115,6 +190,19 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
         },
       };
     }
+    if (this.state && this.isCurrentSessionArchivePending(this.state)) {
+      // Inside the Undo window nothing was sent, so Unarchive cancels the held archive
+      // like the notice's Undo. Once the archive is sending, it waits for the outcome.
+      const sessionKey = params.selectedSession?.key ?? params.sessionKey;
+      return {
+        kind: "composer-replacement" as const,
+        text: t("chat.archivedSessionDisabled"),
+        icon: "archive" as const,
+        actionLabel: t("common.unarchive"),
+        busy: !isArchiveHeld(sessionKey),
+        onAction: () => undoHeldArchive(sessionKey),
+      };
+    }
     if (params.selectedSessionArchived) {
       return {
         kind: "composer-replacement" as const,
@@ -123,7 +211,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
         actionLabel: t("common.unarchive"),
         actionPending: params.cached,
         disabledReason: !params.selectedSessionId
-          ? "Session lifecycle action requires a durable session identity."
+          ? t("sessionsView.lifecycleIdentityRequired")
           : params.unarchiveAccess.allowed
             ? undefined
             : params.unarchiveAccess.reason,
@@ -141,9 +229,26 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       : undefined;
   }
 
-  protected readonly createSession = async (): Promise<boolean> => {
+  /** Failure recovery for the visible run; "Start a new session" uses this owner's creation path. */
+  protected runRecoveryActions(
+    state: Parameters<typeof createChatPaneRunRecoveryActions>[0],
+    options: Omit<Parameters<typeof createChatPaneRunRecoveryActions>[1], "onStartNewSession">,
+  ) {
+    return createChatPaneRunRecoveryActions(state, {
+      ...options,
+      onStartNewSession: (summary) => this.createSession(summary),
+    });
+  }
+
+  protected readonly createSession = async (harnessUpdateSummary?: string): Promise<boolean> => {
     const state = this.state;
-    if (!state || !state.client || !state.connected || this.sessionCreation.creatingIncognito) {
+    if (
+      !state ||
+      !state.client ||
+      !state.connected ||
+      this.sessionCreation.creatingIncognito ||
+      this.sessionCreation.creatingHarnessUpdate
+    ) {
       return false;
     }
     const context = this.context;
@@ -151,7 +256,8 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     const client = state.client;
     const previousSessionKey = state.sessionKey;
     const expiredIncognito = isExpiredIncognitoSession(state);
-    const preservesBoard = !expiredIncognito && this.resolveBoardView().hasBoard;
+    const preservesBoard =
+      harnessUpdateSummary === undefined && !expiredIncognito && this.resolveBoardView().hasBoard;
     const createParams = {
       ...(expiredIncognito
         ? { incognito: true as const }
@@ -178,11 +284,11 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     const isCurrent = () =>
       this.isConnectionScopeCurrent(scope) && this.context.sessions === sessions;
     if (!canCreateChatSession(state)) {
-      setChatError(state, NEW_SESSION_ACTIVE_RUN_MESSAGE);
+      setChatError(state, t("chat.sendErrors.newSessionBusy"));
       return false;
     }
     if (state.sessionsLoading) {
-      setChatError(state, NEW_SESSION_LIST_LOADING_MESSAGE);
+      setChatError(state, t("chat.sendErrors.newSessionLoading"));
       return false;
     }
     const initialAccess = readCreateAccess();
@@ -191,10 +297,45 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       return false;
     }
     this.sessionCreation.creatingIncognito = expiredIncognito;
+    this.sessionCreation.creatingHarnessUpdate = harnessUpdateSummary !== undefined;
     const signal = this.headerSessionMutationAbortController.signal;
     try {
-      const { createCapturedChatSession } =
+      const { createCapturedChatSession, createHarnessUpdateSession } =
         await import("./chat-pane-session-operations.runtime.ts");
+      if (harnessUpdateSummary !== undefined) {
+        const access = readCreateAccess();
+        if (!access.allowed) {
+          if (isCurrent()) {
+            setChatError(state, access.reason);
+          }
+          return false;
+        }
+        // The composer's model, not the roster row: incognito chats are not in the roster.
+        const selection = resolveChatModelSelectValues({
+          activeSession: selectedChatSessionRow(state),
+          agentDefaultModel: state
+            .readChatAgentsList()
+            ?.agents.find((row) => row.id === createParams.agentId)?.model?.primary,
+          modelOverrides: state.sessions.state.modelOverrides,
+          sessionKey: previousSessionKey,
+          sessionsResult: state.sessionsResult ?? null,
+          chatModelCatalog: state.chatModelCatalog,
+          modelSelectionPolicy: state.chatModelSelectionPolicy,
+        });
+        return await createHarnessUpdateSession(
+          {
+            agentId: createParams.agentId,
+            sourceSessionKey: previousSessionKey,
+            model: selection.currentOverride || selection.defaultModel || undefined,
+            create: sessions.createResult,
+            open: (key) => this.onPaneSessionChange?.(this.paneId, key),
+            signal,
+            isCurrent: () =>
+              isCurrent() && state.sessionKey === previousSessionKey && canCreateChatSession(state),
+          },
+          harnessUpdateSummary,
+        );
+      }
       return await createCapturedChatSession({
         state,
         context,
@@ -217,6 +358,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       return false;
     } finally {
       this.sessionCreation.creatingIncognito = false;
+      this.sessionCreation.creatingHarnessUpdate = false;
     }
   };
 }

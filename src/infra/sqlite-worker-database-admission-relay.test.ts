@@ -1,17 +1,25 @@
 import { once } from "node:events";
 import { MessageChannel, type MessagePort, Worker } from "node:worker_threads";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { renderAssistantRequestFailureCopy } from "../agents/failover/assistant-request-failure-copy.js";
+import { PostgresSchemaAdmissionUnavailableError } from "../state/openclaw-state-db-schema-version.js";
+import { withPostgresSchemaAdmissionRetry } from "../state/openclaw-state-postgres-admission.js";
+import * as physicalFacts from "./database-engine/physical-facts.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import * as sqlConnection from "./sql-connection.js";
 import { classifyGatewayStorageFailure } from "./sqlite-error-diagnostics.js";
 import {
   exchangeSqliteDatabaseAdmissions,
   readSqliteDatabaseAdmissionDeadline,
+  SqliteDatabaseAdmissionTimeoutError,
   withSqliteDatabaseAdmissionWait,
 } from "./sqlite-worker-database-admission-relay.js";
+import { SqliteWorkerError } from "./sqlite-worker-error.js";
 
 const channels = new Set<MessageChannel>();
 const workers = new Set<Worker>();
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const channel of channels) {
     channel.port1.close();
     channel.port2.close();
@@ -26,6 +34,60 @@ function createChannel() {
   channels.add(channel);
   return channel;
 }
+
+it.each(["deadline", "early-timeout", "closed", "cancelled"])(
+  "preserves the PostgreSQL admission error only at its own deadline: %s",
+  (outcome) => {
+    const channel = createChannel();
+    const database = openNodeSqliteDatabase(":memory:");
+    const original = new PostgresSchemaAdmissionUnavailableError(
+      "Missing PostgreSQL physical schema admission",
+    );
+    const controller = new AbortController();
+    const transport =
+      outcome === "closed"
+        ? new SqliteWorkerError("Admission host closed", "closed")
+        : new SqliteDatabaseAdmissionTimeoutError();
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    vi.spyOn(process.hrtime, "bigint").mockImplementation(() => BigInt(now * 1e6));
+    vi.spyOn(Atomics, "wait").mockImplementation((_array, _index, _value, timeout) => {
+      now += timeout ?? 0;
+      if (outcome === "cancelled" && now >= 100) {
+        controller.abort(new Error("Caller cancelled PostgreSQL admission"));
+      }
+      return "timed-out";
+    });
+    vi.spyOn(sqlConnection, "isPostgresSqlConnection").mockReturnValue(true);
+    vi.spyOn(physicalFacts, "getPostgresPhysicalFacts").mockImplementation(() => {
+      if (outcome !== "deadline" && outcome !== "cancelled") {
+        throw transport;
+      }
+      exchangeSqliteDatabaseAdmissions(channel.port1, []);
+      return undefined;
+    });
+    let failure: unknown;
+    try {
+      withSqliteDatabaseAdmissionWait(
+        { assertActive: () => controller.signal.throwIfAborted() },
+        () =>
+          withPostgresSchemaAdmissionRetry(database, () => {
+            throw original;
+          }),
+      );
+    } catch (error) {
+      failure = error;
+    } finally {
+      database.close();
+    }
+    if (outcome === "cancelled") {
+      expect(failure).toMatchObject({ cause: controller.signal.reason });
+    } else {
+      expect(failure).toBe(outcome === "deadline" ? original : transport);
+    }
+  },
+);
 
 function startWorker(channel: MessageChannel, source: string, budgetMs?: number) {
   const worker = new Worker(

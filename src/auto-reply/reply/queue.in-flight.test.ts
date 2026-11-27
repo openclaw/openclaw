@@ -100,7 +100,7 @@ describe("followup queue in-flight ownership", () => {
           await settleSources(pending);
         }
         expect(pendingComplete).toHaveBeenCalledTimes(dropPolicy === "old" ? 1 : 0);
-        expect(queue?.summarySources.map((item) => item.prompt)).toEqual(
+        expect(queue?.summaryEntries.map(({ source }) => source.prompt)).toEqual(
           dropPolicy === "summarize" ? ["pending"] : [],
         );
         if (rejectNew) {

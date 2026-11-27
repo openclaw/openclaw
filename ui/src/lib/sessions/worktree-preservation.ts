@@ -18,5 +18,5 @@ export function formatPreservedWorktreesNotice(
 
 export function formatPreservedWorktreeConfirmation(worktree: PreservedSessionWorktree): string {
   const reason = t(`sessionsView.deletePreservedReasons.${worktree.reason}`);
-  return `${t("sessionsView.attentionRequired")}: ${worktree.branch} — ${reason}. ${t("common.remove")}?`;
+  return `${t("sessionsView.attentionRequired")}: ${reason}.`;
 }

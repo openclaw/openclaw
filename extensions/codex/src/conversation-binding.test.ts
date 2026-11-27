@@ -1,4 +1,3 @@
-import type { ReadFileSyncOptions } from "node:fs";
 import path from "node:path";
 import {
   clearActiveEmbeddedRun,
@@ -6,7 +5,10 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ExecApprovalsFile } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { runInHarnessToolAuthorityForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  runInHarnessToolAuthorityForTest,
+  withAdmittedSessionTurnForTest,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -75,29 +77,9 @@ const configLayerPolicyMocks = vi.hoisted(() => ({
   >(async () => ({ config: {}, origins: {}, layers: [] })),
 }));
 
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  return {
-    ...actual,
-    readFileSync(
-      filePath: string | URL | number,
-      options?: BufferEncoding | ReadFileSyncOptions | null,
-    ) {
-      if (filePath === "/etc/codex/requirements.toml") {
-        const content = codexRequirementsTomlMock();
-        if (content !== undefined) {
-          return content;
-        }
-        throw Object.assign(new Error("Synthetic Codex requirements file is absent"), {
-          code: "ENOENT",
-        });
-      }
-      return actual.readFileSync(
-        filePath,
-        typeof options === "string" ? { encoding: options } : (options ?? {}),
-      );
-    },
-  };
+vi.mock("node:fs", async () => {
+  const { mockRequirementsFs } = await import("./conversation-binding-filesystem.test-support.js");
+  return mockRequirementsFs(codexRequirementsTomlMock);
 });
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
@@ -110,18 +92,17 @@ vi.mock("./app-server/config-layer-policy.js", async (importOriginal) => ({
   readCodexEffectiveConfig: configLayerPolicyMocks.readCodexEffectiveConfig,
 }));
 
-vi.mock("openclaw/plugin-sdk/conversation-binding-inspection-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("openclaw/plugin-sdk/conversation-binding-inspection-runtime")
-    >();
-  return {
-    ...actual,
-    inspectConversationBinding: (
-      conversation: Parameters<typeof actual.inspectConversationBinding>[0],
-    ) => createConversationInspection(conversation, publicBindingMocks.readBinding()?.bindingId),
-  };
-});
+vi.mock(
+  import("openclaw/plugin-sdk/conversation-binding-inspection-runtime"),
+  async (original) => ({
+    ...(await original()),
+    prepareConversationBindingInspections: (conversations) =>
+      prepareConversationInspections(
+        conversations,
+        () => publicBindingMocks.readBinding()?.bindingId,
+      ),
+  }),
+);
 
 vi.mock("./app-server/shared-client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./app-server/shared-client.js")>()),
@@ -202,7 +183,7 @@ import type { JsonValue } from "./app-server/protocol.js";
 import {
   createCodexAppServerBindingStore,
   createCodexTestBindingStateStore,
-  createConversationInspection,
+  prepareConversationInspections,
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore as bindings,
   testConversationIdentity as bindingIdentity,
@@ -1639,7 +1620,7 @@ it.each(["deleted history", "resume auth failure"] as const)(
   },
 );
 
-it("moves session history while clamping rootless inherited cwd to the agent workspace", async () => {
+it("moves queued session history while clamping rootless inherited cwd to the agent workspace", async () => {
   const source = sourceSession("source-session");
   const storePath = path.join(tempDir, "source.sqlite");
   await seedSession(source, storePath, { permissionMode: "workspace" });
@@ -1684,14 +1665,17 @@ it("moves session history while clamping rootless inherited cwd to the agent wor
   );
   exposeRetainedClient(client);
   await retainThread(client, source.threadId, releaseSource);
-  await expectReply(
-    claimData(
-      conversationData("binding-source-transfer", { source }),
-      { config: { session: { store: storePath } } },
-      "agent:main:destination-session",
-    ),
-    "Bound reply",
-  );
+  await withAdmittedSessionTurnForTest({ ...source, storePath }, async (operation) => {
+    expect(operation.phase).toBe("queued");
+    await expectReply(
+      claimData(
+        conversationData("binding-source-transfer", { source }),
+        { config: { session: { store: storePath } } },
+        source.sessionKey,
+      ),
+      "Bound reply",
+    );
+  });
 
   expect(requests.map(({ method }) => method)).toEqual([
     "thread/start",

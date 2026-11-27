@@ -1,3 +1,4 @@
+import { buildCodeSpanIndex } from "../../packages/markdown-core/src/code-spans.js";
 import { isSafeFenceBreak, type FenceSpan } from "../../packages/markdown-core/src/fences.js";
 import { findMarkdownTableRanges } from "../../packages/markdown-core/src/ir.js";
 
@@ -6,10 +7,73 @@ type TableSpan = BreakSpan & { header?: string };
 
 export type BreakSpans = {
   fences: FenceSpan[];
+  /** Markdown tables and fitting HTML islands, sorted by start. */
   tables: TableSpan[];
-  /** Fences and tables, sorted by start. */
+  /** Fences and tables, merged and sorted by start. */
   unsafe: BreakSpan[];
 };
+
+// Block-level HTML islands that channel renderers (for example Telegram rich
+// messages) parse only when the opening and closing tags arrive together.
+const HTML_ISLAND_TAG_RE =
+  /<(\/?)(details|table|ul|ol|dl|aside|blockquote|figure|tg-collage|tg-slideshow)(?=[\s/>])[^<>]*>/gi;
+
+/**
+ * Top-level HTML islands outside code that fit in one chunk. While streaming,
+ * an unclosed island extends past the buffer end, so even a break at the end
+ * stays inside it until its closer arrives or it outgrows maxChars.
+ */
+export function findHtmlIslandSpans(
+  source: string,
+  atLineStart: boolean,
+  maxChars: number,
+  streaming: boolean,
+): BreakSpan[] {
+  const spans: BreakSpan[] = [];
+  const open: string[] = [];
+  let start = 0;
+  let isInsideCode: ((index: number) => boolean) | undefined;
+  for (const match of source.matchAll(HTML_ISLAND_TAG_RE)) {
+    isInsideCode ??= buildCodeSpanIndex(source, undefined, { atLineStart }).isInside;
+    if (isInsideCode(match.index)) {
+      continue;
+    }
+    const name = (match[2] ?? "").toLowerCase();
+    if (!match[1]) {
+      if (open.push(name) === 1) {
+        start = match.index;
+      }
+      continue;
+    }
+    const depth = open.lastIndexOf(name);
+    if (depth < 0) {
+      continue;
+    }
+    open.length = depth;
+    const end = match.index + match[0].length;
+    if (depth === 0 && end - start <= maxChars) {
+      spans.push({ start, end });
+    }
+  }
+  if (streaming && open.length > 0 && source.length - start <= maxChars) {
+    spans.push({ start, end: source.length + 1 });
+  }
+  return spans;
+}
+
+/** Merge overlapping spans (islands can enclose fences and tables) for binary search. */
+export function mergeBreakSpans(spans: readonly BreakSpan[]): BreakSpan[] {
+  const merged: BreakSpan[] = [];
+  for (const span of spans.toSorted((left, right) => left.start - right.start)) {
+    const last = merged.at(-1);
+    if (last && span.start < last.end) {
+      last.end = Math.max(last.end, span.end);
+    } else {
+      merged.push({ start: span.start, end: span.end });
+    }
+  }
+  return merged;
+}
 
 function canRenderIndependently(source: string, table: BreakSpan): boolean {
   if (table.start === 0) {

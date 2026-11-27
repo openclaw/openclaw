@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { UnresolvedSecretInputError } from "../config/types.secrets.js";
 import type { PluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -34,6 +35,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createEnteredGate } from "./entered-gate.test-support.js";
+import { getPreparedModelRuntimePolicyConfigReader } from "./prepared-model-runtime-auth.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquirePublishedPreparedModelRuntime,
@@ -103,6 +105,10 @@ async function withRunFixture(
     const leases: PreparedModelRuntimeLease[] = [];
     const disposal = createEnteredGate();
     const catalog = createEnteredGate();
+    const catalogFailure = new UnresolvedSecretInputError({
+      path: "models.providers.run-owner-provider.apiKey",
+      ref: { source: "env", provider: "default", id: "UNRESOLVED_FIXTURE_KEY" },
+    });
     const bridge = {
       registrations,
       captureInstance: () => {
@@ -114,7 +120,7 @@ async function withRunFixture(
       },
       hold: false,
       disposal,
-      catalog: options.catalog,
+      catalog: options.catalog === "reject" ? catalogFailure : options.catalog,
       providers: {},
       catalogGate: catalog,
     };
@@ -163,7 +169,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     ...(bridge.catalog && api.id === ${JSON.stringify(providerId)} ? { staticCatalog: { async run() {
       await bridge.catalogGate.wait();
       if (database.prepare("SELECT value FROM answer").get().value !== 42) throw new Error("catalog lost registration state");
-      if (bridge.catalog === "reject") throw new Error("fixture static catalog failed");
+      if (bridge.catalog !== "hold") throw bridge.catalog;
       return { provider: { api: "openai-completions", baseUrl: "https://fixture.invalid/v1", models: [${JSON.stringify(model)}] } };
     } } } : {})
   };
@@ -290,14 +296,16 @@ it("retains a replaced RUN generation without letting its release retire the rep
       force: true,
     });
     const second = await acquire();
-    expect(first.snapshot === second.snapshot).toBe(false);
+    expect(first.snapshot.catalogOwner).not.toBe(second.snapshot.catalogOwner);
     const replacement = registration(registrations, providerId, old);
     expectRetained(old);
     await first[Symbol.asyncDispose]();
     await expect.poll(() => old.disposals).toBe(1);
     expect(readAnswer(replacement)).toBe(42);
     const third = await acquire();
-    expect(third.snapshot === second.snapshot).toBe(true);
+    expect(third.snapshot.catalogOwner).toBe(second.snapshot.catalogOwner);
+    expect(getPreparedModelRuntimePolicyConfigReader(third.snapshot)?.()).toBe(input.config);
+    expect(getPreparedModelRuntimePolicyConfigReader(second.snapshot)?.()).toBe(input.config);
     await second[Symbol.asyncDispose]();
     expectRetained(replacement);
     await third[Symbol.asyncDispose]();
@@ -454,7 +462,7 @@ it.each(["hold", "reject"] as const)(
           catalogGate.release();
           if (catalog === "reject") {
             await expect(pending.then(() => undefined)).rejects.toThrow(
-              "fixture static catalog failed",
+              "models.providers.run-owner-provider.apiKey: unresolved SecretRef",
             );
           }
           await closePreparedModelRuntimeSnapshots();

@@ -1,16 +1,20 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import type { ExecAllowlistAnalysis } from "../infra/exec-approvals-allowlist.js";
 import type { ExecAutoReviewDecision } from "../infra/exec-auto-review.js";
 import { tail } from "./bash-process-registry.js";
 import { formatExecApprovalContinuationSourceOutput } from "./bash-tools.exec-approval-output.js";
-import type { ProcessGatewayAllowlistParams } from "./bash-tools.exec-host-gateway.types.js";
+import type {
+  ProcessGatewayAllowlistParams,
+  ProcessGatewayAllowlistResult,
+} from "./bash-tools.exec-host-gateway.types.js";
 import { appendExecTimeoutRetryGuidance, normalizeNotifyOutput } from "./bash-tools.exec-output.js";
 import type {
-  ExecApprovalFollowupFactory,
   ExecApprovalFollowupOutcome,
   ExecToolDetails,
   ExecToolApprovalReview,
-} from "./bash-tools.exec-types.js";
+} from "./bash-tools.exec-result.types.js";
+import type { ExecApprovalFollowupFactory } from "./bash-tools.exec-types.js";
 import { formatExecDeniedReasonMessage } from "./exec-approval-result.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
@@ -128,6 +132,21 @@ export function buildGatewayExecApprovalFollowupSummary(params: {
   return appendExecTimeoutRetryGuidance(summary, params.outcome.exitReason);
 }
 
+export function buildGatewayExecAllowlistDeniedMessage(evaluation: ExecAllowlistAnalysis): string {
+  const unresolved = evaluation.authorizationPlan?.groups
+    .flatMap((group) => group.candidates)
+    .some(
+      ({ trustMode, sourceSegment: { resolution } }, index) =>
+        trustMode === "executable" &&
+        evaluation.segmentSatisfiedBy[index] === null &&
+        resolution !== null &&
+        !resolution.execution.resolvedPath,
+    );
+  return unresolved
+    ? "exec denied: executable could not be resolved; check command spelling and Gateway PATH or use an absolute executable path"
+    : "exec denied: allowlist miss";
+}
+
 export function buildGatewayExecApprovalDeniedToolResult(params: {
   approvalId?: string;
   deniedReason: string;
@@ -210,5 +229,18 @@ export function publishGatewayGuardianReview(
       approvalReviewOutcome,
       review,
     },
+  });
+}
+
+export function createGatewayExecDenial(
+  params: Pick<ProcessGatewayAllowlistParams, "command" | "workdir">,
+) {
+  return (deniedReason: string, approvalId?: string): ProcessGatewayAllowlistResult => ({
+    deniedResult: buildGatewayExecApprovalDeniedToolResult({
+      approvalId,
+      deniedReason,
+      command: params.command,
+      cwd: params.workdir,
+    }),
   });
 }

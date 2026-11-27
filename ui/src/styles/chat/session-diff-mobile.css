@@ -153,7 +153,7 @@ openclaw-session-diff:has(> .session-diff--mobile) {
 .session-diff--mobile .session-diff__file {
   padding: 0 12px 12px;
   border: 0;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--popover) 95%, var(--text) 5%);
 }
 
@@ -205,7 +205,6 @@ openclaw-session-diff:has(> .session-diff--mobile) {
   font-size: 14px;
   font-weight: 500;
   line-height: 20px;
-  overflow-wrap: anywhere;
 }
 
 .session-diff--mobile .session-diff__directory,
@@ -228,7 +227,7 @@ openclaw-session-diff:has(> .session-diff--mobile) {
 
 .session-diff--mobile .session-diff__file-body {
   overflow: hidden;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: var(--bg);
 }
 
@@ -301,7 +300,7 @@ openclaw-session-diff:has(> .session-diff--mobile) {
 
 .session-diff-mobile__rail .btn {
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   box-shadow: none;
 }

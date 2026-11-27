@@ -37,6 +37,7 @@ function createHarness(overrides: Partial<GatewayConfig> = {}) {
   };
   const { bridge } = createGatewayHarness({
     ...callbacks,
+    audioFormat: { encoding: "g711_ulaw", sampleRateHz: 8_000, channels: 1 },
     mediaSocketFactory: fakeQuicksilverMediaSocket(webSocketFactory),
     ...overrides,
   });
@@ -50,10 +51,7 @@ function createHarness(overrides: Partial<GatewayConfig> = {}) {
     start: async () => {
       const connection = bridge.connect();
       await vi.waitFor(() => expect(socket?.sent).toHaveLength(1));
-      if (!socket) {
-        throw new Error("expected direct socket");
-      }
-      return { socket, connection };
+      return { socket: socket!, connection };
     },
   };
 }
@@ -178,8 +176,10 @@ describe("GPT-Live Gateway direct transport", () => {
     const { socket: connectedSocket, connection } = await start();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     try {
+      bridge.sendAudio(Buffer.alloc(16_000, 0x80));
       emitSideband(connectedSocket, { type: "session.started", session: {} });
       await connection;
+      expect(Buffer.concat(readAudio(connectedSocket)).length).toBeGreaterThan(95_000);
       connectedSocket.emit("error", new Error("synthetic transport failure"));
       const closing = bridge.close();
       const beforeClose = connectedSocket.sent.length;
