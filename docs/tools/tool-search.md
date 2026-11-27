@@ -43,7 +43,9 @@ directory of the available trusted tool names, plus the structured
 lists names only: `tool_search` returns input signatures and `tool_describe`
 full schemas on demand, so descriptions are not repeated on every request.
 Setting `tools.toolSearch: true` or an object without a mode selects this
-structured surface. Direct-only tools remain visible alongside the controls. On
+structured surface. Direct-only tools remain visible alongside the controls, and so
+do OpenClaw tools that poll by design (such as `agents_wait` and `subagents`), so
+the tool repeat guard sees their own repeat exemption. On
 the default OpenClaw runner, an admitted `progress_card` also appears with its
 full schema in the first model request, so the agent can update the card
 without searching.
@@ -106,8 +108,9 @@ run:
 3. List eligible MCP tools through the session MCP runtime.
 4. Add eligible client tools supplied for the current run.
 5. Apply optional include/exclude selectors to the eligible catalog. Keep
-   unselected and excluded tools, core coding primitives, and direct-only tools
-   model-visible; index compact descriptors for selected eligible tools.
+   unselected and excluded tools, core coding primitives, polling tools and
+   direct-only tools model-visible; index compact descriptors for selected
+   eligible tools.
 6. Add a size-limited capability directory filtered by policy to the cache-stable
    system-prompt prefix. Selection uses fixed rules unless the usage-ranked
    tool index lab is enabled.

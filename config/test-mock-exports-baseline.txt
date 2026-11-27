@@ -5443,7 +5443,6 @@
 ["src/plugins/config-contracts.test.ts","./manifest-registry-installed.js","5d99b012f931a2ac2bfa721e8ead7c862866080611756894245d868271e2e0a2",1]
 ["src/plugins/config-contracts.test.ts","./manifest-registry.js","15dbf8d4d6c7d6b724783ea3c24696ad33d4b43ca84837f27dd9ee7f946d41a2",1]
 ["src/plugins/config-contracts.test.ts","./plugin-registry.js","fb8b294ea2b326715be59d57998dbcf42295d76a14355b174ba780dac827c6e3",1]
-["src/plugins/contracts/auth-choice.contract.test.ts","../../plugins/provider-auth-choice.runtime.js","af0edf3b0fb97e2cecb5ed8d0513f7757324ed558d6a3ffa02547115d4932e60",1]
 ["src/plugins/contracts/registry.retry.test.ts","../provider-contract-public-artifacts.js","bd1c72392e8af93b46cc6711f85e04f64a6c8ce78983e6284ec19454a1f2c9b0",1]
 ["src/plugins/contracts/registry.retry.test.ts","../web-provider-public-artifacts.explicit.js","cbfec6031cd412f509366893839ac17786fe6743ea1e83a377af988764dd50d2",1]
 ["src/plugins/contracts/runtime-seams.contract.test.ts","../../config/plugin-auto-enable.js","07163ec5a3bfb74bd13edde12f6460d34b03a94d76333cb815a07c2368c1ded8",1]

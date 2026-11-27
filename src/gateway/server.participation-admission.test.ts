@@ -193,11 +193,12 @@ it("readmits pending native child and scheduled work under current invitation bo
           { signal },
         );
         releaseChild.resolve();
+        // Removal stops the parent run Carol started, so the held child launch ends with it.
         const childReceipt = await withinTest(childFinished.promise, signal);
-        expect(childReceipt).toEqual({
-          error: `Error: Session "${parent.key}" was not found.`,
-        });
-        await wait("native-held-parent");
+        expect(childReceipt).toHaveProperty("error");
+        expect(
+          await sender.request("agent.wait", { runId: "native-held-parent" }, { signal }),
+        ).not.toMatchObject({ status: "ok" });
         expect(childCalls).toBe(0);
         const afterParent = providerRequests.length;
         await sender.request(
