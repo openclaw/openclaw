@@ -4,6 +4,7 @@ import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getDatabaseProcessRole } from "../../infra/database-engine/admission-scope.js";
 import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
 import { observeOwnedDirectory } from "../../infra/owned-directory-observation.js";
 import { isPathInside } from "../../infra/path-guards.js";
@@ -130,6 +131,31 @@ function pool() {
   ));
 }
 
+/**
+ * Discovery reads: scan, plan, projection and status. A one-shot CLI waits for them before
+ * its first model request, so it runs them in process instead of booting the worker. The
+ * request environment is the one this process captured, so applying it changes nothing.
+ * Filesystem mutations keep the worker, whose host channel carries their authority checks.
+ */
+function discoveryReads(): {
+  run(input: SkillsDiscoveryInput, options: { timeoutMs: number }): Promise<SkillsDiscoveryOutput>;
+} {
+  if (getDatabaseProcessRole() !== "cli-oneshot") {
+    return pool();
+  }
+  return {
+    async run(input, { timeoutMs }) {
+      const { runSkillsDiscoveryTask } = await import("./discovery-task.js");
+      const signal = AbortSignal.timeout(timeoutMs);
+      return await runSkillsDiscoveryTask(input, undefined, {
+        signal,
+        throwIfCancelled: () => signal.throwIfAborted(),
+        runNativeSection: async (operation) => await operation(),
+      });
+    },
+  };
+}
+
 export const {
   prepareSkillResourceRoot,
   prepareSandboxMounts,
@@ -215,7 +241,7 @@ function scanDirtySources(): Promise<void> {
       }
       let results: SkillsDiscoveryResult[];
       try {
-        const response = await pool().run(
+        const response = await discoveryReads().run(
           {
             kind: "scan",
             nativeMode: getFsSafeNativeConfig().mode,
@@ -406,7 +432,7 @@ export async function prepareSkillSourcePlan(
       if (state.plans.size >= MAX_SOURCES) {
         state.plans.delete(state.plans.keys().next().value!);
       }
-      return pool()
+      return discoveryReads()
         .run({ kind: "plan", input }, { timeoutMs: 120_000 })
         .then((result) => {
           if (result.kind !== "plan") {
@@ -426,7 +452,7 @@ export async function projectSkillSnapshot(
   if (state.closing) {
     await state.closing;
   }
-  const result = await pool().run(
+  const result = await discoveryReads().run(
     {
       kind: "project",
       input,
@@ -456,7 +482,7 @@ export async function prepareSkillStatusFacts(
   if (state.closing) {
     await state.closing;
   }
-  const result = await pool().run(
+  const result = await discoveryReads().run(
     { kind: "status", input, environment: captureSkillsDiscoveryEnvironment() },
     { timeoutMs: 120_000 },
   );
