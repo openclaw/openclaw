@@ -323,7 +323,11 @@ export async function resumeExistingCodexThread(
       // durable policy edit, not a cold capability verdict. The durable policy
       // is the request; capability filtering can suppress native search (for
       // example domain restrictions) without an operator denial.
-      webSearchRequested: params.webSearchRequested ?? params.persistentWebSearchAllowed ?? params.webSearchAllowed ?? false,
+      webSearchRequested: 
+        params.webSearchRequested ??
+        params.persistentWebSearchAllowed ??
+        params.webSearchAllowed ??
+        false,
       mcpServersFingerprint:
         params.mcpServersFingerprintEvaluated === true
           ? params.mcpServersFingerprint
@@ -651,7 +655,11 @@ export async function startFreshCodexThread(
       webSearchThreadConfigFingerprint,
       // Same durable-policy fact as the resume write: capability filtering must
       // not look like an operator denial.
-      webSearchRequested: params.webSearchRequested ?? params.persistentWebSearchAllowed ?? params.webSearchAllowed ?? false,
+      webSearchRequested:
+        params.webSearchRequested ?? 
+        params.persistentWebSearchAllowed ?? 
+        params.webSearchAllowed ?? 
+        false,
       nativeToolPolicyRestricted: restrictedToolSurface ? true : undefined,
     };
     const managedSourceHomeId = codexCatalogHomeId(
