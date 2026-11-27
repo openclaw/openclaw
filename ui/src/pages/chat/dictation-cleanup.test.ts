@@ -7,7 +7,7 @@ const source = { id: "capture-1", revision: 7, text: "um please call me tomorrow
 
 describe("dictation review source checks", () => {
   it("does not apply review to Off, an interim result, or an unsupported locale", () => {
-    expect(dictationReviewReason(source, { version: 1, mode: "off" })).toBe("off");
+    expect(dictationReviewReason(source, { version: 1, mode: "off", locale: null })).toBe("off");
     expect(dictationReviewReason({ ...source, isFinal: false }, conservative)).toBe("not-final");
     expect(dictationReviewReason(source, { ...conservative, locale: null })).toBe(
       "unsupported-locale",
