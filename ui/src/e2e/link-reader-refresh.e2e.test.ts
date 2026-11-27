@@ -11,6 +11,9 @@ it("keeps the retained title readable through refresh failure and retry at every
   const overview: ControlUiLinkReaderDocument = {
     url,
     title: "Keep loaded reader controls reachable in constrained panes",
+    subtitle: "example/release-engineering-and-deployment-automation #203950",
+    badge: { label: "Open", tone: "positive" },
+    createdAt: "2026-09-23T11:08:47Z",
     body: "Readable retained details.\n\n".repeat(40),
   };
   const artifacts = createControlUiE2eArtifactDir(
@@ -22,7 +25,7 @@ it("keeps the retained title readable through refresh failure and retry at every
     { methodResponses: { "forge.detail": overview } },
     async ({ page, gateway, panel, content }) => {
       const refresh = panel
-        .locator(".lr-toolbar")
+        .locator(".lr-document-header")
         .getByRole("button", { name: "Refresh item", exact: true });
       const heading = panel.getByRole("heading", { name: overview.title, exact: true });
       await heading.waitFor();
@@ -33,6 +36,27 @@ it("keeps the retained title readable through refresh failure and retry at every
           await openChatPanels(page, "mobile");
         }
         await takeControlUiScreenshotFrame(page, panel, [heading], { animations: "disabled" });
+        const reference = panel.locator(".lr-eyebrow");
+        const referenceNumberIsVisible = () =>
+          reference.evaluate((node) => {
+            const text = node.textContent ?? "";
+            const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+            let offset = text.lastIndexOf("#203950");
+            for (let part = walker.nextNode(); part; part = walker.nextNode()) {
+              const length = part.textContent?.length ?? 0;
+              if (offset >= 0 && offset + 7 <= length) {
+                const range = document.createRange();
+                range.setStart(part, offset);
+                range.setEnd(part, offset + 7);
+                const number = range.getBoundingClientRect();
+                const ink = part.parentElement!.getBoundingClientRect();
+                return number.width > 0 && number.right <= ink.right + 1;
+              }
+              offset -= length;
+            }
+            return false;
+          });
+        expect(await referenceNumberIsVisible()).toBe(true);
         const before = await heading.boundingBox();
         const after = await gateway.deferNext("forge.detail");
         await refresh.click();
@@ -49,6 +73,13 @@ it("keeps the retained title readable through refresh failure and retry at every
               retryable: true,
             });
             await expect.poll(() => refresh.isEnabled()).toBe(true);
+            // The failure takes the date's place in the header; the title below stays put.
+            const notice = panel.locator(".lr-document-header .lr-notice");
+            expect(await notice.textContent()).toBe("Refresh unavailable. Try again.");
+            // The reference gives way before the notice does, even in a phone-width pane.
+            expect(await notice.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(
+              true,
+            );
           }
           const frame = await takeControlUiScreenshotFrame(page, panel, [heading], {
             animations: "disabled",
@@ -71,23 +102,13 @@ it("keeps the retained title readable through refresh failure and retry at every
             }),
           );
         }
-        if (width === 390) {
-          const requests = (await gateway.getRequests("forge.detail")).length;
-          const actions = panel.getByRole("button", { name: "Link reader actions", exact: true });
-          await actions.tap();
-          await page
-            .getByRole("menu", { name: "Link reader actions", exact: true })
-            .getByText("Refresh unavailable. Try again.", { exact: true })
-            .waitFor();
-          expect((await gateway.getRequests("forge.detail")).length).toBe(requests);
-          await actions.tap();
-        }
         await content.evaluate((node) => {
           node.scrollTop = 200;
         });
         const scrollTop = await content.evaluate((node) => node.scrollTop);
         const retry = await gateway.deferNext("forge.detail");
-        await refresh.click();
+        // Refresh sits in the document header; a pointer click would scroll back to it first.
+        await refresh.dispatchEvent("click");
         expect(
           (await gateway.waitForRequest("forge.detail", { after: retry })).params,
         ).toMatchObject({ url, refresh: true });
@@ -98,6 +119,35 @@ it("keeps the retained title readable through refresh failure and retry at every
           node.scrollTop = 0;
         });
       }
+      const longError = "GitHub API rate limit exceeded (HTTP 429). Wait 60 seconds and retry.";
+      const after = await gateway.deferNext("forge.detail");
+      await refresh.click();
+      await gateway.waitForRequest("forge.detail", { after });
+      await gateway.rejectDeferred("forge.detail", {
+        code: "UNAVAILABLE",
+        message: longError,
+        retryable: true,
+      });
+      await expect.poll(() => refresh.isEnabled()).toBe(true);
+      const disclosure = panel.getByRole("button", { name: longError, exact: true });
+      expect(await disclosure.isVisible()).toBe(true);
+      const details = panel.getByRole("dialog", { name: longError, exact: true });
+      await disclosure.tap();
+      const expanded = await takeControlUiScreenshotFrame(page, panel, [details], {
+        animations: "disabled",
+      });
+      writeFileSync(path.join(artifacts, "390-error-expanded.png"), expanded.png);
+      expect(await details.textContent()).toBe(longError);
+      const bounds = await details.boundingBox();
+      const titleBounds = await heading.boundingBox();
+      expect(Math.abs(bounds!.x - titleBounds!.x)).toBeLessThan(1);
+      expect(await details.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+      await page.keyboard.press("Escape");
+      await details.waitFor({ state: "hidden" });
+      await expect.poll(() => disclosure.getAttribute("aria-expanded")).toBe("false");
+      await disclosure.press("Enter");
+      await details.waitFor({ state: "visible" });
+      expect(await disclosure.getAttribute("aria-expanded")).toBe("true");
     },
     { hasTouch: true },
   );

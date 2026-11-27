@@ -1,7 +1,7 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayErrorDetails
-import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.i18n.nativeText
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
@@ -276,7 +276,7 @@ class CronJobManagementTest {
   @Test
   fun mapsCronRevisionConflicts() {
     val conflict =
-      GatewaySession.ErrorShape(
+      ErrorShape(
         code = "INVALID_REQUEST",
         message = "changed",
         details =

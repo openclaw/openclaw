@@ -732,7 +732,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps Home activity and unsent attention stable while rail controls appear", async () => {
+  it("keeps Home activity centered without outbox badges while rail controls appear", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -789,7 +789,7 @@ suite.define(() => {
         await expect
           .poll(() => home.locator(".session-glyph--running .session-glyph__ring").count())
           .toBe(1);
-        await expect.poll(() => home.locator(".session-row-badge--attention").count()).toBe(1);
+        expect(await home.locator(".session-row-badges").count()).toBe(0);
 
         await page.mouse.move(900, 400);
         const restingActivity = await activity.boundingBox();

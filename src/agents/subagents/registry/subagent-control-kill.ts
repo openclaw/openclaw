@@ -170,8 +170,7 @@ async function killLatestSubagentRun(params: {
         requiredSessionId: params.requiredSessionId,
         stateContext: scope.stateContext,
         cancellationControl,
-        isCurrent: (candidate, requirePreparedSession) =>
-          tree.isCurrent(candidate, requirePreparedSession) && matchesExpected(candidate),
+        isCurrent: (candidate) => tree.isCurrent(candidate) && matchesExpected(candidate),
         withdrawQueuedReservation: () => tree.dispatchHold?.withdraw(),
         refreshDescendants: scope.refresh,
       })
@@ -209,14 +208,14 @@ async function killLatestSubagentRun(params: {
     ) {
       await pending;
     }
-    if (!tree.canTraverse() || !matchesExpected(tree.entry)) {
+    if (!(result.killed ? tree.ownsRun() : tree.canTraverse()) || !matchesExpected(tree.entry)) {
       return { entry: tree.entry, session, result: { ...result, superseded: true } };
     }
     // A terminal model result can retain ordinary commands after its run signal
     // is gone. Drain that exact request without replacing the completed task receipt.
     commands.observe(tree.entry);
     commands.cancel(() => {
-      if (!tree.canTraverse() || !matchesExpected(tree.entry)) {
+      if (!(result.killed ? tree.ownsRun() : tree.canTraverse()) || !matchesExpected(tree.entry)) {
         throw new Error("Subagent ownership changed during command cancellation.");
       }
     });
@@ -633,6 +632,7 @@ export async function killSubagentRunAdmin(
   }
 
   let rootStopSuperseded = false;
+  let rootKilled = false;
   return withSubagentKillScope<SubagentAdminKillResult>(
     {
       cfg: params.cfg,
@@ -667,6 +667,7 @@ export async function killSubagentRunAdmin(
       });
       const { result: stopResult, cascade } = stopped;
       rootStopSuperseded = stopResult.superseded === true;
+      rootKilled = stopResult.killed;
       // Descendant cleanup can yield long enough for the target run to finish.
       // Return the freshest registry state so task cancellation cannot make a stale kill sticky.
       const targetState = resolveSubagentKillTargetState(tree.entry) ?? stopResult.targetState;
@@ -701,9 +702,9 @@ export async function killSubagentRunAdmin(
       if (!result.found || !tree) {
         return result;
       }
-      // Completion can commit during the awaited handoff. Fence both the retained
-      // run and its session incarnation before any synchronous result publication.
-      const ownsOutcome = !rootStopSuperseded && tree.ownsRun() && tree.canTraverse();
+      // The claimed row keeps its outcome when a successor session appears during cleanup.
+      const ownsOutcome =
+        !rootStopSuperseded && tree.ownsRun() && (rootKilled || tree.canTraverse());
       if (!ownsOutcome) {
         tree.errors.add("Subagent ownership changed during cancellation; retry.");
       }

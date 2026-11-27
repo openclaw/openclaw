@@ -20,8 +20,11 @@ export type SimpleCompletionSelectionParams = {
 };
 
 export function resolveSimpleCompletionSelectionRequest(
-  params: SimpleCompletionSelectionParams,
-): { selection: AgentSimpleCompletionSelection; shorthandModelId?: string } | null {
+  params: Omit<SimpleCompletionSelectionParams, "agentDir">,
+): {
+  selection: Omit<AgentSimpleCompletionSelection, "agentDir">;
+  shorthandModelId?: string;
+} | null {
   const fallbackRef = resolveDefaultModelForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -73,7 +76,6 @@ export function resolveSimpleCompletionSelectionRequest(
       provider,
       modelId,
       profileId: split?.profile || undefined,
-      agentDir: params.agentDir?.trim() || resolveAgentDir(params.cfg, params.agentId),
     },
     ...(split && !split.model.includes("/") ? { shorthandModelId: split.model } : {}),
   };
@@ -82,5 +84,11 @@ export function resolveSimpleCompletionSelectionRequest(
 export function resolveSimpleCompletionSelectionForAgent(
   params: SimpleCompletionSelectionParams,
 ): AgentSimpleCompletionSelection | null {
-  return resolveSimpleCompletionSelectionRequest(params)?.selection ?? null;
+  const request = resolveSimpleCompletionSelectionRequest(params);
+  return request
+    ? {
+        ...request.selection,
+        agentDir: params.agentDir?.trim() || resolveAgentDir(params.cfg, params.agentId),
+      }
+    : null;
 }

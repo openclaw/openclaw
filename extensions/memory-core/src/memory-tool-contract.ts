@@ -142,26 +142,26 @@ export function buildMemoryPromptSection({
 
   // Code mode may defer tool descriptions; recall and disclosure policy must stay here.
   const guidance = hasMemorySearch
-    ? `When an answer depends on prior work, decisions, dates, people, preferences, or todos not already present in the current turn, run memory_search without corpus to search the configured sources${
-        hasMemoryGet ? "; for memory-file hits, use memory_get to pull only the needed lines" : ""
-      }. Do not repeat memory retrieval when supplied context fully answers the question. Use corpus=all only when compiled wiki supplements are needed. If low confidence after search, say you checked.`
-    : "When an answer depends on prior work, decisions, dates, people, preferences, or todos not already present in the current turn and points to a specific memory file, run memory_get to pull only the needed lines. Do not repeat memory retrieval when supplied context fully answers the question. If low confidence after reading, say you checked.";
+    ? `When an answer depends on prior work, decisions, dates, people, preferences, or todos not in this turn, run memory_search without corpus${
+        hasMemoryGet ? "; memory_get only the needed lines of file hits" : ""
+      }. Skip it when supplied context fully answers. Use corpus=all only when compiled wiki supplements are needed. If unsure after searching, say you checked.`
+    : "When an answer depends on prior work, decisions, dates, people, preferences, or todos not in this turn and points to a memory file, memory_get only the needed lines. Skip it when supplied context fully answers. If unsure after reading, say you checked.";
   const sessionGuidance = !hasMemorySearch
     ? []
     : [
         availableTools.has("sessions_search")
-          ? `For session hits, use sessions_search with distinctive snippet text (and sessionKey set to the transcript ID when known)${
+          ? `Session hits: sessions_search with distinctive snippet text (sessionKey = transcript ID when known)${
               availableTools.has("sessions_history")
-                ? ", then sessions_history with the returned sessionKey, messageId, and sessionId for a bounded sanitized excerpt"
-                : "; exact session history is unavailable with the enabled tools"
+                ? ", then sessions_history with the returned sessionKey, messageId, and sessionId"
+                : "; exact session history is unavailable"
             }.`
           : availableTools.has("sessions_history")
-            ? "For session hits, use sessions_history with a known session key or transcript ID and a small limit; paginate its returned history metadata to locate the excerpt."
-            : "Session hits are search snippets only; exact session history is unavailable with the enabled tools.",
-        "Session search line numbers are not history offsets. Never read raw transcript files to expand session hits.",
+            ? "Session hits: sessions_history with a known session key or transcript ID and a small limit; paginate to the excerpt."
+            : "Session hits are snippets only; exact session history is unavailable.",
+        "Search line numbers are not history offsets; never read raw transcript files.",
       ];
   const outcomeGuidance =
-    "Report recall as partial, unavailable, or stale when the result includes a top-level warning or action guidance, or explicitly sets disabled=true or stale=true. In a multi-corpus result without a top-level warning or action guidance, treat an optional corpus outcome of not-registered as informational.";
+    "Report recall as partial, unavailable, or stale on a top-level warning or action guidance, disabled=true, or stale=true; in a multi-corpus result without one, an optional corpus outcome of not-registered is informational.";
   const citationGuidance =
     citationsMode === "off"
       ? "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks."

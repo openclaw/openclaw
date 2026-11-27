@@ -10,6 +10,7 @@ import {
 import { freezeOwnedDiagnosticSnapshot } from "../infra/diagnostic-value-snapshot.js";
 import { getSessionRowSelectionMetrics } from "../infra/gateway-work-metrics.js";
 import { getOldGenerationAfterGcBytes } from "../infra/gc-observer.js";
+import { captureDelegatedMemoryPressureReader } from "../infra/host-memory.js";
 import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
 import { getWorkerMessageMetrics } from "../infra/worker-message-metrics.js";
 import { createSubsystemLogger } from "./subsystem.js";
@@ -23,7 +24,8 @@ const memoryPressure = channel("openclaw.memory.critical");
 
 // Bun's compatibility probe walks the heap and does not describe a V8 allocation limit.
 let defaultHeapSizeLimitBytes: number | undefined;
-const DEFAULT_PROCESS_MEMORY_LIMIT_BYTES = process.constrainedMemory();
+let defaultProcessMemoryLimitBytes: number | undefined;
+type DelegatedMemoryPressureReader = ReturnType<typeof captureDelegatedMemoryPressureReader>;
 const DEFAULT_PHYSICAL_MEMORY_BYTES = totalmem();
 const DEFAULT_IS_BUN_RUNTIME = typeof process.versions.bun === "string";
 
@@ -66,8 +68,9 @@ async function readProcessFootprint(): Promise<ProcessFootprint> {
 
 /** One pending OS read must never hold the heartbeat's liveness or pressure checks. */
 export function createDiagnosticMemorySampler(isCurrent: () => boolean) {
+  const readDelegated = captureDelegatedMemoryPressureReader();
   let pending = false;
-  return (
+  const sampleMemory = (
     emitSample: boolean,
     options?: { emitMemorySample?: EmitDiagnosticMemorySample },
   ): void => {
@@ -77,7 +80,11 @@ export function createDiagnosticMemorySampler(isCurrent: () => boolean) {
     }
     const linuxSample = emitSample && process.platform === "linux";
     const sampledAt = performance.now();
-    const memory = emitDiagnosticMemorySample({ emitSample: emitSample && !linuxSample });
+    const memory = emitDiagnosticMemorySample(
+      { emitSample: emitSample && !linuxSample },
+      true,
+      readDelegated,
+    );
     if (!linuxSample || pending) {
       return;
     }
@@ -105,6 +112,10 @@ export function createDiagnosticMemorySampler(isCurrent: () => boolean) {
         );
       }
     });
+  };
+  return {
+    sampleMemory,
+    checkPressure: () => emitDiagnosticMemorySample(undefined, false, readDelegated),
   };
 }
 
@@ -328,6 +339,7 @@ export function emitDiagnosticMemorySample(
     emitSample?: boolean;
   },
   collectDiagnostics = true,
+  readDelegated?: DelegatedMemoryPressureReader,
 ): DiagnosticMemoryUsage {
   const now = options?.now ?? Date.now();
   const memory = normalizeMemoryUsage(
@@ -339,7 +351,11 @@ export function emitDiagnosticMemorySample(
     ? undefined
     : (options?.heapSizeLimitBytes ??
       (defaultHeapSizeLimitBytes ??= getHeapStatistics().heap_size_limit));
-  const processLimitBytes = options?.processMemoryLimitBytes ?? DEFAULT_PROCESS_MEMORY_LIMIT_BYTES;
+  const delegated = readDelegated?.();
+  const processLimitBytes = delegated
+    ? delegated.limitBytes
+    : (options?.processMemoryLimitBytes ??
+      (defaultProcessMemoryLimitBytes ??= process.constrainedMemory()));
   const physicalMemoryBytes = options?.physicalMemoryBytes ?? DEFAULT_PHYSICAL_MEMORY_BYTES;
   const memoryLimits = [processLimitBytes, physicalMemoryBytes].filter(isPositiveMemoryLimit);
   // Node/Linux accounts for cgroup charges that RSS does not include. Unconstrained
@@ -350,7 +366,9 @@ export function emitDiagnosticMemorySample(
     isPositiveMemoryLimit(processLimitBytes) &&
     isPositiveMemoryLimit(physicalMemoryBytes) &&
     processLimitBytes < physicalMemoryBytes
-      ? process.availableMemory()
+      ? delegated
+        ? delegated.availableBytes
+        : process.availableMemory()
       : undefined;
   const processMemory =
     availableMemoryBytes !== undefined &&

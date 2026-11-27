@@ -173,6 +173,7 @@ it.each<[string, Partial<Cost> | undefined, Cost, boolean?, Partial<Cost>?]>([
     };
     const configuredProvider = {
       baseUrl: "https://models.example/v1",
+      api: "openai-completions" as const,
       apiKey: "CATALOG_FIXTURE_KEY",
       models: [configuredModel],
     };
