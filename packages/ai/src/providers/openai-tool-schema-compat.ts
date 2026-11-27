@@ -108,6 +108,11 @@ function collectStrictSchemaViolations(
   if (Array.isArray(record.type) && !record.type.every((type) => typeof type === "string")) {
     violations.push(`${path}.type`);
   }
+  // Strict mode needs every value schema typed; an untyped node ({} or annotations only) is
+  // valid JSON Schema but outside the strict subset.
+  if (!("type" in record) && !("$ref" in record) && !("enum" in record) && !("const" in record)) {
+    violations.push(`${path}.type`);
+  }
   if (typeof record.pattern === "string" && hasRegexLookaround(record.pattern)) {
     violations.push(`${path}.pattern`);
   }

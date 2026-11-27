@@ -139,6 +139,7 @@ describe("OpenAI strict tool schema normalization", () => {
   it("keeps a closed tool with a union key non-strict, but accepts a nullable type list", () => {
     const union = objectSchema({ mode: { anyOf: [{ enum: ["auto"] }, { type: "integer" }] } });
     expect(resolveOpenAIToolStrictFlag(union, true)).toBe(false);
+    expect(resolveOpenAIToolStrictFlag(objectSchema({ value: {} }), true)).toBe(false);
     const nullable = objectSchema({ limit: { type: ["integer", "null"] } });
     expect(resolveOpenAIToolStrictFlag(nullable, true)).toBe(true);
   });
