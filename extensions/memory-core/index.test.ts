@@ -203,7 +203,8 @@ describe("buildPromptSection", () => {
     if (tools[0] === "memory_get") {
       expect(result[1]).not.toContain("run memory_search");
     }
-    expect(result.join("\n")).not.toContain("Citations");
+    // The disclosure limit stays in the prompt, where Code Mode cannot defer it.
+    expect(result.join("\n").includes("Citations are disabled")).toBe(citationsMode === "off");
     expect(result.at(-1)).toBe("");
   });
 

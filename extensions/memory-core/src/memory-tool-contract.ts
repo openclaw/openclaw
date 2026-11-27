@@ -148,6 +148,7 @@ export type MemoryToolContract = (
 
 export function buildMemoryPromptSection({
   availableTools,
+  citationsMode,
 }: Parameters<MemoryPromptSectionBuilder>[0]): string[] {
   const hasMemorySearch = availableTools.has("memory_search");
   const hasMemoryGet = availableTools.has("memory_get");
@@ -155,11 +156,17 @@ export function buildMemoryPromptSection({
     return [];
   }
 
-  // Recall triggers stay eager; retrieval recipes live in the deferred descriptions.
+  // Recall triggers and disclosure limits stay eager: Code Mode may defer tool descriptions.
+  // Retrieval recipes live in those descriptions.
   const guidance = hasMemorySearch
     ? "Answer needs prior work, decisions, dates, people, preferences, or todos absent from this turn? Run memory_search; skip when supplied context fully answers."
     : "When an answer depends on prior work, decisions, dates, people, preferences, or todos not in this turn and points to a memory file, use memory_get. Skip it when supplied context fully answers.";
-  return ["## Memory Recall", guidance, ""];
+  return [
+    "## Memory Recall",
+    guidance,
+    ...(citationsMode === "off" ? [describeMemoryCitations(citationsMode)] : []),
+    "",
+  ];
 }
 
 /** Ask agents to tag repository-specific curated entries with the run's safe project key. */
