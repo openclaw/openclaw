@@ -39,6 +39,10 @@ export function createLobsterTool() {
     description:
       "Run Lobster workflows with resumable approvals and structured input. For needs_input, ask the user the returned prompt, then resume with their answer as responseJson matching responseSchema. For approvals, resume with approve. Use cancel: true to cancel a checkpoint.",
     parameters: LobsterParameters,
+    // A completed lobster run/resume delivers the workflow's side effects
+    // (messages, webhooks, commits). Cap it at one completion per user input so
+    // a stalled or looping agent cannot deliver fresh cards on every repeat.
+    sideEffect: true,
     async execute(_id: string, params: Record<string, unknown>) {
       const action = typeof params.action === "string" ? params.action.trim() : "";
       if (!action) {

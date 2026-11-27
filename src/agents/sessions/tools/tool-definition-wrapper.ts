@@ -20,6 +20,7 @@ function toolDefinitionMetadata<TParams extends TSchema>(
     executionMode: tool.executionMode,
     interruptible: tool.interruptible,
     repeatable: tool.repeatable,
+    ...(tool.sideEffect !== undefined ? { sideEffect: tool.sideEffect } : {}),
     ...(tool.async === false ? { async: false as const } : {}),
   };
 }

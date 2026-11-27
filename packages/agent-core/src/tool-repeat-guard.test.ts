@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import { captureAgent, makeCall, makeTool } from "./agent-loop.test-support.js";
 import { setInternalToolRepeatPolicy } from "./internal-hooks.js";
 import {
-  type SideEffectVerdict,
   TOOL_REPEAT_LIMIT_CODE,
   TOOL_REPEAT_NOTE_AT,
   TOOL_REPEAT_STOP_AT,
@@ -230,7 +229,6 @@ describe("completed-effect budget (side_effect_budget)", () => {
 
   it("blocks the second successful invocation even when signatures alternate", async () => {
     const executed: string[] = [];
-    const verdicts: SideEffectVerdict[] = [];
     // Alternating wrapper/dispatch style calls: distinct arguments every time,
     // so the consecutive streak never reaches its cap — only the completed-effect
     // budget can stop this loop.

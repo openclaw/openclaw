@@ -110,9 +110,10 @@ export async function runAgentLoop(
   const inputPrompts = prompts.filter((message) => !isOpenClawSystemUpdateMessage(message));
   await emit({ type: "agent_start" });
   await emit({ type: "turn_start" });
-  await commitInputMessages(inputPrompts, state.context, config, emit, newMessages, () =>
-    resetToolRepeatState(repeatState),
-  );
+  await commitInputMessages(inputPrompts, state.context, config, emit, newMessages, () => {
+    resetToolRepeatState(repeatState);
+    resetSideEffectBudgetState(budgetState);
+  });
   if (inputPrompts.length > 0 && newMessages.length === 0) {
     // A drained queue batch can be cancelled while turn_start listeners settle.
     // Close without a provider call so cancelled input cannot become an empty continuation.
@@ -543,29 +544,11 @@ async function executeToolCalls(
       }
     }
   }
-  // Completed-effect budget: refuse an opted-in side-effecting tool that has
-  // already completed successfully this user input. Keyed on tool name only,
-  // so alternating signatures and distinct payloads cannot evade it.
-  for (const toolCall of toolCalls) {
-    if (signal?.aborted) {
-      break;
-    }
-    const resolution = await resolveToolCallTool(batch, toolCall);
-    const budgetVerdict = observeSideEffectBudget(
-      sideEffectBudgetState,
-      toolCall,
-      resolution.kind === "resolved" ? resolution.tool : undefined,
-    );
-    if (budgetVerdict) {
-      config.onSideEffectBudget?.(budgetVerdict);
-      return await completeToolRepeatStopBatch(
-        batch,
-        toolCalls,
-        { ...budgetVerdict, count: budgetVerdict.completedCount },
-        createSideEffectBudgetStopResult(budgetVerdict),
-      );
-    }
-  }
+  // Completed-effect budget admission now runs per call at the execution
+  // boundary inside executeToolCallGroups/prepareToolCallEntry, so a batch
+  // containing several calls to the same opted-in tool cannot all see a spent
+  // or unspent count together. Only an already-spent budget stops the whole
+  // batch here; calls admitted before the budget was spent settle normally.
   let hasSequentialToolCall = false;
   if (config.toolExecution !== "sequential") {
     for (const toolCall of toolCalls) {
@@ -650,6 +633,10 @@ async function executeToolCallGroups(
   let steeringMessages: AgentMessage[] = [];
   let cursor = 0;
   let fatal: ExecutedToolCallBatch["fatal"];
+  // Per-call budget admission stops individual calls, so unlike the old
+  // batch-level pre-check it must still surface a terminal verdict when every
+  // call in the group was refused; otherwise the loop keeps sampling.
+  let sideEffectStopVerdict: SideEffectVerdict | undefined;
 
   while (cursor < toolCalls.length) {
     if (sequential && batch.toolPlan.executionStarted && !batch.signal?.aborted) {
@@ -685,6 +672,7 @@ async function executeToolCallGroups(
           const entry = await prepareToolCallEntry(batch, toolCall);
           entries.push(entry);
           if (!("kind" in entry)) {
+            sideEffectStopVerdict ??= budgetStopVerdictForToolCall(batch, entry);
             await emitToolExecutionEnd(entry, batch);
           }
           if (sequential || batch.signal?.aborted) {
@@ -812,11 +800,45 @@ async function executeToolCallGroups(
     throw mergeToolExecutionFailure(fatal, error).error;
   }
 
+  const termination = resolveToolBatchTermination(finalizedCalls);
+  if (sideEffectStopVerdict && termination.terminate) {
+    batch.onTerminalLoop?.();
+    return {
+      messages,
+      steeringMessages,
+      ...termination,
+      repeatStop: { ...sideEffectStopVerdict, count: sideEffectStopVerdict.completedCount },
+      ...(fatal ? { fatal } : {}),
+    };
+  }
   return {
     messages,
     steeringMessages,
-    ...resolveToolBatchTermination(finalizedCalls),
+    ...termination,
     ...(fatal ? { fatal } : {}),
+  };
+}
+
+/**
+ * Returns the side-effect budget verdict for a finalized call that was refused
+ * before execution because its tool's completed-effect budget was spent.
+ */
+function budgetStopVerdictForToolCall(
+  batch: ToolBatchContext,
+  finalized: FinalizedToolCallOutcome,
+): SideEffectVerdict | undefined {
+  if (!batch.sideEffectBudgetState || finalized.executionStarted) {
+    return undefined;
+  }
+  const block = finalized.result.details as { deniedReason?: unknown } | undefined;
+  if (block?.deniedReason !== "side_effect_budget") {
+    return undefined;
+  }
+  return observeSideEffectBudget(batch.sideEffectBudgetState, finalized.toolCall, undefined) ?? {
+    kind: "stop",
+    toolCallId: finalized.toolCall.id,
+    toolName: finalized.toolCall.name,
+    completedCount: batch.sideEffectBudgetState.counts.get(finalized.toolCall.name) ?? 0,
   };
 }
 
@@ -827,6 +849,33 @@ async function prepareToolCallEntry(
   toolCall: AgentToolCall,
 ): Promise<FinalizedToolCallEntry> {
   const hideFromChannelProgress = hidesToolCallFromChannelProgress(batch, toolCall);
+  // Completed-effect budget admission happens per call immediately before this
+  // call starts, so several calls to the same opted-in tool in one assistant
+  // message cannot all pass a batch-level pre-check and exceed the cap.
+  if (batch.sideEffectBudgetState) {
+    const resolution = await resolveToolCallTool(batch, toolCall);
+    const budgetVerdict = observeSideEffectBudget(
+      batch.sideEffectBudgetState,
+      toolCall,
+      resolution.kind === "resolved" ? resolution.tool : undefined,
+    );
+    if (budgetVerdict) {
+      batch.config.onSideEffectBudget?.(budgetVerdict);
+      const stopResult = createSideEffectBudgetStopResult(budgetVerdict);
+      await emitToolExecutionStart(batch, toolCall, hideFromChannelProgress);
+      return await finalizeToolCallOutcome(
+        batch,
+        {
+          toolCall,
+          result: stopResult,
+          isError: true,
+          executionStarted: false,
+          ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+        },
+        toolCall.arguments,
+      );
+    }
+  }
   await emitToolExecutionStart(batch, toolCall, hideFromChannelProgress);
   const preparation = await prepareToolCall(batch, toolCall);
   if (preparation.kind === "immediate") {
