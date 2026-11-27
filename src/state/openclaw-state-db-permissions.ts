@@ -298,13 +298,12 @@ export function ensureOpenClawStatePermissions(
  */
 export function hasOpenClawStatePermissionDrift(pathname: string, env: NodeJS.ProcessEnv): boolean {
   const { dir, isDefaultStateDatabase } = resolveStatePermissionDirectory(pathname, env);
-  const targets: Array<[string, number]> = [
-    ...(isDefaultStateDatabase ? [[dir, OPENCLAW_STATE_DIR_MODE] as [string, number]] : []),
-    ...resolveSqliteDatabaseFilePaths(pathname).map((candidate): [string, number] => [
-      candidate,
-      OPENCLAW_STATE_FILE_MODE,
-    ]),
-  ];
+  const targets: Array<[string, number]> = resolveSqliteDatabaseFilePaths(pathname).map(
+    (candidate) => [candidate, OPENCLAW_STATE_FILE_MODE],
+  );
+  if (isDefaultStateDatabase) {
+    targets.push([dir, OPENCLAW_STATE_DIR_MODE]);
+  }
   return targets.some(([target, mode]) => {
     try {
       return (statSync(target).mode & 0o7777) !== mode;
