@@ -251,7 +251,7 @@ public final class ChatModelPickerStore {
         "nvidia": "NVIDIA", "opencode": "OpenCode", "openrouter": "OpenRouter", "vllm": "vLLM", "zai": "Z.AI",
     ]
 
-    private static func providerDisplayName(_ provider: String) -> String {
+    nonisolated static func providerDisplayName(_ provider: String) -> String {
         switch provider {
         case "anthropic": "Anthropic"
         case "google", "google-gemini-cli": "Google"

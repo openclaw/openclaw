@@ -708,9 +708,10 @@ extension OpenClawSnapshotUITests {
             thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)))
     }
 
-    /// Model sign-in is the picker's last row; at the medium detent it can sit below the fold.
+    /// Provider accounts is the picker's last row; the composer can also offer a sign-in shortcut.
     func pickerSignInRow(in app: XCUIApplication) -> XCUIElement {
-        let signIn = app.buttons["chat-model-sign-in"]
+        let signIn = app.buttons.matching(NSPredicate(
+            format: "identifier == %@ AND label == %@", "chat-model-sign-in", "Provider accounts")).element
         if !signIn.waitForExistence(timeout: 2) {
             self.expandModelPickerSheet(in: app)
         }
