@@ -79,7 +79,7 @@ async function withSkillLocks<T>(keys: readonly string[], run: () => Promise<T>)
 export function firstReviewChangeForCurrentSkill(
   feed: readonly WorkshopChange[],
   name: string,
-  runId: string,
+  reviewChangeIds: ReadonlySet<string>,
 ): WorkshopChange | undefined {
   let first: WorkshopChange | undefined;
   // Newest first. An independent create separates this skill from an earlier one of the same name.
@@ -87,7 +87,7 @@ export function firstReviewChangeForCurrentSkill(
     if (row.skillName !== name) {
       continue;
     }
-    if (row.runId === runId && row.actor === "review") {
+    if (row.actor === "review" && reviewChangeIds.has(row.id)) {
       first = row;
     } else if (row.action === "create") {
       break;
@@ -113,8 +113,13 @@ export function prepareSkillMutation(
     ctx.assertLive?.();
     const undo = ctx.undoReviewChange;
     if (undo) {
-      const feed = await listWorkshopChanges(ctx.agentId, { limit: WORKSHOP_CHANGES_MAX_LIMIT });
-      if (firstReviewChangeForCurrentSkill(feed, name, undo.runId)?.id !== undo.id) {
+      const limit = WORKSHOP_CHANGES_MAX_LIMIT;
+      const [reviewChanges, feed] = await Promise.all([
+        listWorkshopChanges(ctx.agentId, { runId: undo.runId, limit }),
+        listWorkshopChanges(ctx.agentId, { limit }),
+      ]);
+      const reviewChangeIds = new Set(reviewChanges.map((change) => change.id));
+      if (firstReviewChangeForCurrentSkill(feed, name, reviewChangeIds)?.id !== undo.id) {
         throw new WorkshopWriteError(
           `Cannot undo the review change to "${name}": its history changed. Refresh the Workshop and try again.`,
         );

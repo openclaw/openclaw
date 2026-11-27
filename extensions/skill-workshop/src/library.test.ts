@@ -235,26 +235,37 @@ it("versions and restores legacy names, including undoing an undo and an archive
   expect(await liveNames()).toEqual([name]);
 });
 
-it("checks the creation ID after a queued same-name create takes the skill lock", async () => {
-  const name = liveSkillName;
-  const content = skill(name, "Deploy the service.");
-  const original = await lib.createWorkshopSkill({ ...ctx, actor: "review" }, { name, content });
-  await archive();
-  const user = { ...ctx, actor: "user" as const };
-  const [replacement, undo] = await Promise.allSettled([
-    lib.createWorkshopSkill(user, { name, content }),
-    lib.archiveWorkshopSkill(
-      { ...user, undoReviewChange: { id: original.id, runId } },
-      { name, reason: "undo" },
-    ),
-  ]);
-  expect(replacement.status).toBe("fulfilled");
-  expect(undo).toMatchObject({ status: "rejected", reason: expect.any(lib.WorkshopWriteError) });
-  expect(await readLive()).toBe(content);
-  expect(await lib.listWorkshopChanges("main", { limit: 1 })).toMatchObject([
-    { action: "create", actor: "user" },
-  ]);
-});
+it.each(["user", "review"] as const)(
+  "rechecks review membership after a queued same-name create by %s",
+  async (actor) => {
+    const name = liveSkillName;
+    const content = skill(name, "Deploy the service.");
+    const original = await lib.createWorkshopSkill({ ...ctx, actor: "review" }, { name, content });
+    await archive();
+    const user = { ...ctx, actor: "user" as const };
+    const [replacement, undo] = await Promise.allSettled([
+      lib.createWorkshopSkill({ ...ctx, actor }, { name, content }),
+      lib.archiveWorkshopSkill(
+        { ...user, undoReviewChange: { id: original.id, runId } },
+        { name, reason: "undo" },
+      ),
+    ]);
+    expect(replacement.status).toBe("fulfilled");
+    if (actor === "review") {
+      expect(undo).toMatchObject({ status: "fulfilled", value: { action: "archive" } });
+      expect(await liveNames()).not.toContain(name);
+    } else {
+      expect(undo).toMatchObject({
+        status: "rejected",
+        reason: expect.any(lib.WorkshopWriteError),
+      });
+      expect(await readLive()).toBe(content);
+      expect(await lib.listWorkshopChanges("main", { limit: 1 })).toMatchObject([
+        { action: "create", actor: "user" },
+      ]);
+    }
+  },
+);
 
 it("undoes an archived version restore without changing the default or losing its redo", async () => {
   const name = liveSkillName;

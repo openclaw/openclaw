@@ -72,10 +72,12 @@ async function revertReview(
   runId: string,
   reviewId: string,
 ): Promise<WorkshopReviewUndoResult> {
-  // Newest first; reversed, the first entry per skill is the review's first change of it.
-  const reviewChanges = (
-    await listWorkshopChanges(ctx.agentId, { runId, limit: WORKSHOP_CHANGES_MAX_LIMIT })
-  ).toReversed();
+  const limit = WORKSHOP_CHANGES_MAX_LIMIT;
+  const [newestReviewChanges, feed] = await Promise.all([
+    listWorkshopChanges(ctx.agentId, { runId, limit }),
+    listWorkshopChanges(ctx.agentId, { limit }),
+  ]);
+  const reviewChanges = newestReviewChanges.toReversed();
   const reviewStart = reviewChanges[0];
   if (!reviewStart) {
     throw new WorkshopReviewNotFoundError(`No skill changes recorded for review ${runId}.`);
@@ -83,7 +85,6 @@ async function revertReview(
   // The feed drops its oldest rows past the cap. If it is full and nothing older than this
   // review's first retained row is left, the review's first changes may be gone, and their
   // revert anchors with them; refuse rather than restore the wrong version.
-  const feed = await listWorkshopChanges(ctx.agentId, { limit: WORKSHOP_CHANGES_MAX_LIMIT });
   const oldestRetained = feed.at(-1);
   if (
     feed.length >= WORKSHOP_CHANGES_MAX_LIMIT &&
@@ -103,12 +104,13 @@ async function revertReview(
       })
     ).map((change) => change.skillName),
   );
+  const reviewChangeIds = new Set(reviewChanges.map((change) => change.id));
   const names = new Set(reviewChanges.map((change) => change.skillName));
   const live = new Set(
     (await listWorkshopSkills(ctx.config, ctx.agentId)).map((skill) => skill.name),
   );
   const targets = [...names].flatMap((name) => {
-    const first = firstReviewChangeForCurrentSkill(feed, name, runId);
+    const first = firstReviewChangeForCurrentSkill(feed, name, reviewChangeIds);
     return first && !undone.has(name) && (first.versionId || live.has(name)) ? [first] : [];
   });
   // Check every saved version before the first write, so a pruned one refuses the whole undo.
