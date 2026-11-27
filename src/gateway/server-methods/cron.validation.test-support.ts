@@ -254,7 +254,7 @@ function channelConfig(channels: NonNullable<OpenClawConfig["channels"]>): OpenC
   return { channels, plugins: pluginEntries(...Object.keys(channels)) };
 }
 
-export function slackConfig(params: { includeMainSession?: boolean } = {}): OpenClawConfig {
+function slackConfig(params: { includeMainSession?: boolean } = {}): OpenClawConfig {
   return {
     ...(params.includeMainSession ? { session: { mainKey: "main" } } : {}),
     ...channelConfig({ slack: { botToken: "xoxb-slack-token", appToken: "xapp-slack-token" } }),
