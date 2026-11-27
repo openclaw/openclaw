@@ -37,12 +37,10 @@ import {
   isWorkflowDispatch,
   ghField,
   expectDispatchFailure,
+  expectCandidateToolingLagWarning,
+  rejectArgs,
 } from "./full-release-validation-at-sha.test-support.js";
 import { publicationSelectionFixture } from "./full-release-validation-state.test-support.js";
-
-function rejectArgs(args: string[], error: string) {
-  expect(() => parseArgs(args)).toThrow(error);
-}
 
 describe("full-release-validation-at-sha", () => {
   it("continues candidate dispatch after a tooling comparison fails", () => {
@@ -71,6 +69,7 @@ describe("full-release-validation-at-sha", () => {
   });
 
   it("does not depend on a manually maintained release-path inventory", () => {
+    expectCandidateToolingLagWarning();
     const fixture = createDispatchFixture({ candidateOwned: true });
     const result = fixture.run();
 
