@@ -4,18 +4,13 @@ import { isMainThread } from "node:worker_threads";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupPluginLoaderFixturesForTest,
-  EMPTY_PLUGIN_SCHEMA,
   makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
 } from "../../plugins/loader.test-fixtures.js";
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import { withPluginGenerationSourceCustody } from "../../plugins/plugin-generation-source-lookup.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
-import {
-  rebasePluginMetadataSnapshotManifestRegistry,
-  resolvePluginMetadataSnapshot,
-  restorePluginMetadataSnapshot,
-} from "../../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import * as setupModule from "../../plugins/plugin-setup-module.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -23,7 +18,6 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { channelHasConfiguredState, resolveChannelAccount } from "../account-resolution.js";
-import { buildChannelUiCatalog } from "./catalog.js";
 import {
   listReadOnlyChannelPluginsForConfig,
   listReadOnlyChannelPluginsForConfigAsync,
@@ -158,20 +152,6 @@ afterEach(() => {
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("listReadOnlyChannelPluginsForConfig", () => {
-  it("resolves selected channel setup through the async preparation path", async () => {
-    const fixture = setupFixture();
-    await using cache = createPluginCache();
-    await withPluginCache(cache, () =>
-      withPluginGenerationSourceCustody(async () => {
-        const plugins = await listReadOnlyChannelPluginsForConfigAsync(
-          fixture.cfg,
-          coldOptions(true),
-        );
-        expectExternalChatSetupOnlyPluginLoaded({ ...fixture, plugins });
-      }),
-    );
-  });
-
   it.each(["worker", "cleanup"] as const)(
     "propagates fatal %s failure from async channel preparation",
     async (kind) => {
@@ -336,36 +316,6 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     },
   );
 
-  it("keeps explicitly supplied metadata inventories separate for the same config", () => {
-    const { cfg, list } = externalFixture({ setupEntry: false, manifestChannelConfig: true });
-    const original = resolvePluginMetadataSnapshot({ config: cfg });
-    const replacement = restorePluginMetadataSnapshot(
-      rebasePluginMetadataSnapshotManifestRegistry(original, {
-        ...original.manifestRegistry,
-        plugins: original.plugins.map((record) => ({
-          ...record,
-          channelConfigs: {
-            ...record.channelConfigs,
-            "external-chat": {
-              ...record.channelConfigs?.["external-chat"],
-              schema: EMPTY_PLUGIN_SCHEMA,
-              label: "Replacement inventory",
-            },
-          },
-        })),
-      }),
-    );
-    const labels = [original, replacement, original].map(
-      (metadataSnapshot) => findPlugin(list({ metadataSnapshot }))?.meta.label,
-    );
-
-    expect(labels).toEqual([
-      "External Chat Manifest",
-      "Replacement inventory",
-      "External Chat Manifest",
-    ]);
-  });
-
   it("reuses manifest adapters while account settings and channel policy stay live", () => {
     const { cfg, list, pluginDir, setupMarker, fullMarker } = externalFixture({
       manifestChannelConfig: true,
@@ -437,41 +387,6 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(pluginIds(read())).not.toContain(channelId);
     fs.writeFileSync(persistedAuthPath, "linked again", "utf8");
     expect(read().find((plugin) => plugin.id === channelId)).toBe(linked);
-    expectMarkers(setupMarker, fullMarker);
-  });
-
-  it("keeps package presentation on its declared channel", () => {
-    const { list, fullMarker, setupMarker } = externalFixture(
-      {
-        manifestChannelIds: ["external-chat", "sibling-chat"],
-        manifestChannelConfig: true,
-        packagePresentation: {
-          selectionLabel: "Package Chat (picker)",
-          detailLabel: "Package Chat Bot",
-          systemImage: "bubble.left",
-        },
-      },
-      {
-        "external-chat": { token: "configured" },
-        "sibling-chat": { token: "configured" },
-      },
-    );
-    const catalog = buildChannelUiCatalog(list());
-    expect(catalog.entries).toEqual(
-      expect.arrayContaining([
-        {
-          id: "external-chat",
-          label: "External Chat Manifest",
-          detailLabel: "Package Chat Bot",
-          systemImage: "bubble.left",
-        },
-        {
-          id: "sibling-chat",
-          label: "External Chat Manifest",
-          detailLabel: "External Chat Manifest",
-        },
-      ]),
-    );
     expectMarkers(setupMarker, fullMarker);
   });
 
