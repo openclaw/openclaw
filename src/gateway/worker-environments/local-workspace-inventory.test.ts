@@ -53,7 +53,12 @@ it.each([
   ];
   const full = new Set((await requireGitBuffer(host, listing)).toString().split("\0"));
   const scoped = (await readLocalWorkspaceGitExclusions(host, projection, new Set())).paths;
-  const candidates = new Set(files.flatMap((file) => [file, ...workspacePathAncestors(file)]));
+  const candidates = new Set(files);
+  for (const file of files) {
+    for (const ancestor of workspacePathAncestors(file)) {
+      candidates.add(ancestor);
+    }
+  }
   const answers = (ignored: ReadonlySet<string>) =>
     [...candidates].filter((candidate) => isIgnoredWorkspaceBuildOutput(candidate, ignored));
   expect(answers(full)).not.toEqual([]);
