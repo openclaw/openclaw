@@ -32,7 +32,7 @@ import {
 import { VERSION } from "../version.js";
 import { runReleaseUpdateCli } from "./cli.js";
 import * as serviceConversion from "./convert-service.js";
-import { settleRunFromTrial } from "./gateway-trial.js";
+import { announceReady } from "./gateway-trial.js";
 import { preflight } from "./preflight.js";
 import { registerAlreadyCurrentUpdateTests } from "./prepare-current.test-support.js";
 import { prepareGit } from "./prepare-git.js";
@@ -45,7 +45,7 @@ import {
 import { preparePackage } from "./prepare-package.js";
 import { bin, executable, node, repository, root } from "./prepare.test-support.js";
 import { prepareUpdate } from "./run.js";
-import { readTrial, resolvePrefix, switchLink } from "./store.js";
+import { readTrial, resolvePrefix, switchLink, writeTrial } from "./store.js";
 import * as targets from "./target.js";
 import { resolveTarget } from "./target.js";
 
@@ -830,11 +830,13 @@ if (process.argv[2] !== 'install') {
           expect(result.stdout.trim()).toBe("running");
         }
         expect((await readTrial(prefix))?.phase).toBe("pending");
-        await settleRunFromTrial({
+        await writeTrial({
           ...(await readTrial(prefix))!,
           phase: "rolled-back",
           outcome: { status: "rolled-back", reason: "new build failed to start", at: Date.now() },
         });
+        vi.stubEnv("OPENCLAW_LAUNCHER_IPC", "");
+        await announceReady(null);
         const rolledBack = await getUpdateRunAsync(run.runId);
         expect(rolledBack?.status).toBe("failed");
         expect(rolledBack?.origin.releaseAdmission).toEqual(preparedRun?.origin.releaseAdmission);
