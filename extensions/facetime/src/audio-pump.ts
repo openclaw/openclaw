@@ -45,7 +45,8 @@ type FaceTimeAudioPump = {
   stop(): Promise<void>;
 };
 
-function sanitizedAudioChildEnv(): NodeJS.ProcessEnv {
+/** Native media children never need provider or Gateway credentials. */
+export function sanitizedCaptureChildEnv(): NodeJS.ProcessEnv {
   return Object.fromEntries(
     Object.entries(process.env).filter(
       ([key]) => !/(?:API_?KEY|AUTH|CREDENTIAL|PASSWORD|SECRET|TOKEN)/iu.test(key),
@@ -61,13 +62,15 @@ class PlaybackClock {
   private retiredFrames = 0;
   private items: Array<{ itemId?: string; frames: number }> = [];
 
-  append(frames: number, itemId?: string): void {
+  /** Returns the wall-clock time at which the appended audio starts playing. */
+  append(frames: number, itemId?: string): number {
     const nowMs = Date.now();
     if (nowMs >= this.playbackUntilMs) {
       this.playedFramesBeforeSegment = this.generatedFrames;
       this.playbackStartsAtMs = nowMs + OUTPUT_LATENCY_BUDGET_MS;
       this.playbackUntilMs = this.playbackStartsAtMs;
     }
+    const startsAtMs = this.playbackUntilMs;
     this.generatedFrames += frames;
     this.playbackUntilMs += (frames / FACETIME_AUDIO_SAMPLE_RATE_HZ) * 1000;
     const previous = this.items.at(-1);
@@ -76,6 +79,7 @@ class PlaybackClock {
     } else {
       this.items.push({ itemId, frames });
     }
+    return startsAtMs;
   }
 
   playbackState(): RealtimeVoicePlaybackItem[] {
@@ -173,7 +177,7 @@ function spawnAudioProcess(process: AudioProcess, env: NodeJS.ProcessEnv): Child
   return spawn(command, args, { env, stdio });
 }
 
-async function terminateProcess(proc: ChildProcess, signal: NodeJS.Signals = "SIGTERM") {
+export async function terminateProcess(proc: ChildProcess, signal: NodeJS.Signals = "SIGTERM") {
   if (proc.killed && signal !== "SIGKILL") {
     return;
   }
@@ -234,8 +238,12 @@ export function startFaceTimeAudioPump(params: {
   onError?: (error: Error) => boolean | void | Promise<boolean | void>;
   onSuppressionLost?: (error: Error) => void | Promise<void>;
   onPlaybackDrained?: () => void;
+  /** Observes accepted model audio with the wall-clock time at which the caller hears it. */
+  onOutputAudio?: (audio: Buffer, startsAtMs: number) => void;
+  /** Queued model audio was discarded: interruption, suspension, or stop. */
+  onOutputCleared?: () => void;
 }): FaceTimeAudioPump {
-  const childEnv = sanitizedAudioChildEnv();
+  const childEnv = sanitizedCaptureChildEnv();
   const playbackClock = new PlaybackClock();
   let drainTimer: NodeJS.Timeout | undefined;
   let outputProcess: ChildProcess;
@@ -306,6 +314,7 @@ export function startFaceTimeAudioPump(params: {
     outputProcess = spawnOutput();
     cancelDrainTimer();
     playbackClock.reset();
+    params.onOutputCleared?.();
     void terminateProcess(previous, "SIGKILL");
   };
   const stop = async () => {
@@ -318,6 +327,7 @@ export function startFaceTimeAudioPump(params: {
     routeReady.settle(new Error("FaceTime input route stopped before verification"));
     cancelDrainTimer();
     playbackClock.reset();
+    params.onOutputCleared?.();
     try {
       captureProcess.stdin?.write(CAPTURE_CLOSE_SAFE_FRAME);
       captureProcess.stdin?.end();
@@ -403,7 +413,9 @@ export function startFaceTimeAudioPump(params: {
       try {
         cancelDrainTimer();
         outputProcess.stdin.write(audio);
-        playbackClock.append(audio.byteLength / 2, metadata?.itemId);
+        // The clock must advance on every chunk, observed or not.
+        const startsAtMs = playbackClock.append(audio.byteLength / 2, metadata?.itemId);
+        params.onOutputAudio?.(audio, startsAtMs);
       } catch (error) {
         reportFailure(error instanceof Error ? error : new Error(formatErrorMessage(error)), false);
       }
@@ -441,6 +453,7 @@ export function startFaceTimeAudioPump(params: {
         mediaSuspended = true;
         cancelDrainTimer();
         playbackClock.reset();
+        params.onOutputCleared?.();
         await terminateProcess(outputProcess, "SIGKILL");
       }
     },

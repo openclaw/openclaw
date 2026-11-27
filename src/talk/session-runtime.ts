@@ -11,6 +11,7 @@ import type {
   RealtimeVoiceBridgeCallbacks,
   RealtimeVoiceAudioClearReason,
   RealtimeVoiceBargeInOptions,
+  RealtimeVoiceImageInput,
   RealtimeVoiceToolCallEvent,
 } from "./provider-types.js";
 import { resolveRealtimeVoiceBargeIn } from "./realtime-session-policy.js";
@@ -38,6 +39,8 @@ export type RealtimeVoiceBridgeSession = Pick<
   bridge: RealtimeVoiceBridge;
   readonly capabilities?: InternalRealtimeVoiceProviderCapabilities;
   sendUserMessage(text: string): void;
+  /** Returns false when the session is closed or its provider cannot accept images. */
+  sendImage(image: RealtimeVoiceImageInput): boolean;
   handleBargeIn(options?: RealtimeVoiceBargeInOptions): void;
   triggerGreeting(instructions?: string): void;
 };
@@ -151,6 +154,17 @@ export function createRealtimeVoiceBridgeSession(
         const bridge = requireBridge();
         requestResponse(bridge.sendUserMessage?.bind(bridge, text));
       }
+    },
+    sendImage: (image) => {
+      if (!isAdmitting()) {
+        return false;
+      }
+      const bridge = requireBridge();
+      if (!bridge.sendImage) {
+        return false;
+      }
+      bridge.sendImage(image);
+      return true;
     },
     handleBargeIn: (options) => {
       if (!isAdmitting()) {

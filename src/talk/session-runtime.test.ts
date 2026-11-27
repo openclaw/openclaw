@@ -569,4 +569,20 @@ describe("native delegation session facade", () => {
       await session.close();
     }
   });
+
+  it("forwards images only while open and only to a provider that accepts them", async () => {
+    const image = { mimeType: "image/jpeg" as const, data: Buffer.from([0xff, 0xd8, 0xff]) };
+    const sendImage = vi.fn();
+    const sighted = createSession({}, makeBridge({ sendImage }));
+    const blind = createSession();
+
+    expect(sighted.session.sendImage(image)).toBe(true);
+    expect(sendImage).toHaveBeenCalledExactlyOnceWith(image);
+    expect(blind.session.sendImage(image)).toBe(false);
+
+    await sighted.session.close();
+    await blind.session.close();
+    expect(sighted.session.sendImage(image)).toBe(false);
+    expect(sendImage).toHaveBeenCalledOnce();
+  });
 });

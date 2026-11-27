@@ -1,5 +1,6 @@
 import type {
   RealtimeVoiceBridge,
+  RealtimeVoiceImageInput,
   RealtimeVoiceSessionConnection,
   RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
@@ -142,6 +143,30 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeProtocol implements Real
       type: "input_audio_buffer.append",
       audio: audio.toString("base64"),
     });
+  }
+
+  sendImage(image: RealtimeVoiceImageInput): void {
+    // A frame is only useful while it is current, so a disconnected session drops it
+    // instead of replaying a stale view after reconnect.
+    if (!this.isConnected()) {
+      return;
+    }
+    this.sendEvent(
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_image",
+              image_url: `data:${image.mimeType};base64,${image.data.toString("base64")}`,
+            },
+          ],
+        },
+      },
+      `image bytes=${image.data.byteLength}`,
+    );
   }
 
   sendUserMessage(text: string, options?: OpenAIRealtimeUserMessageOptions): void {

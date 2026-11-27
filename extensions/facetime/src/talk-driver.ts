@@ -17,18 +17,22 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { startFaceTimeAudioPump } from "./audio-pump.js";
+import type { FaceTimeAvatarSink } from "./avatar-feed.js";
 import type { FaceTimeConfig } from "./config.js";
 import { createFaceTimeConsultController } from "./talk-consult-controller.js";
 import {
   agentIdFromSessionKey,
   buildRealtimeInstructions,
   FACETIME_END_CALL_TOOL,
+  FACETIME_LOOK_TOOL,
+  FACETIME_LOOK_TOOL_NAME,
   INPUT_AUDIO_STATUS_INTERVAL_MS,
   MAX_TRANSCRIPT_CHARS,
   MAX_TRANSCRIPT_ENTRY_CHARS,
   REALTIME_READY_TIMEOUT_MS,
   resolveFaceTimeRealtimeProvider,
 } from "./talk-driver-config.js";
+import { createFaceTimeVision } from "./talk-vision.js";
 
 // The carrier can report active before its newly enabled media route is audible.
 // Give that route one short settling window. Only a real caller transcript may
@@ -46,6 +50,9 @@ export async function startFaceTimeTalkDriver(params: {
   callUUID: string;
   senderId: string;
   captureBinary: string;
+  /** Present only when vision is enabled and the native video helper is installed. */
+  videoCaptureBinary?: string;
+  avatar?: FaceTimeAvatarSink;
   signal?: AbortSignal;
   onHangupRequested: () => Promise<void>;
   onFailure?: (error: Error) => boolean | Promise<boolean>;
@@ -91,6 +98,7 @@ export async function startFaceTimeTalkDriver(params: {
   let stopped = false;
   let mediaSuspended = false;
   let bridge: RealtimeVoiceBridgeSession | undefined;
+  let vision: ReturnType<typeof createFaceTimeVision> | undefined;
   let lastInputAudioStatusAt = 0;
   let callMediaTimestampMs = 0;
   let modelMediaGeneration = 1;
@@ -179,6 +187,9 @@ export async function startFaceTimeTalkDriver(params: {
     mediaSuspendedDeferred.reject(mediaSuspensionError);
     interruptProviderConnect?.();
     consultController.abortForClose();
+    params.avatar?.setCallActive(false);
+    // Capture stops reading frames now; its child exit joins after the audio path is safe.
+    const visionStopped = vision?.stop();
     suspendMediaPromise = (async () => {
       try {
         await bridge?.close();
@@ -198,6 +209,7 @@ export async function startFaceTimeTalkDriver(params: {
       }
       resetResponsePlayback();
       finishOutputAudio(reason);
+      await visionStopped;
     })();
     return await suspendMediaPromise;
   };
@@ -386,6 +398,8 @@ export async function startFaceTimeTalkDriver(params: {
       return safeToClose;
     },
     onPlaybackDrained: finishDrainedResponse,
+    onOutputAudio: params.avatar?.speak,
+    onOutputCleared: params.avatar?.clear,
   });
   const providerConnect = (async () => {
     let removeAbortListener: (() => void) | undefined;
@@ -417,6 +431,21 @@ export async function startFaceTimeTalkDriver(params: {
       if (params.signal?.aborted || stopped || mediaSuspended) {
         throw new Error("FaceTime talk startup aborted");
       }
+      if (params.videoCaptureBinary) {
+        if (resolved.capabilities?.supportsVideoFrames === true) {
+          vision = createFaceTimeVision({
+            captureBinary: params.videoCaptureBinary,
+            logger: params.logger,
+            getBridge: () => bridge,
+            ensureTurn,
+            remember,
+          });
+        } else {
+          params.logger.warn(
+            `[facetime] vision is enabled, but the ${resolved.provider.id} realtime model for this call cannot receive images; continuing without it`,
+          );
+        }
+      }
       bridge = createRealtimeVoiceBridgeSession({
         provider: resolved.provider,
         capabilities: resolved.capabilities,
@@ -430,6 +459,7 @@ export async function startFaceTimeTalkDriver(params: {
           instructions: params.config.realtime.instructions,
           bootstrapContext,
           toolPolicy: params.config.realtime.toolPolicy,
+          vision: vision !== undefined,
         }),
         autoRespondToAudio: true,
         triggerGreetingOnReady: false,
@@ -437,6 +467,7 @@ export async function startFaceTimeTalkDriver(params: {
         markStrategy: "ack-immediately",
         tools: resolveRealtimeVoiceAgentConsultTools(params.config.realtime.toolPolicy, [
           FACETIME_END_CALL_TOOL,
+          ...(vision ? [FACETIME_LOOK_TOOL] : []),
         ]),
         audioSink: {
           isOpen: () => !stopped && !mediaSuspended,
@@ -541,7 +572,10 @@ export async function startFaceTimeTalkDriver(params: {
         onResponseDone(outcome) {
           finishResponseOutcome(outcome, true);
         },
-        onToolCall: consultController.handleToolCall,
+        onToolCall: (event) =>
+          vision && event.name === FACETIME_LOOK_TOOL_NAME && !stopped && !mediaSuspended
+            ? vision.handleLook(event)
+            : consultController.handleToolCall(event),
         onReady() {
           if (!stopped && !mediaSuspended) {
             remember({ type: "session.ready", payload: { callUUID: params.callUUID } });
@@ -579,6 +613,13 @@ export async function startFaceTimeTalkDriver(params: {
           })();
         },
       });
+      if (vision && !bridge.bridge.sendImage) {
+        // The model family can see, but this provider's Gateway bridge has no image input.
+        // The look tool then answers that it cannot see; the caller hears that, not silence.
+        params.logger.warn(
+          `[facetime] vision is enabled, but the ${resolved.provider.id} realtime bridge cannot send images; looks will report no view`,
+        );
+      }
       await bridge.connect();
     };
     try {
@@ -656,6 +697,7 @@ export async function startFaceTimeTalkDriver(params: {
         return;
       }
       activated = true;
+      params.avatar?.setCallActive(true);
       initialGreeting.schedule();
     },
     suspendMedia,

@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import type { FaceTimeAvatarSink } from "./avatar-feed.js";
 import { normalizeFaceTimeCallEvent } from "./call-events.js";
 import { resolveFaceTimeConfig, validateFaceTimeConfig, type FaceTimeConfig } from "./config.js";
 import { installFaceTimeDriver } from "./driver-setup.js";
@@ -25,7 +26,11 @@ import {
   type PendingFaceTimeDial,
 } from "./outbound-call.js";
 import { PendingFaceTimeDialStore } from "./pending-dial-store.js";
-import { ensureCaptureBinary, ensureHelperArtifacts } from "./plugin-paths.js";
+import {
+  ensureCaptureBinary,
+  ensureHelperArtifacts,
+  resolveVideoCaptureBinary,
+} from "./plugin-paths.js";
 import { runFaceTimePreflight, type FaceTimePreflightResult } from "./preflight.js";
 import { createFaceTimeCallControl } from "./runtime-call-control.js";
 import { createFaceTimeCallEventHandler } from "./runtime-call-events.js";
@@ -64,6 +69,7 @@ export async function createFaceTimeRuntime(params: {
   runtime: PluginRuntime;
   logger: RuntimeLogger;
   pluginRoot: string;
+  avatar?: FaceTimeAvatarSink;
 }): Promise<FaceTimeRuntime> {
   const config = resolveFaceTimeConfig(params.config);
   if (!config.enabled) {
@@ -97,6 +103,12 @@ export async function createFaceTimeRuntime(params: {
   let driverInstallTask: Promise<void> | undefined;
   const isDriverInstallPending = () => driverInstall.phase === "installing";
   const captureBinary = await ensureCaptureBinary();
+  const videoCaptureBinary = config.vision.enabled ? await resolveVideoCaptureBinary() : undefined;
+  if (config.vision.enabled && !videoCaptureBinary) {
+    params.logger.warn(
+      "[facetime] vision is enabled, but the installed native package has no facetime-video-capture helper; calls continue without it",
+    );
+  }
   const { buildId: helperBuildId, ipcKey: helperIpcKey } = await ensureHelperArtifacts({
     pluginRoot: params.pluginRoot,
     runCommandWithTimeout: params.runtime.system.runCommandWithTimeout,
@@ -328,6 +340,8 @@ export async function createFaceTimeRuntime(params: {
     runtime: params.runtime,
     logger: params.logger,
     captureBinary,
+    videoCaptureBinary,
+    avatar: params.avatar,
     isStopping: () => stopping,
     getHelperTopologyVersion: () => helperTopologyVersion,
   });
@@ -372,6 +386,7 @@ export async function createFaceTimeRuntime(params: {
       runtime: params.runtime,
       helperConnected: helper.connectedSockets > 0,
       captureBinary,
+      videoCaptureBinary,
     });
 
   return {

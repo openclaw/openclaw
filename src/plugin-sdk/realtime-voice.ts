@@ -27,6 +27,7 @@ export type {
   RealtimeVoiceCloseOptions,
   RealtimeVoiceBrowserSession,
   RealtimeVoiceGatewayControl,
+  RealtimeVoiceImageInput,
   RealtimeVoiceProviderCapabilities,
   RealtimeVoiceCloseReason,
   RealtimeVoiceProviderConfig,

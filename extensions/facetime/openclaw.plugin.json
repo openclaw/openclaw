@@ -46,6 +46,20 @@
             }
           }
         }
+      },
+      "vision": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "default": false }
+        }
+      },
+      "avatar": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "default": false }
+        }
       }
     }
   },
@@ -59,7 +73,17 @@
     "realtime.model": { "label": "Realtime Model", "advanced": true },
     "realtime.voice": { "label": "Realtime Voice", "advanced": true },
     "realtime.sessionKey": { "label": "Agent Session Key", "advanced": true },
-    "realtime.toolPolicy": { "label": "Tool Policy", "advanced": true }
+    "realtime.toolPolicy": { "label": "Tool Policy", "advanced": true },
+    "vision.enabled": {
+      "label": "See the Caller's Video",
+      "help": "Captures the FaceTime call window about every two seconds and shows the agent one frame when it looks. Frames stay in memory and go only to the realtime voice provider. Needs the facetime-video-capture native helper.",
+      "advanced": true
+    },
+    "avatar.enabled": {
+      "label": "Lip-synced Avatar",
+      "help": "Serves an animated avatar at /facetime/avatar on this Gateway for a local OBS browser source. Loopback only.",
+      "advanced": true
+    }
   },
   "configContracts": {
     "secretInputs": {

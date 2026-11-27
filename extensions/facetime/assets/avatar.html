@@ -1,0 +1,760 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Avatar</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #12162b;
+      }
+      canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+    <script>
+      (function () {
+        "use strict";
+
+        // ---------- configuration ----------
+        var query = new URLSearchParams(location.search);
+
+        function parseHex(h) {
+          if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+          return [
+            parseInt(h.slice(0, 2), 16),
+            parseInt(h.slice(2, 4), 16),
+            parseInt(h.slice(4, 6), 16),
+          ];
+        }
+        function colorParam(name, fallback) {
+          var v = query.get(name);
+          return v !== null && /^([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v) ? parseHex(v) : fallback;
+        }
+        function clamp(v, lo, hi) {
+          return v < lo ? lo : v > hi ? hi : v;
+        }
+
+        var DEMO = query.get("demo") === "1";
+        var OFFSET_MS = (function () {
+          var n = parseInt(query.get("offsetMs"), 10);
+          return isFinite(n) ? clamp(n, -1000, 1000) : 0;
+        })();
+
+        var BG = colorParam("bg", [18, 22, 43]);
+        var ACCENT = colorParam("accent", [108, 140, 255]);
+
+        function mix(a, b, t) {
+          return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+        }
+        function css(c, a) {
+          return (
+            "rgba(" +
+            Math.round(c[0]) +
+            "," +
+            Math.round(c[1]) +
+            "," +
+            Math.round(c[2]) +
+            "," +
+            (a === undefined ? 1 : a) +
+            ")"
+          );
+        }
+        var WHITE = [255, 255, 255],
+          BLACK = [0, 0, 0];
+
+        var SKIN = [243, 199, 166],
+          SKIN_LIGHT = [255, 226, 198],
+          SKIN_SHADE = [212, 156, 128];
+        var HAIR = mix(ACCENT, [14, 10, 34], 0.82);
+        var HAIR_HI = mix(ACCENT, WHITE, 0.2);
+        var SHIRT = mix(ACCENT, [20, 24, 60], 0.18);
+        var LIP = [186, 78, 98];
+
+        // ---------- mouth schedule ----------
+        var segs = []; // {at, hop, n, f: Float32Array [o,w,...]} in epoch ms; later entries win
+        var scheduledFrames = 0;
+        var clockOffset = 0;
+        var MAX_FUTURE_MS = 30000;
+        var MAX_SEGS = 512;
+        var mouthOut = [0, 0];
+
+        function epochNow() {
+          return Date.now() + clockOffset;
+        }
+
+        // Pure lookup: interpolated [o, w] at epoch time t, or null when nothing is scheduled there.
+        function mouthAt(t) {
+          for (var k = segs.length - 1; k >= 0; k--) {
+            var s = segs[k];
+            var x = (t - s.at) / s.hop;
+            if (x < 0 || x >= s.n) continue;
+            var i = Math.floor(x),
+              fr = x - i,
+              j = i + 1 < s.n ? i + 1 : i;
+            mouthOut[0] = s.f[2 * i] + (s.f[2 * j] - s.f[2 * i]) * fr;
+            mouthOut[1] = s.f[2 * i + 1] + (s.f[2 * j + 1] - s.f[2 * i + 1]) * fr;
+            return mouthOut;
+          }
+          return null;
+        }
+
+        function pruneSchedule(t) {
+          var live = [];
+          scheduledFrames = 0;
+          for (var k = Math.max(0, segs.length - MAX_SEGS); k < segs.length; k++) {
+            var s = segs[k];
+            if (s.at + s.n * s.hop > t - 100) {
+              live.push(s);
+              scheduledFrames += s.n;
+            }
+          }
+          segs = live;
+        }
+
+        function addSpeak(msg) {
+          var at = Number(msg.at),
+            hop = Number(msg.hopMs),
+            raw = msg.frames;
+          if (!isFinite(at) || !isFinite(hop) || hop <= 0 || !Array.isArray(raw)) return;
+          hop = clamp(hop, 5, 200);
+          var t = epochNow() - OFFSET_MS; // compare in "frame time"; the trim is applied at lookup
+          var n = Math.floor(raw.length / 2);
+          var first = Math.max(0, Math.floor((t - at) / hop)); // drop frames already in the past
+          var last = Math.min(n, Math.floor((t + MAX_FUTURE_MS - at) / hop) + 1); // cap the future
+          if (last <= first) return;
+          var f = new Float32Array((last - first) * 2);
+          for (var i = first; i < last; i++) {
+            var o = Number(raw[2 * i]),
+              w = Number(raw[2 * i + 1]);
+            f[2 * (i - first)] = clamp(isFinite(o) ? o / 100 : 0, 0, 1);
+            f[2 * (i - first) + 1] = clamp(isFinite(w) ? w / 100 : 0, -1, 1);
+          }
+          segs.push({ at: at + first * hop, hop: hop, n: last - first, f: f });
+          scheduledFrames += last - first;
+        }
+
+        function clearSchedule() {
+          segs = [];
+          scheduledFrames = 0;
+        }
+
+        // ---------- state ----------
+        var state = {
+          call: "idle",
+          active: 0, // eased 0..1 version of call
+          open: 0,
+          wide: 0, // smoothed mouth
+          energy: 0, // slow follower of openness, drives head motion
+          brow: 0,
+          connected: false,
+          blink: { next: 1500 + Math.random() * 2500, start: 0, n: 0 },
+          gaze: { x: 0, y: 0, tx: 0, ty: 0, next: 800 },
+        };
+
+        function setCall(v) {
+          if (v === "idle" || v === "active") state.call = v;
+        }
+
+        Object.defineProperty(window, "__avatarDebug", {
+          value: function () {
+            return {
+              call: state.call,
+              open: state.open,
+              wide: state.wide,
+              scheduled: scheduledFrames,
+              connected: state.connected,
+            };
+          },
+        });
+
+        // ---------- feed ----------
+        function handleMessage(data) {
+          var m;
+          try {
+            m = JSON.parse(data);
+          } catch (e) {
+            return;
+          }
+          if (!m || typeof m !== "object") return;
+          switch (m.type) {
+            case "hello":
+              if (isFinite(Number(m.now))) clockOffset = Number(m.now) - Date.now();
+              setCall(m.call);
+              break;
+            case "call":
+              setCall(m.state);
+              break;
+            case "speak":
+              addSpeak(m);
+              break;
+            case "clear":
+              clearSchedule();
+              break;
+          }
+        }
+
+        function startFeed() {
+          if (location.protocol !== "http:" && location.protocol !== "https:") return; // e.g. file://: nothing to connect to
+          var url =
+            (location.protocol === "https:" ? "wss://" : "ws://") +
+            location.host +
+            location.pathname;
+          var backoff = 500,
+            warned = false;
+          function retry() {
+            state.connected = false;
+            setTimeout(connect, backoff);
+            backoff = Math.min(backoff * 2, 5000);
+          }
+          function connect() {
+            var ws;
+            try {
+              ws = new WebSocket(url);
+            } catch (e) {
+              retry();
+              return;
+            }
+            ws.onopen = function () {
+              backoff = 500;
+              state.connected = true;
+            };
+            ws.onmessage = function (ev) {
+              handleMessage(ev.data);
+            };
+            ws.onerror = function () {
+              if (!warned) {
+                warned = true;
+                console.warn("avatar: feed unavailable, retrying");
+              }
+            };
+            ws.onclose = retry;
+          }
+          connect();
+        }
+
+        // Believable looping speech for positioning the source without a call; goes through addSpeak.
+        var VOWELS = [
+          [0.85, 0],
+          [0.3, 0.9],
+          [0.35, -0.9],
+          [0.7, -0.55],
+          [0.55, 0.4],
+          [0.65, 0.15],
+        ];
+        var demoEnd = 0;
+        function demoFeed() {
+          var now = epochNow();
+          if (demoEnd > now + 1500) return;
+          var start = demoEnd ? demoEnd + 500 + Math.random() * 1100 : now + 100;
+          var frames = [],
+            syl = 6 + Math.floor(Math.random() * 7);
+          for (var s = 0; s < syl; s++) {
+            var v = VOWELS[Math.floor(Math.random() * VOWELS.length)];
+            var amp = 0.6 + Math.random() * 0.4;
+            var len = 5 + Math.floor(Math.random() * 6);
+            for (var k = 0; k < len; k++) {
+              var env = Math.pow(Math.sin((Math.PI * (k + 0.5)) / len), 0.7);
+              frames.push(
+                Math.round(Math.max(6, v[0] * amp * env * 100)),
+                Math.round(v[1] * Math.sqrt(env) * 100),
+              );
+            }
+            if (Math.random() < 0.6) frames.push(4, 0);
+          }
+          addSpeak({ at: start, hopMs: 20, frames: frames });
+          demoEnd = start + (frames.length / 2) * 20;
+        }
+
+        // ---------- animation update ----------
+        var anim = {
+          dx: 0,
+          dy: 0,
+          tilt: 0,
+          blink: 0,
+          gx: 0,
+          gy: 0,
+          breath: 0,
+          maxOpen: 1,
+          brow: 0,
+        };
+
+        function update(t, dt) {
+          var now = epochNow();
+          pruneSchedule(now - OFFSET_MS);
+          var target = mouthAt(now - OFFSET_MS);
+          var to = target ? target[0] : 0,
+            tw = target ? target[1] : 0;
+          var tauO = to > state.open ? 40 : 90;
+          state.open += (to - state.open) * (1 - Math.exp(-dt / tauO));
+          state.wide += (tw - state.wide) * (1 - Math.exp(-dt / 70));
+          state.energy += (state.open - state.energy) * (1 - Math.exp(-dt / 220));
+
+          var act = state.call === "active" ? 1 : 0;
+          state.active += (act - state.active) * (1 - Math.exp(-dt / 350));
+          var browTarget = state.open > 0.62 ? (state.open - 0.62) / 0.38 : 0;
+          state.brow +=
+            (browTarget - state.brow) * (1 - Math.exp(-dt / (browTarget > state.brow ? 70 : 200)));
+
+          // blinks: every 2-6 s, 20% double
+          var bl = state.blink,
+            b = 0;
+          if (bl.n === 0 && t >= bl.next) {
+            bl.n = Math.random() < 0.2 ? 2 : 1;
+            bl.start = t;
+            bl.next = t + 2000 + Math.random() * 4000;
+          }
+          if (bl.n > 0) {
+            var p = (t - bl.start) / 170;
+            if (p >= 1) {
+              bl.n--;
+              bl.start = t + 70;
+              p = (t - bl.start) / 170;
+            }
+            b = p > 0 ? Math.sin(Math.PI * Math.min(p, 1)) : 0;
+          }
+          anim.blink = b;
+
+          // saccades
+          var g = state.gaze;
+          if (t >= g.next) {
+            var centered = Math.random() < 0.4;
+            g.tx = centered ? 0 : Math.random() * 2 - 1;
+            g.ty = centered ? 0 : Math.random() * 1.2 - 0.6;
+            g.next = t + 700 + Math.random() * 2300;
+          }
+          var gk = 1 - Math.exp(-dt / 55);
+          g.x += (g.tx - g.x) * gk;
+          g.y += (g.ty - g.y) * gk;
+
+          // head motion: always swaying, a bit livelier while speaking
+          var calm = 0.55 + 0.45 * state.active,
+            e = state.energy;
+          var ts = t / 1000;
+          anim.breath = Math.sin((ts * 2 * Math.PI) / 4.2);
+          anim.dx = calm * 7 * Math.sin(ts * 0.41) + e * 5 * Math.sin(ts * 3.1);
+          anim.dy = anim.breath * 4 * calm + e * 6 * Math.sin(ts * 6.3);
+          anim.tilt =
+            calm * (0.028 * Math.sin(ts * 0.37) + 0.012 * Math.sin(ts * 0.91 + 1)) +
+            e * 0.035 * Math.sin(ts * 4.7);
+          anim.maxOpen = 0.8 + 0.2 * state.active;
+        }
+
+        // ---------- drawing ----------
+        var canvas = document.getElementById("c");
+        var ctx = canvas.getContext("2d");
+        var bgCanvas = document.createElement("canvas");
+        var cw = 0,
+          ch = 0;
+
+        function resize() {
+          var dpr = Math.min(window.devicePixelRatio || 1, 2);
+          cw = Math.max(1, Math.round(window.innerWidth * dpr));
+          ch = Math.max(1, Math.round(window.innerHeight * dpr));
+          canvas.width = bgCanvas.width = cw;
+          canvas.height = bgCanvas.height = ch;
+          renderBackground();
+        }
+
+        // Static backdrop is painted once per resize, then blitted every frame.
+        function renderBackground() {
+          var g = bgCanvas.getContext("2d");
+          var lin = g.createLinearGradient(0, 0, 0, ch);
+          lin.addColorStop(0, css(mix(BG, WHITE, 0.07)));
+          lin.addColorStop(1, css(mix(BG, BLACK, 0.4)));
+          g.fillStyle = lin;
+          g.fillRect(0, 0, cw, ch);
+          var r = Math.max(cw, ch) * 0.55;
+          var glow = g.createRadialGradient(cw / 2, ch * 0.45, 0, cw / 2, ch * 0.45, r);
+          glow.addColorStop(0, css(ACCENT, 0.34));
+          glow.addColorStop(0.55, css(ACCENT, 0.09));
+          glow.addColorStop(1, css(ACCENT, 0));
+          g.fillStyle = glow;
+          g.fillRect(0, 0, cw, ch);
+          var vig = g.createRadialGradient(
+            cw / 2,
+            ch / 2,
+            Math.min(cw, ch) * 0.45,
+            cw / 2,
+            ch / 2,
+            Math.max(cw, ch) * 0.75,
+          );
+          vig.addColorStop(0, "rgba(0,0,0,0)");
+          vig.addColorStop(1, "rgba(0,0,0,0.38)");
+          g.fillStyle = vig;
+          g.fillRect(0, 0, cw, ch);
+        }
+
+        function drawBody() {
+          ctx.save();
+          ctx.translate(0, anim.breath * 3);
+          // neck
+          var ng = ctx.createLinearGradient(735, 0, 865, 0);
+          ng.addColorStop(0, css(SKIN_SHADE));
+          ng.addColorStop(0.5, css(mix(SKIN, SKIN_SHADE, 0.35)));
+          ng.addColorStop(1, css(SKIN_SHADE));
+          ctx.fillStyle = ng;
+          ctx.fillRect(738, 540, 124, 240);
+          // shirt with scooped neckline
+          var sg = ctx.createLinearGradient(0, 690, 0, 900);
+          sg.addColorStop(0, css(mix(SHIRT, WHITE, 0.12)));
+          sg.addColorStop(1, css(mix(SHIRT, BLACK, 0.35)));
+          ctx.fillStyle = sg;
+          ctx.beginPath();
+          ctx.moveTo(280, 900);
+          ctx.bezierCurveTo(300, 790, 470, 720, 660, 700);
+          ctx.quadraticCurveTo(800, 790, 940, 700);
+          ctx.bezierCurveTo(1130, 720, 1300, 790, 1320, 900);
+          ctx.closePath();
+          ctx.fill();
+          ctx.strokeStyle = css(mix(SHIRT, WHITE, 0.4), 0.8);
+          ctx.lineWidth = 8;
+          ctx.lineCap = "round";
+          ctx.beginPath();
+          ctx.moveTo(660, 700);
+          ctx.quadraticCurveTo(800, 790, 940, 700);
+          ctx.stroke();
+          // shoulder highlights
+          ctx.strokeStyle = css(WHITE, 0.1);
+          ctx.lineWidth = 6;
+          ctx.beginPath();
+          ctx.moveTo(380, 790);
+          ctx.bezierCurveTo(440, 748, 540, 722, 630, 712);
+          ctx.moveTo(1220, 790);
+          ctx.bezierCurveTo(1160, 748, 1060, 722, 970, 712);
+          ctx.stroke();
+          ctx.restore();
+          // chin shadow on the neck
+          ctx.save();
+          ctx.translate(800 + anim.dx * 0.5, 622 + anim.dy * 0.5);
+          ctx.scale(1, 0.4);
+          var cs = ctx.createRadialGradient(0, 0, 0, 0, 0, 130);
+          cs.addColorStop(0, "rgba(110,56,42,0.55)");
+          cs.addColorStop(1, "rgba(110,56,42,0)");
+          ctx.fillStyle = cs;
+          ctx.beginPath();
+          ctx.arc(0, 0, 130, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+
+        function facePath(jaw) {
+          ctx.beginPath();
+          ctx.moveTo(0, -215);
+          ctx.bezierCurveTo(105, -215, 190, -140, 190, -20);
+          ctx.bezierCurveTo(190, 100, 120, 215 + jaw, 0, 215 + jaw);
+          ctx.bezierCurveTo(-120, 215 + jaw, -190, 100, -190, -20);
+          ctx.bezierCurveTo(-190, -140, -105, -215, 0, -215);
+          ctx.closePath();
+        }
+
+        function drawFace(jaw) {
+          // ears
+          for (var sx = -1; sx <= 1; sx += 2) {
+            ctx.fillStyle = css(mix(SKIN, SKIN_SHADE, 0.3));
+            ctx.beginPath();
+            ctx.ellipse(sx * 186, 15, 28, 42, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = css(SKIN_SHADE, 0.45);
+            ctx.beginPath();
+            ctx.ellipse(sx * 186, 17, 12, 24, 0, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          var fg = ctx.createRadialGradient(-45, -70, 20, 0, 10, 250);
+          fg.addColorStop(0, css(SKIN_LIGHT));
+          fg.addColorStop(0.55, css(SKIN));
+          fg.addColorStop(1, css(SKIN_SHADE));
+          ctx.fillStyle = fg;
+          facePath(jaw);
+          ctx.fill();
+          // cheeks
+          for (sx = -1; sx <= 1; sx += 2) {
+            var cg = ctx.createRadialGradient(sx * 118, 72, 0, sx * 118, 72, 58);
+            cg.addColorStop(0, "rgba(255,115,120,0.38)");
+            cg.addColorStop(1, "rgba(255,115,120,0)");
+            ctx.fillStyle = cg;
+            ctx.beginPath();
+            ctx.arc(sx * 118, 72, 58, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          // nose
+          ctx.strokeStyle = css(SKIN_SHADE, 0.75);
+          ctx.lineWidth = 5;
+          ctx.lineCap = "round";
+          ctx.beginPath();
+          ctx.moveTo(-9, 56);
+          ctx.quadraticCurveTo(0, 68, 11, 57);
+          ctx.stroke();
+          ctx.fillStyle = css(WHITE, 0.22);
+          ctx.beginPath();
+          ctx.ellipse(-3, 28, 6, 14, 0, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        function drawEye(sx) {
+          var ex = sx * 80,
+            ey = -5;
+          var openness = Math.max(0.05, (1 - anim.blink) * anim.maxOpen);
+          ctx.save();
+          ctx.translate(ex, ey);
+          ctx.scale(1, openness);
+          ctx.beginPath();
+          ctx.ellipse(0, 0, 44, 50, 0, 0, Math.PI * 2);
+          ctx.save();
+          ctx.clip();
+          var sc = ctx.createLinearGradient(0, -50, 0, 50);
+          sc.addColorStop(0, "rgb(214,220,236)");
+          sc.addColorStop(0.35, "rgb(255,255,255)");
+          sc.addColorStop(1, "rgb(240,242,250)");
+          ctx.fillStyle = sc;
+          ctx.fillRect(-50, -56, 100, 112);
+          var gx = state.gaze.x * 9 + anim.dx * -0.2,
+            gy = state.gaze.y * 7;
+          var ig = ctx.createRadialGradient(gx - 4, gy - 6, 2, gx, gy, 28);
+          ig.addColorStop(0, css(mix(ACCENT, WHITE, 0.4)));
+          ig.addColorStop(0.7, css(mix(ACCENT, [10, 20, 50], 0.35)));
+          ig.addColorStop(1, css(mix(ACCENT, [6, 10, 30], 0.75)));
+          ctx.fillStyle = ig;
+          ctx.beginPath();
+          ctx.arc(gx, gy, 28, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "rgb(14,16,32)";
+          ctx.beginPath();
+          ctx.arc(gx, gy, 13.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "rgba(255,255,255,0.95)";
+          ctx.beginPath();
+          ctx.arc(gx - 9, gy - 10, 8, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "rgba(255,255,255,0.7)";
+          ctx.beginPath();
+          ctx.arc(gx + 10, gy + 11, 4, 0, Math.PI * 2);
+          ctx.fill();
+          // soft shadow cast by the upper lid
+          var ls = ctx.createLinearGradient(0, -50, 0, -10);
+          ls.addColorStop(0, "rgba(70,30,40,0.35)");
+          ls.addColorStop(1, "rgba(70,30,40,0)");
+          ctx.fillStyle = ls;
+          ctx.fillRect(-50, -56, 100, 50);
+          ctx.restore();
+          // upper lash line
+          ctx.strokeStyle = css(mix(HAIR, BLACK, 0.4));
+          ctx.lineWidth = 6;
+          ctx.lineCap = "round";
+          ctx.beginPath();
+          ctx.ellipse(0, 0, 44, 50, 0, Math.PI * 1.08, Math.PI * 1.92);
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        function drawBrows() {
+          var raise = state.brow * 16 - (1 - state.active) * 4;
+          var by = -92 - raise;
+          ctx.strokeStyle = css(HAIR);
+          ctx.lineWidth = 13;
+          ctx.lineCap = "round";
+          for (var sx = -1; sx <= 1; sx += 2) {
+            ctx.beginPath();
+            ctx.moveTo(sx * 34, by + 6);
+            ctx.quadraticCurveTo(sx * 82, by - 16, sx * 126, by + 12);
+            ctx.stroke();
+          }
+        }
+
+        // Mouth from (o, w): width and height both follow the parameters; corners lift when closed (smile).
+        function drawMouth(o, w) {
+          var cy = 106;
+          var hw = 60 + 36 * w; // 24 (round) .. 96 (wide)
+          var open = o * 78 * (1 + 0.25 * Math.max(0, -w) - 0.2 * Math.max(0, w)); // round shapes are taller
+          var smile = (1 - Math.min(1, o * 2.5)) * (5 + (4 * (w + 1)) / 2);
+          var yc = cy - smile; // corner height
+          var round = Math.max(0, -w);
+          var topC = cy - o * (6 + 12 * round),
+            botC = cy + open; // centre heights of the lips
+          var topCtl = (topC - 0.25 * yc) / 0.75,
+            botCtl = (botC - 0.25 * yc) / 0.75;
+          var tkx = 0.5 + 0.4 * round,
+            bkx = 0.6 + 0.6 * round; // rounder bowls when pursed
+
+          function path() {
+            ctx.beginPath();
+            ctx.moveTo(-hw, yc);
+            ctx.bezierCurveTo(-hw * tkx, topCtl, hw * tkx, topCtl, hw, yc);
+            ctx.bezierCurveTo(hw * bkx, botCtl, -hw * bkx, botCtl, -hw, yc);
+            ctx.closePath();
+          }
+
+          if (open > 3) {
+            ctx.save();
+            path();
+            ctx.clip();
+            var ig = ctx.createLinearGradient(0, topC, 0, botC);
+            ig.addColorStop(0, "rgb(52,14,26)");
+            ig.addColorStop(1, "rgb(26,6,14)");
+            ctx.fillStyle = ig;
+            ctx.fillRect(-hw - 4, topC - 20, hw * 2 + 8, open + 40);
+            // upper teeth
+            var ta = clamp(0.55 + 0.6 * w, 0, 1),
+              th = Math.min(open * 0.42, 22);
+            if (ta > 0.02 && th > 2) {
+              ctx.globalAlpha = ta;
+              var tg = ctx.createLinearGradient(0, topC, 0, topC + th);
+              tg.addColorStop(0, "rgb(255,255,255)");
+              tg.addColorStop(1, "rgb(238,236,244)");
+              ctx.fillStyle = tg;
+              var tw = hw * 0.82;
+              ctx.beginPath();
+              ctx.moveTo(-tw, topC - 6);
+              ctx.lineTo(tw, topC - 6);
+              ctx.lineTo(tw, topC + th - 7);
+              ctx.quadraticCurveTo(tw, topC + th, tw - 8, topC + th);
+              ctx.lineTo(-tw + 8, topC + th);
+              ctx.quadraticCurveTo(-tw, topC + th, -tw, topC + th - 7);
+              ctx.closePath();
+              ctx.fill();
+              ctx.globalAlpha = 1;
+            }
+            // tongue
+            var tgn = ctx.createRadialGradient(
+              0,
+              botC - open * 0.3,
+              2,
+              0,
+              botC - open * 0.2,
+              hw * 0.6,
+            );
+            tgn.addColorStop(0, "rgb(236,118,136)");
+            tgn.addColorStop(1, "rgb(190,68,94)");
+            ctx.fillStyle = tgn;
+            ctx.beginPath();
+            ctx.ellipse(
+              0,
+              botC - open * 0.05,
+              hw * 0.52,
+              Math.max(2, open * 0.42),
+              0,
+              0,
+              Math.PI * 2,
+            );
+            ctx.fill();
+            ctx.restore();
+          }
+
+          ctx.lineJoin = "round";
+          ctx.lineCap = "round";
+          ctx.strokeStyle = css(LIP);
+          ctx.lineWidth = 8;
+          path();
+          ctx.stroke();
+          if (open > 8) {
+            // lower-lip sheen
+            ctx.strokeStyle = "rgba(255,200,205,0.22)";
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.moveTo(-hw * 0.5, botC + 5 + open * 0.02);
+            ctx.quadraticCurveTo(0, botCtl + 9, hw * 0.5, botC + 5 + open * 0.02);
+            ctx.stroke();
+          }
+        }
+
+        function drawHairFront() {
+          var hg = ctx.createLinearGradient(-200, -280, 160, 0);
+          hg.addColorStop(0, css(mix(HAIR, WHITE, 0.1)));
+          hg.addColorStop(1, css(mix(HAIR, BLACK, 0.3)));
+          ctx.fillStyle = hg;
+          ctx.beginPath();
+          ctx.moveTo(-200, -20);
+          ctx.bezierCurveTo(-225, -300, 225, -300, 200, -20);
+          ctx.bezierCurveTo(175, -80, 140, -118, 60, -134);
+          ctx.bezierCurveTo(20, -108, -70, -112, -108, -138);
+          ctx.bezierCurveTo(-130, -105, -170, -62, -200, -20);
+          ctx.closePath();
+          ctx.fill();
+          ctx.strokeStyle = css(HAIR_HI, 0.35);
+          ctx.lineWidth = 7;
+          ctx.lineCap = "round";
+          ctx.beginPath();
+          ctx.moveTo(-120, -190);
+          ctx.quadraticCurveTo(-40, -240, 60, -226);
+          ctx.stroke();
+        }
+
+        function drawHead() {
+          ctx.save();
+          ctx.translate(800 + anim.dx, 650 + anim.dy);
+          ctx.rotate(anim.tilt);
+          ctx.translate(0, -232);
+          var jaw = state.open * 14;
+          ctx.fillStyle = css(HAIR); // back hair, peeks out around the face
+          ctx.beginPath();
+          ctx.ellipse(0, -40, 210, 232, 0, 0, Math.PI * 2);
+          ctx.fill();
+          drawFace(jaw);
+          drawEye(-1);
+          drawEye(1);
+          drawBrows();
+          ctx.save();
+          ctx.translate(0, jaw * 0.5);
+          drawMouth(state.open, state.wide);
+          ctx.restore();
+          drawHairFront();
+          ctx.restore();
+        }
+
+        function draw() {
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.drawImage(bgCanvas, 0, 0);
+          var s = Math.min(cw / 1600, ch / 900);
+          var k = s * 1.18; // zoom about the bottom-centre so the head reads at small tile sizes
+          ctx.setTransform(
+            k,
+            0,
+            0,
+            k,
+            (cw - 1600 * s) / 2 + 800 * (s - k) + 0,
+            (ch - 900 * s) / 2 + 900 * (s - k),
+          );
+          drawBody();
+          drawHead();
+          // idle ("resting") look: dim the whole picture toward the background
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          var rest = 1 - state.active;
+          if (rest > 0.01) {
+            ctx.fillStyle = css(BG, 0.42 * rest);
+            ctx.fillRect(0, 0, cw, ch);
+          }
+        }
+
+        // ---------- main loop (30 fps cap) ----------
+        var FRAME_MS = 1000 / 30,
+          lastTick = -Infinity;
+        function frame(ts) {
+          requestAnimationFrame(frame);
+          if (ts - lastTick < FRAME_MS - 2) return;
+          var dt = clamp(ts - lastTick, 1, 100);
+          if (lastTick === -Infinity) dt = FRAME_MS;
+          lastTick = ts;
+          if (DEMO) demoFeed();
+          update(ts, dt);
+          draw();
+        }
+
+        window.addEventListener("resize", resize);
+        document.documentElement.style.background = css(BG);
+        resize();
+        if (DEMO) setCall("active");
+        else startFeed();
+        requestAnimationFrame(frame);
+      })();
+    </script>
+  </body>
+</html>

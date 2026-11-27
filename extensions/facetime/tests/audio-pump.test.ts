@@ -151,6 +151,33 @@ describe("FaceTime native audio bridge", () => {
     expectProgress();
   });
 
+  it("tells observers when the caller hears each chunk and when queued audio is discarded", async () => {
+    const onOutputAudio = vi.fn();
+    const onOutputCleared = vi.fn();
+    const { pump } = createPump({ onOutputAudio, onOutputCleared });
+    const startedAt = Date.now();
+    const first = Buffer.alloc(4_800, 1);
+    const second = Buffer.alloc(9_600, 2);
+
+    pump.writeOutputAudio(first);
+    pump.writeOutputAudio(second);
+    // Playback starts after the 100 ms output latency budget; chunks then run back to back.
+    expect(onOutputAudio.mock.calls).toEqual([
+      [first, startedAt + 100],
+      [second, startedAt + 200],
+    ]);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    pump.writeOutputAudio(first);
+    expect(onOutputAudio).toHaveBeenLastCalledWith(first, startedAt + 1_100);
+
+    expect(onOutputCleared).not.toHaveBeenCalled();
+    pump.clearOutputAudio();
+    expect(onOutputCleared).toHaveBeenCalledOnce();
+    await pump.suspendMedia();
+    expect(onOutputCleared).toHaveBeenCalledTimes(2);
+  });
+
   it.each(["barge-in", "suspend"] as const)(
     "clears %s playback without stale drain or failure callbacks",
     async (action) => {

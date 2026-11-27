@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
     close: vi.fn(),
     connect: vi.fn<() => Promise<void>>(),
     sendAudio: vi.fn(),
+    sendImage: vi.fn(() => true),
     sendUserMessage: vi.fn(),
     handleBargeIn: vi.fn(),
     setMediaTimestamp: vi.fn(),

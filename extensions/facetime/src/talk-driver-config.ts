@@ -38,6 +38,18 @@ export const FACETIME_END_CALL_TOOL: RealtimeVoiceTool = {
   },
 };
 
+export const FACETIME_LOOK_TOOL_NAME = "facetime_look";
+export const FACETIME_LOOK_TOOL: RealtimeVoiceTool = {
+  type: "function",
+  name: FACETIME_LOOK_TOOL_NAME,
+  description:
+    "See the caller's current FaceTime video: their camera, or their screen while they share it. Attaches one current frame to the conversation.",
+  parameters: {
+    type: "object",
+    properties: {},
+  },
+};
+
 export function agentIdFromSessionKey(sessionKey: string, config: OpenClawConfig): string {
   if (parseAgentSessionKey(sessionKey)) {
     return resolveAgentIdFromSessionKey(sessionKey);
@@ -49,7 +61,16 @@ export function buildRealtimeInstructions(params: {
   instructions: string | undefined;
   bootstrapContext: string | undefined;
   toolPolicy: FaceTimeConfig["realtime"]["toolPolicy"];
+  vision: boolean;
 }): string {
+  const visionInstructions = params.vision
+    ? [
+        "Vision:",
+        `- You can see the caller's FaceTime video by calling ${FACETIME_LOOK_TOOL_NAME}. Each call shows you one current frame of their camera, or of their screen while they share it.`,
+        `- Call ${FACETIME_LOOK_TOOL_NAME} yourself, without delegating, when the caller shows you something, shares their screen, refers to something visible, or asks what you see. Call it again whenever the view may have changed.`,
+        "- Never describe or guess visual details you have not just looked at. If no frame is available, say you cannot see anything right now.",
+      ].join("\n")
+    : undefined;
   const callControlInstructions = [
     "Call control:",
     `- When the caller asks you to hang up, end, leave, or disconnect the current FaceTime call, call ${FACETIME_END_CALL_TOOL_NAME} immediately.`,
@@ -79,6 +100,7 @@ export function buildRealtimeInstructions(params: {
     params.instructions?.trim(),
     params.bootstrapContext?.trim(),
     callControlInstructions,
+    visionInstructions,
     proxyInstructions,
   ]
     .filter(Boolean)
