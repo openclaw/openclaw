@@ -325,8 +325,7 @@ describe("new session pending dictation review", () => {
         expect(owner.dictation.dictation?.requiresReview).toBe(resolution !== "off");
         page.querySelector<HTMLButtonElement>(".chat-send-btn--dictating")!.click();
         expect(finish).toHaveBeenCalledOnce();
-        const send = () =>
-          page.querySelector<HTMLButtonElement>(".new-session-page__start-submit");
+        const send = () => page.querySelector<HTMLButtonElement>(".new-session-page__start-submit");
         const expectSubmissionBlocked = async () => {
           await waitForSolid(() => expect(send()?.disabled).toBe(true));
           for (const ctrlKey of [false, true]) {

@@ -160,8 +160,7 @@ describe("dictation submission", () => {
         }
         expect(finish).toHaveBeenCalledOnce();
         expect(props.submit).not.toHaveBeenCalled();
-        const send = () =>
-          view.container.querySelector<HTMLButtonElement>('button[type="submit"]');
+        const send = () => view.container.querySelector<HTMLButtonElement>('button[type="submit"]');
         const expectSubmissionBlocked = async () => {
           await waitForSolid(() => expect(send()?.disabled).toBe(true));
           textarea.dispatchEvent(
@@ -202,9 +201,7 @@ describe("dictation submission", () => {
           );
           await expectSubmissionBlocked();
           if (resolution === "original") {
-            view
-              .getByRole("button", { name: t("chat.dictation.punctuation.useOriginal") })
-              .click();
+            view.getByRole("button", { name: t("chat.dictation.punctuation.useOriginal") }).click();
             await expectSubmissionBlocked();
           }
           view
@@ -245,7 +242,9 @@ describe("dictation submission", () => {
       props.client = createClient();
       let created = 0;
       dictationIo.request.mockImplementation(async (method) =>
-        method === "talk.session.create" ? sessionResult(`dictation-${++created}`) : request(method),
+        method === "talk.session.create"
+          ? sessionResult(`dictation-${++created}`)
+          : request(method),
       );
       const previous = loadSettings().dictationRefinement;
       patchSettings({ dictationRefinement: undefined });
