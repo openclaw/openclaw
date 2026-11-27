@@ -43,6 +43,3 @@ export type TranscriptLayoutProps = {
 };
 
 export const TranscriptRowKeyContext = createContext<() => string | undefined>(() => undefined);
-
-/** Reading is stricter than resource preparation; bubbles outside a transcript cannot admit reads. */
-export const TranscriptReadPresentation = createContext<() => boolean>(() => false);

@@ -9,7 +9,7 @@ import { createDocumentVisibility } from "../../../lib/reactive/platform.ts";
 import { hasTerminalRunOutcome, resolveAssistantReplyPhase } from "../chat-assistant-reply.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
-import { TranscriptReadPresentation } from "./chat-transcript-layout.ts";
+import { TranscriptReadPresentation } from "./chat-transcript-read-presentation.ts";
 
 /** Only the mounted answer bubble can acknowledge its delivered completion. */
 export function createChatCompletionReadRef(

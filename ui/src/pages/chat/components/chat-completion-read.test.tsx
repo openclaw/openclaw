@@ -7,7 +7,7 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createChatCompletionReadRef } from "./chat-completion-read.ts";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
-import { TranscriptReadPresentation } from "./chat-transcript-layout.ts";
+import { TranscriptReadPresentation } from "./chat-transcript-read-presentation.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
