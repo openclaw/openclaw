@@ -2,7 +2,6 @@ import { formatErrorMessageForDisplay } from "../../infra/error-diagnostics.js";
 import { isCliSessionInvalidatingFailoverReason } from "../cli-session.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner.js";
 import { type FailoverError, isFailoverError } from "../failover-error.js";
-import { isClaudeCliBackendId } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 import type { CliReusableSession, PreparedCliRunContext } from "./types.js";
 
@@ -85,17 +84,6 @@ export async function runCliRecovery<TAttempt>(params: {
       `cli ${kind} failure: provider=${runParams.provider} model=${context.modelId} durationMs=${Date.now() - context.started} runId=${runParams.runId} error=${formatErrorMessageForDisplay(error)}`,
     );
   const failTerminal = async (error: unknown): Promise<never> => {
-    if (
-      runParams.trigger === "cron" &&
-      runParams.nativeAuthOnly &&
-      isClaudeCliBackendId(runParams.provider) &&
-      context.executionTarget.kind !== "node" &&
-      error instanceof Error &&
-      /\bnot logged in\b/i.test(error.message)
-    ) {
-      error.message +=
-        ". Log in to Claude on the Gateway host with `claude /login` as the OS user running the Gateway, then retry this job.";
-    }
     // Record only after every eligible recovery path is exhausted.
     logFailure("terminal", error);
     await params.onTerminalFailure(error);

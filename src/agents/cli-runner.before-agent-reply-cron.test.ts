@@ -526,20 +526,21 @@ describe("runCliAgent before_agent_reply seam", () => {
     ["claude-cli", "user", true, "Not logged in · Please run /login", false],
     ["claude-cli", "cron", undefined, "Not logged in · Please run /login", false],
     ["codex-cli", "cron", true, "Not logged in · Please run /login", false],
-    ["claude-cli", "cron", true, "API key is invalid", false],
+    ["claude-cli", "cron", true, "API key is invalid", true],
+    ["claude-cli", "cron", true, "the external service is not logged in", false],
   ] as const)(
     "adds Gateway login guidance only for native-only scheduled Claude failures (%s, %s, %s, %s)",
     async (provider, trigger, nativeAuthOnly, message, hasHint) => {
-      const error = new FailoverError(message, { reason: "auth", status: 401 });
+      const error = new Error(message);
       executeMock.mockRejectedValueOnce(error);
 
       await expect(runCliAgent({ provider, trigger, nativeAuthOnly })).rejects.toMatchObject({
         message: hasHint
           ? `${message}. Log in to Claude on the Gateway host with \`claude /login\` as the OS user running the Gateway, then retry this job.`
           : message,
-        reason: "auth",
-        status: 401,
+        ...(hasHint ? { reason: "auth", status: 401 } : {}),
       });
+      expect(error.message).toBe(message);
     },
   );
 
