@@ -98,7 +98,8 @@ it(
     expect(before.configJobs[0]).not.toHaveProperty("ownerProfileId");
     expect(before.store.jobs[0]?.ownerProfileId).toBe("profile-creator");
 
-    const result = await repair(storePath);
+    const { cfg, state } = await loadRepairStateForStore(storePath);
+    const result = await applyLegacyCronStoreRepair({ cfg, state });
     expect(result.changes).toContainEqual(
       expect.stringContaining("Saved the recorded creator profile as the owner"),
     );
