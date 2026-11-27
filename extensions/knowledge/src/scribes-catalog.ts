@@ -250,6 +250,8 @@ const SLACK_DM_WORDS = {
 } as const;
 /** Title of the note page a Memory import with saved progress keeps its file list on. */
 export const MEMORY_CHECKPOINT = "Knowledge scribe checkpoint · Learn from Memory";
+/** The `knowledge_source_check` provider a Memory import with saved progress binds each file to. */
+export const MEMORY_SOURCE = "openclaw-memory";
 const MEMORY_PROGRESS = `Progress: saved on the Knowledge note page "${MEMORY_CHECKPOINT}", so an interrupted import can continue.`;
 const MEMORY_WORDS: Record<MemorySource, string> = {
   "memory-md": "MEMORY.md",
@@ -498,9 +500,9 @@ export function setupPrompt(setup: ScribeSetup) {
 const PROGRESS_WORK = {
   start: 'Save progress as "Saved progress" there says, starting a new file list.',
   continue:
-    'Follow "Learn from Memory" in the "Scribe runs" section of the knowledge-ingest skill for the files on that checkpoint, continuing as "Saved progress" there says: keep its file list and import only the files still pending. Never change Memory files.',
+    'Follow "Learn from Memory" in the "Scribe runs" section of the knowledge-ingest skill for the files on that checkpoint, continuing as "Saved progress" there says: keep its file list and import only the files that are not done yet. Never change Memory files.',
 };
-const PROGRESS_END = `${endStep("done", `one sentence with counts: ${COUNTS.memory}`)} Use \`done\` only when no file on the checkpoint is pending; otherwise end with \`Scribe status: needs attention — <files done> of <files listed> files imported\`.`;
+const PROGRESS_END = `${endStep("done", `one sentence with counts: ${COUNTS.memory}`)} Use \`done\` only when every file on the checkpoint is done; otherwise end with \`Scribe status: needs attention — <files done> of <files listed> files imported\`.`;
 
 /**
  * The message that continues a Memory import with saved progress in its conversation, after a

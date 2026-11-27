@@ -12,6 +12,10 @@ const statusLine = (state: string, summary: string) => ({
   content: `Done.\nScribe status: ${state} — ${summary}`,
 });
 const label = "Scribe · Learn from Memory";
+const sha = (n: number) => String(n).repeat(64);
+const files = ["MEMORY.md", "memory/2026-11-01.md", "memory/2026-11-02.md"].map(
+  (path, n) => `${path} ${sha(n + 1)}`,
+);
 const setup = scribeSetup(
   "memory",
   "once",
@@ -19,16 +23,14 @@ const setup = scribeSetup(
   "UTC",
 );
 
-it("continues a Memory import with saved progress until every file on its checkpoint is done", async () => {
-  const checkpoint = [
-    "- MEMORY.md: done (3 saved, 1 known, 0 skipped)",
-    "- memory/2026-11-01.md: done (2 saved, 0 known, 1 skipped)",
-    "- memory/2026-11-02.md: pending",
-  ].join("\n");
+it("continues a Memory import with saved progress until every file on its checkpoint has a receipt", async () => {
+  const checkpoint = files.map((file) => `- ${file}`).join("\n");
+  const receipts = files.slice(0, 2);
   const { render, ui, calls } = fixture({
     sessions: { [label]: { key: "s-mem", displayName: label, status: "interrupted" } },
     history: { "s-mem": [userText(setupPrompt(setup))] },
     checkpoint,
+    receipts,
   });
   ui.s.scribe = "memory";
   // The start turn stopped partway: it continues in its conversation instead of starting over.
@@ -43,7 +45,7 @@ it("continues a Memory import with saved progress until every file on its checkp
     message: continuePrompt(),
     idempotencyKey: expect.stringMatching(/^knowledge:scribe:memory:s-mem:[0-9a-f-]{36}$/),
   });
-  // A turn that says done while a file is still pending is not done.
+  // A turn that says done while a file has no receipt is not done.
   const claimed = fixture({
     sessions: { [label]: { key: "s-mem", displayName: label } },
     history: {
@@ -61,6 +63,7 @@ it("continues a Memory import with saved progress until every file on its checkp
       ],
     },
     checkpoint,
+    receipts,
   });
   claimed.ui.s.scribe = "memory";
   const pending = await claimed.render();
@@ -71,7 +74,8 @@ it("continues a Memory import with saved progress until every file on its checkp
     history: {
       "s-mem": [userText(continuePrompt()), statusLine("done", "Saved 6 items from 3 files")],
     },
-    checkpoint: checkpoint.replace("pending", "done (1 saved, 0 known, 0 skipped)"),
+    checkpoint,
+    receipts: files,
   });
   finished.ui.s.scribe = "memory";
   const done = await finished.render();
@@ -89,29 +93,32 @@ it("offers Continue when the start message has scrolled out of chat history", as
         ...Array.from({ length: 101 }, () => ({ role: "toolResult", content: "Read daily note" })),
       ],
     },
-    checkpoint: "- MEMORY.md: done\n- memory/2026-11-02.md: pending",
+    checkpoint: `- ${files[0]}\n- ${files[2]}`,
+    receipts: [files[0]!],
   });
   ui.s.scribe = "memory";
   expect(buttonNamed(await render(), "Continue")).toBeDefined();
 });
 
 it("checks the later windows of a checkpoint before offering Continue or showing Done", async () => {
-  const firstWindow = "- MEMORY.md: done\n- memory/2026-11-01.md: done\n- memory/2026-11-02.md: ";
+  const firstWindow = `- ${files[0]}\n- ${files[1]}\n- ${files[2]}`;
   const world = {
     sessions: { [label]: { key: "s-mem", displayName: label } },
     history: { "s-mem": [userText(continuePrompt()), statusLine("done", "Saved 5 items")] },
-    checkpoint: `${firstWindow}pending`,
+    checkpoint: `${firstWindow}\n- DREAMS.md ${sha(4)}`,
     checkpointWindow: firstWindow.length,
+    receipts: files,
   };
   const { render, ui } = fixture(world);
   ui.s.scribe = "memory";
   const view = await render();
   expect(buttonNamed(view, "Continue")).toBeDefined();
-  expect(view.textContent).toContain("2 of 3 files imported");
+  expect(view.textContent).toContain("3 of 4 files imported");
 
-  world.checkpoint = `${firstWindow}done`;
+  // A file with nothing new to save has no receipt; its line says so.
+  world.checkpoint = `${world.checkpoint} nothing new`;
   const done = await render();
-  expect(done.textContent).toContain("3 of 3 files imported");
+  expect(done.textContent).toContain("4 of 4 files imported");
   expect(buttonNamed(done, "Continue")).toBeUndefined();
 });
 
@@ -119,7 +126,8 @@ it("lets the user retry a checkpoint read before trusting a done result", async 
   const { render, ui, load, feature } = fixture({
     sessions: { [label]: { key: "s-mem", displayName: label } },
     history: { "s-mem": [userText(continuePrompt()), statusLine("done", "Saved 5 items")] },
-    checkpoint: "- MEMORY.md: done\n- memory/2026-11-02.md: pending",
+    checkpoint: `- ${files[0]}\n- ${files[2]}`,
+    receipts: [files[0]!],
   });
   ui.s.scribe = "memory";
   feature.invoke.mockRejectedValueOnce(new Error("Knowledge store unavailable"));

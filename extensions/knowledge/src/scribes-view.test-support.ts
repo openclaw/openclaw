@@ -32,6 +32,8 @@ export function fixture(world: {
   /** Body of the Memory import checkpoint page in the viewed store; absent when there is none. */
   checkpoint?: string;
   checkpointWindow?: number;
+  /** Memory files with a Knowledge source receipt, by path and SHA-256. */
+  receipts?: string[];
 }) {
   // HTMLDialogElement is incomplete in jsdom.
   Object.assign(HTMLDialogElement.prototype, {
@@ -123,20 +125,26 @@ export function fixture(world: {
   const load = vi.fn(async () => true);
   const scribesTab = document.createElement("button");
   const feature = {
-    invoke: vi.fn(async (operation: string, input?: { offset?: number }) => {
-      if (operation === "lookup") {
-        return world.checkpoint === undefined
-          ? { outcome: "missing", hits: [] }
-          : { outcome: "found", hits: [{ record: { id: "page-checkpoint" } }] };
-      }
-      const body = world.checkpoint ?? "";
-      const offset = input?.offset ?? 0;
-      const end = offset + (world.checkpointWindow ?? body.length);
-      return {
-        record: { body: body.slice(offset, end), hash: "checkpoint-version" },
-        content: { nextOffset: end < body.length ? end : null },
-      };
-    }),
+    invoke: vi.fn(
+      async (operation: string, input?: { offset?: number; key?: string; sha256?: string }) => {
+        if (operation === "lookup") {
+          return world.checkpoint === undefined
+            ? { outcome: "missing", hits: [] }
+            : { outcome: "found", hits: [{ record: { id: "page-checkpoint" } }] };
+        }
+        if (operation === "source_check") {
+          const receipt = `${input?.key} ${input?.sha256}`;
+          return { state: world.receipts?.includes(receipt) ? "unchanged" : "missing" };
+        }
+        const body = world.checkpoint ?? "";
+        const offset = input?.offset ?? 0;
+        const end = offset + (world.checkpointWindow ?? body.length);
+        return {
+          record: { body: body.slice(offset, end), hash: "checkpoint-version" },
+          content: { nextOffset: end < body.length ? end : null },
+        };
+      },
+    ),
   };
   const ui = {
     s: { context: { host }, scribe: "", storesSnapshot: undefined, tab: "scribes" },

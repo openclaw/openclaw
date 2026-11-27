@@ -33,7 +33,8 @@ Test on 3–5 items before the rest.
 
 Both scribes apply the rules above. Save single-passage lessons with
 `knowledge_remember`, its `excerpt` the cited passage and its `attribution`
-the source and date; do not attach whole transcripts or files. When a lesson
+the source and date; do not attach whole transcripts or files (a Memory
+import with [saved progress](#saved-progress) attaches each file). When a lesson
 changes what an existing page's State says, rewrite that topic too.
 
 ### Learn from conversations
@@ -85,14 +86,36 @@ When the prompt says progress is saved, keep the note page it names as the
 import's checkpoint so an interrupted import continues where it stopped
 ([#205796](https://github.com/openclaw/openclaw/issues/205796)).
 
-1. **List.** Before reading any file, `ls` the named files. On a new import,
-   save the page with `knowledge_save_page` (type `note`), replacing any earlier
-   body: one line per file, `- <path>: pending`, the path relative to the
-   workspace. To continue, `knowledge_lookup` the page and keep its list (start
-   a new one only when the page is missing).
-2. **Import.** Work through the `pending` files in order. After each file's
-   items are saved, change its line to
-   `- <path>: done (<saved> saved, <known> known, <skipped> skipped)` with
-   `knowledge_edit_body`. A pending file may have been half imported: the
-   duplicate check above keeps it from adding anything twice.
-3. **Done.** The import is done only when no line is `pending`.
+Each file is done when its own save leaves a Knowledge source receipt for its
+exact bytes (provider `openclaw-memory`, key the file's path relative to the
+workspace): the Scribes page and a continuing turn check those receipts with
+`knowledge_source_check`, not anything written on the page.
+
+1. **List.** Before reading any file, `ls` the named files and compute each
+   one's SHA-256 with a host tool (for example `shasum -a 256`). On a new
+   import, save the page with `knowledge_save_page` (type `note`), replacing
+   any earlier body: one line per file, `- <path> <sha256>`. To continue,
+   `knowledge_lookup` the page and keep its list (start a new one only when the
+   page is missing). If a listed file's bytes changed since, replace its hash on
+   its line with `knowledge_edit_body` first.
+2. **Skip done files.** `knowledge_source_check` each listed file
+   (`{provider: "openclaw-memory", key: <path>, sha256}`). Skip `unchanged`
+   files and files whose line ends in `nothing new`.
+3. **Import each other file**, in list order:
+   - `knowledge_attach_file` the file (its path, listed SHA-256, filename and
+     attribution) and cite the returned evidence, with the lines of each item,
+     on the claims you save from it.
+   - Save the file's new items as claims with `knowledge_publish_batch` instead
+     of `knowledge_remember`. Its last batch carries
+     `source: {provider: "openclaw-memory", key: <path>, sha256}`: that writes
+     the file's receipt with its items. A batch holds 25 items, so with more,
+     publish the earlier ones without `source`. For a `changed` file, reconcile
+     what its earlier receipt saved and set `expectedPreviousRequestId` from
+     the check.
+   - A file with nothing new to save gets no receipt: append ` nothing new` to
+     its line with `knowledge_edit_body`.
+     A file may have been half imported when a turn stopped: it has no receipt
+     and is imported again, and the duplicate check above keeps it from adding
+     anything twice.
+4. **Done.** The import is done only when every listed file has a receipt or
+   ends in `nothing new`.

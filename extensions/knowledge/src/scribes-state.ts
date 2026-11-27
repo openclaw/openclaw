@@ -7,6 +7,7 @@ import type { RecordOutput } from "./inspection-contract.js";
 import {
   checkRunMessage,
   MEMORY_CHECKPOINT,
+  MEMORY_SOURCE,
   SCRIBE_SESSION_TARGET,
   SCRIBES,
   scribeDeclarationKey,
@@ -424,21 +425,32 @@ async function latestRunResult(
   return result && { result, at };
 }
 
-// One checkpoint line: `- <path>: pending` or `- <path>: done (…)`.
-const CHECKPOINT_LINE = /^\s*[-*]\s+.+:\s*(pending|done)\b/i;
+// One checkpoint line: `- <path> <sha256>`, ending in `nothing new` when the file had nothing to save.
+const CHECKPOINT_LINE = /^\s*[-*]\s+(.+?)\s+([a-f0-9]{64})(\s+nothing new)?\s*$/i;
 
-// The files a checkpoint page body lists and how many are done.
-function checkpointProgress(body: string): ImportProgress {
-  let files = 0,
-    done = 0;
-  for (const line of body.split("\n")) {
+/**
+ * How many of the files a checkpoint page body lists are done: a file is done when its own
+ * Knowledge save left a receipt for its exact bytes, or when the import found nothing new in it.
+ */
+async function checkpointProgress(
+  feature: FeatureClient<FullOutputContract>,
+  body: string,
+): Promise<ImportProgress> {
+  const files = body.split("\n").flatMap((line) => {
     const match = CHECKPOINT_LINE.exec(line);
-    if (match) {
-      files++;
-      done += match[1]!.toLowerCase() === "done" ? 1 : 0;
-    }
-  }
-  return { files, done };
+    return match
+      ? [{ key: match[1]!, sha256: match[2]!.toLowerCase(), nothingNew: Boolean(match[3]) }]
+      : [];
+  });
+  const done = await Promise.all(
+    files.map(
+      async ({ key, sha256, nothingNew }) =>
+        nothingNew ||
+        (await feature.invoke("source_check", { provider: MEMORY_SOURCE, key, sha256 })).state ===
+          "unchanged",
+    ),
+  );
+  return { files: files.length, done: done.filter(Boolean).length };
 }
 
 /**
@@ -472,7 +484,7 @@ async function readImportProgress(
       body += record.body;
       offset = content.nextOffset;
     } while (offset !== null);
-    return checkpointProgress(body);
+    return await checkpointProgress(feature, body);
   } catch {
     return "unavailable";
   }
