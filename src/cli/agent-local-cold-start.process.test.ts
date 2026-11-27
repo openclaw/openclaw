@@ -29,7 +29,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const COLD_START_BUDGET = {
   nodeProcesses: 4,
   nodeSpawns: 5,
-  workerThreads: 17,
+  workerThreads: 15,
   mainModules: 11_200,
   mainKiB: 87_000,
 };
