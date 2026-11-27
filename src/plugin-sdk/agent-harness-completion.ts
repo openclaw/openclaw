@@ -81,7 +81,7 @@ export function registerAgentHarnessCompletion<Completion>(params: {
   // The supplied delivery operation still uses the host-issued scope and custody.
   return createSubagentAnnounceObligation(undefined, {
     ...lifecycle,
-    scope: getCanonicalGatewayContextResolver(resolver) ?? detachedCompletionScope,
+    scope: (resolver && getCanonicalGatewayContextResolver(resolver)) ?? detachedCompletionScope,
     key: `${scope.requesterAgentId}\0${scope.requesterSessionKey}\0${assignmentId}`,
   });
 }
