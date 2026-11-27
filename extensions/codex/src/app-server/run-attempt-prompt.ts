@@ -44,7 +44,14 @@ import { hasAuthoredCodexBaseInstructions } from "./thread-prompt.js";
 import { resolveCodexProjectionStartupBinding } from "./thread-restricted-resume.js";
 import { buildCodexHistoryProvenancePrefix, buildTurnCollaborationMode } from "./turn-params.js";
 
-export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
+export type CodexAttemptAssembly = {
+  result?: ReturnType<typeof assembleHarnessContextEngine>;
+};
+
+export async function prepareCodexAttemptPrompt(
+  context: CodexAttemptContext,
+  assembly: CodexAttemptAssembly = {},
+) {
   const {
     runtime,
     attemptTools,
@@ -239,9 +246,11 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       : undefined;
     const historyBudget = reserveCodexHistoryBudget(promptBudget);
     try {
+      // Physical client replacement must not select new history for the same run.
+      // Preserve rejected outcomes too; projection below still uses fresh authority.
       const assembled: Awaited<ReturnType<typeof assembleHarnessContextEngine>> =
-        activeContextEngine
-          ? await assembleHarnessContextEngine({
+        await (assembly.result ??= activeContextEngine
+          ? assembleHarnessContextEngine({
               contextEngine: activeContextEngine,
               sessionId: runtimeParams.sessionId,
               sessionKey: contextSessionKey,
@@ -263,7 +272,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
               transcriptReadFence: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
               prompt: params.prompt,
             })
-          : { messages: historyState.messages, estimatedTokens: 0 };
+          : Promise.resolve({ messages: historyState.messages, estimatedTokens: 0 }));
       if (!assembled) {
         throw new Error("context engine assemble returned no result");
       }

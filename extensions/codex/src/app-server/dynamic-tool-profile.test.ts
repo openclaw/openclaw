@@ -1,8 +1,11 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   filterCodexDynamicTools,
   resolveCodexDynamicToolsLoading,
+  resolveCodexDynamicToolsLoadingForRuntime,
 } from "./dynamic-tool-profile.js";
+
+afterEach(() => vi.unstubAllEnvs());
 
 const names = (value: string) => value.split(" ");
 const goals = "progress_card get_goal create_goal update_goal";
@@ -53,3 +56,40 @@ it.each([
     expect(resolveCodexDynamicToolsLoading({})).toBe("direct");
   }
 });
+
+it.each([
+  { listed: true, expected: "searchable" },
+  { listed: false, expected: "direct" },
+  { listed: undefined, expected: "direct" },
+])(
+  "uses exact connection membership for restricted discovery ($listed)",
+  ({ listed, expected }) => {
+    expect(
+      resolveCodexDynamicToolsLoadingForRuntime({}, "catalog-model", {
+        nativeToolSurfaceEnabled: false,
+        modelListedOnConnection: listed,
+      }),
+    ).toBe(expected);
+  },
+);
+
+it.each([
+  {
+    config: { codexDynamicToolsLoading: "direct" as const },
+    model: "catalog-model",
+    connectionClass: "local-loopback" as const,
+  },
+  { config: {}, model: "catalog-model", connectionClass: "remote" as const },
+  { config: {}, model: "gpt-5.4-nano", connectionClass: "local-loopback" as const },
+])(
+  "keeps direct guard despite positive membership ($model, $connectionClass)",
+  ({ config, model, connectionClass }) => {
+    expect(
+      resolveCodexDynamicToolsLoadingForRuntime(config, model, {
+        nativeToolSurfaceEnabled: false,
+        modelListedOnConnection: true,
+        connectionClass,
+      }),
+    ).toBe("direct");
+  },
+);

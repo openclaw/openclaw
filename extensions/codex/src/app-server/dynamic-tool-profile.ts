@@ -85,13 +85,15 @@ export function resolveCodexDynamicToolsLoadingForRuntime(
   options: {
     connectionClass?: CodexAppServerConnectionClass;
     nativeToolSurfaceEnabled?: boolean;
+    /** Exact final model membership on the executing app-server connection. */
+    modelListedOnConnection?: boolean;
   } = {},
 ): CodexDynamicToolsLoading {
-  // Without native JavaScript discovery, model metadata may also omit tool_search.
-  // Publish callable schemas rather than leaving allowed tools unreachable.
+  // Restricted models need positive membership on their executing connection.
+  // Missing evidence retains callable direct schemas.
   const loading = resolveCodexDynamicToolsLoading(config);
   return loading === "searchable" &&
-    (options.nativeToolSurfaceEnabled === false ||
+    ((options.nativeToolSurfaceEnabled === false && options.modelListedOnConnection !== true) ||
       shouldDisableCodexToolSearchForModel(modelId) ||
       options.connectionClass === "remote")
     ? "direct"
