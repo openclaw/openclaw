@@ -68,7 +68,8 @@ suite.define(() => {
             },
           });
           await page.goto(new URL("/skills/workshop", suite.server.baseUrl).toString());
-          await page.locator(".sw-detail").getByText("Run make deploy.", { exact: true }).waitFor();
+          // No drafts and no changes: the start page opens on Learned skills.
+          await page.locator(".sw-row").filter({ hasText: "deploy-staging" }).waitFor();
           await page.getByRole("button", { name: filter + " 0", exact: true }).click();
           const empty = page
             .locator(".sw-list__rows")
@@ -78,12 +79,13 @@ suite.define(() => {
             0,
           );
           expect(await page.locator(".sw-detail").count()).toBe(0);
-          const bounds = await page.locator(".sw-layout").evaluate((layout) => ({
-            layout: layout.getBoundingClientRect().width,
-            list: layout.querySelector(".sw-list")!.getBoundingClientRect().width,
-          }));
-          expect(bounds.list).toBeCloseTo(bounds.layout, 0);
+          const overflow = await page.evaluate(
+            () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+          );
+          expect(overflow).toBeLessThanOrEqual(0);
+          await page.getByRole("button", { name: /^Learned skills/ }).click();
           await page.getByRole("button", { name: "Active 1", exact: true }).click();
+          await page.locator(".sw-row__main").filter({ hasText: "deploy-staging" }).click();
           await page.locator(".sw-detail").getByText("Run make deploy.", { exact: true }).waitFor();
           expect(await gateway.getRequests("skills.workshop.archive")).toHaveLength(0);
         },

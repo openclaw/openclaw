@@ -211,7 +211,7 @@ export type DeliverOutboundPayloadsCoreParams = OutboundChannelContext & {
   completionRetention?: DeliveryQueueCompletionRetention;
   /** @internal Producer-specific durable recovery attempt budget. */
   maxRetries?: number;
-  /** @internal Marks an ordinary agent final; the channel's durableFinal adapter grants bounded text replay. */
+  /** @internal Marks an agent final; ordinary text may be resent once when its send is unconfirmed. */
   retryAmbiguousFinalText?: true;
   /** @internal Retry this producer's pending intent only when no platform send began. */
   reusePendingDeliveryIntent?: boolean;

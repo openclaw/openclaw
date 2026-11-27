@@ -44,6 +44,7 @@ import {
   mockClonedSessionStoreUpdate,
 } from "./agent.session-store-fixtures.test-support.js";
 import {
+  registerAgentTerminalDiagnosticCases,
   registerCompactionSessionSettlementCase,
   registerSuccessfulAgentSettlementCase,
   registerYieldedRequesterSettlementCase,
@@ -211,7 +212,7 @@ describe("gateway agent handler", () => {
             { client, respond, context, flushDispatch: false },
           );
           expect(replacementWrite).toHaveBeenCalledOnce();
-          expect(finish).toHaveBeenCalledWith("cancelled", undefined);
+          expect(finish).toHaveBeenCalledWith("cancelled", "failed");
           expect(dispose).toHaveBeenCalledOnce();
           expect(respond).toHaveBeenCalledWith(
             false,
@@ -597,71 +598,7 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it.each([
-    {
-      name: "resolved failure",
-      timeout: false,
-      recordedError: undefined,
-      expectedError: "Provider rejected this request.",
-    },
-    {
-      name: "resolved timeout",
-      timeout: true,
-      recordedError: undefined,
-      expectedError: "Request timed out before a response was generated.",
-    },
-    {
-      name: "producer lifecycle guidance",
-      timeout: false,
-      recordedError: "Reconnect the selected provider, then try again.",
-      expectedError: "Reconnect the selected provider, then try again.",
-    },
-  ])("retains the $name diagnostic on the terminal outcome", async (scenario) => {
-    const root = sessionDirs.make();
-    useTestStateDir(root);
-    primeMainAgentRun();
-    const runId = `task-diagnostic-${scenario.name}`;
-    mocks.agentCommand.mockResolvedValueOnce(
-      recordAgentRunTerminalOutcome(
-        {
-          payloads: [],
-          meta: {
-            durationMs: 1,
-            error: {
-              kind: "incomplete_turn",
-              message: scenario.recordedError ? "Agent run failed" : scenario.expectedError,
-            },
-            ...(scenario.timeout
-              ? { timeoutPhase: "provider", providerStarted: true }
-              : { stopReason: "error" }),
-          },
-        },
-        "failed",
-        scenario.recordedError,
-      ),
-    );
-    const onSettled = vi.fn(() => true);
-    await dispatchAgentRunFromGateway({
-      admittedRunEntry: undefined,
-      ingressOpts: {
-        message: "Run this request.",
-        sessionKey: "agent:main:main",
-        allowModelOverride: false,
-      },
-      runId,
-      dedupeKeys: [],
-      abortController: new AbortController(),
-      cleanupAbortController: vi.fn(),
-      io: createAgentTurnIo(vi.fn()),
-      context: makeContext(),
-      onSettled,
-    });
-    expect(onSettled).toHaveBeenCalledWith(
-      expect.objectContaining({
-        terminalOutcome: expect.objectContaining({ error: scenario.expectedError }),
-      }),
-    );
-  });
+  registerAgentTerminalDiagnosticCases(() => sessionDirs.make());
 
   it.each([
     {
@@ -1834,51 +1771,6 @@ describe("gateway agent handler", () => {
       agentId: "work",
       clone: false,
     });
-  });
-
-  it("preserves accepted session and runtime metadata on cached responses", async () => {
-    const context = makeContext();
-    mockGlobalSessionAgentRoster();
-    mocks.agentCommand.mockClear();
-    context.dedupe.set("agent:cached-global-work", {
-      ts: Date.now(),
-      ok: true,
-      payload: {
-        runId: "cached-global-work",
-        sessionKey: "global",
-        agentId: "work",
-        status: "accepted",
-        runtime: {
-          harness: "claude-cli",
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
-        },
-      },
-    });
-    const respond = vi.fn();
-
-    await invokeAgent(
-      {
-        message: "global session retry",
-        sessionKey: "global",
-        agentId: "work",
-        idempotencyKey: "cached-global-work",
-      },
-      { context, respond, reqId: "cached-global-work" },
-    );
-
-    expectRecordFields(mockCallArg(respond, 0, 1), {
-      runId: "cached-global-work",
-      sessionKey: "global",
-      agentId: "work",
-      status: "in_flight",
-      runtime: {
-        harness: "claude-cli",
-        provider: "anthropic",
-        model: "claude-sonnet-4-6",
-      },
-    });
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
 
   describe("spawned child execution", () => {

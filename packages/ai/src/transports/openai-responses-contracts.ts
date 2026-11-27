@@ -32,6 +32,8 @@ export const OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY = "openclawReasoni
 export const OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH = 64;
 // Projection-only provenance: symbols survive option/object spreads but never enter provider JSON.
 export const RESPONSES_RETAINED_USER = Symbol("responsesRetainedUser");
+/** Marks the input item that carries the system prompt when `instructions` is not used. */
+export const RESPONSES_SYSTEM_PROMPT = Symbol("responsesSystemPrompt");
 export const OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE = "openai-responses-compaction";
 export const OPENAI_RESPONSES_RETAINED_COMPACTION_REPLAY_TYPE =
   "openai-responses-retained-compaction";
@@ -282,7 +284,7 @@ export type OpenAIResponsesRequestParams = {
   instructions?: string;
   prompt_cache_key?: string;
   prompt_cache_retention?: "24h";
-  prompt_cache_options?: { ttl?: "30m" | "12h" };
+  prompt_cache_options?: { ttl?: "30m" | "12h"; prewarm?: boolean };
   metadata?: Record<string, string>;
   previous_response_id?: string;
   store?: boolean;

@@ -1,5 +1,5 @@
 import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import type { AssistantMessage } from "../../../llm/types.js";
+import type { AssistantHistoryMessage } from "../../../llm/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { hasNonzeroUsage, normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import type { PromptCacheChange } from "../prompt-cache-observability.js";
@@ -60,10 +60,10 @@ export function buildContextEnginePromptCacheInfo(params: {
 export function findCurrentAttemptAssistantMessage(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
-}): AssistantMessage | undefined {
+}): AssistantHistoryMessage | undefined {
   const firstAttemptIndex = Math.max(0, params.prePromptMessageCount);
   return params.messagesSnapshot.findLast(
-    (message, index): message is AssistantMessage =>
+    (message, index): message is AssistantHistoryMessage =>
       index >= firstAttemptIndex && message?.role === "assistant",
   );
 }
@@ -72,7 +72,7 @@ export function findCurrentAttemptAssistantMessage(params: {
 function findLatestCurrentAttemptUsageSnapshot(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
-}): { assistant: AssistantMessage; usage: NormalizedUsage } | undefined {
+}): { assistant: AssistantHistoryMessage; usage: NormalizedUsage } | undefined {
   const firstAttemptIndex = Math.max(0, params.prePromptMessageCount);
   for (let i = params.messagesSnapshot.length - 1; i >= firstAttemptIndex; i--) {
     const message = params.messagesSnapshot[i];
@@ -92,7 +92,7 @@ export function findLatestUncompactedAttemptUsageSnapshot(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
   compactionOccurred: boolean;
-}): { assistant: AssistantMessage; usage: NormalizedUsage } | undefined {
+}): { assistant: AssistantHistoryMessage; usage: NormalizedUsage } | undefined {
   return params.compactionOccurred ? undefined : findLatestCurrentAttemptUsageSnapshot(params);
 }
 

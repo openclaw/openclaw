@@ -59,9 +59,9 @@ export default defineControlUiPlugin({
         });
         const navigation = host.ui.registerNavigation({
           id: ACCESS_PAGE_ID,
-          label: "Access",
+          label: "Remote access",
           page: { id: ACCESS_PAGE_ID },
-          icon: "users",
+          icon: "access",
           defaultVisible: false,
         });
         disposePage = () => {

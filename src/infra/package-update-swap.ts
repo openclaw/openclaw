@@ -112,7 +112,7 @@ async function swapStagedPackageDirectory(
   let publicationUncertain = false;
   let publication: string | null;
   let displacedCandidateRoot: string | undefined;
-  const baseline = createPackageIntegrityReader(params.timeoutMs);
+  const baseline = createPackageIntegrityReader(params.timeoutMs, { warnings });
   const launchers: PackageLauncherBackup = { entries: [] };
   const shims = launchers.entries;
   const rollback: Array<(assertCurrent: () => void) => Promise<void>> = [];
@@ -697,7 +697,7 @@ async function swapStagedPackageDirectory(
       : [
           hadPackage && !retained
             ? rootLink
-              ? await rootLink.retire()
+              ? ((await rootLink.retire())?.message ?? null)
               : await discardPackageUpdateBackup(backupRoot, "old package", targetLayout.globalRoot)
             : null,
           !retained ? await discardPackageLauncherBackup(launchers, targetLayout.globalRoot) : null,

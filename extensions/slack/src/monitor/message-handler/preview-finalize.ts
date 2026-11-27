@@ -1,11 +1,10 @@
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { editSlackRenderedMessage } from "../../actions.js";
-import { buildSlackBlocksFallbackText } from "../../blocks-fallback.js";
+import { buildSlackBlocksFallbackText, hasSlackNativeDataBlock } from "../../blocks-fallback.js";
 import { buildSlackEditTextPayload } from "../../edit-text.js";
 import { normalizeSlackOutboundText } from "../../format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "../../limits.js";
-import { hasSlackNativeDataBlock } from "../../native-data-blocks.js";
 import { buildSlackNativeDataDeliveryPlan } from "../../native-data-fallback.js";
 import { truncateSlackTextByUtf8Bytes } from "../../truncate.js";
 

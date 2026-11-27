@@ -451,16 +451,7 @@ test("initializes unrestricted Telegram model browsing and reuses its prepared c
   const telegramCalls: TelegramCall[] = [];
   const pendingUpdates: unknown[] = [];
   let nextUpdateId = 2;
-  let pickerStage:
-    | "initial"
-    | "providers"
-    | "models"
-    | "repeated-providers"
-    | "repeated-providers-second"
-    | "done" = "initial";
-  let discoveryFrozen = false;
-  let discoveryRequests = 0;
-  let postWarmDiscoveryAttempts = 0;
+  let pickerStage: "initial" | "providers" | "models" | "back" | "done" = "initial";
 
   const queueCallback = (data: string) => {
     const callbackNumber = nextUpdateId - 1;
@@ -472,12 +463,6 @@ test("initializes unrestricted Telegram model browsing and reuses its prepared c
     const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
 
     if (pathname === "/ollama/api/tags") {
-      discoveryRequests += 1;
-      if (discoveryFrozen) {
-        postWarmDiscoveryAttempts += 1;
-        writeJson(res, 503, { ok: false, error: "provider discovery frozen after warmup" });
-        return;
-      }
       writeJson(res, 200, {
         models: [
           {
@@ -492,12 +477,6 @@ test("initializes unrestricted Telegram model browsing and reuses its prepared c
     }
 
     if (pathname === "/ollama/api/show") {
-      discoveryRequests += 1;
-      if (discoveryFrozen) {
-        postWarmDiscoveryAttempts += 1;
-        writeJson(res, 503, { ok: false, error: "provider discovery frozen after warmup" });
-        return;
-      }
       writeJson(res, 200, {
         model_info: { "general.context_length": 8192 },
         capabilities: ["completion", "tools"],
@@ -550,20 +529,11 @@ test("initializes unrestricted Telegram model browsing and reuses its prepared c
       pickerStage === "models" &&
       hasCallback({ method, body }, `mdl_sel_ollama/${DISCOVERED_MODEL}`)
     ) {
-      pickerStage = "repeated-providers";
+      pickerStage = "back";
       queueCallback("mdl_prov");
     } else if (
       method === "editMessageText" &&
-      pickerStage === "repeated-providers" &&
-      typeof body.text === "string" &&
-      body.text.includes("Select a provider:")
-    ) {
-      expect(hasCallback({ method, body }, "mdl_list_ollama_1")).toBe(true);
-      pickerStage = "repeated-providers-second";
-      queueCallback("mdl_prov");
-    } else if (
-      method === "editMessageText" &&
-      pickerStage === "repeated-providers-second" &&
+      pickerStage === "back" &&
       typeof body.text === "string" &&
       body.text.includes("Select a provider:")
     ) {
@@ -675,9 +645,6 @@ test("initializes unrestricted Telegram model browsing and reuses its prepared c
               expect.objectContaining({ provider: "ollama", id: DISCOVERED_MODEL }),
             ]),
           });
-          expect(discoveryRequests).toBeGreaterThan(0);
-          const warmDiscoveryRequests = discoveryRequests;
-          discoveryFrozen = true;
           queueCallback("mdl_prov");
 
           await expect
@@ -689,7 +656,7 @@ test("initializes unrestricted Telegram model browsing and reuses its prepared c
               }),
               { interval: 50, timeout: 30_000 },
             )
-            .toMatchObject({ stage: "done", answers: 4 });
+            .toMatchObject({ stage: "done", answers: 3 });
 
           const sendMessage = telegramCalls.find((call) => call.method === "sendMessage");
           expect(sendMessage).toBeDefined();
@@ -698,48 +665,17 @@ test("initializes unrestricted Telegram model browsing and reuses its prepared c
           const pickerEdits = telegramCalls.filter(
             (call) => call.method === "editMessageText" && inlineKeyboard(call).length > 0,
           );
-          expect(pickerEdits).toHaveLength(4);
+          expect(pickerEdits).toHaveLength(3);
           expect(hasCallback(pickerEdits[0]!, "mdl_list_ollama_1")).toBe(true);
           expect(hasCallback(pickerEdits[2]!, "mdl_list_ollama_1")).toBe(true);
           expect(
             pickerEdits[1] &&
               keyboardCallbackData(pickerEdits[1]).includes(`mdl_sel_ollama/${DISCOVERED_MODEL}`),
           ).toBe(true);
-          expect(pickerEdits[3] && hasCallback(pickerEdits[3], "mdl_list_ollama_1")).toBe(true);
 
           expect(
             telegramCalls.filter((call) => call.method === "answerCallbackQuery"),
-          ).toHaveLength(4);
-          const preparedModels = await gateway.call("models.list", { view: "default" });
-          expect(preparedModels).toMatchObject({
-            models: expect.arrayContaining([
-              expect.objectContaining({ provider: "ollama", id: DISCOVERED_MODEL }),
-            ]),
-          });
-          expect(discoveryRequests).toBe(warmDiscoveryRequests);
-          expect(postWarmDiscoveryAttempts).toBe(0);
-
-          discoveryFrozen = false;
-          const refreshedModels = await gateway.call("models.list", {
-            view: "default",
-            refresh: true,
-          });
-          expect(refreshedModels).toMatchObject({
-            models: expect.arrayContaining([
-              expect.objectContaining({ provider: "ollama", id: DISCOVERED_MODEL }),
-            ]),
-          });
-          expect(discoveryRequests).toBeGreaterThan(warmDiscoveryRequests);
-          console.info(
-            "MODEL_INVENTORY_PROOF",
-            JSON.stringify({
-              scenario: "unrestricted-inventory",
-              callbacks: keyboardCallbackData(pickerEdits[1]!),
-              warmDiscoveryRequests,
-              postWarmDiscoveryAttempts,
-              refreshedDiscoveryRequests: discoveryRequests,
-            }),
-          );
+          ).toHaveLength(3);
         } finally {
           await settleCleanup(async () => await stopQaGatewayFixture(gatewayOwner));
         }

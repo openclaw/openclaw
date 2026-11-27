@@ -17,8 +17,9 @@ import {
 afterEach(() => {
   resetThreadPresentation();
   document.body.replaceChildren();
-  vi.useRealTimers();
+  // Unstub before uninstalling the fake clock so its frame function cannot leak.
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 it("closes the message menu on Escape after a previous hover tooltip finishes loading", async () => {
@@ -118,4 +119,13 @@ it("keeps failed context-copy feedback visible and retries before dismissing the
   await vi.waitFor(() => expect(button.isConnected).toBe(false));
   expect(writeText).toHaveBeenNthCalledWith(1, "Synthetic commentary");
   expect(writeText).toHaveBeenNthCalledWith(2, "Synthetic commentary");
+});
+
+it("keeps native animation frames working after menu mocks are restored", async () => {
+  let delivered = false;
+  const frame = requestAnimationFrame(() => {
+    delivered = true;
+  });
+  onTestFinished(() => cancelAnimationFrame(frame));
+  await vi.waitFor(() => expect(delivered).toBe(true));
 });

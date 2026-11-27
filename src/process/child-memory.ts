@@ -2,15 +2,17 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { readFile as readFileCallback, readFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import os from "node:os";
-import path from "node:path";
 import { promisify } from "node:util";
 import { parseNodeReleaseVersion } from "../../node-version.mjs";
 import { hasErrnoCode } from "../infra/errno.js";
+import { readCgroupV2MemoryLimits } from "../infra/host-memory.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const rssField = Buffer.from("\nVmRSS:");
 const swapField = Buffer.from("\nVmSwap:");
+const pssField = Buffer.from("\nPss:");
+const swapPssField = Buffer.from("\nSwapPss:");
 
 // Reuse the buffer API where available; Node 26.8+'s native one-shot reader is
 // faster and exposes only the final file size to V8. Leave Bun's reader intact.
@@ -65,39 +67,10 @@ export type HostExecMemoryBudget = { memoryBytes: number; swapBytes: number };
 export type HostExecMemoryUsage = HostExecMemoryBudget;
 
 function constrainToCgroupAncestors(capacity: HostExecMemoryBudget): void {
-  let relative: string | undefined;
-  try {
-    relative = /^0::(\/.*)$/mu.exec(readFileSync("/proc/self/cgroup", "utf8"))?.[1];
-  } catch {
-    return;
-  }
-  if (!relative) {
-    return;
-  }
-  const mount = "/sys/fs/cgroup";
-  let directory = path.resolve(mount, `.${relative}`);
-  if (directory !== mount && !directory.startsWith(`${mount}/`)) {
-    return;
-  }
-  // Node only reads the current cgroup. Delegated Gateway leaves can have no
-  // memory files even though a service or slice above them limits RAM and swap.
-  for (;;) {
-    for (const file of ["memory.max", "memory.high", "memory.swap.max"]) {
-      try {
-        const value = readFileSync(path.join(directory, file), "utf8").trim();
-        if (/^\d+$/u.test(value)) {
-          const dimension = file === "memory.swap.max" ? "swapBytes" : "memoryBytes";
-          capacity[dimension] = Math.min(capacity[dimension], Number(value));
-        }
-      } catch {
-        // Missing controllers and inaccessible ancestors retain known limits.
-      }
-    }
-    // A cgroup namespace can expose a constrained container at the mount root.
-    if (directory === mount) {
-      break;
-    }
-    directory = path.dirname(directory);
+  const limits = readCgroupV2MemoryLimits(["memory.max", "memory.high", "memory.swap.max"]);
+  for (const [file, value] of Object.entries(limits)) {
+    const dimension = file === "memory.swap.max" ? "swapBytes" : "memoryBytes";
+    capacity[dimension] = Math.min(capacity[dimension], value);
   }
 }
 
@@ -192,6 +165,17 @@ function shareReads<T>(read: (pid: number) => Promise<T>): (pid: number) => Prom
 }
 
 async function readMemory(pid: number): Promise<HostExecMemoryUsage> {
+  try {
+    const rollup = await readKernelFile(`/proc/${pid}/smaps_rollup`);
+    if (rollup.includes(pssField)) {
+      return {
+        memoryBytes: readStatusNumber(rollup, pssField) * 1024,
+        swapBytes: readStatusNumber(rollup, swapPssField) * 1024,
+      };
+    }
+  } catch {
+    // Old kernels and non-dumpable processes keep the full resident charge.
+  }
   const status = await readKernelFile(`/proc/${pid}/status`);
   return {
     memoryBytes: readStatusNumber(status, rssField) * 1024,
@@ -283,8 +267,8 @@ function totalUsage(): HostExecMemoryUsage {
     total.swapBytes += snapshot.extra.swapBytes;
     for (const [pid, usage] of snapshot.pids) {
       const previous = pids.get(pid);
-      // Overlapping retained roots share a charge. Shared pages across distinct
-      // processes can still overcount; the sampled backend is conservative.
+      // Overlapping retained roots share a charge. Pages shared by distinct
+      // processes count once by PSS, or once per process on the RSS fallback.
       pids.set(pid, {
         memoryBytes: Math.max(previous?.memoryBytes ?? 0, usage.memoryBytes),
         swapBytes: Math.max(previous?.swapBytes ?? 0, usage.swapBytes),

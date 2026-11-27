@@ -230,7 +230,11 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
         return [value.buffer];
       }
       if (value && typeof value === "object" && "patch" in value) {
-        return [value.patch.buffer, value.basePack.buffer];
+        return [
+          value.patch.buffer,
+          value.basePack.buffer,
+          ...(value.publicationPack ? [value.publicationPack.buffer] : []),
+        ];
       }
       return [];
     },

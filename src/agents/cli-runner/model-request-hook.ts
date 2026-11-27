@@ -1,0 +1,194 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ImageContent } from "../../llm/types.js";
+import type { CliBackendPromptContext } from "../../plugins/cli-backend.types.js";
+import type { PluginHookModelRequestKind } from "../../plugins/hook-model.types.js";
+import type { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
+import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
+import { buildAgentHookConversationMessages } from "../harness/hook-history.js";
+import type { RunCliAgentParams } from "./types.js";
+
+/** Text a CLI backend receives for one turn or one steered input. */
+export type CliModelRequestPayload = {
+  prompt: string;
+  prependContext?: string;
+  appendContext?: string;
+  images?: Array<ImageContent & { displayName?: string }>;
+};
+
+/** Final gate before OpenClaw hands text to a CLI backend. Throws to stop the dispatch. */
+export type CliModelRequestGate = (
+  payload: CliModelRequestPayload,
+  currentMessage?: unknown,
+) => Promise<CliModelRequestPayload>;
+
+type HookRunner = NonNullable<ReturnType<typeof getGlobalHookRunner>>;
+
+const PAYLOAD_KEYS = new Set(["prompt", "prependContext", "appendContext"]);
+
+export function toCliModelRequestPayload(
+  prompt: string,
+  promptContext?: CliBackendPromptContext,
+): CliModelRequestPayload {
+  return {
+    prompt,
+    ...(promptContext?.prependContext ? { prependContext: promptContext.prependContext } : {}),
+    ...(promptContext?.appendContext ? { appendContext: promptContext.appendContext } : {}),
+  };
+}
+
+export function readCliPromptContext(
+  payload: CliModelRequestPayload,
+): CliBackendPromptContext | undefined {
+  return payload.prependContext || payload.appendContext
+    ? {
+        ...(payload.prependContext ? { prependContext: payload.prependContext } : {}),
+        ...(payload.appendContext ? { appendContext: payload.appendContext } : {}),
+      }
+    : undefined;
+}
+
+/** Plugins may rewrite text only; any other shape stops the dispatch. */
+function readCliModelRequestPayload(value: unknown, allowImages: boolean): CliModelRequestPayload {
+  const invalid = () =>
+    new Error(
+      allowImages
+        ? "before_model_request must keep text fields as strings and images as inline image blocks"
+        : "before_model_request must keep the CLI payload as { prompt, prependContext?, appendContext? } strings",
+    );
+  if (!isRecord(value)) {
+    throw invalid();
+  }
+  const record = value;
+  if (
+    Object.keys(record).some((key) => !PAYLOAD_KEYS.has(key) && !(allowImages && key === "images"))
+  ) {
+    throw invalid();
+  }
+  const { prompt, prependContext, appendContext, images } = record;
+  if (
+    typeof prompt !== "string" ||
+    (prependContext !== undefined && typeof prependContext !== "string") ||
+    (appendContext !== undefined && typeof appendContext !== "string")
+  ) {
+    throw invalid();
+  }
+  const requestImages: CliModelRequestPayload["images"] = [];
+  if (images !== undefined) {
+    if (!allowImages || !Array.isArray(images)) {
+      throw invalid();
+    }
+    const values: unknown[] = images;
+    for (const image of values) {
+      if (!isRecord(image)) {
+        throw invalid();
+      }
+      const imageRecord = image;
+      const { type, data, mimeType, displayName } = imageRecord;
+      if (
+        type !== "image" ||
+        typeof data !== "string" ||
+        typeof mimeType !== "string" ||
+        (displayName !== undefined && typeof displayName !== "string") ||
+        Object.keys(imageRecord).some(
+          (key) => !["type", "data", "mimeType", "displayName"].includes(key),
+        )
+      ) {
+        throw invalid();
+      }
+      requestImages.push({
+        type,
+        data,
+        mimeType,
+        ...(displayName !== undefined ? { displayName } : {}),
+      });
+    }
+  }
+  return {
+    prompt,
+    ...(prependContext ? { prependContext } : {}),
+    ...(appendContext ? { appendContext } : {}),
+    ...(images !== undefined ? { images: requestImages } : {}),
+  };
+}
+
+/**
+ * CLI runtimes have no provider payload: the backend owns its wire request. The hook sees and
+ * may rewrite the text OpenClaw hands to the CLI, with the same opt-in, timeout, and
+ * fail-closed policy as embedded provider requests.
+ */
+export function createCliModelRequestGate(params: {
+  hookRunner: HookRunner;
+  hookContext: PluginHookAgentContext;
+  provider: string;
+  model: string;
+  requestKind?: PluginHookModelRequestKind;
+  /** Model-facing history for this turn, current user turn last. */
+  messages: () => Promise<readonly unknown[]>;
+}): CliModelRequestGate {
+  return async (payload, currentMessage) => {
+    if (!params.hookRunner.hasHooks("before_model_request")) {
+      return payload;
+    }
+    // Handlers may edit the event payload in place, as on embedded runs.
+    const requestPayload: CliModelRequestPayload = { ...payload };
+    const result = await params.hookRunner.runBeforeModelRequest(
+      {
+        runtime: "cli",
+        requestKind: params.requestKind ?? "turn",
+        payload: requestPayload,
+        provider: params.provider,
+        model: params.model,
+        messages: structuredClone([
+          ...(await params.messages()),
+          ...(currentMessage === undefined ? [] : [currentMessage]),
+        ]),
+      },
+      params.hookContext,
+    );
+    return readCliModelRequestPayload(
+      result ? result.payload : requestPayload,
+      payload.images !== undefined,
+    );
+  };
+}
+
+/** Gate for one CLI run; its prepared user row carries provenance and sender metadata. */
+export function createCliRunModelRequestGate(params: {
+  hookRunner: ReturnType<typeof getGlobalHookRunner> | undefined;
+  hookContext: PluginHookAgentContext;
+  run: Pick<
+    RunCliAgentParams,
+    "provider" | "inputProvenance" | "senderIsOwner" | "userTurnTranscriptRecorder"
+  >;
+  model: string;
+  prompt: string;
+  history: () => readonly unknown[];
+}): CliModelRequestGate | undefined {
+  if (!params.hookRunner?.hasHooks("before_model_request")) {
+    return undefined;
+  }
+  const { run } = params;
+  let currentTurn: Promise<unknown> | undefined;
+  return createCliModelRequestGate({
+    hookRunner: params.hookRunner,
+    hookContext: { ...params.hookContext, modelProviderId: run.provider, modelId: params.model },
+    provider: run.provider,
+    model: params.model,
+    messages: async () => {
+      currentTurn ??= Promise.resolve(run.userTurnTranscriptRecorder?.resolveMessage()).then(
+        (message) =>
+          message ??
+          buildPersistedUserTurnMessage({
+            text: params.prompt,
+            provenance: run.inputProvenance,
+            senderIsOwner: run.senderIsOwner,
+          }),
+      );
+      return buildAgentHookConversationMessages({
+        historyMessages: params.history(),
+        currentTurnMessages: [await currentTurn],
+      });
+    },
+  });
+}

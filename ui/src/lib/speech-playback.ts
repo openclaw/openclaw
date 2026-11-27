@@ -5,6 +5,8 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { base64ToBytes } from "./bytes-base64.ts";
 import { listen } from "./reactive/listener.ts";
 
+const AUDIO_PRIMER_TIMEOUT_MS = 1_000;
+
 const activePlayback = new WeakMap<GatewayBrowserClient, GatewaySpeechPlayback>();
 
 export function resolveSpeechTextLimit(config: unknown): number {
@@ -42,10 +44,31 @@ export class GatewaySpeechPlayback {
       "data:audio/wav;base64,UklGRiYAAABXQVZFZm10IBAAAAABAAEAIlYAAESsAAACABAAZGF0YQIAAAAAAA==",
     );
     this.audio = audio;
-    this.ready = audio.play().then(
-      () => audio.pause(),
-      () => undefined,
-    );
+    const priming = audio.play();
+    this.ready = new Promise<void>((resolve) => {
+      let expired = false;
+      const timeout = setTimeout(() => {
+        expired = true;
+        // Retire the primer before a reply reuses this element.
+        audio.pause();
+        audio.removeAttribute("src");
+        audio.load();
+        resolve();
+      }, AUDIO_PRIMER_TIMEOUT_MS);
+      void priming.then(
+        () => {
+          clearTimeout(timeout);
+          if (!expired) {
+            audio.pause();
+          }
+          resolve();
+        },
+        () => {
+          clearTimeout(timeout);
+          resolve();
+        },
+      );
+    });
     return audio;
   }
 

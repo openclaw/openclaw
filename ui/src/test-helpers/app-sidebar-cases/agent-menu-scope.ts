@@ -88,6 +88,8 @@ describe("AppSidebar agent menu scope", () => {
         activeRouteId: "skills",
         sidebarAgentsMode: mode,
       });
+      // Skills opens the Customize list; the agent menu belongs to Sessions.
+      await dom.update({ navigationView: "sessions" });
       await open();
       const gear = dom.query<HTMLButtonElement>(
         '[data-value="agent:research"] .sidebar-agent-menu__settings',
@@ -114,6 +116,10 @@ describe("AppSidebar agent menu scope", () => {
       sidebar.connected = true;
       patchSettings({ sidebarAgentsMode: "roster" });
       context.agentSelection.setScope(null);
+      await sidebar.updateComplete;
+      // Skills opens the Customize list; the agent menu belongs to Sessions.
+      sidebar.navigationView = "sessions";
+      sidebar.invalidate();
       await sidebar.updateComplete;
       const menu = await open();
       expect(menu.attr(".sidebar-agent-menu__agent-switch--active", "data-value")).toBe(

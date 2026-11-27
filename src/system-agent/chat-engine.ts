@@ -25,6 +25,9 @@ import {
   approvalQuestion,
   createCaptureRuntime,
   formatSystemAgentTurnInput,
+  finishSystemAgentPersistentOperation,
+  resolveSystemAgentConfigWriteRepair,
+  verifySystemAgentConfigAfterWrite,
   type CaptureRuntime,
 } from "./dialogue.js";
 import type { SystemAgentGreetingPlanner } from "./greeting.js";
@@ -47,6 +50,7 @@ import {
   describeSystemAgentPersistentOperation,
   executeSystemAgentOperation,
   isPersistentSystemAgentOperation,
+  parseSystemAgentConfigCommand,
   parseSystemAgentOperation,
   redactSensitiveCommandText,
   SYSTEM_AGENT_OPERATOR_NAVIGATION_HANDOFF,
@@ -57,6 +61,7 @@ import {
 } from "./operations.js";
 import {
   hashSystemAgentOperation,
+  classifySystemAgentApprovalText,
   resolveOperatorApprovalDecision,
   resolvePendingOperatorProposal,
   SYSTEM_AGENT_APPROVAL_APPLICATION_UNCONFIRMED_TEXT,
@@ -73,7 +78,9 @@ export type SystemAgentChatTurnOptions = {
 };
 
 export type SystemAgentChatEngineOptions = {
-  readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
+  readonly verifiedInference?: SystemAgentVerifiedInferenceBinding;
+  /** Prepare a real inference binding only when conversational work needs it. */
+  prepareInference?: () => Promise<SystemAgentVerifiedInferenceBinding>;
   yes?: boolean;
   deps?: SystemAgentCommandDeps;
   runAgentTurn?: SystemAgentTurnRunner;
@@ -85,30 +92,34 @@ export type SystemAgentChatEngineOptions = {
 
 type PersistentApplyGuard = () => void;
 
-function unavailable(reason: string): string {
-  return [
-    `⚠ The write was applied, but post-write verification is unavailable: ${reason}.`,
-    "Run `openclaw doctor --fix` on the machine running OpenClaw, then verify the configuration before continuing.",
-  ].join("\n");
-}
-
 export class SystemAgentChatEngine {
   private readonly history: SystemAgentAssistantTurn[] = [];
-  private readonly agentSession: SystemAgentSession;
+  private inference?: {
+    binding: SystemAgentVerifiedInferenceBinding;
+    session: SystemAgentSession;
+  };
   private readonly wizard: ChatWizardHost;
   private pending: SystemAgentOperation | null = null;
+  private pendingExactConfig = false;
   private pendingDescription?: string;
   private proposalResolution: "approved" | "declined" | undefined;
-  private verifiedInference: SystemAgentVerifiedInferenceBinding;
   private turnQueue: Promise<unknown> = Promise.resolve();
+
+  private get inferenceRuntime() {
+    if (!this.inference) {
+      throw new SystemAgentInferenceUnavailableError("conversation");
+    }
+    return this.inference;
+  }
 
   constructor(private readonly options: SystemAgentChatEngineOptions) {
     const binding = options?.verifiedInference;
-    if (!binding) {
+    if (!binding && !options?.prepareInference) {
       throw new SystemAgentInferenceUnavailableError("conversation");
     }
-    this.verifiedInference = binding;
-    this.agentSession = createSystemAgentSession(binding);
+    if (binding) {
+      this.inference = { binding, session: createSystemAgentSession(binding) };
+    }
     this.wizard = new ChatWizardHost({
       surface: options.surface,
       beforePersistentApply: async (runtime) => {
@@ -124,7 +135,10 @@ export class SystemAgentChatEngine {
   }
 
   getPendingOperatorProposal(): SystemAgentOperatorProposal | null {
-    const proposal = resolvePendingOperatorProposal(this.pending, this.agentSession.proposalRef);
+    const proposal = resolvePendingOperatorProposal(
+      this.pending,
+      this.inference?.session.proposalRef ?? {},
+    );
     if (!proposal) {
       return null;
     }
@@ -146,6 +160,8 @@ export class SystemAgentChatEngine {
     terminalStatus?: "expired" | "cancelled",
   ): Promise<SystemAgentChatReply | null> {
     return await this.enqueueTurn(async () => {
+      // Approval consumes pending state before applying. Retain its host-owned provenance.
+      const exactConfig = this.pendingExactConfig;
       const reply = await resolveOperatorApprovalDecision<SystemAgentChatReply>({
         decision,
         proposalHash,
@@ -153,7 +169,11 @@ export class SystemAgentChatEngine {
         clear: () => this.clearPendingProposals(),
         apply: async (operation) => {
           this.proposalResolution = "approved";
-          return await this.applyApprovedPersistentOperation(operation, beforePersistentApply);
+          return await this.applyApprovedPersistentOperation(
+            operation,
+            beforePersistentApply,
+            exactConfig,
+          );
         },
         denied: () => {
           this.proposalResolution = "declined";
@@ -198,7 +218,9 @@ export class SystemAgentChatEngine {
 
   async dispose(): Promise<void> {
     this.wizard.dispose();
-    await cleanupSystemAgentSession(this.agentSession);
+    if (this.inference) {
+      await cleanupSystemAgentSession(this.inference.session);
+    }
   }
 
   /**
@@ -212,7 +234,17 @@ export class SystemAgentChatEngine {
 
   async handle(text: string, options?: SystemAgentChatTurnOptions): Promise<SystemAgentChatReply> {
     return await this.enqueueTurn(async () => {
-      await this.requireVerifiedInference();
+      const exactConfig =
+        !this.wizard.active &&
+        (parseSystemAgentConfigCommand(text) ||
+          (this.pendingExactConfig && classifySystemAgentApprovalText(text) !== "other"));
+      const delegatedApprovalPending =
+        !this.wizard.active &&
+        this.options.operatorApprovalOnly &&
+        this.getPendingOperatorProposal();
+      if (!exactConfig && !delegatedApprovalPending) {
+        await this.requireVerifiedInference();
+      }
       const sensitiveTurn = this.wizard.sensitiveInputPending;
       const reply = await this.resolveTurn(text, options);
       return this.completeTurn(
@@ -271,16 +303,17 @@ export class SystemAgentChatEngine {
   async planGreeting(
     params: Parameters<SystemAgentGreetingPlanner>[0],
   ): ReturnType<SystemAgentGreetingPlanner> {
+    await this.requireVerifiedInference();
     const runPlanner = async () =>
       await import("./assistant.js").then(({ planSystemAgentGreetingWithConfiguredModel }) =>
         planSystemAgentGreetingWithConfiguredModel({
           ...params,
-          verifiedInference: this.verifiedInference,
+          verifiedInference: this.inferenceRuntime.binding,
         }),
       );
     const requesterAgentId = this.options.requesterAgentId?.trim();
     const plan =
-      requesterAgentId && requesterAgentId !== this.verifiedInference.execution.agentId
+      requesterAgentId && requesterAgentId !== this.inferenceRuntime.binding.execution.agentId
         ? await runOutsidePreparedModelRuntimePluginGenerationScope(runPlanner)
         : await runPlanner();
     if (plan) {
@@ -290,8 +323,9 @@ export class SystemAgentChatEngine {
   }
 
   private async requireVerifiedInference() {
-    const binding = this.verifiedInference;
-    if (this.agentSession.verifiedInference !== binding) {
+    await this.prepareInferenceSession();
+    const binding = this.inferenceRuntime.binding;
+    if (this.inferenceRuntime.session.verifiedInference !== binding) {
       return this.throwInferenceUnavailable();
     }
     return await requireSystemAgentInferenceRoute(binding, "conversation", (failures) =>
@@ -300,8 +334,9 @@ export class SystemAgentChatEngine {
   }
 
   private async requirePersistentApplyInference(runtime: RuntimeEnv) {
-    const binding = this.verifiedInference;
-    if (this.agentSession.verifiedInference !== binding) {
+    await this.prepareInferenceSession();
+    const binding = this.inferenceRuntime.binding;
+    if (this.inferenceRuntime.session.verifiedInference !== binding) {
       return this.throwInferenceUnavailable();
     }
     return await requireSystemAgentPersistentApplyInference({ binding, runtime }, (failures) =>
@@ -312,68 +347,37 @@ export class SystemAgentChatEngine {
     );
   }
 
+  private async prepareInferenceSession(): Promise<void> {
+    if (!this.inference) {
+      const binding = await this.options.prepareInference?.();
+      if (!binding) {
+        throw new SystemAgentInferenceUnavailableError("conversation");
+      }
+      this.inference = { binding, session: createSystemAgentSession(binding) };
+    }
+  }
+
   private rebindVerifiedInference(binding: SystemAgentVerifiedInferenceBinding): void {
-    if (binding.execution.agentId !== this.verifiedInference.execution.agentId) {
+    if (binding.execution.agentId !== this.inferenceRuntime.binding.execution.agentId) {
       return;
     }
-    delete this.agentSession.cliSession;
-    this.verifiedInference = binding;
-    this.agentSession.verifiedInference = binding;
+    delete this.inferenceRuntime.session.cliSession;
+    this.inference = { binding, session: this.inferenceRuntime.session };
+    this.inferenceRuntime.session.verifiedInference = binding;
   }
 
   private throwInferenceUnavailable(failures: readonly unknown[] = [], cancelWizard = true): never {
     this.clearPendingProposals();
     this.proposalResolution = undefined;
     this.wizard.clearHandoff();
-    delete this.agentSession.cliSession;
+    if (this.inference) {
+      delete this.inference.session.cliSession;
+    }
     if (cancelWizard) {
       this.wizard.dispose();
     }
     this.history.splice(0);
     throw new SystemAgentInferenceUnavailableError("conversation", failures, "route-changed");
-  }
-
-  private async verifyConfigAfterWrite(): Promise<string | null> {
-    let issuesText: string;
-    try {
-      const { readConfigFileSnapshot } = await import("../config/config.js");
-      const snapshot = await readConfigFileSnapshot();
-      if (!snapshot.exists) {
-        return unavailable("openclaw.json was not found");
-      }
-      if (snapshot.valid) {
-        return null;
-      }
-      const issues = (snapshot.issues ?? []).map(
-        (issue: { path?: string; message: string }) =>
-          `${issue.path ? `${issue.path}: ` : ""}${issue.message}`,
-      );
-      issuesText = issues.length > 0 ? issues.join("\n") : "unknown validation failure";
-    } catch {
-      return unavailable("openclaw.json could not be read");
-    }
-    return await this.resolveConfigWriteRepair(issuesText, true);
-  }
-
-  private async resolveConfigWriteRepair(issuesText: string, applied = false): Promise<string> {
-    const notice = applied
-      ? `⚠ openclaw.json failed validation after that write:\n${issuesText}`
-      : `The config write failed; proposing a fix.\n${issuesText}`;
-    let recovery: { text: string };
-    try {
-      recovery = await this.resolveAssistantTurn(
-        `[config-verify] ${applied ? "The config file is now invalid" : "The config write failed"}:\n${issuesText}\n${applied ? "" : "If the report says the config was written, inspect the current value before correcting it. "}Propose one corrective command from the allowed list.`,
-        false,
-      );
-    } catch (error) {
-      if (!isSystemAgentInferenceUnavailableError(error)) {
-        throw error;
-      }
-      return `${notice}\n${applied ? "The write was applied, but inference" : "Inference"} could not propose a repair. Run \`openclaw doctor --fix\` on the machine running OpenClaw, then try again.`;
-    }
-    return recovery.text
-      ? `${notice}\n\n${recovery.text}`
-      : `${notice}\nUse \`config schema <path>\` here to check the expected shape. Or, with OpenClaw stopped, run \`openclaw doctor --fix\` on the machine running it.`;
   }
 
   private async resolveTurn(
@@ -401,19 +405,13 @@ export class SystemAgentChatEngine {
     if (this.options.operatorApprovalOnly && this.getPendingOperatorProposal()) {
       return { text: "Approval pending. Human must decide in OpenClaw UI.", action: "none" };
     }
+    const configCommand = parseSystemAgentConfigCommand(text);
+    if (configCommand) {
+      return isInvalidConfigSetOperation(configCommand)
+        ? { text: configCommand.message, action: "none" }
+        : await this.runOperation(configCommand, true);
+    }
     const typed = parseSystemAgentOperation(text);
-    if (isInvalidConfigSetOperation(typed)) {
-      return { text: typed.message, action: "none" };
-    }
-    if (
-      typed.kind === "config-set" ||
-      typed.kind === "config-unset" ||
-      typed.kind === "config-set-ref" ||
-      typed.kind === "config-get" ||
-      typed.kind === "config-schema"
-    ) {
-      return await this.runOperation(typed);
-    }
     if (isSystemAgentNavigationOperation(typed)) {
       return await this.runOperation(typed);
     }
@@ -423,7 +421,9 @@ export class SystemAgentChatEngine {
       : await this.classifyApprovalIntent(text);
     if (this.pending) {
       if (intent === "approve") {
-        await this.requireVerifiedInference();
+        if (!this.pendingExactConfig) {
+          await this.requireVerifiedInference();
+        }
         return await this.applyPendingProposal(this.pending);
       }
       if (intent === "decline") {
@@ -436,8 +436,8 @@ export class SystemAgentChatEngine {
       }
     }
     if (intent === "decline") {
-      this.agentSession.proposalRef.current = undefined;
-      this.agentSession.proposalRef.operation = undefined;
+      this.inferenceRuntime.session.proposalRef.current = undefined;
+      this.inferenceRuntime.session.proposalRef.operation = undefined;
     }
     return await this.resolveAssistantTurn(
       text,
@@ -447,8 +447,12 @@ export class SystemAgentChatEngine {
   }
 
   private async classifyApprovalIntent(text: string): Promise<SystemAgentApprovalIntent> {
+    const literal = classifySystemAgentApprovalText(text);
+    if (this.pendingExactConfig && literal !== "other") {
+      return literal;
+    }
     const hasProposal =
-      this.pending !== null || this.agentSession.proposalRef.current !== undefined;
+      this.pending !== null || this.inferenceRuntime.session.proposalRef.current !== undefined;
     if (!hasProposal) {
       return "other";
     }
@@ -458,76 +462,51 @@ export class SystemAgentChatEngine {
     return await classify({
       message: text,
       ...(this.pending ? { proposal: describeSystemAgentPersistentOperation(this.pending) } : {}),
-      verifiedInference: this.verifiedInference,
+      verifiedInference: this.inferenceRuntime.binding,
     });
   }
 
   private async applyPendingProposal(pending: SystemAgentOperation): Promise<SystemAgentChatReply> {
+    const exactConfig = this.pendingExactConfig;
     this.clearPendingProposals();
     this.proposalResolution = "approved";
-    return await this.applyApprovedPersistentOperation(pending);
+    return await this.applyApprovedPersistentOperation(pending, undefined, exactConfig);
   }
 
   private async applyApprovedPersistentOperation(
     operation: SystemAgentOperation,
     beforePersistentApply?: PersistentApplyGuard,
+    exactConfig = false,
   ): Promise<SystemAgentChatReply> {
     if (!isPersistentSystemAgentOperation(operation)) {
       throw new Error("OpenClaw host received a non-persistent approved operation.");
     }
     const capture = createCaptureRuntime();
-    const result = await this.executeOperation(operation, capture, beforePersistentApply);
+    const result = await this.executeOperation(
+      operation,
+      capture,
+      beforePersistentApply,
+      exactConfig,
+    );
     if (operation.kind === "plugin-install" && result?.pluginCapabilityReview) {
       return await this.runOperation({
         ...operation,
         capabilityReview: result.pluginCapabilityReview,
       });
     }
-    const configWrite =
-      operation.kind === "config-set" ||
-      operation.kind === "config-unset" ||
-      operation.kind === "config-set-ref";
-    if (configWrite && result === undefined) {
-      return {
-        text: await this.resolveConfigWriteRepair(capture.read()),
-        action: "none",
-        applied: false,
-      };
-    }
-    const verify = result?.applied ? await this.verifyConfigAfterWrite() : null;
-    const baseText = [capture.read() || "Applied. Audit entry written.", verify]
-      .filter(Boolean)
-      .join("\n\n");
+    const reply = await finishSystemAgentPersistentOperation({
+      operation,
+      result,
+      text: capture.read(),
+      exactConfig,
+      surface: this.options.surface,
+      resolveAssistantTurn: (text) => this.resolveAssistantTurn(text, false),
+      loadOverview: () => this.loadOverview(),
+    });
     if (operation.kind === "template-install") {
-      this.agentSession.templateResult = baseText;
+      this.inferenceRuntime.session.templateResult = reply.text;
     }
-    if (
-      (operation.kind === "setup" || operation.kind === "create-agent") &&
-      result?.applied &&
-      result.bootstrapPending === true &&
-      verify === null
-    ) {
-      const setupNotice = getRegularAgentSetupNotice(await this.loadOverview(), result.agentId);
-      if (setupNotice) {
-        return { text: `${baseText}\n\n${setupNotice}`, action: "none", applied: true };
-      }
-      return {
-        text: [
-          baseText,
-          `Your agent is hatching — handing you over now. ${agentHandoffReturnHint(this.options.surface)}`,
-        ].join("\n\n"),
-        action: "open-tui",
-        applied: true,
-        agentDraft: "hatch",
-        handoff: {
-          kind: "open-tui",
-          agentDraft: "hatch",
-          ...(operation.workspace ? { workspace: operation.workspace } : {}),
-          ...(result.agentId ? { agentId: result.agentId } : {}),
-        },
-      };
-    }
-    return { text: baseText, action: "none", applied: result?.applied === true };
+    return reply;
   }
 
   private async resolveAssistantTurn(
@@ -542,7 +521,7 @@ export class SystemAgentChatEngine {
       this.pending,
       this.proposalResolution,
       uiContext,
-      this.agentSession.templateResult,
+      this.inferenceRuntime.session.templateResult,
     );
     // The runtime already owns recovery; a terminal failure must not start another inference turn.
     const runTurn = () =>
@@ -551,11 +530,12 @@ export class SystemAgentChatEngine {
         surface: this.options.surface ?? "cli",
         approvalArmed,
         ...(this.options.operatorApprovalOnly ? { operatorApprovalOnly: true } : {}),
-        session: this.agentSession,
+        session: this.inferenceRuntime.session,
       });
     const requesterAgentId = this.options.requesterAgentId?.trim();
     const loopReply =
-      requesterAgentId && requesterAgentId !== this.agentSession.verifiedInference.execution.agentId
+      requesterAgentId &&
+      requesterAgentId !== this.inferenceRuntime.session.verifiedInference.execution.agentId
         ? await runOutsidePreparedModelRuntimePluginGenerationScope(runTurn)
         : await runTurn();
     if (!loopReply?.text) {
@@ -564,8 +544,9 @@ export class SystemAgentChatEngine {
     this.proposalResolution = undefined;
     if (loopReply.directive) {
       this.clearPendingProposals();
-    } else if (this.agentSession.proposalRef.current !== undefined) {
+    } else if (this.inferenceRuntime.session.proposalRef.current !== undefined) {
       this.pending = null;
+      this.pendingExactConfig = false;
       this.pendingDescription = undefined;
     }
     await this.requireVerifiedInference();
@@ -575,14 +556,19 @@ export class SystemAgentChatEngine {
       applyApproved: (operation) => this.applyApprovedPersistentOperation(operation),
     });
     if (loopReply.directive?.kind === "template-operation") {
-      this.agentSession.templateResult = reply.text;
+      this.inferenceRuntime.session.templateResult = reply.text;
     }
     return reply;
   }
 
-  private async runOperation(operation: SystemAgentOperation): Promise<SystemAgentChatReply> {
+  private async runOperation(
+    operation: SystemAgentOperation,
+    exactConfig = false,
+  ): Promise<SystemAgentChatReply> {
     const recordedOperation = this.recordCreateAgentRequester(operation);
-    await this.requireVerifiedInference();
+    if (!exactConfig) {
+      await this.requireVerifiedInference();
+    }
     // All inputs (typed commands and tool directives) enter
     // here before any wizard or handoff starts.
     if (this.options.operatorApprovalOnly && isSystemAgentNavigationOperation(recordedOperation)) {
@@ -663,6 +649,7 @@ export class SystemAgentChatEngine {
         deps: this.commandDeps(),
       });
       this.pending = recordedOperation;
+      this.pendingExactConfig = exactConfig;
       if (recordedOperation.kind === "template-install") {
         this.pendingDescription = proposal.message;
       }
@@ -677,9 +664,9 @@ export class SystemAgentChatEngine {
       };
     }
     if (isPersistentSystemAgentOperation(recordedOperation)) {
-      return await this.applyApprovedPersistentOperation(recordedOperation);
+      return await this.applyApprovedPersistentOperation(recordedOperation, undefined, exactConfig);
     }
-    const result = await this.executeOperation(recordedOperation, capture);
+    const result = await this.executeOperation(recordedOperation, capture, undefined, exactConfig);
     const reply = capture.read();
     if (result?.exitsInteractive === true) {
       return { text: reply, action: "exit" };
@@ -691,9 +678,12 @@ export class SystemAgentChatEngine {
     operation: SystemAgentOperation,
     capture: CaptureRuntime,
     beforePersistentApply?: PersistentApplyGuard,
+    exactConfig = false,
   ): Promise<SystemAgentOperationResult | undefined> {
     try {
-      await this.requirePersistentApplyInference(capture);
+      if (!exactConfig) {
+        await this.requirePersistentApplyInference(capture);
+      }
       return await executeSystemAgentOperation(operation, capture, {
         approved: true,
         ...(this.options.requesterAgentId
@@ -722,7 +712,13 @@ export class SystemAgentChatEngine {
   }
 
   private async finishWizardText(result: ChatWizardResult): Promise<string> {
-    const verify = result.configWritten ? await this.verifyConfigAfterWrite() : null;
+    const verify = result.configWritten
+      ? await verifySystemAgentConfigAfterWrite((issuesText, applied) =>
+          resolveSystemAgentConfigWriteRepair(issuesText, applied, (text) =>
+            this.resolveAssistantTurn(text, false),
+          ),
+        )
+      : null;
     return [result.text, verify].filter(Boolean).join("\n");
   }
 
@@ -736,9 +732,12 @@ export class SystemAgentChatEngine {
 
   private clearPendingProposals(): void {
     this.pending = null;
+    this.pendingExactConfig = false;
     this.pendingDescription = undefined;
-    this.agentSession.proposalRef.current = undefined;
-    this.agentSession.proposalRef.operation = undefined;
+    if (this.inference) {
+      this.inference.session.proposalRef.current = undefined;
+      this.inference.session.proposalRef.operation = undefined;
+    }
   }
 
   private recordCreateAgentRequester(operation: SystemAgentOperation): SystemAgentOperation {

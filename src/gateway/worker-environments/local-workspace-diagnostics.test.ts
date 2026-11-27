@@ -8,19 +8,6 @@ import {
   readLocalWorkspaceProjection,
 } from "./local-workspace-store.test-support.js";
 
-const mutationLog = vi.hoisted(() => vi.fn<(message: string) => void>());
-// mock-isolation: Observe diagnostic text while using the real writer and recovery bytes.
-vi.mock("../../logging/subsystem.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
-  return {
-    ...actual,
-    createSubsystemLogger: (name: string) => ({
-      ...actual.createSubsystemLogger(name),
-      warn: mutationLog,
-    }),
-  };
-});
-
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
     await closeOpenClawStateDatabaseAsync();
@@ -41,7 +28,15 @@ it("correlates oversized journal bytes without logging their contents or changin
   });
   const digest = (value: string | Uint8Array) =>
     createHash("sha256").update(value).digest("hex").slice(0, 16);
-  mutationLog.mockClear();
+  const warnings: string[] = [];
+  vi.stubEnv("OPENCLAW_LOG_LEVEL", "warn");
+  const stderr = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+    const line = String(chunk);
+    if (line.includes("Local workspace oversized mutation:")) {
+      warnings.push(line);
+    }
+    return true;
+  });
   await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
     const created = await store.create({
       ...localWorkspaceProjectionFixture(worktreeId, root),
@@ -51,9 +46,9 @@ it("correlates oversized journal bytes without logging their contents or changin
     const persisted = await store.update(created, patch);
     await store.update(persisted, patch);
   });
-  const warnings = mutationLog.mock.calls
-    .map(([line]) => line)
-    .filter((line) => line.startsWith("Local workspace oversized mutation:"));
+  await closeOpenClawStateDatabaseAsync();
+  stderr.mockRestore();
+  vi.unstubAllEnvs();
   expect(warnings).toHaveLength(1);
   expect(warnings[0]).toContain(
     `journalPackSha256=${digest(pack)} journalJsonSha256=${digest(journal)}`,

@@ -19,6 +19,7 @@ import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing
 import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import { readSessionForkSource } from "../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
@@ -70,6 +71,7 @@ import {
   filterToolsByClientCaps,
   resolveSessionToolListingClientCaps,
 } from "./openclaw-tools.client-caps.js";
+import { filterParticipationTools } from "./participation-ceiling.js";
 import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 import { resolveSandboxFileIdentity } from "./sandbox/file-mutation-identity.js";
 import { createEmbeddedMessageInvocationPolicy } from "./scheduled-message-invocation.js";
@@ -79,7 +81,12 @@ import { subagentAttachmentRootForRun } from "./subagents/subagent-attachment-pa
 import { applySwarmCollectorToolContract } from "./subagents/swarm/swarm-collector-capability.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import type { ToolPolicyFilterEvent } from "./tool-policy-pipeline.js";
-import { expandToolGroups, normalizeToolPolicyName } from "./tool-policy.js";
+import {
+  DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+  expandToolGroups,
+  normalizeToolPolicyName,
+} from "./tool-policy.js";
+import { listsFixedToolSet } from "./tool-search-config.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "./tool-search-protocol.js";
 import { createToolSearchTools, resolveToolSearchConfig } from "./tool-search.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
@@ -94,6 +101,8 @@ export function* assembleOpenClawCodingTools(
   preparedSurface?: { tools: AnyAgentTool[]; policy: ReturnType<typeof prepareCoreToolPolicy> },
   assertLoopbackConfigCurrent = captureLocalBrowserLoopbackConfig(options?.config),
 ): CodingToolAssembly {
+  const participationCeiling = options?.pluginExecutionAuthority?.participationCeiling;
+  const reviewerDeviceId = participationCeiling ? undefined : options?.approvalReviewerDeviceId;
   const preparedTools = preparedSurface?.tools;
   const listingClientCaps =
     options?.listingClientCaps ?? resolveSessionToolListingClientCaps(options ?? {});
@@ -135,6 +144,14 @@ export function* assembleOpenClawCodingTools(
   const toolSearchControlAllowlist = toolSearchControlsEnabled
     ? [...TOOL_SEARCH_CONTROL_TOOL_NAMES]
     : [];
+  // One listing per session: `message` is always offered; a scheduled allowlist gates calls.
+  const fixedListing = listsFixedToolSet(
+    toolSearchConfig,
+    toolSearchControlsEnabled,
+    options?.sessionKey,
+  )
+    ? { profileAlsoAllow: ["message"], includeRuntimeToolPolicy: false }
+    : undefined;
   const runtimeToolAllowlistIncludesMessage = expandToolGroups(
     options?.runtimeToolAllowlist ?? [],
   ).some((toolName) => {
@@ -175,7 +192,8 @@ export function* assembleOpenClawCodingTools(
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
   const { workspaceRoot, runtimeRoot } = capabilityProfile.workspace;
   const codingRoot = sandboxRoot ?? runtimeRoot;
-  const containmentRoot = sandboxRoot ?? sessionPermissionPolicy?.root ?? codingRoot;
+  const permissionRoot = participationCeiling?.source?.root ?? sessionPermissionPolicy?.root;
+  const containmentRoot = sandboxRoot ?? permissionRoot ?? codingRoot;
   const memoryWriteProvenance = createMemoryWriteProvenanceObserver({
     mutationRoot: sandboxRoot ?? workspaceRoot,
     workspaceDir: sandboxRoot ?? workspaceRoot,
@@ -237,6 +255,7 @@ export function* assembleOpenClawCodingTools(
       ? yield {
           coreTools: {
             abortSignal: options?.abortSignal,
+            prepareHostFileMutation: options?.prepareHostFileMutation,
             attachmentReadRoot,
             codingRoot,
             containmentRoot,
@@ -255,6 +274,7 @@ export function* assembleOpenClawCodingTools(
               config: options?.exec?.config ?? options?.config,
               preparedRunEnvironment: options?.exec?.preparedRunEnvironment,
               reviewer: options?.exec?.reviewer ?? execConfig.reviewer,
+              participation: participationCeiling !== undefined,
               reviewTranscript: options?.exec?.reviewTranscript,
               trigger: options?.trigger,
               node: options?.exec?.node ?? execConfig.node,
@@ -290,17 +310,29 @@ export function* assembleOpenClawCodingTools(
               currentThreadTs: options?.currentThreadTs,
               channelContext: options?.channelContext,
               accountId: options?.agentAccountId,
-              approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
-              nonInteractiveApproval: options?.swarmCollector,
+              approvalReviewerDeviceId: reviewerDeviceId,
+              // A hidden fork has nobody to ask; a command that needs approval is denied.
+              nonInteractiveApproval:
+                options?.swarmCollector ||
+                readSessionForkSource(options?.inputProvenance) !== undefined,
               backgroundMs: options?.exec?.backgroundMs ?? execConfig.backgroundMs,
               timeoutSec: options?.exec?.timeoutSec ?? execConfig.timeoutSec,
               approvalRunningNoticeMs:
                 options?.exec?.approvalRunningNoticeMs ?? execConfig.approvalRunningNoticeMs,
-              notifyOnExit: options?.exec?.notifyOnExit ?? execConfig.notifyOnExit,
+              // Participation cannot create an uncapped turn; a one-shot CLI has no next turn.
+              notifyOnExit:
+                participationCeiling || options?.oneShotCliRun
+                  ? false
+                  : (options?.exec?.notifyOnExit ?? execConfig.notifyOnExit),
+              approvalFollowupMode: participationCeiling
+                ? undefined
+                : options?.exec?.approvalFollowupMode,
               notifyOnExitEmptySuccess:
                 options?.exec?.notifyOnExitEmptySuccess ?? execConfig.notifyOnExitEmptySuccess,
             },
             processDefaults: {
+              readOnly: Boolean(participationCeiling),
+              includeAncestors: !participationCeiling,
               scopeKey,
               sessionKey: executionSessionKey,
               agentId: executionAgentId,
@@ -322,13 +354,19 @@ export function* assembleOpenClawCodingTools(
   const ownerOnlyCoreToolDenylist = automationsScope.denied
     ? [...sessionToolAccess.ownerOnlyCoreToolDenylist, AUTOMATIONS_TOOL_NAME]
     : sessionToolAccess.ownerOnlyCoreToolDenylist;
+  // A fixed listing also builds the default plugin tools a narrowing allowlist would skip.
   const pluginToolAllowlist = appendRuntimePluginToolGrant(
-    capabilityProfile.policy.explicitToolAllowlist,
+    fixedListing
+      ? [DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, ...capabilityProfile.policy.explicitToolAllowlist]
+      : capabilityProfile.policy.explicitToolAllowlist,
     runtimePluginToolGrant,
   );
   // Owner-only tools stay listed; descendants and captured allowlists cannot inherit them.
-  const pluginToolDenylist = [...capabilityProfile.policy.explicitToolDenylist];
-  const requesterToolDenylist = pluginToolDenylist.concat(
+  const pluginToolDenylist = fixedListing
+    ? capabilityProfile.policy.sessionToolDenylist
+    : capabilityProfile.policy.explicitToolDenylist;
+  // Children inherit the turn's full denylist, including sender, group and run policy.
+  const requesterToolDenylist = capabilityProfile.policy.explicitToolDenylist.concat(
     capabilityProfile.policy.inheritedToolPolicy?.deny ?? [],
     ownerOnlyCoreToolDenylist,
   );
@@ -347,9 +385,15 @@ export function* assembleOpenClawCodingTools(
     accountId: options?.agentAccountId,
     channel: resolveGatewayMessageChannel(options?.messageChannel ?? options?.messageProvider),
   });
+  let messageToolAvailable = true;
   const pluginToolOptions = {
     ...options,
     listingClientCaps,
+    retainUnavailableMessageTool: true,
+    onMessageToolAvailability: (available: boolean) => {
+      messageToolAvailable = available;
+      options?.onMessageToolAvailability?.(available);
+    },
     agentSessionKey: options?.sessionKey,
     agentChannel: resolveGatewayMessageChannel(options?.messageChannel ?? options?.messageProvider),
     agentTo: options?.messageTo,
@@ -365,11 +409,13 @@ export function* assembleOpenClawCodingTools(
     sandboxed: Boolean(sandbox),
     pluginToolAllowlist,
     pluginToolDenylist,
+    fixedToolListing: fixedListing !== undefined,
     // Only the grant's owner reaches tool construction; the grant itself stays in the allowlist.
     ...(runtimePluginToolGrant
       ? { runtimePluginToolOwnerId: runtimePluginToolGrant.pluginId }
       : {}),
-    disableMessageTool: options?.disableMessageTool || options?.swarmCollector,
+    disableMessageTool:
+      options?.swarmCollector || (options?.disableMessageTool === true && !fixedListing),
     requesterAgentIdOverride: executionAgentId,
   };
   const pluginToolsOnly = filterToolsByClientCaps(
@@ -428,6 +474,9 @@ export function* assembleOpenClawCodingTools(
           ringZeroTools,
           yield {
             ...pluginToolOptions,
+            // The planning receipt belongs to a user conversation, not to scheduler or SDK calls.
+            requireCronCreationPlan:
+              options?.trigger === "user" && Boolean(options.sessionKey) && !options.jobId,
             cronSandboxContext: sandbox,
             sessionPortalTarget,
             sandboxSessionRenameOnly: capabilityProfile.policy.sandboxSessionRenameOnly,
@@ -446,9 +495,7 @@ export function* assembleOpenClawCodingTools(
               ask: effectiveExecPolicy.ask,
               node: options?.exec?.node ?? execConfig.node,
             },
-            approvalReviewerDeviceIds: options?.approvalReviewerDeviceId
-              ? [options.approvalReviewerDeviceId]
-              : undefined,
+            approvalReviewerDeviceIds: reviewerDeviceId ? [reviewerDeviceId] : undefined,
             gatewayCallerAccountId: gatewayCaller.accountId,
             gatewayCallerChannel: gatewayCaller.channel,
             gatewayCallerLocal: gatewayCaller.local,
@@ -473,7 +520,8 @@ export function* assembleOpenClawCodingTools(
             cwd: sandbox
               ? (capabilityProfile.workspace.spawnWorkspaceRoot ?? runtimeRoot)
               : runtimeRoot,
-            gatewayConfigReadAllowed: capabilityProfile.policy.gatewayConfigReadAllowed,
+            gatewayManagementActionsAllowed:
+              capabilityProfile.policy.gatewayManagementActionsAllowed,
             cronCreatorToolAllowlist,
             cronCreatorToolAllowlistCaptureRef: options?.cronCreatorToolAllowlistCaptureRef,
             resolveCronCreatorToolAuthority: cronCreatorAuthorityResolver,
@@ -493,9 +541,9 @@ export function* assembleOpenClawCodingTools(
             inheritedToolDenylist,
             delegatedToolDenyFloor,
             requesterToolDenylist,
-            readDelegationConfig: options?.config
-              ? createRuntimeConfigReader(options.config)
-              : undefined,
+            readDelegationConfig:
+              options?.readDelegationConfig ??
+              (options?.config ? createRuntimeConfigReader(options.config) : undefined),
             inheritedToolPolicySource: capabilityProfile.policy.inheritedToolPolicySource,
             processScopeKey: scopeKey,
           },
@@ -568,17 +616,43 @@ export function* assembleOpenClawCodingTools(
       ),
       options?.config,
     );
+  const handoff = capabilityProfile.policy.requesterPolicySource === "completion-handoff";
+  const turnTools = completeTurnTools(
+    messageInvocationPolicy.filter(capabilityProfile, onPolicyFilter),
+  );
+  const participatingTools = new Set(
+    filterParticipationTools(turnTools, participationCeiling, getPluginToolMeta),
+  );
   const {
     tools: authorizedTools,
     turnAuthorized,
     callableTools,
     exportedTools,
   } = resolveTurnToolSurface({
-    turnTools: completeTurnTools(messageInvocationPolicy.filter(capabilityProfile, onPolicyFilter)),
+    turnTools: turnTools.filter(
+      (tool) =>
+        (tool.name !== "message" || options?.disableMessageTool !== true) &&
+        (participatingTools.has(tool) ||
+          (options?.swarmCollector && tool === swarmStructuredOutputTool)),
+    ),
+    // Participation narrows the provider schema as well as executable authority.
     sessionTools:
-      capabilityProfile.policy.requesterPolicySource === "completion-handoff"
-        ? completeTurnTools(messageInvocationPolicy.filter(capabilityProfile, undefined, "session"))
+      !participationCeiling && (handoff || fixedListing)
+        ? completeTurnTools(
+            messageInvocationPolicy.filter(
+              capabilityProfile,
+              undefined,
+              handoff ? "session" : "turn",
+              fixedListing,
+            ),
+          )
         : undefined,
+    outsideTurnReason: handoff
+      ? undefined
+      : (name) =>
+          name === "message"
+            ? "message cannot send on this turn: its reply delivery or tool policy does not allow the message tool. Do not retry message."
+            : `${name} is outside the tools this run allows. Do not retry ${name}.`,
     ownerOnlyDenied: new Set(ownerOnlyCoreToolDenylist),
     ownerToolCurrentAssertion: sessionToolAccess.ownerToolCurrentAssertion,
     hostSystemTurn: isHostSystemTurn(options ?? {}),
@@ -611,6 +685,7 @@ export function* assembleOpenClawCodingTools(
   const requester = buildHarnessHostRequester(options ?? {});
   const hookContext = {
     awaitSessionDiffBaseline: options?.awaitSessionDiffBaseline,
+    getRunAbortDeadlineAtMs: options?.getRunAbortDeadlineAtMs,
     agentId: executionAgentId,
     ...(options?.config ? { config: options.config } : {}),
     cwd: codingRoot,
@@ -624,7 +699,7 @@ export function* assembleOpenClawCodingTools(
     sessionId: options?.sessionId,
     runId: options?.runId,
     trigger: options?.trigger,
-    approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
+    approvalReviewerDeviceId: reviewerDeviceId,
     channelId: options?.hookChannelId ?? options?.currentChannelId,
     ...(Object.keys(requester).length > 0 ? { requester } : {}),
     ...(turnSourceChannel ? { turnSourceChannel } : {}),
@@ -637,7 +712,11 @@ export function* assembleOpenClawCodingTools(
   };
   const finalizedTools = finalizeAgentTools({
     ...options,
-    tools: authorizedTools,
+    // Route omission is presentation, not a durable child or scheduled deny.
+    tools:
+      messageToolAvailable || options?.retainUnavailableMessageTool
+        ? authorizedTools
+        : authorizedTools.filter((tool) => tool.name !== "message"),
     wrapBeforeToolCallHook: preparedTools
       ? (tool) =>
           options?.wrapBeforeToolCallHook !== false &&

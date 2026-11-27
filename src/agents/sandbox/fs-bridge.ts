@@ -124,7 +124,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     const canonicalPath = await this.pathGuard.resolveCanonicalMutationTarget(
       target,
       PINNED_MUTATION_ACTION_LABELS[params.action],
-      { directory: params.action === "mkdir" },
+      { directory: params.action === "mkdir", signal: params.signal },
     );
     return { policyPath: canonicalPath, pinnedPath: canonicalPath };
   }
@@ -151,6 +151,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
         pinned: await this.pathGuard.resolveAnchoredPinnedDirectoryEntry(
           target,
           "list directories",
+          params.signal,
         ),
       }),
       signal: params.signal,
@@ -170,8 +171,17 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
         kind: "copy",
         sourceTarget: source,
         destinationTarget: destination,
-        source: await this.pathGuard.resolveAnchoredPinnedEntry(source, "copy files"),
-        destination: await this.resolveMutationPin(destination, params.pinnedPath, "copy files"),
+        source: await this.pathGuard.resolveAnchoredPinnedEntry(
+          source,
+          "copy files",
+          params.signal,
+        ),
+        destination: await this.resolveMutationPin(
+          destination,
+          params.pinnedPath,
+          "copy files",
+          params.signal,
+        ),
         mkdir: params.mkdir !== false,
       }),
       signal: params.signal,
@@ -204,11 +214,15 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     const action = PINNED_MUTATION_ACTION_LABELS[kind];
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, action);
-    await this.pathGuard.assertPathSafety(target, { action, requireWritable: true });
+    await this.pathGuard.assertPathSafety(target, {
+      action,
+      requireWritable: true,
+      signal: params.signal,
+    });
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
-    const pinned = await this.resolveMutationPin(target, params.pinnedPath, action);
+    const pinned = await this.resolveMutationPin(target, params.pinnedPath, action, params.signal);
     const result = await this.runCheckedCommand({
       ...buildPinnedMutationPlan({
         kind,
@@ -312,7 +326,11 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       "stat files",
       params.signal,
     );
-    const anchoredTarget = await this.pathGuard.resolveAnchoredSandboxEntry(target, "stat files");
+    const anchoredTarget = await this.pathGuard.resolveAnchoredSandboxEntry(
+      target,
+      "stat files",
+      params.signal,
+    );
     const result = await this.runCheckedCommand({
       // Keep stat's original parent/basename metadata semantics, while its
       // boundary check validates the container-visible backing rather than a hidden host alias.
@@ -347,9 +365,14 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   ): ReturnType<NonNullable<SandboxFsBridge["readFileWithSource"]>> {
     const opened = await this.pathGuard.openReadableFile(target, signal, expectedPolicyPath);
     try {
+      signal?.throwIfAborted();
       let data: Buffer;
       if (maxBytes === undefined) {
-        data = await readFileAsync(opened.fd);
+        const readOptions = {
+          signal,
+          encoding: null,
+        } satisfies fs.ReadFileOptionsWithBufferEncoding;
+        data = await readFileAsync(opened.fd, readOptions);
       } else {
         if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
           throw new RangeError("maxBytes must be a non-negative safe integer");
@@ -363,7 +386,10 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
         }
         // Read and recheck the same guarded descriptor so path swaps and file
         // growth cannot bypass the byte limit or allocate an unbounded buffer.
+        // fs-safe's bounded descriptor API has no signal; retain exclusion until
+        // that read actually settles, then stop before returning its bytes.
         data = await readFileDescriptorBounded(opened.fd, maxBytes);
+        signal?.throwIfAborted();
         const finalStat = fs.fstatSync(opened.fd);
         if (!finalStat.isFile() || finalStat.size > maxBytes) {
           throw new RangeError(`File exceeds ${maxBytes} bytes`);
@@ -394,7 +420,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   private async runCheckedCommand(
     plan: SandboxFsCommandPlan & { signal?: AbortSignal },
   ): Promise<SandboxBackendCommandResult> {
-    await this.pathGuard.assertPathChecks(plan.checks);
+    await this.pathGuard.assertPathChecks(plan.checks, plan.signal);
     return await this.sandbox.backend.runShellCommand({
       script: plan.script,
       args: plan.args,
@@ -436,9 +462,10 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     target: SandboxResolvedFsPath,
     pinnedPath: string | undefined,
     action: string,
+    signal?: AbortSignal,
   ): Promise<PinnedSandboxEntry> {
     if (pinnedPath === undefined) {
-      return await this.pathGuard.resolveAnchoredPinnedEntry(target, action);
+      return await this.pathGuard.resolveAnchoredPinnedEntry(target, action, signal);
     }
     return this.pathGuard.resolvePinnedEntry(
       this.authorizedPinnedTarget(target, pinnedPath, action),

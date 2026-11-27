@@ -2,7 +2,7 @@ import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coe
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import {
   prepareChildRuntimeViability,
-  readChildRuntimeViability,
+  getRecordedChildRuntimeViability,
   type ChildRuntimeViability,
 } from "../../infra/child-runtime-viability.js";
 import type { AgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
@@ -12,14 +12,10 @@ import {
   evaluateChannelHealth,
   type ChannelHealthPolicy,
 } from "../channel-health-policy.js";
-import type { ReadinessChecker, ReadinessResult } from "../health/types.js";
+import type { PreparedReadinessChecker, ReadinessResult } from "../health/types.js";
 import type { ChannelManager } from "../server-channels.js";
 import type { GatewayPluginReloadStatus } from "../server-plugin-reload-status.types.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
-
-export type PreparedReadinessChecker = ReadinessChecker & {
-  prepare: () => Promise<{ publish: () => ReadinessResult }>;
-};
 
 export type StartupResult =
   | { ok: true; status: "started"; uptimeMs: number; gatewayBootId?: string }
@@ -124,7 +120,7 @@ export function createReadinessChecker(
     if (startup.status === "draining") {
       return { ready: false, coreReady: false, failing: ["gateway-draining"], uptimeMs };
     }
-    if (!(childRuntime ?? readChildRuntimeViability()).available) {
+    if (!(childRuntime ?? getRecordedChildRuntimeViability()).available) {
       return { ready: false, coreReady: false, failing: ["child-runtime"], uptimeMs };
     }
     const stateDatabaseFailure = deps.getStateDatabaseFailure?.();
@@ -148,7 +144,7 @@ export function createReadinessChecker(
       };
     }
     const pluginReload = deps.getPluginReloadStatus?.();
-    if (pluginReload) {
+    if (pluginReload && pluginReload.phase !== "reloading") {
       cachedState = null;
       return { ready: false, coreReady: false, failing: ["plugin-reload"], pluginReload, uptimeMs };
     }

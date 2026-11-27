@@ -3,7 +3,6 @@ import { For, Show, createMemo, createStore, createUniqueId, onSettled } from "s
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
-import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
@@ -12,11 +11,12 @@ import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { isSessionRunStateActive } from "../../../lib/session-run-state.ts";
 import { endedWithoutFinishing, isUnfinishedSubagent } from "../chat-spawned-subagent.ts";
+import type { SubagentsPanelData, SubagentsPanelRow } from "../subagents-panel-data.ts";
 import "../../../styles/session-panel-rail.css";
 import "./chat-subagents-working.css";
 import "./chat-subagents-panel-desktop.css";
-import type { SubagentsPanelData, SubagentsPanelRow } from "../subagents-panel-data.ts";
 import { SubagentDesktopAvatar } from "./chat-subagent-avatar.tsx";
+import { SubagentListName } from "./chat-subagent-list-name.tsx";
 import { ChatSubagentsNative } from "./chat-subagents-native.tsx";
 import type { createSubagentsPresentation } from "./chat-subagents-presentation.ts";
 
@@ -69,12 +69,14 @@ function groupFor(row: SubagentsPanelRow): Group {
 
 function DesktopRow(props: {
   row: SubagentsPanelRow;
+  branch?: { hasChildren: boolean; rails: readonly number[] };
   onOpen: (row: SubagentsPanelRow, source: HTMLButtonElement) => void;
   createStop: ReturnType<typeof createSubagentsPresentation>["createStop"];
   renderElapsed: ChatSubagentsPanelDesktopProps["renderElapsed"];
   registerOpen: (key: string, button: HTMLButtonElement) => () => void;
 }) {
   const stop = props.createStop(() => props.row);
+  const depth = () => props.row.depth ?? 0;
   const name = () => resolveSessionDisplayName(props.row.session.key, props.row.session);
   const group = () => groupFor(props.row);
   const ended = () => endedWithoutFinishing(props.row.session);
@@ -102,46 +104,71 @@ function DesktopRow(props: {
     <div
       class="subagents-desktop__row"
       data-session-key={props.row.session.key}
-      data-depth={props.row.depth ?? 0}
-      style={{ "--subagent-depth": props.row.depth ?? 0 }}
+      data-depth={depth()}
+      data-has-children={props.branch?.hasChildren ? "" : undefined}
+      data-branch-continues={props.branch?.rails.includes(depth()) ? "" : undefined}
+      style={{ "--subagent-depth": depth() }}
       data-group={group()}
       role="listitem"
     >
+      <For each={props.branch?.rails}>
+        {(level) => (
+          <span
+            class="subagents-desktop__branch-rail"
+            aria-hidden="true"
+            data-current-depth={level === depth() ? "" : undefined}
+            style={{ "--subagent-rail-depth": level }}
+          />
+        )}
+      </For>
       <button
         class="subagents-desktop__open"
         ref={[elementRef(props.registerOpen.bind(undefined, props.row.session.key))]}
         type="button"
-        title={[name(), metadata()].filter(Boolean).join("\n")}
         onClick={(event) => props.onOpen(props.row, event.currentTarget)}
       >
         <SubagentDesktopAvatar sessionKey={props.row.session.key} working={group() === "active"} />
         <span class="subagents-desktop__identity">
-          <span ref={createTextOverflow(name)} class="subagents-desktop__name">
-            {name()}
+          <span class="subagents-desktop__name">
+            <SubagentListName name={name()} />
           </span>
-          <Show when={group() !== "done"}>
+          <Show when={group() !== "done" || props.row.modelLabel}>
             <span class="subagents-desktop__status">
-              <Show
-                when={group() === "active"}
-                fallback={
-                  group() === "waiting"
-                    ? props.row.session.status === "queued"
-                      ? t("common.queued")
-                      : t("chat.subagentsPanel.desktopWaiting")
-                    : groupLabel(group())
-                }
-              >
-                <span class="subagents-desktop__working text-shimmer">
-                  {t("chat.subagentsPanel.desktopWorking")}
-                </span>{" "}
-                <Show
-                  when={props.row.session.runtimeMs != null || props.row.session.startedAt != null}
-                >
-                  <span>
-                    {t("chat.subagentsPanel.desktopFor")} {props.renderElapsed(props.row)}
-                  </span>
-                </Show>
+              <Show when={group() !== "done"}>
+                <span>
+                  <Show
+                    when={group() === "active"}
+                    fallback={
+                      group() === "waiting"
+                        ? props.row.session.status === "queued"
+                          ? t("common.queued")
+                          : t("chat.subagentsPanel.desktopWaiting")
+                        : groupLabel(group())
+                    }
+                  >
+                    <span class="subagents-desktop__working text-shimmer">
+                      {t("chat.subagentsPanel.desktopWorking")}
+                    </span>{" "}
+                    <Show
+                      when={
+                        props.row.session.runtimeMs != null || props.row.session.startedAt != null
+                      }
+                    >
+                      <span>
+                        {t("chat.subagentsPanel.desktopFor")} {props.renderElapsed(props.row)}
+                      </span>
+                    </Show>
+                  </Show>
+                </span>
               </Show>
+              {props.row.modelLabel && (
+                <>
+                  {group() !== "done" && <span aria-hidden="true">·</span>}
+                  <span class="chat-subagents__model" title={props.row.modelLabel}>
+                    {props.row.modelLabel}
+                  </span>
+                </>
+              )}
             </span>
           </Show>
           <span class="sr-only">{metadata()}</span>
@@ -233,6 +260,26 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
     },
   );
   const allDone = () => props.doneExpanded ?? navigation.showAllDone;
+  const branchLayout = createMemo(() => {
+    const layout = new Map<string, { hasChildren: boolean; rails: readonly number[] }>();
+    const continuing = new Set<number>();
+    let nextDepth = 0;
+    // The rows are in depth-first order. A shallower row ends the deeper sibling rails.
+    for (const row of props.rows.toReversed()) {
+      const depth = row.depth ?? 0;
+      for (const level of continuing) {
+        if (level > depth) {
+          continuing.delete(level);
+        }
+      }
+      layout.set(row.session.key, { hasChildren: nextDepth > depth, rails: [...continuing] });
+      if (depth > 0) {
+        continuing.add(depth);
+      }
+      nextDepth = depth;
+    }
+    return layout;
+  });
   const families = createMemo(() => {
     const result: Array<[SubagentsPanelRow, ...SubagentsPanelRow[]]> = [];
     for (const row of props.rows) {
@@ -341,6 +388,7 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
                           {(row) => (
                             <DesktopRow
                               row={row()}
+                              branch={branchLayout().get(row().session.key)}
                               onOpen={open}
                               createStop={props.createStop}
                               renderElapsed={props.renderElapsed}

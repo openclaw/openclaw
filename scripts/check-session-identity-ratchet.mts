@@ -24,6 +24,10 @@ const PATTERNS = [
   new RegExp(String.raw`[!=]==\s*[\w$.?()[\]]*(?:^|[^\w$])${ID}\b`, "gu"),
   /differs from the captured|no longer active|changed before|was replaced/giu,
 ];
+const TYPEOF_COMPARISON = new RegExp(
+  String.raw`(\btypeof\s+[\w$.?()[\]]*${ID}\s*)[!=]==(\s*(["'])(?:undefined|object|boolean|number|bigint|string|symbol|function)\3)(?=\s*(?:$|[),;:?]|&&|\|\|))`,
+  "gu",
+);
 const TOKENS = [
   "essionId",
   "ifecycleRevision",
@@ -48,12 +52,14 @@ const EXCLUDE = [
 
 /** Counts each pin name, id compare and inference refusal on one line. */
 export function countSessionIdentityPins(line: string) {
-  // Remove only the operator next to a standalone absent value, not the ID or
-  // the rest of the line: an adjacent real comparison and pin names still count.
-  const comparisons = line.replace(
-    /(?<![\w$.])(?:undefined|null)\s*[!=]==|[!=]==\s*(?:undefined|null)(?=\s*(?:$|[),;:?]|&&|\|\|))/gu,
-    " ",
-  );
+  // Type and presence checks do not compare identities. Remove only their
+  // operator so adjacent real comparisons and explicit pin names still count.
+  const comparisons = line
+    .replace(TYPEOF_COMPARISON, "$1 $2")
+    .replace(
+      /(?<![\w$.])(?:undefined|null)\s*[!=]==|[!=]==\s*(?:undefined|null)(?=\s*(?:$|[),;:?]|&&|\|\|))/gu,
+      " ",
+    );
   return PATTERNS.reduce((sum, pattern) => sum + (comparisons.match(pattern)?.length ?? 0), 0);
 }
 

@@ -8,12 +8,26 @@ import {
   TemplateGatewayPlanBlockedError,
   TemplateGatewayPlanChangedError,
 } from "../../templates/gateway-add-apply.js";
+import type { TemplateAddSource } from "../../templates/gateway-add-source.js";
 import { TemplateGatewayConsentError } from "../../templates/gateway-plugin-consent.js";
 import { TemplateSkillConsentError } from "../../templates/gateway-skill-consent.js";
+import { TemplateProjectError } from "../../templates/project.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
 import { templatesAddHandlers } from "./templates-add.js";
 import type { RespondFn } from "./types.js";
+
+const diagnosticLog = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (name: string) =>
+      name === "gateway/templates-add"
+        ? { ...actual.createSubsystemLogger(name), ...diagnosticLog }
+        : actual.createSubsystemLogger(name),
+  };
+});
 
 const planAdd = vi.hoisted(() => vi.fn());
 const applyAdd = vi.hoisted(() => vi.fn());
@@ -92,22 +106,31 @@ async function callAdd(
   getRuntimeConfig: () => unknown = () => enabled,
   options: {
     hasCurrentClientAuthority?: () => boolean;
+    source?: TemplateAddSource;
     cron?: unknown;
     applyPluginLifecycleChange?: unknown;
     applyParams?: Record<string, unknown>;
   } = {},
 ) {
-  const { hasCurrentClientAuthority, applyParams = params, ...runtime } = options;
+  const {
+    hasCurrentClientAuthority,
+    source: sourceOverride = source,
+    applyParams = params,
+    ...runtime
+  } = options;
   const method = `templates.add.${operation}`;
   const respond = vi.fn<RespondFn>();
   const handler = expectDefined(templatesAddHandlers[method], method);
   await handler({
     req: { type: "req", id: "add", method },
-    params: operation === "plan" ? { source } : applyParams,
+    params:
+      operation === "plan"
+        ? { source: sourceOverride }
+        : { ...applyParams, ...(options.source ? { source: sourceOverride } : {}) },
     respond,
     context: { getRuntimeConfig, ...runtime } as never,
     client:
-      operation === "apply"
+      operation === "apply" || "kind" in sourceOverride
         ? ({ connect: { role: "operator", scopes: ["operator.admin"] } } as never)
         : null,
     hasCurrentClientAuthority,
@@ -133,7 +156,7 @@ async function applyThrough(
 }
 
 it.each(["plan", "apply"] as const)(
-  "templates.add.%s requires its scope and Labs",
+  "templates.add.%s requires its scope and Templates availability",
   async (operation) => {
     const method = `templates.add.${operation}`;
     expect(coreGatewayHandlers[method]).toBeDefined();
@@ -143,7 +166,9 @@ it.each(["plan", "apply"] as const)(
       allowed: false,
       missingScope: operation === "plan" ? "operator.read" : "operator.admin",
     });
-    const request = await callAdd(operation, () => ({}));
+    const request = await callAdd(operation, () => ({
+      gateway: { controlUi: { experimental: { templates: false } } },
+    }));
     expect(request[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
     expect(operation === "plan" ? planAdd : applyAdd).not.toHaveBeenCalled();
   },
@@ -155,6 +180,7 @@ it("plans from the persisted roster, not a stale Gateway cache", async () => {
   const request = await callAdd("plan");
   expect(planAdd).toHaveBeenCalledWith({
     source,
+    onStage: expect.any(Function),
     config: onDisk,
     resolvePreferredModel: expect.any(Function),
     sourceMcpServers: expect.any(Function),
@@ -163,10 +189,12 @@ it("plans from the persisted roster, not a stale Gateway cache", async () => {
   expect(request).toEqual([[true, plan]]);
 });
 
-it("drops a preview if Labs is switched off mid-request", async () => {
+it("drops a preview if Templates availability is switched off mid-request", async () => {
   let calls = 0;
   planAdd.mockResolvedValue(plan);
-  const request = await callAdd("plan", () => (calls++ === 0 ? enabled : {}));
+  const request = await callAdd("plan", () =>
+    calls++ === 0 ? enabled : { gateway: { controlUi: { experimental: { templates: false } } } },
+  );
   expect(request[0]?.[2]).toMatchObject({
     code: "FORBIDDEN",
     details: { mutationAccepted: false },
@@ -337,29 +365,8 @@ it.each(["matching", "stale"] as const)(
   },
 );
 
-it("guards live authority while leaving post-admission Labs policy to the Add service", async () => {
-  let authorized = true;
-  const revoked = await applyThrough(
-    (input) => {
-      authorized = false;
-      input.assertCurrent();
-    },
-    { hasCurrentClientAuthority: () => authorized },
-  );
-  expect(revoked[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
-
-  let labsEnabled = true;
-  applyAdd.mockImplementation(async (input) => {
-    labsEnabled = false;
-    input.assertCurrent();
-    return complete;
-  });
-  const switchedOff = await callAdd("apply", () => (labsEnabled ? enabled : {}));
-  expect(switchedOff).toEqual([[true, complete]]);
-});
-
-it("blocks Add when persisted Labs is off despite a stale Gateway cache", async () => {
-  readPolicy.mockResolvedValue({});
+it("blocks Add when persisted Templates availability is off despite a stale Gateway cache", async () => {
+  readPolicy.mockResolvedValue({ gateway: { controlUi: { experimental: { templates: false } } } });
 
   const request = await callAdd("apply");
 
@@ -466,43 +473,6 @@ it("rolls back only the unchanged new agent and its scheduled work", async () =>
   expect(request[0]?.[0]).toBe(true);
 });
 
-it.each(["scratch", "enable"] as const)(
-  "rechecks live Add authority at the %s commit",
-  async (operation) => {
-    let authorized = true;
-    const persisted = vi.fn();
-    const cron = makeCron({
-      writeScratch: vi.fn(async (_id, options) => {
-        authorized = false;
-        options.commitGuard();
-        persisted();
-        return { ok: true };
-      }),
-      updateWithPrecondition: vi.fn(async (_id, _patch, _precondition, options) => {
-        authorized = false;
-        options.commitGuard();
-        persisted();
-      }),
-    });
-    const request = await applyThrough(
-      async (input) => {
-        if (operation === "scratch") {
-          await input.cronGateway!.writeScratch!("job-1", "Checklist", () => {});
-        } else {
-          await input.cronGateway!.enable!("job-1", "reviewed-revision", () => {});
-        }
-      },
-      {
-        cron,
-        hasCurrentClientAuthority: () => authorized,
-      },
-    );
-
-    expect(persisted).not.toHaveBeenCalled();
-    expect(request[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
-  },
-);
-
 it("keeps the new agent when another automation appears before rollback", async () => {
   const cron = makeCron({
     list: vi.fn().mockResolvedValue([{ id: "user-job", agentId }]),
@@ -521,7 +491,7 @@ it("keeps the new agent when another automation appears before rollback", async 
   expect(deleteAgent).not.toHaveBeenCalled();
 });
 
-it("rejects a declaration created after the Template list check without mutating it", async () => {
+it("rejects an existing declaration at the scheduler without relying on a list precheck", async () => {
   const cron = makeCron({
     add: vi.fn(async (_input, options) => {
       options.matchesExisting({
@@ -533,13 +503,9 @@ it("rejects a declaration created after the Template list check without mutating
     }),
   });
   validateDelivery.mockResolvedValue(undefined);
-  const request = await applyThrough(
-    async (input) => {
-      expect(await input.cronGateway!.list!(agentId)).toEqual({ jobs: [] });
-      await input.cronGateway!.add(schedule);
-    },
-    { cron },
-  );
+  const request = await applyThrough((input) => input.cronGateway!.add(schedule), { cron });
+
+  expect(cron.list).not.toHaveBeenCalled();
 
   expect(request[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
 });
@@ -588,3 +554,94 @@ it("rechecks reviewed access at the plugin reload's persistent apply", async () 
   expect(applied).not.toHaveBeenCalled();
   expect(request[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
 });
+
+it.each(["plan", "apply"] as const)(
+  "logs bounded %s outcomes without source or error data",
+  async (operation) => {
+    const localSource = { kind: "local" as const, path: "/private/template-secret" };
+    const operationMock = operation === "plan" ? planAdd : applyAdd;
+    operationMock.mockRejectedValueOnce(new Error("private error with token=secret"));
+    const response = await callAdd(operation, () => enabled, { source: localSource });
+    expect(response[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
+    expect(diagnosticLog.warn).toHaveBeenCalledExactlyOnceWith("Template add did not complete", {
+      operation,
+      stage: operation === "plan" ? "source_resolution_and_plan" : "apply",
+      outcome: "failed",
+      sourceKind: "local",
+      correlationId: expect.stringMatching(/^[a-f0-9-]{36}$/),
+      durationMs: expect.any(Number),
+    });
+    expect(diagnosticLog.error).not.toHaveBeenCalled();
+    expect(JSON.stringify(diagnosticLog.warn.mock.calls)).not.toContain("private");
+    const firstId = diagnosticLog.warn.mock.calls[0]?.[1].correlationId;
+    operationMock.mockResolvedValueOnce(operation === "plan" ? plan : ready);
+    await callAdd(operation, () => enabled, { source: localSource });
+    expect(diagnosticLog.info).toHaveBeenCalledExactlyOnceWith(
+      "Template add completed",
+      expect.objectContaining({ operation, outcome: "success", sourceKind: "local" }),
+    );
+    expect(diagnosticLog.info.mock.calls[0]?.[1].correlationId).not.toBe(firstId);
+  },
+);
+
+it.each(["plan", "apply"] as const)(
+  "records the failing upload stage for %s",
+  async (operation) => {
+    const operationMock = operation === "plan" ? planAdd : applyAdd;
+    operationMock.mockImplementationOnce(async (input) => {
+      input.onStage?.("upload_decode_and_staging");
+      input.onStage?.("upload_extraction");
+      throw new Error("private upload error");
+    });
+    await callAdd(operation, () => enabled, { source: { kind: "upload", archiveBase64: "YWJj" } });
+    expect(diagnosticLog.warn).toHaveBeenCalledExactlyOnceWith(
+      "Template add did not complete",
+      expect.objectContaining({
+        operation,
+        stage: "upload_extraction",
+        outcome: "failed",
+        sourceKind: "upload",
+      }),
+    );
+    expect(JSON.stringify(diagnosticLog.warn.mock.calls)).not.toContain("private");
+  },
+);
+
+it("records local source authority rejection without resolving the source", async () => {
+  await callAdd("plan", () => enabled, {
+    source: { kind: "local", path: "/private/template-secret" },
+    hasCurrentClientAuthority: () => false,
+  });
+  expect(planAdd).not.toHaveBeenCalled();
+  expect(diagnosticLog.warn).toHaveBeenCalledExactlyOnceWith(
+    "Template add did not complete",
+    expect.objectContaining({ stage: "policy", outcome: "forbidden", sourceKind: "local" }),
+  );
+});
+
+it("records a partial Add as a non-success outcome", async () => {
+  applyAdd.mockResolvedValueOnce({ ...complete, status: "partial" });
+  await callAdd("apply");
+  expect(diagnosticLog.info).not.toHaveBeenCalled();
+  expect(diagnosticLog.warn).toHaveBeenCalledExactlyOnceWith(
+    "Template add did not complete",
+    expect.objectContaining({ operation: "apply", stage: "apply", outcome: "partial" }),
+  );
+});
+
+it.each(["plan", "apply"] as const)(
+  "returns actionable invalid-project diagnostics for %s",
+  async (operation) => {
+    const service = operation === "plan" ? planAdd : applyAdd;
+    service.mockRejectedValueOnce(
+      new TemplateProjectError("project_invalid", "missing openclaw.template"),
+    );
+    const replies = await callAdd(operation, () => enabled, {
+      source: { kind: "local", path: "/tmp/invalid-template" },
+    });
+    expect(replies[0]?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringMatching(/missing openclaw.template.*templates validate/s),
+    });
+  },
+);

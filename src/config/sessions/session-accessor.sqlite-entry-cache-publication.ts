@@ -44,6 +44,7 @@ import {
   type CommittedSessionSharingFacts,
 } from "./session-accessor.sqlite-sharing-acquisition.js";
 import { sealSessionEntryPublicationSource } from "./session-entry-publication-source.js";
+import { publishSessionParticipationMemberChange } from "./session-participation-source.js";
 import type { SessionEntry } from "./types.js";
 
 export {
@@ -304,6 +305,9 @@ function publishSessionSharingFieldChange(
     database,
     () => {
       commitSessionSharingFieldChange(database, sessionKey, change);
+      if (change.kind === "member") {
+        publishSessionParticipationMemberChange(database.agentId, sessionKey, change);
+      }
     },
     () =>
       stageSessionSharingPublication(

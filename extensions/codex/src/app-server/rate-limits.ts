@@ -30,7 +30,8 @@ const ONE_DAY_MS = 24 * 60 * 60_000;
 const DAY_WINDOW_MINUTES = 24 * 60;
 const WEEKLY_WINDOW_MINUTES = 7 * DAY_WINDOW_MINUTES;
 const WEEKLY_RESET_GAP_MS = 3 * ONE_DAY_MS;
-const CODEX_USAGE_LIMIT_MESSAGE_PREFIX = "You've reached your Codex subscription usage limit.";
+// Native usageLimitExceeded also covers API quota and plans without Codex access.
+const CODEX_USAGE_LIMIT_MESSAGE_PREFIX = "Codex reported a usage or quota limit.";
 const CODEX_USAGE_LIMIT_STATE_MISMATCH_MESSAGE =
   "Codex rejected the request with a usage-limit error, but its current account usage does not report an exhausted limit.";
 
@@ -122,6 +123,7 @@ export function formatCodexUsageLimitErrorMessage(params: {
   ) {
     return [
       CODEX_USAGE_LIMIT_STATE_MISMATCH_MESSAGE,
+      ...(message ? [message] : []),
       "Retry the request, use another Codex account if available, or switch to another configured model/provider.",
     ].join(" ");
   }
@@ -133,8 +135,8 @@ export function formatCodexUsageLimitErrorMessage(params: {
     (ordinaryUsageAllowed === undefined && !usageSummary?.blocked
       ? selectRateLimitWindowEntry(allSnapshots.flatMap(readWindowEntries), nowMs, "next")?.window
       : undefined);
-  const parts = [CODEX_USAGE_LIMIT_MESSAGE_PREFIX];
-  let recoveryAction = "Wait until Codex becomes available";
+  const parts = [CODEX_USAGE_LIMIT_MESSAGE_PREFIX, ...(message ? [message] : [])];
+  let recoveryAction = "Check the active account's usage and billing details";
   if (nextReset) {
     parts.push(
       `Next reset in ${formatRelativeDuration(nextReset.resetsAtMs - nowMs)}, ${formatCalendarResetTime(nextReset.resetsAtMs, nowMs)}.`,
@@ -223,6 +225,14 @@ export function resolveCodexUsageLimitResetAtMs(
   return blockingSnapshot
     ? selectSnapshotBlockingReset(blockingSnapshot, nowMs)?.resetsAtMs
     : undefined;
+}
+
+/** Codex's typed reason for a reached limit, preferring a specific one over the generic type. */
+export function readCodexRateLimitReachedType(value: JsonValue | undefined): string | undefined {
+  const types = collectCodexRateLimitSnapshots(value).flatMap((snapshot) =>
+    snapshot.rateLimitReachedType ? [snapshot.rateLimitReachedType] : [],
+  );
+  return types.find((type) => type !== "rate_limit_reached") ?? types[0];
 }
 
 export function summarizeCodexAccountUsage(

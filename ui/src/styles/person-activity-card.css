@@ -121,6 +121,14 @@
   line-height: 1.42;
 }
 
+.person-activity-card__skeleton {
+  --skeleton-animation: none;
+
+  display: block;
+  block-size: 0.75em;
+  margin-block: calc((1lh - 0.75em) / 2);
+}
+
 .person-activity-card__sessions {
   display: grid;
   gap: 3px;
@@ -148,10 +156,6 @@
 
 .person-activity-card__session-name.hover-marquee {
   --hover-marquee-fade-width: 18px;
-
-  white-space: nowrap;
-  color: var(--text-strong);
-  text-overflow: clip;
 }
 
 @media (hover: none), (pointer: coarse), (prefers-reduced-motion: reduce) {

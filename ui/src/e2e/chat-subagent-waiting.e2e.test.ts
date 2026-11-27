@@ -457,7 +457,7 @@ suite.define(() => {
           }
         };
         // The parent wait is generic; child state and navigation stay in Details.
-        const waitingOn = indicator.getByText("Wait for subagents", { exact: true });
+        const waitingOn = indicator.getByText("Waiting for subagents", { exact: true });
         await waitingOn.waitFor();
         expect(await indicator.count()).toBe(1);
         expect(

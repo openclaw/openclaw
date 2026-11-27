@@ -191,13 +191,51 @@ it.each([
 });
 
 it.each([
-  { consumer: "openai-chat-tools", supported: false, authorized: false, legacy: false },
-  { consumer: "openai-chat-tools", supported: false, authorized: true, legacy: false },
-  { consumer: "openai-chat-tools", supported: true, authorized: true, legacy: false },
-  { consumer: "openai-chat-tools", supported: true, authorized: true, legacy: true },
+  {
+    consumer: "openai-chat-tools",
+    supported: false,
+    authorized: false,
+    legacy: false,
+    bounded: false,
+  },
+  {
+    consumer: "openai-chat-tools",
+    supported: false,
+    authorized: true,
+    legacy: false,
+    bounded: false,
+  },
+  {
+    consumer: "openai-chat-tools",
+    supported: true,
+    authorized: true,
+    legacy: false,
+    bounded: false,
+  },
+  {
+    consumer: "openai-chat-tools",
+    supported: true,
+    authorized: true,
+    legacy: true,
+    bounded: false,
+  },
+  {
+    consumer: "openai-chat-tools",
+    supported: true,
+    authorized: true,
+    legacy: false,
+    bounded: true,
+  },
+  {
+    consumer: "session-runtime-context",
+    supported: true,
+    authorized: true,
+    legacy: false,
+    bounded: true,
+  },
 ])(
-  "derives $consumer cold mode (supported=$supported, authorized=$authorized, legacy=$legacy)",
-  ({ consumer, supported, authorized, legacy }) => {
+  "derives $consumer cold mode (supported=$supported, authorized=$authorized, legacy=$legacy, bounded=$bounded)",
+  ({ consumer, supported, authorized, legacy, bounded }) => {
     const source = committedSourceFixture({
       "package.json": '{"type":"module","version":"2026.9.4"}',
       [runtimePath]:
@@ -208,7 +246,9 @@ it.each([
       "src/config/sessions/session-cold-storage-worker.ts": supported
         ? legacy
           ? 'db.deleteFrom("transcript_events").where("session_id", "=", sessionId)'
-          : "retainSessionColdNavigationInTransaction(database, sessionId)"
+          : bounded
+            ? "return retainSessionColdNavigationInTransaction(\n  database,\n  input.sessionId,\n  input.afterSeq,\n  input.maxRows,\n);"
+            : "retainSessionColdNavigationInTransaction(database, sessionId)"
         : null,
     });
     const { result, args } = runConsumer(source, consumer, { authorized, dockerStatus: 0 });

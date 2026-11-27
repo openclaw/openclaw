@@ -13,11 +13,11 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
+import { transcriptSessionExportKey, TranscriptsStore } from "../transcripts/store.js";
 import type {
   TranscriptSessionDescriptor as Session,
   TranscriptUtterance as Utterance,
-} from "../transcripts/provider-types.js";
-import { transcriptSessionExportKey, TranscriptsStore } from "../transcripts/store.js";
+} from "../transcripts/types.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");

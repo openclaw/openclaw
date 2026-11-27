@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { repairLegacySessionRunOutcomes } from "../../commands/doctor/shared/session-entry-rewrite.js";
 import { withEngineStoreAdmission } from "../../infra/database-engine/admission-scope.js";
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import { settleCurrentReadPreparations } from "../../shared/current-read-authority.js";
@@ -128,8 +129,6 @@ export async function runSessionStartupMigration(params: {
     let alreadyOpen: boolean | undefined;
     let handedOff = false;
     try {
-      const { repairLegacySessionRunOutcomes } =
-        await import("../../commands/doctor/shared/session-entry-rewrite.js");
       params.assertCurrent?.();
       alreadyOpen = isOpenClawAgentDatabaseOpen(databasePath);
       const mainKey = params.cfg.session?.mainKey;

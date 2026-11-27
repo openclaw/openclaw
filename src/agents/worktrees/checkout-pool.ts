@@ -5,10 +5,14 @@ import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
 import { resolveGitMetadataPath } from "./git.js";
 import { retainWorktreeTemplate } from "./template-cache.js";
 import { readTemplateAsync } from "./template-registry-async.js";
-import type { WorktreeTemplateRecord, WorktreeWarmPoolRequest } from "./template-registry.js";
+import {
+  worktreeTemplateMutationKey,
+  type WorktreeTemplateRecord,
+  type WorktreeWarmPoolRequest,
+} from "./template-registry.js";
 
 export const selectWarmWorktree = (template: WorktreeTemplateRecord) => ({
-  cacheKey: `warm:${template.cacheKey}`,
+  cacheKey: `warm:${worktreeTemplateMutationKey(template.cacheKey)}`,
   contentKey: `${template.id}:${template.contentKey}`,
   backend: `warm-${template.backend}`,
 });

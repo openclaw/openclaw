@@ -267,7 +267,7 @@ export const contract = defineFeatureContract({
     annotate: {
       kind: "action",
       description:
-        "Revision-fenced, evidence-backed metadata annotation without changing assertion text or lifecycle. Set source-page association, identity uncertainty/candidates, speaker-attribution confidence, continuity links, or explicit fixture classification; replace a claim's linked entity pages (entities); append retained evidence to an unchanged assertion. Omitted fields are preserved; supplied arrays replace. Only fixture classification may change historical records. Similarity is not supersession, candidate identity is not a merge, and source grouping is not an ingestion batch. Inspect the target and evidence first; a reason and exact revision/hash are required.",
+        "Revision-fenced, evidence-backed metadata annotation without changing assertion text or lifecycle. Set source-page association, identity uncertainty/candidates, speaker-attribution confidence, continuity links, or explicit fixture classification; replace a claim's linked entity pages (entities); append retained evidence to an unchanged assertion. entities and addEvidence are top-level siblings beside annotations, not inside it; omit annotations for entity-only or evidence-only changes. Omitted fields are preserved; supplied arrays replace. Only fixture classification may change historical records. Similarity is not supersession, candidate identity is not a merge, and source grouping is not an ingestion batch. Inspect the target and evidence first; a reason and exact revision/hash are required.",
       input: AnnotateInput,
       output: receipt,
       tool: { name: "knowledge_annotate", label: "Annotate knowledge context" },

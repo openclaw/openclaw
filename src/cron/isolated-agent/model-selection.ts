@@ -2,6 +2,7 @@ import { raceWithTimeout } from "@openclaw/retry";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import { resolveConfiguredModelPolicyAllow } from "../../agents/model-selection-shared.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import type { PreparedReplyDispatchRuntime } from "../../agents/prepared-model-runtime.types.js";
@@ -13,7 +14,6 @@ import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronAgentConfig } from "./run-config.js";
 import {
-  DEFAULT_MODEL,
   DEFAULT_PROVIDER,
   getModelRefStatus,
   loadResolvedPublishedModelCatalogOwner,
@@ -229,15 +229,14 @@ export async function resolveCronModelSelection(
     cfg: cfgWithAgentDefaults,
     agentId: ownerAgentId,
     defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
     manifestPlugins: owner.metadataSnapshot,
   });
   // Overrides keep the owner's agent policy; flattened defaults only select the default model.
   const selectionParams = {
     cfg: owner.config,
     catalog: owner.modelCatalog.entries,
-    defaultProvider: resolvedDefault.provider,
-    defaultModel: resolvedDefault,
+    defaultProvider: resolvedDefault?.provider ?? DEFAULT_PROVIDER,
+    ...(resolvedDefault ? { defaultModel: resolvedDefault } : {}),
     agentId: ownerAgentId,
     manifestPlugins: owner.metadataSnapshot,
   };
@@ -316,7 +315,7 @@ export async function resolveCronModelSelection(
   const sessionModelOverride = params.sessionEntry.modelOverride?.trim();
   const sessionSelection = override(
     sessionModelOverride
-      ? `${params.sessionEntry.providerOverride?.trim() || resolvedDefault.provider}/${sessionModelOverride}`
+      ? `${params.sessionEntry.providerOverride?.trim() || selectionParams.defaultProvider}/${sessionModelOverride}`
       : undefined,
     "session",
   );
@@ -334,10 +333,12 @@ export async function resolveCronModelSelection(
       normalizeModelSelection(subagentSelection?.raw),
       subagentSelection?.source === "agent" ? "agent" : "subagent",
     ) ??
-    selection(
-      resolvedDefault,
-      "default",
-      resolveAgentModelPrimaryValue(cfgWithAgentDefaults.agents?.defaults?.model),
-    )
+    (resolvedDefault
+      ? selection(
+          resolvedDefault,
+          "default",
+          resolveAgentModelPrimaryValue(cfgWithAgentDefaults.agents?.defaults?.model),
+        )
+      : { ok: false, error: NO_MODEL_CONFIGURED_MESSAGE })
   );
 }

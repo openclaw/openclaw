@@ -12,6 +12,7 @@ import {
   type PublishSnapshotRequest,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { createOpenClawIdAuthority } from "./authority.js";
 import { memoryStore, nowSeconds, TEST_K_SRV } from "./openclaw-id.test-support.js";
 import { PUBLICATION_REFRESH_MS } from "./publication-retry.js";
@@ -33,11 +34,13 @@ vi.mock("./mailbox-reader.js", async (importOriginal) => ({
   startMailboxReader: () => ({ stop() {} }),
 }));
 
+let enabled = true;
 let stateDir: string;
 let service: OpenClawIdService;
 let authority: ReturnType<typeof createOpenClawIdAuthority>;
 
 beforeEach(() => {
+  enabled = true;
   vi.useFakeTimers();
   stateDir = mkdtempSync(path.join(tmpdir(), "ocid-publication-refresh-"));
   // Fixed external Discovery answers; signing, authority and publication are real.
@@ -66,7 +69,7 @@ beforeEach(() => {
 function startService(): OpenClawIdService {
   return createOpenClawIdService({
     getConfig: () => ({
-      enabled: true,
+      enabled,
       loaderDomain: "claws.test",
       discoveryUrl: "https://discovery.test",
       relayUrl: "https://relay.test/",
@@ -148,6 +151,64 @@ async function expectArmed() {
 }
 
 describe("service publication refresh scheduling", () => {
+  it.each(["startup", "toggle"])("publishes role labels after enabling from %s", async (mode) => {
+    if (mode === "toggle") {
+      await commitLink();
+    }
+    enabled = false;
+    await service.reconcileRuntimePolicy();
+    enabled = true;
+    if (mode === "startup") {
+      await commitLink();
+    } else {
+      await service.reconcileRuntimePolicy();
+    }
+    const snapshots = () =>
+      vi
+        .mocked(fetch)
+        .mock.calls.filter(([input]) =>
+          (typeof input === "string"
+            ? input
+            : input instanceof URL
+              ? input.href
+              : input.url
+          ).endsWith("/snapshot"),
+        ).length;
+    const before = snapshots();
+    invalidateOperatorRolePolicy("changed-member", { roleOnly: true });
+    await vi.waitFor(() => expect(snapshots()).toBeGreaterThan(before));
+  });
+
+  it("retries a pending profile label after a same-second snapshot refusal", async () => {
+    await commitLink();
+    const discovery = vi.mocked(fetch).getMockImplementation()!;
+    let snapshots = 0;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (new Request(input, init).url.endsWith("/snapshot") && ++snapshots === 1) {
+        return Response.json(
+          { error: { code: "stale_snapshot", message: "issued_at must be newer" } },
+          { status: 409 },
+        );
+      }
+      return discovery(input, init);
+    });
+    invalidateOperatorRolePolicy("changed-member", { roleOnly: true });
+    await vi.waitFor(async () =>
+      expect((await service.linkStatus()).publication).toMatchObject({
+        state: "failed",
+        code: "stale_snapshot",
+        retryable: true,
+        retryAt: expect.any(Number),
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(2_100);
+    await vi.waitFor(async () =>
+      expect((await service.linkStatus()).publication).toMatchObject({ state: "published" }),
+    );
+    expect(snapshots).toBe(2);
+    expect(authority.current()?.discovery.publish_pending).toBe(false);
+  });
+
   it("invalidates People after a publication refusal settles", async () => {
     await commitLink();
     const entered = createDeferred();

@@ -1,0 +1,2 @@
+# Preserve unrelated keys and scalar types when a tokenized URL is redacted.
+19

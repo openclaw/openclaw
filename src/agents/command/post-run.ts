@@ -189,8 +189,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
         compactionAccounting: compactionFact,
         touchInteraction:
           params.opts.bootstrapContextRunKind !== "cron" && !params.opts.internalEvents?.length,
-        // Cron output counts as unread-worthy activity; internal events do not.
-        touchActivity: !params.opts.internalEvents?.length,
         preserveRuntimeModel:
           result.meta.providerStarted === false ||
           fallbackExhausted ||
@@ -274,7 +272,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
       admittedSource: compactionFact?.target ?? params.admittedDeliverySource,
       assertCurrent: () => {
         assertSourceCurrent?.();
-        operatorAuthority?.assertCurrent();
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
       },
       commandOwnerReference: params.opts.assertSourceCurrent?.recoveryReference,
@@ -298,7 +295,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
         ? async (): Promise<SessionEntry | undefined> => {
             const assertCurrent = () => {
               assertSourceCurrent?.();
-              operatorAuthority?.assertCurrent();
               assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
             };
             assertCurrent();
@@ -388,7 +384,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
       const authorize = () => {
         throwAgentRunRestartAbortReason(params.opts.abortSignal?.reason);
         assertSourceCurrent?.();
-        operatorAuthority?.assertCurrent();
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
         return (
           maintenance.remainingMs() > 0 && !maintenance.signal.aborted && !sessionReboundDuringRun

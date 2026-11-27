@@ -36,6 +36,7 @@ import { buildSubagentRunReadTopology } from "../../src/agents/subagents/registr
 import type { SubagentRunReadRecord } from "../../src/agents/subagents/registry/subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "../../src/agents/subagents/registry/subagent-registry.types.js";
 import { SubagentSessionReadLookup } from "../../src/agents/subagents/registry/subagent-session-read-scope.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
 assert(global.gc, "Run with --expose-gc");
@@ -182,12 +183,7 @@ previews.length = 0;
 const baselineHeap = await heap();
 const inspector = new Session();
 if (allocation) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 16_384,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 16_384);
 }
 const load = loadavg();
 const points = [];

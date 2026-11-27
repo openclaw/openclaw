@@ -1,6 +1,10 @@
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableObjectRecord as readCostRecord } from "@openclaw/normalization-core/record-coerce";
-import { Errored, Loading, Repeat, Show, createMemo, lazy } from "solid-js";
+import { Errored, For, Loading, Repeat, Show, createMemo, lazy } from "solid-js";
+import {
+  formatPromptCacheHitRate,
+  latestRunCacheHitRate,
+} from "../../../../../src/shared/prompt-cache-hit-rate.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../../../src/shared/transcript-only-openclaw-assistant.js";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -9,7 +13,7 @@ import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
 import type { ProviderQuotaGroup } from "../../../lib/provider-quota-summary.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { promptCacheHitRate } from "../../../lib/sessions/usage.ts";
+import type { SessionCostTotal } from "../../../lib/session-context-report.ts";
 import type {
   ContextNoticeProps,
   getContextNoticeViewModel,
@@ -85,42 +89,6 @@ function latestProviderCostStats(messages: unknown[] | undefined): ProviderCostS
   return null;
 }
 
-/** Prompt cache share across the model calls since the latest user message that reported
- *  a cache split; a call with unknown usage or cache use is left out, never counted as a miss. */
-function latestRunCacheHitRate(messages: unknown[] | undefined): number | null {
-  const totals = { input: 0, cacheRead: 0, cacheWrite: 0 };
-  for (let index = (messages?.length ?? 0) - 1; index >= 0; index -= 1) {
-    const message = readCostRecord(messages?.[index]);
-    if (message?.role === "user") {
-      break;
-    }
-    if (message?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(message)) {
-      continue;
-    }
-    const usage = readCostRecord(message.usage);
-    if (
-      readCostRecord(usage?.usageReport)?.state === "unavailable" ||
-      readCostRecord(usage?.cacheTelemetry)?.state === "unavailable"
-    ) {
-      continue;
-    }
-    for (const key of ["input", "cacheRead", "cacheWrite"] as const) {
-      totals[key] += asNonNegativeFiniteNumber(usage?.[key]) ?? 0;
-    }
-  }
-  return promptCacheHitRate(totals);
-}
-
-// Floor so 100% only appears when every prompt token was a cache read.
-function CacheHitRate(props: { rate: number }) {
-  return (
-    <div title={t("chat.composer.contextUsage.cacheHitRate")}>
-      <dt>{t("chat.composer.contextUsage.cacheShort")}</dt>
-      <dd>{(Math.floor(props.rate * 10_000) / 100).toFixed(2)}%</dd>
-    </div>
-  );
-}
-
 function formatContextCost(value: number) {
   return formatCost(value).replace(/(\.\d{2})0$/, "$1");
 }
@@ -192,7 +160,6 @@ export function ChatComposerContextPanel(
     () => (props.open && props.model ? latestRunCacheHitRate(props.messages) : null),
     { lazy: true },
   );
-  const showRunCost = () => showCosts() && props.model?.cost !== null;
   const costTitle = () => {
     const costs = providerCosts();
     return costs
@@ -201,6 +168,102 @@ export function ChatComposerContextPanel(
           .map((key) => `${t(`usage.breakdown.${key}`)} ${formatContextCost(costs[key]!)}`)
           .join(" · ") || undefined
       : undefined;
+  };
+  /** One small table, one row per scope, and every row has the same columns: cache hit
+   *  rate and cost when known, else token counts. Token counts not shown as columns live
+   *  in each row label's tooltip. */
+  const UsageTable = (table: { total: () => SessionCostTotal | null }) => {
+    const context = () => props.model!;
+    const columns = (): ("input" | "output" | "cache" | "cost")[] => {
+      const shown: ("cache" | "cost")[] = [];
+      // Either scope's rate earns the column; the other shows a dash.
+      if (runCacheHitRate() !== null || (table.total()?.cacheHitRate ?? null) !== null) {
+        shown.push("cache");
+      }
+      // A cost column of dashes says nothing; show it once either scope has a figure.
+      if (showCosts() && (context().cost !== null || table.total() !== null)) {
+        shown.push("cost");
+      }
+      return shown.length > 0 ? shown : ["input", "output"];
+    };
+    const tokensTitle = (input: number | null, output: number | null, partial = false) =>
+      columns().includes("input")
+        ? undefined
+        : `${t("chat.composer.contextUsage.inputShort")} ${partial ? "≥ " : ""}${formatStat(input)} · ${t("chat.composer.contextUsage.outputShort")} ${partial ? "≥ " : ""}${formatStat(output)}`;
+    return (
+      <div
+        class="context-usage__usage"
+        role="table"
+        aria-label={t("chat.composer.contextUsage.title")}
+        style={{ "grid-template-columns": `1fr repeat(${columns().length}, auto)` }}
+      >
+        <div class="context-usage__usage-row context-usage__usage-head" role="row">
+          <span role="columnheader" />
+          <For each={columns()}>
+            {(column) => (
+              <span
+                role="columnheader"
+                title={
+                  column === "cache" ? t("chat.composer.contextUsage.cacheHitRate") : undefined
+                }
+              >
+                {t(`chat.composer.contextUsage.${column}Short`)}
+              </span>
+            )}
+          </For>
+        </div>
+        <div class="context-usage__usage-row" role="row" data-chat-usage-row="run">
+          <span role="rowheader" title={tokensTitle(context().input, context().output)}>
+            {t("chat.composer.contextUsage.latestRun")}
+          </span>
+          <For each={columns()}>
+            {(column) => (
+              <b role="cell" title={column === "cost" ? costTitle() : undefined}>
+                {column === "input"
+                  ? formatStat(context().input)
+                  : column === "output"
+                    ? formatStat(context().output)
+                    : column === "cache"
+                      ? formatPromptCacheHitRate(runCacheHitRate())
+                      : context().cost === null
+                        ? "—"
+                        : formatContextCost(context().cost!)}
+              </b>
+            )}
+          </For>
+        </div>
+        <Show when={table.total()}>
+          {(total) => {
+            const bound = (value: string) => (total().partial ? "≥ " : "") + value;
+            return (
+              <div class="context-usage__usage-row" role="row" data-chat-session-cost="true">
+                <span
+                  role="rowheader"
+                  title={tokensTitle(total().input, total().output, total().partial)}
+                >
+                  {t("chat.composer.contextUsage.sessionTotal")}
+                </span>
+                <For each={columns()}>
+                  {(column) => (
+                    <b role="cell">
+                      {column === "input"
+                        ? bound(formatStat(total().input))
+                        : column === "output"
+                          ? bound(formatStat(total().output))
+                          : column === "cache"
+                            ? formatPromptCacheHitRate(total().cacheHitRate)
+                            : total().unpriced
+                              ? t("chat.composer.contextUsage.unpriced")
+                              : bound(formatContextCost(total().usd))}
+                    </b>
+                  )}
+                </For>
+              </div>
+            );
+          }}
+        </Show>
+      </div>
+    );
   };
   return (
     <section class="context-usage__popover" aria-label={t("chat.composer.contextUsage.title")}>
@@ -257,41 +320,11 @@ export function ChatComposerContextPanel(
               />
             </div>
             <div class="context-usage__separator" />
-            {/* Two rows, one per scope. A priced run shows cost and moves its token counts
-                into the row tooltip; a plan-billed run keeps them, since it has no cost. */}
-            <div
-              class="context-usage__latest"
-              title={
-                showRunCost()
-                  ? `${t("chat.composer.contextUsage.inputShort")} ${formatStat(context().input)} · ${t("chat.composer.contextUsage.outputShort")} ${formatStat(context().output)}`
-                  : undefined
-              }
+            <Show
+              when={props.gateway && props.session}
+              fallback={<UsageTable total={() => null} />}
             >
-              <span>{t("chat.composer.contextUsage.latestRun")}</span>
-              <dl class="context-usage__stats">
-                <Show when={!showRunCost()}>
-                  <div>
-                    <dt>{t("chat.composer.contextUsage.inputShort")}</dt>
-                    <dd>{formatStat(context().input)}</dd>
-                  </div>
-                  <div>
-                    <dt>{t("chat.composer.contextUsage.outputShort")}</dt>
-                    <dd>{formatStat(context().output)}</dd>
-                  </div>
-                </Show>
-                <Show when={runCacheHitRate() !== null}>
-                  <CacheHitRate rate={runCacheHitRate()!} />
-                </Show>
-                <Show when={showRunCost()}>
-                  <div title={costTitle()}>
-                    <dt>{t("chat.composer.contextUsage.costShort")}</dt>
-                    <dd>{formatContextCost(context().cost!)}</dd>
-                  </div>
-                </Show>
-              </dl>
-            </div>
-            <Show when={props.gateway && props.session}>
-              <Loading>
+              <Loading fallback={<UsageTable total={() => null} />}>
                 <ChatSessionCost
                   gateway={props.gateway!}
                   session={props.session!}
@@ -299,28 +332,7 @@ export function ChatComposerContextPanel(
                   used={context().used}
                   presented={props.open}
                 >
-                  {(total) => (
-                    <Show when={showCosts() || total().cacheHitRate !== null}>
-                      <div class="context-usage__latest" data-chat-session-cost="true">
-                        <span>{t("chat.composer.contextUsage.sessionTotal")}</span>
-                        <dl class="context-usage__stats">
-                          <Show when={total().cacheHitRate !== null}>
-                            <CacheHitRate rate={total().cacheHitRate!} />
-                          </Show>
-                          <Show when={showCosts()}>
-                            <div>
-                              <dt>{t("chat.composer.contextUsage.costShort")}</dt>
-                              <dd>
-                                {total().unpriced
-                                  ? t("chat.composer.contextUsage.unpriced")
-                                  : (total().partial ? "≥ " : "") + formatContextCost(total().usd)}
-                              </dd>
-                            </div>
-                          </Show>
-                        </dl>
-                      </div>
-                    </Show>
-                  )}
+                  {(total) => <UsageTable total={total} />}
                 </ChatSessionCost>
               </Loading>
             </Show>

@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import type { WorkerWorkspaceManifestEntry } from "./workspace-manifest.js";
+import type {
+  WorkerWorkspaceManifest,
+  WorkerWorkspaceManifestEntry,
+} from "./workspace-manifest.js";
 
 export type LocalWorkspaceManifestNode =
   | WorkerWorkspaceManifestEntry
@@ -34,6 +37,27 @@ export function localWorkspaceManifestRootReference(
   baseCommit: string | null,
 ): string {
   return digest("root", baseCommit, records.get("")!.treeRef);
+}
+
+export function createLocalWorkspaceBaselineTree(
+  manifest: WorkerWorkspaceManifest,
+  preparedDirectories: readonly string[] = [],
+) {
+  const directories = new Set(manifest.directories);
+  for (let directory of preparedDirectories) {
+    // A filtered template can omit an ancestor that already exists on disk.
+    while (directory && !directories.has(directory)) {
+      directories.add(directory);
+      directory = parentPath(directory);
+    }
+  }
+  return createLocalWorkspaceManifestTree([
+    ...manifest.entries,
+    ...[...directories].map((entryPath) => ({
+      path: entryPath,
+      type: "directory" as const,
+    })),
+  ]);
 }
 
 export function createLocalWorkspaceManifestTree(

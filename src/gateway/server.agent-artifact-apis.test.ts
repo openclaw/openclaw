@@ -501,6 +501,73 @@ describe("Gateway agent and artifact APIs", () => {
       expect(Buffer.from(await range.arrayBuffer())).toEqual(fixture.body.subarray(0, 4));
     }
 
+    const appendAt = Date.now();
+    await appendTranscriptMessage(scope, {
+      eventId: "gateway-agent-artifact-chatter",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Plain progress without attachments." }],
+        timestamp: appendAt,
+      } as never,
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "gateway-agent-artifact-upload",
+      message: {
+        role: "user",
+        content: "Please review this screenshot.",
+        timestamp: appendAt + 1,
+        __openclaw: {
+          media: [
+            {
+              url: "media://inbound/upload---0b6f3d7e.png",
+              contentType: "image/png",
+              kind: "image",
+              fileName: "upload.png",
+              sizeBytes: 2048,
+            },
+          ],
+        },
+      } as never,
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "gateway-agent-artifact-directive",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: `Here is the summary.\n\nMEDIA:${path.join(mainWorkspace, "report.pdf")}`,
+          },
+        ],
+        timestamp: appendAt + 2,
+      } as never,
+    });
+    const { attachments } = await client.request<{
+      attachments: {
+        messages: Array<{
+          role: string;
+          content: unknown;
+          __openclaw?: { id?: string; seq?: number };
+        }>;
+        sessionId: string;
+        truncated?: boolean;
+      };
+    }>("artifacts.list", { sessionKey });
+    expect(attachments.truncated).toBeUndefined();
+    expect(attachments.sessionId).toBe(sessionId);
+    expect(attachments.messages.map((message) => message["__openclaw"]?.seq)).toEqual([1, 3, 4]);
+    const [managed, upload, directive] = attachments.messages;
+    expect(managed?.content).toHaveLength(2);
+    expect(upload).toMatchObject({
+      role: "user",
+      content: [],
+      __openclaw: { media: [expect.objectContaining({ fileName: "upload.png" })] },
+    });
+    // Only the directive survives; the reply prose never leaves the Gateway.
+    expect(directive?.content).toEqual([
+      { type: "text", text: `MEDIA:${path.join(mainWorkspace, "report.pdf")}` },
+    ]);
+
     const artifact = artifactList.artifacts[0]!;
 
     await expect(

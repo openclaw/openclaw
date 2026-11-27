@@ -31,15 +31,49 @@ import type { ThinkLevel } from "./directives.js";
 
 type ModelPickerCatalogEntry = { provider: string; id: string; name?: string };
 
+async function describeCurrentModel(params: {
+  cfg: OpenClawConfig;
+  activeAgentId: string;
+  provider: string;
+  model: string;
+  sessionKey?: string;
+  storePath?: string;
+  sessionEntry?: InternalSessionEntry;
+}): Promise<string[]> {
+  const modelParams = {
+    selectedProvider: params.provider,
+    selectedModel: params.model,
+    sessionEntry: params.sessionEntry,
+  };
+  const completedModel = await readSessionFallbackModelAsync({
+    ...modelParams,
+    config: params.cfg,
+    sessionScope: {
+      agentId: params.activeAgentId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    },
+  });
+  const modelRefs = resolveSelectedAndActiveModel({
+    ...modelParams,
+    sessionEntry: completedModel ?? params.sessionEntry,
+  });
+  return [
+    `Current: ${modelRefs.selected.label}${modelRefs.activeDiffers ? " (selected)" : ""}`,
+    modelRefs.activeDiffers ? `Active: ${modelRefs.active.label} (runtime)` : null,
+  ].filter((line): line is string => Boolean(line));
+}
+
 export async function maybeHandleModelDirectiveInfo(params: {
   directives: InlineDirectives;
   cfg: OpenClawConfig;
   agentDir: string;
   activeAgentId: string;
   provider: string;
-  model: string;
+  /** Undefined when nothing configured or selected a model. */
+  model: string | undefined;
   defaultProvider: string;
-  defaultModel: string;
+  defaultModel: string | undefined;
   aliasIndex: ModelAliasIndex;
   allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
   currentThinkLevel: ThinkLevel;
@@ -89,7 +123,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
       cfg: params.cfg,
       commandBodyNormalized: "/models",
       surface: params.surface,
-      currentModel: `${params.provider}/${params.model}`,
+      currentModel: params.model ? `${params.provider}/${params.model}` : undefined,
       agentId: params.activeAgentId,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
@@ -98,40 +132,22 @@ export async function maybeHandleModelDirectiveInfo(params: {
     return reply ?? { text: "No models available." };
   }
 
-  const modelParams = {
-    selectedProvider: params.provider,
-    selectedModel: params.model,
-    sessionEntry: params.sessionEntry,
-  };
-  const completedModel = await readSessionFallbackModelAsync({
-    ...modelParams,
-    config: params.cfg,
-    sessionScope: {
-      agentId: params.activeAgentId,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-    },
-  });
-  const modelRefs = resolveSelectedAndActiveModel({
-    ...modelParams,
-    sessionEntry: completedModel ?? params.sessionEntry,
-  });
-  const lines = [
-    `Current: ${modelRefs.selected.label}${modelRefs.activeDiffers ? " (selected)" : ""}`,
-    modelRefs.activeDiffers ? `Active: ${modelRefs.active.label} (runtime)` : null,
-  ].filter((line): line is string => Boolean(line));
-  if (wantsSummary) {
+  const selectedModel = params.model;
+  const lines = selectedModel
+    ? await describeCurrentModel({ ...params, model: selectedModel })
+    : ["Current: not configured"];
+  if (wantsSummary && selectedModel) {
     const thinkingRuntime = resolveEffectiveAgentRuntime({
       cfg: params.cfg,
       provider: params.provider,
-      modelId: params.model,
+      modelId: selectedModel,
       agentId: params.activeAgentId,
       sessionKey: params.runtimePolicySessionKey,
       sessionEntry: params.sessionEntry,
     });
     const effectiveThinkLevel = resolveSupportedThinkingLevel({
       provider: params.provider,
-      model: params.model,
+      model: selectedModel,
       level: params.currentThinkLevel,
       catalog: params.thinkingCatalog,
       agentRuntime: thinkingRuntime,
@@ -210,7 +226,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
   const authByProvider = prepared.providerAuthLabels;
 
   lines.push(
-    `Default: ${params.defaultProvider}/${params.defaultModel}`,
+    `Default: ${params.defaultModel ? `${params.defaultProvider}/${params.defaultModel}` : "not configured"}`,
     `Agent: ${params.activeAgentId}`,
     `Auth store: ${shortenHomePath(await resolveAuthStorePathForDisplayAsync(params.agentDir))}`,
   );

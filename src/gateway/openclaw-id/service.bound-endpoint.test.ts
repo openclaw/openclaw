@@ -60,11 +60,33 @@ describe("tunnel child restarts for a linked claw", () => {
     }
   });
 
+  it("start unlinked after a confirmed unlink, not pinned to the old K_srv", async () => {
+    const claw = await linkedClaw();
+    const { service } = serviceFor(
+      claw.authority,
+      { enabled: true, relayUrl: "https://relay.test/" },
+      claw.stateDir,
+    );
+    try {
+      await service.reconcileRuntimePolicy();
+      expect(runtime.boundEndpointKey?.()).toBe(TEST_K_SRV);
+      expect(await service.unlink.run("local_operator", claw.clawId)).toMatchObject({
+        ok: true,
+        unlinked: true,
+      });
+      expect(claw.authority.current()?.binding).toBeNull();
+      expect(runtime.boundEndpointKey?.()).toBeUndefined();
+    } finally {
+      await service.stop();
+    }
+  });
+
   it.each(["initial link", "later write"])(
     "stay on K_srv when %s persistence is uncertain",
     async (phase) => {
       const store = memoryStore();
       let uncertain = false;
+      let pinBeforeAcknowledgement: string | undefined;
       const flaky = {
         read: async () => {
           if (uncertain) {
@@ -75,6 +97,8 @@ describe("tunnel child restarts for a linked claw", () => {
         write: async (next: StoredClaw) => {
           await store.write(next);
           if (uncertain) {
+            // Persistence completed, but the caller still sees the pre-write cached record.
+            pinBeforeAcknowledgement = runtime.boundEndpointKey?.();
             throw new Error("acknowledgement lost");
           }
         },
@@ -103,6 +127,7 @@ describe("tunnel child restarts for a linked claw", () => {
             "uncertain",
           );
         }
+        expect(pinBeforeAcknowledgement).toBe(TEST_K_SRV);
         expect((await store.read())?.binding?.body.k_srv).toBe(TEST_K_SRV);
         expect(owner?.current()).toBeUndefined();
         expect(runtime.boundEndpointKey?.()).toBe(TEST_K_SRV);

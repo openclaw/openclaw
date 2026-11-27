@@ -12,11 +12,7 @@ const DEFAULT_GIT_TIMEOUT_MS = 60_000;
 const MAX_GIT_TIMEOUT_MS = 10 * 60_000;
 const GIT_TIMEOUT_ENV = "OPENCLAW_RELEASE_METADATA_GIT_TIMEOUT_MS";
 
-const VERSION_ONLY_TEXT_PATHS = new Set([
-  "apps/android/Config/Version.properties",
-  "apps/android/version.json",
-  "apps/macos/Sources/OpenClaw/Resources/Info.plist",
-]);
+const VERSION_ONLY_TEXT_PATHS = new Set(["apps/macos/Sources/OpenClaw/Resources/Info.plist"]);
 
 function normalizePath(input: string) {
   return input

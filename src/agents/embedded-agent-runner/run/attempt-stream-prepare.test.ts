@@ -561,7 +561,7 @@ describe("prepareEmbeddedAttemptStream", () => {
                 sourceCurrent = false;
               }
               if (transition.startsWith("source-recovered-")) {
-                expect(assertCurrent).toThrow("Message injection authority is no longer current");
+                expect(assertCurrent).toThrow("The message input is no longer available");
                 sourceCurrent = true;
                 // A fresh injection can proceed; recovery cannot revive this one.
                 expect(createMessageInjectionAuthority(() => sourceCurrent)).not.toThrow();

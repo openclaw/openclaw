@@ -5,6 +5,7 @@ import { GatewayClientRequestError } from "../../packages/gateway-client/src/req
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   resolveConfiguredAgentId,
+  resolveDefaultAgentId,
   type AgentSelectionContext,
 } from "../agents/agent-scope-config.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
@@ -158,6 +159,14 @@ function setUnreadySkill(overrides: Partial<SkillStatusEntry>) {
 function installedCalendar(targetDir = "/tmp/workspace/skills/calendar") {
   return { ok: true, slug: "calendar", version: "1.2.3", targetDir };
 }
+
+const systemAgentConfig = {
+  agents: {
+    ownership: "explicit",
+    entries: { writer: {}, reader: {} },
+    defaults: { systemAgent: { agentId: "reader" } },
+  },
+} as const;
 
 describe("skills cli commands", () => {
   it.each(["check --json", "info calendar"])("keeps interrupted %s quiet", async (args) => {
@@ -443,6 +452,27 @@ describe("skills cli commands", () => {
     expect(stdout[1]).toBe(JSON.stringify(report.skills[0], null, 2));
   });
 
+  it.each(["--json", "list", "info calendar", "check"])(
+    "requests the system agent's inventory from a neutral cwd (%s)",
+    async (argv) => {
+      mocks.bestEffortConfig.mockReturnValue(systemAgentConfig);
+      mocks.gateway.mockResolvedValue(mocks.report);
+      await run(argv);
+      expectOptions(mocks.gateway, { method: "skills.status", params: { agentId: "reader" } });
+    },
+  );
+  it.each(["install calendar", "update calendar", "verify calendar"])(
+    "still requires a workspace owner for %s from a neutral cwd",
+    async (argv) => {
+      mocks.config.mockReturnValue(systemAgentConfig);
+      mocks.defaultAgent.mockImplementation((_config, context) =>
+        resolveDefaultAgentId(systemAgentConfig, context),
+      );
+      await expectFailure(argv);
+      expect([...errors, ...stdout].join("\n")).toContain("Pass --agent <id>.");
+      expectUnused(mocks.install, mocks.update, mocks.target, mocks.verify);
+    },
+  );
   it("uses Gateway skills.status for a canonical --agent instead of local status", async () => {
     mocks.explicitAgent.mockImplementation((_config, agent) =>
       resolveConfiguredAgentId({ agents: { entries: { main: {}, writer: {} } } }, agent),

@@ -1,10 +1,10 @@
-import { createMemo, createUniqueId, Errored, Loading } from "solid-js";
+import { createMemo, createUniqueId, Errored, Loading, Show } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
 import { iconButtonClass, ROW_GLYPH_STROKE } from "../../components/solid/icon-button.tsx";
 import { Icon, sessionIcon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
-import { SettingsToggle } from "../../components/solid/settings-ui.tsx";
+import { Switch } from "../../components/solid/switch.tsx";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -38,6 +38,24 @@ export function NoticeBanner(props: { notice: string | null }) {
         </div>
       ) : undefined}
     </>
+  );
+}
+/** Without a sidebar listing the automations, the page's own list is the way back. */
+export function BackRow(props: Pick<CronProps, "listsJobs" | "busy" | "onClosePanel">) {
+  return (
+    <Show when={props.listsJobs}>
+      <div class="cron-back-row">
+        <button
+          type="button"
+          class="cron-back"
+          data-test-id="cron-back"
+          disabled={props.busy}
+          onClick={() => props.onClosePanel()}
+        >
+          <Icon name="arrowLeft" /> {t("cron.detail.back")}
+        </button>
+      </div>
+    </Show>
   );
 }
 export function AdminRequired(props: CronProps) {
@@ -125,7 +143,7 @@ export function EnabledSwitch(
       data-test-id={props.compact ? `cron-row-toggle-${props.job.id}` : "cron-toggle-enabled"}
       title={props.compact ? actionLabel() : undefined}
     >
-      <SettingsToggle
+      <Switch
         checked={props.job.enabled}
         saving={props.toggleSavingJobId === props.job.id}
         disabled={

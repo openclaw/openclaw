@@ -12,6 +12,7 @@ import {
 } from "../state/agent-database-admission-error.js";
 import * as admission from "../state/agent-database-admission.js";
 import { StateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
+import * as workerConnection from "./worker-connection.js";
 import { ComposedGatewayHarness } from "./worker-fault-injection.test-support.js";
 import { runWorkerDescriptor } from "./worker.runtime.js";
 
@@ -89,6 +90,17 @@ it.each(["storage", "malformed schema receipt"])(
 );
 
 it("replays transient transcript failures and completes the run without duplicate messages", async () => {
+  // Exercise each replayable failure in one turn within the admission budget.
+  const createConnection = workerConnection.createWorkerConnection;
+  const connection = vi
+    .spyOn(workerConnection, "createWorkerConnection")
+    .mockImplementation((options) =>
+      createConnection({
+        ...options,
+        reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
+      }),
+    );
+  onTestFinished(() => connection.mockRestore());
   await withWorker(async (harness, start) => {
     const pendingInspection = { agentId: "main", paths: [], reason: "pending", pending: true };
     const storePath = harness.sessionTarget.storePath;
