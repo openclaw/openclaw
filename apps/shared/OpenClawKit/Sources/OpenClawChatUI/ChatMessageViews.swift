@@ -495,6 +495,7 @@ struct ChatMessageBubble: View, @MainActor Equatable {
     #if os(iOS)
     /// Not compared: only user bubbles carry it, and the iOS render gate never holds those.
     var userBubbleAccessories: ChatUserBubbleAccessories?
+    @Environment(\.chatInlineVideos) private var inlineVideos
     #endif
 
     var canUseIOSRenderGate: Bool {
@@ -936,9 +937,11 @@ extension ChatMessageBubble {
     }
 
     fileprivate var userAttachmentsToTextSpacing: CGFloat {
-        let last = self.visibleInlineAttachments.contains { !AttachmentRow.rendersImage($0) }
-            ? ChatUIConstants.userBlockSpacing
-            : ChatUIConstants.userMediaToTextSpacing
+        let others = self.visibleInlineAttachments.filter { !AttachmentRow.rendersImage($0) }
+        let lastIsCard = others.indices.last.map { index in
+            ChatInlineVideoSource(others[index], local: self.sentVideo(in: others, at: index)) == nil
+        } ?? false
+        let last = lastIsCard ? ChatUIConstants.userBlockSpacing : ChatUIConstants.userMediaToTextSpacing
         return last - ChatUIConstants.userFooterSpacing
     }
 
@@ -973,8 +976,11 @@ extension ChatMessageBubble {
                 self.userImageTiles(images)
             }
             ForEach(others.indices, id: \.self) { index in
-                self.userAttachmentRow(others[index])
-                    .frame(maxWidth: self.column.bubbleAndMediaMaxWidth, alignment: .trailing)
+                let att = others[index]
+                let local = self.sentVideo(in: others, at: index)
+                let isVideo = ChatInlineVideoSource(att, local: local) != nil
+                self.userAttachmentRow(att, localVideo: local)
+                    .frame(maxWidth: isVideo ? nil : self.column.bubbleAndMediaMaxWidth, alignment: .trailing)
             }
             if self.omittedImageAttachmentCount > 0 {
                 Text(ChatUIConstants.imagesNotShown(self.omittedImageAttachmentCount))
@@ -982,6 +988,13 @@ extension ChatMessageBubble {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func sentVideo(in attachments: [OpenClawChatMessageContent], at index: Int) -> OpenClawPendingAttachment? {
+        guard attachments[index].mediaKind == .video else { return nil }
+        return self.inlineVideos?.attachment(
+            messageKey: self.message.idempotencyKey,
+            index: attachments[..<index].filter { $0.mediaKind == .video }.count)
     }
 
     /// Three tiles to a row, two for two or four images; the last row keeps to the trailing edge.
@@ -1004,7 +1017,10 @@ extension ChatMessageBubble {
         }
     }
 
-    private func userAttachmentRow(_ att: OpenClawChatMessageContent, tileSide: CGFloat? = nil) -> some View {
+    private func userAttachmentRow(
+        _ att: OpenClawChatMessageContent, tileSide: CGFloat? = nil, localVideo: OpenClawPendingAttachment? = nil)
+        -> some View
+    {
         AttachmentRow(
             att: att,
             imageGallery: ChatImageViewerItem.gallery(in: self.visibleInlineAttachments, sentPhotos: true),
@@ -1012,7 +1028,8 @@ extension ChatMessageBubble {
             textColor: self.textColor,
             playbackAllowed: self.mediaPlaybackAllowed,
             imageTileSide: tileSide,
-            messageAttachments: self.visibleInlineAttachments)
+            messageAttachments: self.visibleInlineAttachments,
+            localVideo: localVideo)
     }
 }
 #endif
@@ -1033,6 +1050,9 @@ private struct AttachmentRow: View {
     var imageTileSide: CGFloat?
     /// A user message's attachments, so the viewer can load any of its sent photos, not only this one.
     var messageAttachments: [OpenClawChatMessageContent] = []
+    #if os(iOS)
+    var localVideo: OpenClawPendingAttachment?
+    #endif
 
     /// Whether a user's attachment draws as an image (a managed artifact, or a sent photo) rather
     /// than a card.
@@ -1045,7 +1065,23 @@ private struct AttachmentRow: View {
 
     var body: some View {
         #if os(iOS)
-        if self.isUser, let image = ChatUserImageSource(self.att) {
+        if self.att.mediaKind == .video {
+            if let video = ChatInlineVideoSource(att, local: localVideo) {
+                ChatInlineVideo(
+                    source: video,
+                    title: self.attachmentLabel,
+                    maxWidth: self.column.bubbleAndMediaMaxWidth,
+                    resolverReady: video.local != nil || self.gateway?.isResolverReady() == true,
+                    playbackAllowed: self.playbackAllowed,
+                    load: {
+                        guard let id = video.artifactID else { return nil }
+                        return try await self.loadMedia(id, .video, self.att.playback ?? .transcode)
+                    }, fallback: { self.videoFileCard })
+                    .id(video.local?.id.uuidString ?? video.artifactID)
+            } else {
+                self.videoFileCard
+            }
+        } else if self.isUser, let image = ChatUserImageSource(att) {
             ChatMediaImageAttachment(
                 artifactId: image.loadID,
                 // A sent photo's name is the picker's ("photo-1A2B.jpg"), not something to read aloud.
@@ -1079,6 +1115,21 @@ private struct AttachmentRow: View {
         self.gatewayMedia
         #endif
     }
+
+    #if os(iOS)
+    @ViewBuilder private var videoFileCard: some View {
+        if let id = Self.fetchableArtifactId(att) {
+            ChatFileAttachment(
+                artifactId: id,
+                label: self.attachmentLabel,
+                fileName: self.att.fileName ?? self.attachmentLabel,
+                resolverReady: self.gateway?.isResolverReady() == true,
+                load: { try await self.loadMedia($0, .file, nil) })
+        } else {
+            self.fallbackRow
+        }
+    }
+    #endif
 
     @ViewBuilder
     private var gatewayMedia: some View {
@@ -1114,6 +1165,9 @@ private struct AttachmentRow: View {
                     playbackAllowed: self.playbackAllowed,
                     load: { try await self.loadMedia($0, .audio, self.att.playback ?? .transcode) })
             case .video:
+                #if os(iOS)
+                self.videoFileCard
+                #else
                 ChatMediaVideoAttachment(
                     artifactId: artifactId,
                     label: self.attachmentLabel,
@@ -1122,6 +1176,7 @@ private struct AttachmentRow: View {
                     resolverReady: resolverReady,
                     playbackAllowed: self.playbackAllowed,
                     load: { try await self.loadMedia($0, .video, self.att.playback ?? .transcode) })
+                #endif
             }
         } else {
             self.fallbackRow

@@ -510,6 +510,9 @@ extension OpenClawChatViewModel {
                 fileName: attachment.fileName,
                 content: attachment.data.base64EncodedString())
         }
+        #if os(iOS)
+        inlineVideos.remember(draft.attachments, messageKey: Self.outboxUserIdempotencyKey(runId))
+        #endif
         let userContent = Self.userContent(
             messageText: draft.outgoingMessageText,
             attachments: draft.attachments,

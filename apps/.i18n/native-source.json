@@ -495,6 +495,8 @@
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/NodesDevicesSettingsScreen.kt","kind":"ui-call","surface":"android","id":"native.android.36df0d0feca68186","source":"Verify this requesting device before granting access."},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/NodesDevicesSettingsScreen.kt","kind":"ui-call","surface":"android","id":"native.android.bb5ec97eefdd1439","source":"now"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/NodesDevicesSettingsScreen.kt","kind":"ui-call","surface":"android","id":"native.android.0e99e0054a0b7788","source":"requested ${relativeDeviceTime(it)}"},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatInlineVideo.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.ff8a624b35b28e5e","source":"Pause Talk mode before playing this attachment."},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatInlineVideo.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.266c9a15dcdaa667","source":"Play video"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ProviderAuthController.kt","kind":"ui-call","surface":"android","id":"native.android.772681663305ba62","source":"API key saved"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ProviderAuthController.kt","kind":"ui-call","surface":"android","id":"native.android.d7936177bbc4f0bb","source":"API key saved. Tap Refresh to apply it."},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ProviderAuthController.kt","kind":"ui-call","surface":"android","id":"native.android.eca9dec623c2827d","source":"Could not cancel sign-in. Check the connection and try again."},

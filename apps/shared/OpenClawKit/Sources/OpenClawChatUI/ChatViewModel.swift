@@ -10,13 +10,13 @@ let chatUILogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatUI")
 @MainActor
 @Observable
 public final class OpenClawChatViewModel {
-    static let maxAttachmentBytes = 5_000_000
-    static let sessionListFetchLimit = 200
-
     public internal(set) var messages: [OpenClawChatMessage] = [] {
         didSet { self.sourcePreviewState.update(self.messages) }
     }
 
+    #if os(iOS)
+    let inlineVideos = ChatInlineVideos()
+    #endif
     let sourcePreviewState = ChatSourcePreviewState()
     var reactionState = ChatMessageReactionState()
 
