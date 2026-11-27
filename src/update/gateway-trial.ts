@@ -259,14 +259,14 @@ export async function settleRunFromTrial(
             reason: `${outcome.reason ?? "The new version did not start"}; v${VERSION} is still running`,
           },
     );
+    if (outcome.status === "succeeded") {
+      schedulePostUpdateMaintenance(trial);
+    }
     if (finished.steps.some((step) => step.step === "notice:ack" && step.status === "completed")) {
       const { createUpdateRunNotifier } = await import("../gateway/update-run-notice.runtime.js");
       await (
         await createUpdateRunNotifier(finished)
       )(finished, "finished");
-    }
-    if (outcome.status === "succeeded") {
-      schedulePostUpdateMaintenance(trial);
     }
     return;
   }

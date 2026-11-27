@@ -13,7 +13,7 @@ import type * as DoctorContributions from "../flows/doctor-health-contributions.
 import { logGatewayReady } from "../gateway/server-startup-readiness.js";
 import { createPreparedReadinessFixture } from "../gateway/server/readiness.test-support.js";
 import { registerGatewayInstallationReplacementHandler } from "../gateway/stale-install.js";
-import type * as UpdateNotices from "../gateway/update-run-notice.runtime.js";
+import * as UpdateNotices from "../gateway/update-run-notice.runtime.js";
 import * as watcherModule from "../gateway/update-run-watcher.js";
 import * as rootModule from "../infra/openclaw-root.js";
 import { PACKAGE_RELEASE_MIN_AGE_MS } from "../infra/package-release-retention.js";
@@ -363,6 +363,39 @@ it.each(["pending", "trial", "restoring"] as const)(
     expect(await readTrial()).toMatchObject({ runId: run.runId, phase });
   },
 );
+
+it("keeps post-update maintenance when result notice preparation fails", async () => {
+  const state = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trial-notice-"));
+  directories.push(state);
+  vi.stubEnv("OPENCLAW_STATE_DIR", state);
+  openOpenClawStateDatabase({ env: process.env });
+  const run = await createUpdateRunAsync({ trigger: "control-ui" });
+  await recordUpdateRunStepAsync(run.runId, { step: "notice:ack", status: "completed" });
+  vi.spyOn(UpdateNotices, "createUpdateRunNotifier").mockRejectedValueOnce(
+    new Error("notice preparation failed"),
+  );
+  await expect(
+    settleRunFromTrial({
+      v: 2,
+      runId: run.runId,
+      phase: "committed",
+      target: "releases/new/openclaw",
+      previous: "releases/old/openclaw",
+      version: VERSION,
+      attempts: 1,
+      createdAt: Date.now(),
+      outcome: { status: "succeeded", at: Date.now() },
+    }),
+  ).rejects.toThrow("notice preparation failed");
+  await Promise.all(backgroundWork);
+  expect(await getUpdateRunAsync(run.runId)).toMatchObject({
+    status: "succeeded",
+    steps: expect.arrayContaining([
+      expect.objectContaining({ step: "plugins", status: "completed" }),
+      expect.objectContaining({ step: "post-activation doctor inspections", status: "completed" }),
+    ]),
+  });
+});
 
 it.each([true, false])(
   "sends the outcome to a requester that received the start notice (acknowledged=%s)",
