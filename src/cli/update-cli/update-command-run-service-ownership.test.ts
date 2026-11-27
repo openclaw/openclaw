@@ -46,10 +46,7 @@ import {
   resolveUpdateCommandAdmissionEnv,
   resolveUpdateCommandAdmissionRoot,
 } from "./update-command-run.js";
-import {
-  getNodeRuntimeFixture,
-  stubNodeRuntime,
-} from "./update-command-runtime-recovery.test-support.js";
+import { getNodeRuntimeFixture } from "./update-command-runtime-recovery.test-support.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 import { collectServiceInspectionFailureFacts } from "./update-command-service-plan.js";
 import * as servicePlan from "./update-command-service-plan.js";
@@ -161,7 +158,17 @@ it.each([
         `[Service]\nExecStart=${serviceNode} ${root}/dist/entry.js gateway\n`,
       );
     }
-    const snapshot = () => snapshotUpdateFixtureTree(home);
+    // POSIX cold recovery reads create and remove their schema-custody directory.
+    // Only its parent's mtime is incidental; keep every identity and file byte.
+    const snapshot = () =>
+      snapshotUpdateFixtureTree(home).map((entry) =>
+        pending && process.platform !== "win32" && entry[0] === path.relative(home, serviceState)
+          ? entry.with(2, 0)
+          : entry,
+      );
+    if (pending) {
+      expect(fs.existsSync(path.join(serviceState, "tmp"))).toBe(false);
+    }
     const before = snapshot();
     const nativeFailure = new Error("inspection-secret-canary");
     const rootFailure = new Error("installation classification failed");
@@ -365,7 +372,8 @@ it.each([
 ] as const)(
   "preserves service admission authority ($platform, $outcome)",
   async ({ platform, outcome }) => {
-    stubNodeRuntime();
+    // Keep the host runtime intact so its SQLite transport matches its workers.
+    const serviceNode = getNodeRuntimeFixture().execPath;
     // Platform simulation cannot host native reconciliation workers.
     vi.spyOn(updateRunLedger, "reconcileAbandonedUpdateRunsAsync").mockResolvedValue([]);
     const { home, callerState, serviceState, serviceOverrides } = admissionHome(
@@ -402,7 +410,7 @@ it.each([
               },
             },
       readCommand: async () => ({
-        programArguments: [process.execPath, path.join(serviceRoot, "dist", "index.js"), "gateway"],
+        programArguments: [serviceNode, path.join(serviceRoot, "dist", "index.js"), "gateway"],
         environment: {
           ...serviceOverrides,
           ...(outcome === "conflict"
