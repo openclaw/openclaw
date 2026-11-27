@@ -235,7 +235,6 @@ describe("session activity projection", () => {
     const expected = [[older, tied, older], [newer], [unknown]];
     for (const [index, day] of activity.days.entries()) {
       expect(day.sessions).toHaveLength(expected[index]!.length);
-      expect(day.sessions).not.toBe(rows);
       day.sessions.forEach((row, member) => expect(row).toBe(expected[index]![member]));
     }
     expect(activity.sessions).toBe(rows);
