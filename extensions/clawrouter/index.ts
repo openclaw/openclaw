@@ -588,7 +588,7 @@ export default defineSingleProviderPluginEntry({
         ].join("\n"),
       },
       catalog: {
-        order: "simple",
+        order: "profile",
         run: discoverClawRouterProviderCatalog,
       },
       // This is protocol support, not a key grant. The decision executor checks the
