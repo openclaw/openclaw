@@ -231,14 +231,15 @@ it("prepares granted Luna chat and Decisions without leaking grants across crede
         }),
       ).rejects.toMatchObject(unsupported);
       expect(fetched).toEqual([]);
-      for (const { key, route } of [
+      const selections = [
         { key: "synthetic-granted" },
         { key: "synthetic-decisions-only" },
         { key: "synthetic-incompatible" },
         { key: "synthetic-granted", route: { baseUrl: "https://other.fixture.invalid/v1" } },
         { key: "synthetic-granted", route: { api: "openai-completions" as const } },
         { key: "synthetic-granted", route: { baseUrl: "https://clawrouter.openclaw.ai" } },
-      ]) {
+      ];
+      for (const { key, route } of selections) {
         const config: OpenClawConfig = route
           ? {
               ...cfg,
@@ -358,14 +359,7 @@ it("prepares granted Luna chat and Decisions without leaking grants across crede
       ]);
       expect(await readFile(state.configPath, "utf8")).toBe(settingsBefore);
       // Each acquisition refreshes its selected credential, including warm chat rows.
-      expect(fetched).toEqual([
-        "Bearer synthetic-granted",
-        "Bearer synthetic-decisions-only",
-        "Bearer synthetic-incompatible",
-        "Bearer synthetic-granted",
-        "Bearer synthetic-granted",
-        "Bearer synthetic-granted",
-      ]);
+      expect(fetched).toEqual(selections.map(({ key }) => `Bearer ${key}`));
     },
   );
 });

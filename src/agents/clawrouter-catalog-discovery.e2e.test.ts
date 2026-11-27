@@ -46,7 +46,6 @@ describe("ClawRouter cold prepared catalog", () => {
     await state.cleanup();
   });
 
-  // Publishes the real ClawRouter catalog through the prepared catalog worker.
   async function publishCatalog(params: {
     sibling?: boolean;
     refreshedAuth?: boolean;
@@ -64,23 +63,27 @@ describe("ClawRouter cold prepared catalog", () => {
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
       },
     });
-    const requests: Array<
-      | "capability closed"
-      | { url: string | undefined; authorized: boolean; client: string | string[] | undefined }
-    > = [];
+    let withheldResponseClosed = false;
+    const requests: Array<{
+      route: string;
+      authorized: boolean;
+      client: string | string[] | undefined;
+    }> = [];
     server = await reserveTestPortListener({
       offsets: [0],
       createListener: () =>
         createServer((request, response) => {
           const client = request.headers["x-clawrouter-client"];
           requests.push({
-            url: request.url,
+            route: `${request.method} ${request.url}`,
             authorized: request.headers.authorization === "Bearer catalog-test-key",
             client,
           });
           if (params.expireCapability && client === "openclaw") {
             // Let the real client deadline close the pending response.
-            response.once("close", () => requests.push("capability closed"));
+            response.once("close", () => {
+              withheldResponseClosed = true;
+            });
             return;
           }
           response.setHeader("content-type", "application/json");
@@ -194,11 +197,14 @@ describe("ClawRouter cold prepared catalog", () => {
     if (result.status !== "ok" || result.kind !== "catalog") {
       throw new Error("catalog worker did not publish a catalog");
     }
-    const expected = { url: "/private/v1/catalog", authorized: true };
+    const expected = { route: "GET /private/v1/catalog", authorized: true };
     expect(requests).toEqual([
       { ...expected, client: "openclaw" },
-      ...(params.expireCapability ? ["capability closed", { ...expected, client: undefined }] : []),
+      ...(params.expireCapability ? [{ ...expected, client: undefined }] : []),
     ]);
+    if (params.expireCapability) {
+      await expect.poll(() => withheldResponseClosed).toBe(true);
+    }
     return { agentId, baseUrl, config, pluginMetadataSnapshot, result };
   }
 
