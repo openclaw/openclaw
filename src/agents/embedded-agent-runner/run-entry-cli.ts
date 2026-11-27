@@ -18,6 +18,7 @@ import { createAgentRunSupersededAbortError } from "../run-termination.js";
 import { withLocalSessionPlacementTurnSettlement } from "../session-placement-admission.js";
 import type { LocalTurnPlacementClaim } from "../session-placement-admission.types.js";
 import { deriveSessionTotalTokens } from "../usage.js";
+import { publishSessionContext } from "./run/attempt-context-accounting.js";
 import type { CompactionAccountingFact } from "./run/internal-params.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
@@ -43,6 +44,7 @@ export function withAdmittedCliCandidate(
     sessionEntry: SessionEntry | undefined;
     cliSessionBinding: ReturnType<typeof getCliSessionBinding>;
     assertSettlementCurrent: SessionSourceAssertion;
+    publishContext?: (tokens: number) => Promise<void>;
     settleResult: (settlement: CliCandidateSettlement) => Promise<EmbeddedAgentRunResult>;
     persistStoppedFirstSession: (
       settlement: Omit<CliCandidateSettlement, "result" | "preserveBinding"> & {
@@ -76,6 +78,22 @@ export function withAdmittedCliCandidate(
       let contextEntry = sessionEntry ? { ...sessionEntry } : undefined;
       const runResult = await run({
         sessionEntry: contextEntry,
+        publishContext:
+          target && contextEntry
+            ? async (tokens) => {
+                if (!contextEntry) return;
+                await publishSessionContext(
+                  target,
+                  {
+                    sessionId: contextEntry.sessionId,
+                    lifecycleRevision: contextEntry.lifecycleRevision,
+                    activeWriterRunId: contextEntry.activeWriterRunId,
+                  },
+                  assertSettlementCurrent,
+                  tokens,
+                );
+              }
+            : undefined,
         cliSessionBinding: getCliSessionBinding(sessionEntry, params.provider),
         assertSettlementCurrent,
         settleResult: async ({ result, expectedSession, sessionStore, preserveBinding }) => {

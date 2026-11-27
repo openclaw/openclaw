@@ -30,6 +30,7 @@ import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "../embedded-agent-runner/run
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { classifyFailoverReason } from "../failover/classify.js";
 import { CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE } from "../failover/error.js";
+import { createCliContextPublisher } from "./context-usage.js";
 import type { CliEventHandlers } from "./execute-events.js";
 import { createCliAbortError, executeNodeClaudeRun } from "./execute-node-claude.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
@@ -185,6 +186,14 @@ export async function executeCliProcess(params: {
     params.assertCurrent();
   }
 
+  await using contextPublisher =
+    hasJsonlOutput &&
+    runParams.publishContext &&
+    !runParams.sessionManager &&
+    !runParams.isolatedCompletion &&
+    runParams.executionMode !== "side-question"
+      ? createCliContextPublisher(runParams.publishContext)
+      : undefined;
   const streamingParser = hasJsonlOutput
     ? createCliJsonlStreamingParser({
         backend: params.backend,
@@ -209,6 +218,7 @@ export async function executeCliProcess(params: {
         onNativeTools: context.preparedBackend.mcpClientGrantCapture?.captureNativeTools,
         onAssistantMessage: params.diagnostics?.observeAssistantMessage,
         onUsage: params.diagnostics?.observeUsage,
+        onContextTokens: contextPublisher?.observe,
         onAttributedSubagentProgress: (parentToolUseId) => {
           if (!params.events.isActiveForegroundAgentTool(parentToolUseId)) {
             return;

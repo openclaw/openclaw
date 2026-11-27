@@ -1,4 +1,6 @@
+import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import { applySessionEntryOperation } from "../../../config/sessions/session-accessor.sqlite-entry.js";
+import type { SessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import { sessionEntryCommitGuardOptions } from "../../../config/sessions/session-source-authority.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../../config/sessions/types.js";
 import { log } from "../logger.js";
@@ -18,16 +20,30 @@ export async function publishEmbeddedRequestContext(
     return;
   }
   const { target, assertCurrent } = prepared;
+  await publishSessionContext(
+    target,
+    {
+      sessionId: target.sessionId,
+      lifecycleRevision: target.expectedLifecycleRevision,
+      activeWriterRunId: target.expectedWriterRunId ?? attempt.runId,
+    },
+    assertCurrent,
+    contextTokens,
+  );
+}
+
+export async function publishSessionContext(
+  target: SessionTranscriptRuntimeTarget,
+  expected: { sessionId: string; lifecycleRevision?: string; activeWriterRunId?: string },
+  assertCurrent: SessionSourceAssertion,
+  contextTokens: number,
+): Promise<void> {
   try {
     await applySessionEntryOperation(
       target,
       {
         kind: "fields",
-        expected: {
-          sessionId: target.sessionId,
-          lifecycleRevision: target.expectedLifecycleRevision,
-          activeWriterRunId: target.expectedWriterRunId ?? attempt.runId,
-        },
+        expected,
         patch: {
           totalTokens: contextTokens,
           totalTokensFresh: true,

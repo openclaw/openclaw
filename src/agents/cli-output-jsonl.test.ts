@@ -292,9 +292,10 @@ describe("parseCliJsonl", () => {
       "claude-cli",
     );
 
+    // The parent message_delta refines the earlier 5-token assistant snapshot.
     expect(output.usage).toEqual({
       input: 4418,
-      output: 5,
+      output: 534,
       cacheRead: undefined,
       cacheWrite: 36955,
       cacheWrite1h: 36955,

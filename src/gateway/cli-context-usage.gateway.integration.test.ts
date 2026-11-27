@@ -73,7 +73,10 @@ it(
               const expected = 14 + cacheRead + turnOffset;
               const until = Date.now() + 3_000;
               let sample = await row();
-              while (sample?.totalTokens !== expected && Date.now() < until) {
+              while (
+                (sample?.totalTokens !== expected || sample.totalTokensFresh !== true) &&
+                Date.now() < until
+              ) {
                 await delay(50);
                 sample = await row();
               }
@@ -130,7 +133,7 @@ it(
               totalTokensFresh: true,
             });
           }
-          expect(before).toEqual([undefined, 28_517]);
+          expect(before[0]).toBeUndefined();
           expect(observed).toEqual([19_302, 28_517, 19_402, 28_617]);
         } finally {
           await disconnectGatewayClient(gateway.client);

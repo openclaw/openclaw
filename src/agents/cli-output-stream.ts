@@ -47,6 +47,7 @@ import {
   streamJsonOutputLimitErrorText,
 } from "./cli-output-stream-limits.js";
 import { resolveCliStreamOutput } from "./cli-output-stream-output.js";
+import { deriveSessionTotalTokens } from "./usage.js";
 export { CLI_STREAM_JSON_MISSING_RESULT_ERROR } from "./cli-output-stream-output.js";
 const CLAUDE_SYNTHETIC_NO_RESPONSE_ERROR = "Claude CLI returned a synthetic no-response result.";
 
@@ -73,6 +74,9 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   let resumeCheckpointId: string | undefined;
   let usage: CliUsage | undefined;
   let diagnosticUsage: CliUsage | undefined;
+  let parentStreamId: string | undefined;
+  let refinedParentId: string | undefined;
+  let measuredParentId: string | undefined;
   let output: CliOutput | null = null;
   let parseErrorText = "";
   let rawChars = 0;
@@ -351,9 +355,49 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     if (nextUsage) {
       params.onUsage?.(nextUsage, isClaudeTerminalResult);
     }
-    const shouldUseUsage =
-      !supportsCliJsonlToolEvents(params) || parsed.type !== "result" || !usage;
-    if (shouldUseUsage) {
+    if (claudeStreamJson && !isClaudeSubagentRecord(parsed)) {
+      const evt =
+        parsed.type === "stream_event" && isRecord(parsed.event) ? parsed.event : undefined;
+      const message =
+        parsed.type === "assistant"
+          ? parsed.message
+          : evt?.type === "message_start"
+            ? evt.message
+            : undefined;
+      const id = isRecord(message) && typeof message.id === "string" ? message.id : undefined;
+      if (evt?.type === "message_start") {
+        parentStreamId = id;
+        refinedParentId = undefined;
+      }
+      const delta = evt?.type === "message_delta" && parentStreamId !== undefined;
+      const measured = delta
+        ? readCliUsage({ usage: evt.usage })
+        : isRecord(message) && message.model !== "<synthetic>" && (!id || id !== refinedParentId)
+          ? readCliUsage({ usage: message.usage })
+          : undefined;
+      const tokens = deriveSessionTotalTokens({ lastCallUsage: measured });
+      if (measured && tokens !== undefined) {
+        // A completed-call delta may omit the cache TTL split from this call's snapshot.
+        if (
+          delta &&
+          parentStreamId === measuredParentId &&
+          measured.cacheWrite1h === undefined &&
+          usage?.cacheWrite === measured.cacheWrite
+        ) {
+          measured.cacheWrite1h = usage?.cacheWrite1h;
+        }
+        usage = measured;
+        measuredParentId = delta ? parentStreamId : id;
+        if (delta) refinedParentId = parentStreamId;
+        params.onContextTokens?.(tokens);
+      } else if (isClaudeTerminalResult && !usage && parsed.openclaw_interim_result !== true) {
+        usage = nextUsage;
+      }
+      if (evt?.type === "message_stop") parentStreamId = undefined;
+    } else if (
+      !claudeStreamJson &&
+      (!supportsCliJsonlToolEvents(params) || parsed.type !== "result" || !usage)
+    ) {
       usage = nextUsage ?? usage;
     }
     if (

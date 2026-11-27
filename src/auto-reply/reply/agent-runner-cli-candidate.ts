@@ -218,6 +218,7 @@ export async function runCliFallbackCandidate(
       },
       async ({
         sessionEntry: initialSessionEntry,
+        publishContext,
         cliSessionBinding,
         assertSettlementCurrent,
         settleResult,
@@ -441,6 +442,7 @@ export async function runCliFallbackCandidate(
             ...buildFallbackCandidateTurnParams(params),
             ...buildReplyRunStateParams(turn.followupRun.run),
             diagnosticOwner,
+            publishContext,
             sessionId: turn.followupRun.run.sessionId,
             sessionKey,
             sessionTarget,

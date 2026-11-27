@@ -11,7 +11,7 @@ OpenClaw can run agent turns through a local AI CLI, such as Claude Code or Gemi
 
 - A backend with `bundleMcp: true` receives Gateway tools through a loopback MCP bridge. OpenClaw does not inject tool calls into the CLI protocol directly.
 - JSONL streaming for CLIs that support it.
-- Sessions are supported, so follow-up turns stay coherent.
+- Sessions are supported, so follow-up turns stay coherent. During a Claude CLI session turn, the context meter updates when the parent model call reports usage. It does not count a subagent’s context or use the whole turn’s billing total. Backends that report usage only at the end do not show a new measurement mid-turn.
 - Images pass through if the CLI accepts image paths.
 
 With Claude CLI, a successful `sessions_yield` closes the current subprocess after

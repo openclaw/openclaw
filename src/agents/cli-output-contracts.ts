@@ -156,6 +156,7 @@ export type CliJsonlStreamingParserOptions = {
   onNativeTools?: (tools: unknown) => void;
   onAssistantMessage?: (message: unknown) => void;
   onUsage?: (usage: CliUsage, terminal: boolean) => void;
+  onContextTokens?: (tokens: number) => void;
   /** Semantic subagent work for an active parent Agent call. Not a parent-lane event. */
   onAttributedSubagentProgress?: (parentToolUseId: string) => void;
 };
