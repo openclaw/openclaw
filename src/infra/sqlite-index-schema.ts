@@ -112,23 +112,21 @@ export function* verifyAndRepairCanonicalSqliteIndexSteps(
 }
 
 /**
- * Canonical named indexes whose present definition differs from the committed schema, on
- * tables that exist. Throws for an unexpected unique index (and, with `nonUniqueOnly`, for
- * a unique index that differs), as repair refuses those.
+ * The canonical named indexes whose stored definition is missing or drifted on an
+ * existing table. Read-only: it inspects the catalog through `readTable` and never
+ * changes the database. `repairCanonicalSqliteIndexes` rebuilds exactly this set.
  */
-function collectCanonicalSqliteIndexRepairs(
-  databaseLabel: string,
+export function findCanonicalSqliteIndexDrift(
   schemaSql: SqliteSchemaSource,
+  databaseLabel: string,
   readTable: SqliteTableContractReader,
-  options: Pick<RepairCanonicalSqliteIndexesOptions, "nonUniqueOnly">,
 ): CanonicalSqliteNamedIndexContract[] {
   if (hasCanonicalSqliteSchemaFingerprint(schemaSql, readTable)) {
     return [];
   }
-  const repairIndexes: CanonicalSqliteNamedIndexContract[] = [];
-  const indexes = getCanonicalSqliteNamedIndexContracts(schemaSql);
+  const drifted: CanonicalSqliteNamedIndexContract[] = [];
   const indexesByTable = new Map<string, CanonicalSqliteNamedIndexContract[]>();
-  for (const index of indexes) {
+  for (const index of getCanonicalSqliteNamedIndexContracts(schemaSql)) {
     assertSqliteIdentifier(index.name);
     assertSqliteIdentifier(index.tableName);
     const tableIndexes = indexesByTable.get(index.tableName) ?? [];
@@ -159,44 +157,11 @@ function collectCanonicalSqliteIndexRepairs(
     for (const index of tableIndexes) {
       const actual = actualIndexes.find((candidate) => candidate.name === index.name);
       if (JSON.stringify(actual) !== JSON.stringify(index.fingerprint)) {
-        if (options.nonUniqueOnly && (index.unique || actual?.unique === 1)) {
-          throw new SqliteSchemaMismatchError(
-            `Canonical unique index ${index.name} requires full admission`,
-          );
-        }
-        repairIndexes.push(index);
+        drifted.push(index);
       }
     }
   }
-  return repairIndexes;
-}
-
-/**
- * Read-only: whether {@link repairCanonicalSqliteIndexes} would rebuild an index or refuse
- * an unexpected unique one. It does not run the repair's optional integrity gate.
- */
-export function hasCanonicalSqliteIndexRepairs(
-  db: DatabaseSync,
-  databaseLabel: string,
-  schemaSql: SqliteSchemaSource,
-): boolean {
-  return runSqliteSchemaReadSnapshotSync(db, () => {
-    try {
-      return (
-        collectCanonicalSqliteIndexRepairs(
-          databaseLabel,
-          schemaSql,
-          createSqliteTableContractReader(db),
-          {},
-        ).length > 0
-      );
-    } catch (error) {
-      if (isSqliteSchemaMismatchError(error)) {
-        return true;
-      }
-      throw error;
-    }
-  });
+  return drifted;
 }
 
 /**
@@ -214,12 +179,15 @@ export function repairCanonicalSqliteIndexes(
   // One read snapshot also avoids a network lock round trip per metadata query.
   runSqliteSchemaReadSnapshotSync(db, () => {
     const readTable = createSqliteTableContractReader(db);
-    for (const index of collectCanonicalSqliteIndexRepairs(
-      databaseLabel,
-      schemaSql,
-      readTable,
-      options,
-    )) {
+    for (const index of findCanonicalSqliteIndexDrift(schemaSql, databaseLabel, readTable)) {
+      const actual = readTable(index.tableName)?.indexes.find(
+        (candidate) => candidate.name === index.name,
+      );
+      if (options.nonUniqueOnly && (index.unique || actual?.unique === 1)) {
+        throw new SqliteSchemaMismatchError(
+          `Canonical unique index ${index.name} requires full admission`,
+        );
+      }
       repairIndexes.add(index);
     }
 

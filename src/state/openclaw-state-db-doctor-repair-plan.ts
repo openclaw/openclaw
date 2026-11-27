@@ -5,10 +5,11 @@ import type { DoctorMaintenancePending } from "../commands/doctor-maintenance-pe
 import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
 import { hasClientCredentialStoreRecoveryWork } from "../infra/client-credential-recovery-plan.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { hasCanonicalSqliteIndexRepairs } from "../infra/sqlite-index-schema.js";
+import { findCanonicalSqliteIndexDrift } from "../infra/sqlite-index-schema.js";
 import {
   assertSqliteSchemaTablesPresent,
   collectSqliteSchemaIssues,
+  createSqliteTableContractReader,
   getCanonicalSqliteTableNames,
 } from "../infra/sqlite-schema-contract.js";
 import { readMainTableList } from "../infra/sqlite-strict.js";
@@ -207,11 +208,21 @@ const STATE_SCHEMA_REPAIR_CONDITIONS: ReadonlyArray<{
       );
     },
   },
-  // repairCanonicalSqliteIndexes.
+  // repairCanonicalSqliteIndexes rebuilds this drift set, and refuses an unexpected unique index.
   {
     id: "canonical-indexes",
-    work: ({ db, pathname }) =>
-      hasCanonicalSqliteIndexRepairs(db, pathname, OPENCLAW_STATE_SCHEMA_SQL),
+    work: ({ db, pathname }) => {
+      let drifted = false;
+      const refused = refuses(() => {
+        drifted =
+          findCanonicalSqliteIndexDrift(
+            OPENCLAW_STATE_SCHEMA_SQL,
+            pathname,
+            createSqliteTableContractReader(db),
+          ).length > 0;
+      });
+      return refused || drifted;
+    },
   },
   // assertCurrentStateRuntimeSchema before commit.
   {

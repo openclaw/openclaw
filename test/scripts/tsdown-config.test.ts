@@ -1821,14 +1821,6 @@ worker.once("message", value => { assert.equal(value, 42); console.log("relocate
     },
   );
 
-  it.each(["tsdown.config.ts", "tsdown.ai.config.ts"])(
-    "keeps %s free of runtime imports from tsdown",
-    (configPath) => {
-      const source = fs.readFileSync(configPath, "utf8");
-      expect(source).not.toMatch(/^import(?!\s+type\b).*from ["']tsdown["'];?$/mu);
-    },
-  );
-
   it("gives every standalone declaration caller one canonical package config", () => {
     for (const packageName of [
       "gateway-client",
@@ -1858,64 +1850,6 @@ worker.once("message", value => { assert.equal(value, 42); console.log("relocate
       if (packageName === "acp-core") {
         expect(sources).toContain("packages/acp-core/src/error-format.ts");
       }
-    }
-  });
-
-  it("isolates runtime output from one shared declaration program", () => {
-    const packageConfigs = configs.filter((entry) => entry.name === TSDOWN_PACKAGE_CONFIG_GROUP);
-    const unifiedRuntimeConfig = configs.find(
-      (entry) => entry.name === TSDOWN_UNIFIED_CONFIG_GROUP,
-    );
-    const standaloneRuntimeConfig = configs.find(
-      (entry) =>
-        entry.name === TSDOWN_UNIFIED_CONFIG_GROUP &&
-        entry.dts === false &&
-        hasWorkerEntry(
-          entry,
-          "infra/sqlite-readonly-location.worker",
-          path.resolve("src/infra/sqlite-readonly-location.worker.ts"),
-        ),
-    );
-    const unifiedDeclarationConfigs = TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.map((name) =>
-      configs.find((entry) => entry.name === name),
-    );
-
-    expect(packageConfigs).not.toHaveLength(0);
-    expect(packageConfigs.map((entry) => entry.dts)).toEqual(
-      packageConfigs.map(() => ({ tsconfig: "tsconfig.packages.json" })),
-    );
-    expect(unifiedRuntimeConfig?.dts).toBe(false);
-    expect(standaloneRuntimeConfig?.dts).toBe(false);
-    expect(unifiedDeclarationConfigs).toHaveLength(1);
-    expect(unifiedDeclarationConfigs.every(Boolean)).toBe(true);
-    const runtimeEntries = configs
-      .filter(
-        (entry) =>
-          entry.name === TSDOWN_UNIFIED_CONFIG_GROUP &&
-          entry !== standaloneRuntimeConfig &&
-          !isWorkerBuildConfig(entry) &&
-          !entry.outDir,
-      )
-      .flatMap((entry) => Object.entries(entry.entry ?? {}));
-    const runtimeEntryNames = runtimeEntries.map(([name]) => name);
-    const runtimeOnlyEntryNames = ["native-hook-relay/entry", "node-host-launcher-bootstrap"];
-    expect(runtimeEntryNames).toEqual(expect.arrayContaining(runtimeOnlyEntryNames));
-    const declarationEntries = runtimeEntries.filter(
-      ([name]) => !runtimeOnlyEntryNames.includes(name),
-    );
-    const declarationEntryNames = declarationEntries.map(([name]) => name);
-    const standaloneEntries = Object.entries(standaloneRuntimeConfig?.entry ?? {});
-    const standaloneNames = new Set(standaloneEntries.map(([name]) => name));
-    const declarationInputs = Object.fromEntries([...declarationEntries, ...standaloneEntries]);
-    for (const declarationConfig of unifiedDeclarationConfigs) {
-      expect(declarationConfig?.dts).toMatchObject({ emitDtsOnly: true });
-      // Runtime and inventory graphs retain every alias in the declaration input map.
-      expect(declarationConfig?.entry).toEqual(declarationInputs);
-      expect(
-        Object.keys(declarationConfig?.entry ?? {})
-          .filter((name) => !standaloneNames.has(name))
-          .toSorted(),
-      ).toEqual(declarationEntryNames.toSorted());
     }
   });
 

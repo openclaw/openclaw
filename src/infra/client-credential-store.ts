@@ -22,7 +22,11 @@ import {
   CLIENT_CREDENTIAL_SCHEMA_VERSION,
 } from "./client-credential-schema.js";
 import { hasErrnoCode } from "./errno.js";
-import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
+import {
+  openNodeSqliteDatabase,
+  resolveExistingSqliteFileUri,
+  resolveReadOnlyShmSqliteFileUri,
+} from "./node-sqlite.js";
 import { preparePrivateStoreFileSync } from "./private-store-file.js";
 import {
   publishSqliteDatabaseAdmission,
@@ -32,7 +36,10 @@ import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
 import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
-import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
+import {
+  runSqliteDeferredTransactionSync,
+  runSqliteImmediateTransactionSync,
+} from "./sqlite-transaction.js";
 import { readSqliteUserVersion, writeSqliteUserVersion } from "./sqlite-user-version.js";
 import { readDatabaseIdentityBirthtime, resolveDatabasePathKey } from "./sqlite-worker-identity.js";
 import {
@@ -199,13 +206,21 @@ function* openClientCredentialCustodySteps(
   options: {
     createIfMissing?: boolean;
     readOnly?: boolean;
+    /**
+     * Inspection reads committed rows under a shared lock: a read-only connection, no
+     * exclusive custody and no write transaction. A hot rollback journal needs a writer,
+     * so that store is still admitted through read-only custody.
+     */
+    inspect?: boolean;
     migration?: boolean;
     timeoutMs?: number;
   } = {},
   execute?: (database: DatabaseSync) => void,
 ): Generator<CredentialAdmissionStep, ClientCredentialCustody | undefined, void> {
-  const createIfMissing = (options.createIfMissing ?? false) && !options.readOnly;
+  const readOnly = options.readOnly === true || options.inspect === true;
+  const createIfMissing = (options.createIfMissing ?? false) && !readOnly;
   const pathname = resolveClientCredentialStorePath(env);
+  const inspect = options.inspect === true && !fs.existsSync(`${pathname}-journal`);
   const directory = path.dirname(pathname);
   const custodyKey = resolveDatabasePathKey(pathname);
   if (retainedPaths.has(custodyKey)) {
@@ -262,9 +277,14 @@ function* openClientCredentialCustodySteps(
     }
     const identity = `${stat.dev}:${stat.ino}:${readDatabaseIdentityBirthtime(stat)}`;
     assertPrivateAcl(pathname);
-    db = openNodeSqliteDatabase(resolveExistingSqliteFileUri(pathname), {
-      timeout: options.timeoutMs ?? 5000,
-    });
+    db = inspect
+      ? openNodeSqliteDatabase(resolveReadOnlyShmSqliteFileUri(pathname), {
+          readOnly: true,
+          timeout: options.timeoutMs ?? 5000,
+        })
+      : openNodeSqliteDatabase(resolveExistingSqliteFileUri(pathname), {
+          timeout: options.timeoutMs ?? 5000,
+        });
     const database = db;
     if (
       // sqlite-allow-raw -- Read native journal policy before admission.
@@ -289,7 +309,10 @@ function* openClientCredentialCustodySteps(
       if (closed) {
         throw new Error("Client credential custody is closed.");
       }
-      if (options.readOnly) {
+      if (inspect) {
+        return runSqliteDeferredTransactionSync(database, operation);
+      }
+      if (readOnly) {
         return runSqliteImmediateTransactionSync(database, operation);
       }
       return runUpdateSqliteMigration(
@@ -308,8 +331,10 @@ function* openClientCredentialCustodySteps(
       created,
       admit: () =>
         transaction(() => {
-          // Acquire custody before retaining locks so competing openers can release their shared locks.
-          database.exec("PRAGMA locking_mode=EXCLUSIVE"); // sqlite-allow-raw -- Retain owner custody across operation commits.
+          if (!inspect) {
+            // Acquire custody before retaining locks so competing openers can release their shared locks.
+            database.exec("PRAGMA locking_mode=EXCLUSIVE"); // sqlite-allow-raw -- Retain owner custody across operation commits.
+          }
           if (
             options.migration ||
             cached?.identity !== identity ||
@@ -345,7 +370,7 @@ function* openClientCredentialCustodySteps(
             const admission = readClientCredentialAdmission(database);
             const receipt = admitClientCredentialStore(database, env, {
               initialize: initialized,
-              readOnly: options.readOnly ?? false,
+              readOnly,
               stored: admission.stored,
             });
             needsMetadataUpgrade = receipt.sharedFile !== null && receipt.source === null;
@@ -378,7 +403,7 @@ function* openClientCredentialCustodySteps(
         if (closed) {
           throw new Error("Client credential custody is closed.");
         }
-        if (options.readOnly && isClientCredentialMutation(operation)) {
+        if (readOnly && isClientCredentialMutation(operation)) {
           throw new Error("Client credential custody is read-only.");
         }
         const run = () => {
@@ -421,9 +446,9 @@ export function isClientCredentialMutation(operation: ClientCredentialOperation)
 export function runClientCredentialOperation(
   env: NodeJS.ProcessEnv,
   operation: ClientCredentialOperation,
-  options: { beforeCommit?: () => void; readOnly?: boolean } = {},
+  options: { beforeCommit?: () => void; readOnly?: boolean; inspect?: boolean } = {},
 ): ClientCredentialResult {
-  if (options.readOnly && isClientCredentialMutation(operation)) {
+  if ((options.readOnly || options.inspect) && isClientCredentialMutation(operation)) {
     throw new Error("Client credential custody is read-only.");
   }
   let result!: ClientCredentialResult;
@@ -432,6 +457,7 @@ export function runClientCredentialOperation(
     {
       createIfMissing: clientCredentialOperationCreatesStore(operation),
       readOnly: options.readOnly,
+      inspect: options.inspect,
     },
     (database) => {
       result = performClientCredentialOperation(database, operation, resolveStateDir(env));

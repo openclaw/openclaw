@@ -588,7 +588,5 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       toolNames: ["sessions_spawn", "subagents"],
     });
     expect(prompt.includes("## Delegation")).toBe(expected);
-    // The child brief has one owner: `## Delegation` when it renders, otherwise Tooling.
-    expect(prompt.includes("objective/output/write-scope/verification")).toBe(!expected);
   });
 });

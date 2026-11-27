@@ -266,9 +266,6 @@ function prepareAgentSystemPrompt(params: AgentSystemPromptParams) {
   ]);
   const resolveToolName = (normalized: string) => visibleTools.get(normalized) ?? normalized;
   const hasSessionsSpawn = availableTools.has("sessions_spawn");
-  const subagentStatusTools = ["subagents", "sessions_list"].filter((name) =>
-    availableTools.has(name),
-  );
   const sessionLookupTools = ["sessions_list", "sessions_search"].filter((name) =>
     availableTools.has(name),
   );
@@ -501,7 +498,7 @@ function prepareAgentSystemPrompt(params: AgentSystemPromptParams) {
         // by the scheduler, while a job left disabled pending confirmation
         // is watched by nothing and dies silently.
         hasAutomations && [
-          `When \`${resolveToolName(AUTOMATIONS_TOOL_NAME)}\` exposes list/add/run/remove and the same job is asked a 3rd time: do the work, check list (no duplicates), offer a routine, restate schedule+task for confirmation, create it, and force \`run\` once (remove if test fails).`,
+          `If \`${resolveToolName(AUTOMATIONS_TOOL_NAME)}\` exposes list/add/run/remove, on the same job's 3rd request: do it, list (no duplicates), offer a routine, confirm schedule+task, create it, force \`run\` once; remove if test fails.`,
         ],
       ],
       nativeCommandGuidanceLines,
@@ -510,19 +507,10 @@ function prepareAgentSystemPrompt(params: AgentSystemPromptParams) {
       ],
       renderOpenClawToolWorkflowHints &&
         sessionLookupTools.length > 0 &&
-        `Asked about another chat/group/session not in context: check ${sessionLookupTools.map((name) => `\`${name}\``).join("/")} before claiming no access.`,
+        `Other chat/group/session absent from context: check ${sessionLookupTools.map((name) => `\`${name}\``).join("/")} before claiming no access.`,
       hasProcess &&
         "Before input: process log; log/poll shows waitingForInput/stdinWritable. Lost id: process list.",
-      hasSessionsSpawn && [
-        "Follow each spawn's accepted completion mode (collectors need explicit collection, not completion events).",
-        inTurnCollectionGuidance ??
-          (availableTools.has("sessions_yield")
-            ? "Announcing children: wait via `sessions_yield`; never busy-poll."
-            : "Announcing children: wait for runtime completion events; never busy-poll."),
-      ],
-      renderOpenClawToolWorkflowHints &&
-        subagentStatusTools.length > 0 &&
-        `Never loop-poll ${subagentStatusTools.map((name) => (name === "subagents" ? "`subagents list`" : `\`${name}\``)).join("/")}; check status only on-demand/debug/intervention.`,
+      hasSessionsSpawn && inTurnCollectionGuidance,
       buildMediaGenerationToolLines(availableTools),
     ],
     tool_call_style: () =>
@@ -770,5 +758,3 @@ export function measureAgentSystemPromptSections(
         ]),
   );
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -6,18 +6,6 @@ import type {
   ToolResultContentSource,
 } from "./types.js";
 
-type RepetitionGuardPolicy = (model: AgentLoopConfig["model"]) => boolean;
-const repetitionGuardByAgent = new WeakMap<object, RepetitionGuardPolicy>();
-
-/** Host policy only: no plugin-facing option or user setting. */
-export function setInternalRepetitionGuard(agent: object, policy: RepetitionGuardPolicy): void {
-  repetitionGuardByAgent.set(agent, policy);
-}
-
-export function getInternalRepetitionGuard(agent: object): RepetitionGuardPolicy | undefined {
-  return repetitionGuardByAgent.get(agent);
-}
-
 type InternalToolRepeatPolicy = {
   enabled: boolean;
   onVerdict?: NonNullable<AgentLoopConfig["onToolRepeat"]>;

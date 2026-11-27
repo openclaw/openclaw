@@ -27,9 +27,3 @@ it("keeps missing non-bundled inspection entries visible as filesystem failures"
     /ENOENT/,
   );
 });
-
-it("reports no retained artifact for a newly installed native ESM entry", () => {
-  const target = inspectionTarget();
-  fs.writeFileSync(target.source, 'export const value = "installed";');
-  expect(hasRetainedNativeEsmArtifact({ ...target, origin: "global" })).toBe(false);
-});

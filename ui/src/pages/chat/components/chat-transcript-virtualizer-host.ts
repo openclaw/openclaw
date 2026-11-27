@@ -275,6 +275,8 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
               // Measurement may have consumed this offset before its native event.
               // Commit its queued rows now, ahead of this frame's paint.
               this.#presentation.flushChange();
+              // Native input can cross the measured start without changing the virtual row range.
+              this.#readerAnchor.settle();
               this.#readerAnchor.captureReaderContent();
               callbacks.onNativeScroll?.(event);
             },

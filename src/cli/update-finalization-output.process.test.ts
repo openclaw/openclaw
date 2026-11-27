@@ -467,14 +467,10 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
           target: { kind: "package", version: "2026.9.4" },
           steps: containingStep({ step: "finalize:doctor", status: "failed", exitCode: 1 }),
         });
-        const report = await prepareUpdateFailureReport(
-          {
-            attemptId: run.runId,
-            recordedRun: run,
-            result: { status: "error", mode: "unknown", steps: [], durationMs: 0 },
-          },
-          { env: { HOME: root, OPENCLAW_STATE_DIR: state }, stateDir: state },
-        );
+        const report = await prepareUpdateFailureReport(run, {
+          env: { HOME: root, OPENCLAW_STATE_DIR: state },
+          stateDir: state,
+        });
         expectText(
           report.body,
           failure,
@@ -482,8 +478,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
           "Update mode: package",
           "Reason code: doctor-failed",
           "Failed phase finalize-doctor: exit 1",
-          "Recovery outcome: readiness unverified (timeout)",
-          "Gateway readiness was not verified; service status: unknown. Check openclaw gateway status --deep.",
+          "Result: failed",
         );
         expect(run.steps.filter((step) => step.step === "gateway recovery verification")).toEqual([
           {

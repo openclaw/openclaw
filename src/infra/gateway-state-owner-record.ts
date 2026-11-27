@@ -59,13 +59,17 @@ function comparableStateOwnerStaleReason(
 }
 
 /** Reclamation uses native identity for local owners and heartbeat expiry across namespaces. */
-export function isGatewayStateOwnerDefinitelyStale(value: unknown, lockPath?: string): boolean {
+export function isGatewayStateOwnerDefinitelyStale(
+  value: unknown,
+  lockPath?: string,
+  databasePath?: string,
+): boolean {
   const payload = isRecord(value) ? value : null;
   if (!payload) {
     // Exclusive creation precedes publication; an incomplete record still owns its lock.
     return false;
   }
-  const namespace = classifyGatewayLockProcessNamespace(payload, lockPath);
+  const namespace = classifyGatewayLockProcessNamespace(payload, lockPath, databasePath);
   if (namespace === "unknown") {
     throw new GatewayLockNamespaceError(payload, lockPath);
   }
@@ -116,7 +120,7 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
   }
   // Ordinary SQLite access does not reclaim the owner or borrow schema custody.
   // Unknown namespaces retain maintenance contention without probing a local PID.
-  const namespace = classifyGatewayLockProcessNamespace(owner, ownerPath);
+  const namespace = classifyGatewayLockProcessNamespace(owner, ownerPath, databasePath);
   const staleReason = comparableStateOwnerStaleReason(owner, namespace);
   if (staleReason) {
     if (inspection && staleReason === "owner-process-exited") {
@@ -257,7 +261,7 @@ export function acquireGatewayStateOwnerFile(
   const observed: { holder: LockPayload | null } = { holder: null };
   const stale = ({ payload: value }: { payload: unknown }) => {
     observed.holder = LockPayloadSchema.safeParse(value).data ?? null;
-    return isGatewayStateOwnerDefinitelyStale(observed.holder, pathname);
+    return isGatewayStateOwnerDefinitelyStale(observed.holder, pathname, databasePath);
   };
   if (busyTimeoutMs > 0) {
     try {
@@ -266,7 +270,7 @@ export function acquireGatewayStateOwnerFile(
       ));
       if (
         previous &&
-        !isGatewayStateOwnerDefinitelyStale(previous, pathname) &&
+        !isGatewayStateOwnerDefinitelyStale(previous, pathname, databasePath) &&
         (previous.pid === process.pid ||
           ((previous.role ?? "gateway") === "gateway" && isPidAlive(previous.pid)))
       ) {

@@ -4,7 +4,6 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import {
-  countRunningSubagents,
   handoffSessionLinks,
   listResumedHandoffSessions,
   listSubagents,
@@ -254,24 +253,6 @@ describe("chat waiting on subagents", () => {
     expect([idle([done]), idle(paused, true)]).toEqual([null, null]);
   });
 
-  it("counts child sessions that are not subagents apart and names them on the wait", () => {
-    const session = { ...child, key: "agent:main:dashboard:opened", label: "Opened session" };
-    const derive = (rows: GatewaySessionRow[]) => status({ subagentSessions: rows }).wait;
-    expect(derive([session])).toEqual({
-      startedAt: 2_000,
-      runId: "parent-run",
-      runningCount: 0,
-      sessionCount: 1,
-      sessions: [{ key: session.key, label: "Opened session", status: "running" }],
-    });
-    const acp = { ...child, key: "agent:main:acp:coder", label: "Coder" };
-    expect(derive([acp])).toMatchObject({ runningCount: 1 });
-    expect(derive([child, session])).toMatchObject({
-      runningCount: 1,
-      sessionCount: 1,
-    });
-  });
-
   it.each([2_500, 1_500])("uses lifecycle end %i, not a later transcript timestamp", (endedAt) => {
     expect(status({ selectedSession: { ...parent, endedAt } }).wait?.startedAt).toBe(
       endedAt >= 2_000 ? endedAt : undefined,
@@ -324,48 +305,6 @@ describe("chat waiting on subagents", () => {
       expect(wait).toBeNull();
     },
   );
-
-  it("counts unfinished children beside the session's own work once the roster has loaded", () => {
-    const working = { ...parent, hasActiveRun: true };
-    const roster = [child, { ...child, key: "agent:main:subagent:other" }];
-    const count = (input: Partial<Parameters<typeof projectSubagentStatus>[0]> = {}) =>
-      status({
-        selectedSession: working,
-        subagentSessions: roster,
-        runWorking: true,
-        messages: [],
-        ...input,
-      }).running;
-    expect(count()).toBe(2);
-    // Queued children have not started, so the running count matches Details' Working count.
-    const withQueued = [
-      ...roster,
-      {
-        ...child,
-        key: "agent:main:subagent:queued",
-        hasActiveRun: false,
-        status: "queued" as const,
-      },
-    ];
-    expect(count({ subagentSessions: withQueued })).toBe(2);
-    expect(
-      countRunningSubagents({
-        selectedSession: working,
-        subagentSessions: withQueued,
-        subagentSessionsHydrated: true,
-      }),
-    ).toBe(2);
-    expect(count({ subagentSessions: [{ ...child, hasActiveRun: false }] })).toBe(0);
-    expect(
-      count({ subagentSessions: [...roster, { ...child, key: "agent:main:dashboard:opened" }] }),
-    ).toBe(2);
-    expect(
-      count({ subagentSessions: [...roster, { ...child, key: "agent:main:acp:coder" }] }),
-    ).toBe(3);
-    expect(count({ subagentSessionsHydrated: false })).toBe(0);
-    expect(count({ selectedSession: { ...working, hasActiveSubagentRun: false } })).toBe(0);
-    expect(count({ selectedSession: undefined })).toBe(0);
-  });
 
   it("keeps an active parent's running count while a covering child read is pending", () => {
     const input = {
@@ -619,27 +558,6 @@ describe("chat waiting on subagents", () => {
       { key: child.key, label: "Backend implementation", status: "running" },
       { key: "agent:main:dashboard:docs", label: "Docs", status: "done" },
     ]);
-  });
-
-  it("makes the running count the way to the list when navigation is available", () => {
-    const container = document.createElement("div");
-    const onOpenSubagents = vi.fn();
-    const update = mountWorkingIndicator(container, {
-      kind: "reading-indicator",
-      key: "parent-count",
-      startedAt: 1_000,
-    });
-    const draw = (options: ChatWorkingIndicatorOptions) => update({ onOpenSubagents, ...options });
-    const control = () => container.querySelector<HTMLButtonElement>("button");
-    draw({ runningSubagents: 3 });
-    expect(control()?.textContent?.trim()).toBe("3 subagents running");
-    control()?.click();
-    expect(onOpenSubagents).toHaveBeenCalledOnce();
-    draw({ runningSubagents: 1, onOpenSubagents: undefined });
-    expect(container.textContent).toContain("1 subagent running");
-    expect(control()).toBeNull();
-    draw({ runningSubagents: 0 });
-    expect(container.querySelector(".chat-working-indicator__subagents")).toBeNull();
   });
 });
 

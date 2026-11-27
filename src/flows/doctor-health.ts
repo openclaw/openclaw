@@ -457,6 +457,10 @@ async function runDoctorHealthFlowWithResult(
         configPath: configResult.path ?? CONFIG_PATH,
         stateDirExistedAtStart,
         gatewayMaintenanceActive: maintenance !== undefined,
+        // Doctor restores the Gateway it stopped; an updater owns its own stop and restart.
+        ...(maintenance && !repairMode.updateInProgress && !writeAuthority
+          ? { afterRestartContributions: [] }
+          : {}),
         agentDatabaseRefusals,
         updateWarnings: normalizeUpdatePostInstallDoctorWarnings([
           ...(startupFindings.updateWarnings ?? []),
@@ -473,6 +477,12 @@ async function runDoctorHealthFlowWithResult(
       healthContext = ctx;
       const { runDoctorHealthContributions } = await import("./doctor-health-contributions.js");
       await measure("doctor.contributions", () => runDoctorHealthContributions(ctx));
+      if (startup.isDoctorRepairRefused(ctx)) {
+        // The refusal summary below closes Doctor's report; complete it first.
+        await (
+          await import("./doctor-health-contributions.js")
+        ).runDoctorAfterRestartContributions(ctx);
+      }
       if (recordRepairRefusal(ctx)) {
         return undefined;
       }
@@ -530,19 +540,25 @@ async function runDoctorHealthFlowWithResult(
       const activeMaintenance = maintenance;
       if (activeMaintenance) {
         const completed = ctx;
-        await measure("doctor.maintenance.finish", () =>
-          activeMaintenance.finish(
-            completed?.cfg,
-            completed
-              ? async (nextConfig) => {
-                  const { writeDoctorGatewayConfig } =
-                    await import("./doctor-health-contribution-runners.gateway.js");
-                  return writeDoctorGatewayConfig(completed, nextConfig);
-                }
-              : undefined,
-            failure,
-          ),
-        );
+        const { finishDoctorMaintenanceThenDiagnose } =
+          await import("./doctor-health-maintenance-steps.js");
+        await finishDoctorMaintenanceThenDiagnose({
+          ctx: healthContext,
+          measure,
+          failed: failure !== undefined,
+          finish: () =>
+            activeMaintenance.finish(
+              completed?.cfg,
+              completed
+                ? async (nextConfig) => {
+                    const { writeDoctorGatewayConfig } =
+                      await import("./doctor-health-contribution-runners.gateway.js");
+                    return writeDoctorGatewayConfig(completed, nextConfig);
+                  }
+                : undefined,
+              failure,
+            ),
+        });
       }
     }
     if (!ctx) {
