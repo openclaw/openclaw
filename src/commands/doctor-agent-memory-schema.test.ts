@@ -93,22 +93,26 @@ it("decides pending schema work only beside held stores, without writing", async
   expect(await check()).toBe("undecidable");
   expect(changedStoreFiles(stopped, snapshotStoreFiles(root))).toEqual([]);
 
-  {
-    using heldState = holdStore(statePath);
-    using heldAgent = holdStore(databasePath);
+  let holders = [holdStore(statePath), holdStore(databasePath)];
+  try {
     const held = snapshotStoreFiles(root);
     expect(await check()).toBe("work");
     expect(await check(false)).toBe("none");
     expect(changedStoreFiles(held, snapshotStoreFiles(root))).toEqual([]);
+  } finally {
+    holders.forEach((holder) => holder.close());
   }
   expect(readMemoryChunkColumns(databasePath)).toContain("importance");
 
   const report = await repairMemory(env);
   expect(report.repaired).toHaveLength(1);
   expect(readMemoryChunkColumns(databasePath)).not.toContain("importance");
-  using heldState = holdStore(statePath);
-  using heldAgent = holdStore(databasePath);
-  expect(await check()).toBe("none");
+  holders = [holdStore(statePath), holdStore(databasePath)];
+  try {
+    expect(await check()).toBe("none");
+  } finally {
+    holders.forEach((holder) => holder.close());
+  }
 });
 
 it("removes a stale clean-close seal before failed writable repair while inspection preserves it", async () => {

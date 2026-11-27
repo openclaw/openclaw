@@ -323,9 +323,11 @@ describe("legacy runtime file pending check", () => {
     seedCacheRows(agent.db, true);
     await maybeRepairLegacyRuntimeFiles(true, env);
     await closeOpenClawAgentDatabasesAsync();
-    {
-      using heldAgent = holdStore(agent.path);
+    const cleanHolder = holdStore(agent.path);
+    try {
       await expect(checkLegacyRuntimeFilesPending(env)).resolves.toBe("none");
+    } finally {
+      cleanHolder.close();
     }
 
     if (seeded === "rows") {
@@ -342,13 +344,17 @@ describe("legacy runtime file pending check", () => {
         seeded.endsWith(".jsonl") ? preRedactorAudit : "x",
       );
     }
-    using heldAgent = holdStore(agent.path);
-    const before = snapshotStoreFiles(root);
-    await expect(checkLegacyRuntimeFilesPending(env)).resolves.toBe("work");
-    expect(changedStoreFiles(before, snapshotStoreFiles(root))).toEqual([]);
+    const holder = holdStore(agent.path);
+    try {
+      const before = snapshotStoreFiles(root);
+      await expect(checkLegacyRuntimeFilesPending(env)).resolves.toBe("work");
+      expect(changedStoreFiles(before, snapshotStoreFiles(root))).toEqual([]);
 
-    await maybeRepairLegacyRuntimeFiles(true, env);
-    await expect(checkLegacyRuntimeFilesPending(env)).resolves.toBe("none");
+      await maybeRepairLegacyRuntimeFiles(true, env);
+      await expect(checkLegacyRuntimeFilesPending(env)).resolves.toBe("none");
+    } finally {
+      holder.close();
+    }
   });
 
   it("leaves an agent database no connection holds unopened, and the cleanup still owns it", async () => {
