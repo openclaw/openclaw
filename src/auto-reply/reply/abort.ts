@@ -64,6 +64,7 @@ export async function tryFastAbortFromMessage(
   if (!request) {
     return { handled: false, aborted: false };
   }
+  params.onAbortRequest?.();
   // Normalized ingress is not authority. The operation resolves authorization
   // and retains current-target validation after loading cancellation machinery.
   const { executeFastAbortRequest } = await import("./abort-operation.js");

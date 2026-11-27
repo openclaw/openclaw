@@ -57,7 +57,7 @@ export function resolveFaceTimeConfig(input: unknown) {
   }
   return {
     enabled: asBoolean(raw.enabled) ?? true,
-    ownerHandles: normalizeTrimmedStringList(raw.ownerHandles),
+    allowedCallers: normalizeTrimmedStringList(raw.allowedCallers),
     realtime: {
       provider: normalizeOptionalString(realtime.provider),
       model: normalizeOptionalString(realtime.model),
@@ -75,8 +75,8 @@ export function validateFaceTimeConfig(config: FaceTimeConfig): {
   errors: string[];
 } {
   const errors: string[] = [];
-  if (!config.ownerHandles.length) {
-    errors.push("ownerHandles must contain at least one authorized FaceTime handle");
+  if (!config.allowedCallers.length) {
+    errors.push("allowedCallers must contain at least one FaceTime handle");
   }
   if (process.platform !== "darwin") {
     errors.push("facetime requires macOS");

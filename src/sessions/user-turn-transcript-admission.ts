@@ -9,8 +9,8 @@ import type {
 } from "../config/sessions/session-sharing-authority.types.js";
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
+import type { PersistedUserTurnMessage } from "./user-turn-input.types.js";
 import type {
-  PersistedUserTurnMessage,
   UserTurnTranscriptAdmissionReceipt,
   UserTurnTranscriptRecorder,
 } from "./user-turn-transcript.types.js";
@@ -32,6 +32,8 @@ export type UserTurnPromptReactionSource = Readonly<{
 }>;
 
 type AdmissionOwner = {
+  /** An unstaged Gateway ACK already accepted the input; later persistence isn't another input. */
+  markInputAccepted: () => void;
   onOriginalInputCommitted?: (anchor: TranscriptEntryAnchor) => void;
   prepareMentionInvitation?: (
     message: PersistedUserTurnMessage,

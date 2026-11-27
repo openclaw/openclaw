@@ -11,9 +11,9 @@ describe("resolveCronCreateScheduleFromArgs positional schedule disambiguation",
     "every 1h of the day",
     "every tuesday at 9am",
     "every minute",
-  ])("reports an invalid --every for %j instead of a schedule-count error", (input) => {
+  ])("reports an unsupported interval for %j instead of a schedule-count error", (input) => {
     expect(() => resolveCronCreateScheduleFromArgs({ positionalSchedule: input })).toThrow(
-      "Invalid --every. Use a duration like 10m, 1h, or 1d.",
+      'OpenClaw couldn’t use that repeat interval. Use --every 10m or, when creating an automation, "every 10m".',
     );
   });
 

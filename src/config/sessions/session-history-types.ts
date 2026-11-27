@@ -1,3 +1,4 @@
+import type { SerializedJsonArrayIndex } from "../../gateway/serialized-json.js";
 import type {
   SessionArtifactReadQuery,
   SessionArtifactReadResult,
@@ -46,7 +47,7 @@ export type ChatHistoryResponsePage = {
   activity?: AgentHistoryActivity[];
   messagesBytes: number;
   responseHistoryBytes: number;
-  omission?: { omittedCount: number; normalizedBytes: number; byteLimited?: true };
+  omission?: { omittedCount: number; byteLimited?: true };
   nextOffset?: number;
   olderCursor?: string;
   newerCursor?: string;
@@ -71,6 +72,7 @@ export type ChatHistoryPageAnchor = Pick<ChatHistoryPageCursor, "sessionId" | "s
 };
 
 export type ChatHistoryPage = {
+  messageModelIndex?: SerializedJsonArrayIndex;
   encodedResponse?: Omit<ChatHistoryResponsePage, "messages" | "activity"> & {
     messages: Uint8Array<ArrayBuffer>;
     activity?: Uint8Array<ArrayBuffer>;

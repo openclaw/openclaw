@@ -59,6 +59,15 @@ const compileOnlyPostgresDialect = new OpenClawPostgresDialect({
   },
 });
 
+let compileOnlyPostgresKysely: Kysely<unknown> | undefined;
+
+/** For asynchronous PostgreSQL callers that compile with the shared owners and run the query themselves. */
+export function getCompileOnlyPostgresKysely<Database>(): Kysely<Database> {
+  compileOnlyPostgresKysely ??= new KyselyInstance({ dialect: compileOnlyPostgresDialect });
+  // SAFETY: this compile-only facade stores no rows; Database supplies the caller's schema types.
+  return compileOnlyPostgresKysely as Kysely<Database>;
+}
+
 export function getNodeSqliteKysely<Database>(
   db: DatabaseSync | PostgresSqlConnection,
 ): Kysely<Database>;

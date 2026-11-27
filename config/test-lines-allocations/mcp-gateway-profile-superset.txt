@@ -1,0 +1,2 @@
+# Gateway WebSocket/OAuth callback coverage on both verified ingress paths, plus mixed catalog and shared-tool regressions.
+365

@@ -5,7 +5,7 @@ import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import pg from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { getFileLockProcessStartTime, getProcessStartTime } from "../shared/pid-alive.js";
 import { stateEngineSchema } from "../state/openclaw-state-db-engine.js";
 import { PROCESS_MACHINE_IDENTITY_KEY } from "./current-machine-identity.js";
 import { withDatabaseEngineSelection } from "./database-engine/context.js";
@@ -111,6 +111,48 @@ describe.skipIf(!connection)("confirmed PostgreSQL Gateway owner recovery", () =
     };
   }
 
+  it.skipIf(process.platform !== "linux")(
+    "recovers only the PostgreSQL Gateway lease attributable to the supplied namespace incarnation",
+    async () => {
+      const h = await fixture();
+      const namespace = readGatewayLockProcessNamespace();
+      const initStart = getProcessStartTime(1);
+      if (namespace?.platform !== "linux" || initStart === null) {
+        throw new Error("Linux PID namespace identity required");
+      }
+      const proof = { ...namespace, host: "stopped-old-pod", pidNsInitStartTicks: initStart };
+      const original = await h.rows();
+      const owner = original.find((row) => row.scope === "gateway-owner");
+      await h.change(
+        "UPDATE $namespace.state_leases SET payload_json=$1 WHERE scope='gateway-owner'",
+        [JSON.stringify({ ...JSON.parse(owner.payload_json), pidNsInitStartTicks: initStart })],
+      );
+      const before = await h.rows();
+
+      await h.run(async () => {
+        await expect(
+          recoverGatewayLock({
+            terminatedNamespace: { ...proof, pidNsInitStartTicks: initStart + 1 },
+          }),
+        ).rejects.toThrow("Gateway owner lease does not belong");
+        expect(await h.rows()).toEqual(before);
+
+        await expect(recoverGatewayLock({ terminatedNamespace: proof })).resolves.toEqual({
+          recovered: true,
+          removed: 1,
+        });
+        expect(await h.rows()).toEqual(before.filter((row) => row.scope !== "gateway-owner"));
+        expect((await h.change("SELECT * FROM $namespace.retained_history")).rows).toEqual([
+          { event_id: "original-event", body: "retained bytes" },
+        ]);
+        using anchor = openNodeSqliteDatabase(h.file, { readOnly: true });
+        expect(anchor.prepare("SELECT * FROM openclaw_engine_anchor").all()).toEqual([
+          { store_id: h.storeId, engine: "postgres", schema: h.namespace },
+        ]);
+      });
+    },
+  );
+
   it.skipIf(process.platform !== "linux" && process.platform !== "darwin").each([
     {
       machine: "same",
@@ -131,7 +173,7 @@ describe.skipIf(!connection)("confirmed PostgreSQL Gateway owner recovery", () =
       }
       const host = row.sameHost ? current.host : "host-before-reboot";
       await h.change(
-        "UPDATE $namespace.state_leases SET payload_json=$1 WHERE scope='gateway-owner'",
+        "UPDATE $namespace.state_leases SET payload_json=$1, heartbeat_at=$2 WHERE scope='gateway-owner'",
         [
           JSON.stringify({
             owner: {
@@ -150,6 +192,8 @@ describe.skipIf(!connection)("confirmed PostgreSQL Gateway owner recovery", () =
             mode: "foreground",
             supervisor: null,
           }),
+          // A fresh heartbeat isolates process-identity classification from timed takeover.
+          Date.now(),
         ],
       );
       await h.run(async () => {
@@ -176,7 +220,7 @@ describe.skipIf(!connection)("confirmed PostgreSQL Gateway owner recovery", () =
         expect(decodeGatewayOwnerLease(inspected.lease ?? undefined)?.state).toBe(row.state);
         expect(await h.rows()).toEqual(before);
         expect(inspected.holders.join("\n")).toContain("PostgreSQL Gateway owner lease");
-        // Explicit confirmation may recover an unknown owner; it never grants automatic admission.
+        // A fresh unverified owner still needs independent confirmation.
         await expect(recoverGatewayLock({ confirmation: inspected.confirmation })).resolves.toEqual(
           {
             recovered: true,

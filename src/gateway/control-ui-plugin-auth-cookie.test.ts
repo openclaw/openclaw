@@ -201,9 +201,6 @@ it("caps a broader signed read cookie on remote native and panel reads without c
         try {
           const admission = await admit({ req, res, auth });
           expect(admission?.requestAuth.controlUiPluginGrants?.[0]?.scopes).toEqual(expected);
-          expect(admission?.requestAuth.revalidate).toBeTypeOf("function");
-          await admission?.requestAuth.revalidate?.();
-          expect(admission?.requestAuth.controlUiPluginGrants?.[0]?.scopes).toEqual(expected);
         } finally {
           res.destroy();
           req.destroy();
@@ -214,7 +211,7 @@ it("caps a broader signed read cookie on remote native and panel reads without c
 });
 
 it.each(["admin", "writer"])(
-  "prepares cold %s cookie facts and revalidates demotion without caller-thread SQL",
+  "prepares cold %s cookie facts and applies demotion to fresh authorization without caller-thread SQL",
   async (role) => {
     await withRoleConfig(async () => {
       const profile = ensureProfileForEmail("cold-reader@example.test");
@@ -229,11 +226,9 @@ it.each(["admin", "writer"])(
           authenticatedUserProfile: { profileId: profile.id },
           controlUiPluginGrants: [{ pluginId: "example", scopes: ["operator.read"] }],
         });
-        await expect(admitted?.requestAuth.revalidate?.()).resolves.toBeUndefined();
         expect(sql.queries).toEqual([]);
         await setCanonicalUserProfileRole(profile.id, "denied");
         sql.queries.length = 0;
-        await expect(admitted?.requestAuth.revalidate?.()).rejects.toThrow("Unauthorized");
         expect(
           authorizeCookie(cookie, resolveSharedGatewaySessionGeneration(auth))?.requestAuth,
         ).toMatchObject({
@@ -297,7 +292,7 @@ it.each(["revoked", "unavailable"] as const)(
           res.destroy();
         }
         if (failure === "unavailable") {
-          // Revalidation has no response argument; its outer HTTP owner translates the error.
+          // Direct cookie authorization has no response argument; its HTTP owner translates the error.
           expect(() =>
             authorizeCookie(cookie, resolveSharedGatewaySessionGeneration(auth)),
           ).toThrow(GatewayOperatorAccessUnavailableError);
@@ -412,11 +407,6 @@ it.each([{ trustedProxies: undefined }, { trustedProxies: ["192.0.2.1"] }])(
             trustedProxies: proxies,
           });
           expect(admitted?.requestAuth.authenticatedUserProfile?.profileId).toBe(profile.id);
-          expect(admitted?.requestAuth.hasCurrentClientAuthority?.()).toBe(true);
-          await expect(admitted?.requestAuth.revalidate?.()).resolves.toBeUndefined();
-          setRuntimeConfigSnapshot({ gateway: { trustedProxies: ["198.51.100.1"] } });
-          expect(admitted?.requestAuth.hasCurrentClientAuthority?.()).toBe(false);
-          await expect(admitted?.requestAuth.revalidate?.()).rejects.toThrow("Unauthorized");
         } finally {
           res.destroy();
         }

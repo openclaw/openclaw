@@ -528,7 +528,7 @@ describe("/learn undo through the command registry and persisted state", () => {
       owner: false,
       authorized: false,
       scopes: ["operator.admin"],
-      text: undefined,
+      text: 'You are not authorized to use this command: `commands.allowFrom` does not include this Gateway client. Add your Gateway user profile ID to `commands.allowFrom`, or move its `"*"` entries to per-channel keys so Control UI commands follow operator access.',
     },
     {
       name: "owner with write but not admin",

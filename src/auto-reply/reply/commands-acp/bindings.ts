@@ -158,7 +158,6 @@ export async function bindSpawnedAcpSession(params: {
   }
 
   try {
-    commandParams.command.assertOwnerCurrent?.();
     const label = params.label || params.agentId;
     const lifecycleScope = {
       cfg: commandParams.cfg,
@@ -171,7 +170,6 @@ export async function bindSpawnedAcpSession(params: {
       targetKind: "session",
       conversation: conversationRef,
       placement,
-      assertCurrent: commandParams.command.assertOwnerCurrent,
       metadata: {
         threadName: resolveThreadBindingThreadName({ agentId: params.agentId, label }),
         agentId: params.agentId,

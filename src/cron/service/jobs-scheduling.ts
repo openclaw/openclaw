@@ -20,6 +20,7 @@ import type { CronJob, CronSchedule } from "../types.js";
 import { autoDisableCronJob } from "./auto-disable.js";
 import {
   computeOneShotNextRunAtMs,
+  hasLegacyCronCleanupPolicy,
   clearInvalidForcePreservedNextRun,
   resolveForcePreservedOneShotAtMs,
 } from "./one-shot-schedule.js";
@@ -119,7 +120,6 @@ export function resolveNextRunAtMsOrDisable(params: {
   }
   autoDisableCronJob({
     job: params.job,
-    reason: "schedule-errors",
     atMs: params.state.deps.nowMs(),
     consecutiveErrors: 1,
     deferredNotifications: params.deferredNotifications,
@@ -362,7 +362,7 @@ export function findJobOrThrow(state: CronServiceState, id: string) {
 
 /** Returns the effective enabled flag, defaulting missing values to enabled. */
 export function isJobEnabled(job: Pick<CronJob, "enabled">): boolean {
-  return job.enabled ?? true;
+  return (job.enabled ?? true) && !hasLegacyCronCleanupPolicy(job);
 }
 
 export function isTimeScheduledJob(job: Pick<CronJob, "schedule">): boolean {
@@ -453,7 +453,6 @@ export function recordScheduleComputeError(params: {
   if (errorCount >= MAX_SCHEDULE_ERRORS) {
     autoDisableCronJob({
       job,
-      reason: "schedule-errors",
       atMs: state.deps.nowMs(),
       consecutiveErrors: errorCount,
       deferredNotifications: params.deferredNotifications,
@@ -481,6 +480,9 @@ function normalizeJobTickState(params: {
   skip: boolean;
 } {
   const { job, ownership } = params;
+  if (hasLegacyCronCleanupPolicy(job)) {
+    return { changed: false, skip: true };
+  }
   let changed = false;
 
   if (!job.state) {
@@ -548,6 +550,9 @@ export function recomputeJobNextRunAtMs(params: {
   deferredNotifications: DeferredCronNotifications;
   skipScheduleErrorHandling?: boolean;
 }) {
+  if (hasLegacyCronCleanupPolicy(params.job)) {
+    return false;
+  }
   let changed = false;
   try {
     let newNext = computeJobNextRunAtMs(params.job, params.nowMs);
@@ -622,7 +627,7 @@ export function needsCronTimerMaintenance(
   nowMs: number,
   options?: CronScheduleMaintenanceOptions,
 ): boolean {
-  if (hasActiveCronRun(job, false)) {
+  if (hasLegacyCronCleanupPolicy(job) || hasActiveCronRun(job, false)) {
     return false;
   }
   if (!isTimeScheduledJob(job)) {

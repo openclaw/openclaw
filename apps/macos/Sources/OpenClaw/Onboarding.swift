@@ -724,14 +724,15 @@ struct OnboardingView: View {
     static func pageOrder(
         for mode: AppState.ConnectionMode,
         requiresCLIInstall: Bool,
-        joinedClaw: Bool = false) -> [Int]
+        joinedClaw: Bool = false,
+        openClawIDEnabled: Bool = MacOpenClawIDFeature.isEnabled) -> [Int]
     {
         // The OpenClaw ID claw owns its AI setup, which needs operator.admin a member key does
         // not hold; there is no Gateway to find either.
         if mode == .remote, joinedClaw { return [0, 1, 9] }
         return switch mode {
         case .local:
-            requiresCLIInstall ? [0, 1, 2, 3, 5, 9] : [0, 1, 3, 5, 9]
+            (requiresCLIInstall ? [0, 1, 2, 3] : [0, 1, 3]) + (openClawIDEnabled ? [5, 9] : [9])
         case .remote:
             [0, 1, 4, 3, 9]
         case .unconfigured:

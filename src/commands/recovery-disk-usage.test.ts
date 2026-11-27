@@ -133,6 +133,21 @@ it.each(["entry-limit", "metadata-byte-limit", "time-limit"] as const)(
   },
 );
 
+it("charges rollback receipts to the status metadata budget", async () => {
+  await withOpenClawTestState({ label: "recovery-usage-receipts" }, async (state) => {
+    fs.mkdirSync(state.statePath("state"), { recursive: true });
+    // Each receipt is under the per-receipt read cap; together they exceed the 2 MiB budget.
+    for (let index = 0; index < 40; index++) {
+      fs.writeFileSync(
+        state.statePath("state", `openclaw.sqlite.migrated-run${index}.receipt.json`),
+        `{"padding":"${"x".repeat(60 * 1024)}"}`,
+      );
+    }
+    const usage = await collectRecoveryDiskUsage({ cfg: {}, env: state.env });
+    expect(usage.incompleteReasons).toContain("metadata-byte-limit");
+  });
+});
+
 it("includes the same read-only recovery inventory in Doctor lint JSON", async () => {
   await withOpenClawTestState({ label: "doctor-recovery-usage", applyEnv: true }, async (state) => {
     fs.mkdirSync(state.statePath("state"), { recursive: true });

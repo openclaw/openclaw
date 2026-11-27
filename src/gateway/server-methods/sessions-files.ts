@@ -17,18 +17,17 @@ import {
   validateSessionsFilesDownloadParams,
   validateSessionsFilesListParams,
   validateSessionsFilesSetParams,
+  validateSessionsFilesStatParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { loadAgentIdentityFromWorkspaceAsync } from "../../agents/identity-file.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../../agents/workspace-bootstrap-policy.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   releaseSessionFilePreviewGrant,
   sessionFilePreviewBinding,
 } from "../artifact-download-grants.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
-import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { hasSessionReadAccessChanged } from "../session-sharing-policy.js";
 import { readSessionWorkerPlacementAsync } from "../worker-environments/session-placement-lifecycle.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
@@ -49,7 +48,11 @@ import {
   respondSessionFileTooLarge,
   sessionFilesError,
 } from "./session-files-errors.js";
-import { loadSessionFiles, withSessionFileRoot } from "./session-files-root.js";
+import {
+  loadSessionFiles,
+  requireSessionFilesAgentId,
+  withSessionFileRoot,
+} from "./session-files-root.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import {
   getRepositoryArtifact,
@@ -60,31 +63,14 @@ import { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace
 import { retainSessionScopedRead } from "./session-scoped-read.js";
 import { getSessionWorkspaceAssets } from "./sessions-file-assets.js";
 import { respondSessionFileDownload } from "./sessions-file-download.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
+import { handleSessionFilesStat } from "./sessions-files-stat.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 import {
   getSessionWorkspaceFile,
   listSessionWorkspaceFiles,
   setSessionWorkspaceFile,
 } from "./workspace-files.js";
-
-function requireSessionFilesAgentId(params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  agentId?: string;
-  respond: RespondFn;
-}): string | undefined {
-  const requestedAgent = resolveRequestedSessionAgentId(
-    params.cfg,
-    params.sessionKey,
-    params.agentId,
-  );
-  if (!requestedAgent.ok) {
-    params.respond(false, undefined, requestedAgent.error);
-    return undefined;
-  }
-  return requestedAgent.agentId;
-}
 
 async function handleSessionFilesRead(
   options: GatewayRequestHandlerOptions,
@@ -136,6 +122,7 @@ async function handleSessionFilesRead(
         agentId,
         readEntry: read?.prepared.readRetainedEntry ?? readEntry,
         assertSourceCurrent: read?.assertCurrent ?? assertSourceCurrent,
+        isInvitedWorkspaceTarget: read?.isInvitedWorkspaceTarget,
       });
       readAuthority = hostRead;
       const authority = readGatewayRequestMutationAuthority(options);
@@ -432,6 +419,11 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
     "sessions.files.get",
     validateSessionsFilesGetParams,
     (options) => handleSessionFilesRead(options, { kind: "get", params: options.params }),
+  ),
+  "sessions.files.stat": defineValidatedGatewayHandler(
+    "sessions.files.stat",
+    validateSessionsFilesStatParams,
+    handleSessionFilesStat,
   ),
   "sessions.files.set": async ({ params, respond, context, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsFilesSetParams, "sessions.files.set", respond)) {

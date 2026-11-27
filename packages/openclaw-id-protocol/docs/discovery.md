@@ -37,12 +37,13 @@ never the security boundary.
 
 ## Authentication
 
-| Class     | How                                                                   | Used by                                                   |
-| --------- | --------------------------------------------------------------------- | --------------------------------------------------------- |
-| `user`    | `Authorization: Bearer <OpenClaw ID token>`                           | loader, apps                                              |
-| `device`  | `user` + `OpenClaw-Signature` by a device key D bound to that account | owner/member devices reading device mail, binding devices |
-| `gateway` | `OpenClaw-Signature` by the claw's registered K_gw. No bearer secret  | Gateway (control connection)                              |
-| `relay`   | static bearer token; relay source address allowlisted at the edge     | iroh-relay `access.http`                                  |
+| Class       | How                                                                   | Used by                                                   |
+| ----------- | --------------------------------------------------------------------- | --------------------------------------------------------- |
+| `user`      | `Authorization: Bearer <OpenClaw ID token>`                           | loader, apps                                              |
+| `device`    | `user` + `OpenClaw-Signature` by a device key D bound to that account | owner/member devices reading device mail, binding devices |
+| `gateway`   | `OpenClaw-Signature` by the claw's registered K_gw. No bearer secret  | Gateway (control connection)                              |
+| `relay`     | static bearer token; relay source address allowlisted at the edge     | iroh-relay `access.http`                                  |
+| `statement` | none: the signed statement in the body is the credential              | unlinkClaw                                                |
 
 `OpenClaw-Signature: keyid=ed25519:<hex>,ts=<unix>,sig=<base64url>`, where sig = Ed25519 over
 `"openclaw/discovery-request/v1\0" || JCS({ body_sha256, method, path, ts })` (`path` includes
@@ -72,6 +73,7 @@ ready message.
 | receiveMail             | `GET /v1/claws/{claw_id}/mailbox?after=&wait=`        | gateway                                   | -> `{ messages, cursor }` (to `gateway`)                                                           |
 | receiveDeviceMail       | `GET /v1/claws/{claw_id}/mailbox/device?after=&wait=` | device                                    | -> `{ messages, cursor }` (to `owners` if an owner device, and to its own fp)                      |
 | ackMail / ackDeviceMail | `POST .../mailbox/ack`, `POST .../mailbox/device/ack` | gateway / device                          | `{ cursor }` -> 204                                                                                |
+| unlinkClaw              | `POST /v1/claws/{claw_id}/unlink`                     | statement (ClawUnlink)                    | `{ unlink }` -> `{ claw_id, hostname, unlinked_at }` (Unlinking)                                   |
 | irohAdmit               | `POST /iroh/admit`                                    | relay                                     | header `X-Iroh-Endpoint-Id` -> body `true` / `false`                                               |
 
 Types for every body are in `src/discovery/api.ts`; the endpoint table is
@@ -133,6 +135,33 @@ descriptor as one row. The request is signed by the same K_gw (a reset keeps it)
   stored snapshot is for the old binding_seq, so owner and member relay rows drop until the
   Gateway publishes the snapshot for the new binding (it has no owner devices or members, so
   this matches the claw).
+
+### Unlinking
+
+`POST /v1/claws/{claw_id}/unlink` with `{ unlink: <ClawUnlink> }` ends a claw's link for good
+(enrollment.md, "Unlinking a claw"). It has no bearer and no request signature: the statement is
+the credential. Discovery accepts it only when `verifyClawUnlink(unlink, stored binding)`
+passes: signed by the stored binding's K_gw, the path's claw id, exactly the stored
+binding_seq. A refusal is `invalid_statement` and changes nothing. A replayed statement for an
+older binding is `rollback`; one signed by an older K_gw is `wrong_signer`.
+
+On success Discovery, in this order:
+
+1. retires the hostname for good (no account, including the owner's, can register it again;
+   `checkClawName` reports it unavailable) and keeps a tombstone `{ claw_id, hostname, unlink,
+   unlinked_at }`;
+2. deletes the claw, its descriptor and snapshot, its member mirror and its relay keys, so
+   relay admission refuses K_srv and every owner, member and node peer key at once;
+3. empties the claw's mailbox and closes its Gateway sockets.
+
+From then on every request that names the claw id (descriptor and snapshot reads and
+publications, mailbox reads and sends, registration, a repeated unlink) is refused with
+`unlinked` (410) carrying `unlink`, the stored ClawUnlink. The claw leaves every `listClaws`
+result. A Gateway that sent the unlink before (a pending unlink) treats `unlinked` as done.
+
+Part 2 (OCF-597) adds signers, not a new endpoint: the same body signed by R or a current owner
+device, checked against the stored descriptor's root and snapshot. This replaces
+`scripts/retire-claw.mjs` for owners.
 
 ### Claw addresses
 
@@ -275,6 +304,7 @@ match `code` only.
 | `stale_binding`      | 409  | descriptor binding_seq lower than stored                                    |
 | `stale_snapshot`     | 409  | snapshot not newer than stored by (seq, issued_at)                          |
 | `code_invalid`       | 410  | enrollment code unknown, used or expired                                    |
+| `unlinked`           | 410  | the claw id was unlinked by its owner; carries `unlink` (Unlinking)         |
 | `payload_too_large`  | 413  | mailbox payload over 64 KiB                                                 |
 | `rate_limited`       | 429  | per claw / account / address limit                                          |
 | `unavailable`        | 503  | temporary failure                                                           |
@@ -293,7 +323,8 @@ an integrity error.
 - Device mail for `owners`: Discovery decides "is an owner device" from the snapshot's
   `owner_peer_keys` (or `owner_devices` and their caps for a certificate reader) and its own
   device bindings; withholding it only delays enrollment.
-- Claw retirement (spike threat-model backlog 4) is not specified yet.
+- Claw retirement by the owner is unlinking (above). Retiring a claw whose owner can no longer
+  reach the machine is part 2 (OCF-597).
 
 ## Accountless node authentication
 

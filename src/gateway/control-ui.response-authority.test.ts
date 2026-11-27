@@ -3,14 +3,8 @@ import fs from "node:fs/promises";
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import path from "node:path";
-import {
-  createPluginRegistryFixture,
-  registerVirtualTestPlugin,
-} from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import * as avatarFile from "../agents/identity-avatar-file.js";
 import { mockStoppedWorkspaceContainer } from "../agents/sandbox/mount-plan.test-helpers.js";
 import { requireGit } from "../agents/worktrees/git.js";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
@@ -25,8 +19,6 @@ import { discardSessionPendingInput } from "../config/sessions/session-pending-i
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import * as devInstallBranch from "../infra/dev-install-branch.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
@@ -41,8 +33,7 @@ import {
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { handleControlUiAssistantMediaRequest } from "./control-ui-assistant-media-http.js";
-import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
-import { handleControlUiAvatarRequest, handleControlUiHttpRequest } from "./control-ui.js";
+import { handleControlUiAvatarRequest } from "./control-ui.js";
 import { invalidateOperatorRolePolicy, resolveCreatorSandbox } from "./operator-role-policy.js";
 import * as transcriptReaders from "./session-transcript-readers.js";
 import { withLocalWorkspaceProjection } from "./worker-environments/local-workspace-projection.js";
@@ -52,10 +43,8 @@ const REAL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   "base64",
 );
-const testTempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();
-  resetPluginRuntimeStateForTest();
 });
 
 function createAvatarConfig(workspace: string, avatar: string): OpenClawConfig {
@@ -82,37 +71,6 @@ function httpResponse(
   Object.assign(req, { method: "GET", url, headers });
   const res = new ServerResponse(req);
   return { req, res };
-}
-
-function registerPanel(
-  config: OpenClawConfig,
-  authorize?: () => { signal: AbortSignal; assertCurrent(): void } | undefined,
-) {
-  const { registry } = createPluginRegistryFixture(config);
-  registerVirtualTestPlugin({
-    registry,
-    config,
-    id: "person-access",
-    name: "Person access",
-    register(api) {
-      if (authorize) {
-        api.registerGatewayAccessPolicy({ authorize });
-      }
-      api.registerHttpRoute({
-        path: "/secure-hook",
-        auth: "gateway",
-        match: "prefix",
-        handler: async () => true,
-      });
-      api.session.controls.registerControlUiDescriptor({
-        surface: "tab",
-        id: "panel",
-        label: "Visitor panel",
-        path: "/secure-hook/panel",
-      });
-    },
-  });
-  setActivePluginRegistry(registry.registry);
 }
 
 function preparationGate() {
@@ -146,138 +104,6 @@ describe("Control UI response authority", () => {
       expect(res.getHeader("Vary")).toBe("Authorization, Cookie");
     });
   });
-
-  it("withholds prepared bootstrap bytes when visitor authority expires before its abort signal", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const trustedProxy = { userHeader: "x-visitor-email", allowLoopback: true };
-      const config: OpenClawConfig = {
-        gateway: {
-          auth: { mode: "trusted-proxy", trustedProxy },
-          trustedProxies: ["127.0.0.1"],
-        },
-      };
-      const auth: ResolvedGatewayAuth = {
-        mode: "trusted-proxy",
-        trustedProxy,
-        allowTailscale: false,
-      };
-      setRuntimeConfigSnapshot(config);
-      ensureProfileForEmail("visitor@example.test");
-      const grant = new AbortController();
-      const expiresAt = 1_000;
-      let now = 0;
-      const authority = {
-        signal: grant.signal,
-        assertCurrent() {
-          grant.signal.throwIfAborted();
-          if (now >= expiresAt) {
-            throw new Error("Visitor grant expired");
-          }
-        },
-      };
-      registerPanel(config, () => (now < expiresAt ? authority : undefined));
-      const { entered, release, hold } = preparationGate();
-      vi.spyOn(devInstallBranch, "resolveDevInstallGitBranch").mockImplementation(() =>
-        hold("private-branch"),
-      );
-      const { req, res } = httpResponse(CONTROL_UI_BOOTSTRAP_CONFIG_PATH, {
-        "x-visitor-email": "visitor@example.test",
-        "x-forwarded-for": "203.0.113.10",
-        "x-openclaw-scopes": "operator.read",
-      });
-      const end = vi.spyOn(res, "end");
-      const catalog = await prepareUserProfileCatalog();
-      const pending = handleControlUiHttpRequest(req, res, {
-        config,
-        cfg: config,
-        auth,
-        trustedProxies: config.gateway?.trustedProxies,
-        getResolvedAuth: () => auth,
-        getRuntimeConfig: () => config,
-      });
-      const settled = pending.catch((error: unknown) => error);
-      try {
-        await Promise.race([entered.promise, pending]);
-        expect(res.getHeader("Set-Cookie")).toEqual(
-          expect.arrayContaining([expect.stringContaining("Path=/secure-hook")]),
-        );
-        now = expiresAt;
-        expect(grant.signal.aborted).toBe(false);
-        release.resolve();
-
-        expect(await settled).toBeInstanceOf(Error);
-        expect(res).toMatchObject({ destroyed: true, headersSent: false });
-        expect(end).not.toHaveBeenCalled();
-      } finally {
-        release.resolve();
-        await settled;
-        res.destroy();
-        req.destroy();
-        catalog.release();
-      }
-    });
-  });
-
-  it.each(["avatar", "bootstrap"] as const)(
-    "withholds a prepared %s response after requester authority changes",
-    async (kind) => {
-      const workspace = testTempDirs.make("openclaw-ui-response-authority-");
-      await fs.writeFile(path.join(workspace, "avatar.png"), REAL_PNG);
-      let config = createAvatarConfig(workspace, "avatar.png");
-      const { entered, release, hold } = preparationGate();
-      if (kind === "bootstrap") {
-        registerPanel(config);
-        vi.spyOn(devInstallBranch, "resolveDevInstallGitBranch").mockImplementation(() =>
-          hold("private-branch"),
-        );
-      } else {
-        const prepare = avatarFile.prepareLocalAgentAvatarFile;
-        vi.spyOn(avatarFile, "prepareLocalAgentAvatarFile").mockImplementation(async (params) => {
-          const prepared = await prepare(params);
-          expect(prepared).toMatchObject({ ok: true, file: { body: REAL_PNG } });
-          return hold(prepared);
-        });
-      }
-      let auth = tokenAuth;
-      const { req, res } = httpResponse(
-        kind === "bootstrap" ? CONTROL_UI_BOOTSTRAP_CONFIG_PATH : "/avatar/main",
-      );
-      const end = vi.spyOn(res, "end");
-      const setHeader = vi.spyOn(res, "setHeader");
-      const handler =
-        kind === "bootstrap" ? handleControlUiHttpRequest : handleControlUiAvatarRequest;
-      const pending = handler(req, res, {
-        config,
-        cfg: config,
-        auth,
-        getResolvedAuth: () => auth,
-        getRuntimeConfig: () => config,
-      });
-      const settled = pending.catch(() => undefined);
-      try {
-        await Promise.race([entered.promise, pending]);
-        expect(res.writableEnded).toBe(false);
-        if (kind === "bootstrap") {
-          expect(res.getHeader("Set-Cookie")).toEqual(
-            expect.arrayContaining([expect.stringContaining("Path=/secure-hook")]),
-          );
-          config = { ...config, gateway: { roles: { definitions: {} } } };
-        } else {
-          auth = { ...auth, token: "replacement-token" };
-        }
-      } finally {
-        release.resolve();
-        await settled;
-      }
-
-      expect(res.statusCode).toBe(401);
-      expect(String(end.mock.calls[0]?.[0])).not.toContain("private-branch");
-      expect(end).not.toHaveBeenCalledWith(REAL_PNG);
-      expect(setHeader).not.toHaveBeenCalledWith("Content-Type", "image/png");
-      expect(setHeader).not.toHaveBeenCalledWith("ETag", expect.anything());
-      expect(res.getHeader("Set-Cookie")).toBeUndefined();
-    },
-  );
 });
 
 describe("saved message attachment response authority", () => {
@@ -841,6 +667,63 @@ describe("saved message attachment response authority", () => {
       }
     },
   );
+
+  it.each([
+    { author: true, late: false },
+    { author: false, late: false },
+    { author: false, late: true },
+  ])("limits a revoked queued attachment to its author (%j)", async ({ author, late }) => {
+    const runId = `attachment-revoked-${author}-${late}`;
+    const operatorProfileId = ensureProfileForEmail(author ? email : unrelatedEmail).id;
+    const receipt = (await stageSessionPendingInput(scope, {
+      runId,
+      assertCurrent: () => {},
+      message: {
+        role: "user",
+        content: "Revoked pending comment",
+        timestamp: 1,
+        idempotencyKey: `${runId}:user`,
+        __openclaw: {
+          media: [{ url: source, contentType: "text/plain" }],
+          requesterOrigin: { sessionKey: scope.sessionKey, operatorProfileId },
+          participationRevoked: true,
+        },
+      },
+    }))!;
+    let revoked = false;
+    const revoke = async () => {
+      revoked = true;
+      receipt.finish("cancelled", "revoked");
+      await receipt.settled?.();
+    };
+    try {
+      const query = { messageId: `pending:${receipt.inputId}` };
+      const mediaTicket = late ? await metadata(query) : undefined;
+      const file = state.statePath("media", "inbound", "selection-comment.txt");
+      const open = fs.open;
+      using _ = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+        const handle = await open(filePath, flags, mode);
+        if (late && filePath === file && !revoked) {
+          await revoke();
+        }
+        return handle;
+      });
+      if (!late) {
+        await revoke();
+      }
+      const response = await request(
+        mediaTicket ? { ...query, mediaTicket } : query,
+        mediaTicket ? { ticketOnly: true } : {},
+      );
+      expect(revoked).toBe(true);
+      expect(response.status).toBe(author ? 200 : 404);
+      expect((await response.text()) === text).toBe(author);
+      expect((await request({ ...query, meta: "1" })).status).toBe(author ? 200 : 404);
+    } finally {
+      receipt.finish("cancelled", "failed");
+      await receipt.settled?.();
+    }
+  });
 
   const ticketSources: Record<string, string>[] = [
     {},

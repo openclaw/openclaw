@@ -48,70 +48,41 @@ export function resolveDiscordNativePolicyReader(
   );
 }
 
-export async function createDiscordNativeCommandAuthority(params: {
+/** Reads command access once, when the command is admitted. */
+export function resolveDiscordNativeCommandAccess(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
   commandAuthorized: boolean;
   sender: { id: string; name?: string; tag?: string };
   allowNameMatching: boolean;
-  isPolicyCurrent?: () => boolean;
   accountId: string;
   guildId?: string;
   commandName: string;
   pluginCommand: boolean;
 }) {
-  const assertAdmittedOwner = (await resolveCommandAuthorizationAsync(params)).assertOwnerCurrent;
-  const readAuthorization = () => {
-    const cfg = getRuntimeConfigSnapshot() ?? params.cfg;
-    const owners = resolveDiscordCommandOwnerAllowFrom(cfg);
-    const senderIsOwner =
-      params.isPolicyCurrent?.() !== false &&
-      (resolveDiscordOwnerAccess({
-        allowFrom: owners,
-        sender: params.sender,
-        allowNameMatching: params.allowNameMatching,
-      }).ownerAllowed ||
-        resolveCommandAuthorization({ ...params, cfg }).senderIsOwner);
-    const commands = resolveDiscordNativeCommandAllowlistAccess({
-      cfg,
+  const cfg = getRuntimeConfigSnapshot() ?? params.cfg;
+  const owners = resolveDiscordCommandOwnerAllowFrom(cfg);
+  const senderIsOwner =
+    resolveDiscordOwnerAccess({
+      allowFrom: owners,
       sender: params.sender,
-      guildId: params.guildId,
-    });
-    return {
-      senderIsOwner,
-      allowed:
-        (!commands.configured || commands.allowed) &&
-        (!owners ||
-          owners.includes("*") ||
-          senderIsOwner ||
-          commands.allowed ||
-          params.commandName === "status" ||
-          params.pluginCommand),
-    };
-  };
-  const assertActive = () => {
-    assertAdmittedOwner?.();
-    if (params.isPolicyCurrent?.() === false || !readAuthorization().allowed) {
-      throw new Error("Discord command authority changed; send a new request.");
-    }
-  };
+      allowNameMatching: params.allowNameMatching,
+    }).ownerAllowed || resolveCommandAuthorization({ ...params, cfg }).senderIsOwner;
+  const commands = resolveDiscordNativeCommandAllowlistAccess({
+    cfg,
+    sender: params.sender,
+    guildId: params.guildId,
+  });
   return {
-    assertActive,
-    assertOwnerCurrent: () => {
-      assertActive();
-      if (!readAuthorization().senderIsOwner) {
-        throw new Error("Discord owner authority changed; send a new request.");
-      }
-    },
-    senderIsOwner: () => readAuthorization().senderIsOwner,
-    isAllowed: () => {
-      try {
-        assertActive();
-        return true;
-      } catch {
-        return false;
-      }
-    },
+    senderIsOwner,
+    allowed:
+      (!commands.configured || commands.allowed) &&
+      (!owners ||
+        owners.includes("*") ||
+        senderIsOwner ||
+        commands.allowed ||
+        params.commandName === "status" ||
+        params.pluginCommand),
   };
 }
 

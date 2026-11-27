@@ -18,13 +18,17 @@ export function sourceDomain(raw?: string) {
   return safe ? new URL(safe).hostname : "No external link";
 }
 
+export type ReportSegment =
+  | { text: string; sourceId?: undefined }
+  | { text: string; sourceId: string; startByte: number };
+
 /** Text-only semantic rendering: no HTML, image, preview or privileged URL retrieval. */
 function reportSegments(
   job: Pick<ResearchView, "report" | "citations" | "sources">,
-): Array<{ text: string; sourceId?: string }> {
+): Array<ReportSegment> {
   const bytes = new TextEncoder().encode(job.report ?? "");
   const decoder = new TextDecoder("utf-8", { fatal: true });
-  const segments: Array<{ text: string; sourceId?: string }> = [];
+  const segments: Array<ReportSegment> = [];
   let offset = 0;
   for (const citation of job.citations.toSorted((a, b) => a.startByte - b.startByte)) {
     if (
@@ -38,7 +42,10 @@ function reportSegments(
     try {
       const before = decoder.decode(bytes.slice(offset, citation.startByte));
       const text = decoder.decode(bytes.slice(citation.startByte, citation.endByte));
-      segments.push({ text: before }, { text, sourceId: citation.sourceId });
+      segments.push(
+        { text: before },
+        { text, sourceId: citation.sourceId, startByte: citation.startByte },
+      );
       offset = citation.endByte;
     } catch {
       /* An invalid range remains ordinary report text. */
@@ -50,7 +57,7 @@ function reportSegments(
 
 /** Headings are presentation only; citation offsets always refer to the original report bytes. */
 export function reportBlocks(job: Pick<ResearchView, "report" | "citations" | "sources">) {
-  const lines: Array<Array<{ text: string; sourceId?: string }>> = [[]];
+  const lines: Array<Array<ReportSegment>> = [[]];
   for (const segment of reportSegments(job)) {
     for (const [index, text] of segment.text.split("\n").entries()) {
       if (index > 0) {

@@ -22,7 +22,12 @@ export function readSessionColdStorageInventory(database?: { db: EngineConnectio
           .selectFrom("session_transcript_cold_archives")
           .select((eb) => [
             eb.fn.countAll<number>().as("count"),
-            eb.fn.sum<number>("archive_bytes").filterWhere("storage", "=", "sqlite").as("bytes"),
+            eb
+              .cast<number | null>(
+                eb.fn.sum("archive_bytes").filterWhere("storage", "=", "sqlite"),
+                "bigint",
+              )
+              .as("bytes"),
           ]),
       );
       return {

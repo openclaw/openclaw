@@ -12,6 +12,7 @@ import {
 } from "../service/jobs-scheduling.js";
 import {
   canRetryArchivedCronJob,
+  hasLegacyCronCleanupPolicy,
   resolveForcePreservedOneShotAtMs,
 } from "../service/one-shot-schedule.js";
 import { findCronRunRecoveryInDatabase } from "../service/run-history-recovery.js";
@@ -152,6 +153,9 @@ export function recoverCronJobInDatabase(
   if (!job) {
     return recoverUnmarkedReceipt(receipt);
   }
+  if (hasLegacyCronCleanupPolicy(job)) {
+    return { skipStartupCatchup: true };
+  }
   const previousEnabled = job.enabled ?? true;
   const runningAtMs = job.state.runningAtMs;
   if (runningAtMs === undefined) {
@@ -243,6 +247,7 @@ export function recoverCronJobInDatabase(
       interrupted,
       nowMs,
       archive:
+        previousEnabled &&
         job.schedule.kind === "at" &&
         interrupted.replacementAtMs === undefined &&
         !job.state.runningScheduleChangeId &&
@@ -284,6 +289,7 @@ export function recoverCronJobInDatabase(
   }
   if (
     interrupted &&
+    previousEnabled &&
     job.schedule.kind === "at" &&
     interrupted.replacementAtMs === undefined &&
     job.state.nextRunAtMs === undefined

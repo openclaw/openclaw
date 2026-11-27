@@ -34,11 +34,9 @@ export function planEndedOneTimeCronRepair(jobs: readonly Record<string, unknown
       state.queuedAtMs !== undefined ||
       state.runSlotWaitReceiptId !== undefined ||
       state.conditionCheckReceiptId !== undefined;
-    if (busy) {
-      continue;
-    }
     const oneTime = schedule.kind === "at" || schedule.kind === "on-exit";
     if (
+      !busy &&
       schedule.kind === "at" &&
       job.enabled === false &&
       job.deleteAfterRun !== false &&
@@ -72,11 +70,8 @@ export function planEndedOneTimeCronRepair(jobs: readonly Record<string, unknown
         continue;
       }
     }
-    if (
-      Object.hasOwn(job, "deleteAfterRun") ||
-      (schedule.kind === "on-exit" && job.enabled !== false)
-    ) {
-      // Explicit keep-after-run and missing on-exit policies cannot be converted without
+    if (Object.hasOwn(job, "deleteAfterRun")) {
+      // Explicit keep-after-run policies cannot be converted without
       // changing what happens after a run. A recurring true flag also controlled session cleanup.
       if (
         (oneTime &&
@@ -116,6 +111,8 @@ export function endedOneTimeCronHistory(
 ): CronRunHistoryWrite {
   const { job, id, name, status, startedAt, deliveryStatus, delivered, completionStatus } = row;
   const state = isRecord(job.state) ? job.state : {};
+  const archivedJob = { ...job };
+  delete archivedJob.deleteAfterRun;
   const durationMs =
     typeof state.lastDurationMs === "number" &&
     Number.isSafeInteger(state.lastDurationMs) &&
@@ -137,7 +134,7 @@ export function endedOneTimeCronHistory(
     error: typeof state.lastError === "string" ? state.lastError : undefined,
     deliveryError:
       typeof state.lastDeliveryError === "string" ? state.lastDeliveryError : undefined,
-    retryAvailable: canRetryArchivedCronJob(job as CronStoredJob) || undefined,
+    retryAvailable: canRetryArchivedCronJob(archivedJob as CronStoredJob) || undefined,
   };
   return {
     storeKey,
@@ -148,7 +145,7 @@ export function endedOneTimeCronHistory(
     endedAt: entry.ts,
     status: cronRunStorageStatus(entry),
     error: entry.error,
-    detail: cronRunLogEntryToDetail(entry, { storeKey, archivedJob: job }),
+    detail: cronRunLogEntryToDetail(entry, { storeKey, archivedJob }),
   };
 }
 

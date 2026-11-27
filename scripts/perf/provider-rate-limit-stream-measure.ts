@@ -13,6 +13,7 @@ import { admitProviderRateLimitStream } from "../../src/llm/provider-rate-limit-
 import { createProviderRateLimitRequest } from "../../src/llm/provider-rate-limit.ts";
 import type { AssistantMessage, Model } from "../../src/llm/types.ts";
 import { createAssistantMessageEventStream } from "../../src/llm/utils/event-stream.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -172,12 +173,7 @@ await run(200);
 globalThis.gc?.();
 const session = new Session();
 if (values.mode === "allocation") {
-  session.connect();
-  await session.post("HeapProfiler.startSampling", {
-    samplingInterval: 8192,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(session, 8192);
 }
 const hostLoad = loadavg();
 const before = process.threadCpuUsage();

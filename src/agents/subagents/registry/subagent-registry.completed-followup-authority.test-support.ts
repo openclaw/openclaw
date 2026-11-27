@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
+import { decideTurnGrant } from "../../../gateway/operator-admission.js";
 import * as operatorCapture from "../../../gateway/operator-run-authority.js";
 import {
   createContext,
@@ -11,7 +12,11 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
+import { createParticipationTestAuthority } from "../../participation-ceiling.test-support.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import type { SubagentCompletionCustody } from "./subagent-registry-memory.types.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
 import type { RegistryRegistrationFixture } from "./subagent-registry.requester-completion.fixture.test-support.js";
@@ -47,7 +52,10 @@ export async function retainedOperatorFixture(
 ) {
   const fixture = operatorFixture(profileName, false, context, resolveGatewayContext);
   const source = expectDefined(
-    await operatorCapture.captureGatewayOperatorRunAuthority(fixture),
+    await operatorCapture.prepareGatewayOperatorRunAuthority({
+      ...fixture,
+      sourceAuthority: fixture.sourceAuthority,
+    }),
     "operator registration source",
   );
   fixture.client.internal = { operatorRunAuthority: source.authority };
@@ -58,9 +66,95 @@ export function registerCompletedFollowupAuthorityTests({
   registration,
   updateRun,
 }: RegistryRegistrationFixture) {
+  it.each([false, true])(
+    "separates complete participant restrictions, including cancellation=%s",
+    (cancelled) => {
+      setRuntimeConfigSnapshot({});
+      const ceiling = createParticipationTestAuthority({
+        kind: "send",
+        profileId: "participant",
+        sessionKey: "agent:main:original",
+        tools: ["read"],
+        permission: "guarded",
+      }).participationCeiling!;
+      const source = {};
+      const invocation = {};
+      const effect = vi.fn();
+      const retained = vi.fn();
+      const install = (runId: string, restriction: typeof ceiling | undefined) => {
+        const entry: SubagentRunRecord = {
+          ...registration(runId),
+          createdAt: 1,
+          requiresCompletionAuthority: restriction ? true : undefined,
+          ...(cancelled ? { endedReason: SUBAGENT_ENDED_REASON_KILLED } : {}),
+          execution: { status: "terminal", outcome: { status: cancelled ? "error" : "ok" } },
+        };
+        const authority = createAdmittedRunOperatorAuthority({
+          canonicalIdentity: null,
+          profileId: "participant",
+          scopes: ["operator.write"],
+          grant: decideTurnGrant(["operator.write"]),
+          participationCeiling: restriction,
+          source,
+          invocation,
+        });
+        const run = <T>(work: () => T): T => {
+          retained(runId);
+          return work();
+        };
+        const custody: SubagentCompletionCustody["authority"] = {
+          operatorAuthority: authority,
+          scopes: ["operator.write"],
+          requesterOrigin: undefined,
+          signal: new AbortController().signal,
+          assertCurrent: () => authority.signal?.throwIfAborted(),
+          release() {},
+          run,
+          runWithRequester: run,
+        };
+        subagentRuns.set(runId, entry);
+        subagentRuns.bindCompletionAuthority(entry, custody);
+        return entry;
+      };
+      {
+        const anchor = install("anchor", ceiling);
+        const same = install("same", structuredClone(ceiling));
+        const owner = install("owner", undefined);
+        const narrower = install("narrower", { ...ceiling, tools: [] });
+        const otherInvitation = install("other", {
+          ...ceiling,
+          source: { ...ceiling.source, sessionId: "different" },
+        });
+        expect(
+          subagentRuns.selectCompletionAuthorityBatch(
+            [anchor, same, owner, narrower, otherInvitation],
+            anchor,
+          ),
+        ).toEqual([anchor, same]);
+        subagentRuns.runWithCompletionBatchAuthority([anchor, same], effect);
+        expect(effect).toHaveBeenCalledOnce();
+        expect(retained).toHaveBeenCalledOnce();
+        effect.mockClear();
+        for (const other of [owner, narrower, otherInvitation]) {
+          expect(() =>
+            subagentRuns.runWithCompletionBatchAuthority([anchor, other], effect),
+          ).toThrow(/stay current and separate/);
+        }
+        subagentRuns.releaseCompletionAuthority(anchor);
+        expect(() => subagentRuns.runWithCompletionAuthority(anchor, effect)).toThrow(
+          /original-source custody/,
+        );
+        expect(() => subagentRuns.runWithCompletionBatchAuthority([anchor, same], effect)).toThrow(
+          /original-source custody/,
+        );
+        expect(effect).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it.each(["original", "successor"] as const)(
-    "keeps completed-result and followup custody independent when the %s source is revoked",
-    (revokedOwner) =>
+    "keeps completed-result and followup custody independent when the %s result is released",
+    (releasedOwner) =>
       withOpenClawTestState({ scenario: "minimal" }, async () => {
         setRuntimeConfigSnapshot({});
         const context = createContext();
@@ -90,7 +184,6 @@ export function registerCompletedFollowupAuthorityTests({
             ),
           );
           original.release();
-          expect(original.authority.assertCurrent).not.toThrow();
           const entry = expectDefined(subagentRuns.get("child"), "completed child");
           await updateRun(entry.runId, (draft) => {
             draft.execution = { status: "terminal", endedAt: 1, outcome: { status: "ok" } };
@@ -136,17 +229,14 @@ export function registerCompletedFollowupAuthorityTests({
           // Suppressing old session effects must not retire its pending result's custody.
           expect(completionSource(retained)).toBe(original.authority.source);
           expect(completionSource(successor)).toBe(followup.authority.source);
-          const revokeOriginal = revokedOwner === "original";
-          (revokeOriginal ? original.revoked : followup.revoked).abort(
-            new Error("operator revoked"),
-          );
-          expect(completionSource(revokeOriginal ? retained : successor)).toBeUndefined();
-          expect(completionSource(revokeOriginal ? successor : retained)).toBe(
-            revokeOriginal ? followup.authority.source : original.authority.source,
+          const releaseOriginal = releasedOwner === "original";
+          await releaseSubagentRun(releaseOriginal ? retained.runId : successor.runId);
+          expect(completionSource(releaseOriginal ? retained : successor)).toBeUndefined();
+          expect(completionSource(releaseOriginal ? successor : retained)).toBe(
+            releaseOriginal ? followup.authority.source : original.authority.source,
           );
           await releaseSubagentRun(entry.runId);
           await releaseSubagentRun(successor.runId);
-          expect(original.authority.assertCurrent).toThrow();
           expect(subagentRuns.runWithCompletionAuthority(entry, () => "baseline")).toBe("baseline");
         } finally {
           original.release();

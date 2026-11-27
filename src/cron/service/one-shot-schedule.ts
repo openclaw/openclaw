@@ -5,10 +5,18 @@ import { computeNextRunAtMs } from "../schedule.js";
 import { resolveCronSessionTargetSessionKey } from "../session-target.js";
 import type { CronJob, CronRunStatus, CronStoredJob } from "../types.js";
 
+export const CRON_CLEANUP_REPAIR_REQUIRED_MESSAGE =
+  "cron cleanup policy requires migration; run openclaw doctor --fix before running this automation";
+
+export function hasLegacyCronCleanupPolicy(job: object): boolean {
+  return Object.hasOwn(job, "deleteAfterRun");
+}
+
 /** Do not copy one-use or identity-bound authority onto a new job ID. */
 export function canRetryArchivedCronJob(job: CronStoredJob): boolean {
   return (
     (job.schedule?.kind === "at" || job.schedule?.kind === "on-exit") &&
+    !hasLegacyCronCleanupPolicy(job) &&
     !job.declarationKey &&
     !job.operatorSource &&
     !job.pluginCommand &&

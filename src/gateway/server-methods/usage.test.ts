@@ -23,6 +23,7 @@ import {
   discoverAllSessions,
   loadCostUsageSummaryFromCache,
 } from "../../infra/session-cost-usage.js";
+import { includesUsageDay } from "../../shared/usage-calendar.js";
 import { resolveDateRange } from "./usage-date-range.js";
 import { invokeUsage, usageReply, usageTotals } from "./usage.test-support.js";
 
@@ -87,6 +88,45 @@ it("falls back to the offset when Gateway ICU does not recognize the browser tim
   );
 });
 
+it("shares the UTC report for a named UTC zone even with a conflicting offset", async () => {
+  const config = {};
+  const startMs = Date.UTC(2026, 1, 1);
+  const endMs = Date.UTC(2026, 1, 3) - 1;
+  const summary = costSummary(7, 0.25);
+  loadCost.mockResolvedValueOnce(summary);
+
+  expectUsage(await request(dates, config), summary);
+  expectUsage(
+    await request({ ...dates, mode: "specific", timeZone: "UTC", utcOffset: "UTC+5:30" }, config),
+    summary,
+  );
+  expect(loadCost).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      startMs,
+      endMs,
+      dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+    }),
+  );
+});
+
+it("includes later years when a split-day report starts before year 1000", () => {
+  const range = resolveDateRange({
+    startDate: "0999-01-01",
+    endDate: "2007-11-04",
+    mode: "specific",
+    timeZone: "America/St_Johns",
+  });
+  const days = range.ok && range.value.civilDays;
+  expect(days && includesUsageDay("2007-11-03", days)).toBe(true);
+});
+
+it("resolves the 23-hour day in Vienna", () => {
+  expectRange(
+    { startDate: "2026-03-29", endDate: "2026-03-29", mode: "specific", timeZone: "Europe/Vienna" },
+    [Date.parse("2026-03-28T23:00:00Z"), Date.parse("2026-03-29T22:00:00Z") - 1],
+  );
+});
+
 it.each(["specific", "gateway"])("handles skipped civil dates in %s mode", (mode) => {
   withEnv({ TZ: "Pacific/Apia" }, () => {
     const params = { mode, ...(mode === "specific" ? { timeZone: "Pacific/Apia" } : {}) };
@@ -99,6 +139,12 @@ it.each(["specific", "gateway"])("handles skipped civil dates in %s mode", (mode
     expectRange({ ...params, startDate: "2011-12-29", endDate: "2011-12-29" }, [
       Date.UTC(2011, 11, 29, 10),
       Date.UTC(2011, 11, 30, 10) - 1,
+    ]);
+    // Local Dec 31 follows Dec 29. A trailing two-day window includes only Dec 31.
+    vi.useFakeTimers({ toFake: ["Date"] }).setSystemTime(new Date("2011-12-30T22:00:00Z"));
+    expectRange({ ...params, days: 2 }, [
+      Date.UTC(2011, 11, 30, 10),
+      Date.UTC(2011, 11, 31, 10) - 1,
     ]);
   });
 });

@@ -1,4 +1,5 @@
 import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../../cron/agent-id.js";
+import { CRON_CLEANUP_REPAIR_REQUIRED_MESSAGE } from "../../cron/service/one-shot-schedule.js";
 import { CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE } from "../../cron/store/delivery-codec.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 
@@ -6,6 +7,7 @@ export function isCronInvalidRequestError(err: unknown): boolean {
   const message = formatErrorMessage(err);
   return (
     message === CRON_AGENT_SELECTION_REQUIRED_MESSAGE ||
+    message === CRON_CLEANUP_REPAIR_REQUIRED_MESSAGE ||
     message === CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE ||
     message.startsWith("unknown cron job id:") ||
     message.startsWith("cron job already exists:") ||

@@ -241,11 +241,36 @@ defineDiscordVoiceTests((h) => {
     expect(trailingSilence).toStrictEqual(Buffer.alloc(33_600));
   });
 
-  it("ignores realtime capture during playback when barge-in is disabled", async () => {
+  it("admits provider-controlled interruption without local barge-in", async () => {
     const connection = h.useConnection();
     const { entry, manager, player } = await h.createJoinedBidiFixture({
       allowFrom: ["discord:u1"],
-      voice: { realtime: { bargeIn: false } },
+      voice: {
+        realtime: {
+          bargeIn: false,
+          providers: { openai: { interruptResponseOnInputAudio: true } },
+        },
+      },
+    });
+    player.state.status = "playing";
+
+    await h.handleSpeakingStart(manager, entry, "u1");
+
+    expect(h.realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
+    expect(player.stop).not.toHaveBeenCalled();
+    expect(connection.receiver.subscribe).toHaveBeenCalledWith("u1", expect.any(Object));
+  });
+
+  it("ignores realtime capture during playback when all interruption is disabled", async () => {
+    const connection = h.useConnection();
+    const { entry, manager, player } = await h.createJoinedBidiFixture({
+      allowFrom: ["discord:u1"],
+      voice: {
+        realtime: {
+          bargeIn: false,
+          providers: { openai: { interruptResponseOnInputAudio: false } },
+        },
+      },
     });
     player.state.status = "playing";
 

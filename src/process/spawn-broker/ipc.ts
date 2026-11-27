@@ -60,7 +60,9 @@ export function createBrokerSender(send: IpcSender) {
     handle?: SendHandle,
     initiateSpawn?: SpawnInitiation,
   ): Promise<void> => {
-    const payload = serialize(message);
+    // The resource owner can hand off a message it already serialized at admission.
+    const prepared = Buffer.isBuffer(message);
+    const payload = prepared ? message : serialize(message);
     const size = payload.byteLength;
     if (size > FRAME_BYTES && handle) {
       return Promise.reject(
@@ -70,7 +72,7 @@ export function createBrokerSender(send: IpcSender) {
     const id = ++sequence;
     const operation = async () => {
       if (size <= FRAME_BYTES) {
-        await write(message, handle, initiateSpawn);
+        await write(prepared ? deserialize(payload) : message, handle, initiateSpawn);
         return;
       }
       for (let offset = 0; offset < size; offset += FRAME_BYTES) {

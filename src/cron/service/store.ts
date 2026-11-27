@@ -35,6 +35,10 @@ import type { CronStoredJob, CronJob, CronStoreFile } from "../types.js";
 import { prepareCronStreamMutationAdmission } from "./config-mutation.js";
 import { assertTimeScheduleSatisfiable } from "./jobs-validation.js";
 import { dispatchCronNotification } from "./notification-dispatch.js";
+import {
+  CRON_CLEANUP_REPAIR_REQUIRED_MESSAGE,
+  hasLegacyCronCleanupPolicy,
+} from "./one-shot-schedule.js";
 import { wakeCronRunQueues } from "./run-queue-wake.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
 import { publishDurableNextRunChanges } from "./runtime-publication.js";
@@ -288,6 +292,9 @@ export async function ensureLoaded(
       continue;
     }
     const hydrated = hydratedRaw;
+    if (hasLegacyCronCleanupPolicy(hydrated)) {
+      warnJobLoadOnce(state, hydrated, CRON_CLEANUP_REPAIR_REQUIRED_MESSAGE);
+    }
     warnJobLoadOnce(
       state,
       hydrated,

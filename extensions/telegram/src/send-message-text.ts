@@ -97,7 +97,6 @@ export function createTelegramTextSender(config: {
     };
 
     const start = sender.parts.length;
-    let acceptedReplyToMessageId: number | undefined;
     const deliveryResults: TelegramSendResult[] = [];
     const buildReceipt = () => {
       if (deliveryResults.length < 2) {
@@ -106,12 +105,12 @@ export function createTelegramTextSender(config: {
       const receipt = createMessageReceiptFromOutboundResults({
         results: deliveryResults,
         kind: "text",
-        ...(typeof acceptedReplyToMessageId === "number"
-          ? { replyToId: String(acceptedReplyToMessageId) }
-          : {}),
       });
       receipt.parts.forEach((part, index) => {
         part.index = index;
+        if (part.replyToId) {
+          receipt.replyToId ??= part.replyToId;
+        }
       });
       return receipt;
     };
@@ -163,7 +162,6 @@ export function createTelegramTextSender(config: {
 
     const record = async (params: Omit<PendingChunk, "reportChatId">) => {
       const { messageId } = params;
-      acceptedReplyToMessageId ??= resolveAcceptedReplyToMessageId(params.acceptedParams);
       if (sender.parts.length === start + 1) {
         await options.beforeFirstAccepted?.();
       }
@@ -173,6 +171,7 @@ export function createTelegramTextSender(config: {
       });
       await reportDelivery({
         messageId,
+        acceptedReplyToMessageId: resolveAcceptedReplyToMessageId(params.acceptedParams) ?? null,
         fallbackChatId: params.result?.chat?.id ?? chatId,
         message: params.result,
         meta: {

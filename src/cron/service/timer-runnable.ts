@@ -13,6 +13,7 @@ import {
   resolveJobLastRunStatus,
 } from "./jobs-scheduling.js";
 import {
+  hasLegacyCronCleanupPolicy,
   isCronOneShotContinuationJob,
   resolveForcePreservedOneShotAtMs,
 } from "./one-shot-schedule.js";
@@ -81,6 +82,7 @@ export function isRunnableJob(params: {
     job.state = {};
   }
   if (
+    hasLegacyCronCleanupPolicy(job) ||
     !hasCanonicalCronDeliveryMode(job.delivery) ||
     hasActiveCronRun(job, params.activeInProcess)
   ) {

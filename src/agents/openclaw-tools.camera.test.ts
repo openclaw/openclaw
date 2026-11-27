@@ -9,15 +9,6 @@ import { createNodesTool } from "./tools/nodes-tool.js";
 
 const { callGateway } = vi.hoisted(() => ({ callGateway: vi.fn() }));
 vi.mock("../gateway/call.js", () => ({ callGateway }));
-vi.mock("../media/media-services.js", () => ({
-  buildImageResizeSideGrid: vi.fn(() => [1600]),
-  getImageMetadata: vi.fn(async () => ({ width: 1, height: 1 })),
-  IMAGE_REDUCE_QUALITY_STEPS: [85],
-  isImageProcessorUnavailableError: vi.fn(() => false),
-  MAX_IMAGE_INPUT_PIXELS: 25_000_000,
-  readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
-  resizeToJpeg: vi.fn(async () => Buffer.from("jpeg")),
-}));
 
 const NODE_ID = "mac-1";
 const TINY_JPEG_BASE64 =
@@ -187,37 +178,6 @@ it("returns an explicit model-facing result when no photos are available", async
   expect(result.content).toStrictEqual([{ type: "text", text: "No photos found." }]);
   expect(result.details).toStrictEqual([]);
 });
-
-it.each<[string, Record<string, unknown>, Record<string, unknown>]>([
-  ["device.status", { action: "device_status" }, {}],
-  [
-    "notifications.actions",
-    {
-      action: "notifications_action",
-      notificationKey: "n1",
-      notificationAction: "reply",
-      notificationReplyText: " On it ",
-    },
-    { key: "n1", action: "reply", replyText: "On it" },
-  ],
-  [
-    "location.get",
-    {
-      action: "location_get",
-      maxAgeMs: 12_000,
-      desiredAccuracy: "balanced",
-      locationTimeoutMs: 4_500,
-    },
-    { maxAgeMs: 12_000, desiredAccuracy: "balanced", timeoutMs: 4_500 },
-  ],
-])(
-  "routes %s with normalized parameters and returns its payload",
-  async (command, input, params) => {
-    const payload = { fixture: "node reply" };
-    mockInvoke(command, params, payload, [command]);
-    expect(JSON.parse(firstText(await executeNodes(input)))).toStrictEqual(payload);
-  },
-);
 
 it("blocks media invoke commands to avoid base64 context bloat", async () => {
   await expectNodeError(

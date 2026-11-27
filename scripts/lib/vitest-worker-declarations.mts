@@ -89,8 +89,6 @@ export const vitestWorkerDeclarationEntries = {
     "src/commands/sessions-cleanup-runtime.test-support.ts",
   "test/scripts/tooling-probe-runtime.test-support":
     "test/scripts/tooling-probe-runtime.test-support.mts",
-  "test/scripts/tooling-native-runtime.test-support":
-    "test/scripts/tooling-native-runtime.test-support.ts",
   "infra/native-process-runtime.test-support": "src/infra/native-process-runtime.test-support.ts",
   "infra/storage-process-runtime.test-support": "src/infra/storage-process-runtime.test-support.ts",
   "infra/worker-task-pool-runtime.test-support":

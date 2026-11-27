@@ -631,11 +631,16 @@ async function runCloseTeardownFailure() {
   }
 }
 
-async function runReferenceLiveness() {
-  const worker = createRetainedNativeWorker(
+async function runReferenceLiveness(directory: string) {
+  const { createPluginCaptureOwner } =
+    await import("../plugins/plugin-capture-native-resource.client.js");
+  const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+  const captures = await createPluginCaptureOwner(source);
+  const worker = source.create(
     `const { parentPort } = require("node:worker_threads");
     parentPort.on("message", value => setImmediate(() => parentPort.postMessage(value + 1)));`,
     { eval: true, execArgv: [] },
+    captures.descriptor,
   );
   let reply = createDeferredCore<unknown>();
   worker.on("message", (value) => reply.resolve(value));
@@ -651,8 +656,26 @@ async function runReferenceLiveness() {
   await roundTrip();
   worker.unref();
   await worker.getHeapStatistics();
-  console.log(JSON.stringify({ ending: "reference-liveness", activeCompleted: true }));
-  // Deliberately leave the idle child open: only the host reference owner permits exit.
+  // Neither idle execution nor passive capture may keep this process alive, but
+  // independent-port creation and asynchronous disposal must finish before exit.
+  const storage = { stateDir: directory, placement: "state" } as const;
+  const [first, retained] = await Promise.all([
+    captures.createSource(1, storage, "liveness-first-"),
+    captures.createSource(2, storage, "liveness-retained-"),
+  ]);
+  assert.equal(existsSync(first.directory), true);
+  assert.equal(existsSync(retained.directory), true);
+  await captures.releaseSource(1);
+  assert.equal(existsSync(first.directory), false);
+  assert.equal(existsSync(retained.directory), true);
+  console.log(
+    JSON.stringify({
+      ending: "reference-liveness",
+      activeCompleted: true,
+      activeCaptureCompleted: true,
+    }),
+  );
+  // Leave both capture claims and one real artifact open: they retain custody, not liveness.
 }
 
 assert.equal(isMainThread, true, "the fixture must block the process main thread");
@@ -679,7 +702,7 @@ if (ending === "close-live-worker" || ending === "close-owner-retry") {
 } else if (ending === "close-teardown-failure") {
   await runCloseTeardownFailure();
 } else if (ending === "reference-liveness") {
-  await runReferenceLiveness();
+  await runReferenceLiveness(directory);
 } else if (ending === "generation") {
   await runGenerationLifecycle(directory, databasePath);
 } else if (ending === "explicit-unbound") {

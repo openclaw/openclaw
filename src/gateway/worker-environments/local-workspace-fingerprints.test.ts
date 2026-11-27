@@ -6,7 +6,10 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
-import { prepareLocalWorkspaceFingerprints } from "./local-workspace-fingerprints.js";
+import {
+  prepareLocalWorkspaceFingerprints,
+  rebindClonedWorkspaceFingerprints,
+} from "./local-workspace-fingerprints.js";
 import {
   createLocalWorkspaceManifestTree,
   type LocalWorkspaceManifestNode,
@@ -209,6 +212,28 @@ it("re-encodes an unchanged tree when a file identity changes", async () => {
   expect(current.blob).not.toEqual(baseline.blob);
 });
 
+it("carries snapshot file identities into a clone with newly prepared directories", async () => {
+  const { root, baseline } = await fixture();
+  const dev = (await fs.stat(root, { bigint: true })).dev;
+  const template = await capture(root, baseline, baseline.blob, {
+    root,
+    sourceDev: dev + 1n,
+    snapshotDev: dev,
+    capturedAtMs: Date.now(),
+  });
+  await fs.mkdir(path.join(root, "skills"));
+  const records = createLocalWorkspaceManifestTree([
+    ...[...baseline.records.values()].map(({ node }) => node).filter((node) => node.path !== ""),
+    { path: "skills", type: "directory" },
+  ]);
+  const treeRoot = records.get("")!.treeRef;
+  const blob = rebindClonedWorkspaceFingerprints(template.blob, template.treeRoot, treeRoot, dev);
+  const unchanged = await capture(root, { records, treeRoot, blob });
+  expect(unchanged.metrics.contentHashCount).toBe(0);
+  expect(unchanged.treeRoot).toBe(treeRoot);
+  expect(rebindClonedWorkspaceFingerprints(template.blob, treeRoot, treeRoot, dev)).toBeNull();
+});
+
 it("hashes a same-size edit with a recent identical ctime after restart", async () => {
   let now = Date.now();
   vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -299,16 +324,14 @@ it("preserves v1 slots and exact u64 identities when file paths are added and re
     codec.compress(bytes),
     Date.now(),
   );
-  const identity = "gateway:18446744073709551615:9007199254740993:4:0:1";
   expect(
-    scan.reuseFile("b.txt", identity, {
+    scan.reuseFile("b.txt", {
       dev: 18446744073709551615n,
       ino: 9007199254740993n,
       size: 4n,
       ctimeNs: 1n,
     }),
   ).toBe(baseline.get("b.txt")!.node);
-  scan.observe("b.txt", identity);
   scan.observe("a.txt", "gateway:18446744073709551615:9007199254740997:4:0:3");
   const current = createLocalWorkspaceManifestTree([file("b.txt"), file("a.txt")]);
   const currentRoot = current.get("")!.treeRef;

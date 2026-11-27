@@ -65,6 +65,8 @@ function createQueueBlocker() {
   return {
     runCommandJob,
     async occupy(cron: CronService, signal: AbortSignal) {
+      // No spare memory, so exactly the default run slots fill.
+      vi.spyOn(process, "availableMemory").mockReturnValue(0);
       const jobs = await Promise.all(
         Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, (_, index) =>
           addOneShot(cron, `capacity blocker ${index}`, clock.clock.now() + 86_400_000, {

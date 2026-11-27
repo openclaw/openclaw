@@ -40,6 +40,7 @@ await definePluginReloadProductTest(
           effects: number;
           wakes: number;
           notices: number;
+          messageRequests: number;
           barrierFired: number;
           revocation?: { method: string; bobRefused: boolean };
           databasePath: string;
@@ -76,6 +77,8 @@ await definePluginReloadProductTest(
         databasePath: binding.databasePath,
       })),
     );
+    // Refusal comes before the send: the revoked replay never reaches the target model.
+    expect(proofs[1]?.messageRequests).toBe(0);
     expect(proofs[1]?.revocation?.bobRefused).toBe(true);
     console.log("RELOAD_REVOCATION_CASES", JSON.stringify(proofs));
     console.log(

@@ -185,6 +185,8 @@ Before downgrading, stop and settle sandbox streams on the current version. Olde
 
 Set `cron.triggers.enabled: false` to disable streams together with condition-trigger scripts and script payloads. Disabling or removing the job stops the process; Gateway shutdown waits for process-tree teardown. Fast failures restart with the scheduler's built-in error backoff. Five consecutive runs shorter than 60 seconds leave the job in an error state and use the normal failure-alert path; manually re-enable the job to clear the restart cap.
 
+On Linux, a separate native process owner retains the stream's descendants if its command anchor crashes. It stops and reaps those descendants before the stream can restart, including children that detached into another process group. Losing that final cleanup owner still leaves the stream in an error state: re-enabling does not override unconfirmed cleanup. Inspect and stop the original workload through its service or container manager before restarting the Gateway and re-enabling it.
+
 ```bash
 openclaw automations add \
   --name "Build event stream" \
@@ -266,7 +268,9 @@ const pr = 123;
 async function readJson(command) {
   const response = await exec({ command });
   if (response.status !== "completed" || response.exitCode !== 0) {
-    throw new Error("CI observation failed; inspect this automation's run diagnostics.");
+    // A failed evaluation records only this message, so say what failed in it.
+    const output = String(response.message || response.aggregated || "").slice(-200);
+    throw new Error("CI observation failed (exit " + response.exitCode + "): " + output);
   }
   return JSON.parse(response.aggregated);
 }
@@ -310,12 +314,19 @@ A new head, a rerun with a new check identity, or a check/status transition fire
 the payload even when the aggregate status is unchanged. An unchanged observation
 returns `fire: false`, so no model turn or visible update is produced. Observation
 errors throw and remain actionable scheduler failures; do not convert them to
-`fire: false`. Keep this example within the 16 KiB state limit by scoping large
+`fire: false`. A failed evaluation records the thrown message as the run's error
+and keeps no command output, so the message must carry what you need to diagnose
+it. A trigger's `exec` always waits for its command to finish within the
+trigger's time limit and returns `status: "completed"` or `"failed"`, never a
+running process; `yieldMs` and `background` have no effect there. A successful
+command's `aggregated` is exactly what the command wrote. When a command leaves a
+process running (`gh`, for example, can start a helper that outlives it),
+OpenClaw reports that in `response.warningText`, not in the output. Keep this example within the 16 KiB state limit by scoping large
 repositories to the checks the watcher owns. Do not use a change-only gate for an
 explicitly requested recurring report or digest: that job should deliver at its
 requested cadence even if the observations are unchanged.
 
-Forced manual runs bypass this gate: `openclaw automations run <job-id>` (forced by default) and the `automations` tool with `action: "run", runMode: "force"` skip `trigger.script` and execute the payload directly. An `agentTurn` payload wakes the model even if the script would return `fire: false`. To test the gate, wait for a scheduled evaluation or use `openclaw automations run <job-id> --due` when the job is due. The tool's default `runMode: "due"` also honors the gate; neither due mode makes a job due early.
+Manual runs evaluate this gate like a scheduled run: `openclaw automations run <job-id>` and the `automations` tool with `action: "run"` run `trigger.script` first and execute the payload only when it returns `fire: true`. A quiet result is recorded as a skipped run (`trigger condition not met`). `runMode: "force"` runs the check now; the default `runMode: "due"` runs it only when the job is due.
 
 `openclaw doctor --fix` converts persisted trigger scripts that call `tools.call('exec', args)` and read the `.result.details` envelope. Doctor leaves custom or ambiguous scripts unchanged and identifies each affected job for manual conversion; standalone script payloads are not converted.
 
@@ -333,9 +344,9 @@ time first, and start as soon as a running check finishes or its condition fires
 A queued check is not deferred or retried later, holds no run slot, spends none of
 its time budget, and keeps its occurrence across a Gateway restart.
 
-A scheduled check does not use one of the scheduler's eight run slots, so checks keep
-running while eight long runs are active. Only the payload of a fired condition needs a
-run slot. If a condition fires while all eight are busy, the run waits for a free slot and
+A scheduled check does not use one of the scheduler's run slots, so checks keep running
+while every run slot holds a long run. Only the payload of a fired condition needs a run
+slot. If a condition fires while every slot is busy, the run waits for a free slot and
 then runs its payload on the result of that one check; the wait does not count against
 the run's time budget. A cron config change keeps the wait; a Gateway stop or restart
 ends it without running the payload. Freed slots go to waiting payloads and queued runs in due-time

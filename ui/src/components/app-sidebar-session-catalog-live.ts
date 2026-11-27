@@ -1,6 +1,7 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   SessionCatalog,
+  SessionCatalogProfileRelation,
   SessionsCatalogHostEvent,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
@@ -391,6 +392,7 @@ export async function refreshSessionCatalogsLive(params: {
   live: SessionCatalogLiveState;
   client: GatewayBrowserClient;
   agentId: string;
+  profileRelation?: SessionCatalogProfileRelation;
   generation: number;
   currentGeneration: () => number;
   currentClient: () => GatewayBrowserClient | null;
@@ -423,8 +425,14 @@ export async function refreshSessionCatalogsLive(params: {
     scope === live.refreshScope &&
     live.isCurrentRequest(progressId);
   try {
+    // One aggregate request refreshes every catalog. The Gateway applies the relation only to
+    // providers that support it, and an advertised capability proves it accepts the field.
+    const sendRelation =
+      params.profileRelation &&
+      params.catalogs().some((catalog) => catalog.capabilities.profileRelation);
     const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
       agentId: params.agentId,
+      ...(sendRelation ? { profileRelation: params.profileRelation } : {}),
       limitPerHost: 40,
       progressId,
       allowPartialResults: true,
@@ -441,6 +449,7 @@ export async function refreshSessionCatalogsLive(params: {
         previousCatalogs: observed,
         client,
         agentId: params.agentId,
+        profileRelation: params.profileRelation,
         pageDepths,
         isCurrent: requestIsCurrent,
         canRequestPage: () => requestIsCurrent() && document.visibilityState !== "hidden",

@@ -52,9 +52,7 @@ export const startupMetadataReadOperations = {
     // native admission so no SQLite handle or snapshot is held across the await.
     const readMetadata = isUpdateRunAdmissionReadCommand(command)
       ? await import("../infra/update-run-admission.read.js").then(
-          ({ readUpdateRunAdmissionCommand }) =>
-            (db: EngineConnection) =>
-              readUpdateRunAdmissionCommand(db, command),
+          ({ prepareUpdateRunAdmissionRead }) => prepareUpdateRunAdmissionRead(command),
         )
       : command.type === "config.health.read"
         ? (db: EngineConnection) => configHealthReadOperations[command.type](command.input, db)

@@ -109,20 +109,20 @@ class ChatControllerSessionSearchTest {
           .single()
           .localFallbackTitle,
       )
-      val searched = controller.fetchSessionList(search = "node-device", archived = false).single()
+      val searched = requireNotNull(controller.fetchSessionList(search = "node-device", archived = false)).single()
       assertEquals("Device A", searched.localFallbackTitle)
       assertNull(searched.autoLabel)
       assertNull(searched.displayName)
 
       offline = true
-      val offlineMatches = controller.fetchSessionList(search = "  dEvIcE a  ", archived = false)
+      val offlineMatches = requireNotNull(controller.fetchSessionList(search = "  dEvIcE a  ", archived = false))
       assertEquals(listOf(key), offlineMatches.map { it.key })
       assertEquals("Device A", offlineMatches.single().localFallbackTitle)
       assertNull(offlineMatches.single().autoLabel)
       assertNull(offlineMatches.single().displayName)
-      assertTrue(controller.fetchSessionList(search = "Device A", archived = true).isEmpty())
-      assertTrue(controller.fetchSessionList(search = "Device B", archived = false).isEmpty())
-      assertEquals("Device A", controller.fetchSessionList(search = "node-device", archived = false).single().localFallbackTitle)
+      assertNull(controller.fetchSessionList(search = "Device A", archived = true))
+      assertTrue(requireNotNull(controller.fetchSessionList(search = "Device B", archived = false)).isEmpty())
+      assertEquals("Device A", requireNotNull(controller.fetchSessionList(search = "node-device", archived = false)).single().localFallbackTitle)
       controller.onGatewayConnected(MainSessionBinding(key, "Renamed device A"))
       assertEquals(
         "Renamed device A",
@@ -131,13 +131,13 @@ class ChatControllerSessionSearchTest {
           .localFallbackTitle,
       )
       runCurrent()
-      assertEquals(listOf(key), controller.fetchSessionList(search = "Renamed device A", archived = false).map { it.key })
+      assertEquals(listOf(key), requireNotNull(controller.fetchSessionList(search = "Renamed device A", archived = false)).map { it.key })
 
       controller.onGatewayScopeChanging()
       cacheScope = ChatCacheScope("gateway-b", 2)
       assertTrue(controller.sessions.value.isEmpty())
       offline = false
-      assertNull(controller.fetchSessionList(search = null, archived = false).single().localFallbackTitle)
+      assertNull(requireNotNull(controller.fetchSessionList(search = null, archived = false)).single().localFallbackTitle)
       controller.prepareMainSessionKey(key)
       controller.onGatewayConnected(MainSessionBinding(key, "Device B"))
       runCurrent()
@@ -149,10 +149,10 @@ class ChatControllerSessionSearchTest {
           .single()
           .localFallbackTitle,
       )
-      assertEquals("Device B", controller.fetchSessionList(search = null, archived = false).single().localFallbackTitle)
+      assertEquals("Device B", requireNotNull(controller.fetchSessionList(search = null, archived = false)).single().localFallbackTitle)
       offline = true
-      assertTrue(controller.fetchSessionList(search = "Device A", archived = false).isEmpty())
-      assertEquals(listOf(key), controller.fetchSessionList(search = "Device B", archived = false).map { it.key })
+      assertTrue(requireNotNull(controller.fetchSessionList(search = "Device A", archived = false)).isEmpty())
+      assertEquals(listOf(key), requireNotNull(controller.fetchSessionList(search = "Device B", archived = false)).map { it.key })
     }
 
   @Test
@@ -169,7 +169,7 @@ class ChatControllerSessionSearchTest {
       }
       val controller = newController(gateway)
 
-      val archivedRows = controller.fetchSessionList(search = null, archived = true)
+      val archivedRows = requireNotNull(controller.fetchSessionList(search = null, archived = true))
       assertEquals(listOf("agent:main:old"), archivedRows.map { it.key })
       assertTrue(archivedRows.single().archived == true)
 
@@ -204,7 +204,7 @@ class ChatControllerSessionSearchTest {
         ]}""",
       )
       val controller = newController(gateway)
-      val rows = controller.fetchSessionList(search = null, archived = false)
+      val rows = requireNotNull(controller.fetchSessionList(search = null, archived = false))
       val expectedPinned =
         setOf(
           "agent:main:dashboard:work",
@@ -309,7 +309,7 @@ class ChatControllerSessionSearchTest {
       }
       val controller = newController(gateway)
 
-      val row = controller.fetchSessionList(search = null, archived = false).single()
+      val row = requireNotNull(controller.fetchSessionList(search = null, archived = false)).single()
       assertEquals("main", row.ownerAgentId)
       assertEquals("direct", row.classification)
       assertEquals("main", row.accountId)
@@ -378,13 +378,13 @@ class ChatControllerSessionSearchTest {
       controller.refreshSessions()
       advanceUntilIdle()
 
-      val filtered = controller.fetchSessionList(search = "trip", archived = false)
+      val filtered = requireNotNull(controller.fetchSessionList(search = "trip", archived = false))
       assertEquals(listOf("agent:main:topic-a"), filtered.map { it.key })
-      val automaticallyNamed = controller.fetchSessionList(search = "REMOTE DEVICE", archived = false)
+      val automaticallyNamed = requireNotNull(controller.fetchSessionList(search = "REMOTE DEVICE", archived = false))
       assertEquals(listOf("agent:main:topic-c"), automaticallyNamed.map { it.key })
       assertNull(automaticallyNamed.single().displayName)
-      // Archived rows exist only server-side, so offline archived search is empty.
-      assertTrue(controller.fetchSessionList(search = null, archived = true).isEmpty())
+      // Archived rows exist only server-side; offline is not an authoritative empty result.
+      assertNull(controller.fetchSessionList(search = null, archived = true))
     }
 
   @Test
@@ -401,8 +401,8 @@ class ChatControllerSessionSearchTest {
           currentDefaultAgentId = { null },
         )
 
-      assertTrue(controller.fetchSessionList(search = "trip", archived = false).isEmpty())
-      assertTrue(controller.fetchSessionList(search = null, archived = true).isEmpty())
+      assertTrue(requireNotNull(controller.fetchSessionList(search = "trip", archived = false)).isEmpty())
+      assertNull(controller.fetchSessionList(search = null, archived = true))
       assertTrue(gateway.calls.isEmpty())
     }
 
@@ -422,38 +422,37 @@ class ChatControllerSessionSearchTest {
     }
 
   @Test
-  fun fetchSessionListDropsAResponseAfterOwnerOrGatewayChanges() =
+  fun fetchSessionListDropsALateAnswerAcrossEachOwnershipBoundary() =
     runTest {
-      var defaultAgentId = "agent-a"
-      var defaultAgentRevision = 1L
-      var cacheScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1)
-      val requestStarted = CompletableDeferred<Unit>()
-      val releaseResponse = CompletableDeferred<String>()
-      val gateway = ScriptedGateway(json)
-      gateway.respond("sessions.list") {
-        requestStarted.complete(Unit)
-        releaseResponse.await()
+      for (change in listOf("agent", "gateway", "reconnect", "operator hello")) {
+        var defaultAgentId = "agent-a"
+        var cacheScope = ChatCacheScope("gateway-a", 1)
+        var operatorEpoch = 1L
+        val response = CompletableDeferred<String>()
+        val gateway = ScriptedGateway(json)
+        gateway.respond("sessions.list") { response.await() }
+        val controller =
+          ChatController(
+            scope = this,
+            commandOutbox = createChatCommandOutbox(),
+            json = json,
+            requestGateway = gateway::request,
+            cacheScope = { cacheScope },
+            currentDefaultAgentId = { defaultAgentId },
+            currentGatewayCatalogRevision = { operatorEpoch },
+          )
+        val pending = async { controller.fetchSessionList(search = "trip", archived = true) }
+        runCurrent()
+        assertEquals(1, gateway.callCount("sessions.list"))
+        when (change) {
+          "agent" -> defaultAgentId = "agent-b"
+          "gateway" -> cacheScope = cacheScope.copy(gatewayId = "gateway-b")
+          "reconnect" -> cacheScope = cacheScope.copy(connectionGeneration = 2)
+          "operator hello" -> operatorEpoch++
+        }
+        response.complete(sessionsListJson(sessionRowJson("agent:agent-a:old", updatedAt = 10, archived = true)))
+        assertNull(change, pending.await())
       }
-      val controller =
-        ChatController(
-          scope = this,
-          commandOutbox = this.createChatCommandOutbox(),
-          json = json,
-          requestGateway = gateway::request,
-          cacheScope = { cacheScope },
-          currentDefaultAgentId = { defaultAgentId },
-          currentDefaultAgentRevision = { defaultAgentRevision },
-        )
-
-      val pending = async { controller.fetchSessionList(search = "trip", archived = false) }
-      runCurrent()
-      requestStarted.await()
-      defaultAgentId = "agent-b"
-      defaultAgentRevision += 1
-      cacheScope = ChatCacheScope(gatewayId = "gateway-b", connectionGeneration = 2)
-      releaseResponse.complete(sessionsListJson(sessionRowJson(key = "agent:agent-a:old", updatedAt = 10)))
-
-      assertTrue(pending.await().isEmpty())
     }
 
   @Test

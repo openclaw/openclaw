@@ -8,7 +8,13 @@ import { describe, expect, it, vi } from "vitest";
 import { FILE_FETCH_CHUNK_BYTES } from "./shared/file-fetch-protocol.js";
 import { createNodeWorkspaceBridge } from "./workspace-bridge.js";
 
-function fixture(options: { excess?: boolean; receipt?: Record<string, unknown> } = {}) {
+function fixture(
+  options: {
+    boundedReplies?: boolean;
+    excess?: boolean;
+    receipt?: Record<string, unknown>;
+  } = {},
+) {
   const bytes = Buffer.from("output");
   const closed = createDeferred<unknown>();
   let receiver: ((message: Uint8Array) => void | Promise<void>) | undefined;
@@ -65,19 +71,76 @@ function fixture(options: { excess?: boolean; receipt?: Record<string, unknown> 
     invoke,
     openDuplex,
     signal: new AbortController().signal,
+    boundedReplies: options.boundedReplies,
   });
   return {
+    bytes,
     close,
+    invoke,
+    openDuplex,
     unsubscribe,
-    read: () =>
+    read: (maxBytes = 16 * 1024 * 1024 + 1, signal?: AbortSignal) =>
       bridge.readFile({
         filePath: "/workspace/output",
-        maxBytes: 16 * 1024 * 1024 + 1,
+        maxBytes,
+        signal,
       }),
   };
 }
 
 describe("node workspace binary reads", () => {
+  it("selects one policy-checked duplex invocation at the default workspace budget", async () => {
+    const selected = fixture({ boundedReplies: true });
+    const maxBytes = 16 * 1024 * 1024;
+    await expect(selected.read(maxBytes)).resolves.toEqual(selected.bytes);
+    expect(selected.invoke).not.toHaveBeenCalled();
+    expect(selected.openDuplex).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        command: "file.fetch",
+        params: expect.objectContaining({ maxBytes, transport: "binary" }),
+        timeoutMs: 60_000,
+      }),
+    );
+  });
+
+  it.each([
+    ["NOT_FOUND", "ENOENT"],
+    ["FILE_TOO_LARGE", "FILE_TOO_LARGE"],
+    ["SYMLINK_REDIRECT", "SYMLINK_REDIRECT"],
+  ])("preserves a structured %s refusal before duplex readiness", async (code, localCode) => {
+    const selected = fixture({ boundedReplies: true });
+    selected.openDuplex.mockRejectedValueOnce(
+      Object.assign(new Error("file preflight refused"), {
+        details: { fileTransferError: { ok: false, code } },
+      }),
+    );
+    await expect(selected.read()).rejects.toMatchObject({ code: localCode });
+    expect(selected.openDuplex).toHaveBeenCalledOnce();
+    expect(selected.invoke).not.toHaveBeenCalled();
+  });
+
+  it("does not translate the caller's cancellation into a missing file", async () => {
+    const selected = fixture({ boundedReplies: true });
+    const abort = new AbortController();
+    const reason = Object.assign(new Error("caller cancelled"), {
+      details: { fileTransferError: { ok: false, code: "NOT_FOUND" } },
+    });
+    selected.openDuplex.mockImplementationOnce(async () => {
+      abort.abort(reason);
+      throw reason;
+    });
+    await expect(selected.read(16 * 1024 * 1024, abort.signal)).rejects.toBe(reason);
+    expect(selected.invoke).not.toHaveBeenCalled();
+  });
+
+  it("rejects a digest-valid receipt outside the selected workspace", async () => {
+    const selected = fixture({ boundedReplies: true, receipt: { path: "/outside/output" } });
+    await expect(selected.read(16 * 1024 * 1024)).rejects.toThrow(
+      "outside the configured node workspace",
+    );
+    expect(selected.close).toHaveBeenCalledOnce();
+  });
+
   it("rejects excess bytes before accepting the final receipt", async () => {
     const value = fixture({ excess: true });
     await expect(value.read()).rejects.toThrow("oversized");

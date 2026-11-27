@@ -209,6 +209,8 @@ export type CronFailureNotificationDetail =
       source: "payload" | "trigger";
       code: CronTriggerFailureCode;
     }
+  /** A deterministic setup refusal: the operator must record the intended account. */
+  | { kind: "inference-account-unrecorded" }
   /** A stuck-session recovery aborted the run for a known semantic cause (e.g. `blocked_tool_call`). */
   | { kind: "agent-stall"; classification: string };
 
@@ -357,8 +359,12 @@ export type CronJobState = Omit<
   runningReceiptId?: string;
   /** Receipt of the active run while its condition is still being evaluated; see the run queue. */
   conditionCheckReceiptId?: string;
-  /** Receipt of the active run while its fired condition waits for a run slot. */
+  /** Receipt of an active run waiting for a slot after a condition or provider check. */
   runSlotWaitReceiptId?: string;
+  /** Resolved provider, valid only with the wait receipt above. */
+  runSlotWaitProvider?: string;
+  /** Receipt that was granted a slot past the fixed floor. */
+  extraRunSlotReceiptId?: string;
   /** Nonce for a committed schedule edit during the pending run. */
   runningScheduleChangeId?: string;
   /**
@@ -462,6 +468,8 @@ export type CronToolsAllowProvenance =
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
 export type CronStoredJob = Omit<CronJob, "streamExecutionHost" | "payloadSource"> & {
+  /** Legacy persisted input held for backed-up Doctor conversion; never a public option. */
+  deleteAfterRun?: boolean;
   /** Immutable host-captured scheduled command invocation; never public create/patch input. */
   pluginCommand?: PluginCommandSchedule;
   /** Original authenticated source for a same-conversation continuation, never a public grant. */
@@ -515,6 +523,8 @@ type CronJobStateInput = Partial<
     | "runningReceiptId"
     | "conditionCheckReceiptId"
     | "runSlotWaitReceiptId"
+    | "runSlotWaitProvider"
+    | "extraRunSlotReceiptId"
     | "runningScheduleChangeId"
     | "pluginCommandRuns"
     | "pluginCommandBinding"

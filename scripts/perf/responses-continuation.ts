@@ -42,13 +42,17 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { GCProfiler, writeHeapSnapshot } from "node:v8";
 import { configureAiTransportHost } from "../../packages/ai/src/host.js";
-import { cleanupSessionResources } from "../../packages/ai/src/session-resources.js";
+import {
+  claimConversationProviderState,
+  cleanupSessionResources,
+} from "../../packages/ai/src/session-resources.js";
 import type {
   ResponsesContinuationRequest,
   ResponsesContinuationState,
 } from "../../packages/ai/src/transports/openai-responses-continuation.js";
 import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../src/shared/immutable-data.js";
 import { summarizeGcByKind } from "../lib/gc-profile-summary.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 
 const { values } = parseArgs({
@@ -398,7 +402,7 @@ function run(count: number): void {
         );
       } else {
         const claim = owner.claimOpenAIResponsesHttpContinuation({
-          sessionId: "continuation-owner-bench",
+          scope: claimConversationProviderState("continuation-owner-bench"),
           apiKey: "synthetic-key",
           baseUrl: "https://provider.invalid/v1",
           headers: {},
@@ -416,12 +420,7 @@ const expectedHash = lastHash;
 globalThis.gc();
 const inspector = new Session();
 if (values.allocation) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32_768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32_768);
 }
 const gc = new GCProfiler();
 gc.start();

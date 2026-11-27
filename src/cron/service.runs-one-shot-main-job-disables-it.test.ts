@@ -132,7 +132,7 @@ it.each([
   ["legacy session", { sessionKey: "agent:ops:telegram:direct:123:thread:123:456" }],
   ["owner session", { owner: { sessionKey: "agent:ops:telegram:direct:123:thread:123:456" } }],
 ] as const)(
-  "notifies the %s after refusing a main-session event without enqueuing a replay",
+  "records a refused main-session event for the %s without enqueuing a replay",
   async (_name, origin) => {
     await using f = await fixture({
       runSessionEvent: async () => ({
@@ -180,7 +180,11 @@ it("consumes a scratch-empty one-shot without replaying it after restart", async
   expect(f.deps.runSessionEvent).not.toHaveBeenCalled();
   expect(f.deps.enqueueSystemEvent).not.toHaveBeenCalled();
   expect(f.history(job.id)).toMatchObject([
-    { status: "skipped", summary: "Automation scratch is explicitly empty" },
+    {
+      status: "ok",
+      completionStatus: "succeeded",
+      summary: "Automation scratch is explicitly empty",
+    },
   ]);
 });
 

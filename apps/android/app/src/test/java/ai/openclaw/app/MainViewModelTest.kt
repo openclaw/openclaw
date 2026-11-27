@@ -10,6 +10,8 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Looper
 import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModelStore
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -23,6 +25,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.util.ReflectionHelpers
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -38,6 +41,44 @@ class MainViewModelTest {
     val appShadow = shadowOf(app)
     while (appShadow.nextStartedService != null) {
       // Drain queued service intents so each test owns its lifecycle assertions.
+    }
+  }
+
+  @Test
+  fun connectionStateFollowsTheCurrentRuntimeDisplay() {
+    val (viewModel, prefs) = createViewModel()
+    val app = RuntimeEnvironment.getApplication() as NodeApp
+    val models = ViewModelStore().apply { put("connection", viewModel) }
+    val runtimes = mutableListOf<NodeRuntime>()
+    try {
+      assertFalse(viewModel.isConnected.value)
+      val runtimeRef = ReflectionHelpers.getField<MutableStateFlow<NodeRuntime?>>(viewModel, "runtimeRef")
+      val first = NodeRuntime(app, prefs, initialForeground = false, initialReconnectSuppressed = true).also(runtimes::add)
+      val firstDisplay = ReflectionHelpers.getField<MutableStateFlow<GatewayConnectionDisplay>>(first, "_gatewayConnectionDisplay")
+      runtimeRef.value = first
+      assertTrue(waitUntil { viewModel.runtimeInitialized.value })
+
+      firstDisplay.value = firstDisplay.value.copy(isConnected = true)
+      assertTrue(waitUntil { viewModel.isConnected.value })
+      firstDisplay.value = firstDisplay.value.copy(isConnected = false)
+      assertTrue(waitUntil { !viewModel.isConnected.value })
+
+      val second = NodeRuntime(app, prefs, initialForeground = false, initialReconnectSuppressed = true).also(runtimes::add)
+      val secondDisplay = ReflectionHelpers.getField<MutableStateFlow<GatewayConnectionDisplay>>(second, "_gatewayConnectionDisplay")
+      secondDisplay.value = secondDisplay.value.copy(isConnected = true)
+      runtimeRef.value = second
+      assertTrue(waitUntil { viewModel.isConnected.value })
+
+      firstDisplay.value = firstDisplay.value.copy(isConnected = true)
+      shadowOf(Looper.getMainLooper()).idle()
+      firstDisplay.value = firstDisplay.value.copy(isConnected = false)
+      shadowOf(Looper.getMainLooper()).idle()
+      assertTrue(viewModel.isConnected.value)
+      secondDisplay.value = secondDisplay.value.copy(isConnected = false)
+      assertTrue(waitUntil { !viewModel.isConnected.value })
+    } finally {
+      models.clear()
+      runtimes.forEach(::closeNodeRuntimeTestFixture)
     }
   }
 

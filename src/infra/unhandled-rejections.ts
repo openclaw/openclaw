@@ -1,7 +1,7 @@
-import process from "node:process";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { installProcessFailureListener } from "../cli/failure-context.js";
 import { exitAfterSignalExitBarriers } from "../cli/signal-exit-barrier.js";
 import { restoreRuntimeTerminalState } from "../runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -271,54 +271,56 @@ export function isUncaughtExceptionHandled(error: unknown): boolean {
   return exceptionRegistry.isHandled(error);
 }
 
+const exitWithTerminalRestore = (
+  reason: string,
+  error: unknown,
+  hookReason: string,
+  exitCode = 1,
+) => {
+  for (const message of runFatalErrorHooks({ reason: hookReason, error })) {
+    console.error("[openclaw]", message);
+  }
+  restoreRuntimeTerminalState(reason, { resumeStdinIfPaused: false });
+  exitAfterSignalExitBarriers(exitCode, reason);
+};
+
+function handleUnhandledRejection(reason: unknown): void {
+  if (rejectionRegistry.isHandled(reason)) {
+    return;
+  }
+
+  // Cancellation during shutdown is expected.
+  if (isAbortError(reason)) {
+    console.warn("[openclaw] Suppressed AbortError:", formatUncaughtError(reason));
+    return;
+  }
+
+  const code = extractErrorCodeWithCause(reason);
+  if (code !== undefined && FATAL_ERROR_CODES.has(code)) {
+    console.error("[openclaw] FATAL unhandled rejection:", formatUncaughtError(reason));
+    exitWithTerminalRestore("fatal unhandled rejection", reason, "fatal_unhandled_rejection");
+    return;
+  }
+
+  if (code !== undefined && CONFIG_ERROR_CODES.has(code)) {
+    console.error("[openclaw] CONFIGURATION ERROR - requires fix:", formatUncaughtError(reason));
+    const exitCode = code === INVALID_CONFIG_ERROR_CODE ? EXIT_CONFIG_ERROR : 1;
+    exitWithTerminalRestore("configuration error", reason, "configuration_error", exitCode);
+    return;
+  }
+
+  if (isTransientUnhandledRejectionError(reason)) {
+    console.warn(
+      "[openclaw] Non-fatal unhandled rejection (continuing):",
+      formatUncaughtError(reason),
+    );
+    return;
+  }
+
+  console.error("[openclaw] Unhandled promise rejection:", formatUncaughtError(reason));
+  exitWithTerminalRestore("unhandled rejection", reason, "unhandled_rejection");
+}
+
 export function installUnhandledRejectionHandler(): void {
-  const exitWithTerminalRestore = (
-    reason: string,
-    error: unknown,
-    hookReason: string,
-    exitCode = 1,
-  ) => {
-    for (const message of runFatalErrorHooks({ reason: hookReason, error })) {
-      console.error("[openclaw]", message);
-    }
-    restoreRuntimeTerminalState(reason, { resumeStdinIfPaused: false });
-    exitAfterSignalExitBarriers(exitCode, reason);
-  };
-
-  process.on("unhandledRejection", (reason, _promise) => {
-    if (rejectionRegistry.isHandled(reason)) {
-      return;
-    }
-
-    // Cancellation during shutdown is expected.
-    if (isAbortError(reason)) {
-      console.warn("[openclaw] Suppressed AbortError:", formatUncaughtError(reason));
-      return;
-    }
-
-    const code = extractErrorCodeWithCause(reason);
-    if (code !== undefined && FATAL_ERROR_CODES.has(code)) {
-      console.error("[openclaw] FATAL unhandled rejection:", formatUncaughtError(reason));
-      exitWithTerminalRestore("fatal unhandled rejection", reason, "fatal_unhandled_rejection");
-      return;
-    }
-
-    if (code !== undefined && CONFIG_ERROR_CODES.has(code)) {
-      console.error("[openclaw] CONFIGURATION ERROR - requires fix:", formatUncaughtError(reason));
-      const exitCode = code === INVALID_CONFIG_ERROR_CODE ? EXIT_CONFIG_ERROR : 1;
-      exitWithTerminalRestore("configuration error", reason, "configuration_error", exitCode);
-      return;
-    }
-
-    if (isTransientUnhandledRejectionError(reason)) {
-      console.warn(
-        "[openclaw] Non-fatal unhandled rejection (continuing):",
-        formatUncaughtError(reason),
-      );
-      return;
-    }
-
-    console.error("[openclaw] Unhandled promise rejection:", formatUncaughtError(reason));
-    exitWithTerminalRestore("unhandled rejection", reason, "unhandled_rejection");
-  });
+  installProcessFailureListener("unhandledRejection", handleUnhandledRejection);
 }

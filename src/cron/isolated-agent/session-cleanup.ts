@@ -1,4 +1,5 @@
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
+import { listRunningSessions } from "../../agents/bash-process-registry.js";
 import { isSessionLifecycleChangedGatewayError } from "../../config/sessions/lifecycle.js";
 import { isCronSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -78,6 +79,11 @@ function shouldDeleteCronRunSessionAfterRun(params: {
 }): boolean {
   return (
     (params.job.schedule.kind === "at" || params.job.schedule.kind === "on-exit") &&
-    isCronSessionKey(params.agentSessionKey)
+    isCronSessionKey(params.agentSessionKey) &&
+    !listRunningSessions().some(
+      (session) =>
+        session.sessionKey === params.agentSessionKey ||
+        session.sessionKey?.startsWith(`${params.agentSessionKey}:run:`),
+    )
   );
 }

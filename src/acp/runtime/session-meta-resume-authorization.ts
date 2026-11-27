@@ -43,7 +43,7 @@ export async function withAcpResumeSessionAuthorization<T>(
   const assertCurrent = () => {
     ownership.assertCurrent?.();
     if (!current) {
-      throw new Error("ACP resume source authority changed; retry from the current session.");
+      throw new Error("The ACP resume source session changed; retry from the current session.");
     }
   };
   try {

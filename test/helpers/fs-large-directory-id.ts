@@ -8,6 +8,7 @@ export function mockLargeDirectoryId(directoryPath: string): { mockRestore(): vo
   const largeInode = BigInt(Number.MAX_SAFE_INTEGER) + 2n;
   const lstat = fs.lstatSync;
   const fstat = fs.fstatSync;
+  const statSync = fs.statSync;
   const lstatAsync = fsPromises.lstat;
   const withLargeIdentity = <T extends fs.Stats | fs.BigIntStats | undefined>(stat: T): T => {
     if (
@@ -26,6 +27,7 @@ export function mockLargeDirectoryId(directoryPath: string): { mockRestore(): vo
   const spies = [
     vi.spyOn(fs, "lstatSync").mockImplementation((...args) => withLargeIdentity(lstat(...args))),
     vi.spyOn(fs, "fstatSync").mockImplementation((...args) => withLargeIdentity(fstat(...args))),
+    vi.spyOn(fs, "statSync").mockImplementation((...args) => withLargeIdentity(statSync(...args))),
     vi
       .spyOn(fsPromises, "lstat")
       .mockImplementation(async (...args) => withLargeIdentity(await lstatAsync(...args))),

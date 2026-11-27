@@ -3,6 +3,7 @@ import type { CronJob, CronStoredJob } from "./types.js";
 /** Remove scheduler-only state before a cron job crosses a public API boundary. */
 export function toPublicCronJob(job: CronStoredJob): CronJob {
   const {
+    deleteAfterRun: _deleteAfterRun,
     pluginCommand: _pluginCommand,
     operatorSource: _operatorSource,
     inferenceBinding: _inferenceBinding,
@@ -26,6 +27,8 @@ export function toPublicCronJob(job: CronStoredJob): CronJob {
   delete state.runningReceiptId;
   delete state.conditionCheckReceiptId;
   delete state.runSlotWaitReceiptId;
+  delete state.runSlotWaitProvider;
+  delete state.extraRunSlotReceiptId;
   delete state.startupCatchupAtMs;
   delete state.pacedNextRunAtMs;
   delete state.forcePreservedNextRunAtMs;
