@@ -18,7 +18,7 @@ import {
   resolveChatAbortRequester,
 } from "./chat-abort-authorization.js";
 import { descendantAbortError } from "./chat-abort-descendants.js";
-import { abortChatRunsForSessionKeyWithPartials } from "./chat-abort-runtime.js";
+import type { ChatSessionAbortResult } from "./chat-abort-runtime.types.js";
 import {
   abortedPartialPersistenceError,
   withAbortedPartialPersistenceWarning,
@@ -399,8 +399,10 @@ export async function runChatSendPreAdmission(
         throw error;
       }
     };
-    let res: Awaited<ReturnType<typeof abortChatRunsForSessionKeyWithPartials>>;
+    let res: ChatSessionAbortResult;
     try {
+      // Load before the retry and routing checks so cancellation uses their current decision.
+      const { abortChatRunsForSessionKeyWithPartials } = await import("./chat-abort-runtime.js");
       if (await respondPreparedChatSendRetry(params, true)) {
         return false;
       }

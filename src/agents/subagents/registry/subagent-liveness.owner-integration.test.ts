@@ -192,12 +192,14 @@ it("retains quiet admitted execution in listing, admission count, and requester 
     expect(isSubagentRunLive(entry)).toBe(true);
     expect(isSubagentRunLive(updated)).toBe(true);
     expect(isSubagentRunLive({ ...updated })).toBe(false);
-    const displayed = buildSubagentSessionListReadIndex().getDisplaySubagentRun(
-      entry.childSessionKey,
-    );
-    expect(displayed).not.toBe(updated);
+    const index = buildSubagentSessionListReadIndex();
+    const displayed = index.getSessionDisplayFacts(entry.childSessionKey);
+    expect(displayed?.identity).not.toBe(updated);
     const serialize = vi.spyOn(JSON, "stringify");
-    const live = Array.from({ length: 100 }, () => isSubagentRunLive(displayed));
+    const live = Array.from(
+      { length: 100 },
+      () => index.getSessionDisplayFacts(entry.childSessionKey)?.active,
+    );
     const serializations = serialize.mock.calls.length;
     serialize.mockRestore();
     expect(live.every(Boolean)).toBe(true);

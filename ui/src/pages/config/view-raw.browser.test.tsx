@@ -301,6 +301,16 @@ describe("config raw editing and redaction", () => {
     expect(container.querySelector(".config-diff")).toBeNull();
   });
 
+  it("projects changed arrays as one pending-change row", () => {
+    const { container } = setup({
+      originalRaw: "{items: [1,]}",
+      raw: "{items: [1, 2,]}",
+    });
+    openDiff(container);
+    expect(container.querySelectorAll(".config-diff__item")).toHaveLength(1);
+    expectDiff(container, "items", "[1 item]", "[2 items]");
+  });
+
   it.each([
     {
       path: "channels.discord.token.id",

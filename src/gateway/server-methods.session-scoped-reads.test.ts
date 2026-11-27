@@ -188,6 +188,31 @@ describe("narrow session read owners", () => {
     );
   });
 
+  it("finishes an admitted invited read after membership removal", async () => {
+    await withScopedReader(
+      "invited-reader",
+      async ({ reader, context }) => {
+        const profileId = reader.authenticatedUserProfile!.profileId;
+        const owner = roleClient("view", "invited-owner");
+        await seed({ sessionId: "invited-read", updatedAt: 1, createdActor: createdActor(owner) });
+        await addSessionMember(scope, { identityId: profileId, addedBy: "owner", addedAt: 1 });
+        const io = prepareRead("sessions.files.get", async () => {
+          await removeSessionMember(scope, profileId);
+        });
+        const respond = vi.fn();
+        await dispatchRead("sessions.files.get", { client: reader, context, respond });
+        expect(io).toHaveBeenCalledOnce();
+        expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls)).toBe(true);
+        // The next read is admitted after the removal and refused.
+        respond.mockClear();
+        await dispatchRead("sessions.files.get", { client: reader, context, respond });
+        expect(io).toHaveBeenCalledOnce();
+        expect(respond.mock.calls[0]?.[0]).toBe(false);
+      },
+      { role: "invited" },
+    );
+  });
+
   it("admits CSP previews for session-only readers and revokes resources when sharing ends", async () => {
     await withScopedReader("preview-reader", async ({ state, reader, context }) => {
       reader.connId = "narrow-preview";
@@ -579,32 +604,15 @@ describe("narrow session read owners", () => {
         updatedAt: 1,
         createdActor: { type: "human", source: "profile", id: GATEWAY_OWNER_PROFILE_ID },
       });
-      for (const changed of [false, true]) {
-        client.internal.operatorRoleActor = {
-          kind: "operator",
-          profileId: GATEWAY_OWNER_PROFILE_ID,
-        };
-        const io = prepareRead(method, async () => {
-          if (changed) {
-            client.internal!.operatorRoleActor = {
-              kind: "operator",
-              profileId: "another-person",
-            };
-          }
-        });
-        const respond = vi.fn();
-        await dispatchRead(method, {
-          client,
-          context: createDirectChatContext(),
-          respond,
-        });
-        expect(io).toHaveBeenCalledOnce();
-        expect(respond.mock.calls[0]?.[0]).toBe(!changed);
-        if (changed) {
-          expect(respond.mock.calls[0]?.[1]).toBeUndefined();
-        }
-        io.mockRestore();
-      }
+      const io = prepareRead(method, async () => {});
+      const respond = vi.fn();
+      await dispatchRead(method, {
+        client,
+        context: createDirectChatContext(),
+        respond,
+      });
+      expect(io).toHaveBeenCalledOnce();
+      expect(respond.mock.calls[0]?.[0]).toBe(true);
     });
   });
 
