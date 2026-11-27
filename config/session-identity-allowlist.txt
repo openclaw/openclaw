@@ -857,7 +857,6 @@ src/gateway/server-methods/artifacts-session-read.ts	4
 src/gateway/server-methods/chat-abort-authorization.ts	12
 src/gateway/server-methods/chat-abort-exact-run.ts	4
 src/gateway/server-methods/chat-abort-handler.ts	11
-src/gateway/server-methods/chat-abort-runtime.ts	2
 src/gateway/server-methods/chat-abort-session-plan.ts	10
 src/gateway/server-methods/chat-aborted-partial.ts	7
 src/gateway/server-methods/chat-history-handler.ts	2

@@ -39,10 +39,11 @@ export function captureDormantSubagentStop(params: {
     undefined,
     params.agentId,
   );
+  // The child index and exact-run lookup share the registry's resident record.
   if (
     !entry ||
     (!isSubagentRunQueued(entry) && !isSubagentPausedByYield(entry)) ||
-    (params.runId && entry.runId !== params.runId)
+    (params.runId && subagentRuns.get(params.runId) !== entry)
   ) {
     return undefined;
   }
