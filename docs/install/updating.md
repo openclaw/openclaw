@@ -181,6 +181,20 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    update or trigger rollback. A successful reload's warnings stay in the plugin
    step details without marking activation failed or requesting a retry.
 
+Saved update history does not grant or refuse a new release update. After taking
+its preparation lock and checking the installation, the serving release marks
+other unfinished runs `failed` with reason `interrupted`, then continues. It
+preserves its own run and the run handed over by its serving launcher trial.
+Historical plugin-cohort records remain unchanged; the new update does not
+adopt or replay their rollback.
+
+Recovery admission still refuses a live in-place update lease and an
+`.openclaw-restore-*` directory that may contain the only original state files.
+Current preparation locks, active trials, and ordinary preflight checks still
+apply. Owned release leftovers are collected by path after the Gateway is ready,
+never by matching version strings. Doctor retains its separate cleanup for old
+in-place updater runtimes; that process census is not on the update critical path.
+
 Packaged bundled plugins belong to the selected core release, not a second
 plugin installation. Channel synchronization retires obsolete compiled-bundle
 install records before it plans package updates; switching to a packaged bundle

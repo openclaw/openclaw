@@ -13,12 +13,17 @@ import type * as DoctorContributions from "../flows/doctor-health-contributions.
 import type * as UpdateNotices from "../gateway/update-run-notice.runtime.js";
 import * as watcherModule from "../gateway/update-run-watcher.js";
 import * as rootModule from "../infra/openclaw-root.js";
+import { PACKAGE_RELEASE_MIN_AGE_MS } from "../infra/package-release-retention.js";
 import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
 import type * as UpdateInstallStatus from "../infra/update-install-status.js";
 import { renderUpdateRunSummary } from "../infra/update-run-notice.js";
 import { getUpdateRunAsync } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
-import { createUpdateRunAsync, recordUpdateRunStepAsync } from "../infra/update-run-write.async.js";
+import {
+  createUpdateRunAsync,
+  finishUpdateRunAsync,
+  recordUpdateRunStepAsync,
+} from "../infra/update-run-write.async.js";
 import type * as ProcessExec from "../process/exec.js";
 import type { SpawnResult } from "../process/exec.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -34,10 +39,13 @@ import { VERSION } from "../version.js";
 import { announceReady, settleRunFromTrial } from "./gateway-trial.js";
 import {
   acquireUpdateLock,
+  allocateStaging,
   createTrialPending,
+  publishStaging,
   readTrial,
   readUpdateLock,
   resolvePrefix,
+  switchLink,
   writeTrial,
   type Trial,
 } from "./store.js";
@@ -718,5 +726,73 @@ process.stdout.write("maintenance-ready\\n");`,
     }
     await watcher.stop();
     await lifecycle.stop();
+  }
+});
+
+it("collects obsolete paths after ready but keeps same-version selected and trial paths", async () => {
+  const state = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ready-retention-")),
+  );
+  directories.push(state);
+  vi.stubEnv("OPENCLAW_STATE_DIR", state);
+  const prefix = resolvePrefix();
+  const manifest = JSON.stringify({ name: "openclaw", version: VERSION });
+  const publish = async (id: string) => {
+    const staging = await allocateStaging({ kind: "package", id }, prefix);
+    await fs.mkdir(path.join(staging.releaseRoot, "dist"), { recursive: true });
+    await fs.writeFile(path.join(staging.releaseRoot, "package.json"), manifest);
+    await fs.writeFile(
+      path.join(staging.releaseRoot, "openclaw.mjs"),
+      `export const version = ${JSON.stringify(VERSION)};\n`,
+    );
+    await fs.writeFile(
+      path.join(staging.releaseRoot, "dist", "build-info.json"),
+      JSON.stringify({ buildId: `fixture-${id}` }),
+    );
+    return publishStaging(staging);
+  };
+  const obsolete = await publish("obsolete");
+  const previous = await publish("previous");
+  const selected = await publish("selected");
+  await switchLink(path.relative(prefix, previous), prefix);
+  openOpenClawStateDatabase();
+  const run = await createUpdateRunAsync({ trigger: "cli" });
+  const pending = await createTrialPending(
+    {
+      runId: run.runId,
+      target: path.relative(prefix, selected),
+      previous: path.relative(prefix, previous),
+      version: VERSION,
+    },
+    prefix,
+  );
+  await switchLink(path.relative(prefix, selected), prefix);
+  await writeTrial(
+    {
+      ...pending,
+      phase: "committed",
+      reported: true,
+      outcome: { status: "succeeded", at: Date.now() },
+    },
+    prefix,
+  );
+  await finishUpdateRunAsync(run.runId, { status: "succeeded" });
+  const past = new Date(Date.now() - 2 * PACKAGE_RELEASE_MIN_AGE_MS);
+  for (const release of [obsolete, previous, selected]) {
+    await fs.utimes(path.dirname(release), past, past);
+  }
+  await settleRunFromTrial(await readTrial(prefix), prefix);
+  await vi.waitFor(
+    async () =>
+      expect((await fs.readdir(path.join(prefix, "releases"))).toSorted()).toEqual([
+        ".trial",
+        "previous",
+        "selected",
+      ]),
+    { timeout: 10_000 },
+  );
+  expect(await fs.realpath(path.join(prefix, "openclaw"))).toBe(selected);
+  for (const kept of [previous, selected]) {
+    expect(await fs.readFile(path.join(kept, "package.json"), "utf8")).toBe(manifest);
   }
 });

@@ -1942,7 +1942,6 @@ src/plugins/slots.ts
 src/plugins/status-dependencies-core.ts
 src/plugins/toggle-config.ts
 src/plugins/update-cohort-artifacts.ts
-src/plugins/update-cohort-protected-artifacts.ts
 src/plugins/web-search-install-catalog.ts
 src/process/child-memory.ts
 src/process/child-process-tree.ts

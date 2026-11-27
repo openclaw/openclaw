@@ -344,6 +344,9 @@ class StateReadTransport {
       // Maintenance reuses this reader; standalone inspection releases it before metadata loads.
       const retireAfterRead =
         !pool.retained && !context.maintenanceScope && readCommand.type !== "admit";
+      // A one-shot CLI keeps its reader isolate for later reads and releases only the native
+      // handles here; CLI cleanup closes the pool when the command ends.
+      const releaseInPlace = retireAfterRead && getDatabaseProcessRole() === "cli-oneshot";
       const prepareDispatch = async () => {
         const physicalLocation = resolveSqliteDatabaseFilePath(location);
         try {
@@ -425,7 +428,8 @@ class StateReadTransport {
         let outcome: OpenClawStateReadOutcome;
         try {
           const reply = await task.result;
-          cleanup.retire = retireAfterRead || Boolean(reply.nativeCleanupFailure);
+          cleanup.retire =
+            (retireAfterRead && !releaseInPlace) || Boolean(reply.nativeCleanupFailure);
           outcome = decodeOpenClawStateReadReply(reply);
         } catch (error) {
           outcome = { error };
@@ -436,6 +440,10 @@ class StateReadTransport {
         cleanup.retire ||= "error" in outcome;
         if (retireAfterRead && !("error" in outcome)) {
           await this.closeTask(task);
+          if (!cleanup.retire) {
+            // Joined before the result returns: no SQLite handle outlives a successful read.
+            await closeReadResources(pool.pool);
+          }
         }
         return outcome;
       })();
