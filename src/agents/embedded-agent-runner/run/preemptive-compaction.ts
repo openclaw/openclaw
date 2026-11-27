@@ -175,8 +175,9 @@ function estimateTranscriptBoundaryTokenPressure(
     estimatedPromptTokens:
       (measuredTokens ?? 0) +
       Math.ceil(locallyEstimatedTokens * SAFETY_MARGIN) +
-      // Measured usage already counts the tool definitions its request sent.
-      (boundary ? 0 : toolSchemaTokens),
+      // A saved replay prefix does not bind today's tool definitions. Reserve
+      // their current size even when covered conversation usage is measured.
+      (boundary && !replay ? 0 : toolSchemaTokens),
     source:
       measuredTokens !== undefined
         ? "provider_context_usage"
