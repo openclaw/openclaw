@@ -311,7 +311,12 @@ export function createPersistentModelCatalogAccess(
             provider,
             {
               source,
-              credentials: preparedProviderCatalogCredentials(auth, provider, normalizeProvider),
+              // Record satisfied generation inputs; worker auth below owns account retention.
+              credentials: preparedProviderCatalogCredentials(
+                params.agentFacts,
+                provider,
+                normalizeProvider,
+              ),
               ...retry.discoveryDeadline(failed, expiresAt, retained?.providers.get(provider)),
               ...(legacyProviders.has(provider) ? { legacyAcquired: true } : {}),
             },
