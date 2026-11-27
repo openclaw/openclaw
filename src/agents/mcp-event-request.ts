@@ -11,15 +11,29 @@ export const MCP_EVENTS_PROTOCOL_VERSION = "2026-07-28";
 export type McpEventRequestMethod =
   | "server/discover"
   | "events/list"
+  | "events/poll"
   | "events/subscribe"
   | "events/unsubscribe";
 
 /** Preserve protocol dispositions without exposing remote diagnostic bodies or credentials. */
 class McpEventRequestError extends Error {
-  constructor(code: number, reason?: string) {
+  constructor(
+    readonly code: number,
+    reason?: string,
+  ) {
     super("MCP Events request failed (code " + code + (reason ? ", reason " + reason : "") + ")");
     this.name = "McpEventRequestError";
   }
+}
+
+/** SEP-2243 field value: plain when header-safe ASCII, otherwise the Base64 sentinel form. */
+function encodeMcpHeaderValue(value: string): string {
+  const plain =
+    value.length > 0 &&
+    value === value.trim() &&
+    !(value.startsWith("=?base64?") && value.endsWith("?=")) &&
+    /^[\t\x20-\x7e]*$/u.test(value);
+  return plain ? value : "=?base64?" + Buffer.from(value, "utf8").toString("base64") + "?=";
 }
 
 /** Transport failures may carry credentials beyond their message; expose only redacted diagnostics. */
@@ -64,7 +78,13 @@ export async function requestMcpEvent(params: {
     cfg: params.cfg,
     agentDir: params.agentDir,
     requesterScope: params.requesterScope,
-    requestHeaders: { "Mcp-Method": params.method },
+    // SEP-3415 routes events/poll, subscribe, and unsubscribe by event name; events/list has none.
+    requestHeaders: {
+      "Mcp-Method": params.method,
+      ...(typeof params.params?.name === "string"
+        ? { "Mcp-Name": encodeMcpHeaderValue(params.params.name) }
+        : {}),
+    },
     beforeRequest: assertCurrent,
   });
   if (!resolved || resolved.transportType !== "streamable-http") {
