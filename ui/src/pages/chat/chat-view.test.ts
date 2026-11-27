@@ -1188,14 +1188,9 @@ describe("chat voice controls", () => {
       realtimeTalkDetail: detail,
       onDismissRealtimeTalkError,
     });
-    // The voice problem alert loads off the boot path.
-    await waitForSolid(() =>
-      expect(
-        container
-          .querySelector('[role="alert"].agent-chat__composer-alert .callout__content')
-          ?.textContent?.trim(),
-      ).toBe(detail),
-    );
+    const voiceAlert = () =>
+      container.querySelector('[role="alert"].agent-chat__composer-alert .callout__content');
+    await waitForSolid(() => expect(voiceAlert()?.textContent?.trim()).toBe(detail));
     const stop = requireElement(
       container,
       '[aria-label="Stop voice input"]',
