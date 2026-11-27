@@ -45,9 +45,12 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
     expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
       ctx: { media: [{ url, contentType: "audio/opus" }] },
       cfg,
-      agentDir: undefined,
     });
-    expect(result).toEqual({ hasTypedText: false, transcript: "hello from dm" });
+    expect(result).toEqual({
+      hasTypedText: false,
+      transcript: "hello from dm",
+      attachmentIndex: 0,
+    });
   });
 
   it.each([
@@ -97,7 +100,6 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
     expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
       ctx: { media: [{ url, contentType: "audio/ogg" }] },
       cfg,
-      agentDir: undefined,
     });
   });
 });

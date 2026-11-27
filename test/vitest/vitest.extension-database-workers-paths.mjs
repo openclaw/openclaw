@@ -33,6 +33,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/clickclack/src/inbound.test.ts",
   "extensions/clickclack/src/discussions/service-open.agent-storage.test.ts",
   "extensions/discord/src/monitor/message-handler.context-history.test.ts",
+  "extensions/discord/src/monitor/message-handler.preflight-echo.test.ts",
   "extensions/irc/src/inbound.behavior.test.ts",
   "extensions/line/src/bot-mention-context.test.ts",
   "extensions/line/src/bot-message-context.test.ts",

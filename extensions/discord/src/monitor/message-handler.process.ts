@@ -612,7 +612,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       outboundEchoSourceId: resolveDiscordWebhookId(message) ?? undefined,
       route: { agentId: route.agentId, sessionKey: persistedSessionKey },
       ctxPayload,
-      afterRecord: reactions.queueInitialAckReactionAfterRecord,
+      afterRecord: () => reactions.afterRecord(ctxPayload),
       sessionInitRetry: {
         delaysMs: [250, 1_000, 2_500],
         signal: abortSignal,

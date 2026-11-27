@@ -48,10 +48,10 @@ const discordPreflightAudio = createChannelPreflightAudio({
   channel: "discord",
   isAudio: (attachment: DiscordAudioAttachment) =>
     Boolean(normalizeOptionalString(attachment.url) && inferAudioAttachmentMime(attachment)),
-  // Discord uses this transcript only for mention admission and has no deferred
-  // admitted-message echo, so its transcription config must remain unchanged.
-  deferTranscriptEcho: false,
 });
+
+export const sendDiscordPreflightAudioTranscriptEcho =
+  discordPreflightAudio.send.bind(discordPreflightAudio);
 
 export async function resolveDiscordPreflightAudioMentionContext(params: {
   message: {
@@ -64,42 +64,28 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
   cfg: OpenClawConfig;
   abortSignal?: AbortSignal;
 }) {
-  const audioAttachments = Array.isArray(params.message.attachments)
-    ? params.message.attachments.filter(discordPreflightAudio.isAudio)
-    : [];
-  const hasAudioAttachment = audioAttachments.length > 0;
+  const attachments = Array.isArray(params.message.attachments) ? params.message.attachments : [];
   const hasTypedText = Boolean(params.message.content?.trim());
-  const needsPreflightTranscription =
-    hasAudioAttachment &&
-    // Caption text suppresses preflight; media-only messages remain eligible.
-    !hasTypedText &&
-    (params.isDirectMessage || (params.shouldRequireMention && params.mentionRegexes.length > 0));
-
-  let transcript: string | undefined;
-  if (needsPreflightTranscription) {
-    if (params.abortSignal?.aborted) {
-      return {
-        hasTypedText,
-      };
-    }
-    const media = audioAttachments.flatMap((attachment) => {
-      const url = normalizeOptionalString(attachment.url);
-      return url ? [{ url, contentType: inferAudioAttachmentMime(attachment) }] : [];
-    });
-    if (media.length > 0) {
-      transcript = await discordPreflightAudio.resolve({
-        request: {
-          ctx: { media },
-          cfg: params.cfg,
-          agentDir: undefined,
-        },
-        abortSignal: params.abortSignal,
-      });
-    }
+  // Caption text suppresses preflight; media-only messages remain eligible.
+  if (
+    hasTypedText ||
+    params.abortSignal?.aborted ||
+    (!params.isDirectMessage && (!params.shouldRequireMention || !params.mentionRegexes.length))
+  ) {
+    return { hasTypedText };
   }
-
-  return {
-    hasTypedText,
-    transcript,
-  };
+  const attachmentIndex = attachments.findIndex(discordPreflightAudio.isAudio);
+  const attachment = attachments[attachmentIndex];
+  const url = normalizeOptionalString(attachment?.url);
+  if (!attachment || !url) {
+    return { hasTypedText };
+  }
+  const transcript = await discordPreflightAudio.resolve({
+    request: {
+      ctx: { media: [{ url, contentType: inferAudioAttachmentMime(attachment) }] },
+      cfg: params.cfg,
+    },
+    abortSignal: params.abortSignal,
+  });
+  return transcript ? { hasTypedText, transcript, attachmentIndex } : { hasTypedText };
 }

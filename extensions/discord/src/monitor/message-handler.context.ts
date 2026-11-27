@@ -339,10 +339,6 @@ export async function buildDiscordMessageProcessContext(params: {
     }
     parentSessionKey = threadParentInheritanceEnabled ? modelParentSessionKey : undefined;
   }
-  const preflightAudioIndex =
-    preflightAudioTranscript === undefined
-      ? -1
-      : mediaList.findIndex((media) => media.contentType?.startsWith("audio/"));
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey,
     threadId: threadChannel ? messageChannelId : undefined,
@@ -518,9 +514,7 @@ export async function buildDiscordMessageProcessContext(params: {
       authorized: commandAuthorized,
       body: baseText,
     }),
-    media: await toInboundMediaFactsWithMetadata(mediaList, {
-      transcribed: (_media, index) => index === preflightAudioIndex,
-    }),
+    media: await toInboundMediaFactsWithMetadata(mediaList),
     supplemental: {
       quote: replyContext
         ? {

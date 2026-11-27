@@ -328,7 +328,11 @@ it.each([true, false])("keeps command provenance (audio=%s)", async (audio) => {
   const fetch = vi.fn(async () => {
     throw new Error("prepared media must not be fetched again");
   });
-  const media = { path: "/tmp/openclaw-discord-test/voice.ogg", contentType: "audio/ogg" };
+  const media = {
+    path: "/tmp/openclaw-discord-test/voice.ogg",
+    contentType: "audio/ogg",
+    transcribed: true,
+  };
   const text = audio ? "" : "/status";
   await runBase({
     baseText: text,
@@ -362,7 +366,7 @@ it.each([true, false])("keeps command provenance (audio=%s)", async (audio) => {
       RawBody: "",
       CommandBody: "",
       Transcript: "/status",
-      media: [expect.objectContaining({ ...media, transcribed: true })],
+      media: [expect.objectContaining(media)],
     });
   }
 });
