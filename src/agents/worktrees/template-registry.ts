@@ -27,4 +27,15 @@ export type WorktreeWarmPoolRequest = {
   template: WorktreeTemplateRecord;
   sourceOnly: boolean;
   cloneBytes?: number;
+  /** A base advance is not a refill of the consumed generation. */
+  targetCommit?: string;
+  backgroundUsedAt?: number;
+};
+
+export type RecentWorktreeTemplate = {
+  request: WorktreeWarmPoolRequest;
+  usedAt: number;
+  nextFetchAt: number;
+  targetCommit: string;
+  preparedCommit: string;
 };

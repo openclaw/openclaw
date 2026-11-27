@@ -78,6 +78,20 @@ defaults write ai.openclaw.mac openclaw.nixMode -bool true
 - Missing dependencies surface Nix-specific remediation messages.
 - The UI shows a read-only Nix mode banner.
 
+### Telemetry
+
+First-party `nix-openclaw` sets `OPENCLAW_NIX_MODE=1`, which suppresses daily
+update checks, feature statistics, installation counts, and update outcomes. If
+your Nix package does not enable Nix mode, set `update.checkOnStart = false` in
+your declarative OpenClaw config or `OPENCLAW_NO_AUTO_UPDATE=1` in the service
+environment to stop the same requests.
+
+ClawHub reporting is separate. For `nix-openclaw`, set
+`programs.openclaw.environment.CLAWHUB_DISABLE_TELEMETRY = "1";` in Home Manager
+and apply it with `home-manager switch`. Set `CLAWHUB_DISABLE_TELEMETRY=1` in the
+environment of any standalone CLI you use with ClawHub, too. See
+[Telemetry controls](/gateway/telemetry#telemetry-controls) for what each switch disables.
+
 ### Config and state paths
 
 OpenClaw reads JSON5 config from `OPENCLAW_CONFIG_PATH` and stores mutable data in `OPENCLAW_STATE_DIR`. Under Nix, set these explicitly to Nix-managed locations so runtime state and config stay out of the immutable store.

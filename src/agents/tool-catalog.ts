@@ -81,6 +81,7 @@ const CORE_TOOL_DESCRIPTIONS = {
   sessions_spawn: SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
   github_identity_status: "Inspect the effective GitHub identity and credential health",
   github_publish: "Publish the reconciled session worktree as a draft GitHub pull request",
+  session_project: "Move this conversation into a registered project",
   agents_wait: AGENTS_WAIT_TOOL_DISPLAY_SUMMARY,
   sessions_yield: "End turn to receive sub-agent results",
   subagents: "Background work: subagents, media gen, automation runs. list/cancel.",

@@ -210,17 +210,13 @@ final class AdaptiveLayoutUITests: XCTestCase {
         let composer = app.otherElements["chat-composer-surface"].firstMatch
         XCTAssertTrue(show.waitForExistence(timeout: 30))
         XCTAssertTrue(composer.waitForExistence(timeout: 10))
-        let transcript = app.scrollViews["chat-transcript"].firstMatch
+        let transcript = app.descendants(matching: .any)["chat-transcript"].firstMatch
         XCTAssertTrue(transcript.waitForExistence(timeout: 10))
-        // Use available chat width; the Duo can reserve a side region for system UI.
-        XCTAssertGreaterThan(composer.frame.width, transcript.frame.width - 32)
+        // The composer surface is the reading column of whatever width the chat pane gets.
+        XCTAssertEqual(composer.frame.width, Self.expectedColumn(paneWidth: transcript.frame.width), accuracy: 1)
         self.capture("iphone-portrait-compact-chat", in: app)
         self.rotateWindow(in: app, portrait: false, minimumWidth: 0)
         XCTAssertTrue(show.exists)
-        // Large iPhones must not inherit the iPad's 760pt reading cap.
-        if transcript.frame.width >= 800 {
-            XCTAssertGreaterThan(composer.frame.width, 760)
-        }
         self.capture("iphone-landscape-compact-chat", in: app)
         self.rotateWindow(in: app, portrait: true)
         show.tap()
@@ -297,7 +293,7 @@ final class AdaptiveLayoutUITests: XCTestCase {
         let composer = app.otherElements["chat-composer-surface"].firstMatch
         XCTAssertTrue(composer.exists)
         XCTAssertGreaterThan(composer.frame.width, 700)
-        XCTAssertLessThanOrEqual(composer.frame.width, 760)
+        XCTAssertLessThanOrEqual(composer.frame.width, 768)
         app.typeText("2")
         self.assertDraft("draft12", in: input)
 
@@ -338,14 +334,14 @@ final class AdaptiveLayoutUITests: XCTestCase {
         XCTAssertTrue(completed.waitForExistence(timeout: 30))
         XCTAssertTrue(composer.waitForExistence(timeout: 10))
         self.rotateWindow(in: app, portrait: false)
-        self.assertReadingColumn(completed, composer: composer, responseInset: 2)
+        self.assertReply(completed, in: app)
         XCTAssertGreaterThan(completed.frame.width, 700, "Must detect the former 560pt assistant cap")
 
         let show = app.buttons.matching(identifier: "RootTabs.Sidebar.Show").firstMatch
         let hide = app.buttons.matching(identifier: "RootTabs.Sidebar.Hide").firstMatch
         show.tap()
         XCTAssertTrue(hide.waitForExistence(timeout: 5))
-        self.assertReadingColumn(completed, composer: composer, responseInset: 2)
+        self.assertReply(completed, in: app)
         hide.tap()
         XCTAssertTrue(show.waitForExistence(timeout: 5))
 
@@ -355,13 +351,88 @@ final class AdaptiveLayoutUITests: XCTestCase {
         app.buttons["chat-send-message"].tap()
         let streaming = app.descendants(matching: .any)["chat-streaming-assistant-body"].firstMatch
         XCTAssertTrue(streaming.waitForExistence(timeout: 10))
-        self.assertReadingColumn(streaming, composer: composer, responseInset: 12)
+        self.assertReply(streaming, in: app)
         XCTAssertGreaterThan(streaming.frame.width, 650, "Must detect the former streaming bubble cap")
         show.tap()
         XCTAssertTrue(hide.waitForExistence(timeout: 5))
-        self.assertReadingColumn(streaming, composer: composer, responseInset: 12)
+        self.assertReply(streaming, in: app)
         self.rotateWindow(in: app, portrait: true)
-        self.assertReadingColumn(streaming, composer: composer, responseInset: 12)
+        self.assertReply(streaming, in: app)
+    }
+
+    /// Spec §2: one width rule from the measured pane, on iPhone and on iPad in both orientations.
+    func testTranscriptColumnFollowsWidthRule() {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = self.launchColumnFixture()
+        defer {
+            app.terminate()
+            XCUIDevice.shared.orientation = .portrait
+        }
+        let input = app.descendants(matching: .any)["chat-message-input"].firstMatch
+        XCTAssertTrue(input.waitForExistence(timeout: 30))
+        // A long prompt reaches the bubble cap; the fixture's own prompt is a single short line.
+        input.tap()
+        input.typeText(String(repeating: "Check how wide a long user message may grow. ", count: 6))
+        app.buttons["chat-send-message"].tap()
+        self.assertColumnGeometry(in: app, context: "portrait")
+
+        // Only iPad landscape is free of horizontal safe areas that the pane excludes.
+        guard UIDevice.current.userInterfaceIdiom == .pad else { return }
+        self.rotateWindow(in: app, portrait: false, minimumWidth: 0)
+        self.assertColumnGeometry(in: app, context: "landscape")
+        let show = app.buttons.matching(identifier: "RootTabs.Sidebar.Show").firstMatch
+        let hide = app.buttons.matching(identifier: "RootTabs.Sidebar.Hide").firstMatch
+        if hide.exists {
+            hide.tap()
+            XCTAssertTrue(show.waitForExistence(timeout: 5))
+            self.assertColumnGeometry(in: app, context: "landscape-hidden-sidebar")
+        }
+    }
+
+    /// The width rule ignores text size, and the largest size clips neither the header nor the composer.
+    func testTranscriptColumnHoldsAtAccessibilityTextSize() {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = self.launchColumnFixture(contentSize: "UICTContentSizeCategoryAccessibilityXXXL")
+        defer {
+            app.terminate()
+            XCUIDevice.shared.orientation = .portrait
+        }
+        let input = app.descendants(matching: .any)["chat-message-input"].firstMatch
+        XCTAssertTrue(input.waitForExistence(timeout: 30))
+        let window = app.windows.firstMatch.frame
+        let identity = app.buttons["chat-agent-identity"].firstMatch
+        let actions = app.buttons["Chat actions"].firstMatch
+        let composer = app.otherElements["chat-composer-surface"].firstMatch
+        for (name, element) in [("identity", identity), ("actions", actions), ("composer", composer)] {
+            XCTAssertTrue(element.waitForExistence(timeout: 5), "\(name) is missing")
+            XCTAssertTrue(window.contains(element.frame), "\(name) is clipped: \(element.frame) in \(window)")
+        }
+        XCTAssertTrue(identity.isHittable)
+        XCTAssertTrue(actions.isHittable)
+        XCTAssertTrue(input.isHittable)
+        self.capture("accessibility-xxxl-column-portrait", in: app)
+        self.assertColumnGeometry(in: app, context: "accessibility-xxxl-portrait")
+        guard UIDevice.current.userInterfaceIdiom == .pad else { return }
+        self.rotateWindow(in: app, portrait: false, minimumWidth: 0)
+        XCTAssertTrue(app.windows.firstMatch.frame.contains(composer.frame), "Composer is clipped in landscape")
+        self.assertColumnGeometry(in: app, context: "accessibility-xxxl-landscape")
+    }
+
+    private func launchColumnFixture(contentSize: String? = nil) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--openclaw-initial-destination", "chat",
+            "--openclaw-screenshot-mode",
+            "--openclaw-ui-test-readiness",
+            "--openclaw-appearance", "light",
+            "--openclaw-long-chat-fixture",
+        ] + (contentSize.map { ["-UIPreferredContentSizeCategoryName", $0] } ?? [])
+        app.launch()
+        app.activate()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 8))
+        return app
     }
 
     private func requireExpandedWindow(in app: XCUIApplication) throws {
@@ -370,18 +441,53 @@ final class AdaptiveLayoutUITests: XCTestCase {
             "Requires expanded window space")
     }
 
-    private func assertReadingColumn(_ response: XCUIElement, composer: XCUIElement, responseInset: CGFloat) {
-        let responseFrame = response.frame
-        let composerFrame = composer.frame
-        XCTAssertGreaterThan(responseFrame.height, 0)
-        XCTAssertGreaterThan(composerFrame.width, 0)
-        XCTAssertLessThanOrEqual(responseFrame.width, 760)
-        // Expanded rows reserve 30pt for the avatar plus an 8pt gap.
-        // Composer chrome sits inside 4pt padding. Completed rows inset by 2pt;
-        // the streaming run adds 4pt padding plus 8pt clean-bubble chrome per side.
-        print("Reading column: response=\(responseFrame), composer=\(composerFrame)")
-        XCTAssertEqual(responseFrame.width + responseInset * 2 + 38, composerFrame.width + 8, accuracy: 1)
-        XCTAssertEqual(responseFrame.midX, composerFrame.midX + 19, accuracy: 2)
+    /// Spec §2, restated: the UI test process cannot import the app's `ChatColumnLayout`.
+    private static func expectedColumn(paneWidth: CGFloat) -> CGFloat {
+        let margin: CGFloat = paneWidth < 700 ? 16 : 24
+        return min(768, paneWidth - 2 * margin)
+    }
+
+    private static func expectedUserBubbleMax(column: CGFloat) -> CGFloat {
+        (column < 600 ? 0.82 : 0.68) * column
+    }
+
+    /// A reply spans the column: it ends on the column's trailing edge and starts on its leading
+    /// edge, or one avatar gutter (30pt avatar + 8pt gap) inside it where the avatar shows.
+    private func assertReply(_ reply: XCUIElement, in app: XCUIApplication, context: String = "") {
+        let pane = app.descendants(matching: .any)["chat-transcript"].firstMatch.frame
+        let composer = app.otherElements["chat-composer-surface"].firstMatch.frame
+        let column = Self.expectedColumn(paneWidth: pane.width)
+        let replyFrame = reply.frame
+        print("Column \(context): pane=\(pane) column=\(column) composer=\(composer) reply=\(replyFrame)")
+        XCTAssertGreaterThan(replyFrame.height, 0, context)
+        XCTAssertEqual(composer.width, column, accuracy: 1, "\(context): composer surface is not the column")
+        XCTAssertEqual(composer.midX, pane.midX, accuracy: 1, "\(context): column is not centred")
+        XCTAssertEqual(replyFrame.maxX, composer.maxX, accuracy: 1, "\(context): reply stops short of the column")
+        let gutter = replyFrame.minX - composer.minX
+        XCTAssertTrue(
+            abs(gutter) <= 1 || (UIDevice.current.userInterfaceIdiom == .pad && abs(gutter - 38) <= 1),
+            "\(context): reply is inset by \(gutter)pt instead of spanning the column")
+    }
+
+    private func assertColumnGeometry(in app: XCUIApplication, context: String) {
+        let pane = app.descendants(matching: .any)["chat-transcript"].firstMatch
+        let reply = app.descendants(matching: .any)["chat-assistant-message-body"].firstMatch
+        XCTAssertTrue(pane.waitForExistence(timeout: 10), context)
+        XCTAssertTrue(reply.waitForExistence(timeout: 10), context)
+        self.assertReply(reply, in: app, context: context)
+        let column = Self.expectedColumn(paneWidth: pane.frame.width)
+        let composer = app.otherElements["chat-composer-surface"].firstMatch.frame
+        let users = app.descendants(matching: .any).matching(identifier: "chat-user-message-body")
+            .allElementsBoundByIndex.filter { $0.exists && $0.frame.intersects(pane.frame) }
+        XCTAssertFalse(users.isEmpty, "\(context): no user bubble on screen")
+        for user in users {
+            XCTAssertLessThanOrEqual(
+                user.frame.width,
+                Self.expectedUserBubbleMax(column: column) + 1,
+                "\(context): user bubble exceeds the rule's cap")
+            XCTAssertEqual(user.frame.maxX, composer.maxX, accuracy: 1, "\(context): user bubble leaves the column")
+        }
+        self.capture("column-\(context)", in: app)
     }
 
     private func assertDraft(_ draft: String, in input: XCUIElement) {

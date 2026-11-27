@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { list as listTar } from "tar";
+import { list as listTar } from "tar/raw";
 import { listDirectoryTreeStrict } from "../../src/infra/directory-walk.ts";
 import { collectNpmPackInventory } from "./npm-pack-inventory.mts";
 import { listBundleDependencies } from "./package-bundle-dependencies.mts";

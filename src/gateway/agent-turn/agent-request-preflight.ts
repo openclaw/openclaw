@@ -62,8 +62,11 @@ export async function prepareAgentRequestPreflight(params: {
     return undefined;
   };
   const cfg = params.context.getRuntimeConfig();
+  // The declared mode is caller-chosen; only in-process or handshake-attested local backends qualify.
   const canUseInternalRuntimeHandoff =
-    params.client?.connect?.client?.mode === GATEWAY_CLIENT_MODES.BACKEND;
+    params.client?.connect?.client?.mode === GATEWAY_CLIENT_MODES.BACKEND &&
+    (params.client.internal?.syntheticClient === true ||
+      params.client.internal?.localBackendClient === true);
   const requestSessionKey = request.sessionKey?.trim();
   const parsedRequestSessionKey = requestSessionKey
     ? parseAgentSessionKey(requestSessionKey)
@@ -219,6 +222,14 @@ export async function prepareAgentRequestPreflight(params: {
   // Plugin tools read the starting run named on exec completion wakes; only the host stamps it.
   if (isExecCompletionInputProvenance(inputProvenance) && !canUseInternalRuntimeHandoff) {
     return rejectInvalidRequest("Exec completion input is reserved for background exec owners.");
+  }
+  // Restart input may wait for a surviving turn or a reconnecting node; only recovery stamps it.
+  if (
+    inputProvenance?.kind === "internal_system" &&
+    inputProvenance.sourceTool === "restart" &&
+    !canUseInternalRuntimeHandoff
+  ) {
+    return rejectInvalidRequest("Restart input is reserved for restart recovery.");
   }
   if (inputProvenance?.kind === "inter_session" && inputProvenance.sourceTool === "sessions_send") {
     const sourceSessionKey = inputProvenance.sourceSessionKey;

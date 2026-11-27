@@ -108,6 +108,12 @@ export class CodexNativeSubagentCompletionDelivery {
         return;
       }
       const historyOwner = childState.historyOwner;
+      // Rediscovering a worker can restore a thread-only assignment for a later turn.
+      const completionIdentity = readCodexNativeSubagentRunId(childState.runId)?.turnId
+        ? childState.runId
+        : childState.nativeTurnId
+          ? codexNativeSubagentRunId(completion.childThreadId, childState.nativeTurnId)
+          : completion.childThreadId;
       const delivery = await this.dependencies.deliver({
         scope: state.completionScope,
         completionCustody: childState.completionCustody,
@@ -123,7 +129,7 @@ export class CodexNativeSubagentCompletionDelivery {
           this.isCurrent(state, childState) && this.claim(state, childState),
         childSessionKey: childState.runId,
         childSessionId: completion.childThreadId,
-        announceId: `codex-native:${childState.nativeParentThreadId}:${readCodexNativeSubagentRunId(childState.runId)?.turnId ? childState.runId : completion.childThreadId}:${completion.status}`,
+        announceId: `codex-native:${childState.nativeParentThreadId}:${completionIdentity}:${completion.status}`,
         announceType: "Subagent",
         taskLabel: "Subagent",
         status: completion.status,

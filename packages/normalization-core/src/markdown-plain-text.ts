@@ -107,11 +107,15 @@ export function flattenMarkdownToPlainText(text: string): string {
     .replace(/```/g, " ");
   // Code spans become `\0<index>\0` so block and emphasis stripping cannot rewrite them; other NULs are doubled.
   // A span closes on the next backtick run of its own length, so ``a`b`` keeps its inner backtick.
-  const withoutCode = stripInlineLinks(withoutFences).replace(
-    /\0|(?<!`)(`+)(?!`)([\s\S]*?[^`])\1(?!`)/g,
-    (_match, _run: string | undefined, literal: string | undefined) =>
-      literal === undefined ? "\0\0" : `\0${code.push(literal) - 1}\0`,
-  );
+  // Protect each retained part before removing links can join separate backtick runs.
+  const withoutCode = stripInlineLinks(withoutFences, {
+    transformText: (part) =>
+      part.replace(
+        /\0|(?<!`)(`+)(?!`)([\s\S]*?[^`])\1(?!`)/g,
+        (_match, _run: string | undefined, literal: string | undefined) =>
+          literal === undefined ? "\0\0" : `\0${code.push(literal) - 1}\0`,
+      ),
+  });
   // Quote markers may nest with horizontal whitespace, but must not consume another line.
   // Recognize tables before removing block markers: a following heading or list is not a row.
   let flattened = stripTables(withoutCode).replace(
@@ -267,19 +271,15 @@ function findDestinationEnd(
   return text.charAt(index) === ")" ? index : undefined;
 }
 
-/**
- * Maps each link label's `[` to its `]` and that `]` to the end of the `(destination "title")`
- * that follows it, skipping backslash-escaped characters. Brackets inside a code span, destination
- * or title are not labels, so they never pair with a label bracket.
- */
-function matchLinks(text: string): {
-  labelEnds: Map<number, number>;
-  destinationEnds: Map<number, number>;
-} {
-  const labelEnds = new Map<number, number>();
-  const destinationEnds = new Map<number, number>();
+/** Strips inline link destinations, retaining nested labels and optionally omitting images entirely. */
+export function stripInlineLinks(
+  text: string,
+  options: { images?: "label" | "omit"; transformText?: (text: string) => string } = {},
+): string {
+  const skips = new Map<number, number>();
   const parenClosers = matchParens(text);
   const brackets: number[] = [];
+  // Brackets inside escapes, code spans, and recognized destinations cannot match a label.
   for (let index = 0; index < text.length; index += 1) {
     const char = text.charAt(index);
     if (char === "\\") {
@@ -290,63 +290,44 @@ function matchLinks(text: string): {
       brackets.push(index);
     } else if (char === "]") {
       const opener = brackets.pop();
-      if (opener === undefined) {
+      if (opener === undefined || text.charAt(index + 1) !== "(") {
         continue;
       }
-      labelEnds.set(opener, index);
-      const destinationEnd =
-        text.charAt(index + 1) === "("
-          ? findDestinationEnd(text, index + 1, parenClosers)
-          : undefined;
-      if (destinationEnd !== undefined) {
-        destinationEnds.set(index, destinationEnd);
-        index = destinationEnd;
+      const end = findDestinationEnd(text, index + 1, parenClosers);
+      if (end === undefined) {
+        continue;
       }
+      let isImage = text.charAt(opener - 1) === "!";
+      // An odd backslash run escapes the bang, leaving an ordinary link.
+      if (isImage) {
+        for (let backslash = opener - 2; text.charAt(backslash) === "\\"; backslash -= 1) {
+          isImage = !isImage;
+        }
+      }
+      if (isImage && options.images === "omit") {
+        skips.set(opener - 1, end + 1);
+      } else if (isImage || opener + 1 < index) {
+        skips.set(isImage ? opener - 1 : opener, opener + 1);
+        skips.set(index, end + 1);
+      }
+      index = end;
     }
   }
-  return { labelEnds, destinationEnds };
-}
-
-/** Strips inline link destinations, retaining nested labels and optionally omitting images entirely. */
-export function stripInlineLinks(
-  text: string,
-  options: { images?: "label" | "omit" } = {},
-): string {
-  const { labelEnds, destinationEnds } = matchLinks(text);
-  const suffixEnds = new Map<number, number>();
+  if (skips.size === 0) {
+    return options.transformText?.(text) ?? text;
+  }
   let output = "";
   let cursor = 0;
+  // Walk the source, not the map: an omitted image covers any edits inside its label.
   for (let index = 0; index < text.length; index += 1) {
-    const suffixEnd = suffixEnds.get(index);
-    if (suffixEnd !== undefined) {
-      output += text.slice(cursor, index);
-      cursor = suffixEnd;
-      index = suffixEnd - 1;
-      continue;
+    const end = skips.get(index);
+    if (end !== undefined) {
+      const part = text.slice(cursor, index);
+      output += options.transformText?.(part) ?? part;
+      cursor = end;
+      index = end - 1;
     }
-    const labelEnd = text[index] === "[" ? labelEnds.get(index) : undefined;
-    const destinationEnd = labelEnd === undefined ? undefined : destinationEnds.get(labelEnd);
-    if (labelEnd === undefined || destinationEnd === undefined) {
-      continue;
-    }
-    let isImage = index > cursor && text[index - 1] === "!";
-    // An odd backslash run escapes the bang, leaving an ordinary link.
-    if (isImage) {
-      for (let backslash = index - 2; backslash >= 0 && text[backslash] === "\\"; backslash -= 1) {
-        isImage = !isImage;
-      }
-    }
-    if (!isImage && labelEnd === index + 1) {
-      continue;
-    }
-    output += text.slice(cursor, isImage ? index - 1 : index);
-    if (isImage && options.images === "omit") {
-      cursor = destinationEnd + 1;
-      index = destinationEnd;
-      continue;
-    }
-    cursor = index + 1;
-    suffixEnds.set(labelEnd, destinationEnd + 1);
   }
-  return output + text.slice(cursor);
+  const tail = text.slice(cursor);
+  return output + (options.transformText?.(tail) ?? tail);
 }

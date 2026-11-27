@@ -7,6 +7,7 @@ import {
 import { normalizePluginsConfig, resolveEnableState } from "../plugins/config-state.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
+import { hasPluginConfigValues } from "./runtime-secret-scan.js";
 import {
   collectCanonicalSecretInputAssignment as collectSecretInputAssignment,
   type ResolverContext,
@@ -35,7 +36,10 @@ export function collectPluginConfigAssignments(params: {
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): void {
   const entries = params.config.plugins?.entries;
-  if (!isRecord(entries) || Object.keys(entries).length === 0) {
+  const configuredEntries = isRecord(entries)
+    ? Object.entries(entries).filter(([, entry]) => hasPluginConfigValues(entry))
+    : [];
+  if (configuredEntries.length === 0) {
     return;
   }
 
@@ -56,23 +60,17 @@ export function collectPluginConfigAssignments(params: {
     env: params.context.env,
     fallbackToBundledMetadataForResolvedBundled: !params.context.manifestRegistry,
     fallbackBundledPluginIds: bundledLoadablePluginIds,
-    pluginIds: Object.keys(entries),
+    pluginIds: configuredEntries.map(([pluginId]) => pluginId),
     manifestRegistry,
   });
 
-  for (const [pluginId, entry] of Object.entries(entries)) {
+  for (const [pluginId, entry] of configuredEntries) {
     const metadata = pluginContracts.get(pluginId);
     if (!metadata?.configContracts.secretInputs?.paths.length) {
       continue;
     }
     const secretInputs = metadata.configContracts.secretInputs;
-    if (!isRecord(entry)) {
-      continue;
-    }
     const pluginConfig = entry.config;
-    if (!isRecord(pluginConfig)) {
-      continue;
-    }
 
     const pluginOrigin = params.loadablePluginOrigins?.get(pluginId);
     const resolvedOrigin = pluginOrigin ?? metadata.origin;

@@ -337,6 +337,11 @@ suite.define(() => {
               .locator(size === "wide" ? ".lr-external-label" : ".lr-external-provider")
               .isVisible(),
           ).toBe(true);
+          // The full check list, with its escape link, opens on request.
+          const checksToggle = active.locator(".lr-checks-summary");
+          if ((await checksToggle.getAttribute("aria-expanded")) === "false") {
+            await checksToggle.click();
+          }
           const checksSource = named(
             panel.locator(".lr-note"),
             "link",
@@ -412,6 +417,42 @@ suite.define(() => {
       },
     );
   });
+  it("keeps unavailable GitHub checks compact and usable", async () => {
+    await suite.withPage({ viewport: { width: 1500, height: 940 } }, async ({ page }) => {
+      await installReader(page, `Review the [pull request](${pullUrl}).`, {
+        featureMethods: ["chat.startup", "chat.metadata", "github.detail"],
+        methodResponses: {
+          "github.detail": {
+            ...pull,
+            checks: {
+              state: "unavailable",
+              summary: "GitHub did not return check results.",
+              total: 106,
+              items: [],
+              url: pullUrl + "/checks",
+            },
+          },
+        },
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      await named(page, "link", "pull request").click();
+      const panel = page.locator("openclaw-link-reader-panel");
+      const disclosure = panel.locator(".lr-checks");
+      const summary = disclosure.locator(".lr-checks-summary");
+      await waitText(summary, "Checks unavailable");
+      expect(await summary.getAttribute("aria-expanded")).toBe("false");
+      const icon = await summary.locator(".lr-checks-icon svg").boundingBox();
+      expect(icon).not.toBeNull();
+      expect(Math.max(icon!.width, icon!.height)).toBeLessThanOrEqual(24);
+      const source = named(disclosure, "link", "View all checks");
+      await summary.press("Space");
+      await source.waitFor();
+      expect(await source.getAttribute("href")).toBe(pullUrl + "/checks");
+      await summary.click();
+      await source.waitFor({ state: "hidden" });
+    });
+  });
+
   it("does not fetch rejected image sources while parsing or mounting remote Markdown", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ context, page }) => {
       const requested: string[] = [];

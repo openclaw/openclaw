@@ -169,19 +169,23 @@ describe("ManagedWorktreeService branch discovery", () => {
     },
   );
 
-  it.each([false, true])(
-    "checks linked reservations without rejected missing-file reads (unreadable: %s)",
-    async (unreadable) => {
+  it.each(["idle", "unreadable", "dirty"])(
+    "checks linked reservations only for eligible checkouts (%s)",
+    async (kind) => {
       const localHead = await git(repo, "rev-parse", "HEAD");
       const remoteHead = await createChildCommit();
       await createRemote(remoteHead);
       const linked = path.join(root, "idle-linked");
       await git(repo, "worktree", "add", "--detach", linked);
       const gitDir = await git(linked, "rev-parse", "--absolute-git-dir");
-      if (unreadable) {
+      if (kind === "unreadable") {
         // A directory produces EISDIR, which must not be treated as an absent reservation.
         await fs.mkdir(path.join(gitDir, "BISECT_START"));
       }
+      if (kind === "dirty") {
+        await fs.writeFile(path.join(repo, "README.md"), "local work\n");
+      }
+      const directories = vi.spyOn(fs, "readdir");
       const reads = vi.spyOn(fs, "readFile");
       const selected = await resolveWorktreeBase(
         repo,
@@ -191,9 +195,13 @@ describe("ManagedWorktreeService branch discovery", () => {
         "fast-forward",
       );
       expect(selected.commit).toBe(remoteHead);
-      expect(await git(repo, "rev-parse", "main")).toBe(unreadable ? localHead : remoteHead);
-      if (unreadable) {
+      expect(await git(repo, "rev-parse", "main")).toBe(kind === "idle" ? remoteHead : localHead);
+      if (kind === "unreadable") {
         expect(selected.warning).toContain("Git worktree operation state could not be checked");
+      } else if (kind === "dirty") {
+        expect(directories.mock.calls.map(([directory]) => directory)).not.toContain(
+          path.dirname(gitDir),
+        );
       } else {
         expect(selected.warning).toBeUndefined();
         expect(
@@ -309,7 +317,7 @@ describe("ManagedWorktreeService branch discovery", () => {
     },
   );
 
-  it.each(["primary", "main", "unrelated", "update-refs", "attached-update-refs"])(
+  it.each(["primary", "main", "apply", "unrelated", "update-refs", "attached-update-refs"])(
     "only retains the default branch reserved by a rebase (%s)",
     async (kind) => {
       const linked = kind !== "primary";
@@ -327,7 +335,7 @@ describe("ManagedWorktreeService branch discovery", () => {
       const rebasing = linked ? path.join(root, "rebasing") : repo;
       if (linked) {
         await git(repo, "worktree", "add", "--force", rebasing, "main");
-        if (kind !== "main") {
+        if (kind !== "main" && kind !== "apply") {
           await git(rebasing, "switch", "-c", "topic");
         }
       }
@@ -340,7 +348,15 @@ describe("ManagedWorktreeService branch discovery", () => {
         await git(rebasing, "commit", "-m", "topic tip");
       }
       await expect(
-        git(rebasing, "rebase", ...(updateRefs ? ["--update-refs"] : []), "onto"),
+        git(
+          rebasing,
+          "-c",
+          "sequence.editor=true",
+          "rebase",
+          kind === "apply" ? "--apply" : "--interactive",
+          ...(updateRefs ? ["--update-refs"] : []),
+          "onto",
+        ),
       ).rejects.toMatchObject({ code: 1 });
       if (updateRefs) {
         const gitDir = await git(rebasing, "rev-parse", "--absolute-git-dir");
@@ -357,13 +373,21 @@ describe("ManagedWorktreeService branch discovery", () => {
       const pausedStatus = await git(rebasing, "status", "--porcelain");
       expect(pausedStatus).toContain("UU README.md");
 
-      const created = await service.create({ repoRoot: repo, name: "during-rebase" });
-      expect(await git(created.path, "rev-parse", "HEAD")).toBe(remoteHead);
-      expect(await git(repo, "rev-parse", "main")).toBe(
-        kind === "unrelated" ? remoteHead : localHead,
-      );
-      expect(await git(rebasing, "rev-parse", "HEAD")).toBe(pausedHead);
-      expect(await git(rebasing, "status", "--porcelain")).toBe(pausedStatus);
+      const logs = createWarnLogCapture("worktree-base-busy");
+      try {
+        const created = await service.create({ repoRoot: repo, name: "during-rebase" });
+        expect(await git(created.path, "rev-parse", "HEAD")).toBe(remoteHead);
+        expect(await git(repo, "rev-parse", "main")).toBe(
+          kind === "unrelated" ? remoteHead : localHead,
+        );
+        expect(await git(rebasing, "rev-parse", "HEAD")).toBe(pausedHead);
+        expect(await git(rebasing, "status", "--porcelain")).toBe(pausedStatus);
+        if (linked && kind !== "unrelated") {
+          expect(await logs.findText("Local default retained")).toContain("reserving it");
+        }
+      } finally {
+        logs.cleanup();
+      }
     },
   );
 
@@ -393,6 +417,11 @@ describe("ManagedWorktreeService branch discovery", () => {
       expect(selected.commit).toBe(remoteHead);
       expect(await git(repo, "rev-parse", "main")).toBe(branch === "main" ? localHead : remoteHead);
       expect(await git(linked, "rev-parse", "HEAD")).toBe(pausedHead);
+      if (branch === "main") {
+        expect(selected.warning).toContain("Local default retained");
+      } else {
+        expect(selected.warning).toBeUndefined();
+      }
     },
   );
 
@@ -672,6 +701,25 @@ describe("ManagedWorktreeService branch discovery", () => {
     await expect(
       service.create({ repoRoot: repo, name: "invalid-base", baseRef: "missing-branch" }),
     ).rejects.toThrow(/base ref|resolve|revision/i);
+  });
+
+  it("suggests recently committed branches after the default and current branch", async () => {
+    for (const [name, date] of [
+      ["alpha-old", "2020-01-01T00:00:00Z"],
+      ["zulu-new", "2024-01-01T00:00:00Z"],
+      ["mid", "2022-01-01T00:00:00Z"],
+    ] as const) {
+      vi.stubEnv("GIT_COMMITTER_DATE", date);
+      await git(repo, "branch", name, await createChildCommit("HEAD^{tree}", name));
+    }
+    vi.stubEnv("GIT_COMMITTER_DATE", undefined);
+
+    expect((await readRepositoryBranches(repo)).branches.map((branch) => branch.name)).toEqual([
+      "main",
+      "zulu-new",
+      "mid",
+      "alpha-old",
+    ]);
   });
 
   it.each([

@@ -6,6 +6,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveLoadedProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { indexFirstByKey } from "../shared/dedupe-by-key.js";
+import { DEFAULT_PROVIDER } from "./defaults.js";
 import {
   normalizeConfiguredProviderModel,
   resolveExplicitModelWithRegistry,
@@ -142,7 +143,7 @@ export function prepareConfiguredModelAliases(
       });
       const policy = createModelVisibilityPolicyWithFallbacks({
         ...selection,
-        defaultProvider: defaults.provider,
+        defaultProvider: defaults?.provider ?? DEFAULT_PROVIDER,
         defaultModel: defaults,
         catalog: [
           ...modelRegistry.getAll().map(modelCatalogRowToEntry),

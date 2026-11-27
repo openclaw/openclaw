@@ -36,6 +36,9 @@ limit. Collector admission instead uses Swarm's `maxChildrenPerGroup` (default
 not raise either group limit. [Codex-native subagents](/plugins/codex-harness) use Codex's own scheduler
 and limits independently of these OpenClaw queues.
 
+When a session reaches its active subagent limit, web chat shows the count on
+the launch row and tells you to wait for a subagent to finish before retrying.
+
 Suspended completion deliveries do not block new work. Native subagents, ACP
 sessions, and visible sessions retain their normal active-run limits and
 authorization checks independently of the delivery backlog.
@@ -93,11 +96,23 @@ service from the parent session, to keep a service after the sub-agent ends.
 Visible spawned sessions keep their processes until reset, delete or archive.
 
 A graceful Gateway shutdown records the top-level requesters of running children,
-then cancels the children through the ordinary abort path. They settle terminally
-and quietly, without completion announcements or failure notices to their parents
-during shutdown. Only the root requester receives the standard resume input at
-startup. Children are not independently resumed, and the Gateway does not adopt
-old child tasks or reconstruct requester completion turns.
+then cancels the children through the ordinary abort path. Children that owe a
+completion retain their error outcome for delivery after startup, including when
+their requester has already finished its turn. A shutdown interruption does not count as
+an intentional cancellation by the requester. Root requesters with interrupted work
+receive the standard resume input; children are not independently resumed.
+Recorded spawn ancestry includes visible spawned coordinators and workers: their
+running descendants contribute to the original root even after its own turn ends.
+An ordinary conversation contacted through `sessions_send` keeps its own restart
+recovery; receiving a message does not make it a spawned child.
+
+Startup also repairs pending `Gateway stopped` completions written by older
+Gateways as quiet kills. These interrupted runs retain an error notice for the
+requester; an explicit Stop or an already delivered outcome is not reopened.
+
+Completion turns retain processing receipts so a transient failure before the
+requester consumes the outcome can retry. An intentional Stop or a completed
+receipt still prevents replay.
 
 The parent uses its transcript and the existing sub-agent tools to inspect prior
 work, then can send a fresh instruction to a retained child or spawn a replacement.
@@ -196,6 +211,11 @@ run and their descendants, including ordinary sub-agents and [Swarm](/tools/swar
 collectors. Successful cancellation keeps selected queued collectors from
 starting while running children stop. Exact-run cancellation does not cancel
 unrelated turns or clear unrelated session-wide queues.
+
+The caller's authority to stop is checked once, while the Stop selects its runs.
+A caller who loses control before then is refused and nothing stops. After that
+the Stop finishes, even if the caller loses control or the Stop itself ends the
+parent turn that started it. The revocation applies to the caller's next request.
 Cancelling a queued follow-up by its `runId` removes only that follow-up; the
 active run and other queued follow-ups in the same session continue.
 

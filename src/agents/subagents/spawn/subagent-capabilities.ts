@@ -343,7 +343,7 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
     inheritedToolDeny: normalizeInheritedToolDenylist(entry.inheritedToolDeny),
     delegatedToolPolicy,
     ...(entry.inheritedToolPolicySource === "sender"
-      ? { inheritedToolPolicySource: "sender" as const }
+      ? { inheritedToolPolicySource: entry.inheritedToolPolicySource }
       : {}),
   };
 }

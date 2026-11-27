@@ -177,6 +177,15 @@ suite.define(() => {
         await notice.filter({ hasText: "Batch completed. 12 chats archived." }).waitFor();
         await page.clock.resume();
         await page.setViewportSize({ width: 390, height: 844 });
+        const archiveValue = await row(page, "Archive files")
+          .locator(".settings-row__value")
+          .boundingBox();
+        const databaseValue = await row(page, "Databases")
+          .locator(".settings-row__value")
+          .boundingBox();
+        expect(archiveValue).not.toBeNull();
+        expect(databaseValue).not.toBeNull();
+        expect(Math.abs(archiveValue!.x - databaseValue!.x)).toBeLessThanOrEqual(1);
         expect(
           await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
         ).toBe(true);

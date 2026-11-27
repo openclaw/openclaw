@@ -887,7 +887,6 @@ async function renderScenarioSnapshot(
     ),
   );
   const dynamicToolFunctions = flattenCodexDynamicToolSpecs(scenario.dynamicTools);
-  const criticalToolSpecs = dynamicToolFunctions.filter((tool) => tool.name === "message");
   const dynamicToolsJson = stableJson(scenario.dynamicTools);
   return [
     `# ${scenario.title}`,
@@ -943,10 +942,6 @@ async function renderScenarioSnapshot(
     "## Dynamic Tool Names",
     "",
     markdownFence("json", stableJson(dynamicToolFunctions.map((tool) => tool.name))),
-    "",
-    "## Critical Visible-Reply Tool Specs",
-    "",
-    markdownFence("json", stableJson(criticalToolSpecs)),
     "",
   ].join("\n");
 }

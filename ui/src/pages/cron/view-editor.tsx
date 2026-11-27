@@ -1,12 +1,11 @@
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { createMemo, For, Show } from "solid-js";
+import type { AgentSelectOption } from "../../components/agent-select-types.ts";
+import "../../components/agent-select-registration.ts";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
-import { providerIdFromModelRef } from "../../components/provider-icon-data.ts";
-import { Icon } from "../../components/solid/icon.tsx";
-import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
-import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
-import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
+import { t } from "../../lib/reactive/i18n.ts";
+import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { CronScratchEditor } from "./scratch-editor.tsx";
 import { EnabledSwitch } from "./view-controls.tsx";
 import { Advanced } from "./view-delivery.tsx";
@@ -16,19 +15,17 @@ import {
   errorIdForField,
   inputIdForField,
   CronSelect,
-  CronInput,
-  TrayInput,
+  FieldRow,
 } from "./view-fields.tsx";
+import { CronModelControls } from "./view-model-controls.tsx";
 import {
   ScheduleControls,
   ScheduleDetails,
-  ScheduleSummary,
+  ScheduleTimeZone,
   TRAY_SCHEDULE_FIELDS,
   TrayErrors,
 } from "./view-schedule.tsx";
 import type { CronProps, CronPanelMode } from "./view-types.ts";
-
-registerEnglishCatalog(registerPreferencesEnglish);
 
 type EditorProps = CronProps & {
   mode: CronPanelMode;
@@ -138,16 +135,7 @@ export function Editor(props: EditorProps & { phoneLayout: boolean }) {
             )}
           </Show>
           <fieldset class="cron-editor-section" disabled={formDisabled()}>
-            <CronInput
-              {...props}
-              field="agentId"
-              label={t("cron.form.agentId")}
-              help={t("cron.form.agentHelp")}
-              quietHelp
-              list="cron-agent-suggestions"
-              disabled={props.form.clearAgent}
-              placeholder={t("cron.form.agentPlaceholder")}
-            />
+            <AgentRow {...props} disabled={formDisabled()} />
             <CronSelect
               {...props}
               field="sessionTarget"
@@ -212,11 +200,73 @@ export function Editor(props: EditorProps & { phoneLayout: boolean }) {
 }
 
 /**
- * The automation as one composer: name and prompt on the sheet, and when and how it runs on
- * the tray tucked under it.
+ * Which agent runs the automation. An empty id (or a cleared one) leaves the choice to the
+ * Gateway, which falls back to its default agent; a stored id missing from the roster is kept
+ * until another agent is picked.
+ */
+function AgentRow(props: CronProps & { disabled: boolean }) {
+  // Typing elsewhere in the form replaces it; only the agent fields rebuild the options.
+  const stored = createMemo(() => (props.form.clearAgent ? "" : props.form.agentId.trim()));
+  const choice = createMemo(() => {
+    const list = props.agentsList;
+    const agents = listSelectableAgents(list?.agents ?? []);
+    const byId = new Map(agents.map((agent) => [normalizeAgentId(agent.id), agent]));
+    const value = stored() ? normalizeAgentId(stored()) : "";
+    const unlisted = Boolean(list && value && !byId.has(value));
+    // System agents are not offered, but a job they own still names them.
+    const system = list?.agents.find((agent) => normalizeAgentId(agent.id) === value);
+    const options: AgentSelectOption[] = [
+      // Cron can inherit an owner from the session key or Gateway configuration.
+      { value: "", label: t("cron.form.defaultAgent") },
+      ...[...byId].map(([id, agent]) => ({ value: id, label: normalizeAgentLabel(agent), agent })),
+      ...(unlisted
+        ? [
+            system
+              ? { value, label: normalizeAgentLabel(system), agent: system }
+              : {
+                  value,
+                  label: stored(),
+                  agent: { id: value },
+                  badge: t("cron.form.agentNotFound"),
+                },
+          ]
+        : []),
+    ];
+    // An existing override can be cleared even if there is only one selectable agent.
+    const hasOverride = Boolean(props.editingJob?.agentId?.trim());
+    return {
+      options,
+      value,
+      visible: Boolean(list) && (agents.length !== 1 || unlisted || hasOverride),
+    };
+  });
+  return (
+    <Show when={choice().visible}>
+      <FieldRow
+        label={t("cron.form.agentId")}
+        controlId=""
+        control={
+          <openclaw-agent-select
+            prop:options={choice().options}
+            prop:value={choice().value}
+            prop:accessibleLabel={t("cron.form.agentId")}
+            prop:disabled={props.disabled}
+            prop:onSelect={(agentId: string) =>
+              props.onFormChange({ agentId, clearAgent: agentId === "" })
+            }
+          />
+        }
+      />
+    </Show>
+  );
+}
+
+/**
+ * New automations are named from the prompt. Edits and copies can change the name.
  */
 function PromptBlock(
   props: CronProps & {
+    mode: CronPanelMode;
     payloadLocked: boolean;
     isAgentTurn: boolean;
     phoneLayout: boolean;
@@ -236,43 +286,30 @@ function PromptBlock(
       : props.form.payloadKind === "systemEvent"
         ? t("cron.form.systemEventHelp")
         : t("cron.form.agentTurnHelp");
-  const modelError = () => props.fieldErrors.payloadModel;
-  const modelOptions = createMemo(() =>
-    uniqueStrings(props.modelSuggestions).map((value) => {
-      const provider = providerIdFromModelRef(value);
-      return { value, label: value, provider: provider ?? undefined };
-    }),
-  );
-  const nameError = () => props.fieldErrors.name;
   const payloadError = () => props.fieldErrors.payloadText;
   return (
     <div class="cron-prompt cron-prompt--editing">
       <div class="cron-prompt__sheet">
-        <textarea
-          id={inputIdForField("name")}
-          class="cron-prompt__name"
-          rows="1"
-          value={props.form.name}
-          aria-label={t("cron.form.fieldName")}
-          aria-required="true"
-          aria-invalid={nameError() ? "true" : "false"}
-          aria-describedby={nameError() ? errorIdForField("name") : undefined}
-          placeholder={t("cron.form.namePlaceholder")}
-          onKeyDown={(event) => {
-            // The name is one line that wraps, as the single-line field it replaces.
-            if (event.key === "Enter" && !event.isComposing) {
-              event.preventDefault();
+        <Show when={props.mode === "job" || props.cloning}>
+          <textarea
+            id={inputIdForField("name")}
+            class="cron-prompt__name"
+            rows="1"
+            value={props.form.name}
+            aria-label={t("cron.form.fieldName")}
+            // An empty name keeps the saved one, so show it rather than an example.
+            placeholder={props.editingJob?.name ?? t("cron.form.namePlaceholder")}
+            onKeyDown={(event) => {
+              // The name is one line that wraps, as the single-line field it replaces.
+              if (event.key === "Enter" && !event.isComposing) {
+                event.preventDefault();
+              }
+            }}
+            onInput={(event) =>
+              props.onFormChange({ name: event.currentTarget.value.replace(/[\r\n]+/g, "") })
             }
-          }}
-          onInput={(event) =>
-            props.onFormChange({ name: event.currentTarget.value.replace(/[\r\n]+/g, "") })
-          }
-        />
-        {nameError() ? (
-          <div id={errorIdForField("name")} class="cron-help cron-error" role="alert">
-            {t(nameError() ?? "")}
-          </div>
-        ) : undefined}
+          />
+        </Show>
         {props.payloadLocked ? (
           <>
             <pre
@@ -330,53 +367,22 @@ function PromptBlock(
       </div>
       <div class="cron-prompt__tray">
         <div class="cron-prompt__controls">
-          <span class="cron-prompt__clock" aria-hidden="true">
-            <Icon name="clock" />
-          </span>
           <div class="cron-editor-schedule">
             <ScheduleControls {...props} phoneLayout={props.phoneLayout} />
+            <ScheduleTimeZone {...props} />
           </div>
           {props.isAgentTurn ? (
-            <span class="cron-prompt__run-controls">
-              <span class="cron-tray-picker" title={t("cron.form.modelHelp")}>
-                <ModelPicker
-                  id="cron-payload-model-picker"
-                  label={t("cron.form.model")}
-                  value={props.form.payloadModel}
-                  options={[
-                    { value: "", label: t("quickSettings.model.default") },
-                    ...modelOptions(),
-                  ]}
-                  custom={{
-                    id: inputIdForField("payloadModel"),
-                    label: t("cron.form.customModel"),
-                    placeholder: t("cron.form.modelPlaceholder"),
-                    invalid: Boolean(modelError()),
-                    describedBy: modelError() ? errorIdForField("payloadModel") : undefined,
-                  }}
-                  onChange={(payloadModel) => props.onFormChange({ payloadModel })}
-                />
-              </span>
-              <TrayInput
-                {...props}
-                field="payloadThinking"
-                label={t("cron.form.thinking")}
-                help={t("cron.form.thinkingHelp")}
-                errorKey="payloadThinking"
-                size="narrow"
-                list="cron-thinking-suggestions"
-                placeholder={t("cron.form.thinkingPlaceholder")}
-              />
+            <span class="cron-prompt__run-controls" data-picker-below>
+              <CronModelControls {...props} />
             </span>
           ) : undefined}
         </div>
-        <div class="cron-editor-tray-errors">
-          <TrayErrors
-            fieldErrors={props.fieldErrors}
-            fields={[...TRAY_SCHEDULE_FIELDS, "payloadModel", "payloadThinking"]}
-          />
-        </div>
-        <ScheduleSummary {...props} />
+      </div>
+      <div class="cron-editor-tray-errors">
+        <TrayErrors
+          fieldErrors={props.fieldErrors}
+          fields={[...TRAY_SCHEDULE_FIELDS, "payloadModel", "payloadThinking"]}
+        />
       </div>
     </div>
   );

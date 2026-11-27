@@ -142,6 +142,99 @@ describe.skipIf(process.platform === "win32")("native workflow binding storage",
   );
 
   it.each([
+    "valid",
+    "missing",
+    "duplicate",
+    "extra",
+    "required absent",
+    "correction present",
+    "alias",
+    "review kind",
+    "review head",
+    "evidence omitted",
+    "evidence mismatch",
+  ])("validates the complete V3 READY inventory: %s", (fault) => {
+    const f = fixture();
+    const previous = f.write(f.record);
+    const source = f.git(["commit-tree", `${f.source}^{tree}`, "-p", f.source], "next workflow\n");
+    f.git(["update-ref", "refs/remotes/origin/main", source]);
+    const blob = (text: string) => f.git(["hash-object", "-w", "--stdin"], text);
+    const env = blob("retained native env\n");
+    const review = blob(
+      JSON.stringify({
+        pr: { number: 123, headSha: fault === "review head" ? source : f.source },
+        recommendation: "READY FOR /prepare-pr",
+      }),
+    );
+    const meta = blob(JSON.stringify({ number: 123, headRefOid: f.source, state: "OPEN" }));
+    const rows = [
+      `.local/prep-context.env ${env}`,
+      `.local/pr-meta.json ${meta}`,
+      `.local/pr-meta.env ${env}`,
+      `.local/review-mode.env ${env}`,
+      `.local/review.json ${review}`,
+      `.local/prep.env ${env}`,
+      ".local/prepare-push-result.env absent",
+      ".local/prepare-sync-result.env absent",
+      ".local/correction-review.json absent",
+      ".local/correction-incoming-review.json absent",
+      ".local/pending-proof-acceptance.json absent",
+      ".local/prepare-baseline.json absent",
+    ];
+    if (fault === "missing") {
+      rows.splice(3, 1);
+    }
+    if (fault === "duplicate") {
+      rows[3] = rows[0]!;
+    }
+    if (fault === "extra") {
+      rows.push(`.local/unknown.json ${env}`);
+    }
+    if (fault === "required absent") {
+      rows[0] = ".local/prep-context.env absent";
+    }
+    if (fault === "correction present") {
+      rows[8] = `.local/correction-review.json ${review}`;
+    }
+    const snapshot = blob(rows.join("\n"));
+    const evidence = rows
+      .filter((row) => !row.endsWith(" absent"))
+      .map((row) => {
+        const [name, oid] = row.split(" ");
+        return `100644 blob ${fault === "evidence mismatch" ? env : oid}\t${name!.slice(7)}\n`;
+      });
+    // Invalid inventory cases can contain duplicate paths; keep mktree itself valid.
+    const evidenceTree = f.git(["mktree"], [...new Set(evidence)].join(""));
+    const record = {
+      ...f.record,
+      version: 3,
+      source,
+      predecessor: previous,
+      continuation: {
+        head: f.source,
+        hostedHead: fault === "alias" ? source : f.source,
+        tree: f.git(["rev-parse", `${f.source}^{tree}`]),
+        review,
+        snapshot,
+        reviewKind: fault === "review kind" ? "correction" : "ready",
+      },
+    };
+    const next = f.write(
+      record,
+      [previous, source, f.source],
+      `${fault === "evidence omitted" ? "" : `040000 tree ${evidenceTree}\tready-evidence\n`}100644 blob ${snapshot}\treview-snapshot\n`,
+    );
+    const result = f.run("workflow-read");
+    expect(result.status, result.stderr).toBe(fault === "valid" ? 0 : 1);
+    if (fault === "valid") {
+      expect(result.stdout).toBe(`${next}\t${source}\n`);
+    } else {
+      expect(result.stdout).toBe("");
+    }
+    expect(f.git(["rev-parse", ref])).toBe(next);
+  });
+
+  it.each([
     ["writer@example.invalid:Org/repo.git", "other@example.invalid:Org/repo.git"],
     ["example.invalid:Org/repo.git", "other.invalid:Org/repo.git"],
     ["example.invalid:Org/repo.git", "example.invalid:org/repo.git"],

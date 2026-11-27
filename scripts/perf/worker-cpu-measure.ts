@@ -18,6 +18,7 @@ import {
   createRetainedNativeWorker,
 } from "../../src/infra/worker-native-lifecycle.ts";
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -84,12 +85,7 @@ try {
     await delay(startAt - Date.now());
   }
   if (inspector) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 8192,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 8192);
   }
   console.log("WORKER_CPU_START");
   const stopDiagnostics = startGatewayBenchDiagnostics();

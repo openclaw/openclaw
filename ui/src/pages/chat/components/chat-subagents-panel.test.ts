@@ -199,6 +199,66 @@ const openSelector = (mobile?: boolean) =>
       ? ".subagents-desktop__open"
       : ".chat-subagents__open";
 
+it.each([false, true])(
+  "shows each child's model in the %s roster without guessing",
+  async (mobile) => {
+    const rows = [
+      {
+        ...child("named"),
+        model: "model-a",
+        modelProvider: "fixture",
+        activeModel: "model-a",
+        activeModelProvider: "fixture",
+        modelDisplayName: "Model A",
+        runtimeMs: 18_000,
+      },
+      {
+        ...child("fallback"),
+        model: "model-b",
+        modelDisplayName: "Model B",
+        activeModel: "model-c",
+      },
+      {
+        ...child("done"),
+        model: "model-d",
+        status: "done" as const,
+        hasActiveRun: false,
+        activeRunIds: [],
+      },
+      {
+        ...child("unknown"),
+        activeModel: " ",
+        modelDisplayName: " ",
+        model: " ",
+        runtimeMs: 12_000,
+      },
+      {
+        ...child("rerouted"),
+        model: "shared-id",
+        modelProvider: "first",
+        modelDisplayName: "First provider's model",
+        activeModel: "shared-id",
+        activeModelProvider: "second",
+      },
+    ] satisfies [GatewaySessionRow, ...GatewaySessionRow[]];
+    const [named, fallback, done, unknown, rerouted] = rows;
+    const f = mountRows(() => rows, mobile);
+    await f.waitForCount(openSelector(mobile), rows.length);
+    const text = (row: GatewaySessionRow) =>
+      f.panel.querySelector('[data-session-key="' + row.key + '"] ' + openSelector(mobile))
+        ?.textContent;
+    expect(text(named)).toMatch(/18s.*·.*Model A/);
+    expect(text(named)?.includes("Working for")).toBe(!mobile);
+    expect(text(unknown)).toMatch(/Working for.*12s/);
+    expect(text(fallback)).toContain("model-c");
+    expect(text(fallback)).not.toContain("Model B");
+    expect(text(done)).toContain("model-d");
+    expect(text(unknown)).not.toContain("·");
+    expect(text(rerouted)).toContain("shared-id");
+    expect(text(rerouted)).not.toContain("First provider's model");
+  },
+);
+
 it.each([undefined, false, true])(
   "retains the %s list through an observed refresh and recovers a failed read",
   async (mobile) => {

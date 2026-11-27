@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { CronJob } from "../api/types.ts";
-import { isCronJobActiveFailure } from "./cron-status.ts";
+import { resolveCronJobAttention } from "./cron-status.ts";
 
 function failedJob(enabled: boolean): CronJob {
   return {
@@ -10,10 +10,10 @@ function failedJob(enabled: boolean): CronJob {
   } as CronJob;
 }
 
-describe("isCronJobActiveFailure", () => {
+describe("resolveCronJobAttention", () => {
   it("reports only enabled failed jobs as actionable", () => {
-    expect(isCronJobActiveFailure(failedJob(true))).toBe(true);
-    expect(isCronJobActiveFailure(failedJob(false))).toBe(false);
+    expect(resolveCronJobAttention(failedJob(true))).toBe("error");
+    expect(resolveCronJobAttention(failedJob(false))).toBeUndefined();
   });
 
   it("keeps auto-disabled jobs visible as failures", () => {
@@ -24,6 +24,14 @@ describe("isCronJobActiveFailure", () => {
       ...job.state,
       autoDisabled: { reason: "consecutive-failures", atMs: 1, consecutiveErrors: 10 },
     };
-    expect(isCronJobActiveFailure(job)).toBe(true);
+    expect(resolveCronJobAttention(job)).toBe("error");
+  });
+
+  it("keeps an operator pause and an execution failure distinct from retained task attention", () => {
+    const job = failedJob(false);
+    job.state.lastMeaningfulResult = { outcome: "blocked", summary: "Input required", atMs: 1 };
+    expect(resolveCronJobAttention(job)).toBeUndefined();
+    job.enabled = true;
+    expect(resolveCronJobAttention(job)).toBe("error");
   });
 });

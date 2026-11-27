@@ -26,7 +26,6 @@ import { readAssistantDisplayContent } from "../../shared/assistant-display-cont
 import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
-import { runInAgentRunWriteContext } from "../agent-run-terminal-writes.js";
 import { resolveImplicitMessageActionTarget } from "./message-action-normalization.js";
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForMirror } from "./payloads.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
@@ -450,12 +449,6 @@ function isDeliveredCurrentSourceReplyAction(params: SourceReplyTranscriptMirror
 export async function mirrorDeliveredSourceReplyToTranscript(
   params: SourceReplyTranscriptMirrorParams,
 ): Promise<boolean> {
-  // The run's own reply: its CLI history writer must cover the row, or the gap refuses saved
-  // history to the next fresh CLI session.
-  return await runInAgentRunWriteContext(params.runId, () => mirrorSourceReply(params));
-}
-
-async function mirrorSourceReply(params: SourceReplyTranscriptMirrorParams): Promise<boolean> {
   const deliveryFact = projectPluginMessageDeliveryFact(params.deliveredPayload);
   if (
     (deliveryFact && (deliveryFact.status !== "settled" || deliveryFact.partialDelivery)) ||
@@ -546,6 +539,19 @@ async function mirrorSourceReply(params: SourceReplyTranscriptMirrorParams): Pro
                     includeSensitiveMedia: false,
                   });
                   preparedBlocks = assistantContent ?? [];
+                  // A platform receipt establishes delivery, not permission to embed the file.
+                  if (
+                    deliveryFact?.primaryPlatformMessageId &&
+                    assistantContent?.some((block) => block.type === "attachment_error")
+                  ) {
+                    return [
+                      ...assistantContent.filter((block) => block.type !== "attachment_error"),
+                      {
+                        type: "text",
+                        text: "Attachment sent to the channel. Preview unavailable in chat history.",
+                      },
+                    ];
+                  }
                   return assistantContent;
                 },
                 onMessageCommitted: (message, acceptCompletion) => {

@@ -59,9 +59,6 @@ it.each([
         <div class="cmd-palette__create">
           <Kbd keys="⏎" />
         </div>
-        <div class="cmd-palette__footer">
-          <Kbd keys={["↑", "↓"]} />
-        </div>
         <div class="sidebar-region--desktop">
           <div class="side-panel-launcher__item">
             <Kbd keys="B" />

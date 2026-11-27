@@ -20,6 +20,8 @@ export type OnboardingPluginInstallOptions = {
   runtime: RuntimeEnv;
   workspaceDir?: string;
   promptInstall?: boolean;
+  /** Return failures for a caller that owns the final diagnostic. */
+  failureOutput?: "caller";
   autoConfirmSingleSource?: boolean;
   beforePersistentEffect?: () => void | Promise<void>;
   beforePersistentApply?: () => void;

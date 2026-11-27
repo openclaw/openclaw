@@ -60,7 +60,7 @@ import {
   prepareSessionSystemPrompt,
 } from "../session-prompt-state.js";
 import { withPromptFixture } from "./attempt-system-prompt.sandbox-info.test-support.js";
-import { isChatGPTV2CompactionEligible } from "./chatgpt-v2-compaction.js";
+import { resolveRequestBoundaryCompaction } from "./request-boundary-compaction.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -694,7 +694,9 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
                 expect(publishPrompt).not.toHaveBeenCalled();
                 expect(outcome).toMatchObject({
                   status: "rejected",
-                  reason: { message: "admitted run authority is no longer active" },
+                  reason: {
+                    message: "This agent run is no longer active. Start a new turn to retry.",
+                  },
                 });
               } else {
                 expect(outcome.status).toBe("fulfilled");
@@ -895,7 +897,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
 
     expect(fixture.settingsManager.getCompactionEnabled()).toBe(!forbidden);
     expect(
-      isChatGPTV2CompactionEligible({
+      resolveRequestBoundaryCompaction({
         model: {
           api: "openai-chatgpt-responses",
           provider: "openai",
@@ -905,7 +907,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
         compactionEnabled: result.compactionEnabled,
         compactionReplayEnabled: true,
       }),
-    ).toBe(!forbidden);
+    ).toBe(forbidden ? undefined : "native-checkpoint");
     expect(fixture.events).toEqual([...sessionPreparationEvents, "stage:agent-session"]);
     expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledOnce();
     const sessionCall = hoisted.createAgentSession.mock.calls[0];
@@ -913,7 +915,6 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(sessionCall?.[0]).toMatchObject({
       toolRepeatPolicy: expect.objectContaining({ enabled: true }),
       contextOverflowRecoveryOwner: "caller",
-      cleanupProviderSessionResourcesOnDispose: false,
     });
     expect(fixture.activeSession.agent.state.systemPrompt).toBe("system prompt");
     expect(fixture.input.onSystemPromptChanged).toHaveBeenCalledWith("  system prompt\n");

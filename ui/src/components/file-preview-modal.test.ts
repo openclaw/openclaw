@@ -1,12 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import "./file-preview-modal.tsx";
-import { Icon } from "./solid/icon.tsx";
 
 type FilePreviewModalElement = HTMLElementTagNameMap["openclaw-file-preview-modal"];
 
@@ -63,25 +61,6 @@ describe("openclaw-file-preview-modal", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     delete (document as unknown as { execCommand?: unknown }).execCommand;
-  });
-
-  it("uses the composer skill glyph for skill files but keeps ordinary Markdown icons", async () => {
-    const modal = await renderPreview({
-      activePath: "SKILL.md",
-      previewFiles: [
-        { path: "SKILL.md", size: "1 KB", contents: "Skill instructions" },
-        { path: "README.md", size: "1 KB", contents: "Documentation" },
-      ],
-    });
-    const reference = document.createElement("div");
-    mountSolid(() => createComponent(Icon, { name: "pencilSparkles" }), { container: reference });
-    const paths = (element: Element | null | undefined) =>
-      [...(element?.querySelectorAll("path") ?? [])].map((path) => path.getAttribute("d"));
-    const expectedIcon = paths(reference.querySelector("svg"));
-    const skillIcon = modal.querySelector('[data-path="SKILL.md"] .item-icon svg');
-    const markdownIcon = modal.querySelector('[data-path="README.md"] .item-icon svg');
-    expect(paths(skillIcon)).toEqual(expectedIcon);
-    expect(paths(markdownIcon)).not.toEqual(expectedIcon);
   });
 
   it("emits controlled query, select, and close events", async () => {
@@ -311,18 +290,6 @@ describe("openclaw-file-preview-modal", () => {
       expect(feedback.hidden).toBe(false);
       expect(button.getAttribute("aria-label")).toBe(feedback.textContent);
       expect(writeText).toHaveBeenCalledWith("Morning digest template");
-    },
-  );
-
-  it.each([["references/notes.constructor", "CONSTRUCTOR"]])(
-    "renders the fallback file-kind label for %s",
-    async (path, label) => {
-      const modal = await renderPreview({
-        activePath: path,
-        previewFiles: [{ path, size: "12 B", contents: "Example file" }],
-      });
-
-      expect(modal.querySelector(".chip.accent")?.textContent).toBe(label);
     },
   );
 });

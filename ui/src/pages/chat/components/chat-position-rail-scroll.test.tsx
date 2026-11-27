@@ -60,7 +60,7 @@ it("follows native midpoint crossings and the final virtual range", async () => 
     clientHeight: { configurable: true, value: 600 },
     scrollHeight: { configurable: true, value: 4800 },
   });
-  const rail = document.createElement("div");
+  const rail = container.appendChild(document.createElement("div"));
   rail.style.display = "contents";
   transcript.renderSession(sessionKey, (session) => {
     mountSolid(() => <ChatPositionRail positions={positions} transcript={session} />, {
@@ -75,7 +75,6 @@ it("follows native midpoint crossings and the final virtual range", async () => 
         (row) => (row.kind === "content" ? row.content : null),
         null,
         false,
-        rail,
       );
     });
   const settle = async (frame = false) => {

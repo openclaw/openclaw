@@ -5,7 +5,6 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { button } from "./cloud-worker-snapshots-dom.test-support.ts";
 import {
   buildEnvironmentFixture,
   snapshotListFixture,
@@ -70,8 +69,8 @@ it("retires machine-profile drafts and a pending catalog after admin access is r
         ? pending.promise
         : undefined,
   });
-  await waitForSolid(() => expect(button(page, "Edit").disabled).toBe(false));
-  button(page, "Edit").click();
+  await waitForSolid(() => expect(workers.button(page, "Edit").disabled).toBe(false));
+  workers.button(page, "Edit").click();
   flush();
   for (const label of ["Setup command", "Setup environment names"]) {
     workers.change(

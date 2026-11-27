@@ -1,6 +1,7 @@
 import { chmodSync, lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { text } from "node:stream/consumers";
 import { setImmediate } from "node:timers/promises";
 import { serialize } from "node:v8";
 import { parentPort } from "node:worker_threads";
@@ -307,7 +308,7 @@ if (parentPort) {
   let reply: FsSafeCopyReply = { type: "written" };
   try {
     // SAFETY: This private process receives only the host's typed filesystem commands.
-    const command = JSON.parse(readFileSync(0, "utf8")) as FsSafeCopyWrite;
+    const command = JSON.parse(await text(process.stdin)) as FsSafeCopyWrite;
     switch (command.type) {
       case "reclaim-plugin-captures": {
         const { reclaimPluginCaptureBatch } =

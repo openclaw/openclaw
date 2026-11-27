@@ -808,6 +808,38 @@ describe("ask_user", () => {
   });
 });
 
+it.each([false, true])(
+  "follows replacement text without completing manual work (%s)",
+  async (manual) => {
+    registeredGateway({
+      "question.waitAnswer": async () => ({ status: "cancelled" }),
+      "question.get": async () => ({
+        question: { status: "cancelled", resolvedBy: "chat-composer-replacement" },
+      }),
+    });
+    const result = await createAskUserTool({ sessionKey: SESSION_KEY }).execute(
+      "replacement",
+      manual
+        ? {
+            requiredAction: {
+              reason: "Complete a manual step",
+              instructions: "Use the existing browser",
+            },
+          }
+        : validArgs,
+    );
+    expect(result.details).toEqual(
+      manual ? { status: "action_unresolved", reason: "cancelled" } : { status: "no_answer" },
+    );
+    expect(JSON.stringify(result)).toContain("Follow the new message");
+    expect(JSON.stringify(result)).not.toContain("proceed with best judgment");
+    if (manual) {
+      expect(JSON.stringify(result)).toContain("dependent actions remain blocked");
+      expect(result.terminate).toBeUndefined();
+    }
+  },
+);
+
 it.each([
   ["ready", true],
   ["ready", false],

@@ -312,9 +312,13 @@ describe("Provider model discovery auth preparation", () => {
       const requests: string[] = [];
       const outcomes: ProviderCatalogOutcome[] = [];
       vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+        // ChatGPT listing reads the newest Codex version first; it is not a catalog request.
+        if (url.hostname === "registry.npmjs.org") {
+          return Response.json({ version: "0.169.0" });
+        }
         events.push("catalog");
         requests.push(new Headers(init?.headers).get("authorization") ?? "");
-        const url = new URL(input instanceof Request ? input.url : input);
         return Response.json(
           url.hostname === "chatgpt.com"
             ? { models: [] }
@@ -702,6 +706,7 @@ describe("Provider model discovery auth preparation", () => {
             get provider() {
               return {
                 baseUrl: "https://api.chutes.ai/v1",
+                api: "openai-completions" as const,
                 apiKey: other.apiKey,
                 models: reads++ === 0 ? [independentModel] : [],
               };

@@ -76,7 +76,7 @@ it.each([
   [
     "usage",
     ["src/infra/session-cost-usage-worker.ts"],
-    [...configIO, ...sessions("accessor"), aiTransports],
+    [...configIO, ...sessions("accessor accessor.sqlite-archive-read"), aiTransports],
   ],
   [
     "exact entry mutation",
@@ -116,6 +116,7 @@ vi.mock("./session-transcript-worker-scopes.js", () => ({
     value: await read(),
   }),
   pruneClosedHistoryDatabaseScopes: () => {},
+  closeHistoryDatabaseScopes: () => {},
 }));
 // mock-isolation: Missing-store admission isolates startup imports from actual database handles.
 vi.mock("../../state/openclaw-agent-db-readonly.js", () => ({

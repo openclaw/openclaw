@@ -22,7 +22,7 @@ export function createPresenceReset(
   return { reset: true, version, presence, keys: source.map(getSystemPresenceKey) };
 }
 
-type PresenceDelivery = {
+export type PresenceDelivery = {
   fragment: Buffer;
   snapshot: PresenceDeliverySnapshot;
   mode: "delta" | "reset";
@@ -38,8 +38,7 @@ const publications = new WeakMap<
     audiences: WeakMap<
       SystemPresence[],
       {
-        reset: string | PresenceDelivery;
-        resetBytes: number;
+        reset?: string | PresenceDelivery;
         snapshot: PresenceDeliverySnapshot;
         deltas: WeakMap<PresenceDeliverySnapshot, PresenceDelivery>;
       }
@@ -47,6 +46,45 @@ const publications = new WeakMap<
   }
 >();
 const PAYLOAD_PREFIX = ',"payload":';
+
+export type PreparePresenceProjection = (
+  presence: SystemPresence[],
+) => (client: GatewayWsClient) => SystemPresence[];
+
+export function createPresenceBroadcast(
+  payload: { presence: SystemPresence[] },
+  prepare: PreparePresenceProjection | undefined,
+  encode: (name: "payload", value: unknown) => string,
+) {
+  if (!prepare) {
+    throw new Error("presence recipient projection unavailable");
+  }
+  // The publisher freezes its plain wrapper. Other inputs retain per-send source reads.
+  const ownedPayload =
+    Object.isFrozen(payload) &&
+    Reflect.ownKeys(payload).length === 1 &&
+    Object.getOwnPropertyDescriptor(payload, "presence")?.value !== undefined;
+  const project = prepare(payload.presence);
+  let fragments: Map<SystemPresence[], Buffer> | undefined;
+  return (client: GatewayWsClient, stateVersion?: { presence?: number }) => {
+    // Read the source before checking the recipient's current session authority.
+    const projected = ownedPayload ? undefined : { ...payload, presence: project(client) };
+    const presence = projected?.presence ?? project(client);
+    const version = acceptsPresenceDeltas(client) ? stateVersion?.presence : undefined;
+    if (version !== undefined) {
+      return preparePresenceDelivery(client, payload.presence, presence, version);
+    }
+    if (projected && (Object.keys(projected).length !== 1 || "toJSON" in projected)) {
+      return encode("payload", projected);
+    }
+    let fragment = fragments?.get(presence);
+    if (!fragment) {
+      fragment = Buffer.from(encode("payload", projected ?? { presence }));
+      (fragments ??= new Map()).set(presence, fragment);
+    }
+    return fragment;
+  };
+}
 
 /** Prepare from the live recipient projection; commit only after socket.send accepts the frame. */
 export function preparePresenceDelivery(
@@ -65,10 +103,7 @@ export function preparePresenceDelivery(
   if (!audience) {
     const rows = new Map<string, SystemPresence>();
     keys.forEach((key, index) => rows.set(key, presence[index]!));
-    const reset = `${PAYLOAD_PREFIX}${JSON.stringify({ reset: true, version, presence, keys })}`;
     audience = {
-      reset,
-      resetBytes: Buffer.byteLength(reset),
       snapshot: { version, rows },
       deltas: new WeakMap(),
     };
@@ -80,15 +115,21 @@ export function preparePresenceDelivery(
     return delivery;
   }
   const { snapshot } = audience;
+  const resetText = () => JSON.stringify({ reset: true, version, presence, keys });
   if (previous) {
     const { rows } = snapshot;
     const delta: PresenceDelta = {
       base: previous.version,
       version,
       upsert: [],
-      remove: [...previous.rows.keys()].filter((key) => !rows.has(key)),
+      remove: [],
       order: keys,
     };
+    for (const key of previous.rows.keys()) {
+      if (!rows.has(key)) {
+        delta.remove.push(key);
+      }
+    }
     for (const [key, row] of rows) {
       const before = previous.rows.get(key);
       if (!before) {
@@ -119,7 +160,17 @@ export function preparePresenceDelivery(
       }
     }
     const deltaJSON = JSON.stringify(delta);
-    if (Buffer.byteLength(deltaJSON) < audience.resetBytes - PAYLOAD_PREFIX.length) {
+    const deltaBytes = Buffer.byteLength(deltaJSON);
+    const reset = audience.reset;
+    // Every projected row contains at least these two wire fields. Small deltas
+    // can win without serializing the roster just to measure its reset size.
+    if (
+      deltaBytes < presence.length * '{"ts":0,"text":""}'.length ||
+      deltaBytes <
+        (typeof reset === "object"
+          ? reset.fragment.length - PAYLOAD_PREFIX.length
+          : Buffer.byteLength(reset ?? (audience.reset = resetText())))
+    ) {
       delivery = {
         fragment: Buffer.from(`${PAYLOAD_PREFIX}${deltaJSON}`),
         snapshot,
@@ -128,9 +179,12 @@ export function preparePresenceDelivery(
     }
   }
   if (!delivery) {
-    // A delta-only publication needs the reset's wire size, but never its encoded bytes.
-    if (typeof audience.reset === "string") {
-      audience.reset = { fragment: Buffer.from(audience.reset), snapshot, mode: "reset" };
+    if (typeof audience.reset !== "object") {
+      audience.reset = {
+        fragment: Buffer.from(`${PAYLOAD_PREFIX}${audience.reset ?? resetText()}`),
+        snapshot,
+        mode: "reset",
+      };
     }
     delivery = audience.reset;
   }

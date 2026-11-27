@@ -68,6 +68,7 @@ import { setBroadcastHealthUpdate } from "./server/health-state.js";
 import { startSessionColdStorageMaintenance } from "./session-cold-storage-maintenance.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import { captureGatewayScopeMatcher } from "./session-runtime-scope.js";
+import { sweepUnreachableSessionYields } from "./session-yield-sweep.js";
 import { checkGatewayInstallationReplacement } from "./stale-install.js";
 import { startWorktreeMaintenance } from "./worktree-maintenance.js";
 
@@ -476,7 +477,7 @@ export function startGatewayMaintenanceTimers(params: {
     }
   });
 
-  schedulePeriodic("dedupe", 60_000, () => {
+  schedulePeriodic("dedupe", 60_000, async () => {
     const AGENT_RUN_SEQ_MAX = 10_000;
     const now = scheduler.now();
     pruneExpiredArtifactDownloads(now);
@@ -571,6 +572,14 @@ export function startGatewayMaintenanceTimers(params: {
     }
     // Sweep stale agent run contexts (orphaned when lifecycle end/error is missed).
     sweepStaleRunContexts();
+    if (params.resolveGatewayContext && !isGatewayWorkAdmissionClosed()) {
+      const resolveGatewayContext = params.resolveGatewayContext;
+      await runWithGatewayDetachedWorkAdmission(
+        () => sweepUnreachableSessionYields(resolveGatewayContext, restartDrainSignal),
+        "runtime:yield-settlement",
+        restartDrainSignal,
+      );
+    }
   });
 
   const runManagedOutgoingMediaGc = async () => {

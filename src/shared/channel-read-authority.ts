@@ -92,7 +92,7 @@ export async function withChannelReadAuthority<T>(
   const assertAuthority = () => {
     parent?.();
     if (!open) {
-      throw new Error("Channel read authority is no longer active.");
+      throw new Error("Channel read ended. Retry the action.");
     }
     sourceSignal?.throwIfAborted();
     assertCurrent();

@@ -17,6 +17,7 @@ import { parseArgs } from "node:util";
 import type { SlackBasePostMessagePayload } from "../../extensions/slack/src/post-message-payload.js";
 import type { OpenClawConfig } from "../../src/config/types.js";
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -208,12 +209,7 @@ const samples: Record<Phase, Float64Array> = {
 wireCount = 0;
 const inspector = new Session();
 if (values.allocations) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32768);
 }
 const hostLoadBefore = loadavg();
 const memoryBefore = process.memoryUsage();

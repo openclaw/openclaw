@@ -200,15 +200,12 @@ export async function handleAcpSessionsAction(
         cfg: params.cfg,
         sessionKey: currentSessionKey,
         agentId: target.agentId,
-        assertCurrent: params.command.assertOwnerCurrent,
       });
-  params.command.assertOwnerCurrent?.();
   const visibleEntries = params.command.senderIsOwner
     ? await listAcpSessionEntries({ cfg: params.cfg })
     : currentEntry?.entry && currentEntry.acp
       ? [currentEntry]
       : [];
-  params.command.assertOwnerCurrent?.();
 
   const selectedEntries = visibleEntries
     .toSorted((a, b) => (b.entry?.updatedAt ?? 0) - (a.entry?.updatedAt ?? 0))
@@ -218,7 +215,6 @@ export async function handleAcpSessionsAction(
       .filter(({ entry, acp }) => entry && acp)
       .map(({ storeSessionKey }) => storeSessionKey),
   );
-  params.command.assertOwnerCurrent?.();
   const rows = selectedEntries
     .map(({ storeSessionKey, agentId, entry, acp }) => {
       if (!entry || !acp) {

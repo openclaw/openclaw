@@ -9,6 +9,7 @@ import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
 import { prepareProviderPrompt } from "../../src/agents/embedded-agent-runner/provider-prompt-serialization.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -28,12 +29,7 @@ for (let i = 0; i < 100; i++) {
 global.gc?.();
 const inspector = values.allocation ? new Session() : undefined;
 if (inspector) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 1024,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 1024);
 }
 const started = process.cpuUsage();
 let bytes = 0;
