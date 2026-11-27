@@ -221,14 +221,14 @@ final class AdaptiveLayoutUITests: XCTestCase {
         self.capture("iphone-landscape-compact-chat", in: app)
         self.rotateWindow(in: app, portrait: true)
         show.tap()
-        let settings = app.buttons["RootTabs.Sidebar.Destination.settings"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 5))
-        settings.tap()
+        let overview = app.buttons["RootTabs.Sidebar.Destination.overview"]
+        XCTAssertTrue(overview.waitForExistence(timeout: 5))
+        overview.tap()
         let readiness = app.descendants(matching: .any)["RootTabs.Ready"].firstMatch
-        self.expectation(for: NSPredicate(format: "value == %@", "ready:settings"), evaluatedWith: readiness)
+        self.expectation(for: NSPredicate(format: "value == %@", "ready:overview"), evaluatedWith: readiness)
         self.waitForExpectations(timeout: 10)
         XCTAssertTrue(show.waitForExistence(timeout: 5), "Selecting a drawer row must navigate and close it")
-        let viewport = app.scrollViews.firstMatch
+        let viewport = app.scrollViews.containing(.button, identifier: "Gateway settings").firstMatch
         XCTAssertTrue(viewport.waitForExistence(timeout: 5))
         let detailFrame = viewport.frame
         let window = app.windows.firstMatch
@@ -238,7 +238,7 @@ final class AdaptiveLayoutUITests: XCTestCase {
             dx: detailFrame.maxX - windowFrame.minX - 8,
             dy: detailFrame.midY - windowFrame.minY))
         show.tap()
-        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        XCTAssertTrue(overview.waitForExistence(timeout: 5))
         dismissalPoint.tap()
         XCTAssertTrue(show.waitForExistence(timeout: 5), "Tapping exposed detail must dismiss the drawer")
     }
