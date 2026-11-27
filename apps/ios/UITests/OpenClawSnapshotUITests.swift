@@ -19,8 +19,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
         initialDestination: "chat",
         name: "02-chat-connected")
     private static let agentScreenshotTarget = ScreenshotTarget(
-        initialTab: "agent",
-        initialDestination: "agents",
+        initialTab: "chat",
+        initialDestination: "chat",
         name: "03-agent-connected")
     private static let settingsScreenshotTarget = ScreenshotTarget(
         initialTab: "settings",
@@ -343,7 +343,12 @@ final class OpenClawSnapshotUITests: XCTestCase {
     }
 
     func testReleaseAgentScreenshot() {
-        self.captureReleaseScreenshot(Self.agentScreenshotTarget)
+        self.captureReleaseScreenshot(Self.agentScreenshotTarget) { app in
+            let showSidebar = app.buttons["RootTabs.Sidebar.Show"]
+            XCTAssertTrue(showSidebar.waitForExistence(timeout: 5))
+            showSidebar.tap()
+            XCTAssertTrue(app.buttons["RootTabs.Sidebar.AgentSelector"].waitForExistence(timeout: 5))
+        }
     }
 
     func testReleaseSettingsScreenshot() {
@@ -550,17 +555,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         try? screenshot.pngRepresentation.write(to: directory.appendingPathComponent("\(name).png"))
     }
 
-    func testAgentsNavigateToSettingsThroughSidebar() throws {
-        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar navigation only")
-        self.launchApp(for: Self.agentScreenshotTarget)
-
-        XCTAssertTrue(self.app?.buttons["agent-status-filter-menu"].waitForExistence(timeout: 8) == true)
-        try self.selectSidebarDestination("Settings")
-        XCTAssertTrue(
-            self.app?.descendants(matching: .any)["SettingsHub.Fallback"]
-                .waitForExistence(timeout: 8) == true)
-    }
-
     func testOnboardingExplainsCapabilitiesAndTrust() {
         let app = XCUIApplication()
         app.launchArguments += ["--openclaw-reset-onboarding", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
@@ -580,21 +574,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let disclosure = app.staticTexts.matching(NSPredicate(
             format: "label CONTAINS[c] 'camera' AND label CONTAINS[c] 'trust the gateway and agent'")).firstMatch
         XCTAssertTrue(disclosure.exists)
-    }
-
-    func testSidebarOverviewNavigation() throws {
-        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar only")
-        self.launchApp(for: ScreenshotTarget(
-            initialTab: "control",
-            initialDestination: "overview",
-            name: "control-overview-navigation"))
-
-        XCTAssertTrue(self.app?.staticTexts["Agent session"].waitForExistence(timeout: 8) == true)
-        try self.selectSidebarDestination("Overview")
-
-        XCTAssertTrue(self.app?.buttons["RootTabs.Sidebar.Show"].waitForExistence(timeout: 5) == true)
-        XCTAssertTrue(self.app?.buttons["Gateway settings"].waitForExistence(timeout: 5) == true)
-        XCTAssertEqual(self.app?.state, .runningForeground)
     }
 
     func testLiveGatewayApprovalNotificationsFromOverview() async throws {

@@ -124,7 +124,6 @@ struct RootTabs: View {
         return switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "control", "overview": .overview
         case "chat", "talk", "voice": .chat
-        case "agent", "agents": .agents
         case "settings": .settings
         default: .chat
         }
@@ -386,21 +385,12 @@ struct RootTabs: View {
                 onRouteChange: self.handleSettingsRouteChange,
                 onApprovalNotificationsRoute: self.openNotificationSettings)
                 .id(path)
-        case .agents:
-            AgentProTab(
-                directRoute: .agents,
-                headerSidebarAction: self.sidebarHeaderAction,
-                openSettings: { self.selectSidebarDestination(.gateway) })
-                .id(self.selectedSidebarDestination.id)
         case .sessions:
             CommandSessionsScreen(
                 headerSidebarAction: self.sidebarHeaderAction,
                 openChat: { self.selectSidebarDestination(.chat) })
         case .files:
-            AgentProTab(
-                directRoute: .files,
-                headerSidebarAction: self.sidebarHeaderAction,
-                openSettings: { self.selectSidebarDestination(.gateway) })
+            AgentWorkspaceFilesTab(headerSidebarAction: self.sidebarHeaderAction)
                 .id(self.selectedSidebarDestination.id)
         case .desktop:
             ControlUIHubScreen(
@@ -410,10 +400,6 @@ struct RootTabs: View {
         case .terminal:
             ControlUIHubScreen(
                 page: .terminal,
-                headerSidebarAction: self.sidebarHeaderAction,
-                gatewayAction: { self.selectSidebarDestination(.gateway) })
-        case .docs:
-            OpenClawDocsScreen(
                 headerSidebarAction: self.sidebarHeaderAction,
                 gatewayAction: { self.selectSidebarDestination(.gateway) })
         case .settings:
