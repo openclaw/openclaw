@@ -43,6 +43,7 @@ import {
   releaseSubagentRunKillClaim,
   retireSubagentObligations,
 } from "./subagent-registry.js";
+import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 const subagentKillRuntimeLoader = createLazyImportLoader(
   () => import("./subagent-control.runtime.js"),
@@ -429,13 +430,13 @@ export async function mutateSubagentRunForKill(
       const interruption = Promise.allSettled(
         capturedEffects.map(async (owned) => {
           killSettlement.assertClaimCurrent();
+          // Capture registry ownership before the interrupt callback can retire its row.
+          const ownsSelectedRun =
+            owned.run !== undefined &&
+            isSameSubagentRunOwner(subagentRuns.get(owned.run.runId), params.entry);
           try {
             const interruptedRun = owned.interrupt(createAgentRunDirectAbortError())?.run;
-            acceptance.accept(
-              interruptedRun !== undefined &&
-                (interruptedRun.runId === params.entry.runId ||
-                  interruptedRun.runId === currentEntry()?.runId),
-            );
+            acceptance.accept(interruptedRun !== undefined && ownsSelectedRun);
           } finally {
             await owned.released;
           }

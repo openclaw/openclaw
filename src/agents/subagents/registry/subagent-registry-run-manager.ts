@@ -245,6 +245,7 @@ class SubagentRunManager extends SubagentLaunchManager {
       }
     };
     const sessions = new Map<string, SubagentKillSession>();
+    const acquiredSessions: SubagentKillSession[] = [];
     const holds = new Map<string, NonNullable<ReturnType<typeof holdQueuedSwarmRun>>>();
     for (const entry of selected.values()) {
       if (
@@ -286,6 +287,7 @@ class SubagentRunManager extends SubagentLaunchManager {
             entry.childAgentId,
             entry.childSessionIdentity,
           );
+          acquiredSessions.push(session);
           sessions.set(entry.runId, session);
         }
       }
@@ -532,11 +534,8 @@ class SubagentRunManager extends SubagentLaunchManager {
       return updated;
     } finally {
       releaseTerminalState();
-      for (const [runId, session] of sessions) {
-        // The selected session is borrowed, including its claim-bound adapter.
-        if (runId !== markParams.runId || !markParams.session) {
-          await session.release();
-        }
+      for (const session of acquiredSessions) {
+        await session.release();
       }
       await Promise.all([...holds.values()].map((hold) => hold.release()));
     }
