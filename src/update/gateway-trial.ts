@@ -200,10 +200,7 @@ if (process.env.OPENCLAW_LAUNCHER_IPC === "1") {
   process.channel?.unref();
 }
 
-export async function settleRunFromTrial(
-  trial: Trial | null,
-  prefix = resolvePrefix(),
-): Promise<void> {
+async function settleRunFromTrial(trial: Trial | null, prefix = resolvePrefix()): Promise<void> {
   // Ready releases prune by owned path; stale updater records do not gate preparation.
   void collectReleases(prefix).catch(() => undefined);
   if (

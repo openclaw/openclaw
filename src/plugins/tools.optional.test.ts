@@ -1980,12 +1980,9 @@ describe("resolvePluginTools optional tools", () => {
     expect(factory).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    { assembled: false, warm: true },
-    { assembled: true, warm: true },
-  ])(
-    "does not retain bundled authority after owner replacement (assembled: $assembled, warm: $warm)",
-    async ({ assembled, warm }) => {
+  it.each([false, true])(
+    "does not retain bundled authority after owner replacement (assembled: %s, warm: true)",
+    async (assembled) => {
       const context = createConfiguredFeishuToolContext("delegated");
       const bundledFactory = vi.fn(() => makeTool("feishu_chat"));
       const originalRegistry = setFeishuConversationToolRegistry({
@@ -1994,12 +1991,10 @@ describe("resolvePluginTools optional tools", () => {
         origin: "bundled",
         source: "/tmp/bundled-feishu.js",
       });
-      if (warm) {
-        resolvePluginTools(createResolveToolsParams({ context }));
-      }
+      resolvePluginTools(createResolveToolsParams({ context }));
       const [cachedTool] = resolvePluginTools(createResolveToolsParams({ context }));
       expect(cachedTool?.name).toBe("feishu_chat");
-      expect(bundledFactory).toHaveBeenCalledTimes(warm ? 2 : 1);
+      expect(bundledFactory).toHaveBeenCalledTimes(2);
       const retainedTool = assembled ? { ...cachedTool } : cachedTool;
 
       const externalFactory = vi.fn(() => makeTool("feishu_chat"));
