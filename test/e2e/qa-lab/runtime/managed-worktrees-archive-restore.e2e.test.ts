@@ -32,6 +32,7 @@ it(
   { timeout: 90_000 },
   async () => {
     const home = await fs.realpath(tempDirs.make("openclaw-archive-restore-"));
+    await fs.mkdir(path.join(home, ".openclaw"), { mode: 0o700 });
     const { repo: upstream, baseCommit } = await initializeRepository(home, async (repo) => {
       await fs.writeFile(path.join(repo, ".gitignore"), "input.local\n");
       await fs.writeFile(path.join(repo, ".worktreeinclude"), "input.local\n");
