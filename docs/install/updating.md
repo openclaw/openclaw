@@ -219,20 +219,20 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    After activation of a modern launcher trial, only the Gateway that is ready settles the run
    from the launcher trial and preparation lock. A published trial takes precedence
    over an expired lock for the same run. Only a Gateway that runs the target build
-   records success. It settles once after required plugin work, so the final
-   summary and notice include its result. Restored files alone do not prove that
-   the previous Gateway is serving. Startup does not infer a failed update from
-   PID reuse or uptime.
+   records success. It settles once at core readiness, before background plugin
+   work, and sends the result notice. Restored files alone do not prove that the
+   previous Gateway is serving. Startup does not infer a failed update from PID
+   reuse or uptime.
 7. After the result is recorded, the serving release runs advisory Doctor inspections
    in the background. The same update details receive their results without a page
    reload. Only warning and error findings add advice; inspections do not delay
    completion, fail the update, or trigger rollback.
 8. The serving release updates installed plugins in the background, then reloads
-   changed plugins through the existing runtime lifecycle. The run settles and
-   sends one notice after this work finishes. Plugin failures appear in that
-   summary with the failed step and exact next command; they never fail the core
-   update or trigger rollback. A successful reload's warnings stay in the plugin
-   step details without marking activation failed or requesting a retry.
+   changed plugins through the existing runtime lifecycle. Core settles at ready;
+   plugins converge after. Plugin failures and the next command appear in the
+   update details; they do not delay or rewrite the core result, send another
+   result notice, or trigger rollback. A successful reload's warnings stay in the
+   plugin details without marking activation failed or requesting a retry.
 
 Saved update history does not grant or refuse a new release update. After taking
 its preparation lock and checking the installation, the serving release marks
