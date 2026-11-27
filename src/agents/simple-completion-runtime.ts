@@ -668,6 +668,7 @@ async function acquireCommittedSimpleCompletionModel(
       preparedModelRuntime: lease.snapshot,
       workspaceDir: lease.snapshot.workspaceDir ?? requestedWorkspaceDir,
       modelResolver,
+      selectedModelStores: !modelResolver,
     });
     const preparationParams: PrepareSimpleCompletionModelParams = {
       ...params,

@@ -417,7 +417,6 @@ export function prepareProjectedSessionList(params: {
   projection: SessionRowProjection;
   opts: SessionsListParams;
   key?: string;
-  candidateKeys?: ReadonlySet<string>;
   context?: GatewayRequestContext;
   client?: GatewayClient | null;
   now: number;
@@ -445,7 +444,6 @@ export function prepareProjectedSessionList(params: {
   ).getPresentation();
   const prepared = prepareSessionRowSelection(projection, opts, {
     key: exactKey,
-    candidateKeys: params.candidateKeys,
     now,
     rowContext: presentation.rowContext,
     metadataPrepared: params.metadataPrepared,

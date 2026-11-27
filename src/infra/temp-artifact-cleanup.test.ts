@@ -51,7 +51,7 @@ it("reclaims a runtime by its recorded creator from another installation on a bu
     const busy = "other OpenClaw processes are still running (PIDs: 4242)";
     expect((await maintain()).toSorted()).toEqual([
       `Removed abandoned updater runtime: ${directory("Reused")}`,
-      expect.stringContaining(`${directory("Legacy")}: no recognized runtime marker`),
+      `Runtime retained at ${directory("Legacy")}: it does not match a runtime an OpenClaw updater created, so it is kept`,
       expect.stringContaining(`${directory("Other1")}: ${busy}`),
       `Runtime retained at ${directory("Owned1")}: the creating update (PID ${pid}) is still running`,
     ]);

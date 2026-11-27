@@ -1801,14 +1801,12 @@ AFTER_CD
     expect(evaluateWorkflowExpression(job["runs-on"], manualDispatch)).toBe("ubuntu-24.04");
     expect(evaluateWorkflowExpression(parallelism!, manualDispatch)).toBe(1);
     const prepareRun = expectDefined(prepare.run, "Docker smoke package preparation");
-    expect(prepareRun).toContain("pnpm build:ci-artifacts");
-    const declarations =
-      "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 node --import ./scripts/tsx.mjs scripts/write-unified-entry-dts.ts";
-    expect(prepareRun).toContain(declarations);
-    expect(prepareRun.indexOf("pnpm build:ci-artifacts")).toBeLessThan(
-      prepareRun.indexOf(declarations),
-    );
-    expect(prepareRun.indexOf(declarations)).toBeLessThan(
+    const build = "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 pnpm build";
+    expect(prepareRun).toContain(build);
+    expect(prepareRun).not.toContain("build:ci-artifacts");
+    expect(prepareRun).not.toContain("scripts/write-unified-entry-dts.ts");
+    expect(prepareRun.indexOf("pnpm clean:dist")).toBeLessThan(prepareRun.indexOf(build));
+    expect(prepareRun.indexOf(build)).toBeLessThan(
       prepareRun.indexOf("node scripts/package-openclaw-for-docker.mjs --skip-build"),
     );
     expect(prepareRun).toContain("node scripts/package-openclaw-for-docker.mjs --skip-build");
@@ -6681,6 +6679,30 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         ...context,
       }),
     ).toBe(boat ? "boat-xlarge" : "blacksmith-8vcpu-ubuntu-2404");
+  });
+
+  it("prepares Android CodeQL on runners without an installed SDK or Gradle outputs", () => {
+    const { steps } = readWorkflow(".github/workflows/codeql-android-critical-security.yml").jobs
+      .android;
+    const node = steps.find(
+      (step: WorkflowStep) => step.uses === "./.github/actions/setup-node-env",
+    );
+    const toolchain = steps.find(
+      (step: WorkflowStep) => step.uses === "./.github/actions/setup-android-toolchain",
+    );
+    const init = steps.find((step: WorkflowStep) =>
+      step.uses?.startsWith("github/codeql-action/init@"),
+    );
+    const build = steps.find((step: WorkflowStep) => step.run?.includes(":app:assemblePlayDebug"));
+
+    expect(toolchain).toBeDefined();
+    expect(steps.indexOf(node)).toBeLessThan(steps.indexOf(toolchain));
+    expect(steps.indexOf(toolchain)).toBeLessThan(steps.indexOf(init));
+    expect(steps.indexOf(init)).toBeLessThan(steps.indexOf(build));
+    expect(node.with["install-deps"]).toBe("false");
+    expect(toolchain.with["install-native-deps"]).toBe("true");
+    expect(toolchain.with["gradle-cache-mode"]).toBe("off");
+    expect(build.env.JAVA_HOME).toBe(`\${{ steps.${toolchain.id}.outputs.gradle-java-home }}`);
   });
 
   it("keeps network CodeQL off unrelated source-only refactors", () => {

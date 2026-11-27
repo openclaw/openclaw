@@ -79,6 +79,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   includePickerRuntimes?: boolean;
   pluginRegistry?: PluginRegistry | null;
   observationConfig?: OpenClawConfig;
+  providerIds?: readonly string[];
   includesProvider?: (provider: string) => boolean;
   normalizeProvider?: (provider: string) => string;
   onDiscoveryStarted?: (provider: string) => void;
@@ -179,14 +180,17 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   }
   let result = params.snapshot;
   const completedRows: ModelCatalogEntry[] = [];
+  const requestedProviderIds = params.nativeSelection
+    ? [params.nativeSelection.provider]
+    : params.providerIds;
+  const includesProvider =
+    params.includesProvider ??
+    (requestedProviderIds
+      ? (provider: string) =>
+          requestedProviderIds.some((id) => normalizeProvider(id) === normalizeProvider(provider))
+      : undefined);
   let discovered = false;
   for (const [runtime, providers] of runtimeProviders) {
-    const scopedProviders = [...providers].filter(
-      (provider) => !params.includesProvider || params.includesProvider(provider),
-    );
-    if (providers.size > 0 && scopedProviders.length === 0) {
-      continue;
-    }
     // The scoped lookup retains transient catalog resources for executable CLI cleanup.
     const harness = withPluginRuntimeRegistryScope(
       pluginRegistry,
@@ -195,10 +199,22 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     if (!harness?.loadModelCatalog) {
       continue;
     }
+    const discoveryProviders = harness.modelCatalogProviderIds ?? [...providers];
+    const scopedProviders = discoveryProviders.filter(
+      (provider) => !includesProvider || includesProvider(provider),
+    );
+    // An undeclared, unconfigured harness must be probed to learn its catalog.
+    if (
+      scopedProviders.length === 0 &&
+      (discoveryProviders.length > 0 ||
+        harness.modelCatalogProviderIds !== undefined ||
+        requestedProviderIds?.length === 0)
+    ) {
+      continue;
+    }
     for (const provider of scopedProviders) {
       params.onDiscoveryStarted?.(provider);
     }
-    const includesProvider = params.includesProvider;
     const outsideScope = ({ provider }: { provider: string }) =>
       includesProvider !== undefined && !includesProvider(provider);
     let listedRows: readonly ModelCatalogEntry[];
@@ -210,6 +226,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
         configuredModelRefs,
+        ...(requestedProviderIds ? { providerIds: requestedProviderIds } : {}),
       });
       // v2026.9.5 plugins return plain rows; structured results also own discovery outcomes.
       if (isCatalogRowList(loaded)) {
@@ -397,6 +414,7 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
   snapshot: ModelCatalogSnapshot;
   preparedSnapshot?: ModelCatalogSnapshot;
   pluginRegistry?: PluginRegistry;
+  providerIds?: readonly string[];
   includesProvider?: (provider: string) => boolean;
   normalizeProvider?: (provider: string) => string;
   onDiscoveryStarted?: (provider: string) => void;

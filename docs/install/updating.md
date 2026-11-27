@@ -69,9 +69,9 @@ Managed start/restart keeps the selected release. Use
 `openclaw update --tag <version>` for an explicit downgrade. An explicit
 `--tag` or `--channel` remains your target selection instead of the npm package.
 
-Plugin maintenance failures are warnings, not failed core updates. Retry them
-with `openclaw plugins update --all`. An already-current installation still maintains
-plugins and restarts only when needed and restart was requested.
+Plugin maintenance failures are warnings, not failed core updates. The final
+summary names the failed step and its recovery command. An already-current
+installation still maintains plugins and restarts only when needed and requested.
 
 Older installed updaters still perform their first hop with their shipped update
 flow. The compatibility and recovery details below also cover those older
@@ -84,6 +84,18 @@ before starting the unit. Processes belonging to another supervisor are preserve
 An inconclusive readiness check is reported separately from current serving health.
 This recovery repair is supplied by the candidate CLI; older updaters using
 `gateway restart --preserve-definition` can use it without an updater upgrade.
+
+For a Linux system service, run maintenance as the account in its `User=` setting
+with the service's existing `HOME`, `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`,
+`OPENCLAW_CONFIG_PATH`, and profile selectors. A plain `sudo openclaw update`
+uses root's selectors; it does not automatically adopt the service account.
+
+For an administrator-managed global npm package, replace the package with
+`sudo npm install -g openclaw@latest`, then restart the existing system unit with
+`sudo systemctl restart <unit>.service`. Use the installed unit's name and leave
+its service configuration and file ownership unchanged. Direct Gateway startup
+already migrates old configuration and database schemas in the selected state
+directory; no separate state copy or account adoption is needed.
 
 App-owned packages declare their update owner in `openclaw-install-owner.json`
 at the package root. For `owner: "macos-app"`, update OpenClaw.app through its
@@ -154,16 +166,19 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    After activation of a modern launcher trial, only the Gateway that is ready settles the run
    from the launcher trial and preparation lock. A published trial takes precedence
    over an expired lock for the same run. Only a Gateway that runs the target build
-   records success; restored files alone do not prove that the previous Gateway
-   is serving. Startup does not infer a failed update from PID reuse or uptime.
-7. After success is recorded, the serving release runs advisory Doctor inspections
+   records success. It settles once after required plugin work, so the final
+   summary and notice include its result. Restored files alone do not prove that
+   the previous Gateway is serving. Startup does not infer a failed update from
+   PID reuse or uptime.
+7. After the result is recorded, the serving release runs advisory Doctor inspections
    in the background. The same update details receive their results without a page
    reload. Only warning and error findings add advice; inspections do not delay
    completion, fail the update, or trigger rollback.
 8. The serving release updates installed plugins in the background, then reloads
-   changed plugins through the existing runtime lifecycle. Plugin failures appear
-   in the same update details and warning count; they never fail the core update
-   or trigger rollback.
+   changed plugins through the existing runtime lifecycle. The run settles and
+   sends one notice after this work finishes. Plugin failures appear in that
+   summary with the failed step and exact next command; they never fail the core
+   update or trigger rollback.
 
 Packaged bundled plugins belong to the selected core release, not a second
 plugin installation. Channel synchronization retires obsolete compiled-bundle
@@ -201,15 +216,6 @@ the update through Control UI or `openclaw update`. If it cannot accept the
 requested update over RPC, local preparation refuses visibly rather than
 claiming an unidentified installation. Stop the Gateway through its existing
 owner, then rerun the update. A stopped Gateway remains updatable.
-
-Early Git source-updater recovery is a compatibility exception. Its separate CLI
-worker never enters Gateway startup. It opens a repair run after the first
-readiness check and finishes rebuilding and cleanup after the second. Neither
-startup can report that repair complete; a failed release may not reach readiness
-at all. This layout shipped only in moving-`main` Git installs from 2026-11-17–19,
-not in any published release. Retire `update-early-release-recovery*.ts` and its
-early-layout check at the first regular stable cut after `v2026.11.8`. Keep an
-already-started recovery's retained code until that recovery finishes.
 
 `discoverDatabases` is the state transaction inventory. Boot uses that inventory
 to plan pending canonical schema steps and their derived minimum reader floors
@@ -522,6 +528,12 @@ existing CLI paths keep working without retaining a separate release selection.
 This also applies with `--no-restart`; the launcher selects the pending candidate
 on its next start. The installed updater must contain this repair.
 
+Git preparation carries forward an existing host OpenClaw ID binding when its
+native crate still matches the target. If the binding needs rebuilding, that
+build must succeed in the prepared release before it can replace the serving
+Gateway. Checkouts without a host binding still skip the opt-in build. The
+installed updater must contain this change.
+
 Local npm frontends can offer their installed package to a managed package
 release. The resident release runs the update, with an explicit local package
 source, and publishes forwarding with the validated pending trial. Managed
@@ -545,8 +557,16 @@ never runs automatically or settles the deferred migration: after explicit
 recovery, rerun `openclaw update repair` or `openclaw doctor --fix`, then restart
 the Gateway. Older installed CLIs do not gain this route from a newer plugin alone.
 
-When a package baseline's final rescan detects stat drift, the update still
-refuses package replacement. Local failure output and `openclaw update status --json`
+When a package baseline's final rescan detects stat drift that only moved the
+change time or link count (attribute, ACL or extended-attribute changes, a
+same-mode `chmod`, or a hard link added or removed by a backup, sync, indexing
+or security tool), the scan re-reads only those entries: a file's bytes, a
+symbolic link's target or a directory's entry names. When they match what the
+scan recorded, the update continues and reports a warning naming the first
+entries and their changed fields. Any other drift, or drifted entries whose
+contents changed, still refuses package replacement. A change after the scan
+is caught when a rollback verifies the retained package before restoring it.
+Local failure output and `openclaw update status --json`
 diagnostics identify the first entry relative to the package root (`.` for the
 root), changed stat fields, and their before/after values. Public failure reports
 retain only the changed field names. An unavailable original inode still refuses
@@ -1513,9 +1533,11 @@ transaction-local verification.
 SQLite upgrades default to a whole-database `quick_check`, a full
 `integrity_check` of the tables the migration rewrites or re-indexes, and the
 existing foreign-key checks. This avoids checking every unrelated index against
-its table during a routine upgrade. Structural corruption anywhere in the
-database and corruption in the migration's affected tables still refuse the
-migration; quarantine and rollback behavior are unchanged.
+its table during a routine upgrade. An agent database version step checks only the
+schema catalog and the tables it declares, so upgrade downtime does not grow with
+unrelated agent history; the next Gateway start checks the whole database in the
+background. Other structural corruption and corruption in the migration's affected
+tables still refuse the migration; quarantine and rollback behavior are unchanged.
 Historical upgrades use the same default even when recovery requires a full-file
 backup. Automatic original-state captures and disposable update rehearsals also
 honor the requested check, including same-version Doctor repairs. Automatic rollback

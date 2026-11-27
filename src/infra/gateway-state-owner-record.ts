@@ -32,6 +32,7 @@ import {
 } from "./gateway-state-owner-directory.js";
 import {
   GatewayStateOwnerContentionError,
+  isTransientStateSchemaOwner,
   StateDatabaseAccessError,
   StateDatabaseAdmissionPendingError,
   StateDatabaseOfflineMaintenanceError,
@@ -142,7 +143,7 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
     return;
   }
   const maintenancePending = `OpenClaw state at ${databasePath} is undergoing offline maintenance by ${role} process ${owner.pid}, started ${owner.createdAt}; retry when it finishes. For update progress, run \`openclaw update status --json\`. ${describeGatewayLockHolder(owner, ownerPath, namespace === "same" ? "live" : "unknown")}`;
-  if (owner.stateOwnerKind === "schema" && owner.role === "sqlite-maintenance") {
+  if (isTransientStateSchemaOwner(owner)) {
     throw new StateDatabaseAdmissionPendingError(databasePath, maintenancePending);
   }
   throw new StateDatabaseOfflineMaintenanceError(databasePath, maintenancePending);
@@ -320,7 +321,9 @@ export function acquireGatewayStateOwnerFile(
           databasePath,
           error,
           holderDetail,
-          holder ? { pid: holder.pid, role: holder.role } : undefined,
+          holder
+            ? { pid: holder.pid, role: holder.role, stateOwnerKind: holder.stateOwnerKind }
+            : undefined,
         );
       }
       throw error;

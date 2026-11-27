@@ -546,6 +546,10 @@ describe("acquireSimpleCompletionModelForAgent", () => {
       expect(modelResolver.mock.calls[1]?.[4]).toMatchObject({ agentId: "main" });
       expect(modelResolver.mock.calls[0]?.[4]?.abortSignal).toBe(signal);
       expect(modelResolver.mock.calls[1]?.[4]?.abortSignal).toBe(signal);
+      const firstStores = modelResolver.mock.calls[0]?.[4];
+      const nextStores = modelResolver.mock.calls[1]?.[4];
+      expect(nextStores?.modelRegistry).toBe(firstStores?.modelRegistry);
+      expect(nextStores?.authStorage).toBe(firstStores?.authStorage);
     } finally {
       if (!("error" in result)) {
         await result[Symbol.asyncDispose]();

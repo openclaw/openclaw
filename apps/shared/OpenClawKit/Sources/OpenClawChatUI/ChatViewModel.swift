@@ -22,7 +22,7 @@ public final class OpenClawChatViewModel {
 
     public var input: String = "" {
         didSet {
-            guard self.input != oldValue else { return }
+            guard !self.input.utf8.elementsEqual(oldValue.utf8) else { return }
             self.noteComposerInputChanged()
         }
     }

@@ -28,7 +28,11 @@ import { resolveConfiguredProviderFallback } from "./configured-provider-fallbac
 import { hasExactConfiguredProviderModelRef } from "./configured-provider-model.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import { configuredModelCatalogEntry } from "./model-catalog-entry.js";
-import { findModelCatalogEntry, findModelInCatalog } from "./model-catalog-lookup.js";
+import {
+  createCapturedModelLookup,
+  findModelCatalogEntry,
+  findModelInCatalog,
+} from "./model-catalog-lookup.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "./model-fallback.types.js";
@@ -1130,7 +1134,8 @@ function resolveConfiguredModelManifestPlugins(params: {
 /** Build catalog entries from configured provider model rows. */
 export function buildConfiguredModelCatalog(params: {
   cfg: OpenClawConfig;
-  catalog?: readonly ModelCatalogEntry[];
+  /** A prepared catalog uses the first row for each createModelCatalogIdentityKeyResolver key. */
+  catalog?: readonly ModelCatalogEntry[] | ReadonlyMap<string, ModelCatalogEntry>;
   workspaceDir?: string;
   manifestPlugins?: ModelManifestPlugins;
 }): ModelCatalogEntry[] {
@@ -1141,10 +1146,7 @@ export function buildConfiguredModelCatalog(params: {
 
   const manifestPlugins = resolveConfiguredModelManifestPlugins(params);
   const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer({ manifestPlugins });
-  const resolveModelCatalogIdentityKey = createModelCatalogIdentityKeyResolver();
-  const capturedByIdentity = params.catalog?.length
-    ? indexFirstByKey(params.catalog, resolveModelCatalogIdentityKey)
-    : undefined;
+  const findCaptured = createCapturedModelLookup(params.catalog);
   const catalog: ModelCatalogEntry[] = [];
   for (const [providerRaw, provider] of Object.entries(providers)) {
     const providerId = normalizeProviderId(providerRaw);
@@ -1158,9 +1160,7 @@ export function buildConfiguredModelCatalog(params: {
         continue;
       }
       // Provider defaults are fallbacks; only a model-level pin overrides its captured route.
-      const accepted = capturedByIdentity?.get(
-        resolveModelCatalogIdentityKey({ provider: providerId, id }),
-      );
+      const accepted = findCaptured?.(providerId, id);
       catalog.push(
         configuredModelCatalogEntry({
           provider: providerId,

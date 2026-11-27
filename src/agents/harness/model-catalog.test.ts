@@ -10,6 +10,7 @@ import {
   augmentPreparedModelCatalogWithAgentHarness,
   isPreparedNativeModelCatalogReady,
 } from "./model-catalog.js";
+import type { AgentHarness } from "./types.js";
 
 function row(id: string, fields: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
   return { provider: "fixture", id, name: id, ...fields };
@@ -77,10 +78,13 @@ const snapshot: ModelCatalogSnapshot = {
   ],
 };
 
-function catalogRegistry(loaders: Record<string, () => Promise<readonly ModelCatalogEntry[]>>) {
+function catalogRegistry(
+  loaders: Record<string, NonNullable<AgentHarness["loadModelCatalog"]>>,
+  extra: Partial<AgentHarness> = {},
+) {
   const registry = createEmptyPluginRegistry();
   registry.agentHarnesses = Object.entries(loaders).flatMap(
-    ([id, loadModelCatalog]) => harnessRegistry(id, { loadModelCatalog }).agentHarnesses,
+    ([id, loadModelCatalog]) => harnessRegistry(id, { loadModelCatalog, ...extra }).agentHarnesses,
   );
   return registry;
 }
@@ -125,6 +129,69 @@ function sharedRuntimes(snapshotToInspect: ModelCatalogSnapshot) {
 }
 
 describe("agent harness model catalog", () => {
+  it("passes the selected provider scope without restricting picker enumeration", async () => {
+    const load = vi.fn<NonNullable<AgentHarness["loadModelCatalog"]>>(async () => []);
+    const input = pickerInput(pickerConfig("native-one"));
+    const registry = catalogRegistry({ "native-one": load });
+    await augmentPreparedModelCatalogWithAgentHarness({
+      input,
+      snapshot: catalog([]),
+      pluginRegistry: registry,
+      nativeSelection: { provider: "custom", modelId: "model", runtime: "native-one" },
+    });
+    expect(load).toHaveBeenLastCalledWith(expect.objectContaining({ providerIds: ["custom"] }));
+    await augmentPreparedModelCatalogWithAgentHarness({
+      input,
+      snapshot: catalog([]),
+      pluginRegistry: registry,
+    });
+    expect(load.mock.lastCall?.[0]).not.toHaveProperty("providerIds");
+  });
+
+  it.each([{ providerIds: undefined }, { providerIds: [] }])(
+    "enumerates unconfigured picker runtimes only for an unscoped request ($providerIds)",
+    async ({ providerIds }) => {
+      const load = vi.fn<NonNullable<AgentHarness["loadModelCatalog"]>>(async () => []);
+      await augmentPreparedModelCatalogWithAgentHarness({
+        input: pickerInput(pickerConfig("openclaw", "model", {}, [])),
+        snapshot: catalog([]),
+        pluginRegistry: catalogRegistry({ "native-one": load }),
+        providerIds,
+      });
+      expect(load).toHaveBeenCalledTimes(providerIds === undefined ? 1 : 0);
+    },
+  );
+
+  it.each([false, true])(
+    "uses catalog ownership for cross-provider refresh (declared: %s)",
+    async (declared) => {
+      const load = vi.fn<NonNullable<AgentHarness["loadModelCatalog"]>>(async () => [
+        { provider: "github-copilot", id: "fusion", name: "Fusion", nativeRuntime: "native-one" },
+      ]);
+      const result = await augmentPreparedModelCatalogWithAgentHarness({
+        input: pickerInput(pickerConfig("native-one")),
+        snapshot: catalog([]),
+        pluginRegistry: catalogRegistry(
+          { "native-one": load },
+          declared ? { modelCatalogProviderIds: ["github-copilot"] } : {},
+        ),
+        providerIds: ["github-copilot"],
+        includesProvider: (provider) => provider === "github-copilot",
+      });
+      expect(load).toHaveBeenCalledTimes(declared ? 1 : 0);
+      if (declared) {
+        expect(load).toHaveBeenCalledWith(
+          expect.objectContaining({ providerIds: ["github-copilot"] }),
+        );
+        expect(result.entries).toEqual([
+          expect.objectContaining({ provider: "github-copilot", id: "fusion" }),
+        ]);
+      } else {
+        expect(result.entries).toEqual([]);
+      }
+    },
+  );
+
   it.each([
     { baseRuntime: "openclaw", agentRuntime: undefined, observedRuntime: undefined },
     { baseRuntime: "native-one", agentRuntime: undefined, observedRuntime: "native-one" },

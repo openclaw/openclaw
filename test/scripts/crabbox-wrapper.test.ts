@@ -780,6 +780,7 @@ type WrapperCleanupProof =
     }
   | { kind: "readiness" }
   | { kind: "preparation"; cleanupFails?: boolean }
+  | { kind: "prepared" }
   | { kind: "stdin"; target: "macos" | "capsule" }
   | { kind: "escaped" }
   | { kind: "removal"; target: "script" | "source"; exitCode: 0 | 23 };
@@ -815,7 +816,12 @@ function expectMirrorDirectories(syncRoot: string, repository: string, allocatio
   return { key, id };
 }
 
-function expectIdleSourceMirror(source: string, repository: string, syncRoot: string) {
+function expectIdleSourceMirror(
+  source: string,
+  repository: string,
+  syncRoot: string,
+  users: "none" | "settled" = "settled",
+) {
   const allocation = path.dirname(path.dirname(source));
   const { key, id } = expectMirrorDirectories(syncRoot, repository, allocation);
   expect(lstatSync(source).isDirectory()).toBe(true);
@@ -826,8 +832,8 @@ function expectIdleSourceMirror(source: string, repository: string, syncRoot: st
     repository: realpathSync(repository),
     kind: "capsule",
     durable: true,
-    users: "settled",
-    state: "preserved",
+    users,
+    state: users === "none" ? "prepared" : "preserved",
     mirror: { key, idle: true },
   });
   expect(receipt.hold).toBeUndefined();
@@ -939,7 +945,14 @@ if (entry === ${JSON.stringify(implementationPath)}) {
   const spawnSync = childProcess.spawnSync;
   childProcess.spawnSync = (command, args, options) => {
     if (args?.[0] === "sync-plan") phase("preparing source capsule");
-    return spawnSync(command, args, options);
+    const result = spawnSync(command, args, options);
+    if (${proof.kind === "prepared"} && args?.[0] === "sync-plan" && result.status === 0 && !fs.existsSync(${JSON.stringify(preparationPath)})) {
+      fs.writeFileSync(${JSON.stringify(preparationPath)}, JSON.stringify({ pid: process.pid, parentPid: process.ppid, cwd: options.cwd }));
+      // Queue cancellation while synchronous preparation finishes; the wrapper's
+      // first checkpoint must preserve the completed mirror without admitting a run.
+      process.kill(process.pid, "SIGTERM");
+    }
+    return result;
   };
   if (${proof.kind === "stdin"}) {
     const readFile = fs.readFileSync;
@@ -1309,14 +1322,19 @@ child.once("exit", (code, signal) => {
           code: expectedStatus,
         });
         const retained = path.join(producer, ".crabbox", "wrapper-artifacts");
-        if (proof.kind === "preparation" || proof.kind === "stdin") {
+        if (proof.kind === "preparation" || proof.kind === "prepared" || proof.kind === "stdin") {
           if (proof.kind === "stdin" && proof.target === "capsule") {
             expect(output).toContain("syncing from temporary full checkout");
           }
           expect(existsSync(runSpawnedPath), output).toBe(false);
           expect(existsSync(identityPath)).toBe(false);
           expect(existsSync(claimPath)).toBe(false);
-          if (preparationCleanupFailure) {
+          if (proof.kind === "prepared") {
+            preparationIdentity = readJson(preparationPath);
+            expect(output).toContain("source mirror cold:");
+            expectIdleSourceMirror(preparationIdentity!.cwd, producer, syncRoot, "none");
+            expectFileText(preparationIdentity!.cwd, "fixture.txt", "original source\n");
+          } else if (preparationCleanupFailure) {
             const payload = path.dirname(preparationIdentity!.cwd);
             const allocation = path.dirname(payload);
             expect(readJson(removalFailurePath)).toEqual({
@@ -1498,7 +1516,7 @@ child.once("exit", (code, signal) => {
             (entrypoint === "pnpm" && !terminalCommandPid) ||
             (runReceiptRequired && !identity) ||
             (hasDescendant && !descendantPid) ||
-            (proof.kind === "preparation" && !preparationIdentity) ||
+            ((proof.kind === "preparation" || proof.kind === "prepared") && !preparationIdentity) ||
             (proof.kind === "stdin" && !existsSync(stdinReadyPath)))
         ) {
           throw new Error("fixture ownership receipts are incomplete");
@@ -6886,6 +6904,7 @@ cp.spawnSync = (command, args, options) => {
     { kind: "signal", entrypoint: "pnpm", repeated: false, cooperative: true, provider: "aws" },
     { kind: "preparation" },
     { kind: "preparation", cleanupFails: true },
+    { kind: "prepared" },
     { kind: "stdin", target: "macos" },
     { kind: "stdin", target: "capsule" },
     { kind: "escaped" },

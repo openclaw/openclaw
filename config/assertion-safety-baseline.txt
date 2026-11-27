@@ -1600,7 +1600,6 @@ src/config/sessions/transcript-replay.ts	1
 src/config/sessions/transcript-tree.ts	3
 src/config/sessions/transcript.ts	8
 src/config/sessions/types.ts	1
-src/config/validation-channel-rules.ts	1
 src/config/validation-core.ts	1
 src/config/validation-plugin-config.ts	2
 src/config/validation.ts	1
@@ -1952,7 +1951,7 @@ src/meeting-bot/browser-request.ts	3
 src/meeting-bot/browser-session-control.ts	1
 src/meeting-bot/chrome-node-result.ts	2
 src/meeting-bot/platform-adapter.ts	7
-src/meeting-bot/plugin-entry.ts	5
+src/meeting-bot/plugin-entry.ts	3
 src/meeting-bot/plugin-shell.ts	1
 src/meeting-bot/realtime-tool-continuity.ts	2
 src/meeting-bot/runtime-facade.ts	4
