@@ -72,6 +72,22 @@ async function runJson(...args: string[]) {
   return JSON.parse(await runCli([...args, "--json"]));
 }
 
+async function captureStderr(run: () => Promise<void>): Promise<string> {
+  let output = "";
+  const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(((
+    chunk: string | Uint8Array,
+  ) => {
+    output += String(chunk);
+    return true;
+  }) as typeof process.stderr.write);
+  try {
+    await run();
+    return output;
+  } finally {
+    writeSpy.mockRestore();
+  }
+}
+
 describe("transcripts CLI", () => {
   beforeEach(() => {
     const stateDir = tempDirs.make("openclaw-transcripts-cli-");
@@ -212,5 +228,28 @@ describe("transcripts CLI", () => {
       exists: true,
     });
     expect(ownershipReads, "standalone export ownership SQL on the caller thread").toEqual([]);
+  });
+
+  it.each([
+    ["--dir", "--metadata"],
+    ["--dir", "--transcript"],
+    ["--metadata", "--transcript"],
+  ])("warns about conflicting artifact selectors %s and %s", async (first, second) => {
+    const sessionDir = await writeSession("design-review");
+    const selectors = [first, second];
+    const expectedPath =
+      first === "--dir"
+        ? sessionDir
+        : path.join(sessionDir, first === "--metadata" ? "metadata.json" : "transcript.jsonl");
+
+    let output = "";
+    const warning = await captureStderr(async () => {
+      output = await runCli(["path", "design-review", ...selectors]);
+    });
+
+    expect(output.trim()).toBe(expectedPath);
+    expect(warning).toBe(
+      `warning: transcripts path received multiple artifact selectors; using ${first} (${selectors.join(", ")}).\n`,
+    );
   });
 });

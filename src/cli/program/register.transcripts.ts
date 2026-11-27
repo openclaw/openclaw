@@ -124,6 +124,16 @@ export function registerTranscriptsCli(program: Command): void {
       if (!entry) {
         throwExpectedCliError(`transcripts session not found: ${selector}`);
       }
+      const selected = [
+        options.dir ? "--dir" : undefined,
+        options.metadata ? "--metadata" : undefined,
+        options.transcript ? "--transcript" : undefined,
+      ].filter((option): option is string => option !== undefined);
+      if (selected.length > 1) {
+        process.stderr.write(
+          `warning: transcripts path received multiple artifact selectors; using ${selected[0]} (${selected.join(", ")}).\n`,
+        );
+      }
       const kind = options.dir
         ? "all"
         : options.metadata
