@@ -2,7 +2,6 @@ import {
   buildGoogleImageGenerationBody,
   parseGoogleImageGenerationResponse,
   sniffImageMimeType,
-  type ImageGenerationProvider,
   type ImageGenerationRequest,
 } from "openclaw/plugin-sdk/image-generation";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -18,60 +17,12 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   fetchClawRouterCapabilityOffers,
   resolveClawRouterCapabilityHttpContext,
-  type ClawRouterCapabilityOffer,
 } from "./capability-offers.js";
+import { GOOGLE_IMAGE_CAPABILITIES, qualifiedGoogleImageOffers } from "./image-model-catalog.js";
 
-export const GOOGLE_IMAGE_MODELS = ["google/gemini-3.1-flash-image", "google/gemini-3-pro-image"];
 const JSON_LIMIT = 8 * 1024 * 1024;
 const OUTPUT_LIMIT = 4 * 1024 * 1024;
 const IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/webp"]);
-export const GOOGLE_IMAGE_CAPABILITIES: ImageGenerationProvider["capabilities"] = {
-  generate: {
-    maxCount: 1,
-    supportsSize: true,
-    supportsAspectRatio: true,
-    supportsResolution: true,
-  },
-  edit: {
-    enabled: true,
-    maxCount: 1,
-    maxInputImages: 5,
-    supportsSize: true,
-    supportsAspectRatio: true,
-    supportsResolution: true,
-  },
-  geometry: {
-    sizes: ["1024x1024", "1024x1536", "1536x1024", "1024x1792", "1792x1024"],
-    aspectRatios: ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
-    resolutions: ["1K", "2K", "4K"],
-  },
-};
-
-export function isClawRouterGoogleImageModel(model: string) {
-  return GOOGLE_IMAGE_MODELS.includes(model);
-}
-
-export function qualifiedGoogleImageOffers(offers: ClawRouterCapabilityOffer[]) {
-  return offers
-    .filter((offer) => {
-      const upstream = offer.model?.upstream;
-      return (
-        offer.providerId === "google-gemini" &&
-        offer.endpoint === "image_generate" &&
-        offer.path === "/v1beta/models/${model}:generateContent" &&
-        (offer.routeKind === "native" || offer.routeKind === "manifest") &&
-        offer.methods.includes("POST") &&
-        offer.requestFormat === "google.image_generate" &&
-        offer.responseFormat === "google.image" &&
-        typeof upstream === "string" &&
-        offer.model?.id === "google/" + upstream &&
-        isClawRouterGoogleImageModel("google/" + upstream) &&
-        Array.isArray(offer.model.capabilities) &&
-        offer.model.capabilities.includes("image.generate")
-      );
-    })
-    .toSorted((a, b) => Number(a.routeKind === "manifest") - Number(b.routeKind === "manifest"));
-}
 
 function validateRequest(req: ImageGenerationRequest) {
   if (
