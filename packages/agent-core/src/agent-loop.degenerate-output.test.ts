@@ -1,5 +1,4 @@
 import { setImmediate } from "node:timers/promises";
-import type { AssistantMessage } from "@openclaw/llm-core";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import {
@@ -45,20 +44,23 @@ describe("degenerate tool-call arguments through Chat Completions", () => {
     let requests = 0;
     const closed = Promise.withResolvers<void>();
     const calls: unknown[] = [];
+    let streaming = Promise.resolve();
     await withServer(
-      async (_req, res) => {
+      (_req, res) => {
         requests += 1;
         res.on("close", () => closed.resolve());
         startSse(res);
         writeSse(res, callStart);
         writeSse(res, argumentChunk('{"code":"return 1;"'));
         // The captured runaway: newline and indent forever, ~66 tokens/s until max_output_tokens.
-        for (let index = 0; index < 20_000 && !res.destroyed; index += 1) {
-          writeSse(res, argumentChunk(index % 2 ? "     " : "\n"));
-          whitespaceSent += index % 2 ? 5 : 1;
-          await setImmediate();
-        }
-        res.end();
+        streaming = (async () => {
+          for (let index = 0; index < 20_000 && !res.destroyed; index += 1) {
+            writeSse(res, argumentChunk(index % 2 ? "     " : "\n"));
+            whitespaceSent += index % 2 ? 5 : 1;
+            await setImmediate();
+          }
+          res.end();
+        })();
       },
       async (baseUrl) => {
         const { run } = fixtures.captureToolLoop({
@@ -68,14 +70,13 @@ describe("degenerate tool-call arguments through Chat Completions", () => {
         });
         const messages = await run;
         await closed.promise;
+        await streaming;
         expect(messages.at(-1)).toMatchObject({
           role: "assistant",
           stopReason: "error",
           errorCode: "degenerate_output",
         });
-        expect((messages.at(-1) as AssistantMessage).content).not.toContainEqual(
-          expect.objectContaining({ type: "toolCall" }),
-        );
+        expect(JSON.stringify(messages.at(-1))).not.toContain('"type":"toolCall"');
       },
     );
     expect(calls).toEqual([]);
