@@ -19,6 +19,7 @@ import {
   runWithDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import { getUserTurnTranscriptAdmissionOwner } from "../../sessions/user-turn-transcript-admission.js";
 import {
   normalizeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
