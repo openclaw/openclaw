@@ -29,7 +29,7 @@ const BRANCH = new RegExp(
     // A provider, API, transport, model or auth field compared with a literal.
     String.raw`(?:provider|providerId|modelApi|\bapi|transport|modelId|model\.id|model\.provider|model\.api|authMode|auth\.mode|auth\.type|endpointClass)\s*(?:===|!==|==|!=)\s*["'\x60]`,
     // A named provider/model predicate call.
-    String.raw`\b(?:is|uses|supports|needs|requires)[A-Z][A-Za-z]*(?:${NAMES})[A-Za-z]*\s*\(`,
+    String.raw`\b(?:is|uses|supports|needs|requires)(?:[A-Z][A-Za-z]*)?(?:${NAMES})[A-Za-z]*\s*\(`,
     String.raw`case\s+["'](?:${IDS})["']`,
     String.raw`\.(?:startsWith|includes)\(["'](?:claude|gpt|gemini|o[0-9]|anthropic|openai|google|mistral|deepseek|qwen|kimi|grok)`,
     // Named URL and model-size guesses the patterns above do not see.

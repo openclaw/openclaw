@@ -11,6 +11,7 @@ it.each([
   ['modelId.startsWith("claude-")', 1],
   ["isNativeOpenAIEndpoint(model)", 1],
   ["compat.supportsPromptCacheKey === true", 0],
+  ["supportsClaudeAdaptiveThinking(model)", 1],
   ["if (policy.preserveSignatures) {", 0],
   ["provider === expectedProvider", 0],
 ])("counts %s as %i branch", (line, count) => {
