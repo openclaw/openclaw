@@ -287,7 +287,10 @@ Deferred MCP tools. Skip tool_search for a listed name: call dispatch_action wit
 
 The model can call `dispatch_action` with a listed name directly, skipping the
 `tool_search` and `tool_describe` round trips; arguments that do not match
-return the input schema to retry from. The directory lists
+return the input schema to retry from. Rows of a server that advertises
+instructions end with `[instructions]`, and the heading then tells the model to
+call `tool_describe` first for them, because that is where the instructions
+are returned. The directory lists
 exactly the deferred MCP entries of the run's catalog, so tool policy, allow/deny lists,
 and `include`/`exclude` selectors apply first: an MCP tool kept direct by a
 selector is not listed, and a denied tool is never in the catalog. Every row lists

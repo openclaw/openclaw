@@ -402,6 +402,10 @@ describe("direct MCP tools", () => {
     });
     const applied = apply([mcpTool("tracker", "list", "List."), guided], { catalogRef: {} });
     expect(visibleMcp(applied)).toEqual(["tracker__list"]);
-    expect(applied.directory).toContain("- mcp:guided:guided__query");
+    // The directory sends the model to tool_describe, which returns the instructions.
+    expect(applied.directory).toContain("- mcp:guided:guided__query [instructions]: Query.");
+    expect(applied.directory.split("\n")[0]).toContain(
+      "For a name marked [instructions], call tool_describe first",
+    );
   });
 });
