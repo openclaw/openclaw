@@ -60,7 +60,7 @@ const cases = [
 // A list that maps files to counts must match the references found in each file exactly.
 const allowlists = [
   ["no-operator-permission-read", "Permission read:", ADMISSION_FILES, 58],
-  ["no-operator-permission-read", "Run authority minted:", MINT_FILES, 7],
+  ["no-operator-permission-read", "Run authority minted:", MINT_FILES, 6],
   ["no-operator-permission-read", "Access re-check:", ACCESS_RECHECK_FILES, 2],
   ["no-operator-refusal-construction", "", REFUSAL_FILES, 9],
   ["no-turn-authority-derivation", "Turn-kind flag:", TURN_FLAG_FILES, 18],

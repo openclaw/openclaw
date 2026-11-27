@@ -93,7 +93,6 @@ export const MINT_FILES = new Map([
   ["src/gateway/operator-run-authority.ts", 4],
   ["src/gateway/operator-run-invocation.ts", 3],
   ["src/gateway/operator-run-recovery.ts", 2],
-  ["src/gateway/session-sharing-authorization-async.ts", 2],
   ["src/plugin-sdk/plugin-test-runtime.ts", 2],
 ]);
 
