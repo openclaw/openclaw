@@ -11,6 +11,8 @@ import type { AgentToolResult } from "./runtime/index.js";
 
 export type ProcessGatewayAllowlistParams = ExecHostCommandParams & {
   workdir: string;
+  /** Released scratch-bound grants only; never sent to approval creation. */
+  legacyScratchRequestedEnv?: Record<string, string>;
   secretEgressBindings?: readonly SecretEgressSentinelBinding[];
   durable?: DurableExecOptions;
   githubProfileDir?: string;
