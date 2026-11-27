@@ -71,7 +71,7 @@ it("reads configured models once across provider claims and skips auth profiles 
     plugins: { allow: ["primary"], entries: { primary: { enabled: true } } },
     agents: {
       defaults: {
-        get model() {
+        get utilityModel() {
           modelReads++;
           return { primary: "mixed/first", fallbacks: ["mixed/second"] };
         },
