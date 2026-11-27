@@ -743,6 +743,46 @@ describe("IMAP watcher protocol boundary", () => {
     ]);
   });
 
+  it("matches an SMTPUTF8 sender whose From local part is quoted", async () => {
+    const { authenticate: realAuthenticate, dkimSign } =
+      await vi.importActual<typeof import("mailauth")>("mailauth");
+    const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    // RFC 6532 allows UTF-8 in a quoted local part; mailparser drops these optional
+    // quotes too, while mailauth's headerFrom keeps them, so both spellings must match
+    const key = publicKey.export({ type: "spki", format: "der" }).toString("base64");
+    const legit = 'From: "tr\u00fcst\u00e9d"@example.com\r\nSubject: SMTPUTF8\r\n\r\nMail';
+    vi.spyOn(Resolver.prototype, "resolveTxt").mockImplementation(async (domain) => {
+      if (domain === "_dmarc.example.com") {
+        return [["v=DMARC1; p=none"]];
+      }
+      if (domain === "test._domainkey.example.com") {
+        return [[`v=DKIM1; k=rsa; p=${key}`]];
+      }
+      return [];
+    });
+    const { server, authenticator, dispatch, waitForCursor } = await startWatcher({
+      account: {
+        watch: { mode: "auto", pollSeconds: 0.02 },
+        allowedSenders: ["tr\u00fcst\u00e9d@example.com"],
+      },
+    });
+    authenticator.mockImplementation(realAuthenticate);
+    const signed = await dkimSign(legit, {
+      signatureData: [
+        {
+          signingDomain: "example.com",
+          selector: "test",
+          privateKey: privateKey.export({ type: "pkcs8", format: "pem" }),
+        },
+      ],
+    });
+    server.append(signed.signatures + legit);
+    await waitForCursor(2);
+    expect(dispatch.mock.calls.map(([params]) => params.sessionKey)).toEqual([
+      "hook:imap:inbox:17:2",
+    ]);
+  });
+
   it("records exhausted admission retries and continues to the next mail", async () => {
     const { server, state, context, dispatch, waitForCursor } = await startPollingWatcher();
     dispatch.mockRejectedValue(new Error("Gateway unavailable"));

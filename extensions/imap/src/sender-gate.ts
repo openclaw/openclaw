@@ -57,12 +57,12 @@ function mailboxDomainKey(domain: string): string {
   }
 }
 
-// An RFC 5322 local part that is a quoted string holding only dot-atom characters names
-// the same mailbox as its unquoted spelling. mailparser drops these optional quotes while
-// mailauth keeps them, so both sides are compared without them. Quotes hiding anything a
-// local part cannot carry unquoted (spaces, "@", escapes) stay as they are written.
-const QUOTED_DOT_ATOM =
-  /^"([A-Za-z0-9!#$%&'*+\-/=?^_`{|}~]+(?:\.[A-Za-z0-9!#$%&'*+\-/=?^_`{|}~]+)*)"$/u;
+// An RFC 5322/6531 quoted local part whose content is a dot-atom, with or without
+// the UTF-8 that RFC 6532 allows, names the same mailbox as its unquoted spelling.
+// mailparser drops these optional quotes while mailauth keeps them, so both sides are
+// compared without them. Quotes hiding anything a local part cannot carry unquoted
+// (whitespace, "@", specials, control characters, escapes) stay as they are written.
+const QUOTED_DOT_ATOM = /^"([^.\s"(),:;<@[\\\]\p{Cc}]+(?:\.[^.\s"(),:;<@[\\\]\p{Cc}]+)*)"$/u;
 
 function unquotedLocalPart(local: string): string {
   return QUOTED_DOT_ATOM.exec(local)?.[1] ?? local;
