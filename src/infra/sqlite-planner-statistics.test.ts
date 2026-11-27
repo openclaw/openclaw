@@ -134,6 +134,19 @@ describe("SQLite planner maintenance", () => {
     observe("refreshed after delete", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
     observe("emptied table with statistics", "DELETE FROM plain;");
     observe("refreshed empty", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
+    // Bounded analysis records a different count per index; SQLite keeps the last one.
+    observe(
+      "differing full-index estimates",
+      `CREATE TABLE pair (id INTEGER PRIMARY KEY, a TEXT NOT NULL, b TEXT NOT NULL);
+       CREATE INDEX pair_a ON pair(a);
+       CREATE INDEX pair_b ON pair(b);
+       WITH RECURSIVE n(v) AS (VALUES(1) UNION ALL SELECT v + 1 FROM n WHERE v < 6000)
+       INSERT INTO pair SELECT v, printf('%08d', v), printf('%08d', v) FROM n;
+       PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;
+       UPDATE sqlite_stat1 SET stat = '60000 1' WHERE idx = 'pair_a';
+       UPDATE sqlite_stat1 SET stat = '600 1' WHERE idx = 'pair_b';
+       ANALYZE sqlite_schema;`,
+    );
     observe(
       "analyzed single row deleted",
       `CREATE TABLE single (id INTEGER PRIMARY KEY, value TEXT NOT NULL);

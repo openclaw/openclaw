@@ -86,6 +86,9 @@ function allFileFacts(root: string): string[] {
   return facts.toSorted();
 }
 
+// Windows has no POSIX modes; the permission repair rewrites them on every pass.
+const windows = process.platform === "win32";
+
 const conditionsOf = async (env: NodeJS.ProcessEnv) => {
   const plan = await planAgentDatabaseMigration({ env, configuredAgentDatabaseTargets: [] });
   expect(plan.databases).toHaveLength(1);
@@ -105,9 +108,11 @@ describe("agent database migration plan", () => {
 
     const { plan, conditions } = await conditionsOf(env);
 
-    expect(plan.pending).toBe("none");
+    expect(plan.pending).toBe(windows ? "work" : "none");
     expect(plan.discovery).toEqual({ discovery: "none", "misplaced-copies": "none" });
-    expect(Object.entries(conditions).filter(([, answer]) => answer !== "none")).toEqual([]);
+    expect(Object.entries(conditions).filter(([, answer]) => answer !== "none")).toEqual(
+      windows ? [["permissions", "work"]] : [],
+    );
     // Every condition the writing pass acts on was read, not skipped.
     expect(Object.keys(conditions).toSorted()).toEqual(
       [
@@ -137,36 +142,41 @@ describe("agent database migration plan", () => {
     expect(fileFacts(env.OPENCLAW_STATE_DIR)).toEqual(before);
   });
 
-  it("leaves a healthy database unleased, unopened for writing and its files untouched on a Doctor rerun", async () => {
-    const { env, databasePath } = await healthyInstall();
-    const agentDir = path.join(env.OPENCLAW_STATE_DIR, "agents");
-    const agentFiles = allFileFacts(agentDir);
-    // Settle the earlier pass's shared state handle, which a later read closes and seals.
-    await planAgentDatabaseMigration({ env, configuredAgentDatabaseTargets: [] });
-    const before = fileFacts(env.OPENCLAW_STATE_DIR);
-    const leases = vi.spyOn(maintenanceLease, "withAgentDatabaseMaintenanceLease");
-    const opens = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
-    let admitted: string[] = [];
-    let prepared: string[] = [];
+  // On Windows the permission repair always has work, so no database is ever unchanged;
+  // the case above covers that answer.
+  it.skipIf(windows)(
+    "leaves a healthy database unleased, unopened for writing and its files untouched on a Doctor rerun",
+    async () => {
+      const { env, databasePath } = await healthyInstall();
+      const agentDir = path.join(env.OPENCLAW_STATE_DIR, "agents");
+      const agentFiles = allFileFacts(agentDir);
+      // Settle the earlier pass's shared state handle, which a later read closes and seals.
+      await planAgentDatabaseMigration({ env, configuredAgentDatabaseTargets: [] });
+      const before = fileFacts(env.OPENCLAW_STATE_DIR);
+      const leases = vi.spyOn(maintenanceLease, "withAgentDatabaseMaintenanceLease");
+      const opens = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+      let admitted: string[] = [];
+      let prepared: string[] = [];
 
-    const result = await migrate({
-      env,
-      onAdmittedTargets: (targets) => (admitted = targets.map((target) => target.path)),
-      onPreparedRepairTargets: (targets) => (prepared = targets.map((target) => target.path)),
-    });
+      const result = await migrate({
+        env,
+        onAdmittedTargets: (targets) => (admitted = targets.map((target) => target.path)),
+        onPreparedRepairTargets: (targets) => (prepared = targets.map((target) => target.path)),
+      });
 
-    expect(result).toEqual({ changes: [], warnings: [] });
-    expect(leases).not.toHaveBeenCalled();
-    expect(
-      opens.mock.calls.filter(([p, options]) => p === databasePath && options?.readOnly !== true),
-    ).toEqual([]);
-    // Later Doctor steps still receive the database as admitted and repair-ready.
-    expect(admitted).toEqual([databasePath]);
-    expect(prepared).toEqual([databasePath]);
-    expect(fileFacts(env.OPENCLAW_STATE_DIR)).toEqual(before);
-    // The agent database family, its clean-close seal included, is untouched throughout.
-    expect(allFileFacts(agentDir)).toEqual(agentFiles);
-  });
+      expect(result).toEqual({ changes: [], warnings: [] });
+      expect(leases).not.toHaveBeenCalled();
+      expect(
+        opens.mock.calls.filter(([p, options]) => p === databasePath && options?.readOnly !== true),
+      ).toEqual([]);
+      // Later Doctor steps still receive the database as admitted and repair-ready.
+      expect(admitted).toEqual([databasePath]);
+      expect(prepared).toEqual([databasePath]);
+      expect(fileFacts(env.OPENCLAW_STATE_DIR)).toEqual(before);
+      // The agent database family, its clean-close seal included, is untouched throughout.
+      expect(allFileFacts(agentDir)).toEqual(agentFiles);
+    },
+  );
 
   const stateDatabase = (env: NodeJS.ProcessEnv) => resolveOpenClawStateSqlitePath(env);
   const guards: Array<{
@@ -332,23 +342,27 @@ describe("agent database migration plan", () => {
   ];
   let dropped = "";
 
-  it.each(guards)("reports $condition as work and the pass repairs it", async (guard) => {
-    const fixture = await healthyInstall();
-    guard.create(fixture);
+  // POSIX mode bits are the permission guard's fixture.
+  it.each(guards.filter((guard) => !windows || guard.condition !== "permissions"))(
+    "reports $condition as work and the pass repairs it",
+    async (guard) => {
+      const fixture = await healthyInstall();
+      guard.create(fixture);
 
-    const { conditions } = await conditionsOf(fixture.env);
-    expect(conditions[guard.condition]).toBe("work");
+      const { conditions } = await conditionsOf(fixture.env);
+      expect(conditions[guard.condition]).toBe("work");
 
-    const leases = vi.spyOn(maintenanceLease, "withAgentDatabaseMaintenanceLease");
-    await migrate({ env: fixture.env });
-    // Work keeps the unchanged writing pass, lease included.
-    expect(leases).toHaveBeenCalled();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    expect(guard.repaired(fixture)).toEqual(guard.expected);
-    const after = await conditionsOf(fixture.env);
-    expect(after.conditions[guard.condition]).toBe("none");
-  });
+      const leases = vi.spyOn(maintenanceLease, "withAgentDatabaseMaintenanceLease");
+      await migrate({ env: fixture.env });
+      // Work keeps the unchanged writing pass, lease included.
+      expect(leases).toHaveBeenCalled();
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      expect(guard.repaired(fixture)).toEqual(guard.expected);
+      const after = await conditionsOf(fixture.env);
+      expect(after.conditions[guard.condition]).toBe("none");
+    },
+  );
 
   it("reports an older schema version as work", async () => {
     const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "agent-db-plan-old-") };

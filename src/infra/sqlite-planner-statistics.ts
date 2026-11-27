@@ -137,11 +137,11 @@ export function sqlitePlannerStatisticsNeedRefresh(database: DatabaseSync): bool
       }
       continue;
     }
-    // The table estimate comes from a full-table index row, else the table's own row.
-    const recorded =
-      rows.find(
-        (row) => row.idx !== null && indexes.some((i) => i.name === row.idx && i.partial === 0),
-      ) ?? rows.find((row) => row.idx === null);
+    // SQLite loads stat1 in row order and keeps the last table estimate: from the table's
+    // own row, a full-table index row, or a row naming no current index.
+    const recorded = rows.findLast(
+      (row) => !indexes.some((index) => index.name === row.idx && index.partial !== 0),
+    );
     const recordedRows = Number.parseInt(recorded?.stat ?? "", 10);
     const threshold =
       recorded && Number.isSafeInteger(recordedRows)
