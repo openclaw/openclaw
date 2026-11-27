@@ -762,6 +762,7 @@ Check these in order:
 3. `openclaw.plugin.json` has `contracts.tools` with the expected tool names.
 4. `package.json` has `openclaw.extensions: ["./dist/index.js"]`.
 5. Installation reported successful runtime application; after source edits or a repaired activation failure, run `openclaw plugins reload <plugin-id>`.
+6. The model's direct tool list is not where plugin tools appear by default. Embedded and Copilot runs use [Tool Search](/tools/tool-search) when `tools.toolSearch` is unset, so the model sees `tool_search`, `tool_describe`, and `dispatch_action` and reaches the plugin tool through them: `dispatch_action` with the tool name as `id` and the tool's parameters under `args`. A model that calls the tool by name instead gets a tool error. To check with direct schemas, set `tools.toolSearch: false`.
 
 ## See also
 
