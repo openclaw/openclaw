@@ -29,18 +29,21 @@ const browserResponses = (...cases: ReturnType<typeof browserCase>[]) => ({
 function browserCases(
   tab: BrowserTab,
   screenshot: Record<string, unknown>,
-  address: Record<string, unknown> = {},
+  address: { target?: string; node?: string; query?: { profile: string } } = {},
   tabs: BrowserTab[] = [tab],
 ) {
   const result = { cssWidth: 100, cssHeight: 100, title: tab.title, url: tab.url };
-  const passiveAddress = address.query
-    ? { ...address, query: { operatorInput: false, ...asNullableRecord(address.query) } }
-    : address;
+  const withOperatorInput = (operatorInput: boolean) =>
+    address.query ? { ...address, query: { operatorInput, ...address.query } } : address;
   return [
     browserCase("/tabs", { running: true, tabs }, address),
-    browserCase("/screenshot", screenshot, passiveAddress),
-    browserCase("/act", { result }, passiveAddress),
-    browserCase("/operator/input", { sent: 1, navigated: false, blockedByDialog: false }, address),
+    browserCase("/screenshot", screenshot, { ...withOperatorInput(false), method: "POST" }),
+    browserCase("/act", { result }, withOperatorInput(false)),
+    browserCase(
+      "/operator/input",
+      { sent: 1, navigated: false, blockedByDialog: false },
+      withOperatorInput(true),
+    ),
   ];
 }
 const png = createSolidPngBuffer(1, 1, { r: 255, g: 255, b: 255 });
@@ -490,12 +493,12 @@ suite.define(() => {
           await routeMedia(page);
           const hostTab = {
             ...makeTab("t1", "Managed tab", "https://managed.example/"),
-            target: "host",
+            target: "host" as const,
             profile: "managed",
           };
           const nodeTab = {
             ...makeTab("t1", "Node tab", "https://work.example/"),
-            target: "node",
+            target: "node" as const,
             node: "node-a",
             profile: "work",
           };
