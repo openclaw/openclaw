@@ -90,6 +90,8 @@ it.each(["diagnostics", "channelSetups"] as const)(
     }
     activate(registry);
     expect(lookup(["unloaded"])).toBeUndefined();
+    activate({ ...registry, plugins: [] });
+    expect(lookup(["unloaded"])).toBeUndefined();
   },
 );
 
