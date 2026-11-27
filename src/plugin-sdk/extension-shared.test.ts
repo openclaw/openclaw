@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const createAmbientNodeProxyAgentMock = vi.hoisted(() => vi.fn(() => ({ proxy: true })));
 const hasAmbientNodeProxyConfiguredMock = vi.hoisted(() => vi.fn(() => true));
 
-vi.mock("../infra/net/proxyline-runtime.js", () => ({
+vi.mock("../infra/net/proxyline-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/net/proxyline-runtime.js")>()),
   loadProxyline: () => ({
     createAmbientNodeProxyAgent: createAmbientNodeProxyAgentMock,
     hasAmbientNodeProxyConfigured: hasAmbientNodeProxyConfiguredMock,
