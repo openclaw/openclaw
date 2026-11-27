@@ -4,6 +4,7 @@ import {
   type AttachmentClassification,
 } from "@openclaw/media-core/attachment-classify";
 import { mimeTypeFromFilePath, normalizeMimeType } from "@openclaw/media-core/mime";
+import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import {
   applyAttachmentMarkerBudget,
   type AttachmentContextBlock,
@@ -74,7 +75,11 @@ export async function extractFileContext(params: {
     if (skipAttachmentIndexes?.has(attachment.index)) {
       return { outcome: { kind: "claimed-elsewhere" } };
     }
-    const extensionMime = mimeTypeFromFilePath(attachmentFilename);
+    const extensionMime =
+      mimeTypeFromFilePath(attachmentFilename) ??
+      (!attachment.path && attachment.url && hasHttpUrlPrefix(attachment.url)
+        ? mimeTypeFromFilePath(attachment.url)
+        : undefined);
     const forcedTextMime =
       attachmentClassFromMime(extensionMime) === "text" ? extensionMime : undefined;
     const kind = forcedTextMime ? "document" : resolveAttachmentKind(attachment);

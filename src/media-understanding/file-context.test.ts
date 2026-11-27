@@ -33,10 +33,12 @@ async function localDocument(text: string | Buffer, name: string, mime: string, 
 describe("remote document charset", () => {
   const cyrillic = Buffer.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2, 0x20, 0x88]);
   const transportCharset = "text/plain; charset=windows-1251";
-  const cases: [string, string | undefined, string][] = [
+  const cases: [string, string | undefined, string, string?][] = [
     ["transport charset", undefined, "Привет €"],
     ["channel type without charset", "text/plain", "Привет €"],
     ["channel charset precedence", "text/plain; charset=windows-1252", "Ïðèâåò ˆ"],
+    ["a plain text suffix overriding audio metadata", "audio/mpeg", "Привет €"],
+    ["an encoded text suffix overriding audio metadata", "audio/mpeg", "Привет €", "notes%2Etxt"],
   ];
   let fixture: Awaited<ReturnType<typeof reserveTestPortListener<ReturnType<typeof createServer>>>>;
 
@@ -62,10 +64,10 @@ describe("remote document charset", () => {
 
   it.each(cases)(
     "decodes %s through the real remote attachment owner",
-    async (_name, mime, expected) => {
+    async (_name, mime, expected, fileName = "notes.txt") => {
       const attachment = {
         index: 0,
-        url: `http://127.0.0.1:${fixture.claim.port}/notes.txt`,
+        url: `http://127.0.0.1:${fixture.claim.port}/${fileName}`,
         mime,
       };
       const cache = new MediaAttachmentCache([attachment], {
