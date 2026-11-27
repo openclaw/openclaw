@@ -54,7 +54,9 @@ export function publicationPullRequest(
   return id ? pullRequests.find((pr) => chatPullRequestId(pr) === id) : undefined;
 }
 
-export function showWorkRow(props: ChatPullRequestsProps): boolean {
+export function showWorkRow(
+  props: Pick<ChatPullRequestsProps, "branch" | "branchDismissed" | "publication" | "pullRequests">,
+): boolean {
   return Boolean(
     (!props.branchDismissed && props.branch) ||
     (!props.pullRequests.length &&

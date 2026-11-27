@@ -15,7 +15,8 @@ suite.define(() => {
     const gateway = await installMockGateway(page, { deferredMethods: ["progressCard.get"] });
     await page.goto(`${suite.server.baseUrl}chat`);
     await gateway.waitForRequest("progressCard.get");
-    await openChatDetails(page);
+    const trigger = page.locator(".chat-details-toggle");
+    await expect.poll(() => trigger.isVisible()).toBe(false);
     await page.clock.install();
     await pauseVirtualClock(page);
     await gateway.rejectDeferred("progressCard.get", { message: "Temporary read failure" });
@@ -36,6 +37,8 @@ suite.define(() => {
       },
     });
     await page.clock.runFor(32);
+    await page.clock.resume();
+    await openChatDetails(page);
     await page
       .locator(".task-progress-details__plan")
       .getByText("Recovered progress", { exact: true })
@@ -177,9 +180,12 @@ suite.define(() => {
           }
         }
         expect(frames.every((frame) => !frame.card)).toBe(true);
-        expect(await page.locator(".chat-details-toggle").getAttribute("aria-expanded")).toBe(
-          "false",
-        );
+        const trigger = page.locator(".chat-details-toggle");
+        if (outcome === "card") {
+          expect(await trigger.getAttribute("aria-expanded")).toBe("false");
+        } else {
+          expect(await trigger.isVisible()).toBe(false);
+        }
         expect(await page.locator('.chat-details[role="dialog"]').isVisible()).toBe(false);
         expect(
           Math.max(...frames.map((frame) => frame.height)) -
@@ -194,12 +200,13 @@ suite.define(() => {
         await geometry.dispose();
       }
 
-      await openChatDetails(page);
       if (outcome === "card") {
+        await openChatDetails(page);
         await page
           .locator(".task-progress-details__plan")
           .getByText("Inspect the conversation", { exact: true })
           .waitFor();
+        await closeChatDetails(page);
       } else {
         expect(await page.locator('[data-progress-card-placement="details"]').count()).toBe(0);
         if (outcome === "error") {
@@ -208,7 +215,6 @@ suite.define(() => {
           ).toBe(0);
         }
       }
-      await closeChatDetails(page);
 
       await composer.fill("Keep this draft while progress refreshes");
       await gateway.deferNext("progressCard.get");

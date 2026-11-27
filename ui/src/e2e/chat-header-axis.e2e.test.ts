@@ -32,7 +32,10 @@ suite.define(() => {
           sessionKey,
           "Implement parent breadcrumb navigation and polish overflow behavior",
           2,
-          { parentSessionKey: "agent:main:parent" },
+          {
+            parentSessionKey: "agent:main:parent",
+            worktree: { id: "header-axis", branch: "feature/header", repoRoot: "/repo/openclaw" },
+          },
         ),
       ],
       sessionKey,
@@ -62,6 +65,7 @@ suite.define(() => {
       return;
     }
 
+    await header.locator(".chat-details-toggle").waitFor();
     const geometry = await header.evaluate((root) => {
       const main = root
         .closest("openclaw-chat-pane")

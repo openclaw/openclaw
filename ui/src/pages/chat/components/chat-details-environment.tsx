@@ -12,11 +12,15 @@ import {
   ChatDetailsDesktopSection,
 } from "./chat-details-desktop-section.tsx";
 import "./chat-details-environment-desktop.css";
+import {
+  detailsEnvironmentChanges,
+  detailsEnvironmentLive,
+  detailsEnvironmentWork,
+  hasEnvironmentTextChanges,
+} from "./chat-details-environment-data.ts";
 import type { ChatDetailsEnvironmentDesktopProps } from "./chat-details-types.ts";
-import { hasEnvironmentTextChanges } from "./chat-environment-content.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { createChatMachinePresentation } from "./chat-pane-placement.tsx";
-import { retainedPublication, showWorkRow } from "./chat-pull-requests.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 registerEnglishCatalog(registerChatDetailsEnglish);
@@ -63,37 +67,9 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
       </span>
     );
   }
-  const changes = () => {
-    const result = props.uncommitted;
-    return result && !result.unavailableReason && hasEnvironmentTextChanges(result)
-      ? result
-      : undefined;
-  };
-  const published = () => props.work?.publication?.result?.status === "published";
-  const work = () => {
-    const candidate = props.work;
-    // The Gateway omits branch facts when this checkout has a live PR. Keep
-    // uncertain attempts recoverable; a completed failure is not another publish offer.
-    if (
-      !candidate ||
-      published() ||
-      (!candidate.branch &&
-        !candidate.publication?.locked &&
-        candidate.pullRequests.some((pr) => pr.state === "open" || pr.state === "draft"))
-    ) {
-      return undefined;
-    }
-    const publication = candidate.publication;
-    return showWorkRow(candidate) ||
-      (retainedPublication(publication) &&
-        (publication?.result?.status !== "published" || publication.error))
-      ? candidate
-      : undefined;
-  };
-  const live = createMemo(() => ({
-    branch: workspace()?.branch ?? work()?.branch?.branch,
-    worktree: Boolean(session()?.worktree),
-  }));
+  const changes = () => detailsEnvironmentChanges(props.uncommitted);
+  const work = () => detailsEnvironmentWork(props.work);
+  const live = createMemo(() => detailsEnvironmentLive(props.details, work()?.branch?.branch));
   const facts = () =>
     (!props.details.sessionFactsReady && props.details.cachedDetails?.environment) || live();
   const branchName = () => facts().branch;

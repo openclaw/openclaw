@@ -21,6 +21,56 @@ import { sessionsListResponse } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Details progress warm reload" });
 suite.define(() => {
+  it("discovers a running process before opening Details without mounting another reader", async () => {
+    await suite.withPage({ viewport: { width: 1120, height: 900 } }, async ({ page }) => {
+      const sessionKey = "agent:main:details-process-discovery";
+      const sessionId = "details-process-discovery";
+      const gateway = await installMockGateway(page, {
+        sessionKey,
+        sessions: [{ key: sessionKey, sessionId, kind: "direct", updatedAt: 1 }],
+        featureMethods: [
+          "chat.history",
+          "chat.metadata",
+          "chat.startup",
+          "sessions.processes.list",
+        ],
+        methodResponses: {
+          "sessions.processes.list": {
+            sessionId,
+            processes: [
+              {
+                processId: "verify",
+                instanceId: "verify-1",
+                name: "Synthetic verifier",
+                status: "running",
+                startedAt: 1,
+                tail: "ready",
+                truncated: false,
+                canStop: true,
+              },
+            ],
+            truncated: false,
+          },
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const scope = page.locator(".chat-pane-cache__pane--active");
+      const trigger = scope.locator(".chat-details-toggle");
+      await trigger.waitFor();
+      expect(await trigger.getAttribute("aria-expanded")).toBe("false");
+      expect(await scope.locator(".chat-details-session").count()).toBe(0);
+      const target = { key: sessionKey };
+      const before = await gateway.getRequests("sessions.processes.list", target);
+      expect(before).toHaveLength(1);
+      const details = await openChatDetails(scope);
+      await details
+        .locator('[data-details-group="processes"]')
+        .getByText("Synthetic verifier")
+        .waitFor();
+      expect(await gateway.getRequests("sessions.processes.list", target)).toEqual(before);
+    });
+  });
+
   it.each([
     { face: "chat", archived: false, delayedEnvironment: false, closedDetails: false },
     { face: "dashboard", archived: false, delayedEnvironment: false, closedDetails: false },

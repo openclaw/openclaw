@@ -172,7 +172,7 @@ suite.define(() => {
         await pane
           .getByText("Is the release checklist ready to review?", { exact: true })
           .waitFor();
-        await pane.locator(".chat-details-session").waitFor({ state: "attached" });
+        await gateway.waitForRequest("progressCard.get");
         expect(await trigger.isVisible()).toBe(false);
         expect(await details.isVisible()).toBe(false);
         await openProgressHomeDock(page);
@@ -200,7 +200,11 @@ suite.define(() => {
         const gutterEntrances = await frame.evaluateHandle((el) => {
           const events: string[] = [];
           el.addEventListener("transitionrun", (event) => {
-            if (event.target === el && event.propertyName === "--chat-details-space") {
+            if (
+              event instanceof TransitionEvent &&
+              event.target === el &&
+              event.propertyName === "--chat-details-space"
+            ) {
               events.push(event.propertyName);
             }
           });

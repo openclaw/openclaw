@@ -4,19 +4,19 @@ import {
   retryStaleChunkReloadWhenReachable,
 } from "../../../app/stale-chunk-reload.ts";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
-import { ReportDesktopDetailsContent } from "./chat-details-content-presence.ts";
 
 /** A failed optional chat region must not retire the pane or its composer. */
 export function ChatLazyBoundary(props: {
   children: Element;
   fallback?: Element;
+  errorContent?: Element;
   onClose?: () => void;
 }) {
   return (
     <Errored
       fallback={(error, reset) => (
         <>
-          <ReportDesktopDetailsContent />
+          {props.errorContent}
           <LazyViewError
             error={error()}
             stale={isStaleChunkImportError(error())}

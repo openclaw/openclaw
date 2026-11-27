@@ -310,29 +310,24 @@ suite.define(() => {
         }
         const firstMessage = page.locator(".chat-group.user").first();
         const bubble = firstMessage.locator(".chat-bubble").first();
-        const details = page
-          .locator(".mobile-header__title")
-          .or(
-            page
-              .getByRole("button", { name: "Details", exact: true })
-              .and(page.locator(".chat-details-toggle")),
-          )
+        const headerControl = page
+          .locator(".mobile-header__title, .chat-header-session-menu__trigger")
           .filter({ visible: true })
           .first();
-        await waitForMessageGeometry(bubble, [details, textarea]);
+        await waitForMessageGeometry(bubble, [headerControl, textarea]);
         await (mobile ? bubble.tap() : bubble.hover());
         const actions = firstMessage.locator(".chat-group-footer-actions");
         await expect(actions.locator(".chat-copy-btn")).toBeVisible();
-        await waitForMessageGeometry(bubble, [details, actions]);
-        const detailsBox = (await details.boundingBox())!;
+        await waitForMessageGeometry(bubble, [headerControl, actions]);
+        const headerControlBox = (await headerControl.boundingBox())!;
         const transcriptBoxes = await Promise.all([bubble.boundingBox(), actions.boundingBox()]);
         for (const box of transcriptBoxes) {
           expect(
             box &&
-              (detailsBox.x + detailsBox.width <= box.x ||
-                box.x + box.width <= detailsBox.x ||
-                detailsBox.y + detailsBox.height <= box.y ||
-                box.y + box.height <= detailsBox.y),
+              (headerControlBox.x + headerControlBox.width <= box.x ||
+                box.x + box.width <= headerControlBox.x ||
+                headerControlBox.y + headerControlBox.height <= box.y ||
+                box.y + box.height <= headerControlBox.y),
             `${name}: Header controls must clear the first message and its actions`,
           ).toBe(true);
         }

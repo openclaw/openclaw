@@ -30,6 +30,12 @@ suite.define(() => {
         const activityPillsModule = controlUiE2eBuiltModuleRequest(
           "ui/src/pages/chat/components/chat-activity-pills.tsx",
         );
+        const detailsRenderers = [
+          "chat-details-session.tsx",
+          "chat-details-environment-body.tsx",
+        ].map((file) => controlUiE2eBuiltModuleRequest(`ui/src/pages/chat/components/${file}`));
+        const detailsRendererRequests = () =>
+          requested.filter((path) => detailsRenderers.some((module) => module.test(path)));
         const iconRequests = () =>
           requested.filter((path) => path.endsWith("/apple-touch-icon.png"));
         const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
@@ -87,6 +93,7 @@ suite.define(() => {
         expect(mediaRequests()).toEqual([]);
         expect(await composer.inputValue()).toBe("Keep this draft while the image loads");
         expect(await composer.evaluate((element) => element === document.activeElement)).toBe(true);
+        expect(detailsRendererRequests()).toEqual([]);
         await composer.fill("");
 
         await page.setViewportSize({ width: 600, height: 900 });
