@@ -830,12 +830,12 @@ if (process.argv[2] !== 'install') {
           expect(result.stdout.trim()).toBe("running");
         }
         expect((await readTrial(prefix))?.phase).toBe("pending");
+        vi.stubEnv("OPENCLAW_LAUNCHER_IPC", "");
         await writeTrial({
           ...(await readTrial(prefix))!,
           phase: "rolled-back",
           outcome: { status: "rolled-back", reason: "new build failed to start", at: Date.now() },
         });
-        vi.stubEnv("OPENCLAW_LAUNCHER_IPC", "");
         await announceReady(null);
         const rolledBack = await getUpdateRunAsync(run.runId);
         expect(rolledBack?.status).toBe("failed");

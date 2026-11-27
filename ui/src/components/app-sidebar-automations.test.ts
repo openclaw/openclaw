@@ -139,6 +139,12 @@ it("lists failing automations in their own group, out of Active and Paused", asy
       ].map((name) => name.textContent);
     await waitForSolid(() => expect(group("Needs attention")).toEqual(["Broken", "Stopped"]));
     expect(group("Active")).toEqual(["Healthy"]);
+    const pausedToggle = sidebar.querySelector<HTMLButtonElement>(
+      "[role='group'][aria-label='Paused'] button",
+    );
+    expect(pausedToggle).not.toBeNull();
+    pausedToggle!.click();
+    await waitForSolid(() => expect(group("Paused")).toEqual(["Resting"]));
   } finally {
     inventory.read.mockImplementation(pages);
   }

@@ -113,7 +113,6 @@ export function createSessionProjectTool(options: {
         requestOwners,
         onYield: options.onYield,
         signal,
-        senderIsOwner: options.senderIsOwner,
         // The move runs after this turn ends, still for the person who asked for it.
         retainRequester: true,
         fenceSuccessors: true,
