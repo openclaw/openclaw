@@ -1,14 +1,13 @@
 import type { FunctionTool } from "openai/resources/responses/responses.js";
-import { getAiTransportHost } from "../host.js";
 import { resolveOpenAICompletionsCompat } from "../transports/openai-completions-compat.js";
-import { resolveOpenAIStrictToolFlagWithDiagnostics } from "../transports/openai-transport-params.js";
 import type { Model, Tool } from "../types.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { prepareOpenAIFunctionTool } from "./openai-function-tool.js";
 import { prepareOpenAITools } from "./openai-tool-projection.js";
 import {
   normalizeOpenAIStrictToolParameters,
-  resolveOpenAIProjectedToolsStrictToolFlag,
+  resolveOpenAIStrictToolSetting,
+  resolveOpenAIToolStrictFlag,
 } from "./openai-tool-schema.js";
 import { withPreparedToolSchemaNormalization } from "./tool-schema-normalization-cache.js";
 
@@ -54,15 +53,10 @@ function convertPreparedResponsesTools(
   mutableParameters?: boolean,
 ): FunctionTool[] {
   const { projection, schemas } = prepared;
-  return withPreparedToolSchemaNormalization(schemas, () => {
-    const strict = model
-      ? resolveOpenAIStrictToolFlagWithDiagnostics(projection, strictSetting, {
-          transport: "responses",
-          model,
-        })
-      : resolveOpenAIProjectedToolsStrictToolFlag(projection, strictSetting);
+  return withPreparedToolSchemaNormalization(schemas, () =>
     // Sort tools before request construction so prompt-cache bytes stay deterministic.
-    return sortPromptCacheToolsByName(projection.tools).map((tool) => {
+    sortPromptCacheToolsByName(projection.tools).map((tool) => {
+      const strict = resolveOpenAIToolStrictFlag(tool.parameters, strictSetting);
       const result = prepareOpenAIFunctionTool(
         tool.name,
         tool.description,
@@ -76,8 +70,8 @@ function convertPreparedResponsesTools(
       ).responses;
       // Compatible endpoints can require strict to be absent; the SDK declares it required.
       return result as FunctionTool;
-    });
-  });
+    }),
+  );
 }
 
 function resolveResponsesStrictToolSetting(
@@ -86,11 +80,7 @@ function resolveResponsesStrictToolSetting(
   if (options?.strict !== undefined) {
     return options.strict;
   }
-  if (options?.model) {
-    return getAiTransportHost().resolveOpenAIStrictToolSetting(options.model, {
-      transport: "stream",
-      supportsStrictMode: resolveOpenAICompletionsCompat(options.model).supportsStrictMode,
-    });
-  }
-  return false;
+  return options?.model
+    ? resolveOpenAIStrictToolSetting(resolveOpenAICompletionsCompat(options.model))
+    : false;
 }

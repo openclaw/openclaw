@@ -1,14 +1,12 @@
 import { measuredRequestPressure } from "@openclaw/ai/internal/openai";
 import type { FirstStreamEventInternalOptions } from "@openclaw/ai/internal/runtime";
 import type { CompactionReplayRejection } from "@openclaw/ai/transports";
-import { setInternalRepetitionGuard } from "../../../../packages/agent-core/src/internal-hooks.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
 import { DEFAULT_UNDICI_STREAM_TIMEOUT_MS } from "../../../infra/net/undici-global-dispatcher.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
-import { isSmallModel } from "../../../shared/model-param-b.js";
 import {
   assertOperatorModelAllowed,
   readRunOperatorAuthority,
@@ -131,7 +129,6 @@ export function installEmbeddedAttemptStreamGuards(
       providerTextTransforms,
     },
   } = input.prepared.sessionRuntime;
-  setInternalRepetitionGuard(session.agent, isSmallModel);
   const { liveAllowedToolNames, replayAllowedToolNames } =
     input.prepared.toolCatalog.toolSearchRunPlan;
   const installStreamWrapper = <Args extends unknown[]>(

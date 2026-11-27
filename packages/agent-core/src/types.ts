@@ -155,8 +155,6 @@ export interface PrepareNextTurnContext extends ShouldStopAfterTurnContext {}
 export interface AgentLoopConfig extends SimpleStreamOptions {
   /** @internal Call-scoped cancellation owned by the active Agent. */
   toolInterruptions?: ToolInterruptions;
-  /** @internal Host-resolved small-model repetition policy. */
-  repetitionGuard?: (model: Model) => boolean;
   model: Model;
   /** Logical thinking level retained across model changes before provider mapping. */
   thinkingLevel?: ThinkingLevel;

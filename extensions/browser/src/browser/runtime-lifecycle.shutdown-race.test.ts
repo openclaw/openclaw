@@ -60,6 +60,7 @@ const {
   getProfileLifecycle,
   getOrCreateProfileRuntime,
   registerProfileHandle,
+  withProfileOperationLease,
 } = await import("./server-context.lifecycle.js");
 
 beforeEach(() => {
@@ -118,6 +119,40 @@ it.each([
   const state = await start();
   expect([...mocks.handlers][0]?.(error)).toBe(handled);
   await stop(state);
+});
+
+it("closes owned Chrome and reports the profile when a browser operation never settles", async () => {
+  vi.useFakeTimers();
+  try {
+    const profile = makeBrowserProfile();
+    const state = await start({ profile });
+    const runtime = getOrCreateProfileRuntime(state, profile);
+    const running = mockLaunchedChrome(vi.fn(), 42);
+    registerProfileHandle(runtime, running);
+    runtime.running = running;
+
+    const entered = createDeferred<void>();
+    void withProfileOperationLease({
+      state,
+      runtime,
+      run: () => {
+        entered.resolve();
+        return new Promise<never>(() => {});
+      },
+    });
+    await entered.promise;
+
+    const outcome = stopBrowserRuntime({
+      current: state,
+      clearState: vi.fn(),
+      onWarn: vi.fn(),
+    }).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mocks.stopOpenClawChrome).toHaveBeenCalledWith(running);
+    expect(await outcome).toMatchObject({ message: expect.stringMatching(/openclaw.*timed out/i) });
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("invalidates every deferred start before draining late children and clearing state", async () => {

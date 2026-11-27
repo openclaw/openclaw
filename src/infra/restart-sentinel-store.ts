@@ -234,7 +234,7 @@ function decodeRestartSentinelRowState(
   return sentinel ? { kind: "valid", sentinel } : { kind: "invalid", revision: row.updated_at_ms };
 }
 
-export function readRestartSentinelRowForKeySync(
+function readRestartSentinelRowForKeySync(
   db: EngineConnection,
   sentinelKey: string,
 ): RestartSentinelRowState {
@@ -263,7 +263,7 @@ function requireValidPayload(payload: RestartSentinelPayload): RestartSentinelPa
   return parsed;
 }
 
-export function nextRevision(currentRevision: number | null): number {
+function nextRevision(currentRevision: number | null): number {
   if (currentRevision !== null && !Number.isSafeInteger(currentRevision)) {
     throw new Error("Restart sentinel revision is outside the safe integer range");
   }
@@ -308,7 +308,7 @@ function maxRevision(left: number | null, right: number | null): number | null {
   return Math.max(left, right);
 }
 
-export function buildRestartSentinelRow(
+function buildRestartSentinelRow(
   payload: RestartSentinelPayload,
   revision: number,
   sentinelKey = RESTART_SENTINEL_KEY,

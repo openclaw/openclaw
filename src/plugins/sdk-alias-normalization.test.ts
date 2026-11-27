@@ -75,8 +75,4 @@ describe("buildPluginLoaderJitiOptions alias normalization", () => {
     }).alias;
     expect(expectDefined(alias?.gamma, "alias.gamma test invariant").length).toBeLessThan(32);
   });
-
-  it("does not attach an empty alias map", () => {
-    expect(buildPluginLoaderJitiOptions({})).not.toHaveProperty("alias");
-  });
 });

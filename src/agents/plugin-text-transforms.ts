@@ -8,6 +8,11 @@ import type { AssistantMessage, AssistantMessageEvent } from "../llm/types.js";
 import { mapAssistantMessageStream } from "../llm/utils/stream-wrapper.js";
 import type { PluginTextReplacement, PluginTextTransforms } from "../plugins/cli-backend.types.js";
 import { mapNestedStrings } from "../shared/map-nested-strings.js";
+import {
+  getRuntimeContextDataRanges,
+  setRuntimeContextDataRanges,
+  type RuntimeContextDataRange,
+} from "./runtime-context-data-ranges.js";
 import type { StreamFn } from "./runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "./stream-compat.js";
 import { createStreamIteratorWrapper } from "./stream-iterator-wrapper.js";
@@ -29,13 +34,48 @@ export function mergePluginTextTransforms(
 export function applyPluginTextReplacements(
   text: string,
   replacements?: PluginTextReplacement[],
+  dataRanges?: RuntimeContextDataRange[],
 ): string {
   if (!replacements || replacements.length === 0 || !text) {
     return text;
   }
   let next = text;
-  for (const replacement of replacements) {
-    next = next.replace(replacement.from, replacement.to);
+  for (const { from, to } of replacements) {
+    if (!dataRanges?.length || to.includes("$")) {
+      const rewritten = next.replace(from, to);
+      // Native substitution templates can copy text from outside the match. Preserve
+      // the provider's exact output, but do not guess its provenance.
+      if (dataRanges?.length && rewritten !== next) {
+        dataRanges.length = 0;
+      }
+      next = rewritten;
+      continue;
+    }
+    let shift = 0;
+    next = next.replace(from, (match: string, ...args: unknown[]) => {
+      // In a native replacer the only numeric argument is the UTF-16 match offset.
+      const start = args.findLast((arg): arg is number => typeof arg === "number")! + shift;
+      const end = start + match.length;
+      const delta = to.length - match.length;
+      if (match !== to) {
+        for (let i = dataRanges.length - 1; i >= 0; i--) {
+          const range = dataRanges[i]!;
+          if (end <= range.start) {
+            range.start += delta;
+            range.end += delta;
+          } else if (start < range.end) {
+            if (start >= range.start && end <= range.end && range.end + delta > range.start) {
+              range.end += delta;
+            } else {
+              // A single replacement straddles the label boundary or removes the quote.
+              dataRanges.splice(i, 1);
+            }
+          }
+        }
+      }
+      shift += delta;
+      return to;
+    });
   }
   return next;
 }
@@ -154,9 +194,19 @@ export function wrapStreamFnTextTransforms(params: {
             params.transformSystemPrompt !== false && context.systemPrompt !== undefined
               ? applyPluginTextReplacements(context.systemPrompt, params.input)
               : context.systemPrompt,
-          messages: context.messages.map((message) =>
-            transformContentText(message, params.input, "message"),
-          ),
+          messages: context.messages.map((message) => {
+            if (message.role === "user" && typeof message.content === "string") {
+              const ranges = getRuntimeContextDataRanges(message);
+              if (ranges?.length) {
+                const mapped = ranges.map(({ start, end }) => ({ start, end }));
+                const content = applyPluginTextReplacements(message.content, params.input, mapped);
+                const rewritten = { ...message, content };
+                setRuntimeContextDataRanges(rewritten, mapped);
+                return rewritten;
+              }
+            }
+            return transformContentText(message, params.input, "message");
+          }),
         } as Parameters<StreamFn>[1])
       : context;
     return mapAssistantMessageStream(params.streamFn(model, nextContext, options), (stream) =>

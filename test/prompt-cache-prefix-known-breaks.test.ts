@@ -44,13 +44,13 @@ describe("known prefix breaks", () => {
         role: "user",
         parts: [{ functionResponse: { name, response: { output } } }],
       });
-    const notice = "\n[... 180 more characters truncated; rerun with narrower args if needed]";
+    const notice = "\n[... 180 chars omitted]";
     const full = result("x".repeat(200));
     const trimmed = result(`${"x".repeat(20)}${notice}`);
     const renamed = result(`${"x".repeat(20)}${notice}`, "read");
     const corrupted = result(`${"y".repeat(20)}${notice}`);
     // The trim can also cut the notice itself short.
-    const cut = result("[... 200 more characters truncated; rerun with nar");
+    const cut = result("[... 200 chars omitted");
     const previous = request(["u1", full, "a1"]);
     expect(known("google-generative-ai", previous, request(["u1", trimmed, "a1", "u2"]))).toBe(
       true,

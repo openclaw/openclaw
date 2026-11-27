@@ -61,7 +61,7 @@ import {
 } from "./attempt-callbacks.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
 import { createCommandCompactionAccounting } from "./compaction-accounting.js";
-import { createAgentCommandLifecycle } from "./lifecycle.js";
+import { createAgentCommandLifecycle, resolveAgentRunFailureNotice } from "./lifecycle.js";
 import { withCommandThinkingClamp } from "./model-selection.js";
 import type { RunEmbeddedAgentAttemptParams } from "./run-embedded-attempt.types.js";
 import { loadAttemptExecutionRuntime, type AgentAttemptResult } from "./runtime-loaders.js";
@@ -664,13 +664,10 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
         );
         continue;
       }
-      const errorLifecycleFields = resolveAgentRunErrorLifecycleFields(
-        err,
-        params.opts.abortSignal,
-      );
       lifecycle.emitBasicError(err instanceof Error ? err : new Error("Agent run failed"), {
-        ...errorLifecycleFields,
+        ...resolveAgentRunErrorLifecycleFields(err, params.opts.abortSignal),
         ...(!executionStarted ? { executionStarted: false, providerStarted: false } : {}),
+        ...resolveAgentRunFailureNotice(err, cfg),
       });
       await fallbackTrajectoryRecorder?.flush();
       await deferredLifecycle.complete();
