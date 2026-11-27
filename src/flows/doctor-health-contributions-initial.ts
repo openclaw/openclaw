@@ -1,11 +1,9 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { noteBackupDoctorHint } from "../commands/backup-health.js";
-import { isLegacyParentWritableUpdateDoctorPass } from "../commands/doctor/shared/update-phase.js";
-import { copyConfigResolutionFactsThroughRewrite } from "../config/resolution-facts.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
-import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { gmailGogCheck } from "./doctor-gmail-gog-check.js";
+import { checkInitialConfigWriteHealthPending } from "./doctor-health-contribution-runners.config-plan.js";
 import { runInitialConfigWriteHealth } from "./doctor-health-contribution-runners.config.js";
 import {
   runClaudeCliHealth,
@@ -14,8 +12,13 @@ import {
 import {
   checkAgentMemorySchemaPending,
   checkLegacyPluginManifestPending,
+  checkConfiguredPluginInstallReleasePending,
+  checkLegacyPluginSourceCapturesContributionPending,
+  checkLegacyRuntimeFilesContributionPending,
+  checkLegacyStatePending,
   runAgentMemorySchemaHealth,
   runCodexSessionRouteHealth,
+  runConfiguredPluginInstallReleaseHealth,
   runLegacyCronHealth,
   runLegacyPluginManifestHealth,
   runSessionTranscriptsHealth,
@@ -25,10 +28,7 @@ import type {
   DoctorHealthContribution,
   DoctorHealthFlowContext,
 } from "./doctor-health-contribution-types.js";
-import {
-  noteDoctorRepairResult,
-  resolveDoctorWorkspaceDir,
-} from "./doctor-health-contribution-utils.js";
+import { resolveDoctorWorkspaceDir } from "./doctor-health-contribution-utils.js";
 import {
   coreHealthContribution,
   createDoctorHealthContribution,
@@ -55,6 +55,7 @@ export function resolveInitialDoctorHealthContributions(params: {
   return [
     createDoctorHealthContribution("doctor:write-config-migrations", "Write config migrations", {
       required: true,
+      pending: checkInitialConfigWriteHealthPending,
       run: runInitialConfigWriteHealth,
     }),
     createDoctorHealthContribution("doctor:agent-database-admission", "Agent database admission", {
@@ -189,6 +190,7 @@ export function resolveInitialDoctorHealthContributions(params: {
         "core/doctor/removed-workspaces-state",
         "core/doctor/session-archive-read-cache",
       ],
+      pending: checkLegacyStatePending,
       run: params.runLegacyStateHealth,
     }),
     createDoctorHealthContribution("doctor:session-transcripts", "Chat history", {
@@ -303,39 +305,8 @@ export function resolveInitialDoctorHealthContributions(params: {
             ).map(configuredPluginInstallIssueToRepairEffect);
           }, "legacy doctor configured plugin install repair owns package mutation"),
         },
-        async run(ctx) {
-          if (!ctx.sourceConfigValid || !ctx.prompter.shouldRepair) {
-            return;
-          }
-          const { maybeRunConfiguredPluginInstallReleaseStep } =
-            await import("../commands/doctor/shared/release-configured-plugin-installs.js");
-          const { VERSION } = await import("../version.js");
-          const result = await maybeRunConfiguredPluginInstallReleaseStep({
-            cfg: ctx.cfg,
-            env: ctx.env ?? process.env,
-            touchedVersion:
-              ctx.configResult.sourceLastTouchedVersion ?? ctx.cfg.meta?.lastTouchedVersion,
-          });
-          if (result.pluginInventoryChanged) {
-            ctx.invalidatePluginMetadataSnapshot?.();
-          }
-          if (result.postInstallDoctorResult) {
-            ctx.postInstallDoctorResult = result.postInstallDoctorResult;
-          }
-          noteDoctorRepairResult(result);
-          if (!result.touchedConfig) {
-            return;
-          }
-          const lastTouchedVersion = isLegacyParentWritableUpdateDoctorPass(ctx.env ?? process.env)
-            ? ctx.configResult.sourceLastTouchedVersion?.trim() ||
-              ctx.cfg.meta?.lastTouchedVersion ||
-              VERSION
-            : VERSION;
-          const config = { ...ctx.cfg, meta: { ...ctx.cfg.meta, lastTouchedVersion } };
-          copyConfigResolutionFactsThroughRewrite(ctx.cfg, config);
-          ctx.cfg = config;
-          writeConfigMachineState("config.lastTouchedAt", new Date().toISOString());
-        },
+        pending: checkConfiguredPluginInstallReleasePending,
+        run: runConfiguredPluginInstallReleaseHealth,
       },
     ),
     createDoctorHealthContribution("doctor:plugin-registry", "Plugin registry", {
@@ -393,6 +364,7 @@ export function resolveInitialDoctorHealthContributions(params: {
       "Legacy plugin captures",
       {
         updateWork: { kind: "startup" },
+        pending: checkLegacyPluginSourceCapturesContributionPending,
         async run(ctx) {
           const { noteLegacyPluginSourceCaptures } =
             await import("../commands/doctor-plugin-source-captures.js");
@@ -626,6 +598,7 @@ export function resolveInitialDoctorHealthContributions(params: {
           return result.rewritten > 0 ? [configAuditScrubToRepairEffect(result)] : [];
         }, "legacy doctor config audit contribution owns cleanup"),
       },
+      pending: checkLegacyRuntimeFilesContributionPending,
       async run(ctx) {
         const { maybeRepairLegacyRuntimeFiles } =
           await import("../commands/doctor-usage-cost-cache.js");

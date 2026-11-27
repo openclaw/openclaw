@@ -1,5 +1,9 @@
 import type { ExecApprovalsFile } from "./exec-approvals-core.js";
-import { updateExecApprovalsForMaintenance } from "./exec-approvals-store.js";
+import { ExecApprovalsMigrationRequiredError } from "./exec-approvals-migration-gate.js";
+import {
+  readExecApprovalsForMaintenance,
+  updateExecApprovalsForMaintenance,
+} from "./exec-approvals-store.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 // Detects and removes generated exec grants that predate cwd-bound authorization.
 import { classifyExecAllowlistScope } from "./exec-command-resolution.js";
@@ -43,7 +47,24 @@ function removeObsoleteGeneratedExecApprovals(file: ExecApprovalsFile): {
   return removed === 0 ? { file, removed } : { file: { ...file, agents }, removed };
 }
 
+/** Read-only: the grants `repairObsoleteGeneratedExecApprovals` would remove from the store. */
+export function countStoredObsoleteGeneratedExecApprovals(): number {
+  const file = readExecApprovalsForMaintenance();
+  return file ? countObsoleteGeneratedExecApprovals(file) : 0;
+}
+
 export function repairObsoleteGeneratedExecApprovals(): number {
+  try {
+    // Read first: a store without such grants needs no write transaction.
+    if (countStoredObsoleteGeneratedExecApprovals() === 0) {
+      return 0;
+    }
+  } catch (error) {
+    if (error instanceof ExecApprovalsMigrationRequiredError) {
+      throw error;
+    }
+    // The write transaction below reports an unreadable store.
+  }
   let removed = 0;
   updateExecApprovalsForMaintenance((file) => {
     const result = removeObsoleteGeneratedExecApprovals(file);

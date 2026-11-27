@@ -13,6 +13,7 @@ import {
   resolveActiveEmbeddedRunOwnerByRunId,
   type ActiveEmbeddedRunOwner,
 } from "../../agents/embedded-agent-runner/runs.js";
+import { abortControlledSubagents } from "../../agents/subagents/cancel-descendants.js";
 import { isConfiguredSessionStoreAgentId } from "../../config/sessions.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { resolveExistingAgentSessionStoreTargetsAsync } from "../../config/sessions/targets-runtime.js";
@@ -48,7 +49,7 @@ import { resolveSessionStoreKey } from "../session-store-key.js";
 import { withGatewaySessionEntry } from "../session-utils-store.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import { captureChatAbortAuthority } from "./chat-abort-authorization.js";
-import { abortControlledSubagents, descendantAbortError } from "./chat-abort-descendants.js";
+import { descendantAbortError } from "./chat-abort-descendants.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
 import { abortDormantSubagentSession } from "./chat-abort-runtime.js";
 import { abortedPartialPersistenceError } from "./chat-aborted-partial.js";

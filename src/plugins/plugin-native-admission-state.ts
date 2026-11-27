@@ -320,19 +320,36 @@ export function overlayPluginNativeAdmissions(
   if (!state || state.receipts.size === 0) {
     return index;
   }
+  // A filtered registry can share a wider cache. Only materialize receipts for its roots.
+  const receiptsByRoot = new Map<
+    string,
+    Record<string, PluginSourceAdmissionReceipt> | undefined
+  >();
+  const roots = index.plugins.map((record) => {
+    const root = path.resolve(record.rootDir);
+    receiptsByRoot.set(root, undefined);
+    return root;
+  });
+  for (const [key, receipt] of state.receipts) {
+    // The producer keeps the entry suffix opaque, including any further separators.
+    const separator = key.indexOf("\0");
+    if (separator < 0) {
+      continue;
+    }
+    const root = key.slice(0, separator);
+    const group = receiptsByRoot.get(root);
+    if (group) {
+      group[key] = receipt;
+    } else if (receiptsByRoot.has(root)) {
+      receiptsByRoot.set(root, { [key]: receipt });
+    }
+  }
   return {
     ...index,
-    plugins: index.plugins.map((record) => {
-      const prefix = `${path.resolve(record.rootDir)}\0`;
-      const receipts = [...state.receipts].filter(([key]) => key.startsWith(prefix));
-      return receipts.length
-        ? {
-            ...record,
-            sourceAdmissions: {
-              ...record.sourceAdmissions,
-              ...Object.fromEntries(receipts),
-            },
-          }
+    plugins: index.plugins.map((record, position) => {
+      const receipts = receiptsByRoot.get(roots[position]!);
+      return receipts
+        ? { ...record, sourceAdmissions: { ...record.sourceAdmissions, ...receipts } }
         : record;
     }),
   };

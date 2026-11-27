@@ -45,6 +45,13 @@ vi.mock("../state/openclaw-state-db.js", () => ({
     return runSqliteImmediateTransactionSync(database.db, () => operation(database));
   },
 }));
+// mock-isolation: The read-only plan before the write transaction reads the same fixture.
+vi.mock("../state/openclaw-state-db-readonly.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-db-readonly.js")>()),
+  withExistingOpenClawStateDatabaseCurrentReadOnly: <T>(
+    operation: (database: OpenClawStateDatabase) => T,
+  ): T | undefined => (fixture.database ? operation(fixture.database) : undefined),
+}));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: fixture.note }));
 vi.mock("../commands/doctor-state-integrity.js", () => ({ noteStateIntegrity: vi.fn() }));
 vi.mock("../commands/backup-health.js", () => ({ noteBackupDoctorHint: vi.fn() }));
