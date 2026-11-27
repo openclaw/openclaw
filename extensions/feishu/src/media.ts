@@ -1,6 +1,6 @@
 import path from "node:path";
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import { detectMime, mediaKindFromMime } from "openclaw/plugin-sdk/media-mime";
+import { detectMime, getFileExtension, mediaKindFromMime } from "openclaw/plugin-sdk/media-mime";
 import {
   buildOutboundMediaLoadOptions,
   MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
@@ -398,20 +398,20 @@ function isOggOpusAudio(buffer: Buffer): boolean {
   );
 }
 
-function isFeishuNativeVoiceAudio(params: { fileName: string; contentType?: string }): boolean {
-  const ext = normalizeLowercaseStringOrEmpty(path.extname(params.fileName));
-  const contentType = normalizeLowercaseStringOrEmpty(params.contentType);
+function isFeishuNativeVoiceAudio(extension: string | undefined, contentType?: string): boolean {
+  const mime = normalizeLowercaseStringOrEmpty(contentType);
   return (
-    ext === ".opus" || ext === ".ogg" || contentType === "audio/ogg" || contentType === "audio/opus"
+    extension === ".opus" || extension === ".ogg" || mime === "audio/ogg" || mime === "audio/opus"
   );
 }
 
-function normalizeMediaNameForExtension(raw: string): string {
-  try {
-    return new URL(raw).pathname;
-  } catch {
-    return raw.split(/[?#]/, 1)[0] ?? raw;
+function resolveFeishuMediaExtension(raw: string): string | undefined {
+  const url = URL.parse(raw);
+  if (url?.protocol === "https:" || url?.protocol === "http:") {
+    return getFileExtension(url.href);
   }
+  const fileName = url?.pathname ?? raw.split(/[?#]/, 1)[0] ?? raw;
+  return normalizeLowercaseStringOrEmpty(path.extname(fileName));
 }
 
 export function shouldSuppressFeishuTextForVoiceMedia(params: {
@@ -433,20 +433,17 @@ export function shouldSuppressFeishuTextForVoiceMedia(params: {
 
   if (
     params.fileName &&
-    isFeishuNativeVoiceAudio({
-      fileName: params.fileName,
-      contentType: params.contentType,
-    })
+    isFeishuNativeVoiceAudio(
+      normalizeLowercaseStringOrEmpty(path.extname(params.fileName)),
+      params.contentType,
+    )
   ) {
     return true;
   }
   if (!params.mediaUrl) {
     return false;
   }
-  return isFeishuNativeVoiceAudio({
-    fileName: normalizeMediaNameForExtension(params.mediaUrl),
-    contentType: params.contentType,
-  });
+  return isFeishuNativeVoiceAudio(resolveFeishuMediaExtension(params.mediaUrl), params.contentType);
 }
 
 async function probeMediaDurationMs(params: FeishuMedia): Promise<number | undefined> {
