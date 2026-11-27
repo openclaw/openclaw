@@ -371,8 +371,9 @@ Knowledge does not share the core worker host.
 
 The **Scribes** tab starts conversations that keep a store up to date on their
 own: consolidating unlinked claims after maintenance, learning from conversations
-once or daily, and importing Memory once. Each follows a bundled skill; ongoing
-scribes schedule themselves as OpenClaw automations.
+once or daily, and importing Memory once. Each follows a bundled skill; the
+Scribes tab sets up ongoing scribes as OpenClaw automations, which needs a
+Gateway administrator.
 
 See [Scribes](/plugins/knowledge/scribes).
 

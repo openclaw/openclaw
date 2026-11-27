@@ -362,6 +362,9 @@ describe("production lint suppressions", () => {
         "src/gateway/session-event-projection.ts|typescript/prefer-for-of|1",
         // Session presentation keys, event fields, and sharing aliases sort fresh private arrays.
         "src/gateway/session-event-projection.ts|unicorn/no-array-sort|1",
+        // Sidebar packing avoids per-row iterators and fills one output slot per input row.
+        "src/gateway/session-list-view-cache.ts|typescript/prefer-for-of|1",
+        "src/gateway/session-list-view-cache.ts|unicorn/no-new-array|1",
         "src/gateway/session-row-presentation.ts|unicorn/no-array-sort|1",
         "src/gateway/session-sharing-read.ts|unicorn/no-array-sort|1",
         "src/gateway/session-swarm-summary.ts|unicorn/no-array-sort|2",

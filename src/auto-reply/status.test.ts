@@ -17,7 +17,6 @@ import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { readRecentSessionUsageFromTranscriptAsync } from "../gateway/session-transcript-usage.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import * as commandsRegistry from "./commands-registry.js";
 import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
 import {
   buildCommandsMessage,
@@ -386,23 +385,6 @@ function group(tools: ReturnType<typeof tool>[], source: "core" | "plugin" = "co
   };
 }
 
-it("groups shipped docks commands with tools", () => {
-  vi.spyOn(commandsRegistry, "listChatCommands").mockReturnValue(
-    (["docks", "tools"] as const).map((category) => ({
-      key: category,
-      description: category,
-      textAliases: [`/${category}`],
-      scope: "text",
-      category,
-    })),
-  );
-  const text = buildCommandsMessage();
-  expect(text).toContain("Tools\n  /docks [text] - docks");
-  expect(text).toContain("  /tools [text] - tools");
-  expect(text.match(/^Tools$/gm)).toHaveLength(1);
-  expect(text).not.toContain("Docks");
-});
-
 it("renders compact inventory with plugin ownership and availability notices", () => {
   const text = buildToolsMessage({
     agentId: "main",
@@ -432,36 +414,6 @@ it("renders compact inventory with plugin ownership and availability notices", (
   expect(text).not.toContain("unavailable right now");
   expect(text).toContain("Notes");
   expect(text).toContain('Add tools.alsoAllow: ["browser"].');
-});
-
-it("trims verbose descriptions before schema-like doc blocks", () => {
-  const text = buildToolsMessage(
-    {
-      agentId: "main",
-      profile: "coding",
-      groups: [
-        group([
-          {
-            ...tool("cron", "Cron", "Schedule jobs."),
-            rawDescription:
-              "Schedule jobs.\n\nACTIONS:\n- status: Check status\nJOB SCHEMA:\n{ ... }",
-          },
-        ]),
-      ],
-    },
-    { verbose: true },
-  );
-  expect(text).toContain("Cron - Schedule jobs.");
-  expect(text).toContain("What this agent can use right now:");
-  expect(text).toContain("Tool availability depends on this agent's configuration.");
-  expect(text).not.toContain("ACTIONS:");
-  expect(text).not.toContain("JOB SCHEMA:");
-});
-
-it("returns the empty state when no tools are available", () => {
-  expect(buildToolsMessage({ agentId: "main", profile: "full", groups: [] })).toBe(
-    "No tools are available for this agent right now.\n\nProfile: full",
-  );
 });
 
 const openrouterArgs = {

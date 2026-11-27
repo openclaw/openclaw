@@ -63,6 +63,7 @@ import {
   projectGatewayUrlForDiagnostics,
   type GatewayConnectionDetails,
 } from "./connection-details.js";
+import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 import {
   isGatewaySecretRefUnavailableError,
   resolveExplicitGatewayAuth,
@@ -398,10 +399,9 @@ async function resolveGatewayCallContext(
   };
 }
 
-/** Whether the caller selected the configured local Gateway without a URL override. */
-export async function isImplicitLocalGatewayTarget(
+async function resolveImplicitLocalGatewayConfig(
   opts: GatewayTargetClassificationOptions,
-): Promise<boolean> {
+): Promise<OpenClawConfig | undefined> {
   const urlOverride = resolveGatewayUrlOverride({
     gatewayUrl: opts.url,
     env: process.env,
@@ -409,10 +409,32 @@ export async function isImplicitLocalGatewayTarget(
     localPortOverride: opts.localPortOverride,
   });
   if (urlOverride.url) {
-    return false;
+    return undefined;
   }
   const config = opts.config ?? (await loadGatewayConfig());
-  return opts.localPortOverride !== undefined || config.gateway?.mode !== "remote";
+  return opts.localPortOverride !== undefined || config.gateway?.mode !== "remote"
+    ? config
+    : undefined;
+}
+
+/** Whether the caller selected the configured local Gateway without a URL override. */
+export async function isImplicitLocalGatewayTarget(
+  opts: GatewayTargetClassificationOptions,
+): Promise<boolean> {
+  return (await resolveImplicitLocalGatewayConfig(opts)) !== undefined;
+}
+
+/** Bind one local operation to its target and shared auth before a Gateway restart. */
+export async function prepareLocalGatewayRestartConnection() {
+  const config = await resolveImplicitLocalGatewayConfig({});
+  // Reading config can populate OPENCLAW_GATEWAY_URL in the command environment.
+  if (!config || resolveGatewayUrlOverride({}).url) {
+    return undefined;
+  }
+  const localPortOverride = resolveGatewayPort(config);
+  const auth = await resolveGatewayCredentialsWithSecretInputs({ config });
+  // Keep local TLS and auth-mode inference without rereading config or shared auth on reconnect.
+  return { config, localPortOverride, ...auth, skipImplicitAuth: true };
 }
 
 function gatewayCallBootstrapOptions(
@@ -456,7 +478,7 @@ function ensureRemoteModeUrlConfigured(params: {
   );
 }
 
-export { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
+export { resolveGatewayCredentialsWithSecretInputs };
 
 function createGatewayRequestAbortError(method: string): Error {
   return createAbortError(`gateway request aborted for ${method}`);

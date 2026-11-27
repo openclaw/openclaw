@@ -356,6 +356,7 @@ describe("GPT-Live gateway relay bridge", () => {
     });
     expect(body).toContain('"delegation":{"type":"client","ack_filler":false}');
     expect(body).toContain("Wait for the host control result");
+    expect(body).toContain("Do not invent acknowledgments or progress claims.");
     expect(peer.createOffer).toHaveBeenCalledOnce();
     expect(fetchImpl).toHaveBeenCalledOnce();
     expect(peer.applyAnswer).toHaveBeenCalledWith("v=answer\r\n");

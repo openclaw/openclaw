@@ -25,6 +25,7 @@ import { parseArgs } from "node:util";
 import type { SubagentRunReadRecord } from "../../src/agents/subagents/registry/subagent-registry-read.types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { MaterializedRow, Row } from "../../src/gateway/session-row-projection-record.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -324,12 +325,7 @@ try {
   consumedRows = 0;
   global.gc?.();
   if (values.allocation) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   const samples: number[] = [];
   const cpuStart = process.threadCpuUsage();

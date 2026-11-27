@@ -394,11 +394,6 @@ export async function resolveMutableUpdateFailure(params: {
   };
 }
 
-type UpdateAdmissionReportHints = Pick<
-  NonNullable<Parameters<typeof printResult>[2]>,
-  "writeArtifacts"
->;
-
 /** Unwind update ownership before diagnostics or an interactive agent can run. */
 export class UpdateCommandFailure extends Error {
   constructor(
@@ -441,10 +436,8 @@ export class UpdateCommandPendingRecoveryFailure extends UpdateCommandFailure {
 export async function reportUpdateCommandPendingRecovery(
   error: UpdateCommandPendingRecoveryFailure,
   opts: Pick<UpdateCommandOptions, "json">,
-  reportHints: UpdateAdmissionReportHints = {},
 ): Promise<never> {
   await printResult(error.result, opts, {
-    ...reportHints,
     readHistory: false,
     nextAction: error.detail,
   });

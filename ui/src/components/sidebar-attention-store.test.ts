@@ -734,6 +734,53 @@ describe("sidebar attention source publication", () => {
     },
   );
 
+  it.each(["blocked", "needs_attention"] as const)(
+    "projects %s from scoped inventory and clears it on meaningful recovery or removal",
+    async (outcome) => {
+      vi.useFakeTimers();
+      const lastMeaningfulResult = { outcome, summary: "Source access required", atMs: 10 };
+      const request = inventoryRequest(() => {
+        const page = cronPage("incident", "ok");
+        page.jobs[0]!.lastMeaningfulResult = lastMeaningfulResult;
+        return page;
+      });
+      const harness = startAuthenticatedStore(request);
+      store = harness.attention;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.hasFailedAutomation).toBe(true);
+      const publish = (job: ReturnType<typeof eventJob>, action = "finished") =>
+        harness.emitEvent("cron", { action, jobId: job.id, job });
+      const quiet = eventJob({
+        state: { lastRunStatus: "ok", lastRunAtMs: 20, lastMeaningfulResult },
+      });
+      publish(quiet);
+      publish({ ...quiet, state: { ...quiet.state, lastRunAtMs: 30 } });
+      expect(store.hasFailedAutomation).toBe(true);
+      publish({ ...quiet, enabled: false }, "scheduled");
+      expect(store.hasFailedAutomation).toBe(false);
+      publish(quiet, "scheduled");
+      expect(store.hasFailedAutomation).toBe(true);
+      for (const recovered of ["progress", "done"] as const) {
+        publish({
+          ...quiet,
+          state: {
+            lastRunStatus: "ok",
+            lastMeaningfulResult: { outcome: recovered, summary: "Source processed", atMs: 40 },
+          },
+        });
+        expect(store.hasFailedAutomation).toBe(false);
+        publish({ ...quiet, id: "outside-inventory" });
+        expect(store.hasFailedAutomation).toBe(false);
+        publish(quiet);
+        expect(store.hasFailedAutomation).toBe(true);
+      }
+      publish(quiet, "removed");
+      publish(quiet);
+      expect(store.hasFailedAutomation).toBe(false);
+      expectCalls(request, 1);
+    },
+  );
+
   it("keeps the indicator while a replacement inventory is only partially loaded", async () => {
     const remaining = deferred<CompactCronPage>();
     let reads = 0;

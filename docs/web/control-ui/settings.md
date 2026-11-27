@@ -31,7 +31,13 @@ change the selected provider, device, or project.
 
 In **Models**, choose **Add account** to save a provider sign-in or API key for an agent.
 **Accounts** lists saved access; keys supplied by config or the environment stay
-managed at their source. **Sign out** removes a saved sign-in. Removing a provider
+managed at their source. **Sign out** removes a saved sign-in. When a provider
+plugin supports it, the account shows **Sign out on this device** (removes the
+saved sign-in from this Gateway only; the provider grant and other devices keep
+working) and **Disconnect account** (asks the provider to revoke the grant, then
+removes the saved sign-in; if the provider refuses, the sign-in stays saved and
+you can try again). The plugin may name the disconnect action and add a link to
+the provider's connected-apps page. Removing a provider
 also removes its saved accounts and may stop active replies; the confirmation
 explains whether shared accounts and other agents are affected.
 

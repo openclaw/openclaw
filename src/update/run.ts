@@ -110,7 +110,7 @@ export async function prepareUpdate(params: {
   // Already current: plugins are still maintained, by the running core; the caller restarts
   // a running Gateway only when they changed.
   const current = async (version: string): Promise<UpdateRunOutcome> => {
-    const { plugins, step } = await runPluginMaintenance({
+    const { plugins, step, nextAction } = await runPluginMaintenance({
       root: params.runningRoot,
       node,
       env,
@@ -121,7 +121,11 @@ export async function prepareUpdate(params: {
     await recordUpdateRunStepAsync(params.runId, step, { env });
     await finishUpdateRunAsync(
       params.runId,
-      { status: "skipped", reason: "already-current" },
+      {
+        status: "skipped",
+        reason: "already-current",
+        ...(nextAction ? { nextAction } : {}),
+      },
       { env },
     );
     return { status: "current", version, pluginsChanged: plugins?.changed === true };
@@ -317,6 +321,7 @@ export async function prepareUpdate(params: {
         target.kind === "git"
           ? await prepareGit({
               checkout: target.checkout,
+              runningRoot: params.runningRoot,
               sha: target.sha,
               staging: staging.path,
               node,
@@ -564,8 +569,8 @@ async function runCheckRelease(releaseRoot: string, node: string, env: NodeJS.Pr
 }
 
 /**
- * Plugins follow the core that will serve, so that core's own code maintains them. A plugin
- * problem, or a release without `update plugins`, is a recorded warning, never a failed update.
+ * Plugins follow the serving core and report their required maintenance result separately
+ * from core activation. A failed step keeps the core serving but fails the aggregate run.
  */
 export async function runPluginMaintenance(params: {
   root: string;
@@ -574,7 +579,11 @@ export async function runPluginMaintenance(params: {
   channel: UpdateChannel;
   timeoutMs: number;
   acceptCapabilities?: boolean;
-}): Promise<{ plugins: PostCorePluginUpdateResult | undefined; step: UpdateRunStep }> {
+}): Promise<{
+  plugins: PostCorePluginUpdateResult | undefined;
+  step: UpdateRunStep;
+  nextAction?: string;
+}> {
   const startedAtMs = Date.now();
   const args = [
     "plugins",
@@ -601,7 +610,7 @@ export async function runPluginMaintenance(params: {
     ];
   }
   const failures = plugins?.npm.outcomes.filter((outcome) => outcome.status === "error") ?? [];
-  // Plugin failures are warnings for the core update, but remain failed plugin steps.
+  // Failed maintenance remains a failed step, not a failed core update.
   const failed =
     result.code !== 0 ||
     !plugins ||
@@ -630,12 +639,15 @@ export async function runPluginMaintenance(params: {
         (result.code === null ? "timed out" : `exited ${result.code}`),
     );
   }
-  if (failed && !plugins?.warnings?.some((warning) => warning.guidance.length > 0)) {
-    const ids = failures.map((outcome) => outcome.pluginId).join(" ");
-    messages.push(`Run \`openclaw plugins update ${ids || "--all"}\` to retry.`);
+  const nextAction = failed
+    ? `openclaw plugins update ${failures.map((outcome) => outcome.pluginId).join(" ") || "--all"}`
+    : undefined;
+  if (nextAction && !plugins?.warnings?.some((warning) => warning.guidance.length > 0)) {
+    messages.push(`Run \`${nextAction}\` to retry.`);
   }
   return {
     plugins,
+    ...(nextAction ? { nextAction } : {}),
     step: {
       step: "plugins",
       status: failed ? "failed" : "completed",

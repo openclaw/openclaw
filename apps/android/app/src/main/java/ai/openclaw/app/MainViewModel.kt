@@ -3,6 +3,7 @@ package ai.openclaw.app
 import ai.openclaw.app.chat.ChatActiveRunPresentation
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatComposerOwner
+import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
@@ -64,6 +65,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -149,9 +151,13 @@ private const val CHAT_COMPOSER_DRAFTS_STATE_KEY = "chat-composer-text-drafts"
 internal class ChatShareDraftQueue(
   private val capacity: Int = MAX_PENDING_CHAT_SHARES,
 ) {
+  private class QueuedDraft(
+    val draft: ChatShareDraft,
+    var owner: ChatComposerOwner,
+  )
+
   private val lock = Any()
-  private val drafts = ArrayDeque<ChatShareDraft>()
-  private val ownersById = mutableMapOf<Long, ChatComposerOwner>()
+  private val drafts = ArrayDeque<QueuedDraft>()
   private val headLease = Mutex()
   private val _queued = MutableStateFlow<List<ChatShareDraft>>(emptyList())
   val queued: StateFlow<List<ChatShareDraft>> = _queued.asStateFlow()
@@ -168,8 +174,7 @@ internal class ChatShareDraftQueue(
   ): Boolean =
     synchronized(lock) {
       if (drafts.size >= capacity) return@synchronized false
-      drafts.addLast(draft)
-      ownersById[draft.id] = owner
+      drafts.addLast(QueuedDraft(draft, owner))
       publishQueueLocked()
       true
     }
@@ -181,9 +186,8 @@ internal class ChatShareDraftQueue(
   ): Boolean =
     synchronized(lock) {
       val ownedHead = firstForOwnerLocked(owner)
-      if (ownedHead?.id != id) return@synchronized false
+      if (ownedHead?.draft?.id != id) return@synchronized false
       drafts.remove(ownedHead)
-      ownersById.remove(id)
       publishQueueLocked()
       true
     }
@@ -196,7 +200,7 @@ internal class ChatShareDraftQueue(
   ): Boolean =
     headLease.withLock {
       synchronized(lock) {
-        if (firstForOwnerLocked(owner)?.id != id) return@withLock false
+        if (firstForOwnerLocked(owner)?.draft?.id != id) return@withLock false
       }
       block()
       true
@@ -208,16 +212,15 @@ internal class ChatShareDraftQueue(
   ) {
     if (from == to) return
     synchronized(lock) {
-      val ownedIds = ownersById.filterValues { it == from }.keys
-      ownedIds.forEach { ownersById[it] = to }
-      if (ownedIds.isNotEmpty()) _ownerRevision.value += 1
+      val ownedDrafts = drafts.filter { it.owner == from }
+      ownedDrafts.forEach { it.owner = to }
+      if (ownedDrafts.isNotEmpty()) _ownerRevision.value += 1
     }
   }
 
   fun clear() {
     synchronized(lock) {
       drafts.clear()
-      ownersById.clear()
       publishQueueLocked()
     }
   }
@@ -225,23 +228,19 @@ internal class ChatShareDraftQueue(
   suspend fun removeOwners(matches: (ChatComposerOwner) -> Boolean) {
     headLease.withLock {
       synchronized(lock) {
-        val removedIds = ownersById.filterValues(matches).keys
-        if (removedIds.isEmpty()) return@synchronized
-        drafts.removeAll { it.id in removedIds }
-        removedIds.forEach(ownersById::remove)
-        publishQueueLocked()
+        if (drafts.removeAll { matches(it.owner) }) publishQueueLocked()
       }
     }
   }
 
-  fun ownerOf(id: Long): ChatComposerOwner? = synchronized(lock) { ownersById[id] }
+  fun ownerOf(id: Long): ChatComposerOwner? = synchronized(lock) { drafts.firstOrNull { it.draft.id == id }?.owner }
 
   internal fun size(): Int = synchronized(lock) { drafts.size }
 
-  private fun firstForOwnerLocked(owner: ChatComposerOwner): ChatShareDraft? = drafts.firstOrNull { draft -> ownersById[draft.id] == owner }
+  private fun firstForOwnerLocked(owner: ChatComposerOwner): QueuedDraft? = drafts.firstOrNull { it.owner == owner }
 
   private fun publishQueueLocked() {
-    _queued.value = drafts.toList()
+    _queued.value = drafts.map { it.draft }
   }
 }
 
@@ -488,11 +487,11 @@ class MainViewModel internal constructor(
   internal fun resumeNodeServiceForConnection(): () -> Boolean = NodeForegroundService.resume(context = nodeApp, startNow = prefs.onboardingCompleted.value)
 
   /**
-   * Adapts a runtime StateFlow to a stable ViewModel StateFlow before runtime startup.
+   * Adapts a runtime Flow to a stable ViewModel StateFlow before runtime startup.
    */
   private fun <T> runtimeState(
     initial: T,
-    selector: (NodeRuntime) -> StateFlow<T>,
+    selector: (NodeRuntime) -> Flow<T>,
   ): StateFlow<T> =
     runtimeRef
       .flatMapLatest { runtime -> runtime?.let(selector) ?: flowOf(initial) }
@@ -515,7 +514,7 @@ class MainViewModel internal constructor(
   val notificationForwardingMaxEventsPerMinute: StateFlow<Int> =
     prefs.notificationForwardingMaxEventsPerMinute
 
-  val isConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.isConnected }
+  val isConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.gatewayConnectionDisplay.map { display -> display.isConnected } }
   val gatewayControlPage: StateFlow<NodeRuntime.GatewayControlPage?> =
     runtimeState(initial = null) { it.gatewayControlPage }
   val desktopObserveAvailable: StateFlow<Boolean> =
@@ -584,7 +583,7 @@ class MainViewModel internal constructor(
   val cronActionState: StateFlow<GatewayCronActionState> = runtimeState(initial = GatewayCronActionState.Idle) { it.cronActionState }
   val pendingCronRunJobIds: StateFlow<Set<String>> = runtimeState(initial = emptySet()) { it.pendingCronRunJobIds }
   internal val usageState = runtimeState(initial = GatewaySummaryState<GatewayUsageSummary>()) { it.usageState }
-  internal val skillsState = runtimeState(initial = GatewaySummaryState<GatewaySkillsSummary>()) { it.skillsState }
+  internal val skillsState = runtimeState(initial = GatewaySummaryState<List<GatewaySkillSummary>>()) { it.skillsState }
   val clawHubSkillMethodsAvailable: StateFlow<Boolean> =
     runtimeState(initial = false) { it.clawHubSkillMethodsAvailable }
   val skillMutationKeys: StateFlow<Set<String>> = runtimeState(initial = emptySet()) { it.skillMutationKeys }
@@ -695,6 +694,7 @@ class MainViewModel internal constructor(
   val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = runtimeState(initial = emptyList()) { it.chat.modelCatalog }
   val chatPendingSessionSettingsKeys: StateFlow<Set<String>> =
     runtimeState(initial = emptySet()) { it.chat.pendingSessionSettingsKeys }
+  internal val chatStreamingAssistant: StateFlow<ChatController.StreamingAssistant?> = runtimeState(initial = null) { it.chat.streamingAssistant }
   val chatStreamingAssistantText: StateFlow<String?> = runtimeState(initial = null) { it.chat.streamingAssistantText }
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chat.pendingToolCalls }
   val chatToolActivities: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chat.toolActivities }

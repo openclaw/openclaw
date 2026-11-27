@@ -279,7 +279,6 @@ src/agents/bash-tools.exec-cron-grant.ts	2
 src/agents/bash-tools.exec-host-gateway.ts	1
 src/agents/bash-tools.exec-host-node-policy.ts	2
 src/agents/bash-tools.exec-host-shared.ts	3
-src/agents/bash-tools.exec-run.ts	1
 src/agents/btw-transcript.ts	6
 src/agents/cli-output-events.ts	4
 src/agents/cli-output-stream.ts	2
@@ -635,7 +634,6 @@ src/cli/gateway-cli/run-loop-startup-failure.ts	1
 src/cli/gateway-cli/systemd-activation.ts	2
 src/cli/local-state-owner.ts	1
 src/cli/update-cli/shared.ts	1
-src/cli/update-cli/status.ts	2
 src/cli/update-cli/update-command-admitted.ts	2
 src/cli/update-cli/update-command-cohort.ts	8
 src/cli/update-cli/update-command-convergence.ts	1
@@ -1032,7 +1030,7 @@ src/gateway/session-repository-materialization.ts	17
 src/gateway/session-repository-preparation.ts	1
 src/gateway/session-reset-incognito.ts	3
 src/gateway/session-reset-service.ts	15
-src/gateway/session-restart-resume.ts	11
+src/gateway/session-restart-resume.ts	7
 src/gateway/session-row-child-activity.ts	2
 src/gateway/session-row-child-visibility.ts	2
 src/gateway/session-row-membership-read.ts	2
@@ -1382,7 +1380,7 @@ src/plugins/host-hook-steering.ts	1
 src/plugins/http-registry.ts	2
 src/plugins/install-runtime-batch.ts	2
 src/plugins/installed-plugin-index-source-snapshots.ts	1
-src/plugins/memory-audience.ts	8
+src/plugins/memory-audience.ts	2
 src/plugins/plugin-command-execution.ts	1
 src/plugins/plugin-native-namespace.ts	1
 src/plugins/registry-contributions.ts	1

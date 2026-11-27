@@ -253,7 +253,7 @@ class WearContextPickerTest {
               snapshot = snapshot.copy(sessionSearchQuery = "session", sessionSearchResults = snapshot.sessions + WearSessionSummary("search-only", "Search-only session"))
             },
             onSearchModels = {
-              snapshot = snapshot.copy(modelSearchQuery = "model", modelSearchResults = listOf(snapshot.models.first(), WearModelSummary("example/search-only", "Search-only model", false)))
+              snapshot = snapshot.copy(modelSearchQuery = "model", modelSearchResults = listOf(snapshot.models.first(), WearModel("example/search-only", "Search-only model")))
             },
             onClearSessionSearch = { snapshot = snapshot.copy(sessionSearchQuery = null, sessionSearchResults = emptyList()) },
             onClearModelSearch = { snapshot = snapshot.copy(modelSearchQuery = null, modelSearchResults = emptyList()) },
@@ -285,7 +285,8 @@ class WearContextPickerTest {
         activeSessionTitle = "Watch research session",
         agents = listOf(WearAgent("research-assistant", "Research assistant", null, true), WearAgent("travel", "Travel assistant", null, false)),
         sessions = listOf(WearSessionSummary("watch", "Watch research session", openOnWatch = true), WearSessionSummary("phone", "Phone session", activeOnPhone = true)),
-        models = listOf(WearModelSummary("example/long-reasoning-model-reference", "Long reasoning model", true), WearModelSummary("example/fast", "Fast model", false)),
+        models = listOf(WearModel("example/long-reasoning-model-reference", "Long reasoning model"), WearModel("example/fast", "Fast model")),
+        selectedModelRef = "example/long-reasoning-model-reference",
         agentControlsSupported = true,
         modelControlsSupported = true,
         sessionModelCatalogSupported = true,

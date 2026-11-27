@@ -1,5 +1,6 @@
-import { createMemo } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import { resolveChatThinkingSelectState } from "../../lib/chat/thinking.ts";
+import { getCronModelThinkingIncompatibility } from "../../lib/cron/model-thinking-validation.ts";
 import { resolveModelCatalogState } from "../../lib/model-catalog-store.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { ChatModelControls } from "../chat/components/chat-model-controls.tsx";
@@ -19,7 +20,10 @@ const NO_FAST_MODE = { active: false, currentOverride: "", label: "", supported:
 
 /** The session composer's model and reasoning pickers, bound to the automation's payload. */
 export function CronModelControls(
-  props: Pick<CronProps, "form" | "connected" | "busy" | "canManage" | "onFormChange" | "models">,
+  props: Pick<
+    CronProps,
+    "form" | "connected" | "busy" | "canManage" | "onFormChange" | "models" | "editingJob"
+  >,
 ) {
   const metadata = createMemo((): NewSessionModelMetadata => {
     const catalog = props.models.catalog;
@@ -99,5 +103,31 @@ export function CronModelControls(
       },
     };
   });
-  return <ChatModelControls {...controls()} />;
+  const incompatiblePersistedSelection = createMemo(() => {
+    const payload = props.editingJob?.payload;
+    if (payload?.kind !== "agentTurn") {
+      return undefined;
+    }
+    const incompatibility = getCronModelThinkingIncompatibility(props.form, props.models.catalog, {
+      model: payload.model,
+      thinking: payload.thinking,
+    });
+    if (incompatibility?.unchangedPersistedSelection) {
+      return incompatibility;
+    }
+    return undefined;
+  });
+  return (
+    <>
+      <ChatModelControls {...controls()} />
+      <Show when={incompatiblePersistedSelection()}>
+        {(assessment) => (
+          <span class="cron-help" role="status">
+            {t("cron.errors.payloadThinkingUnsupportedExisting")}{" "}
+            {assessment().supportedLevels.join(", ")}
+          </span>
+        )}
+      </Show>
+    </>
+  );
 }

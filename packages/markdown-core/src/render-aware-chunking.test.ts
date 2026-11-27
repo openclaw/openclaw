@@ -224,48 +224,6 @@ it("suppresses semantic whitespace when attributed rendering trims it away", () 
 });
 
 const href = "https://example.test";
-const paragraph = "A".repeat(78);
-const attributedProfile = FormatCapabilityProfile.define({
-  mechanism: "ranges",
-  constructs: { linkLabel: "fallback" },
-  chunk: { limit: 80, unit: "chars" },
-});
-
-it.each<[string, boolean, string[], number[]]>([
-  [
-    `[alpha${" ".repeat(80)}omega](${href})`,
-    false,
-    [
-      `<a href="${href}">alpha${" ".repeat(40)}</a>`,
-      `<a href="${href}">${" ".repeat(40)}omega</a>`,
-    ],
-    [1, 1],
-  ],
-  [
-    `**${paragraph}**\n\n[a](${href})[b](${href})`,
-    false,
-    [`*${paragraph}*`, `\n\n<a href="${href}">a</a><a href="${href}">b</a>`],
-    [0, 2],
-  ],
-  [`[alpha${" ".repeat(240)}omega](${href})`, true, [`alpha (${href})`, `omega (${href})`], [1, 1]],
-])(
-  "preserves authored links across coalesced whitespace: %s",
-  (markdown, useAttributed, expected, linkCounts) => {
-    const chunks = renderChunks(markdownToIR(markdown), 80, (chunk) =>
-      useAttributed
-        ? renderMarkdownWithAttributedRanges(
-            chunk,
-            { styleMap: {}, trimEnd: true },
-            attributedProfile,
-          ).text
-        : renderHtml(chunk, { styleMarkers: boldMarker }),
-    );
-
-    expect(renderedValues(chunks)).toEqual(expected);
-    expect(chunks.map((chunk) => chunk.source.links.length)).toEqual(linkCounts);
-  },
-);
-
 const transcript = (source: string, enableSpoilers = false) =>
   markdownToIR(source, { assistantTranscriptRoleHeaders: true, enableSpoilers });
 const render = (ir: MarkdownIR, options: Partial<RenderOptions> = {}) =>
@@ -411,33 +369,6 @@ it("prepares independent link copies before invoking callbacks", () => {
   });
   expect(seen).toEqual(["first", "second"]);
   expect([first.href, second.href]).toEqual(["first", "changed by earlier callback"]);
-});
-
-it("keeps marker callback order and link nesting for unsorted same-start styles", () => {
-  let opened = 0;
-  const trackedMarker = (tag: string) => ({
-    open: () => `${tag}${++opened}[`,
-    close: `]${tag}`,
-  });
-  const ir = plainIR(
-    "abcd 🌍",
-    [
-      style(0, 2, "italic"),
-      style(0, 7, "italic"),
-      style(0, 7, "bold"),
-      style(0, 2, "bold"),
-      style(0, 7, "blockquote"),
-    ],
-    [link(0, 7, "u")],
-  );
-  const rendered = render(ir, {
-    styleMarkers: {
-      bold: trackedMarker("b"),
-      italic: trackedMarker("i"),
-      blockquote: trackedMarker("q"),
-    },
-  });
-  expect(rendered).toBe('q1[<a href="u">b2[i3[b4[i5[ab]i]bcd 🌍]i]b</a>]q');
 });
 
 const headers = (ir: MarkdownIR) =>

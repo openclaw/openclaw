@@ -40,6 +40,7 @@ import { isOwnedTranscriptPayload } from "../../src/config/sessions/transcript-j
 import { cloneTranscriptView } from "../../src/config/sessions/transcript-snapshot.js";
 import type { Message } from "../../src/llm/types.js";
 import { isDeeplyFrozenPlainData } from "../../src/shared/immutable-data.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -304,12 +305,7 @@ const shapes = countShapes(sessions[0]!.messages);
 await collect();
 const inspector = values.measure === "allocation" ? new Session() : undefined;
 if (inspector) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 512,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 512);
 }
 if (values.measure === "snapshot") {
   assert.ok(values.output);

@@ -28,4 +28,7 @@
 # OPENCLAW_NATIVE_APP_ROOT and OPENCLAW_NATIVE_STAGED_ROOT (#197437) are the Windows packaging launcher's native-redirect roots, pinned from Gateway startup for the managed GitHub credential child.
 # OPENCLAW_NODE_TRUSTED_WRITABLE_ANCESTORS declares the operator-selected trusted ancestors.
 # OPENCLAW_INTERNAL_WORKER_TMPDIR directs the confined worker to its private temporary directory.
-468
+# OPENCLAW_NODE_WORKER_EXECUTION carries launcher-selected settings to its dedicated worker.
+# OPENCLAW_WORKER_TOOL_DATA supplies node-selected public data to local tools.
+# OPENCLAW_GATEWAY_REQUIRE_NAMESPACE_PROOF lets a supervisor require verified Linux namespace recovery.
+471
