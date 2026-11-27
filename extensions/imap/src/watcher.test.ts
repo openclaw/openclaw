@@ -605,6 +605,66 @@ describe("IMAP watcher protocol boundary", () => {
     },
   );
 
+  it("rejects a From header only the lenient parser reads as the allowlisted sender", async () => {
+    const { authenticate: realAuthenticate, dkimSign } =
+      await vi.importActual<typeof import("mailauth")>("mailauth");
+    const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const pem = privateKey.export({ type: "pkcs8", format: "pem" });
+    const sign = (raw: string, signingDomain: string) =>
+      dkimSign(raw, { signatureData: [{ signingDomain, selector: "test", privateKey: pem }] });
+    // mailauth reads the folded field name as its only From header (attacker@evil.example,
+    // which the attacker's own domain signs to a DMARC pass), while mailparser skips those
+    // lines and reads the vertical-tab-spelled field below them as From: trusted@example.com
+    const spoofed = [
+      "From\r\n",
+      ": attacker@evil.example\r\n",
+      "Subject: Spoofed\r\n",
+      "From\x0b: trusted@example.com\r\n",
+      "\r\n",
+      "Spoofed body",
+    ].join("");
+    const reply = mailText("Re: Payroll", "Mail", "In-Reply-To: <payroll@example.com>\r\n");
+    vi.spyOn(Resolver.prototype, "resolveTxt").mockImplementation(async (domain) => {
+      if (domain === "_dmarc.example.com" || domain === "_dmarc.evil.example") {
+        return [["v=DMARC1; p=none"]];
+      }
+      if (domain === "test._domainkey.example.com" || domain === "test._domainkey.evil.example") {
+        return [
+          [
+            `v=DKIM1; k=rsa; p=${publicKey.export({ type: "spki", format: "der" }).toString("base64")}`,
+          ],
+        ];
+      }
+      return [];
+    });
+    const { server, context, authenticator, dispatch, waitForCursor } = await startPollingWatcher();
+    authenticator.mockImplementation(realAuthenticate);
+    server.append(
+      (await sign(mailText("Payroll"), "example.com")).signatures + mailText("Payroll"),
+    );
+    server.append((await sign(spoofed, "evil.example")).signatures + spoofed);
+    server.append("From: unknown@stranger.example\r\nSubject: Unknown\r\n\r\nHello");
+    server.append((await sign(reply, "example.com")).signatures + reply);
+    await waitForCursor(5);
+    expect(dispatch.mock.calls.map(([params]) => params.sessionKey)).toEqual([
+      "hook:imap:inbox:17:2",
+      "hook:imap:inbox:17:5",
+    ]);
+    expect(context.logger.warn).toHaveBeenCalledWith(
+      "imap: account=inbox uid=3 domain=example.com gate=sender-mismatch",
+    );
+    expect(context.logger.warn).toHaveBeenCalledWith(
+      "imap: account=inbox uid=4 domain=stranger.example gate=sender-not-allowed",
+    );
+    expect(context.logger.info).toHaveBeenCalledWith(
+      "imap: account=inbox uid=2 domain=example.com strength=verified run=mail-run",
+    );
+    expect(await authenticator.mock.results[1]?.value).toMatchObject({
+      dkim: { headerFrom: ["attacker@evil.example"] },
+      dmarc: { status: { result: "pass" } },
+    });
+  });
+
   it("records exhausted admission retries and continues to the next mail", async () => {
     const { server, state, context, dispatch, waitForCursor } = await startPollingWatcher();
     dispatch.mockRejectedValue(new Error("Gateway unavailable"));

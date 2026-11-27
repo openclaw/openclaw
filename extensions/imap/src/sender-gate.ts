@@ -42,6 +42,21 @@ function matchesImapSender(sender: string, entries: readonly string[]): boolean 
   });
 }
 
+function authenticatesSenderMailbox(result: AuthenticateResult, sender: string): boolean {
+  const [mailbox] = result.dkim.headerFrom;
+  if (mailbox === undefined || result.dkim.headerFrom.length !== 1) {
+    return false;
+  }
+  const mailboxAt = mailbox.lastIndexOf("@");
+  const senderAt = sender.lastIndexOf("@");
+  return (
+    mailboxAt > 0 &&
+    senderAt > 0 &&
+    mailbox.slice(0, mailboxAt) === sender.slice(0, senderAt) &&
+    mailbox.slice(mailboxAt + 1).toLowerCase() === sender.slice(senderAt + 1).toLowerCase()
+  );
+}
+
 function recipientAddresses(mail: ParsedMail): string[] {
   const to = mail.to ? (Array.isArray(mail.to) ? mail.to : [mail.to]) : [];
   const delivered = mail.headers.get("delivered-to");
@@ -210,6 +225,17 @@ export async function evaluateImapSender(params: {
   const evidence = mapImapAuthStrength(result, authenticationHeaders(params.mail), params.account);
   if (!meetsIdentifierAuthentication(evidence.strength, params.account.senderAuth.min)) {
     return { accepted: false as const, sender, ...evidence };
+  }
+  // The allowlist matched the mailbox mailparser read, DMARC aligned the one mailauth
+  // read; only an exact single-mailbox match proves the allowlisted sender was signed.
+  if (!authenticatesSenderMailbox(result, sender)) {
+    return {
+      accepted: false as const,
+      sender,
+      strength: evidence.strength,
+      reason: "sender-mismatch" as const,
+      transient: false as const,
+    };
   }
   return { accepted: true as const, sender, strength: evidence.strength, reason: evidence.reason };
 }
