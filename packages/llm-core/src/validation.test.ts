@@ -72,6 +72,20 @@ describe.each(profiles)("validateToolArguments (%s)", (profile) => {
     expect(validate({ b: 2 })).toEqual({ b: 2 });
     expect(() => validate({ b: "invalid" })).toThrow(/Validation failed/);
   });
+
+  // A strict tool schema makes every key required, so models send null for "absent".
+  it("treats null for an optional key as absent, but keeps a declared null", () => {
+    const validate = validator(
+      objectSchema(
+        { path: string, offset: positiveInteger, note: { type: ["string", "null"] } },
+        { required: ["path"] },
+      ),
+    );
+    expect(validate({ path: "a.md", offset: null, note: null })).toEqual({
+      path: "a.md",
+      note: null,
+    });
+  });
   it.each([
     { label: "a missing required field", value: {} },
     { label: "an invalid field type", value: { leaf: "invalid" } },
