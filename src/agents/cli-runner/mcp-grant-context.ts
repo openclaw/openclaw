@@ -201,7 +201,12 @@ export function buildCliMcpGrantContext(params: {
     ...(params.runtimePolicyAgentId ? { runtimePolicyAgentId: params.runtimePolicyAgentId } : {}),
     agentId: params.agentId,
     sessionId: normalizeOptionalString(params.run.sessionId),
-    ...(isSessionProjectMoveEligible(params.config, params.agentId, params.run.sessionEntry)
+    ...(isSessionProjectMoveEligible(
+      params.config,
+      params.agentId,
+      params.run.sessionEntry,
+      params.run.cwd?.trim() || params.run.workspaceDir,
+    )
       ? { sessionProjectMoveEligible: true }
       : {}),
     runId: normalizeOptionalString(params.run.runId),

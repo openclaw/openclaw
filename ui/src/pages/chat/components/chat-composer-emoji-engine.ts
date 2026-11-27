@@ -111,6 +111,13 @@ export function createComposerEmojiEngine(
     if (target.disabled || target.readOnly || inserting) {
       return false;
     }
+    // Native insertText can truncate a catalog emoji and still report success.
+    if (
+      target.maxLength >= 0 &&
+      target.value.length - (token.end - token.start) + replacement.length > target.maxLength
+    ) {
+      return false;
+    }
     focusComposerInput(target, { preventScroll: true });
     const start = target.selectionStart;
     const end = target.selectionEnd;

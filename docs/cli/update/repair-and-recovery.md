@@ -197,7 +197,11 @@ copy does not replace an earlier update's originals. Before allocating another
 standalone copy, Doctor can reuse its newest sealed standalone capture after
 verifying every retained file and comparing the complete current config/includes,
 database ownership and discovery, declared plugin resources, directory contents,
-links, missing paths, permissions, and file digests. Timestamps alone never prove
+links, missing paths, permissions, and file digests. It first compares the recorded
+kinds, permissions and sizes with the current files, then every SQLite page after the
+first with the retained image (except FULL auto-vacuum databases, whose image may differ
+there). A difference, such as rows the Gateway wrote since the capture, skips that
+verification and takes a fresh capture directly. Timestamps alone never prove
 that the source is unchanged. SQLite reuse requires exact consolidated bytes and
 no nonempty WAL or rollback journal. Doctor uses the same private snapshot producer
 as fresh capture and compares each image's complete digest, including normalized
@@ -216,10 +220,11 @@ Shared database families larger than 64 MiB keep discovery copies in an isolated
 so a slow copy does not block Doctor's main thread from processing cancellation.
 Official image activation keeps one such copy per container: after a capture
 succeeds, later starts of the same container skip the repeated full copy, keep
-that copy, and still retire other expired Doctor captures.
-Standalone Doctor keeps the newest three sealed captures and expires captures older
-than 30 days, always preserving the newest sealed capture. Each successful standalone
-`doctor --fix` capture retires older eligible copies and reports each removal.
+that copy, and still retire other superseded Doctor captures.
+Standalone Doctor keeps only its newest sealed capture, whatever its age. Each
+successful standalone `doctor --fix` capture retires older eligible copies and names
+each removal in the debug log (`openclaw --log-level debug doctor --fix`). Manual
+recovery from an earlier Doctor repair can therefore start only from that newest copy.
 Incomplete captures, active recovery references, and real update captures stay protected;
 unreadable role or recovery records also prevent retirement. Take a verified backup
 when you need a long-term copy. Review and retire superseded captures with
@@ -391,13 +396,14 @@ cleanup, because the process census cannot be interrupted. The Gateway's `update
 not run it: the process census would block the serving Gateway, and for a runtime without
 `owner.json` it cannot tell the requesting `openclaw update` from an older updater still
 using it. Inside a container, cleanup keeps runtimes and says so, because host processes
-are not visible. A runtime without `owner.json` that the first release update did not remove
-(for example, because that update ran from the Gateway) is reported afterwards as
-`no recognized runtime marker`. Remove it by hand only after checking that its `tree/`
-holds the replaced installation, that the update that created it and its workers have
-exited (an older updater can still load files from it later, so an empty `lsof +D
-<directory>` alone is not enough), and that no `openclaw update` is running. If you cannot
-verify that, keep it and [get support](/help/support). Run
+are not visible. Updaters through 2026.11.10 write no `owner.json`. Their runtime holds
+exactly `retained-files.json`, `tree/` and `update-native-gate.mjs`, and the file list
+starts with the retained `package.json`. Cleanup recognizes it by that projected
+OpenClaw package, also after the installation moved to a new path (a pnpm global install
+directory or a Git release folder), and removes it under the same process checks. Without a
+recorded creator, any running OpenClaw command that could be an updater keeps it. A
+directory with this name that matches neither shape is kept and reported as not matching a
+runtime an OpenClaw updater created; OpenClaw never deletes it. Run
 `openclaw doctor --fix` before uninstalling; manual removal on Windows needs the
 extended-length path prefix ([Uninstall](/install/uninstall#remove-the-cli)). Incomplete preparation
 keeps immediate best-effort cleanup. Unsettled workers retain their runtime with
@@ -1258,8 +1264,8 @@ before repair or activation. To keep a downgrade path, create a
 [verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup) before
 updating. Identity checks are unchanged. Unfinished runs, pending
 recovery, unresolved failed or rolled-back captures, orphaned/unmanifested copies,
-and blocked artifacts remain. Standalone Doctor captures keep their existing
-newest-three/30-day policy, always retaining the newest sealed capture. Historical
+and blocked artifacts remain. Standalone Doctor captures follow the Doctor rule:
+the newest sealed capture stays and older eligible ones are retired. Historical
 originals requiring additional import verification are left for manual cleanup.
 When that verification is deferred, migration originals are retained together:
 a historical index may reference an original in another manifest. Independently
@@ -1539,8 +1545,7 @@ captures through their sealed manifests; it never reads the captured payload:
   that reached repair or activation and is neither restored nor repaired forward.
   It remains that update's manual recovery source.
 - `candidate` / `superseded-doctor-capture`: a sealed standalone `doctor-<id>`
-  capture outside the newest three or older than 30 days. The newest sealed copy
-  is always retained.
+  capture older than the newest one. The newest sealed copy is always retained.
 - `protected` / `retained-doctor-capture`: a standalone Doctor copy kept by that
   retention rule. Active recovery references remain `pending-update-recovery`.
 - `protected` / `superseded-unsealed-capture`: a marked historical incomplete

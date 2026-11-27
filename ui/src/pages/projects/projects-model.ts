@@ -322,7 +322,7 @@ export class ProjectsModel {
         id: project.id,
         ...(choice === "alternative" ? { deleteCheckout: true } : {}),
       });
-      if (this.gateway.isCurrent(scope)) {
+      if (this.gateway.isCurrent(scope) && this.selectedId === project.id) {
         this.update({ selectedId: null });
       }
       return true;

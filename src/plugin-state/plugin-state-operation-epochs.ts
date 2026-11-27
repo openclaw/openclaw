@@ -11,13 +11,16 @@ const sources = resolveGlobalSingleton(
   () => new Map<string, Map<string, Epoch>>(),
 );
 
-function namespaceEpoch(coordinationKey: string, scope: Namespace): Epoch {
+function namespaceKey(scope: Namespace): string {
+  return JSON.stringify([scope.pluginId, scope.namespace]);
+}
+
+function namespaceEpoch(coordinationKey: string, key: string): Epoch {
   let namespaces = sources.get(coordinationKey);
   if (!namespaces) {
     namespaces = new Map();
     sources.set(coordinationKey, namespaces);
   }
-  const key = JSON.stringify([scope.pluginId, scope.namespace]);
   let epoch = namespaces.get(key);
   if (!epoch) {
     epoch = { revision: 0, pending: new Set() };
@@ -26,10 +29,34 @@ function namespaceEpoch(coordinationKey: string, scope: Namespace): Epoch {
   return epoch;
 }
 
+function forgetSettledNamespace(coordinationKey: string, key: string, epoch: Epoch): void {
+  const namespaces = sources.get(coordinationKey);
+  if (epoch.pending.size || namespaces?.get(key) !== epoch) {
+    return;
+  }
+  namespaces.delete(key);
+  if (!namespaces.size) {
+    sources.delete(coordinationKey);
+  }
+}
+
+function earlierMutations(epochs: Iterable<Epoch | undefined>, ownMutation?: object) {
+  const waits = new Set<Promise<void>>();
+  for (const epoch of epochs) {
+    for (const token of epoch?.pending ?? []) {
+      if (token !== ownMutation) {
+        waits.add(token.settled);
+      }
+    }
+  }
+  return waits.size ? Promise.all(waits).then(() => {}) : undefined;
+}
+
 /** Invalidation precedes queueing, so a pending revocation already closes older receipts. */
 export function beginPluginStateMutation(
   coordinationKey: string,
   scopes: readonly Namespace[],
+  mode: "receipt" | "command" = "receipt",
 ): { token: object; ready: Promise<void> | undefined; finish(): void } {
   let finish!: () => void;
   const token: Mutation = {
@@ -37,9 +64,14 @@ export function beginPluginStateMutation(
       finish = resolve;
     }),
   };
-  const ready = capturePluginStateMutationSettlement(coordinationKey, scopes);
-  const epochs = new Set(scopes.map((scope) => namespaceEpoch(coordinationKey, scope)));
-  for (const epoch of epochs) {
+  const epochs = new Map(
+    scopes.map((scope) => {
+      const key = namespaceKey(scope);
+      return [key, namespaceEpoch(coordinationKey, key)] as const;
+    }),
+  );
+  const ready = earlierMutations(epochs.values());
+  for (const epoch of epochs.values()) {
     epoch.revision += 1;
     epoch.pending.add(token);
   }
@@ -47,8 +79,12 @@ export function beginPluginStateMutation(
     token,
     ready,
     finish() {
-      for (const epoch of epochs) {
-        epoch.pending.delete(token);
+      for (const [key, epoch] of epochs) {
+        // A command issues no receipt. Older guards saw the prior revision, and any
+        // guard captured during this command saw a foreign pending mutation.
+        if (epoch.pending.delete(token) && mode === "command") {
+          forgetSettledNamespace(coordinationKey, key, epoch);
+        }
       }
       finish();
     },
@@ -61,14 +97,14 @@ export function capturePluginStateMutationSettlement(
   scopes: readonly Namespace[],
   ownMutation?: object,
 ): Promise<void> | undefined {
-  const prior = new Set(
-    scopes
-      .flatMap((scope) => [...namespaceEpoch(coordinationKey, scope).pending])
-      .filter((token) => token !== ownMutation),
+  const namespaces = sources.get(coordinationKey);
+  return (
+    namespaces &&
+    earlierMutations(
+      scopes.map((scope) => namespaces.get(namespaceKey(scope))),
+      ownMutation,
+    )
   );
-  return prior.size
-    ? Promise.all([...prior].map((token) => token.settled)).then(() => {})
-    : undefined;
 }
 
 export function invalidatePluginStateMutation(
@@ -77,7 +113,12 @@ export function invalidatePluginStateMutation(
   const source = captureOpenClawStateDatabaseReadAdmission(
     resolveOpenClawStateSqlitePath(scope.env ?? process.env),
   );
-  beginPluginStateMutation(source.coordinationKey, [scope]).finish();
+  const key = namespaceKey(scope);
+  const epoch = sources.get(source.coordinationKey)?.get(key);
+  if (epoch) {
+    epoch.revision += 1;
+    forgetSettledNamespace(source.coordinationKey, key, epoch);
+  }
 }
 
 export function capturePluginStateEpochs(
@@ -86,7 +127,7 @@ export function capturePluginStateEpochs(
   ownMutation?: object,
 ): () => void {
   const observations = scopes.map((scope) => {
-    const epoch = namespaceEpoch(coordinationKey, scope);
+    const epoch = namespaceEpoch(coordinationKey, namespaceKey(scope));
     return {
       epoch,
       revision: epoch.revision,

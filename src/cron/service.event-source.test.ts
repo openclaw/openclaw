@@ -18,6 +18,7 @@ import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-sup
 import { CronService } from "./service.js";
 import {
   createCronServiceWithStateForTest,
+  mockCronAvailableMemory,
   setupCronServiceSuite,
 } from "./service.test-harness.js";
 import { locked } from "./service/locked.js";
@@ -221,7 +222,7 @@ describe("event automation durable admission", () => {
   });
 
   it("parks the transferred event and resumes its original payload and receipt", async () => {
-    vi.spyOn(process, "availableMemory").mockReturnValue(1024 ** 3);
+    mockCronAvailableMemory(1024 ** 3);
     const finish = createDeferredCore();
     const reachedModel = vi.fn();
     const f = await fixture({

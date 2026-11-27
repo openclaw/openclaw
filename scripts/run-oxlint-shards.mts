@@ -183,10 +183,14 @@ export function createOxlintShards({
   const coreShards =
     constrainedSerial && !splitCore
       ? Array.from({ length: DEFAULT_CONSTRAINED_CORE_STRIPES }, (_, index) =>
-          selectCoreOxlintStripe(coreGroups, {
-            index: index + 1,
-            total: DEFAULT_CONSTRAINED_CORE_STRIPES,
-          }),
+          selectCoreOxlintStripe(
+            coreGroups,
+            {
+              index: index + 1,
+              total: DEFAULT_CONSTRAINED_CORE_STRIPES,
+            },
+            { isolateLargeTargets: env.OPENCLAW_TESTBOX_REMOTE_RUN === "1" },
+          ),
         ).flat()
       : coreGroups;
   // Core-only jobs do not need inventories for the discarded shard families.
@@ -631,8 +635,8 @@ export function selectCoreOxlintStripe(
   const targets = shards
     .filter((_, index) => index % stripe.total === stripe.index - 1)
     .flatMap((shard) => shard.args.slice(2));
-  // Published Git updaters call full lint under a fixed command deadline. Only
-  // explicit CI stripes may add compiler startups; automatic full lint stays aggregated.
+  // Remote full gates and explicit CI stripes can run large targets separately.
+  // Published Git updaters keep full lint aggregated under their fixed command deadline.
   const isolatedTargets = isolateLargeTargets
     ? targets.filter((target) => ISOLATED_CORE_TARGETS.has(target))
     : [];

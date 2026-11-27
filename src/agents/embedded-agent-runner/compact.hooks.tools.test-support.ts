@@ -108,28 +108,39 @@ export function registerCompactionPermissionTests({
     },
   );
 
-  it.each(["direct", "recorder"] as const)(
+  it.each(["direct", "recorder", "ended-turn recorder"] as const)(
     "keeps default-mode participant compaction tools at the clamped root via %s",
     async (source) => {
       const { createParticipationTestAuthority } =
         await import("../participation-ceiling.test-support.js");
+      const { createOperatorAuthorityInactiveError } =
+        await import("../../infra/operator-authority-error.js");
       const { attachCompactionAccountingRecorder } =
         await import("./run/compaction-accounting-bridge.js");
       const directory = fixture.makeTempDir("participant-compaction-");
       const root = await realpath(directory);
-      const operatorAuthority = createParticipationTestAuthority({
-        kind: "send",
-        profileId: "guest",
-        sessionKey: "agent:main:invited",
-        permission: "workspace",
-        source: {
-          agentId: "main",
-          sessionId: "invited",
-          lifecycleRevision: null,
-          creatorProfileId: "creator",
-          root,
+      const operatorAuthority = createParticipationTestAuthority(
+        {
+          kind: "send",
+          profileId: "guest",
+          sessionKey: "agent:main:invited",
+          permission: "workspace",
+          source: {
+            agentId: "main",
+            sessionId: "invited",
+            lifecycleRevision: null,
+            creatorProfileId: "creator",
+            root,
+          },
         },
-      });
+        [],
+        // Deferred maintenance can compact after the participant's turn released its hold.
+        source === "ended-turn recorder"
+          ? () => {
+              throw createOperatorAuthorityInactiveError("closure-released", "before-sources", 0);
+            }
+          : undefined,
+      );
       const contextEngineRuntimeContext = {};
       attachCompactionAccountingRecorder(contextEngineRuntimeContext, { operatorAuthority });
       await compactDirect({
