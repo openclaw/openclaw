@@ -38,7 +38,10 @@ export class CodexNativeSubagentCompletionDelivery {
     }
     const registration = this.registration(state, child);
     if (!registration) {
-      this.dependencies.unregisterChild(child);
+      // Stop still owns process cleanup when this child has no completion scope.
+      if (!child.cancellationRequested) {
+        this.dependencies.unregisterChild(child);
+      }
       return Promise.resolve();
     }
     child.completionDelivery ??= registerAgentHarnessCompletion(registration);
