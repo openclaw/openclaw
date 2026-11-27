@@ -8,11 +8,11 @@ import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { isSessionDeliveryGenerationRevokedError } from "../config/sessions/session-delivery-generation.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
-import { acquireTranscriptLease } from "../config/sessions/transcript-lease.js";
 import {
   readSkillLibraryPromptListing,
   type SkillLibraryPromptListing,
 } from "../config/sessions/skill-library-prompt-listing.js";
+import { acquireTranscriptLease } from "../config/sessions/transcript-lease.js";
 import { registerAgentRunDelegatedAuthorityClosedHandler } from "../infra/agent-run-registry.js";
 import { chatRef } from "../sessions/chat-ref.js";
 import {
@@ -213,10 +213,10 @@ export async function resolveGatewaySkillLibraryPromptGrant(params: {
         : undefined;
     const pin = params.sessionEntry?.sessionId ? params.sessionEntry : observed;
     lease = store
-      ? await acquireTranscriptLease(
-          chatRef({ ...store, sessionKey: params.sessionKey }),
-          { sessionId: pin?.sessionId ?? null, lifecycleRevision: pin?.lifecycleRevision },
-        )
+      ? await acquireTranscriptLease(chatRef({ ...store, sessionKey: params.sessionKey }), {
+          sessionId: pin?.sessionId ?? null,
+          lifecycleRevision: pin?.lifecycleRevision,
+        })
       : undefined;
     const stored = await readCommittedPromptListing(params, lease?.assertCurrent ?? (() => {}));
     const storedListing = stored.listing;
