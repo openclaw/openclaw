@@ -38,7 +38,7 @@ export type ProfileRuntimeState = {
   /** Stable, user-facing tab aliases scoped to this profile runtime. */
   tabAliases?: {
     nextTabNumber: number;
-    byTargetId: Record<string, { tabId: string; label?: string; url?: string }>;
+    byTargetId: Record<string, { tabId: string; label?: string; url?: string; crashedAt?: number }>;
   };
 };
 

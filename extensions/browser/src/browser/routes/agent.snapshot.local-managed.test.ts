@@ -1,11 +1,6 @@
 import "./agent.snapshot-mocks.test-support.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserRouteContext } from "../server-context.js";
-import {
-  BrowserTargetCrashedError,
-  isBrowserTargetCrashed,
-  markBrowserTargetCrashed,
-} from "../target-crash.js";
 import { expectResponse, expectResponseContaining, runRoute } from "./agent-route.test-support.js";
 import {
   captureBrowserOperationTarget,
@@ -35,7 +30,7 @@ const routeState = vi.hoisted(() => ({
 }));
 
 const cdp = vi.hoisted(() => ({
-  assertCdpTargetResponsive: vi.fn(async () => true),
+  readCdpTargetCrashState: vi.fn(async () => false),
   captureScreenshot: vi.fn(),
   getDocumentIdentitiesViaCdp: vi.fn<
     (_opts?: unknown) => Promise<{ mainFrame?: string; frameTree?: string }>
@@ -140,6 +135,7 @@ const blocked = "browser navigation blocked by policy";
 const changed = "Frame changed while its browser snapshot was being captured; retry.";
 const roleQuery = { format: "ai", interactive: "true" };
 const snapshotState = () => ({
+  profiles: browserRuntime.profiles,
   resolved: { ssrfPolicy: { dangerouslyAllowPrivateNetwork: false } },
 });
 const dialogState = (pending: { id: string; message: string }[] = []) => ({
@@ -150,12 +146,6 @@ function snapshotRoute(state = snapshotState()) {
   const { app, getHandlers } = createBrowserRouteApp();
   registerBrowserAgentSnapshotRoutes(app, { state: () => state } as never);
   return getHandlers.get("/snapshot");
-}
-
-function navigateRoute(state = snapshotState()) {
-  const { app, postHandlers } = createBrowserRouteApp();
-  registerBrowserAgentSnapshotRoutes(app, { state: () => state } as never);
-  return postHandlers.get("/navigate");
 }
 
 async function snapshot(query: BrowserRequest["query"], handler = snapshotRoute()) {
@@ -184,7 +174,6 @@ describe("local-managed browser snapshot routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     pwMocks.screenshot = false;
-    cdp.assertCdpTargetResponsive.mockReset().mockResolvedValue(true);
     cdp.getDocumentIdentitiesViaCdp.mockReset();
     cdp.snapshotRoleViaCdp.mockReset();
     playwright.module = null;
@@ -201,57 +190,6 @@ describe("local-managed browser snapshot routes", () => {
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
     });
     expect(cdp.snapshotRoleViaCdp).not.toHaveBeenCalled();
-  });
-
-  it("reports a crashed target before starting snapshot work", async () => {
-    cdp.assertCdpTargetResponsive.mockRejectedValueOnce(new BrowserTargetCrashedError());
-
-    const response = await snapshot(roleQuery);
-
-    expectResponse(response, { error: new BrowserTargetCrashedError().message }, 400);
-    expect(cdp.assertCdpTargetResponsive).toHaveBeenCalledWith(
-      expect.objectContaining({ wsUrl: "ws://127.0.0.1/devtools/page/7" }),
-    );
-    expect(isBrowserTargetCrashed("http://127.0.0.1:18800", "7")).toBe(true);
-    expect(cdp.getDocumentIdentitiesViaCdp).not.toHaveBeenCalled();
-    expect(cdp.snapshotRoleViaCdp).not.toHaveBeenCalled();
-  });
-
-  it("clears an earlier crash observation when the target answers again", async () => {
-    markBrowserTargetCrashed("http://127.0.0.1:18800", "7");
-
-    const response = await snapshot(roleQuery);
-
-    expect(response.statusCode).toBe(200);
-    expect(cdp.assertCdpTargetResponsive).toHaveBeenCalled();
-    expect(isBrowserTargetCrashed("http://127.0.0.1:18800", "7")).toBe(false);
-  });
-
-  it("keeps an earlier crash observation when the probe is inconclusive", async () => {
-    markBrowserTargetCrashed("http://127.0.0.1:18800", "7");
-    cdp.assertCdpTargetResponsive.mockResolvedValueOnce(false);
-
-    const response = await snapshot(roleQuery);
-
-    expect(response.statusCode).toBe(200);
-    expect(cdp.assertCdpTargetResponsive).toHaveBeenCalled();
-    expect(isBrowserTargetCrashed("http://127.0.0.1:18800", "7")).toBe(true);
-  });
-
-  it("reports a crashed target on navigate before the navigation budget", async () => {
-    cdp.assertCdpTargetResponsive.mockRejectedValueOnce(new BrowserTargetCrashedError());
-
-    await expect(
-      runRoute(navigateRoute(), {
-        body: { url: "https://example.com" },
-      }),
-    ).rejects.toMatchObject({
-      name: "BrowserTargetCrashedError",
-      message: new BrowserTargetCrashedError().message,
-    });
-    expect(cdp.assertCdpTargetResponsive).toHaveBeenCalledWith(
-      expect.objectContaining({ wsUrl: "ws://127.0.0.1:18800/devtools/page/tab-1" }),
-    );
   });
 
   it("uses CDP first for unscoped managed role snapshots and publishes its refs", async () => {
@@ -500,21 +438,6 @@ describe("browser agent snapshot timeout routing", () => {
     const response = await screenshot({ timeoutMs: "1e3" });
     expect(response.statusCode).toBe(400);
     expect(response.body).toEqual({ error: "timeoutMs must be a positive integer." });
-    expect(cdp.captureScreenshot).not.toHaveBeenCalled();
-  });
-
-  it("reports a crashed target before capturing a direct-CDP screenshot", async () => {
-    cdp.assertCdpTargetResponsive.mockRejectedValueOnce(new BrowserTargetCrashedError());
-    cdp.captureScreenshot.mockResolvedValueOnce(Buffer.from("png"));
-
-    await expect(screenshot()).rejects.toMatchObject({
-      name: "BrowserTargetCrashedError",
-      message: new BrowserTargetCrashedError().message,
-    });
-    expect(cdp.assertCdpTargetResponsive).toHaveBeenCalledWith(
-      expect.objectContaining({ wsUrl: "ws://127.0.0.1:18800/devtools/page/tab-1" }),
-    );
-    expect(isBrowserTargetCrashed("http://127.0.0.1:18800", "tab-1")).toBe(true);
     expect(cdp.captureScreenshot).not.toHaveBeenCalled();
   });
 });
