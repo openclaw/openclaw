@@ -143,9 +143,7 @@ committed rows through its retained read-only maintenance connection. These chec
 share Doctor's repair scope with managed-service continuation checks, avoiding
 repeated whole-database scans with or without a cached writer. Repair steps that
 take their own SQLite maintenance lock inside that scope, such as session
-transcript repair, use the same connection. Checks outside the repair scope,
-during service inspection and restoration, reread the update ledger only after
-the state database files change.
+transcript repair, use the same connection.
 Pre-repair inspections still preserve the source database and its sidecars.
 
 Before a Linux maintenance stop, Doctor backs up and refreshes outdated OpenClaw

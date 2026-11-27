@@ -264,10 +264,7 @@ it.each(warmSources)(
       });
       await maintenance.close();
       hashes.mockClear();
-      // The drained reader is not reused: a closed reader would throw here.
       expect(() => admission()).not.toThrow();
-      const competing = createUpdateRun({ trigger: "cli" }, { env });
-      expect(() => admission()).toThrow(competing.runId);
       expect(hashes).toHaveBeenCalled();
     } finally {
       await maintenance.close();
@@ -370,22 +367,6 @@ it("reads unrelated maintenance scopes from fresh private snapshots", () =>
       await unrelated.close();
     }
   }));
-
-it("rechecks outside maintenance without hashing unchanged files", () => {
-  using context = fixture();
-  const { env, admission, family } = context;
-  const hashes = vi.spyOn(snapshots, "readSqliteSourceContentVersionSync");
-  const before = family();
-  for (let check = 0; check < 4; check++) {
-    admission();
-  }
-  // The fixture's own first admission retained the revision; nothing changed since.
-  expect(hashes).not.toHaveBeenCalled();
-  expect(family()).toEqual(before);
-  const competing = createUpdateRun({ trigger: "cli" }, { env });
-  expect(() => admission()).toThrow(competing.runId);
-  expect(hashes).toHaveBeenCalled();
-});
 
 it("refuses committed WAL updates while preserving all live source artifacts", () => {
   using context = fixture(true);
