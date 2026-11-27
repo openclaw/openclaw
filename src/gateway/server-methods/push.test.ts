@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { setCanonicalUserPreferences } from "../../state/user-preferences.js";
 import { setOpenClawIdMemberAccountLookup } from "../openclaw-id/tunnel-principal.js";
+import { operatorRefusalText } from "../operator-refusal.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { pushHandlers } from "./push.js";
 import { pushSubscription } from "./push.test-support.js";
@@ -501,7 +502,10 @@ describe("push.web.send handler", () => {
       expect(firstRespondCall(respond)).toMatchObject([
         false,
         undefined,
-        { code: ErrorCodes.FORBIDDEN, message: expect.stringContaining("operator.admin") },
+        {
+          code: ErrorCodes.FORBIDDEN,
+          message: operatorRefusalText("role-denies", "send this notification to another profile"),
+        },
       ]);
     }
     expect(mocks.sendProfileWebPush).toHaveBeenCalledTimes(allowed ? 1 : 0);

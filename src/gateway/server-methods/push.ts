@@ -45,6 +45,7 @@ import {
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { sendProfileWebPush } from "../event-web-push.js";
 import { prepareDeviceTokenBindingLookup } from "../openclaw-id/device-token-binding.js";
+import { operatorRefusalText } from "../operator-refusal.js";
 import {
   isNamedOperatorRoleEnforcementEnabled,
   isOperatorRoleEnforcedFor,
@@ -502,7 +503,10 @@ export const pushHandlers = {
       }
       await respondUnavailableOnThrow(respond, async () => {
         if (!(await mayTargetWebPushProfile({ client }, cfg, params.profileId))) {
-          respondWebPushForbidden(respond, "sending to another profile requires operator.admin");
+          respondWebPushForbidden(
+            respond,
+            operatorRefusalText("role-denies", "send this notification to another profile"),
+          );
           return;
         }
         const request = agentId === undefined ? params : { ...params, agentId };
