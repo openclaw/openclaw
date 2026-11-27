@@ -213,9 +213,9 @@ it("keeps an independent opening's result obligation while accepting its peer si
     // The opening's NO_REPLY is refused, so the run asks the model again for its result.
     opening: { status: openingOutcome.status, modelCalls: openingPrompts.length },
     // A later message from the creator is a peer message: exact NO_REPLY is accepted once.
-    note: { status: sent?.status, sessionKey: sent?.sessionKey, modelCalls: notePrompts.length },
-  }).toEqual({
+    note: { result: sent, modelCalls: notePrompts.length },
+  }).toMatchObject({
     opening: { status: "ok", modelCalls: 2 },
-    note: { status: "no_reply", sessionKey: childKey, modelCalls: 1 },
+    note: { result: { status: "no_reply", sessionKey: childKey }, modelCalls: 1 },
   });
 }, 60_000);
