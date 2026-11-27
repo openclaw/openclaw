@@ -159,15 +159,23 @@ export class CodexNativeSubagentCompletionDelivery {
           ? "waiting"
           : "ready";
       },
-      observeConsumption: (assertCurrent: () => void) =>
-        this.dependencies.settleNestedCompletion(state, child, () => {
+      observeConsumption: async (assertCurrent: () => void) => {
+        const consumed = await this.dependencies.settleNestedCompletion(state, child, () => {
           assertCurrent();
           if (completionCustody && !completionCustody.isCurrent()) {
             throw new Error("Native completion acknowledgement is no longer current.");
           }
-        }),
+        });
+        if (!consumed) {
+          assertCurrent();
+          if (this.hasHistoryOwner(state, child)) {
+            // Closing a retired one-shot client releases its foreground owner.
+            this.dependencies.releaseClientRetentionIfIdle();
+          }
+        }
+        return consumed;
+      },
       deliver: (completion: RecoveredCompletion, assertCurrent: () => void) => {
-        this.dependencies.releaseClientRetentionIfIdle();
         const completionIdentity = readCodexNativeSubagentRunId(child.runId)?.turnId
           ? child.runId
           : child.nativeTurnId
