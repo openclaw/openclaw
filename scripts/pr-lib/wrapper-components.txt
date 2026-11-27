@@ -1467,6 +1467,7 @@ src/infra/update-failure-result.ts
 src/infra/update-immutable-install-schema.ts
 src/infra/update-immutable-protection-schema.ts
 src/infra/update-maintenance.ts
+src/infra/update-managed-service-handoff-boot-schema.ts
 src/infra/update-managed-service-handoff-boot.ts
 src/infra/update-managed-service-handoff-cancellation.ts
 src/infra/update-managed-service-handoff-children.ts

@@ -6,8 +6,8 @@ import { isContainerEnvironment } from "./container-environment.js";
 import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import { isTruthyEnvValue } from "./env.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
+import { managedHandoffBootSchema } from "./update-managed-service-handoff-boot-schema.js";
 import { createManagedHandoffBootIdentityReader } from "./update-managed-service-handoff-boot.js";
-import { managedHandoffBootSchema } from "./update-managed-service-handoff-schema.js";
 
 // Sidecar mtime is the cross-namespace heartbeat; payload bytes and ownership stay immutable.
 export const GATEWAY_OWNER_HEARTBEAT_MS = 15_000;
