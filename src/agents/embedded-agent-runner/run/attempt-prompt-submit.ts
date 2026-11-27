@@ -174,6 +174,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
       };
     };
     activeSession.agent.prepareNextTurnWithContext = prepareNextTurn;
+    let attemptDispatched = false;
     const persistThenStream: StreamFn = async (model, context, options) =>
       runWithSessionSourceScope(
         input.assertHostActive,
@@ -240,10 +241,14 @@ export async function submitEmbeddedAttemptPrompt(input: {
           }
           assertRequestCurrent();
           input.assertHostActive?.();
-          const sent = foregroundRequest ? projectionRecorder?.getPersistedMessage?.() : undefined;
+          // A capturing harness never dispatches unfrozen: before this attempt's first send, a
+          // turn the prompt transform could not project (it left the request) freezes as its own
+          // transcript text.
+          const sent =
+            foregroundRequest && !attemptDispatched
+              ? projectionRecorder?.getPersistedMessage?.()
+              : undefined;
           const capture = projectionRecorder?.captureModelPromptProjection;
-          // A capturing harness never dispatches unfrozen: a turn the prompt transform could not
-          // project (it left the request, or has no text) freezes as its own transcript text.
           if (sent && capture && readModelPromptProjection(sent) === undefined) {
             const text =
               typeof sent.content === "string"
@@ -254,6 +259,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
             assertRequestCurrent();
           }
           if (foregroundRequest) {
+            attemptDispatched = true;
             projectionRecorder?.markSentToProvider?.();
           }
           const stream = await baseStreamFn(model, requestContext, options);

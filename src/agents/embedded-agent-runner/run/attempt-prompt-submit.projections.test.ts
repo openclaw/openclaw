@@ -17,11 +17,7 @@ import type { Context } from "../../../llm/types.js";
 import { finalizeRuntimePromptImages } from "../../../media/runtime-prompt-image-provenance.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import type { UserTurnInput } from "../../../sessions/user-turn-input.types.js";
-import { getUserTurnTranscriptAdmissionOwner } from "../../../sessions/user-turn-transcript-admission.js";
-import {
-  createUserTurnTranscriptRecorder,
-  type UserTurnTranscriptRecorder,
-} from "../../../sessions/user-turn-transcript.js";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import {
   isUserMessage,
   readModelPromptProjection,
@@ -123,17 +119,6 @@ function promptImages(buffer: Buffer) {
   ]).images;
 }
 
-// The lifecycle owner records this for the built-in embedded harness before every attempt.
-function declareBuiltinHarness(recorder: UserTurnTranscriptRecorder) {
-  getUserTurnTranscriptAdmissionOwner(recorder)?.declarePromptProjection("captures");
-}
-
-// A Codex fallback captures only when no projection exists (run-attempt-turn-request.ts:381-403).
-async function codexFallbackCapture(recorder: UserTurnTranscriptRecorder) {
-  if (readModelPromptProjection(recorder.getPersistedMessage?.()) === undefined) {
-    await recorder.captureModelPromptProjection!("codex fallback prompt", () => {});
-  }
-}
 describe("durable model prompt projection at provider dispatch", () => {
   it("commits final listener text with its actor carrier without a separate rewrite request", async () => {
     await withOpenClawTestState({ label: "actor-prompt-projection" }, async (state) => {
@@ -679,7 +664,6 @@ describe("durable model prompt projection at provider dispatch", () => {
         target,
       });
       await recorder.persistApproved();
-      declareBuiltinHarness(recorder);
       const manager = await SessionManager.openAsync(target, state.workspaceDir);
       await manager.appendMessageAsync(
         createAssistant(testModel, [{ type: "text", text: "old answer" }]),
@@ -720,59 +704,10 @@ describe("durable model prompt projection at provider dispatch", () => {
       expect(readModelPromptProjection(recorder.getPersistedMessage!())).toBe(
         "original compacted turn",
       );
-      await expect(codexFallbackCapture(recorder)).resolves.toBeUndefined();
       const retainedRow = (await readTranscriptMessages(target)).find(
         (message) => message.role === "user" && message.content === "retained turn",
       );
       expect(readModelPromptProjection(retainedRow)).toBeUndefined();
-    });
-  });
-
-  it("freezes an image-only turn before dispatch so a fallback never re-captures it", async () => {
-    await withOpenClawTestState({ label: "image-only-model-prompt" }, async (state) => {
-      const target = {
-        ...(await prepareTarget(state, "image-only-model-prompt")),
-        sessionEntry: { sessionId, updatedAt: 1 },
-      };
-      const buffer = createSolidPngBuffer(1, 1, { r: 10, g: 20, b: 30 });
-      const imagePath = path.join(state.workspaceDir, "only.png");
-      await fs.writeFile(imagePath, buffer);
-      const recorder = createUserTurnTranscriptRecorder({
-        input: {
-          text: "",
-          timestamp: 1,
-          idempotencyKey: "image-only:user",
-          media: [{ path: imagePath, contentType: "image/png" }],
-        },
-        target,
-      });
-      await recorder.persistApproved();
-      declareBuiltinHarness(recorder);
-      const manager = await SessionManager.openAsync(target, state.workspaceDir);
-      const { session } = await createTestSession({
-        sessionManager: manager,
-        model: { ...testModel, input: ["text", "image"] },
-      });
-      normalizeSession(session);
-      const requests = captureRequests();
-
-      await submit(session, {
-        attempt: { sessionId, userTurnTranscriptRecorder: recorder },
-        transcriptPrompt: "",
-        modelPrompt: undefined,
-        images: promptImages(buffer),
-        prependContext: undefined,
-        appendContext: undefined,
-        getUserTranscriptContexts: () => [],
-        withTranscriptWrite: (write) => write(),
-        promptActiveSession: async (prompt, options) => {
-          await session.prompt(prompt, options);
-        },
-      });
-
-      expect(requests).toHaveLength(1);
-      expect(readModelPromptProjection(recorder.getPersistedMessage!())).toBeDefined();
-      await expect(codexFallbackCapture(recorder)).resolves.toBeUndefined();
     });
   });
 

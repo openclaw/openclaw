@@ -529,17 +529,6 @@ describe("user turn transcript persistence", () => {
       });
     });
 
-    it("replays an empty projection of a text-free turn without adding an empty text block", () => {
-      const image = { type: "image" as const, data: "aW1n", mimeType: "image/png" };
-      const frozen = {
-        role: "user" as const,
-        content: [image],
-        timestamp: 1,
-        __openclaw: { modelPromptProjection: { version: 1, text: "" } },
-      };
-      expect(projectRecordedModelPrompt(frozen).content).toEqual([image]);
-    });
-
     it("persists fallback user turns only once", async () => {
       const persistedMessages: unknown[] = [];
       const recorder = record(userInput("hello from fallback", "chat-run-1:user"), undefined, {
