@@ -82,25 +82,24 @@ export class DictationRefinementCoordinator {
       return this.finish(operation, { status: "cancelled", warnings: ["cancelled"] });
     }
     const latest = this.latest;
-    if (
-      latest &&
-      (request.generation < latest.generation ||
-        (request.generation === latest.generation &&
-          (request.captureId !== latest.captureId ||
-            latest.final ||
-            latest.cancelled ||
-            request.transcriptRevision < latest.revision)))
-    ) {
-      return this.finish(operation, {
-        status: "cancelled",
-        warnings: [
-          latest.cancelled && request.generation === latest.generation
-            ? "cancelled"
-            : latest.final && request.generation === latest.generation
-              ? "duplicate-final"
-              : "superseded",
-        ],
-      });
+    // Order microphone captures, not chat sessions. A newer capture always starts fresh.
+    if (latest && request.generation <= latest.generation) {
+      let warning: RefinementFailureCode | undefined;
+      if (request.generation < latest.generation) {
+        warning = "superseded";
+      } else if (latest.cancelled) {
+        warning = "cancelled";
+      } else if (latest.final) {
+        warning = "duplicate-final";
+      } else if (
+        request.captureId !== latest.captureId ||
+        request.transcriptRevision < latest.revision
+      ) {
+        warning = "superseded";
+      }
+      if (warning) {
+        return this.finish(operation, { status: "cancelled", warnings: [warning] });
+      }
     }
     this.active?.controller.abort(new RefinementError("superseded"));
     this.latest = {

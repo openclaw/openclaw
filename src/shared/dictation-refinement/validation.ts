@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   REFINEMENT_LIMITS,
   RefinementError,
@@ -16,14 +17,10 @@ export function refinementByteLength(value: string): number {
 }
 
 function record(value: unknown, keys: readonly string[]): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value) || Object.keys(value).some((key) => !keys.includes(key))) {
     throw new RefinementError("invalid-request");
   }
-  const result = value as Record<string, unknown>;
-  if (Object.keys(result).some((key) => !keys.includes(key))) {
-    throw new RefinementError("invalid-request");
-  }
-  return result;
+  return value;
 }
 
 function finite(value: unknown): number {

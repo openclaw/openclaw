@@ -1,5 +1,5 @@
 import { createApiRegistry, createLlmRuntime } from "@openclaw/ai";
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeAssistantMessageFixture } from "../agents/test-helpers/assistant-message-fixtures.js";
 import { bindModelCompletionOwner, bindModelLlmRuntime } from "../llm/model-runtime-binding.js";
 import type {
@@ -20,8 +20,7 @@ const mocks = vi.hoisted(() => ({
   stream: vi.fn<typeof import("../llm/stream.js").streamSimple>(),
 }));
 
-// mock-isolation: Model preparation owns credentials/catalog/storage; this suite proves
-// the refinement adapter's actual dispatch boundary with a prepared lease fixture.
+// mock-isolation: isolate model credentials, catalog and storage; dispatch still uses the prepared lease.
 vi.mock("../agents/simple-completion-runtime.js", () => ({
   acquireSimpleCompletionModelWithSelection: mocks.acquire,
 }));
@@ -202,7 +201,9 @@ describe("selected dictation refinement model", () => {
     expect(context.systemPrompt).toContain("Preserve the speaker's wording.");
     expect(JSON.stringify(context)).not.toContain("private-");
     const messageContent = context.messages[0]?.content;
-    assert.isString(messageContent);
+    if (typeof messageContent !== "string") {
+      throw new TypeError("Expected a text-only refinement request");
+    }
     expect(JSON.parse(messageContent)).toEqual({
       transcript: "Do not delete customer_id.",
       locale: "en-US",
