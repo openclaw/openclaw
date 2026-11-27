@@ -27,6 +27,7 @@ import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { bindRequesterYieldCronAuthority } from "../cron-creator-authority-context.js";
 import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../restart-recovery-prompt.js";
+import { visibleParentInputProvenance } from "../subagents/spawn/subagent-capabilities.js";
 import { isSubagentSessionFromEntry } from "../subagents/spawn/subagent-depth-policy.js";
 import { ToolInputError } from "../tool-input-error.js";
 import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
@@ -451,6 +452,7 @@ export async function executeSessionsSend(
         sourceChannel: opts?.agentChannel,
         sourceTool: "sessions_send",
         ...(requesterIsSubagent ? { sourceRole: "subagent" as const } : {}),
+        ...visibleParentInputProvenance(requesterSessionKey, resolvedKey, targetSessionEntry),
       };
       let dispatchMessage = annotateInterSessionPromptText(message, inputProvenance);
       let targetAcpMeta = await readAcpSessionMetaForEntryAsync({

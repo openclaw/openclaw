@@ -6,6 +6,7 @@ import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { isLegacyToolOutputUnavailable } from "../../../lib/chat/tool-output-text.ts";
 import { toolOutputSourceLabel, formatToolOutput } from "../../../lib/chat/tool-output.ts";
+import { downloadHref } from "../../../lib/download.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { JSX } from "../../../types/solid-elements.d.ts";
 import type {
@@ -51,10 +52,7 @@ export function ChatToolOutput(props: Props) {
       url = URL.createObjectURL(
         new Blob([card.outputText ?? ""], { type: "text/plain;charset=utf-8" }),
       );
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = "tool-output.txt";
-      anchor.click();
+      downloadHref(url, "tool-output.txt");
     } catch {
       setDownloadFailed(true);
     } finally {

@@ -455,7 +455,7 @@ src/agents/subagents/registry/subagent-registry-helpers.ts	13
 src/agents/subagents/registry/subagent-registry-lifecycle-announce-cleanup.ts	5
 src/agents/subagents/registry/subagent-registry-lifecycle-bookkeeping.ts	1
 src/agents/subagents/registry/subagent-registry-lifecycle-cleanup.ts	5
-src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	3
+src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	2
 src/agents/subagents/registry/subagent-registry-lifecycle-finalize-cleanup.ts	1
 src/agents/subagents/registry/subagent-registry-lifecycle-persistence.ts	3
 src/agents/subagents/registry/subagent-registry-lifecycle-wake.ts	2
@@ -476,7 +476,6 @@ src/agents/subagents/registry/subagent-registry-sweep-cleanup.ts	2
 src/agents/subagents/registry/subagent-registry-sweep-kill.ts	6
 src/agents/subagents/registry/subagent-registry-sweep-settle.ts	2
 src/agents/subagents/registry/subagent-registry-sweeper-retire.ts	7
-src/agents/subagents/registry/subagent-registry-sweeper.ts	2
 src/agents/subagents/registry/subagent-registry-typing.ts	1
 src/agents/subagents/registry/subagent-registry.mocks.shared.ts	1
 src/agents/subagents/registry/subagent-registry.ts	1
@@ -855,7 +854,6 @@ src/gateway/server-methods/artifacts-session-read.ts	4
 src/gateway/server-methods/chat-abort-authorization.ts	12
 src/gateway/server-methods/chat-abort-exact-run.ts	4
 src/gateway/server-methods/chat-abort-handler.ts	11
-src/gateway/server-methods/chat-abort-runtime.ts	2
 src/gateway/server-methods/chat-abort-session-plan.ts	10
 src/gateway/server-methods/chat-aborted-partial.ts	7
 src/gateway/server-methods/chat-history-handler.ts	2

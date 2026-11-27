@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, createStore, createUniqueId, onSettled } from "solid-js";
+import type { GatewaySessionRow } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
@@ -65,6 +66,14 @@ function groupFor(row: SubagentsPanelRow): Group {
     : isUnfinishedSubagent(row.session)
       ? "waiting"
       : (endedWithoutFinishing(row.session) ?? "done");
+}
+
+/** What a paused subagent waits on; undefined when it is not paused or waits on children. */
+export function pausedSubagentStatus(row: GatewaySessionRow): string | undefined {
+  const background = Boolean(row.backgroundProcessCount);
+  return row.subagentRunState === "paused" && (background || !row.hasActiveSubagentRun)
+    ? t(`chat.handoffSessionStatus.${background ? "background" : "paused"}`)
+    : undefined;
 }
 
 function DesktopRow(props: {
@@ -142,7 +151,8 @@ function DesktopRow(props: {
                       group() === "waiting"
                         ? props.row.session.status === "queued"
                           ? t("common.queued")
-                          : t("chat.subagentsPanel.desktopWaiting")
+                          : (pausedSubagentStatus(props.row.session) ??
+                            t("chat.subagentsPanel.desktopWaiting"))
                         : groupLabel(group())
                     }
                   >

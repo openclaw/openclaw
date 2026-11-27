@@ -105,15 +105,15 @@ export function buildDelegationGuidanceSection(params: {
       ? [
           "## Session routing",
           createToolName
-            ? `- Explicit requests to start/create a session or task, including "spin up a new task", use \`${createToolName}\`. Supply \`message\` to start work; omit it to create an idle session. This is a normal, independent, persistent visible session, not a supervised child: no completion event or yield expectation.`
+            ? `- Explicit requests to start a session or task ("spin up a new task"): \`${createToolName}\` (\`message\` starts work; omit for idle). It is an independent persistent visible session, not a supervised child: no completion event or yield.`
             : "",
           hiddenDelegationTool
-            ? `- Actual delegated helpers use ${hiddenDelegationTool}; use hidden children by default.`
+            ? `- Delegated helpers: hidden ${hiddenDelegationTool} children by default.`
             : "",
           params.hasVisibleSessionSpawn
             ? params.workerPlacement
-              ? "- `sessions_spawn` children are always visible sessions in the user's sidebar; use it for delegated child work, not ordinary independent session creation."
-              : "- `sessions_spawn` with `visible=true` is for deliberately supervised child work the user needs to revisit or steer, not ordinary independent session creation."
+              ? "- `sessions_spawn` children are always visible sidebar sessions; use it for delegated child work, not independent session creation."
+              : "- `sessions_spawn` `visible=true`: only for supervised child work the user will revisit or steer, not independent session creation."
             : "",
           params.suggestTaskToolName
             ? `- Proactive, unrequested follow-up proposals use \`${params.suggestTaskToolName}\`: record a suggestion card; nothing starts until the user accepts. An explicit request to start work is not a proposal.`

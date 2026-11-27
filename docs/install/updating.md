@@ -87,15 +87,9 @@ This recovery repair is supplied by the candidate CLI; older updaters using
 
 For a Linux system service, run maintenance as the account in its `User=` setting
 with the service's existing `HOME`, `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`,
-`OPENCLAW_CONFIG_PATH`, and profile selectors. A plain `sudo openclaw update`
-uses root's selectors; it does not automatically adopt the service account.
-
-For an administrator-managed global npm package, replace the package with
-`sudo npm install -g openclaw@latest`, then restart the existing system unit with
-`sudo systemctl restart <unit>.service`. Use the installed unit's name and leave
-its service configuration and file ownership unchanged. Direct Gateway startup
-already migrates old configuration and database schemas in the selected state
-directory; no separate state copy or account adoption is needed.
+`OPENCLAW_CONFIG_PATH`, and profile selectors. When that account differs from
+the one running `openclaw update`, the update is refused before anything changes;
+see [Linux system service run by another account](#linux-system-service-run-by-another-account).
 
 App-owned packages declare their update owner in `openclaw-install-owner.json`
 at the package root. For `owner: "macos-app"`, update OpenClaw.app through its
@@ -135,6 +129,65 @@ Before a significant update, [create a verified backup](#before-updating-create-
 Automatic config copies and migration recovery originals are not a full-state
 backup.
 
+## Linux system service run by another account
+
+A common Linux layout has an administrator-managed global npm package owned by
+root and a systemd system unit whose `User=` is a service account, with the
+service's state in that account's `HOME` or in the unit's `OPENCLAW_STATE_DIR`.
+`openclaw update` cannot back up and check that state for the service account:
+a plain `sudo openclaw update` would check root's own state, and
+`sudo env OPENCLAW_STATE_DIR=<service state> openclaw update` would write the
+service's state as root. So when the selected system unit runs the installation
+being updated as another account, the update is refused before the package is
+replaced. The package, the service state and the running Gateway are unchanged,
+and the refusal prints the commands below with the unit's name, account and
+selectors filled in. Single-account installs and system units that run as the
+updating account are not affected.
+
+If the refused run pointed `OPENCLAW_STATE_DIR` at the service's state, the
+installed updater still wrote its log and report there as root, and the service
+account's backup refuses directories it cannot read. Give those files back to the
+service account first; the refusal prints this command with the real path:
+
+```bash
+sudo find /var/lib/openclaw/.openclaw -xdev -user 0 -exec chown openclaw {} +
+```
+
+Update such an install by hand:
+
+1. Create a verified backup of the service state as the service account, with
+   the unit's `HOME`, `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`,
+   `OPENCLAW_CONFIG_PATH`, and profile selectors. Keep it until the updated
+   service is healthy.
+
+   ```bash
+   sudo -u openclaw env HOME=/var/lib/openclaw OPENCLAW_STATE_DIR=/var/lib/openclaw/.openclaw \
+     openclaw backup create --verify --output /var/lib/openclaw
+   ```
+
+2. Replace the package. On npm 11.15 and earlier, omit `--allow-scripts=openclaw`.
+
+   ```bash
+   sudo npm install -g openclaw@latest --allow-scripts=openclaw
+   ```
+
+3. Restart the existing unit, using its installed name, and leave its service
+   configuration and file ownership unchanged:
+
+   ```bash
+   sudo systemctl restart openclaw-gateway.service
+   ```
+
+4. Check the service as its account:
+   `sudo -u openclaw env HOME=/var/lib/openclaw OPENCLAW_STATE_DIR=/var/lib/openclaw/.openclaw openclaw gateway status --deep`.
+
+Gateway startup migrates configuration and database schemas in the selected state
+directory, so no separate state copy, Doctor run, or account adoption is needed.
+Do not run `openclaw doctor` or `openclaw update repair` as root against the
+service's state. Reinstalling the previous package alone does not undo a schema
+migration made by the new Gateway; to go back, restore the verified backup with
+it (see [Rollback and recovery](/install/updating/rollback-and-recovery)).
+
 ## Local packaged-code overrides
 
 Prepared-release updates currently refuse `--reapply-local-overrides` instead of
@@ -166,20 +219,20 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    After activation of a modern launcher trial, only the Gateway that is ready settles the run
    from the launcher trial and preparation lock. A published trial takes precedence
    over an expired lock for the same run. Only a Gateway that runs the target build
-   records success. It settles once after required plugin work, so the final
-   summary and notice include its result. Restored files alone do not prove that
-   the previous Gateway is serving. Startup does not infer a failed update from
-   PID reuse or uptime.
+   records success. It settles once at core readiness, before background plugin
+   work, and sends the result notice. Restored files alone do not prove that the
+   previous Gateway is serving. Startup does not infer a failed update from PID
+   reuse or uptime.
 7. After the result is recorded, the serving release runs advisory Doctor inspections
    in the background. The same update details receive their results without a page
    reload. Only warning and error findings add advice; inspections do not delay
    completion, fail the update, or trigger rollback.
 8. The serving release updates installed plugins in the background, then reloads
-   changed plugins through the existing runtime lifecycle. The run settles and
-   sends one notice after this work finishes. Plugin failures appear in that
-   summary with the failed step and exact next command; they never fail the core
-   update or trigger rollback. A successful reload's warnings stay in the plugin
-   step details without marking activation failed or requesting a retry.
+   changed plugins through the existing runtime lifecycle. Core settles at ready;
+   plugins converge after. Plugin failures and the next command appear in the
+   update details; they do not delay or rewrite the core result, send another
+   result notice, or trigger rollback. A successful reload's warnings stay in the
+   plugin details without marking activation failed or requesting a retry.
 
 Saved update history does not grant or refuse a new release update. After taking
 its preparation lock and checking the installation, the serving release marks
@@ -444,10 +497,21 @@ flow names the shipped-updater contract or unmoved route that it serves.
 
 The release CLI uses one client deadline for Gateway requests, status polling,
 restart requests, and a capability-consent retry through a replacement Gateway.
+It retains the latest Gateway-acknowledged `runId` through unavailable status and
+CLI errors, and prints the ID at acknowledgement in human output. An ID alone does
+not confirm completion. See [status and history](/cli/update/status-and-history) for
+JSON output shapes.
 Expiry stops client work and joins connection cleanup; it does not cancel an
 accepted server update or invalidate a published trial. Run `openclaw update status`
 before retrying an unconfirmed request. Preparation and installed-package delegation
 retain their own lifecycle budgets. The installed CLI must contain this repair.
+
+The serving Gateway settles its resident activation run from core readiness, not
+from a detached maintenance tick. It waits for the resident launcher's committed
+trial acknowledgment; if their IPC channel disconnects, it reads the trial once
+from disk instead. A slow acknowledgment cannot spend a one-shot settlement before
+the launcher commits. Required plugin work stays on the Gateway's existing update
+watcher. The candidate must contain this repair; older installed CLIs need no change.
 
 Gateway post-ready maintenance and `openclaw update repair` refresh the known
 legacy Git launcher from development build `d44f263`, which incorrectly counted

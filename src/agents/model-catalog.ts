@@ -82,17 +82,43 @@ function mergeCatalogEntries(
     catalogRoutes?: ModelCatalogRouteVariantCollector;
     routeVariantIndex?: Map<string, number>;
     preserveBaseCompat?: boolean;
+    matchSupplementalRoutes?: boolean;
   },
 ): void {
   const identityKeyOf = createModelCatalogIdentityKeyResolver();
   const keyOf = options?.routeVariantIndex
     ? (entry: ModelCatalogEntry) => catalogRouteVariantKey(entry, identityKeyOf(entry))
     : identityKeyOf;
-  const indexByKey =
-    options?.routeVariantIndex ?? new Map(models.map((entry, index) => [keyOf(entry), index]));
+  const indexByKey = options?.routeVariantIndex ?? new Map<string, number>();
+  let earlierRoutes: Map<string, number> | undefined;
+  if (!options?.routeVariantIndex) {
+    for (const [index, model] of models.entries()) {
+      const key = keyOf(model);
+      const previous = options?.matchSupplementalRoutes ? indexByKey.get(key) : undefined;
+      if (previous !== undefined) {
+        // Only duplicate logical slots need an exact-route index. Earlier slots can
+        // only receive matching supplements; new routes always retarget the last slot.
+        const earlier = models.at(previous);
+        if (earlier) {
+          earlierRoutes ??= new Map();
+          earlierRoutes.set(catalogRouteVariantKey(earlier, key), previous);
+        }
+      }
+      indexByKey.set(key, index);
+    }
+  }
   for (const entry of entries) {
     const key = keyOf(entry);
-    const existingIndex = indexByKey.get(key);
+    let existingIndex = indexByKey.get(key);
+    if (earlierRoutes && entry.api && entry.baseUrl && existingIndex !== undefined) {
+      const route = catalogRouteVariantKey(entry, key);
+      const earlier = earlierRoutes.get(route);
+      const last = models.at(existingIndex);
+      // A preceding supplement may already have retargeted the last logical slot.
+      if (earlier !== undefined && last && catalogRouteVariantKey(last, key) !== route) {
+        existingIndex = earlier;
+      }
+    }
     if (existingIndex === undefined) {
       models.push(entry);
       indexByKey.set(key, models.length - 1);
@@ -480,7 +506,7 @@ export async function buildPreparedModelCatalogSnapshot(
       mergeCatalogEntries(routeVariants.entries, orderedSupplemental, {
         routeVariantIndex: routeVariants.indexByKey,
       });
-      mergeCatalogEntries(models, orderedSupplemental);
+      mergeCatalogEntries(models, orderedSupplemental, { matchSupplementalRoutes: true });
     }
   }
   logStage("plugin-models-merged", `entries=${models.length}`);
