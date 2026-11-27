@@ -265,13 +265,12 @@ export function rowDemandsVisibility(
   reason: RowVisibilityReason = RowVisibilityReason.Any,
 ) {
   return reason === RowVisibilityReason.ActiveRun
-    ? row.hasActiveRun || (row.backgroundProcessCount ?? 0) > 0 || row.runningChildCount > 0
+    ? row.hasActiveRun || row.runningChildCount > 0
     : reason === RowVisibilityReason.Attention
       ? row.attention.kind !== "none"
       : row.visuallyActive ||
         row.containsActiveDescendant ||
         row.hasActiveRun ||
-        (row.backgroundProcessCount ?? 0) > 0 ||
         row.runningChildCount > 0 ||
         (row.workspaceConflictCount ?? 0) > 0 ||
         row.unread ||
