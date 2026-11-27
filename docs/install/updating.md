@@ -444,6 +444,10 @@ flow names the shipped-updater contract or unmoved route that it serves.
 
 The release CLI uses one client deadline for Gateway requests, status polling,
 restart requests, and a capability-consent retry through a replacement Gateway.
+It retains the latest Gateway-acknowledged `runId` through unavailable status and
+CLI errors, and prints the ID at acknowledgement in human output. An ID alone does
+not confirm completion. See [status and history](/cli/update/status-and-history) for
+JSON output shapes.
 Expiry stops client work and joins connection cleanup; it does not cancel an
 accepted server update or invalidate a published trial. Run `openclaw update status`
 before retrying an unconfirmed request. Preparation and installed-package delegation
