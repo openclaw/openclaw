@@ -349,8 +349,8 @@ export function registerRequiredQueuedSubagent(params: {
     return true;
   };
   const failIncompleteRegistration = async (error: unknown): Promise<void> => {
-    const current = queuedEntry();
-    if (!current || current.killIntent) {
+    const queued = queuedEntry();
+    if (!queued || queued.killIntent) {
       return;
     }
     settlementPending = true;
