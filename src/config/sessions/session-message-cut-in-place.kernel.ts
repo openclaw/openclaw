@@ -261,16 +261,13 @@ function createSessionMessageCutReader(
             .selectFrom("transcript_events")
             .select(["event_json", "event_zstd", "event_utf8_bytes"])
             .where("session_id", "=", sessionId)
-            .where("seq", "=", seq),
+            .where("seq", "=", seq)
+            .where(transcriptEventReadBytesSql(), "<=", SESSION_MESSAGE_CUT_MAX_BYTES),
         );
-        if (
-          !payload ||
-          (payload.event_json === null && payload.event_zstd === null) ||
-          (payload.event_utf8_bytes ?? 0) > SESSION_MESSAGE_CUT_MAX_BYTES
-        ) {
+        if (!payload || (payload.event_json === null && payload.event_zstd === null)) {
           return false;
         }
-        return isDegradedCompactionEvent(asRecord(JSON.parse(readTranscriptPayload(payload))));
+        return isDegradedCompactionEvent(JSON.parse(readTranscriptPayload(payload)));
       };
       if (targetId === null) {
         // The repoint selects an empty path, so no compaction on it can be

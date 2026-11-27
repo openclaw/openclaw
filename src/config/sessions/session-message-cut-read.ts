@@ -1,10 +1,9 @@
-import { asOptionalRecord as asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
 import { jsonNativeFieldsValid } from "../../infra/database-engine/json-values.js";
 import {
-  executeSqliteQueryTakeFirstSync,
-  prepareSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
+  prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -14,11 +13,7 @@ import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-state.j
 import { isDegradedCompactionEvent } from "./session-message-cut-plan.js";
 import { projectTranscriptPayloadNavigationSql } from "./session-model-context-projection.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
-import {
-  readTranscriptPayload,
-  transcriptEventJsonSql,
-  transcriptEventNavigationSql,
-} from "./transcript-payload.js";
+import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
 
 export const SESSION_MESSAGE_CUT_MAX_BYTES = 8 * 1024 * 1024;
 
@@ -97,43 +92,16 @@ export function readSessionMessageCut(
     }
     return {
       events,
-      /**
-       * True when a compaction on the selected prefix marks history
-       * quality-degraded. Fork planning copies the prefix, so only its
-       * compactions can reach the new session: read those payloads one at a
-       * time, without retaining them and without charging the navigation budget.
-       * A payload that cannot be verified (missing, or over the per-event read
-       * budget) counts as not degraded.
-       */
+      // Only inspect compactions in the selected prefix using the budgeted payload reader.
       hasDegradedCompaction(prefix: readonly TranscriptEvent[]): boolean {
-        const db = getSessionKysely(database.db);
         for (const event of prefix) {
-          if (!isRecord(event) || event.type !== "compaction") {
-            continue;
-          }
-          const seq =
-            sequences.get(event) ??
-            (typeof event.id === "string" ? identities.get(event.id) : undefined);
-          if (seq === undefined) {
-            continue;
-          }
-          const payload = executeSqliteQueryTakeFirstSync(
-            database.db,
-            db
-              .selectFrom("transcript_events")
-              .select(["event_json", "event_zstd", "event_utf8_bytes"])
-              .where("session_id", "=", sessionId)
-              .where("seq", "=", seq),
-          );
-          if (
-            !payload ||
-            (payload.event_json === null && payload.event_zstd === null) ||
-            (payload.event_utf8_bytes ?? 0) > SESSION_MESSAGE_CUT_MAX_BYTES
-          ) {
-            continue;
-          }
-          if (isDegradedCompactionEvent(asRecord(JSON.parse(readTranscriptPayload(payload))))) {
-            return true;
+          if (isRecord(event) && event.type === "compaction") {
+            const seq =
+              sequences.get(event) ??
+              (typeof event.id === "string" ? identities.get(event.id) : undefined);
+            if (seq !== undefined && isDegradedCompactionEvent(read(seq))) {
+              return true;
+            }
           }
         }
         return false;

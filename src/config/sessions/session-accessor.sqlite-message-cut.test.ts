@@ -153,7 +153,7 @@ async function seedLargeLaterCompactions(
 
 /** Append a long off-path branch in one transaction: a full navigation scan would iterate it. */
 async function seedLongOffPathBranch(
-  scope: Parameters<typeof appendEvent>[0],
+  scope: Awaited<ReturnType<typeof createSession>>["scope"],
   stateDir: string,
   count = 240,
 ) {
@@ -517,23 +517,7 @@ it("rewinds by repointing the active leaf and returns the editor text", async ()
   });
 });
 
-// Rewinding to before a lossy compaction must not keep warning that the restored
-// history may be missing details: the degraded flag belongs to the selected path.
-it("rewinds before a degraded compaction and clears the degraded flag", async () => {
-  const { env, scope, params } = await createSession();
-  await seedDegradedCompaction(scope, env.OPENCLAW_STATE_DIR as string);
-  expect(readEntry(scope)?.compactionQualityDegraded).toBe(true);
-
-  const result = await rewind(params);
-  assert(result.status === "created", `rewind refused: ${result.status}`);
-  expect(result.entry.compactionQualityDegraded).toBeUndefined();
-  expect(result.entry.compactionCount).toBeUndefined();
-  expect(readEntry(scope)?.compactionQualityDegraded).toBeUndefined();
-});
-
-// The flag is derived from the selected path, not cleared unconditionally:
-// switching away drops it, switching back to the degraded branch restores it.
-it("restores the degraded flag when switching back to degraded history", async () => {
+it("clears the degraded flag when switching to a clean branch", async () => {
   const { env, scope } = await createSession();
   await seedDegradedCompaction(scope, env.OPENCLAW_STATE_DIR as string);
   expect(readEntry(scope)?.compactionQualityDegraded).toBe(true);
@@ -547,44 +531,6 @@ it("restores the degraded flag when switching back to degraded history", async (
   assert(away.status === "created", `switch away refused: ${away.status}`);
   expect(away.entry.compactionQualityDegraded).toBeUndefined();
   expect(readEntry(scope)?.compactionQualityDegraded).toBeUndefined();
-
-  const back = await switchBranch({
-    agentId,
-    env,
-    sessionKey,
-    leafEntryId: "assistant-3",
-  });
-  assert(back.status === "created", `switch back refused: ${back.status}`);
-  expect(back.entry.compactionQualityDegraded).toBe(true);
-  expect(readEntry(scope)?.compactionQualityDegraded).toBe(true);
-});
-
-// Fork derives the flag from the copied prefix: a fork whose prefix includes the
-// degraded compaction keeps the warning, one cut before it does not.
-it("forks degradation from the copied prefix only", async () => {
-  const { env, scope, params } = await createSession();
-  await seedDegradedCompaction(scope, env.OPENCLAW_STATE_DIR as string);
-  expect(readEntry(scope)?.compactionQualityDegraded).toBe(true);
-
-  const degraded = await fork({
-    ...params,
-    sessionKey: "agent:main:canonical-message-cut",
-    sessionStoreKey: sessionKey,
-    targetKey: "agent:main:dashboard:message-cut-degraded-fork",
-    entryId: "user-3",
-  });
-  assert(degraded.status === "created", `fork refused: ${degraded.status}`);
-  expect(degraded.entry.compactionQualityDegraded).toBe(true);
-
-  const clean = await fork({
-    ...params,
-    sessionKey: "agent:main:canonical-message-cut",
-    sessionStoreKey: sessionKey,
-    targetKey: "agent:main:dashboard:message-cut-clean-fork",
-    entryId: "user-2",
-  });
-  assert(clean.status === "created", `fork refused: ${clean.status}`);
-  expect(clean.entry.compactionQualityDegraded).toBeUndefined();
 });
 
 // A fork cut before later compactions must not pay for their summaries: the fork
@@ -638,36 +584,18 @@ it("rewinds a long transcript without scanning its navigation", async () => {
   expect(result.entry.compactionQualityDegraded).toBeUndefined();
 });
 
-// Behavior proof, end to end through the shipped entry points: the stored rows
-// are written by the production append owner (untouched by this change), so the
-// session below is latest-stable-shaped data; the real accessor cuts it and the
-// real /status renderer reports the flag at every step.
-it("proves /status clears and returns across navigation and fork", async () => {
+it("renders compaction status for the selected history after rewind, switch and fork", async () => {
   const { env, scope, params } = await createSession();
   await seedDegradedCompaction(scope, env.OPENCLAW_STATE_DIR as string);
-  const trace: string[] = [];
-  const record = (label: string, entry: InternalSessionEntry | undefined) => {
-    const line = statusCompactionLine(entry);
-    trace.push(`${label}: ${line === null ? "[no Compactions line]" : `Compactions: ${line}`}`);
-    return line;
-  };
-
-  // Pre-change stored shape: the entry still carries the flag and the count the
-  // old code wrote.
-  const stored = readEntry(scope);
-  expect(stored?.compactionQualityDegraded).toBe(true);
-  expect(stored?.compactionCount).toBe(2);
-  expect(record("/status before", stored)).toBe("2 · degraded history (details may be lost)");
+  expect(statusCompactionLine(readEntry(scope))).toBe("2 · degraded history (details may be lost)");
 
   const rewound = await rewind(params);
   assert(rewound.status === "created", `rewind refused: ${rewound.status}`);
-  expect(record("/status after rewind", readEntry(scope))).toBeNull();
+  expect(statusCompactionLine(readEntry(scope))).toBeNull();
 
   const back = await switchBranch({ agentId, env, sessionKey, leafEntryId: "assistant-3" });
   assert(back.status === "created", `switch back refused: ${back.status}`);
-  expect(record("/status after branch switch", readEntry(scope))).toBe(
-    "0 · degraded history (details may be lost)",
-  );
+  expect(statusCompactionLine(readEntry(scope))).toBe("0 · degraded history (details may be lost)");
 
   const cleanFork = await fork({
     ...params,
@@ -677,12 +605,7 @@ it("proves /status clears and returns across navigation and fork", async () => {
     entryId: "user-2",
   });
   assert(cleanFork.status === "created", `clean fork refused: ${cleanFork.status}`);
-  expect(
-    record(
-      "/status on clean fork",
-      readEntry({ ...params, sessionKey: "agent:main:dashboard:message-cut-proof-clean-fork" }),
-    ),
-  ).toBeNull();
+  expect(statusCompactionLine(readEntry({ ...params, sessionKey: cleanFork.key }))).toBeNull();
 
   const degradedFork = await fork({
     ...params,
@@ -692,16 +615,9 @@ it("proves /status clears and returns across navigation and fork", async () => {
     entryId: "user-3",
   });
   assert(degradedFork.status === "created", `degraded fork refused: ${degradedFork.status}`);
-  expect(
-    record(
-      "/status on degraded fork",
-      readEntry({
-        ...params,
-        sessionKey: "agent:main:dashboard:message-cut-proof-degraded-fork",
-      }),
-    ),
-  ).toBe("0 · degraded history (details may be lost)");
-  console.log(`\n/status behavior proof:\n${trace.join("\n")}`);
+  expect(statusCompactionLine(readEntry({ ...params, sessionKey: degradedFork.key }))).toBe(
+    "0 · degraded history (details may be lost)",
+  );
 });
 
 // Canonical navigation is neither the raw parent chain nor raw child links, and a
@@ -768,6 +684,40 @@ it("repoints oversized history without hydrating it in one transaction", async (
   await expect(rewind({ ...params, entryId: "oversized-branch-tip" })).rejects.toThrow(
     /read budget/,
   );
+});
+
+it("switches to history with an oversized compaction whose stored byte count is missing", async () => {
+  const { env, scope } = await createSession();
+  const now = Date.parse("2026-07-18T02:00:00.000Z");
+  await appendEvent(scope, {
+    type: "compaction",
+    id: "oversized-compaction",
+    parentId: "off-path-user",
+    timestamp: new Date(now).toISOString(),
+    summary: "x".repeat(SESSION_MESSAGE_CUT_MAX_BYTES),
+    details: { readFiles: [], modifiedFiles: [], qualityDegraded: true },
+  });
+  await appendMessage(scope, {
+    eventId: "after-oversized-compaction",
+    parentId: "oversized-compaction",
+    message: { role: "assistant", content: "retained answer" },
+    now: now + 1_000,
+  });
+  runOpenClawAgentWriteTransaction(
+    ({ db }) =>
+      db
+        .prepare(
+          "UPDATE transcript_events SET event_utf8_bytes = NULL WHERE session_id = ? AND json_extract(event_json, '$.id') = ?",
+        )
+        .run(scope.sessionId, "oversized-compaction"),
+    toDatabaseOptions(resolveSqliteScope(scope)),
+  );
+  const select = (leafEntryId: string) => switchBranch({ agentId, env, sessionKey, leafEntryId });
+  expect(await select("assistant-2")).toMatchObject({ status: "created" });
+  expect(await select("after-oversized-compaction")).toMatchObject({
+    status: "created",
+    entry: { compactionQualityDegraded: undefined },
+  });
 });
 
 // The lifecycle revision is the fence that retires a live writer holding pre-rewind
