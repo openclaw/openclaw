@@ -222,12 +222,14 @@ type ModelsJsonPlan =
   | {
       action: "skip" | "noop";
       pluginCatalogWrites?: Record<string, string>;
+      /** Registry rejection reasons for providers omitted from this plan. */
+      skippedProviders?: string[];
     }
   | {
       action: "write";
       contents: string;
       pluginCatalogWrites?: Record<string, string>;
-      /** Registry rejection reasons for providers omitted from this write. */
+      /** Registry rejection reasons for providers omitted from this plan. */
       skippedProviders?: string[];
     };
 
@@ -475,7 +477,7 @@ export async function planOpenClawModelsJson(params: {
   )}\n`;
 
   if (params.existingRaw === nextContents && Object.keys(pluginCatalogWrites).length === 0) {
-    return { action: "noop", pluginCatalogWrites };
+    return { action: "noop", pluginCatalogWrites, skippedProviders: [...skippedProviders] };
   }
 
   return {

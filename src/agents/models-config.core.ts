@@ -328,7 +328,7 @@ export async function ensureOpenClawModelsJsonWithInput(
       };
     }
     // Logged once per catalog change, not per catalog load, so the skip stays visible without repeating.
-    if (plan.action === "write" && (rootChanged || publication?.changed)) {
+    if (rootChanged || publication?.changed) {
       for (const reason of plan.skippedProviders ?? []) {
         log.warn(`Model catalog omits a provider the model registry cannot load: ${reason}`);
       }
