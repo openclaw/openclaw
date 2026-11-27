@@ -1,5 +1,6 @@
 import { isTerminalSessionStatus } from "../../../config/sessions/types.js";
 import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
+import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.runtime.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import {
@@ -151,6 +152,9 @@ export async function settleRestartInterruptedSubagentRun(params: {
     isYieldedSubagentRun(entry) ||
     // Fresh requester custody owns the notice; the retired process cannot send it.
     (subagentRuns.isCompletionAuthorityRetired(entry) && entry.expectsCompletionMessage === true) ||
+    // Wall-clock time alone cannot turn this Gateway's registered child into a crash orphan.
+    (entry.execution.lifecycleGeneration !== undefined &&
+      isAgentEventLifecycleGenerationCurrent(entry.execution.lifecycleGeneration)) ||
     // Only an earlier process could have owned this execution; this process never did.
     !(entry.createdAt < processStartedAt) ||
     isSubagentRunLive(entry) ||
@@ -170,6 +174,8 @@ export async function settleRestartInterruptedSubagentRun(params: {
       recoveryCurrent: readScope?.completionCurrent,
       endedAt: now,
       outcome: { status: "error", error: SUBAGENT_RESTART_INTERRUPTED_ERROR },
+      // The dead execution cannot publish another reply; the completion owner keeps any saved one.
+      terminalReply: { disposition: "empty" },
       reason: SUBAGENT_ENDED_REASON_ERROR,
       sendFarewell: true,
       accountId: entry.requesterOrigin?.accountId,
