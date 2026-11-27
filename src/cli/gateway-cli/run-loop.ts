@@ -297,7 +297,7 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
       if (!updateSuccessor.stopRequested && !hostExitRequested) {
         try {
           lock = await acquireGatewayLock({
-            port: params.lockPort,
+            port: (await params.resolveRestartPort?.()) ?? params.lockPort,
             listenerMode: supervisorMode ? "supervised" : "foreground",
             supervisor,
           });

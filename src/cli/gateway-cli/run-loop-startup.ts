@@ -100,6 +100,8 @@ export type GatewayRunLoopParams = {
   /** Grants this run loop authority over the process it exclusively owns. */
   ownsProcessLifecycle?: boolean;
   lockPort?: number;
+  /** Resolve the next listener port before reacquiring its state owner. */
+  resolveRestartPort?: () => Promise<number>;
   lifecycleLockDeadlineMs?: number;
   healthHost?: string;
   healthConfig?: OpenClawConfig;

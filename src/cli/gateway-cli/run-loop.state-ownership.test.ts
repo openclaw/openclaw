@@ -53,6 +53,7 @@ it("reacquires state after SIGUSR2 retires its emitting scope and asynchronously
   const restartedOwner = createDeferred<string | undefined>();
   const closing = createLifecycleGate();
   let starts = 0;
+  const ownerPorts: Array<number | undefined> = [];
   let closeContext: string | undefined;
   const requestRestart = () => requestGatewayRestartWithSignalAdmission("config reload: fixture");
 
@@ -61,9 +62,12 @@ it("reacquires state after SIGUSR2 retires its emitting scope and asynchronously
       runGatewayLoop({
         // This port is lease metadata only; the fixture opens no listener.
         lockPort: 43821,
+        resolveRestartPort: async () => 43822,
         start: async () => {
           stateDb.openOpenClawStateDatabase();
-          const owner = readGatewayOwnerLease({ current: true })?.owner;
+          const lease = readGatewayOwnerLease({ current: true });
+          const owner = lease?.owner;
+          ownerPorts.push(lease?.port);
           (starts++ === 0 ? initialOwner : restartedOwner).resolve(owner);
           return createGatewayServer(async () => {
             closeContext = context.getStore();
@@ -93,6 +97,7 @@ it("reacquires state after SIGUSR2 retires its emitting scope and asynchronously
       const second = await waitFor(restartedOwner.promise, "reacquiring state ownership");
       expect(second).toBeTruthy();
       expect(second).not.toBe(first);
+      expect(ownerPorts).toEqual([43821, 43822]);
       expect(closeContext).toBe("gateway-loop");
     } finally {
       closing.release();
