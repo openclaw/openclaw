@@ -60,7 +60,7 @@ suite.define(() => {
           const gateway = await installMockGateway(page, { historyMessages: initial });
           await page.goto(suite.server.baseUrl + "chat");
           const disclosure = page.locator(".chat-system-events");
-          const summary = disclosure.locator("summary");
+          const summary = disclosure.locator(":scope > summary");
           const warning = page.locator(".chat-thread").getByText(warningText, { exact: true });
           if (grouped) {
             await summary.click();
@@ -125,12 +125,70 @@ suite.define(() => {
     },
   );
 
+  it("shows a continuing fallback once without collapsing the commands between receipts", async () => {
+    const commands = [
+      "git status --short",
+      "git diff --stat",
+      "git diff --check",
+      "git log -1 --oneline",
+    ];
+    const switchToBackup = (id: string) => ({
+      ...fallback(id),
+      openclawDeliveryMirror: {
+        ...fallback(id).openclawDeliveryMirror,
+        toModel: "demo/orchard-mini",
+        reason: "rate_limit",
+      },
+    });
+    const trail = commands.flatMap((command, i) => {
+      const id = "check-" + i;
+      return [
+        switchToBackup("receipt-" + i),
+        {
+          ...message("assistant", "", "call-" + i),
+          content: [{ type: "toolCall", id, name: "exec", arguments: { command } }],
+        },
+        {
+          ...message("toolResult", "Check completed.", "result-" + i),
+          toolCallId: id,
+          toolName: "exec",
+          isError: false,
+        },
+      ];
+    });
+    await suite.withPage(pageOptions, async ({ page }) => {
+      await installMockGateway(page, {
+        models: [{ id: "orchard-mini", name: "Orchard Mini", provider: "demo" }],
+        historyMessages: [history[0]!, ...trail, switchToBackup("last"), history.at(-1)!],
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      const thread = page.locator(".chat-thread");
+      const label = thread.locator("summary").filter({ hasText: "Using Orchard Mini temporarily" });
+      const reason = thread.getByText("Reason: rate limit", { exact: true });
+      for (const reload of [false, true]) {
+        if (reload) {
+          await page.reload();
+        }
+        await thread.getByText(answerText, { exact: true }).waitFor();
+        await label.waitFor();
+        expect(await label.count()).toBe(1);
+        expect(await reason.isVisible()).toBe(false);
+        for (const command of commands) {
+          expect(await thread.getByText(command, { exact: true }).isVisible()).toBe(true);
+        }
+        await label.focus();
+        await page.keyboard.press("Enter");
+        await reason.waitFor();
+      }
+    });
+  });
+
   it("keeps operational history quiet, readable, keyboard accessible and responsive", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
       await installMockGateway(page, { historyMessages: history });
       await page.goto(suite.server.baseUrl + "chat");
       const disclosure = page.locator(".chat-system-events");
-      const summary = disclosure.locator("summary");
+      const summary = disclosure.locator(":scope > summary");
       await summary.waitFor();
       expect(await summary.textContent()).toContain("6 system events");
       expect(await disclosure.getAttribute("open")).toBeNull();
@@ -165,10 +223,10 @@ suite.define(() => {
         .allTextContents();
       expect(contents.map((text) => text.replace(/\s+/gu, " ").trim())).toEqual([
         "System · Gateway restartedGateway restarted. The conversation has been restored.",
-        "Model fallback: Primary → BackupReason: capacity",
+        "Using Backup temporarilyReason: capacity",
         "System · Gateway restarted" + warningText,
         "System · Gateway restartedThe workspace connection is available again.",
-        "Returned to selected model: Backup → Primary",
+        "Back to Primary",
         "System · Gateway restartedRecovery checks finished. Your conversation is ready.",
       ]);
       await summary.focus();

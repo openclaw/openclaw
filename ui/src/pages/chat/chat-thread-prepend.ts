@@ -170,6 +170,7 @@ export function prependOlderChatItems(
         !sameSeamItem(retainedItems[turn.index + index]!, item, same),
     ) ||
     pageFacts.modelBefore !== seamFacts.modelBefore ||
+    pageFacts.fallbackBefore !== seamFacts.fallbackBefore ||
     [...(pageFacts.completionIds ?? [])].some(
       (id) => facts.completionIds?.has(id) && !seamFacts.completionIds?.has(id),
     ) ||

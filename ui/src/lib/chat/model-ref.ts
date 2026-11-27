@@ -1,3 +1,4 @@
+import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { isLegacyCodexProviderId } from "../../../../src/config/legacy-codex-provider.js";
 import { normalizeAgentModelRefForConfig } from "../../../../src/config/model-input.js";
 import type { ModelCatalogEntry } from "../../api/types.ts";
@@ -20,6 +21,26 @@ export function buildQualifiedChatModelValue(model: string, provider?: string | 
   return trimmedModel.toLowerCase().startsWith(providerPrefix)
     ? trimmedModel
     : `${trimmedProvider}/${trimmedModel}`;
+}
+
+/** Use the same model name for manual selections and temporary switches in chat history. */
+export function resolveTranscriptModel(value: string, catalog?: ModelCatalogEntry[]) {
+  const reference = parseProviderModelRef(value);
+  const provider = normalizeChatModelProviderId(reference?.provider ?? "");
+  const entry = catalog?.find((candidate) => {
+    const ref = parseProviderModelRef(
+      buildQualifiedChatModelValue(candidate.id, candidate.provider),
+    );
+    return (
+      ref?.model === reference?.model &&
+      normalizeChatModelProviderId(ref?.provider ?? "") === provider
+    );
+  });
+  return {
+    provider,
+    entry,
+    name: entry?.name.trim() || entry?.alias?.trim() || reference?.model || value,
+  };
 }
 
 export function normalizeChatModelOverrideValue(

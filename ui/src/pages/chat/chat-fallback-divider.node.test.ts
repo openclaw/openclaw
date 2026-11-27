@@ -67,7 +67,7 @@ describe("model fallback transcript dividers", () => {
     const items = buildItems({ messages: history });
     expect(items.filter((item) => item.kind === "divider")).toEqual([
       expect.objectContaining({
-        label: "Model fallback: primary/model-a → secondary/model-b",
+        label: "Using model-b temporarily",
         description: "Reason: empty response",
         timestamp: 2000,
       }),
@@ -82,7 +82,7 @@ describe("model fallback transcript dividers", () => {
     expect(source).toEqual(notice);
   });
 
-  it("renders a successful return", () => {
+  it("shows a different fallback, restoration and later reuse of the same fallback", () => {
     const restored = {
       ...notice,
       timestamp: 4000,
@@ -91,18 +91,34 @@ describe("model fallback transcript dividers", () => {
         kind: "model-fallback",
         phase: "restored",
         runId: "run-2",
-        fromModel: "secondary/model-b",
+        fromModel: "secondary/model-c",
         toModel: "primary/model-a",
       },
     };
-    const history = [notice, restored];
+    const other = {
+      ...notice,
+      timestamp: 3000,
+      __openclaw: { id: "switch-2", runId: "run-1", seq: 3 },
+      openclawDeliveryMirror: { ...notice.openclawDeliveryMirror, toModel: "secondary/model-c" },
+    };
+    const again = {
+      ...notice,
+      timestamp: 5000,
+      __openclaw: { id: "switch-3", runId: "run-3", seq: 5 },
+    };
+    const history = [notice, other, restored, again];
     const items = buildItems({ messages: structuredClone(history) });
     expect(items.filter((item) => item.kind === "divider")).toEqual([
-      expect.objectContaining({ label: "Model fallback: primary/model-a → secondary/model-b" }),
+      expect.objectContaining({ label: "Using model-b temporarily" }),
+      expect.objectContaining({ label: "Using model-c temporarily" }),
       expect.objectContaining({
         key: expect.stringContaining("restore-1"),
-        label: "Returned to selected model: secondary/model-b → primary/model-a",
+        label: "Back to model-a",
         timestamp: 4000,
+      }),
+      expect.objectContaining({
+        key: expect.stringContaining("switch-3"),
+        label: "Using model-b temporarily",
       }),
     ]);
     expect(items.filter((item) => item.kind === "group")).toHaveLength(0);

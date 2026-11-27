@@ -2,7 +2,6 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readNodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
 import { readModelFallbackNotice } from "../../../../src/shared/model-fallback-notice.js";
-import { t } from "../../i18n/index.ts";
 import {
   type ChatItem,
   type MessageGroup,
@@ -40,6 +39,7 @@ import {
   toolCardNeedsUserAction,
 } from "./chat-sessions-yield.ts";
 import {
+  buildModelFallbackDivider,
   createSubmittedModelNoticeProjector,
   projectChatSystemNotice,
 } from "./chat-system-notice.ts";
@@ -189,6 +189,16 @@ export function buildChatItems(
   const compactionRunIdentity = createCompactionRunLookup(history, props.runId);
   let hasPersistedCompaction = false;
   let latestResetAt: number | undefined;
+  let lastModelTransition: string | undefined;
+  const pushActivityBoundary = (item: Extract<ChatItem, { kind: "message" }>) => {
+    items.push({
+      kind: "notice",
+      key: `activity-boundary:${item.key}`,
+      text: "",
+      timestamp: rawMessageTimestamp(item.message) ?? 0,
+      activityBoundary: true,
+    });
+  };
   const projectSubmittedModel = createSubmittedModelNoticeProjector();
   for (const [i, item] of historyItems.entries()) {
     const msg = item.message;
@@ -201,45 +211,43 @@ export function buildChatItems(
       continue;
     }
     if (isHiddenChatCommentary(props, msg, activeCommentaryRunId)) {
-      items.push({
-        kind: "notice",
-        key: `activity-boundary:${itemKey}`,
-        text: "",
-        timestamp: rawMessageTimestamp(msg) ?? 0,
-        activityBoundary: true,
-      });
+      pushActivityBoundary(item);
       continue;
     }
     const raw = asRecord(msg) ?? {};
     const marker = asRecord(raw["__openclaw"]);
     if (facts && msg === facts.probe) {
       facts.modelBefore = projectSubmittedModel.state();
+      facts.fallbackBefore = lastModelTransition;
     }
     const modelNotice = projectSubmittedModel(item);
     if (modelNotice) {
       items.push(modelNotice);
     }
+    if (
+      modelNotice ||
+      marker?.kind === "reset" ||
+      (raw.role === "custom" && raw.customType === "session-model-change")
+    ) {
+      lastModelTransition = undefined;
+    }
     const fallback = readModelFallbackNotice(msg);
     if (fallback) {
-      items.push({
-        kind: "divider",
-        key: `divider:model-fallback:${itemKey}`,
-        systemEvent: "info",
-        label: t(
-          fallback.phase === "restored"
-            ? "chat.composer.modelRestoredEvent"
-            : "chat.composer.modelFallbackEvent",
-          { from: fallback.fromModel, to: fallback.toModel },
+      const transition = `${fallback.phase ?? "fallback"}:${fallback.toModel}`;
+      if (transition === lastModelTransition) {
+        // Preserve separate command rows without repeating their intervening status.
+        pushActivityBoundary(item);
+        continue;
+      }
+      lastModelTransition = transition;
+      items.push(
+        buildModelFallbackDivider(
+          itemKey,
+          rawMessageTimestamp(msg) ?? Date.now(),
+          fallback,
+          props.modelCatalog,
         ),
-        ...(fallback.reason
-          ? {
-              description: t("chat.composer.fallbackReason", {
-                reason: fallback.reason.replace(/_/g, " "),
-              }),
-            }
-          : {}),
-        timestamp: rawMessageTimestamp(msg) ?? Date.now(),
-      });
+      );
       continue;
     }
     if (marker?.kind === "compaction" || isContextCompactionMessage(msg)) {

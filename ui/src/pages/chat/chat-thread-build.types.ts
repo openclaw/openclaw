@@ -1,3 +1,4 @@
+import type { ModelCatalogEntry } from "../../api/types.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import type { ChatGuardianNotice, ChatItem, ChatStreamSegment } from "../../lib/chat/chat-types.ts";
 import type { AutomationProjection } from "./chat-automation-projection-loader.ts";
@@ -14,6 +15,7 @@ export type BuildChatItemsProps = ChatInputPlacementProps &
     compactionStatus?: CompactionStatus | null;
     /** Invalidates cached display copy when the active UI language changes. */
     locale?: string;
+    modelCatalog?: ModelCatalogEntry[];
     messages: unknown[];
     messageRecovery?: ChatMessageRecovery;
     toolMessages: unknown[];

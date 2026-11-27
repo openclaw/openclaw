@@ -26,6 +26,7 @@ export type ChatItemsFacts = ReplyAttributionFacts & {
   /** Model-selection state entering this message. */
   probe?: unknown;
   modelBefore?: string;
+  fallbackBefore?: string;
 };
 
 /** Hidden commentary still owns a boundary between neighboring activity batches. */
