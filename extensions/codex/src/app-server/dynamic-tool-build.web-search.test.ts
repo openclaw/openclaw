@@ -229,15 +229,15 @@ it("records webSearchRequested=true for domain-restricted search under cold unsu
   const allowed = vi.fn();
   const requested = vi.fn();
 
-   await buildDynamicToolsForTest(params, workspaceDir, {
+  await buildDynamicToolsForTest(params, workspaceDir, {
     nativeToolSurfaceEnabled: await nativeSurface(),
     nativeProviderWebSearchSupport: "unsupported",
     onPersistentWebSearchPolicyResolved: persistent,
     onWebSearchPolicyResolved: allowed,
     onWebSearchRequestedResolved: requested,
-    });
+  });
 
-   expect(persistent).toHaveBeenCalledExactlyOnceWith(false);
+  expect(persistent).toHaveBeenCalledExactlyOnceWith(false);
   expect(allowed).toHaveBeenCalledExactlyOnceWith(false);
   expect(requested).toHaveBeenCalledExactlyOnceWith(true);
-  });
+});
