@@ -35,6 +35,12 @@ Two complementary working proofs of concept:
 
 The objective is not to make agents remember less. It is to stop making them repeatedly read information they already have or cannot use. Preserve attribution, chronology, reply semantics, trust boundaries, actual execution permissions and checkpoint compatibility. Do not indiscriminately remove tool instructions or security policy.
 
+## Recommendation: integrate transient turn context upstream
+
+**The [Transient Turn Context v0.1 plugin](https://github.com/Animeleague/openclaw/tree/bank/transient-turn-context-v0.1-2026-11-27/live-bank/2026-11-27-transient-turn-context-v0.1) is an integral part of this work, not an optional reference.** We recommend installing and evaluating it on an isolated deployment matching the documented supported route, alongside the V3.1 metadata optimization. Follow the plugin's compatibility, backup and installation precautions; do not install the renamed derivative alongside the original provider plugin.
+
+Ideally, upstream should integrate the transient-context behavior into OpenClaw itself, with capability-aware replay policy and appropriate regression coverage, so users do not need a separate plugin to prevent redundant historical runtime context from accumulating. The existing plugin provides a concrete implementation to evaluate. The goal is to ship both complementary optimizations upstream once the applicable provider, security, replay and cache trade-offs have been validated.
+
 ## Evidence and limitations
 
 November testing used OpenClaw 2026.11.10, Windows, local Gemma via openai-completions and tool-free Discord. Historical carriers fell from 6–9 to one. Derived warm-cache reuse decreased from 92.0% to 82.2%, and mean fresh tokens increased slightly from 1,092 to 1,216 in the first experiment. Subsequent metadata-experiment first-token times were approximately 97, 5 and 40 seconds; history changes and cache behavior confound these observations. The table reports distinct measurements, not a combined speedup.
