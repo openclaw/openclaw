@@ -6,15 +6,20 @@ import type {
   BrokerNativeResourceLease,
 } from "./resource-host.js";
 
+export type SpawnBrokerHostOptions = {
+  onReady?: (pid: number, restarted: boolean) => void;
+  onClosed?: () => void;
+  workerUrl?: URL;
+  nativeResources?: true;
+};
+
 /** Host operations available without importing its runtime diagnosis or startup. */
-export interface SpawnBrokerHost extends ReturnType<typeof createBrokerCommands> {
+export interface AttachmentBrokerHost {
   readonly entryPath: string;
   readonly pid: number | undefined;
   readonly hasOpenNativeResourceClaims: boolean;
   readonly nativeResourceAdmissionClosed: boolean;
   ready(): Promise<void>;
-  readFile(filePath: string, signal?: AbortSignal): Promise<Buffer>;
-  readonly readFilePage: BrokerFileReads["readPage"];
   captureNativeResource(
     input: BrokerNativeResourceInput,
     callbacks: BrokerNativeResourceCallbacks,
@@ -23,4 +28,10 @@ export interface SpawnBrokerHost extends ReturnType<typeof createBrokerCommands>
   serviceNativeResources(): void;
   waitForCleanup(): Promise<void>;
   close(): Promise<void>;
+}
+
+export interface SpawnBrokerHost
+  extends AttachmentBrokerHost, ReturnType<typeof createBrokerCommands> {
+  readFile(filePath: string, signal?: AbortSignal): Promise<Buffer>;
+  readonly readFilePage: BrokerFileReads["readPage"];
 }

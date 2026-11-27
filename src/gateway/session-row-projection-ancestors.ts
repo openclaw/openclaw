@@ -71,7 +71,8 @@ export function createSessionRowRelationReads(owner: {
         const rowContext = owner.preparedContext();
         return (
           (rowContext
-            ? projectGatewaySessionRunState({ key, now: Date.now(), rowContext }).subagentOwner
+            ? projectGatewaySessionRunState({ key, now: Date.now(), rowContext }).subagent
+                ?.ownerSessionKey
             : undefined) || entry.spawnedBy
         );
       });

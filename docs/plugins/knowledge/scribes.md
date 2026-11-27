@@ -58,8 +58,12 @@ which can be started again.
   `Knowledge scribe checkpoint · Learn from Granola`, so an interrupted run
   resumes. Defaults are your meetings (recorded by you or with you invited)
   from the last 7 days.
-- **Learn from Memory** brings `memory-core` notes into Knowledge once. Memory
-  itself is not changed.
+- **Learn from Memory** brings `memory-core` notes into Knowledge once and
+  saves progress as each file finishes. After a Gateway restart,
+  [restart recovery](/gateway/restart-recovery#automatic-resume) continues
+  eligible runs in the same conversation. The import skips unchanged files
+  it already finished and checks any unfinished or changed files. You can also
+  start it again with the same files selected. Your original Memory files stay intact.
 - **Learn from Slack** reads Slack channels through the
   [Slack plugin](#the-slack-plugin) and saves the decisions, commitments, and
   project news discussed there, updating the people, companies, and projects

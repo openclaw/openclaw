@@ -4,7 +4,6 @@ import {
   shouldOmitEmptyArrayItems,
   type ToolSchemaModelCompat,
 } from "./agent-tools-parameter-schema.js";
-import type { OpenAIToolProjection } from "./openai-tool-projection.js";
 import { findOpenAIStrictSchemaViolations } from "./openai-tool-schema-compat.js";
 import { getPublishedRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
 import { createToolSchemaNormalizationCache } from "./tool-schema-normalization-cache.js";
@@ -100,37 +99,32 @@ export function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
   return compatible;
 }
 
-/** Returns strict-schema diagnostics for an already materialized OpenAI tool projection. */
-export function findOpenAIStrictToolProjectionDiagnostics(projection: OpenAIToolProjection): {
-  toolIndex: number;
-  toolName?: string;
-  violations: string[];
-}[] {
-  return [
-    ...projection.diagnostics.map((diagnostic) => ({
-      toolIndex: diagnostic.toolIndex,
-      ...(diagnostic.toolName ? { toolName: diagnostic.toolName } : {}),
-      violations: [...diagnostic.violations],
-    })),
-    ...projection.tools.flatMap((tool) => {
-      const violations = findOpenAIStrictSchemaViolations(
-        normalizeStrictOpenAIJsonSchema(tool.parameters),
-        `${tool.name}.parameters`,
-      );
-      return violations.length > 0
-        ? [{ toolIndex: tool.toolIndex, toolName: tool.name, violations }]
-        : [];
-    }),
-  ];
+/**
+ * Strict policy for one OpenAI-protocol route, from the resolved model compat only: strict
+ * tools only where the route declares strict support; otherwise the field is omitted.
+ */
+export function resolveOpenAIStrictToolSetting(compat: {
+  supportsStrictMode?: boolean;
+}): true | undefined {
+  return compat.supportsStrictMode === true ? true : undefined;
 }
 
-/** Resolves strict mode for the projected tools that will be emitted in the request payload. */
-export function resolveOpenAIProjectedToolsStrictToolFlag(
-  projection: OpenAIToolProjection,
-  strict: boolean | null | undefined,
+/**
+ * Strict is per tool and only for a schema that is strict-compatible as written: the check
+ * runs before strict normalization, which would close an open object and narrow the tool.
+ */
+export function resolveOpenAIToolStrictFlag(
+  parameters: unknown,
+  strictSetting: boolean | null | undefined,
 ): boolean | undefined {
-  if (strict !== true) {
-    return strict === false ? false : undefined;
+  if (strictSetting !== true) {
+    return strictSetting === false ? false : undefined;
   }
-  return projection.tools.every((tool) => isStrictOpenAIJsonSchemaCompatible(tool.parameters));
+  const asWritten = normalizeToolParameterSchema(parameters ?? {}, {
+    modelCompat: resolveToolSchemaModelCompat(undefined),
+  });
+  return (
+    findOpenAIStrictSchemaViolations(asWritten, "parameters", { requireObjectRoot: true })
+      .length === 0
+  );
 }

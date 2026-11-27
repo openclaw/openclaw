@@ -280,7 +280,6 @@ export async function deliverCompletionDirect(params: {
   cfg: OpenClawConfig;
   requesterSessionKey: string;
   requesterSessionId?: string;
-  requesterLifecycleRevision?: string;
   requesterAgentId?: string;
   directIdempotencyKey: string;
   deliveryTarget: {

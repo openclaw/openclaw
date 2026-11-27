@@ -455,7 +455,7 @@ src/agents/subagents/registry/subagent-registry-helpers.ts	13
 src/agents/subagents/registry/subagent-registry-lifecycle-announce-cleanup.ts	5
 src/agents/subagents/registry/subagent-registry-lifecycle-bookkeeping.ts	1
 src/agents/subagents/registry/subagent-registry-lifecycle-cleanup.ts	5
-src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	3
+src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	2
 src/agents/subagents/registry/subagent-registry-lifecycle-finalize-cleanup.ts	1
 src/agents/subagents/registry/subagent-registry-lifecycle-persistence.ts	3
 src/agents/subagents/registry/subagent-registry-lifecycle-wake.ts	2
@@ -476,7 +476,6 @@ src/agents/subagents/registry/subagent-registry-sweep-cleanup.ts	2
 src/agents/subagents/registry/subagent-registry-sweep-kill.ts	6
 src/agents/subagents/registry/subagent-registry-sweep-settle.ts	2
 src/agents/subagents/registry/subagent-registry-sweeper-retire.ts	7
-src/agents/subagents/registry/subagent-registry-sweeper.ts	2
 src/agents/subagents/registry/subagent-registry-typing.ts	1
 src/agents/subagents/registry/subagent-registry.mocks.shared.ts	1
 src/agents/subagents/registry/subagent-registry.ts	1
@@ -951,7 +950,7 @@ src/gateway/server-methods/sessions-read.ts	6
 src/gateway/server-methods/sessions-rewind.ts	9
 src/gateway/server-methods/sessions-search-projected.ts	2
 src/gateway/server-methods/sessions-sharing-authority.ts	7
-src/gateway/server-methods/sessions-sharing.ts	15
+src/gateway/server-methods/sessions-sharing.ts	14
 src/gateway/server-methods/sessions-suggestions-access.ts	6
 src/gateway/server-methods/sessions-suggestions.ts	14
 src/gateway/server-methods/sessions-typing.ts	8
@@ -1288,7 +1287,6 @@ src/infra/update-database-generations.ts	1
 src/infra/update-doctor-migration-attribution.ts	1
 src/infra/update-doctor-process-custody.ts	4
 src/infra/update-doctor-scan-receipts.ts	2
-src/infra/update-failure-report-prepare.ts	2
 src/infra/update-immutable-activation.ts	3
 src/infra/update-immutable-generation.ts	2
 src/infra/update-immutable-protection.ts	1

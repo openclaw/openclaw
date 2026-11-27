@@ -390,9 +390,15 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
   owner.clients.add(close);
   const codec = new GenerationCodec(
     (handle, args, asynchronous, sourceCapture, disposal) => {
-      // Terminal cleanup already owns remote disposal; callers join its outcome.
-      if (closing && disposal) {
-        return asynchronous ? closing : undefined;
+      if (disposal && (closing || shared.retired)) {
+        // Once the worker has exited, only the host can finish releasing this capture.
+        const cleanup = close();
+        if (asynchronous) {
+          return cleanup;
+        }
+        // The preparation owner joins this same promise and reports any failure.
+        void cleanup.catch(() => {});
+        return undefined;
       }
       const command: GenerationWorkerInput = {
         operation: "call",
@@ -619,8 +625,14 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
         transferredNative = native;
       },
       assertAvailable: () => {
-        if (closing || owner.closing || shared.retired) {
+        if (closing || owner.closing) {
           throw new Error("Plugin preparation worker has closed");
+        }
+        if (shared.retired) {
+          // A closed pool can no longer provide the captured source for rollback.
+          throw new PluginSourceRecoveryUnavailableError(
+            new Error("Plugin preparation worker has closed"),
+          );
         }
       },
     };

@@ -75,7 +75,7 @@ import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-g
 import { createChatRunState } from "../server-chat-state.js";
 import * as gatewaySessionWorker from "../session-utils-store-worker.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
-import { agentHandlers } from "./agent.js";
+import { agentWaitHandler } from "./agent.js";
 import { createScopedCliClient } from "./chat-client.test-support.js";
 import {
   createFileAttachment,
@@ -3293,7 +3293,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         ...(failed ? { summary: errorMessage } : {}),
       });
       const waitRespond = vi.fn<RespondFn>();
-      await agentHandlers["agent.wait"]!({
+      await agentWaitHandler({
         params: { runId, timeoutMs: 0 },
         respond: waitRespond,
         context,

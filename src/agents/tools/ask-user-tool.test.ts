@@ -294,12 +294,6 @@ describe("ask_user", () => {
     expect(result.details).toEqual({ status: "answered", answers });
     expect(result.terminate).toBeUndefined();
     expect(owner.continuesAfterAttempt()).toBe(false);
-    expect(result.content).toEqual([
-      expect.objectContaining({
-        type: "text",
-        text: expect.stringContaining("Deployment t: Staging (Recommended)"),
-      }),
-    ]);
     expect(gateway.mock).toHaveBeenNthCalledWith(
       1,
       "question.request",

@@ -453,8 +453,8 @@ export function prepareProjectedSessionPresentation(
       facts[2] = liveModel?.model;
       facts[3] = liveModel === null;
       facts[4] = childOwnerSessionKeys;
-      facts[5] = temporal.subagentRun?.model;
-      facts[6] = temporal.subagentOwner;
+      facts[5] = temporal.subagent?.model;
+      facts[6] = temporal.subagent?.ownerSessionKey;
       facts[7] = temporal.fields.status;
       facts[8] = temporal.fields.lastRunError;
       facts[9] = temporal.fields.suppressErrorNotice;

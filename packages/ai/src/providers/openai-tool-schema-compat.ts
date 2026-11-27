@@ -98,12 +98,19 @@ function collectStrictSchemaViolations(
 
   const record = schema as Record<string, unknown>;
   const violations: string[] = [];
+  // Unions keep a tool non-strict (a branch can lack the type strict mode requires); a type
+  // list such as ["string", "null"] is accepted.
   for (const key of ["anyOf", "oneOf", "allOf"] as const) {
     if (key in record) {
       violations.push(`${path}.${key}`);
     }
   }
-  if (Array.isArray(record.type)) {
+  if (Array.isArray(record.type) && !record.type.every((type) => typeof type === "string")) {
+    violations.push(`${path}.type`);
+  }
+  // Strict mode needs every value schema typed; an untyped node ({} or annotations only) is
+  // valid JSON Schema but outside the strict subset.
+  if (!("type" in record) && !("$ref" in record) && !("enum" in record) && !("const" in record)) {
     violations.push(`${path}.type`);
   }
   if (typeof record.pattern === "string" && hasRegexLookaround(record.pattern)) {
@@ -112,7 +119,13 @@ function collectStrictSchemaViolations(
 
   const properties = isRecord(record.properties) ? record.properties : undefined;
 
-  if (record.type === "object") {
+  // A nullable key is ["object", "null"], and a branch with properties but no type is an object
+  // too; both follow the object rules.
+  if (
+    record.type === "object" ||
+    (Array.isArray(record.type) && record.type.includes("object")) ||
+    (record.type === undefined && properties !== undefined)
+  ) {
     if (record.additionalProperties !== false) {
       violations.push(`${path}.additionalProperties`);
     }

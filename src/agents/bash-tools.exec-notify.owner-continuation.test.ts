@@ -105,13 +105,14 @@ test.for([
     owner: true,
     origin: "untrusted",
   },
+  // The requester's admitted grant decides the wake, also when the command ran for another chat.
   {
     label: "cross-session",
     admin: true,
     tainted: false,
     crossSession: true,
-    owner: false,
-    origin: "untrusted",
+    owner: true,
+    origin: "agent",
   },
 ] as const)(
   "classifies a tracked memory write after an exec wake: $label",

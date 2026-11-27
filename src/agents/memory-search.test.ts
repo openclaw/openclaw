@@ -358,9 +358,7 @@ describe("memory search config", () => {
             multimodal: { enabled: true, allowPartial: true, modalities: ["image"] },
           }),
         ),
-      ).toThrow(
-        /memory\.search\.multimodal does not support memory\.search\.fallback/,
-      );
+      ).toThrow(/memory\.search\.multimodal does not support memory\.search\.fallback/);
     },
   );
 
@@ -395,7 +393,11 @@ describe("memory search config", () => {
     const resolved = resolve(
       multimodalSearch({
         ...overrides,
-        multimodal: { enabled: true, allowPartial: skippedModalities.length > 0, modalities: ["all"] },
+        multimodal: {
+          enabled: true,
+          allowPartial: skippedModalities.length > 0,
+          modalities: ["all"],
+        },
       }),
     );
     expect(resolved?.multimodal).toEqual({

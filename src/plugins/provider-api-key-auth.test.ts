@@ -86,6 +86,10 @@ describe("createProviderApiKeyAuthMethod", () => {
     const ctx = context();
     const config = await discoveredMethod(resolveDefaultModel).runNonInteractive?.(ctx);
     expect(ctx.toApiKeyCredential).not.toHaveBeenCalled();
+    expect(config?.auth?.profiles?.["example:default"]).toEqual({
+      provider: "example",
+      mode: "api_key",
+    });
     expect(config?.agents?.defaults?.model).toEqual(expected);
   });
 

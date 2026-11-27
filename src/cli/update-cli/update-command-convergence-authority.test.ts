@@ -6,7 +6,6 @@ import * as updateCheck from "../../infra/update-check.js";
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import { readGitRuntimeArtifactIdentity } from "../../infra/update-git-runtime.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
-import { updateRunReportInputFromResult } from "../../infra/update-run-report.js";
 import {
   updateRunStepsFromResultStep,
   updateRunWarningMessages,
@@ -177,12 +176,9 @@ describe("candidate convergence Doctor dispatch authority", () => {
     });
     const { resultWithPostUpdate } = await converge({ candidateRuntime: true });
     expect(resultWithPostUpdate.status).toBe("ok");
-    const projected = updateRunReportInputFromResult(resultWithPostUpdate);
-    expect(updateRunWarningMessages(projected.steps)).toEqual([
-      advisory,
-      ...(pending ? [finalWarning] : []),
-    ]);
-    expect(JSON.stringify(projected)).not.toContain("Let the current update or repair finish.");
+    const steps = resultWithPostUpdate.steps.flatMap(updateRunStepsFromResultStep);
+    expect(updateRunWarningMessages(steps)).toEqual([advisory, ...(pending ? [finalWarning] : [])]);
+    expect(JSON.stringify(steps)).not.toContain("Let the current update or repair finish.");
   });
   it("converges plugins for a switched Git release in the updater, without Doctor", async () => {
     const { createGitReleaseDirs, publishGitRelease } = await import("../../infra/git-release.js");

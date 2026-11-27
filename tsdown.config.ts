@@ -549,6 +549,13 @@ function shouldAlwaysBundleDependency(id: string): boolean {
   );
 }
 
+// Single-file relays keep some external imports after their last binding is removed.
+// These audited subpaths belong to packages that declare sideEffects: false.
+const RELAY_UNUSED_IMPORT_RULES = [
+  /^@openclaw\/fs-safe\/(?:advanced|durability|errors|output|root|secure-file|walk)$/u,
+  /^@openclaw\/proc-safe\/(?:errors|identity|inspect|reaper)$/u,
+].map((test) => ({ test, external: true, sideEffects: false }));
+
 function listBundledPluginEntrySources(
   entries: Array<{
     id: string;
@@ -1060,7 +1067,10 @@ const configs: UserConfig[] = [
         "infra/shared-worker-host.worker",
       ].includes(name),
     );
-    const bundleFsSafe = isBrokerNativeResource || bundleWorkerHelpers;
+    const bundleFsSafe =
+      isBrokerNativeResource ||
+      bundleWorkerHelpers ||
+      firstEntry === "state/openclaw-state-lease-heartbeat.worker";
     const isFsSafe = (id: string) =>
       id === "@openclaw/fs-safe" || id.startsWith("@openclaw/fs-safe/");
     return nodeBuildConfig(
@@ -1087,6 +1097,13 @@ const configs: UserConfig[] = [
               )),
         },
         outputOptions: getStandaloneRuntimeProcessOutputOptions(firstEntry),
+        ...(Object.keys(entry).length === 1 &&
+        [
+          "process/supervisor/service-child-relay",
+          "agents/harness/native-hook-relay-client.worker",
+        ].includes(firstEntry)
+          ? { treeshake: { moduleSideEffects: RELAY_UNUSED_IMPORT_RULES } }
+          : {}),
         plugins: [
           createStateSchemaInlinePlugin(),
           ...(bundleFsSafe ? [createPackageRuntimeUrlBuildPlugin("@openclaw/fs-safe")] : []),

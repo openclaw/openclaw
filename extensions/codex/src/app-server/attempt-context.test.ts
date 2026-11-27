@@ -348,8 +348,8 @@ describe("Codex app-server attempt context", () => {
     expect(context.threadDeveloperInstructions).not.toContain("Canonical agent soul");
     expect(context.threadDeveloperInstructions).not.toContain("Execution project instructions");
     expect(context.threadDeveloperInstructions).not.toContain(path.join(executionDir, "AGENTS.md"));
-    expect(context.personaInstructions).toContain("Canonical agent soul");
-    expect(context.personaInstructions).not.toContain("Canonical agent instructions");
+    expect(context.sharedPersonaInstructions).toContain("Canonical agent soul");
+    expect(context.sharedPersonaInstructions).not.toContain("Canonical agent instructions");
     expect(context.memoryToolRouted).toBe(true);
     expect(context.promptContext).toBeUndefined();
   });

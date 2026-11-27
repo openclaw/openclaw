@@ -301,7 +301,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
     parameters: SubagentsToolSchema,
     repeatable: { actions: ["list", "wait"] },
     description:
-      "List native subagents, wait for selected runIds, or cancel a runId and its descendants. A wait timeout never cancels execution or consumes completion delivery.",
+      "List native subagents, wait for selected runIds, or cancel a runId and its descendants. A wait timeout never cancels execution or consumes completion delivery. Never loop-poll list; check status only on demand, debug, or intervention. Follow each spawn's accepted completion mode.",
     execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
       const action = readToolStringParam(params, "action") ?? "list";

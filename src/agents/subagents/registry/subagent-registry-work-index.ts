@@ -1,3 +1,4 @@
+import { hasSubagentKill } from "./subagent-control-kill-intent.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { hasPendingRequesterTurnResult } from "./subagent-requester-turn-custody.js";
 
@@ -12,8 +13,7 @@ export function needsSubagentActivation(entry: SubagentRunRecord): boolean {
       hasPendingRequesterTurnResult(entry) ||
       entry.requesterSettleWake ||
       entry.pauseReason ||
-      entry.killIntent ||
-      entry.killReconciliation ||
+      hasSubagentKill(entry) ||
       entry.collectorLaunchCleanupPending,
     )
   );

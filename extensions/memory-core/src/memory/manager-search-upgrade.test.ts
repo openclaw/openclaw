@@ -225,7 +225,9 @@ it("keeps an existing media index until partial indexing is explicitly enabled",
     expect(process.exitCode).toBe(1);
     process.exitCode = exitCode;
     await runMemoryIndex({ agent: "main", force: true }, host);
-    expect(error).toHaveBeenLastCalledWith(expect.stringContaining("Unsupported modalities: audio"));
+    expect(error).toHaveBeenLastCalledWith(
+      expect.stringContaining("Unsupported modalities: audio"),
+    );
     expect(process.exitCode).toBe(1);
     expect(rows()).toEqual(["media/diagram.png", "media/meeting.wav", note]);
     expect(withDatabase(dbPath, readMeta).model).toBe("both");
