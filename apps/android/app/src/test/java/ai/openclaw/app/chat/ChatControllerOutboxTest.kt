@@ -2,6 +2,7 @@ package ai.openclaw.app.chat
 
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeForegroundService
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
@@ -938,7 +939,7 @@ class ChatControllerOutboxTest {
         advanceUntilIdle()
         gateway.sendFailureAfterDispatch =
           GatewayRequestRejected(
-            GatewaySession.ErrorShape(
+            ErrorShape(
               code = "UNAVAILABLE",
               message = "Gateway is restarting",
               details =
@@ -987,7 +988,7 @@ class ChatControllerOutboxTest {
 
       gateway.online = true
       gateway.sendFailureAfterDispatch =
-        GatewayRequestRejected(GatewaySession.ErrorShape(code = "UNAVAILABLE", message = "cached run failed"))
+        GatewayRequestRejected(ErrorShape(code = "UNAVAILABLE", message = "cached run failed"))
       first.handleGatewayEvent("health", null)
       advanceUntilIdle()
 

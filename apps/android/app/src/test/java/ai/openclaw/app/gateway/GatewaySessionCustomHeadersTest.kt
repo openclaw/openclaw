@@ -1092,7 +1092,7 @@ class GatewaySessionCustomHeadersTest {
   @Test
   fun ingressDenialPausesReconnectUntilExplicitRetry() =
     runBlocking {
-      val failure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+      val failure = CompletableDeferred<Pair<ErrorShape, Boolean>>()
       val secondAuthorization = CompletableDeferred<Unit>()
       val socketCreated = CompletableDeferred<Unit>()
       val attempts = AtomicInteger()
@@ -1143,7 +1143,7 @@ class GatewaySessionCustomHeadersTest {
       for (mode in listOf("valid", "retire", "expired")) {
         val retire = mode == "retire"
         val valid = AtomicBoolean(true)
-        val failure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+        val failure = CompletableDeferred<Pair<ErrorShape, Boolean>>()
         val server = MockWebServer()
         val firstRequest = CompletableDeferred<Unit>()
         val releaseResponse = CountDownLatch(if (retire) 1 else 0)
@@ -1252,7 +1252,7 @@ class GatewaySessionCustomHeadersTest {
       val peerClosed = CompletableDeferred<Unit>()
       val responseHeld = CompletableDeferred<Unit>()
       val rawFailure = CompletableDeferred<Throwable>()
-      val failure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+      val failure = CompletableDeferred<Pair<ErrorShape, Boolean>>()
       val releaseResponse = CountDownLatch(1)
       val releaseFailure = CountDownLatch(1)
       val opened = AtomicInteger()
@@ -1364,7 +1364,7 @@ class GatewaySessionCustomHeadersTest {
   fun onlyAnExplicitUpgradeChallengePausesForExternalAuthorization() =
     runBlocking {
       for (protected in listOf(false, true)) {
-        val failure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+        val failure = CompletableDeferred<Pair<ErrorShape, Boolean>>()
         val disconnected = CompletableDeferred<Unit>()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val authorization =
@@ -1542,7 +1542,7 @@ class GatewaySessionCustomHeadersTest {
   private fun ingressSession(
     scope: CoroutineScope,
     authorization: GatewayIngressAuthorization,
-    onFailure: (GatewaySession.ErrorShape, Boolean) -> Unit = { _, _ -> },
+    onFailure: (ErrorShape, Boolean) -> Unit = { _, _ -> },
     onConnected: (GatewayHelloSummary) -> Unit = {},
     socketFactory: (OkHttpClient, Request, WebSocketListener) -> WebSocket,
   ) = GatewaySession(

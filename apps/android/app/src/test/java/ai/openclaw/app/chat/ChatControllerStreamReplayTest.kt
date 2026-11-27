@@ -1,8 +1,8 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayRequestRejected
-import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.ui.chat.ChatTimelineItem
 import ai.openclaw.app.ui.chat.buildTimeline
 import ai.openclaw.app.ui.chat.prepareChatHistory
@@ -1306,7 +1306,7 @@ class ChatControllerStreamReplayTest {
         reads += 1
         if (reads <= 2) {
           throw GatewayRequestRejected(
-            GatewaySession.ErrorShape(
+            ErrorShape(
               "UNAVAILABLE",
               "session history is busy; retry shortly",
               GatewayErrorDetails(null, false, null, retryable = true),
@@ -1340,7 +1340,7 @@ class ChatControllerStreamReplayTest {
       gateway.respond("chat.history") {
         refusedReads += 1
         throw GatewayRequestRejected(
-          GatewaySession.ErrorShape("UNAVAILABLE", "busy", GatewayErrorDetails(null, false, null, retryable = true)),
+          ErrorShape("UNAVAILABLE", "busy", GatewayErrorDetails(null, false, null, retryable = true)),
         )
       }
       controller.handleGatewayEvent("sessions.changed", """{"sessionKey":"main","agentId":"main","phase":"message"}""")

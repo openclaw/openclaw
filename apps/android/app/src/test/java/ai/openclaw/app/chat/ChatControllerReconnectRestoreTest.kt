@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
@@ -164,7 +165,7 @@ class ChatControllerReconnectRestoreTest {
       gateway.respondWith("sessions.describe", """{"session":null}""")
       gateway.respond("sessions.patch") {
         throw GatewayRequestRejected(
-          GatewaySession.ErrorShape("INVALID_REQUEST", "unexpected property autoLabel"),
+          ErrorShape("INVALID_REQUEST", "unexpected property autoLabel"),
         )
       }
       gateway.respondWith("chat.history", history(emptyList()))
@@ -1345,7 +1346,7 @@ class ChatControllerReconnectRestoreTest {
       mutationHistoryJob.cancelAndJoin()
     } else {
       releaseMutationHistory.completeExceptionally(
-        GatewayRequestRejected(GatewaySession.ErrorShape("UNAVAILABLE", "history unavailable")),
+        GatewayRequestRejected(ErrorShape("UNAVAILABLE", "history unavailable")),
       )
       mutationHistoryJob.join()
     }
