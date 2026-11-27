@@ -39,6 +39,7 @@ export function registerPersistentSessionDeliveryTests({
         expect.objectContaining({
           sessionKey: params.agentSessionKey,
           text: "The release approval is ready.",
+          displayOnly: true,
         }),
       );
       expect(deliverOutboundPayloads).toHaveBeenCalledTimes(deliveryRequested ? 1 : 0);
@@ -123,6 +124,7 @@ export function registerPersistentSessionDeliveryTests({
           expect.objectContaining({
             sessionKey: destinationKey,
             text: "Persistent session report",
+            displayOnly: true,
           }),
         );
       }

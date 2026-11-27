@@ -7,6 +7,7 @@ import {
 } from "../agents/failover/assistant-request-failure-copy.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import { projectPreservedCatalogMessageForDisplay } from "../chat/session-catalog-display.js";
+import type { PendingTurnBoundary } from "../config/sessions/session-history-types.js";
 import {
   projectAgentHistoryActivity,
   type AgentHistoryActivity,
@@ -25,6 +26,7 @@ import {
   formatProviderRefusalText,
 } from "../shared/assistant-error-format.js";
 import { readRunFailureCause, readRunFailureNotice } from "../shared/run-failure-notice.js";
+import { preserveCollectedSubagentCompletions } from "../shared/subagent-completion.js";
 import {
   isOpenClawMessageToolMirrorAssistantMessage,
   isTranscriptOnlyOpenClawAssistantMessage,
@@ -72,7 +74,7 @@ export type ChatDisplayProjectionOptions = {
   activity?: false;
   resolveCurrentUserProfileDisplay?: CurrentUserProfileDisplayResolver;
   stripEnvelope?: boolean;
-  turnBoundaryPending?: boolean;
+  turnBoundaryPending?: PendingTurnBoundary;
   assistantErrorPending?: boolean;
   subagentCoordination?: SubagentCoordinationDisplayResolver;
 };
@@ -133,7 +135,7 @@ function projectCurrentUserProfileAvatars(
 type ChatDisplayProjectionResult = {
   messages: Array<Record<string, unknown>>;
   activity: AgentHistoryActivity[];
-  turnBoundaryPending: boolean;
+  turnBoundaryPending: PendingTurnBoundary;
   assistantErrorPending: boolean;
   assistantErrorRecoveryObserved: boolean;
   commentaryFallbacksObserved?: true;
@@ -482,16 +484,32 @@ function projectRunFailureNotices(
 ): Array<Record<string, unknown>> {
   return messages.flatMap((message) => {
     if (message.role === "custom" && message.customType === "run-failed-before-reply") {
+      const notice = readRunFailureNotice(message);
+      const details = asOptionalRecord(message.details);
       const runId =
         readSessionTranscriptFailureRunId(message) ?? readSessionTranscriptRunId(message);
       const summary =
-        readRunFailureNotice(message)?.summary ??
+        notice?.summary ??
         (typeof message.content === "string" ? message.content.trim() : undefined);
-      const cause =
-        readRunFailureNotice(message)?.cause ??
-        readRunFailureCause(asOptionalRecord(message.details)?.cause);
+      const cause = notice?.cause ?? readRunFailureCause(details?.cause);
+      const desktopNotice = details?.desktopNotice;
+      const desktopSummary =
+        typeof desktopNotice === "string" && desktopNotice.trim() ? desktopNotice : undefined;
       return runId && summary
-        ? [{ ...message, openclawRunError: { runId, summary, ...(cause ? { cause } : {}) } }]
+        ? [
+            {
+              ...message,
+              openclawRunError: {
+                runId,
+                summary,
+                ...(notice?.summaryAsTitle || details?.summaryAsTitle === true
+                  ? { summaryAsTitle: true }
+                  : {}),
+                ...(desktopSummary ? { desktopSummary } : {}),
+                ...(cause ? { cause } : {}),
+              },
+            },
+          ]
         : [message];
     }
     if (readSessionTranscriptRunId(message) && isPendingAssistantError(message)) {
@@ -546,7 +564,9 @@ export function prepareChatHistoryRecoveryMessages(
   options?: ChatHistoryRecoveryOptions,
 ) {
   const projectedMessages = messages.map((original) => {
-    const message = projectTranscriptImageArtifacts(prepareAssistantHistoryMessage(original));
+    const message = preserveCollectedSubagentCompletions(
+      projectTranscriptImageArtifacts(prepareAssistantHistoryMessage(original)),
+    );
     const entry = asOptionalRecord(message);
     const failureRunId = readSessionTranscriptFailureRunId(entry);
     if (failureRunId) {

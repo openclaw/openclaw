@@ -46,7 +46,7 @@ it("updates pending download links and file metadata without replacing the card"
   flush();
   const link = view.getByRole("link", { name: /download/i });
   expect(link.textContent).toBe("Download");
-  expect(link.querySelector("svg")).toBeNull();
+  expect(link.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
   expect(link.hasAttribute("href")).toBe(false);
   expect(link.getAttribute("aria-disabled")).toBe("true");
   expect(link.tabIndex).toBe(0);

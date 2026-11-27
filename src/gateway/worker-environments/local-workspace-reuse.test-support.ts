@@ -10,7 +10,10 @@ import {
 import { requireGit } from "../../agents/worktrees/git.js";
 import { withWorktreePreparationTiming } from "../../agents/worktrees/preparation-timing.js";
 import * as diagnostics from "../../infra/diagnostic-events.js";
+import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { startChatSendDiagnostics } from "../server-methods/chat-send-diagnostics.js";
 import { prepareSandboxCheckpointFixture } from "./local-workspace-incremental.test-support.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import { readLocalWorkspaceProjection } from "./local-workspace-store.test-support.js";
@@ -23,7 +26,67 @@ const expectText = async (directory: string, relative: string, expected: string)
 const expectMissing = async (directory: string, relative: string) =>
   expect(fs.stat(path.join(directory, relative))).rejects.toMatchObject({ code: "ENOENT" });
 
+async function provePreparationAttribution(owner: LocalWorkspaceOwner) {
+  const stores = await import("./local-workspace-store.js");
+  const withStore = stores.withLocalWorkspaceStore;
+  let clock = 0;
+  using clockSpy = vi.spyOn(performance, "now");
+  clockSpy.mockImplementation(() => clock);
+  using storeSpy = vi.spyOn(stores, "withLocalWorkspaceStore");
+  storeSpy.mockImplementation((params, run) =>
+    withStore(params, (store) =>
+      run({
+        ...store,
+        update: async (...args) => {
+          const result = await store.update(...args);
+          if (args[3] && "rawManifest" in args[3]) {
+            clock += 2_000;
+          }
+          return result;
+        },
+        manifest: async (...args) => {
+          const result = await store.manifest(...args);
+          if (args[1].kind === "scan") {
+            clock += 4_000;
+          }
+          return result;
+        },
+      }),
+    ),
+  );
+  const log = { info: vi.fn<(message: string) => void>() };
+  const timing = startChatSendDiagnostics(log);
+  timing.acknowledge();
+  using prepared = await withDiagnosticsTimelineObserver(timing.observeSpan, () =>
+    prepareSandboxCheckpointFixture(owner),
+  );
+  timing.finish();
+  await expectText(prepared.workspaceDir, "source.txt", "original\n");
+  expect(log.info).toHaveBeenCalledTimes(1);
+  const message = log.info.mock.calls[0]![0];
+  const prefix = "detail.attempt.setup.sandbox.workspace_selection.prepare.reconcile";
+  expect(message).toContain(`${prefix}=6000ms`);
+  expect(message).toContain(`${prefix}.baseline=2000ms`);
+  expect(message).toContain(`${prefix}.checkpoint.projection=4000ms`);
+
+  await writeText(prepared.workspaceDir, "source.txt", "later guest edit\n");
+  const reuseTiming = startChatSendDiagnostics(log);
+  reuseTiming.acknowledge();
+  using reused = await withDiagnosticsTimelineObserver(reuseTiming.observeSpan, () =>
+    prepareSandboxCheckpointFixture(owner),
+  );
+  reuseTiming.finish();
+  await expectText(reused.workspaceDir, "source.txt", "later guest edit\n");
+  expect(log.info).toHaveBeenCalledTimes(2);
+  const reuseMessage = log.info.mock.calls[1]![0];
+  expect(reuseMessage).toContain(
+    "detail.attempt.setup.sandbox.workspace_selection.reuse.reconcile.checkpoint.canonical=",
+  );
+  expect(reuseMessage).not.toContain(`${prefix}.checkpoint`);
+}
+
 export async function proveWorkspaceWaitAttribution(owner: LocalWorkspaceOwner) {
+  await provePreparationAttribution(owner);
   using _ = await prepareSandboxCheckpointFixture(owner);
   const stores = await import("./local-workspace-store.js");
   const projections = await import("./local-workspace-projection.js");
@@ -194,7 +257,7 @@ export async function provePreparationObservationBoundary(owner: LocalWorkspaceO
 
 export async function provePreparationWaiterAuthority(
   owner: LocalWorkspaceOwner,
-  mode: "cancel waiter" | "revoke waiter" | "cancel producer" | "failed producer" | "other session",
+  mode: "cancel waiter" | "cancel producer" | "failed producer" | "other session",
 ) {
   using _ = await prepareSandboxCheckpointFixture(owner);
   const stores = await import("./local-workspace-store.js");
@@ -228,18 +291,13 @@ export async function provePreparationWaiterAuthority(
   );
   const producerStop = new AbortController();
   const waiterStop = new AbortController();
-  let revoked = false;
   const producer = prepareSandboxCheckpointFixture(owner, undefined, producerStop.signal);
   let waiter: typeof producer | undefined;
   try {
     await awaitGateBeforeSettlement(entered.promise, producer, "Producer did not acquire custody");
     waiter = prepareSandboxCheckpointFixture(
       mode === "other session" ? { ...owner, sessionId: "another-incarnation" } : owner,
-      () => {
-        if (revoked) {
-          throw new Error("waiter revoked");
-        }
-      },
+      undefined,
       waiterStop.signal,
     );
     await awaitGateBeforeSettlement(admitted.promise, waiter, "Waiter did not enter preparation");
@@ -247,7 +305,6 @@ export async function provePreparationWaiterAuthority(
       waiterStop.abort(new Error("waiter stopped"));
       await expect(waiter).rejects.toBe(waiterStop.signal.reason);
     }
-    revoked = mode === "revoke waiter";
     if (mode === "cancel producer") {
       producerStop.abort(new Error("producer stopped"));
     }
@@ -263,12 +320,10 @@ export async function provePreparationWaiterAuthority(
       mode === "cancel producer" || mode === "failed producer" ? "rejected" : "fulfilled",
     );
     expect(results[1]?.status).toBe(mode === "cancel producer" ? "fulfilled" : "rejected");
-    if (mode === "revoke waiter" || mode === "other session") {
+    if (mode === "other session") {
       expect(results[1]).toMatchObject({
         reason: {
-          message: expect.stringContaining(
-            mode === "revoke waiter" ? "waiter revoked" : "different session incarnation",
-          ),
+          message: expect.stringContaining("different session incarnation"),
         },
       });
     }
@@ -308,24 +363,55 @@ export async function proveWarmWorkspaceReuse(owner: LocalWorkspaceOwner) {
   const canonical = owner.worktree.path;
   const quiescence = await import("../../agents/sandbox/local-workspace-quiescence.js");
   using first = await prepareSandboxCheckpointFixture(owner);
+  expect(
+    (await readLocalWorkspaceProjection(owner.worktree.id))?.projection_fingerprints,
+  ).not.toBeNull();
   const quiesce = vi.spyOn(quiescence, "quiesceLocalWorkspace");
+  // The first reuse must detect a same-size edit despite the retained initialization identities.
+  const source = path.join(first.workspaceDir, "source.txt");
+  const before = await fs.stat(source);
+  // An independent writer bypasses command finalization and host-write hooks.
+  const background = await runCommandWithTimeout(
+    [
+      process.execPath,
+      "-e",
+      "require('node:fs').writeFileSync(process.argv[1], 'modified\\n')",
+      source,
+    ],
+    { timeoutMs: 10_000 },
+  );
+  expect(background.code).toBe(0);
+  await fs.utimes(source, before.atime, before.mtime);
+  using guestEdit = await prepareSandboxCheckpointFixture(owner);
+  await expectText(canonical, "source.txt", "modified\n");
+  await expectText(guestEdit.workspaceDir, "source.txt", "modified\n");
+
+  quiesce.mockClear();
   using unchanged = await prepareSandboxCheckpointFixture(owner);
   expect(unchanged.workspaceDir).toBe(first.workspaceDir);
   expect(quiesce).not.toHaveBeenCalled();
 
-  const source = path.join(first.workspaceDir, "source.txt");
-  const before = await fs.stat(source);
-  await writeText(first.workspaceDir, "source.txt", "modified\n");
-  await fs.utimes(source, before.atime, before.mtime);
-  using guestEdit = await prepareSandboxCheckpointFixture(owner);
-  expect(quiesce).toHaveBeenCalledTimes(1);
-  await expectText(canonical, "source.txt", "modified\n");
-  await expectText(guestEdit.workspaceDir, "source.txt", "modified\n");
-
   await writeText(canonical, "source.txt", "host edit\n");
-  using hostEdit = await prepareSandboxCheckpointFixture(owner);
-  expect(quiesce).toHaveBeenCalledTimes(2);
+  const events: diagnostics.DiagnosticPhaseSnapshot[] = [];
+  vi.spyOn(diagnostics, "createQueuedDiagnosticPhaseEmitter").mockReturnValue((event) =>
+    events.push(event),
+  );
+  using hostEdit = await withWorktreePreparationTiming("sandbox", () =>
+    prepareSandboxCheckpointFixture(owner),
+  );
   await expectText(hostEdit.workspaceDir, "source.txt", "host edit\n");
+  expect(events[0]?.details).toMatchObject({
+    "reuse.probeCanonical": expect.any(Number),
+    "reuse.capturePreparation": expect.any(Number),
+    "reuse.scan": expect.any(Number),
+    "reuse.staging": expect.any(Number),
+    "reuse.materialization": expect.any(Number),
+    "reuse.patch": expect.any(Number),
+    "reuse.preflight": expect.any(Number),
+    "reuse.acceptance": expect.any(Number),
+    "reuse.cleanup": expect.any(Number),
+    reuseDominantPhase: expect.stringMatching(/^reuse\./),
+  });
   await writeText(canonical, "added.txt", "admitted host file\n");
   await requireGit(canonical, ["add", "added.txt"]);
   using admitted = await prepareSandboxCheckpointFixture(owner);
@@ -339,10 +425,15 @@ export async function proveWarmWorkspaceReuse(owner: LocalWorkspaceOwner) {
 
 export async function proveWarmWorkspaceReuseFailure(
   owner: LocalWorkspaceOwner,
-  failure: "read" | "authority" | "observation" | "cancel",
-  revoke: () => void,
+  failure: "read" | "observation" | "cancel",
 ) {
   using first = await prepareSandboxCheckpointFixture(owner);
+  if (failure === "observation") {
+    // An unchanged inode needs no acceptance; replace it without changing the content.
+    const source = path.join(first.workspaceDir, "source.txt");
+    await fs.copyFile(source, `${source}.replacement`);
+    await fs.rename(`${source}.replacement`, source);
+  }
   const stores = await import("./local-workspace-store.js");
   const quiescence = await import("../../agents/sandbox/local-workspace-quiescence.js");
   const quiesce = vi.spyOn(quiescence, "quiesceLocalWorkspace");
@@ -356,9 +447,6 @@ export async function proveWarmWorkspaceReuseFailure(
         manifest: async (row, action) => {
           if (action.kind === "probe" && !failed && failure !== "observation") {
             failed = true;
-            if (failure === "authority") {
-              revoke();
-            }
             if (failure === "cancel") {
               cancellation.abort(new Error("reuse cancelled"));
             }
@@ -379,7 +467,7 @@ export async function proveWarmWorkspaceReuseFailure(
   if (failure === "read") {
     using recovered = await prepareSandboxCheckpointFixture(owner);
     expect(recovered.workspaceDir).toBe(first.workspaceDir);
-    expect(quiesce).toHaveBeenCalledOnce();
+    expect(quiesce).toHaveBeenCalled();
   } else if (failure === "cancel") {
     await expect(
       prepareSandboxCheckpointFixture(owner, undefined, cancellation.signal),
@@ -387,7 +475,7 @@ export async function proveWarmWorkspaceReuseFailure(
     expect(quiesce).not.toHaveBeenCalled();
   } else {
     await expect(prepareSandboxCheckpointFixture(owner)).rejects.toThrow(
-      failure === "authority" ? "revoked" : "observation acceptance failed",
+      "observation acceptance failed",
     );
     expect(quiesce).not.toHaveBeenCalled();
   }

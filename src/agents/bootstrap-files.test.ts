@@ -10,11 +10,8 @@ import {
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  clearInternalHooks,
-  registerInternalHook,
-  type AgentBootstrapHookContext,
-} from "../hooks/internal-hooks.js";
+import type { AgentBootstrapHookContext } from "../hooks/internal-hook-types.js";
+import { clearInternalHooks, registerInternalHook } from "../hooks/internal-hooks.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";

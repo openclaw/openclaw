@@ -129,6 +129,17 @@ export async function finishGatewayStartup(params: {
   } = runtime;
   const databaseStartupAdmission = getAgentDatabaseStartupAdmission();
   const databasePreparationReady = createDeferredCore();
+  const scheduleSessionFactsBackfill =
+    minimalTestGateway || opts.updateCanary
+      ? undefined
+      : (
+          await import("./server-startup-session-migration.js")
+        ).createGatewaySessionFactsBackfillScheduler({
+          scheduler: runtime.scheduler,
+          signal: runtime.connectionWork.signal,
+          waitForReady: () => kernel.startupMethodsReady,
+          log,
+        });
   const getReadiness = runtime.createHttpTransportOptions().getReadiness;
   const { attachGatewayWsConnectionHandler } = await startupTrace.measure(
     "gateway.ws-imports",
@@ -183,6 +194,7 @@ export async function finishGatewayStartup(params: {
         context: gatewayRequestContext,
         preparationReady: databasePreparationReady.promise,
         waitForPostReadyWork: params.waitForPostReadyWork,
+        scheduleSessionFactsBackfill,
         getConfig: getRuntimeConfig,
         getPluginRegistry: () => pluginRuntime.registry,
         getPluginMetadataSnapshot,
@@ -387,13 +399,10 @@ export async function finishGatewayStartup(params: {
       ? []
       : await startupTrace.measure("runtime.worker-pool-metrics", collectGatewayWorkerPoolMetrics)),
   ]);
-  if (getReadiness().ready) {
-    startupTrace.mark("ready");
-    logGatewayReady(
-      { getReadiness, log },
-      opts.updateCanary ? "candidate gateway ready; autonomous sidecars suppressed" : undefined,
-    );
-  }
+  await logGatewayReady(
+    { getReadiness, log, startupTrace, isClosing: () => lifecycle.closePreludeStarted },
+    opts.updateCanary,
+  );
   finishGatewayRestartTrace("restart.ready", collectGatewayProcessMemoryUsageMb());
   if (opts.updateCanary) {
     // Copied queues and jobs must not resume; the canary owns only startup probes.
@@ -569,9 +578,13 @@ export async function finishGatewayStartup(params: {
       for (const nodeSession of runtime.nodeRegistry.refreshRuntimePolicy(nextConfig)) {
         refreshConnectedNodeSurfaceCaches({ context: gatewayRequestContext, nodeSession });
       }
+      // Preset persistence needs managed write preflight after this publication releases
+      // its secrets lock. The service's queue and stop handle own this reconciliation.
+      void runtime.openclawIdService.reconcileRuntimePolicy().catch((error: unknown) => {
+        logReload.warn(`OpenClaw ID policy reconciliation failed: ${String(error)}`);
+      });
       const reconciled = await Promise.allSettled([
         runtime.hostDesktopService.reconcileRuntimePolicy(),
-        runtime.openclawIdService.reconcileRuntimePolicy(),
         runtime.gatewayComputerService.reconcileRuntimePolicy(),
         workerEnvironmentService?.reconcileDesktopPolicy(),
         runtime.nodeDesktopService.reconcileRuntimePolicy(),
@@ -637,6 +650,7 @@ export async function finishGatewayStartup(params: {
       isClosing: () => lifecycle.closePreludeStarted,
       waitForPostReadyWork: params.waitForPostReadyWork,
       startupMaintenance: runtime,
+      scheduleSessionFactsBackfill,
       startMaintenance: () =>
         earlyRuntime.startMaintenance(activeWorkInspectors, resolvePluginGatewayContext),
       applyMaintenance: async (maintenance) => {

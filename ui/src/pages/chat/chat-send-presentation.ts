@@ -1,10 +1,15 @@
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
-export function describePendingSteerWait(tools: readonly string[]): string {
+/** Blocked with no tools means the runtime cannot interrupt; everything else waits for the step. */
+export function describePendingSteerWait(steerNow: {
+  status: string;
+  tools: readonly string[];
+}): string {
   return t(
-    tools.length ? "chat.pendingInputs.steerBlocked" : "chat.pendingInputs.steerUnavailable",
-    { tools: tools.join(", ") },
+    steerNow.status === "blocked" && !steerNow.tools.length
+      ? "chat.pendingInputs.steerUnavailable"
+      : "chat.pendingInputs.steerBlocked",
   );
 }
 

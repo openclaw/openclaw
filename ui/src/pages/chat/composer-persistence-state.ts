@@ -30,6 +30,7 @@ export type ChatComposerDraftRevisionState = ReturnType<typeof readDraftRevision
 
 export type StoredChatComposerSnapshot = {
   draft: string;
+  attachmentVersion?: string;
   mentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode;
   replyTarget?: ChatReplyTarget;
@@ -49,6 +50,7 @@ export type ChatComposerPersistOptions = {
   replyTarget?: ChatReplyTarget | null;
   draftRevision?: number;
   expectedDraftRevision?: number;
+  attachmentVersion?: string;
 };
 
 export type ChatComposerPersistenceState = ChatComposerScope & {

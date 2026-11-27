@@ -131,17 +131,18 @@ it.for(
       operation!.freezeAbort();
       emitAgentEvent({ runId, stream: "assistant", data: { text: "Final answer" } });
       emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
-      return undefined;
+      return { text: "Final answer" };
     });
     const mutate = createMutation(fixture, action);
     const invoke = (respond: RespondFn) => clientRequest.runInAsyncScope(() => mutate(respond));
     const finalResponse = vi.fn<RespondFn>();
     let mutation: Promise<void> | undefined;
+    const settle = settlementOwner.waitForTerminalSessionRunSettlement;
     vi.mocked(fixture.context.broadcast).mockImplementation((event, payload) => {
-      if (event !== "chat" || (payload as { state?: string }).state !== "final") {
+      const frame = asOptionalRecord(payload);
+      if (event !== "chat" || frame?.state !== "final" || frame.runId !== runId || mutation) {
         return;
       }
-      const settle = settlementOwner.waitForTerminalSessionRunSettlement;
       vi.spyOn(settlementOwner, "waitForTerminalSessionRunSettlement").mockImplementation(
         (params) => {
           const result = settle(params);

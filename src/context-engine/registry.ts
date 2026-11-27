@@ -1,4 +1,5 @@
 // Context-engine registry owns engine registration, resolution, compatibility, and quarantine.
+import { cloneTranscriptView } from "../config/sessions/transcript-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { runPluginCleanup } from "../plugins/plugin-instance-scope.js";
 import { isPluginReloadingError } from "../plugins/plugin-replacement-retry.js";
@@ -63,6 +64,11 @@ const GUARDED_CONTEXT_ENGINE_METHODS = new Set<PropertyKey>(
     " ",
   ),
 );
+// Subagent lifecycle hooks report failures to their callers; one hook failure must not downgrade turns.
+const SUBAGENT_LIFECYCLE_METHODS = new Set<PropertyKey>([
+  "prepareSubagentSpawn",
+  "onSubagentEnded",
+]);
 type ResolvedContextEngineMetadata = {
   owner: string;
   engineId: string;
@@ -89,6 +95,17 @@ function wrapResolvedContextEngine(
   let disposal: Promise<void> | undefined;
   const source = metadata.source;
   const engine = source?.wrap(rawEngine) ?? rawEngine;
+  const prepareParams = (methodName: PropertyKey, params: Record<string, unknown>) => {
+    const projected = projectContextEngineHostParams(engine, methodName, params);
+    const key = methodName === "ingest" ? "message" : "messages";
+    // Registration ownership, not the engine's display ID, defines the writable SDK boundary.
+    return metadata.owner !== CORE_CONTEXT_ENGINE_OWNER && key in projected
+      ? {
+          ...projected,
+          [key]: cloneTranscriptView(projected[key], { shareImmutablePayloads: false }),
+        }
+      : projected;
+  };
   const fallback =
     metadata.defaultEngineId && metadata.engineId !== metadata.defaultEngineId
       ? { defaultEngineId: metadata.defaultEngineId, factoryCtx: metadata.factoryCtx }
@@ -206,7 +223,7 @@ function wrapResolvedContextEngine(
         const methodName = property as GuardedContextEngineMethodName;
         if (!fallback || !getFallbackEngine) {
           return (params: Record<string, unknown>) =>
-            method.call(engine, projectContextEngineHostParams(engine, methodName, params));
+            method.call(engine, prepareParams(methodName, params));
         }
         const invokeFallback = async (
           methodParams: Record<string, unknown>,
@@ -239,13 +256,13 @@ function wrapResolvedContextEngine(
             return await invokeFallback(methodParams);
           }
           try {
-            return await method.call(
-              engine,
-              projectContextEngineHostParams(engine, methodName, methodParams),
-            );
+            return await method.call(engine, prepareParams(methodName, methodParams));
           } catch (error) {
-            if (isContextEngineAbortRejection(error, abortSignal)) {
-              // Abort is caller intent, not engine instability; never quarantine for it.
+            if (
+              isContextEngineAbortRejection(error, abortSignal) ||
+              SUBAGENT_LIFECYCLE_METHODS.has(methodName)
+            ) {
+              // Abort is caller intent and lifecycle hooks report to their callers; neither quarantines.
               throw error;
             }
             const recording = recordContextEngineQuarantine({
@@ -255,7 +272,7 @@ function wrapResolvedContextEngine(
               error,
               defaultEngineId: fallback.defaultEngineId,
             });
-            if (methodName === "compact" || methodName === "prepareSubagentSpawn") {
+            if (methodName === "compact") {
               await recording;
               throw error;
             }

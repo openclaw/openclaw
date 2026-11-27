@@ -5,10 +5,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
+import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
 import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { runBestEffortCleanup } from "./non-fatal-cleanup.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./path-existence.js";
 import { isPathInside } from "./path-guards.js";
 
 const log = createSubsystemLogger("infra:temp-artifacts");
@@ -57,6 +58,56 @@ export function resolveRetainedUpdateRuntimeParents(
   return parents;
 }
 
+const retainedRuntimeOwnerFile = "owner.json";
+
+/** PIDs name a process only inside the namespace that recorded them. */
+async function readPidNamespace(): Promise<string | null> {
+  return process.platform === "linux"
+    ? await fs.readlink("/proc/self/ns/pid").catch(() => null)
+    : null;
+}
+
+/**
+ * Only the update command creates a runtime, and it loads code from it until it
+ * exits. Its recorded identity marks the directory for any installation and
+ * decides custody without guessing which host processes might be that updater.
+ */
+export async function recordRetainedUpdateRuntimeOwner(directory: string): Promise<void> {
+  await fs.writeFile(
+    path.join(directory, retainedRuntimeOwnerFile),
+    JSON.stringify({
+      name: "openclaw",
+      pid: process.pid,
+      startTime: getFileLockProcessStartTime(process.pid),
+      pidNamespace: await readPidNamespace(),
+    }),
+    { mode: 0o600, flag: "wx" },
+  );
+}
+
+/** Runtimes from builds that recorded no owner return undefined. */
+async function readRetainedRuntimeOwner(directory: string) {
+  const file = path.join(directory, retainedRuntimeOwnerFile);
+  if ((await fs.realpath(file).catch(() => undefined)) !== file) {
+    return undefined;
+  }
+  const value: unknown = JSON.parse(await fs.readFile(file, "utf8"));
+  if (
+    !isRecord(value) ||
+    value.name !== "openclaw" ||
+    typeof value.pid !== "number" ||
+    !Number.isSafeInteger(value.pid) ||
+    value.pid <= 0
+  ) {
+    return undefined;
+  }
+  return {
+    pid: value.pid,
+    startTime: typeof value.startTime === "number" ? value.startTime : null,
+    pidNamespace: typeof value.pidNamespace === "string" ? value.pidNamespace : null,
+  };
+}
+
 async function isRetainedRuntimeMarker(marker: string): Promise<boolean> {
   if ((await fs.realpath(marker).catch(() => undefined)) !== marker) {
     return false;
@@ -65,10 +116,60 @@ async function isRetainedRuntimeMarker(marker: string): Promise<boolean> {
   return isRecord(value) && value.name === "openclaw";
 }
 
+function projectRetainedSource(directory: string, source: string): string {
+  const base = path.parse(source).root;
+  return path.join(
+    directory,
+    "tree",
+    Buffer.from(base).toString("hex"),
+    path.relative(base, source),
+  );
+}
+
+const retainedFileList = "retained-files.json";
+const shippedRuntimeEntries = new Set([retainedFileList, "tree", "update-native-gate.mjs"]);
+
+/**
+ * Updaters through 2026.11.10 record no owner, and their projection encodes the
+ * installation they ran from, which pnpm global installs and Git release folders
+ * replace with a new path. Their own file list begins with the retained
+ * package.json, so the runtime still proves what it holds after that move.
+ */
+async function recognizesShippedRuntime(directory: string): Promise<boolean> {
+  const entries = await fs.readdir(directory, { withFileTypes: true });
+  if (
+    entries.length !== shippedRuntimeEntries.size ||
+    !entries.every(
+      (entry) =>
+        shippedRuntimeEntries.has(entry.name) &&
+        (entry.name === "tree" ? entry.isDirectory() : entry.isFile()),
+    )
+  ) {
+    return false;
+  }
+  // The list holds every retained path (tens of MB); only its first entry is needed.
+  const handle = await fs.open(path.join(directory, retainedFileList), "r");
+  let head: string;
+  try {
+    const buffer = Buffer.alloc(64 * 1024);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    head = buffer.toString("utf8", 0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+  const first = /^\[("(?:[^"\\]|\\.)*")/u.exec(head)?.[1];
+  const manifest: unknown = first ? JSON.parse(first) : undefined;
+  return (
+    typeof manifest === "string" &&
+    path.isAbsolute(manifest) &&
+    path.normalize(manifest) === manifest &&
+    path.basename(manifest) === "package.json" &&
+    (await isRetainedRuntimeMarker(projectRetainedSource(directory, manifest)))
+  );
+}
+
 async function recognizesRetainedRuntime(directory: string, packageRoot: string): Promise<boolean> {
-  const base = path.parse(packageRoot).root;
-  const tree = path.join(directory, "tree", Buffer.from(base).toString("hex"));
-  const projectedRoot = path.join(tree, path.relative(base, packageRoot));
+  const projectedRoot = projectRetainedSource(directory, packageRoot);
   if (await isRetainedRuntimeMarker(path.join(projectedRoot, "package.json"))) {
     return true;
   }
@@ -113,7 +214,9 @@ export async function maintainRetainedUpdateRuntimes(params: {
   temporaryDirectories?: readonly string[];
   repair: boolean;
   assertCurrent: () => void;
-  assertResourcesSettled?: () => void;
+  assertResourcesSettled?: (directory: string) => void;
+  /** Called for each runtime an updater created, before any removal attempt. */
+  onRecognized?: (directory: string) => void;
 }): Promise<string[]> {
   const messages: string[] = [];
   // Native spelling matches the projection, registration, and marker realpaths
@@ -141,16 +244,21 @@ export async function maintainRetainedUpdateRuntimes(params: {
           if (retainedRuntimes.has(directory)) {
             throw new Error("the creating update still owns this runtime");
           }
-          let marked = false;
-          for (const packageRoot of packages) {
+          const owner = await readRetainedRuntimeOwner(directory);
+          let marked = owner !== undefined;
+          for (const packageRoot of marked ? [] : packages) {
             if (await recognizesRetainedRuntime(directory, packageRoot)) {
               marked = true;
               break;
             }
           }
+          marked ||= await recognizesShippedRuntime(directory);
           if (!marked) {
-            throw new Error("no recognized runtime marker; inspect it before manual cleanup");
+            throw new Error(
+              "it does not match a runtime an OpenClaw updater created, so it is kept",
+            );
           }
+          params.onRecognized?.(directory);
           if (!params.repair) {
             messages.push(
               `Runtime retained at ${directory}: run \`openclaw doctor --fix\` after its workers stop`,
@@ -168,7 +276,25 @@ export async function maintainRetainedUpdateRuntimes(params: {
             throw new Error("directory identity or custody changed");
           }
           params.assertCurrent();
-          const census = inspectOtherOpenClawProcesses(directory);
+          let creatorExited = false;
+          if (owner && owner.pidNamespace === (await readPidNamespace())) {
+            const startTime = getFileLockProcessStartTime(owner.pid);
+            // An exited updater that its parent has not reaped still has a start time.
+            const dead = isPidDefinitelyDead(owner.pid);
+            // This process's registration above already settled its own runtimes.
+            if (
+              owner.pid !== process.pid &&
+              !dead &&
+              startTime !== null &&
+              startTime === owner.startTime
+            ) {
+              throw new Error(`the creating update (PID ${owner.pid}) is still running`);
+            }
+            // Accepted edge: a reboot that reuses both the PID and its start time.
+            creatorExited =
+              owner.pid === process.pid || dead || (startTime !== null && owner.startTime !== null);
+          }
+          const census = inspectOtherOpenClawProcesses(directory, { creatorExited });
           if ("error" in census) {
             throw new Error(census.error);
           }
@@ -182,7 +308,7 @@ export async function maintainRetainedUpdateRuntimes(params: {
               `other OpenClaw processes are still running (PIDs: ${census.pids.join(", ")}); let these holders finish, then rerun openclaw doctor --fix`,
             );
           }
-          params.assertResourcesSettled?.();
+          params.assertResourcesSettled?.(directory);
           params.assertCurrent();
           let failure: string | undefined;
           await removeTemporaryArtifacts(directory, "Updater runtime", (error) => {

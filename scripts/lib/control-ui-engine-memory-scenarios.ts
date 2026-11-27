@@ -319,6 +319,76 @@ export function workingDayScenario(
   };
 }
 
+/** Chromium scalar checkpoints avoid snapshot allocations between natural collections. */
+function messageCacheChurn(): EngineScenario {
+  const seed = workingDayScenario(1, "sessions");
+  const keys = Array.from({ length: 321 }, (_, index) => `agent:main:heap-census-${index}`);
+  return {
+    id: "cache-natural-scalar",
+    route: "/new",
+    explicitOnly: true,
+    memory: true,
+    expected:
+      "Chromium: 300 distinct 2,000-message switches with natural GC, then 20 more and repeated full GC.",
+    fixtureOverrides: (sandbox, base) => ({
+      ...seed.fixtureOverrides!(sandbox, base),
+      sessionKey: keys[0],
+      sessions: keys.map((key, index) => ({
+        key,
+        sessionId: `heap-census-${index}`,
+        agentId: "main",
+        kind: "direct" as const,
+        label: `Heap census ${index}`,
+        updatedAt: 1_800_000_000_000,
+      })),
+      sessionTranscripts: {},
+      historyMessages: [],
+    }),
+    prepare: async () => {},
+    run: async (page, gateway) => {
+      const cdp = await page.context().newCDPSession(page);
+      const evidence: InteractionEvidence = {};
+      const collect = async () => {
+        await cdp.send("HeapProfiler.collectGarbage");
+        await cdp.send("HeapProfiler.collectGarbage");
+        return cdp.send("Runtime.getHeapUsage");
+      };
+      try {
+        for (const [session, key] of keys.entries()) {
+          // Keep only the latest fixture response; older messages belong to the app's cache.
+          await gateway.setHistoryMessages(
+            Array.from({ length: 2_000 }, (_, index) => ({
+              role: index % 2 ? "assistant" : "user",
+              content: `Heap census ${session} message ${index}.\n${"Synthetic retained transcript.\n".repeat(4)}`,
+              timestamp: 1_800_000_000_000 + index * 1_000,
+              __openclaw: { id: `heap-census-${session}-${index}`, seq: index + 1 },
+            })),
+          );
+          await navigateToControlUiSession(page, key);
+          const pane = page.locator(".chat-pane-cache__pane--active");
+          await expect(pane).toHaveJSProperty("transcriptReady", true);
+          await pane.getByText(`Heap census ${session} message 1999.`, { exact: false }).waitFor();
+          await page.evaluate(() => {
+            Reflect.get(window, "openclawControlUiE2eGateway").requests.length = 0;
+          });
+          if (session === 300 || session === 320) {
+            evidence[`heapBefore${session}Bytes`] = (
+              await cdp.send("Runtime.getHeapUsage")
+            ).usedSize;
+            // Allow the existing delayed pane cleanup to finish before sampling retained data.
+            await page.waitForTimeout(4_100);
+            evidence[`heapAfter${session}Bytes`] = (await collect()).usedSize;
+          }
+        }
+        evidence.heapRepeatedBytes = (await collect()).usedSize;
+        return evidence;
+      } finally {
+        await cdp.detach();
+      }
+    },
+  };
+}
+
 /** Separate resident code/data from churn in the same production document. */
 function memoryOwnerCensus(messageCount?: number): EngineScenario {
   const seed = workingDayScenario(1, "sessions");
@@ -553,6 +623,7 @@ export function createEngineMemoryScenarios(soakRounds: number): EngineScenario[
     ]),
   );
   return [
+    messageCacheChurn(),
     memoryOwnerCensus(),
     ...[0, 400, 2_000].map(memoryOwnerCensus),
     workingDayScenario(soakRounds),

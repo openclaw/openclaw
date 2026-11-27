@@ -140,6 +140,27 @@ describe("config external save status", () => {
     },
   );
 
+  it("lets an earlier edit that is waiting to apply report a later deferred write", async () => {
+    const { client, state, publish, status, saveStatus } = setup();
+    state.configAutoSaveStatus = "deferred";
+    state.lastError = "earlier edit is waiting";
+
+    await status.track(async () => undefined, { saveStatus })(client);
+    expect(
+      status.settle(
+        { ok: false, reason: "deferred", error: "this write is waiting" },
+        { saveStatus },
+        client,
+        currentConfigConnectionEpoch(state),
+      ),
+    ).toMatchObject({ reported: true });
+
+    expect(state.configAutoSaveStatus).toBe("deferred");
+    expect(state.lastError).toBe("earlier edit is waiting");
+    expect(status.retry()).toBeNull();
+    expect(publish).not.toHaveBeenCalled();
+  });
+
   it("leaves the status to a form that stalls while the write runs", async () => {
     const { client, state, status, saveStatus } = setup();
     await status.track(

@@ -12,7 +12,6 @@ import {
   createControlUiE2eSuite,
   createControlUiE2eContextOptions,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
 const suite = createControlUiE2eSuite({
   name: "Queued correction update recovery",
@@ -83,11 +82,11 @@ async function reviewStaleBuild(page: Page, gateway: Gateway, build: string) {
   await gateway.waitForRequest("connect", { after: previous });
   await gateway.rejectDeferred("connect", {
     code: "UNAVAILABLE",
-    message: "protocol mismatch: Control UI updated; reload this page to continue",
+    message: "protocol mismatch: OpenClaw updated; reload this page to continue",
     details: { code: "PROTOCOL_MISMATCH", gatewayBuildId: build, reloadRequired: true },
     retryable: false,
   });
-  const refresh = page.getByRole("button", { name: /Server updated/u });
+  const refresh = page.getByRole("button", { name: /OpenClaw was updated/u });
   const dialog = page.locator('openclaw-modal-dialog[label="Unsent Incognito draft"]');
   const outcome = await Promise.race([
     automaticReload.then(() => "reloaded" as const),
@@ -167,15 +166,15 @@ suite.define(() => {
       await disconnectGateway(page, gateway);
       await gateway.setServerBuildId("e2e-next-queued-edit");
       await resumeGateway(page, gateway);
-      const refresh = page.getByRole("button", { name: /Server updated/u });
+      const refresh = page.getByRole("button", { name: /OpenClaw was updated/u });
       await refresh.waitFor();
       await refresh.press("Enter");
       await page
         .getByText("Save or cancel your queued message edit before reloading.", { exact: true })
         .waitFor();
       if (otherPage) {
-        const pages = await openSidebarPages(page);
-        await pages.getByRole("link", { name: "Sessions", exact: true }).click();
+        // Sessions opens from a group heading, and this ungrouped roster has none.
+        await page.evaluate(() => window.openclawControlUi?.navigate("sessions"));
         await page.waitForURL((url) => url.pathname.endsWith("/sessions"));
       }
       await exactButton(page, "Review edit").click();
@@ -411,7 +410,7 @@ suite.define(() => {
         await page.setViewportSize({ width: 520, height: 900 });
       }
       await exactButton(dialog, "Keep in this tab").click();
-      await page.getByRole("button", { name: /Server updated/u }).click();
+      await page.getByRole("button", { name: /OpenClaw was updated/u }).click();
       await exactButton(page, "Review private draft").click();
       const reloaded = page.waitForEvent("domcontentloaded");
       await exactButton(dialog, "Discard this draft and refresh").click();

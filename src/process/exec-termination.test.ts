@@ -10,12 +10,20 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as processIdentity from "../shared/pid-alive.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
+import * as commandIdentity from "./command-process-identity.js";
 import { COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS } from "./exec-spawn.js";
 import { createCommandTerminationController } from "./exec-termination.js";
 import * as adoptedChildren from "./scoped-child-reaper.js";
+import * as groupOwnership from "./supervisor/service-child-group-ownership.js";
 
 const isForceSignal = (signal: Parameters<typeof process.kill>[1]) =>
   signal === "SIGKILL" || signal === osConstants.signals.SIGKILL;
+
+function spyStartTime() {
+  return process.platform === "linux" || process.platform === "android"
+    ? vi.spyOn(commandIdentity, "readCommandProcessStartTime")
+    : vi.spyOn(processIdentity, "getFileLockProcessStartTime");
+}
 
 afterEach(() => {
   if (vi.isFakeTimers()) {
@@ -107,10 +115,12 @@ async function withOwnedTree(
 describe.skipIf(process.platform === "win32")("command process-group settlement", () => {
   it.each([false, true])("settles denied groups (exits during grace: %s)", async (exits) => {
     vi.useFakeTimers();
-    vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockReturnValue(123);
+    spyStartTime().mockReturnValue(123);
     let gone = false;
-    const kill = vi.spyOn(process, "kill").mockImplementation(() => {
-      const code = gone ? "ESRCH" : "EPERM";
+    const census = vi.spyOn(groupOwnership, "isProcessGroupGoneByCensusAsync");
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid) => {
+      // The denial canary's impossible group gets the kernel's ESRCH, so EPERM stays a kernel EPERM.
+      const code = gone || pid === -(4_194_304 + 1) ? "ESRCH" : "EPERM";
       throw Object.assign(new Error(code), { code });
     });
     const { child, kill: killChild } = mockTerminatingChild(exits ? null : 7);
@@ -120,6 +130,7 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
       isChildExited: () => (exits ? child.exitCode !== null : true),
       isCommandSettled: () => !exits,
     });
+    await vi.advanceTimersByTimeAsync(0);
     expect(owner.terminate()).toBe(true);
     const settled = vi.fn();
     const completion = owner.settle().finally(settled);
@@ -147,7 +158,9 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
       expect(settled).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
       await expect(completion).resolves.toBe("uncertain");
-      expect(kill.mock.calls.every(([pid]) => pid === -4242)).toBe(true);
+      // Only the denial canary (a group beyond Linux PID_MAX_LIMIT) may probe another target.
+      expect(kill.mock.calls.every(([pid]) => pid === -4242 || pid === -4_194_305)).toBe(true);
+      expect(census).not.toHaveBeenCalled();
       expect(killChild).not.toHaveBeenCalled();
       expect(cancelController.signal.aborted).toBe(false);
     }
@@ -188,11 +201,10 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
           }
         });
         if (observation !== "exit") {
-          vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockImplementation(
-            (pid, ...args) =>
-              forceSent && observation === "reused" && pid === parent.pid
-                ? originalStart! + 1
-                : readStart(pid, ...args),
+          spyStartTime().mockImplementation((pid: number) =>
+            forceSent && observation === "reused" && pid === parent.pid
+              ? originalStart! + 1
+              : readStart(pid),
           );
         }
         const owner = terminationOwner(parent, { processTree: { mode }, killGraceMs: 0 });
@@ -237,11 +249,11 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
     vi.useFakeTimers();
     let forceSent = false;
     let finalIdentityRead = false;
-    vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockImplementation(() => {
+    spyStartTime().mockImplementation(() => {
       if (!forceSent) {
         return 123;
       }
-      // A synchronous identity probe can consume the remaining observation budget.
+      // Identity preparation can consume the remaining observation budget.
       vi.advanceTimersByTime(COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS);
       finalIdentityRead = true;
       return reused ? 124 : null;
@@ -270,7 +282,7 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
 
   it("keeps kill grace and exit confirmation bounded when the wall clock rewinds", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-    vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockReturnValue(123);
+    spyStartTime().mockReturnValue(123);
     const signals = vi.spyOn(process, "kill").mockReturnValue(true);
     const owner = terminationOwner(mockTerminatingChild().child, { isChildExited: () => false });
     const rewindWallClock = () => vi.setSystemTime(Date.now() - 60_000);

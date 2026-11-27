@@ -47,6 +47,7 @@ export function registerAgentStoredOverrideTests({
     fallback?: boolean;
     expected?: string[];
     clear?: Array<keyof SessionEntry>;
+    nonChat?: boolean;
   };
   it.for<StoredModelCase>([
     {
@@ -100,6 +101,7 @@ export function registerAgentStoredOverrideTests({
       expected: ["anthropic/claude-opus-4-6"],
     },
     { name: "locked one-off rejection", source: "user", locked: true, oneoff: true },
+    { name: "non-chat pin under an exact allowlist", source: "user", nonChat: true },
   ])("respects stored model policy: $name", async (scenario) => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
@@ -149,10 +151,16 @@ export function registerAgentStoredOverrideTests({
         },
         models: Object.fromEntries(refs.map((ref) => [ref, {}])),
         ...(scenario.disallowed && { modelPolicy: { allow: [primary] } }),
+        ...(scenario.nonChat && { modelPolicy: { allow: [primary, storedRef] } }),
       });
       if (!scenario.oneoff) {
         mockModelCatalogOnce([
-          { provider, id: model, name: provider === "ollama" ? "Qwen 3.5" : "Opus" },
+          {
+            provider,
+            id: model,
+            name: provider === "ollama" ? "Qwen 3.5" : "Opus",
+            ...(scenario.nonChat ? { inference: { chat: false } } : {}),
+          },
           { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
           ...(!scenario.disallowed
             ? [
@@ -183,6 +191,20 @@ export function registerAgentStoredOverrideTests({
         sessionKey,
         ...(scenario.oneoff && { model: primary, allowModelOverride: true }),
       });
+      if (scenario.nonChat) {
+        await expect(command).rejects.toMatchObject({
+          reason: "format",
+          code: "model_chat_unsupported",
+          message: "This model doesn't support chat; pick another model.",
+        });
+        expect(runEmbeddedAgent).not.toHaveBeenCalled();
+        expect(readSessionStore<SessionEntry>(store)[sessionKey]).toMatchObject({
+          providerOverride: provider,
+          modelOverride: model,
+          modelOverrideSource: "user",
+        });
+        return;
+      }
       if (scenario.oneoff) {
         await expect(command).rejects.toMatchObject({
           name: "ModelSelectionLockedError",
@@ -257,6 +279,42 @@ export function registerAgentStoredOverrideTests({
 
       expectLastRunProviderModel("anthropic", "claude-opus-5-5");
       expect(readSessionStore<SessionEntry>(store)[sessionKey]).toMatchObject(userPick);
+    });
+  });
+
+  it("runs a subagent-settle turn on the model the session inherits from its parent", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const parentKey = "agent:main:dashboard:inherit-parent";
+      const sessionKey = "agent:main:dashboard:inherit-child";
+      await writeSessionStoreSeed(store, {
+        [parentKey]: {
+          sessionId: "inherit-parent",
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-5-5",
+          modelOverrideSource: "user",
+          modelOverrideRouteResolution: "resolved",
+        },
+        // No selection of its own: user turns resolve the parent's pick.
+        [sessionKey]: { sessionId: "inherit-child", parentSessionKey: parentKey },
+      });
+      mockConfig(home, store, {
+        model: { primary: "clawrouter/anthropic/claude-opus-5-5" },
+      });
+      mockModelCatalogOnce([
+        { provider: "clawrouter", id: "anthropic/claude-opus-5-5", name: "Opus" },
+        { provider: "anthropic", id: "claude-opus-5-5", name: "Opus" },
+      ]);
+
+      await runCommand({
+        sessionKey,
+        inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+      });
+
+      expectLastRunProviderModel("anthropic", "claude-opus-5-5");
+      const entry = readSessionStore<SessionEntry>(store)[sessionKey];
+      expect(entry?.providerOverride).toBeUndefined();
+      expect(entry?.modelOverride).toBeUndefined();
     });
   });
 

@@ -17,10 +17,8 @@ import {
 } from "../plugins/plugin-lifecycle-lease.js";
 import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import {
-  getPluginRuntimeGenerationRegistry,
-  withPluginRuntimeGenerationScope,
-} from "../plugins/runtime/generation-scope.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
 import * as audit from "./audit.js";
 import {
   createChatEngine,
@@ -234,9 +232,7 @@ describe("SystemAgentChatEngine runtime", () => {
     expect(portStep.text).toContain(
       "changing the Gateway port, bind address, or auth credential requires a Gateway restart",
     );
-    expect(portStep.text).toContain(
-      "sign in to the Control UI again with the new address or credential",
-    );
+    expect(portStep.text).toContain("sign in to OpenClaw again with the new address or credential");
     expect(portStep.text).toContain("Gateway port");
 
     expect(storageStep.sensitive).not.toBe(true);
@@ -463,7 +459,9 @@ describe("SystemAgentChatEngine runtime", () => {
       if (revisionConflict) {
         expect(stopped.text).toContain("configuration changed during channel setup");
         const [config, options] = mocks.writeWizardConfigFile.mock.calls[0] ?? [];
-        expect(config).toMatchObject({ channels: { telegram: { botToken: "123:abc" } } });
+        expect(config).toMatchObject({
+          channels: { telegram: { botToken: { source: "store", id: expect.any(String) } } },
+        });
         expect(options).toMatchObject({ baseHash: "base-hash" });
         expect(currentConfig).toEqual(changedConfig);
       } else if (phase === "write") {

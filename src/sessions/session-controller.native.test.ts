@@ -30,9 +30,11 @@ import { waitForSessionRunEnd } from "./session-controller.native-runtime.js";
 import { createReplyOperation } from "./session-controller.operation.js";
 import { getActiveSessionRunCount, isSessionRunActive } from "./session-controller.queries.js";
 import {
+  finishReplyOperationBackend,
   getAttachedBackend,
   getSessionControllerEntryForOperation,
   getSessionControllerOperation,
+  waitForReplyOperationBackend,
 } from "./session-controller.state.js";
 import { testing as controllerTesting } from "./session-controller.test-support.js";
 
@@ -105,6 +107,44 @@ describe("controller/native admission boundary", () => {
       expect(released?.result).toEqual({ kind: "completed" });
     },
   );
+
+  it.each([true, false])(
+    "releases backend waiters while retaining finalization ownership (waiting=%s)",
+    async (alreadyWaiting) => {
+      const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+      operation.setPhase("running");
+      const native = handle("finished-backend");
+      operation.attachBackend(native);
+      operation.detachBackend(native);
+      const pending = alreadyWaiting ? waitForReplyOperationBackend(operation) : undefined;
+      try {
+        finishReplyOperationBackend(operation);
+        await expect(pending ?? waitForReplyOperationBackend(operation)).resolves.toBe(false);
+        expect(getSessionControllerOperation(sessionKey)).toBe(operation);
+        expect(operation.result).toBeNull();
+        expect(operation.abortSignal.aborted).toBe(false);
+        operation.abortForRestart();
+        expect(operation.abortSignal.aborted).toBe(true);
+      } finally {
+        operation.complete();
+      }
+    },
+  );
+
+  it("waits for a replacement backend between attempts", async () => {
+    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+    operation.setPhase("running");
+    const first = handle("first-attempt");
+    operation.attachBackend(first);
+    operation.detachBackend(first);
+    const pending = waitForReplyOperationBackend(operation);
+    try {
+      operation.attachBackend(handle("replacement-attempt"));
+      await expect(pending).resolves.toBe(true);
+    } finally {
+      operation.complete();
+    }
+  });
 
   it("borrows an input only in its admitted async context, not from a concurrent invocation", async () => {
     const input = reserveSessionControllerSource(sessionKey, { policy: { mode: "followup" } });

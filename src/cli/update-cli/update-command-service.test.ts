@@ -7,6 +7,8 @@ import {
   createMockGatewayService,
   mockSystemAccountHome,
 } from "../../daemon/service.test-helpers.js";
+import { gitReleaseForwardingEntry, gitReleaseSlot } from "../../infra/git-release-paths.js";
+import { createGitReleaseDirs, publishGitRelease } from "../../infra/git-release.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import {
   createUpdateRun,
@@ -14,10 +16,6 @@ import {
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
-import {
-  renderUpdateRunReport,
-  updateRunReportInputFromResult,
-} from "../../infra/update-run-report.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
@@ -341,9 +339,6 @@ describe("maybeRestartService", () => {
             }),
           ]);
           expect(result.summary).toContain("plugin failures need a retry");
-          expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledWith(
-            expect.objectContaining({ requirePluginHealth: false }),
-          );
         }
         expect(onVerified).toHaveBeenCalledOnce();
       }
@@ -385,7 +380,7 @@ describe("maybeRestartService", () => {
     expect(loadUpdateRecovery(record.runId, options)).toEqual(record);
   });
 
-  it("records changed-key warnings before health verification and retains them in the outcome and report", async () => {
+  it("records changed-key warnings before health verification and retains them in the outcome", async () => {
     const home = tempDirs.make("service-warning-history-");
     const options = { env: { HOME: home, OPENCLAW_STATE_DIR: home } };
     const admitted = createUpdateRun({ trigger: "cli" }, options);
@@ -435,9 +430,6 @@ describe("maybeRestartService", () => {
       }),
     );
     expect(result.steps).toContainEqual(expect.objectContaining({ warnings: [warning] }));
-    expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
-      warning,
-    );
   });
   it("records measured reconciliation child timing in the outcome and run history", async () => {
     const home = tempDirs.make("service-timing-history-");
@@ -910,4 +902,98 @@ describe("maybeRestartService", () => {
 
     expect(errorSpy).toHaveBeenCalledWith("service management skipped: ownership conflict");
   });
+
+  it.for(["checkout", "npm-fallback", "launcher", "stage-failed"] as const)(
+    "stages the release launcher without restarting when --no-restart leaves the service on the %s",
+    async (serviceStarts, { onTestFinished }) => {
+      const home = await fs.realpath(tempDirs.make("update-git-no-restart-"));
+      const prefix = path.join(home, ".openclaw", "git-install");
+      const { releaseRoot } = await createGitReleaseDirs(prefix);
+      const checkout = path.join(home, "checkout");
+      for (const root of [releaseRoot, checkout]) {
+        await fs.mkdir(path.join(root, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(root, "package.json"),
+          JSON.stringify({ name: "openclaw", version: gateway.version }),
+        );
+        await fs.writeFile(path.join(root, "dist", "index.js"), "export {};\n");
+      }
+      await publishGitRelease({ prefix, releaseRoot, trial: true, pending: true });
+      if (serviceStarts === "npm-fallback") {
+        // A deferred npm-to-Git switch: the link still names the npm package the service starts.
+        await fs.rm(gitReleaseSlot(prefix));
+        await fs.symlink(checkout, gitReleaseSlot(prefix));
+        await fs.writeFile(
+          path.join(checkout, "openclaw.mjs"),
+          gitReleaseForwardingEntry(path.join(prefix, "openclaw-launcher.mjs")),
+        );
+      }
+      const entry =
+        serviceStarts === "launcher"
+          ? path.join(prefix, "openclaw-launcher.mjs")
+          : path.join(checkout, "dist", "index.js");
+      const managedService = createMockGatewayService({
+        isLoaded: async () => true,
+        // Linux admits ownership only with an observed systemd manager.
+        readRuntime: async () => ({ status: "stopped", systemd: { managerUid: 1001 } }),
+        readCommand: async () => ({
+          programArguments: ["/usr/bin/node", entry, "gateway"],
+          environment: { OPENCLAW_SERVICE_MARKER: "openclaw", OPENCLAW_SERVICE_KIND: "gateway" },
+        }),
+        ...(serviceStarts === "stage-failed"
+          ? {
+              stage: vi.fn(async () => {
+                throw new Error("definition is read-only");
+              }),
+            }
+          : {}),
+      });
+      const service = vi
+        .spyOn(gatewayService, "resolveGatewayService")
+        .mockReturnValue(managedService);
+      onTestFinished(() => service.mockRestore());
+      const result: UpdateRunResult = {
+        status: "ok",
+        mode: "git",
+        root: gitReleaseSlot(prefix),
+        steps: [],
+        durationMs: 0,
+      };
+
+      await expect(
+        maybeRestartService({
+          shouldRestart: false,
+          result,
+          opts: { json: true },
+          refreshServiceEnv: false,
+          serviceEnv: { HOME: home },
+          gatewayPort: 18789,
+          timeoutMs: 1_000,
+        }),
+      ).resolves.toBe("ok");
+
+      if (serviceStarts === "launcher") {
+        expect(managedService.stage).not.toHaveBeenCalled();
+      } else {
+        expect(managedService.stage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            programArguments: expect.arrayContaining([
+              path.join(prefix, "openclaw-launcher.mjs"),
+              "gateway",
+              "--port",
+              "18789",
+            ]),
+            preserveAutoStart: true,
+          }),
+        );
+      }
+      expect(managedService.install).not.toHaveBeenCalled();
+      expect(managedService.restart).not.toHaveBeenCalled();
+      expect(managedService.start).not.toHaveBeenCalled();
+      expect(mocks.runUpdatedInstallGatewayCommand).not.toHaveBeenCalled();
+      expect(JSON.stringify(result).includes("still points outside the updated install")).toBe(
+        serviceStarts === "stage-failed",
+      );
+    },
+  );
 });

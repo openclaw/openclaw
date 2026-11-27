@@ -1,10 +1,8 @@
 // Verifies Windows drive-letter paths are treated as absolute under POSIX hosts.
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import {
-  createHostWorkspaceWriteTool,
-  wrapToolMemoryFlushAppendOnlyWrite,
-} from "./agent-tools.read.js";
+import { projectMemoryFlushWriteTool } from "./agent-tools.memory-flush.test-support.js";
+import { createHostWorkspaceWriteTool } from "./agent-tools.read.js";
 import { resolveSandboxInputPath } from "./sandbox-paths.js";
 
 describe("resolveSandboxInputPath (Windows drive paths under POSIX rules)", () => {
@@ -29,7 +27,7 @@ describe("memory-flush write paths (Windows drive paths)", () => {
   it("rejects drive-letter paths outside the retained production write boundary", async () => {
     const drivePath = "C:/temp/agent-output.txt";
     using normalizeWindowsPath = vi.spyOn(path.win32, "normalize");
-    const writeTool = wrapToolMemoryFlushAppendOnlyWrite(createHostWorkspaceWriteTool(root), {
+    const writeTool = projectMemoryFlushWriteTool(createHostWorkspaceWriteTool(root), {
       root,
       relativePath: "memory.md",
     });

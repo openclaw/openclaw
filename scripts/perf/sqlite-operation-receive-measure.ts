@@ -11,6 +11,7 @@ import {
   createSqliteWorkerOperationAdmission,
   observeSqliteWorkerCommittedFacts,
 } from "../../src/infra/sqlite-worker-operation-admission.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const mode = process.argv[2] ?? "timing";
 assert(mode === "timing" || mode === "allocation");
@@ -51,12 +52,7 @@ try {
   batch();
   await setImmediate();
   if (mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   gc.observe({ entryTypes: ["gc"] });
   const results = [];
@@ -85,5 +81,5 @@ try {
 } finally {
   inspector.disconnect();
   gc.disconnect();
-  admission.finish();
+  await admission.finish();
 }

@@ -71,6 +71,25 @@ describe("normalization-core/string-normalization", () => {
     expect(normalize([" b ", "a", "b", "", 4, "a", "MiXeD", "B"])).toEqual(expected);
   });
 
+  it("finishes iterating before coercing even a single entry", () => {
+    let text = "before";
+    function* entries() {
+      yield { toString: () => text };
+      text = " after ";
+    }
+    expect(strings.normalizeSortedUniqueStringEntries(entries())).toEqual(["after"]);
+  });
+
+  it("returns fresh mutable arrays for short normalized results", () => {
+    const singleton = Object.freeze(["value"]);
+    const result = strings.normalizeSortedUniqueStringEntries(singleton);
+    result.push("other");
+    expect(singleton).toEqual(["value"]);
+    const empty = strings.normalizeSortedUniqueStringEntries();
+    empty.push("other");
+    expect(strings.normalizeSortedUniqueStringEntries()).toEqual([]);
+  });
+
   it("normalizes array-backed trimmed string lists", () => {
     const values = [" first ", "", 42, " second ", null];
     expect(strings.normalizeOptionalTrimmedStringList(values)).toEqual(["first", "second"]);

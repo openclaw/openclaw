@@ -54,6 +54,9 @@ const toolSchemas = {
         autoDecomposePerDispatch: Type.Optional(
           Type.Number({ description: "Maximum orchestration candidates per dispatch." }),
         ),
+        maxActivePerOwner: Type.Optional(
+          Type.Number({ description: "Cards one owner or agent may run at once. Default 1." }),
+        ),
         defaultAssignee: Type.Optional(Type.String({ description: "Default assignee." })),
         orchestratorProfile: Type.Optional(
           Type.String({ description: "Orchestrator profile id." }),
@@ -70,7 +73,7 @@ const toolSchemas = {
     boardId: Type.Optional(Type.String({ description: "Optional board id filter." })),
   }),
   specify: strictObject({
-    id: Type.String({ description: "Workboard card id." }),
+    id: cardIdField(),
     title: Type.Optional(Type.String({ description: "Clarified title." })),
     notes: Type.Optional(Type.String({ description: "Clarified notes or acceptance criteria." })),
     agentId: Type.Optional(Type.String({ description: "Assigned agent id." })),
@@ -86,7 +89,7 @@ const toolSchemas = {
     token: Type.Optional(Type.String({ description: "Claim token for claimed cards." })),
   }),
   decompose: strictObject({
-    id: Type.String({ description: "Parent Workboard card id." }),
+    id: cardIdField(),
     token: Type.Optional(Type.String({ description: "Claim token for claimed cards." })),
     summary: Type.Optional(Type.String({ description: "Decomposition summary." })),
     completeParent: Type.Optional(
@@ -179,10 +182,11 @@ const toolSchemas = {
 export function createWorkboardOrchestrationTools(params: {
   store: WorkboardStore;
   ownerId: string;
+  runId: string | undefined;
 }): AnyAgentTool[] {
   const { store, ownerId } = params;
   const { readScopedCardToolParams, scopedCardMutation, claimedCardMutation } =
-    createWorkboardCardMutations(store, ownerId);
+    createWorkboardCardMutations(store, ownerId, params.runId);
   return [
     {
       name: "workboard_boards",
@@ -235,7 +239,8 @@ export function createWorkboardOrchestrationTools(params: {
       parameters: CardIdSchema,
       execute: async (_toolCallId, rawParams) => {
         const id = readStringParam(asNonArrayRecord(rawParams), "id", { required: true });
-        const result = await store.runs(id);
+        const card = await store.requireCardByIdOrPrefix(id);
+        const result = await store.runs(card.id);
         return jsonResult({ ...result, card: redactClaimToken(result.card) });
       },
     },

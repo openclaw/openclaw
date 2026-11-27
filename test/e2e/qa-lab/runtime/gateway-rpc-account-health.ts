@@ -160,7 +160,6 @@ export async function runGatewayRpcAccountHealthProof(
   try {
     gateway = await gatewayOwner.start({
       repoRoot,
-      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       transportBaseUrl: bus.baseUrl,
       providerMode: "mock-openai",

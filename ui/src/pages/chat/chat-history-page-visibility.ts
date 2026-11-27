@@ -1,3 +1,4 @@
+import type { AutomationProjection } from "./chat-automation-projection-loader.ts";
 import { projectChatReasoning } from "./chat-reasoning.ts";
 import { isHandoffBoundaryItem } from "./chat-sessions-yield.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -9,6 +10,7 @@ export function hasVisibleOlderHistoryPage(
   state: ChatPageHost,
   paneId: string,
   messages: unknown[],
+  projectAutomations?: AutomationProjection,
 ): boolean {
   if (messages.length === 0) {
     return false;
@@ -24,6 +26,7 @@ export function hasVisibleOlderHistoryPage(
       paneId,
       sessionKey: state.sessionKey,
       messages,
+      projectAutomations,
       toolMessages: [],
       streamSegments: [],
       stream: null,

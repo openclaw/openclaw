@@ -1,19 +1,24 @@
 import { randomUUID } from "node:crypto";
-import { sanitizeTriageUpdateFailure } from "../../commands/triage-update.js";
+import {
+  sanitizeTriageUpdateFailure,
+  writeTriageUpdateFailure,
+} from "../../commands/triage-update.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveInstallationTarget } from "../../infra/installation-target-context.js";
 import { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-plane-sentinel.js";
 import { preparePublicUpdateFailureIdentifiers } from "../../infra/update-failure-public-identifiers.js";
-import { writeTriageUpdateFailure } from "../../infra/update-failure-report-artifact.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateTriageTarget as TriageTarget } from "../../infra/update-triage.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome-classification.js";
-import { isVerifiedUpdateRollback } from "../../shared/update-outcome.js";
+import {
+  isUpdatePrerequisiteRefusal,
+  isVerifiedUpdateRollback,
+} from "../../shared/update-outcome.js";
 import { formatInstallationTargetCommand } from "../installation-target-format.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { isTerminalInteractive } from "../terminal-interactivity.js";
@@ -93,7 +98,12 @@ export async function prepareUpdateCommandFailureTriage(
       return reportUpdateCommandPendingRecovery(pending, opts);
     }
     const reportedFailure = error instanceof UpdateCommandFailure;
-    if (reportedFailure && error.result.reason === "invalid-dev-target") {
+    // A repair agent cannot install Node or Git or free disk; the refusal already says how.
+    if (
+      reportedFailure &&
+      (error.result.reason === "invalid-dev-target" ||
+        isUpdatePrerequisiteRefusal(error.result.reason))
+    ) {
       return exitCliAfterOutput(defaultRuntime, error.exitCode);
     }
     const rollbackCompleted = reportedFailure && isVerifiedUpdateRollback(error.result);
@@ -152,8 +162,6 @@ export async function prepareUpdateCommandFailureTriage(
             nextAction = await runInteractiveUpdateFailureAction({
               attemptId: updateAttemptId,
               env: opts.run?.env ?? target.env,
-              ...(failure.error ? { error: failure.error } : {}),
-              ...(failure.result ? { result: failure.result } : {}),
               ...(rollbackCompleted ? { rollbackCompleted: true } : {}),
               runtime: defaultRuntime,
             });

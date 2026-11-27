@@ -2,7 +2,7 @@
 import { asDateTimestampMs } from "../../packages/normalization-core/src/number-coercion.js";
 import { buildAuthProfileId } from "../agents/auth-profiles/identity.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
-import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
+import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-selection-normalize.js";
 import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelRefForConfig,

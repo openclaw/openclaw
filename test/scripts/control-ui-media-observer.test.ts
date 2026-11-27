@@ -103,7 +103,7 @@ it("reports cumulative sums separately from session windows through the installe
   expect(first.shifts[1]?.sources[0]?.media).toBe(false);
   expect(first).not.toHaveProperty("cls");
   expect(first).not.toHaveProperty("mediaCls");
-  const prefix = [...first.shifts];
+  const prefix = structuredClone(first.shifts);
   expect(api.read()).toEqual(first);
 
   observer.deliver([shift(8_000, 0.4)]);

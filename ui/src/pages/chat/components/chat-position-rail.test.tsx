@@ -1,9 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { createSignal } from "solid-js";
+import { createMemo, createSignal } from "solid-js";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript, stubSettledAnimationFrames } from "../chat-view.test-helpers.ts";
 import {
   mountChatThread as mountThread,
@@ -275,10 +275,14 @@ describe("conversation position rail", () => {
     const resize = (clientHeight: number, scrollHeight: number) => {
       viewportHeight = clientHeight;
       transcriptHeight = scrollHeight;
-      publishTranscriptScroll(root, {
-        type: "resize",
-        viewport: { clientHeight, scrollHeight, scrollTop: 0 },
-      });
+      // Shrinking the transcript can publish this notification during rendering.
+      const publish = createMemo(() =>
+        publishTranscriptScroll(root, {
+          type: "resize",
+          viewport: { clientHeight, scrollHeight, scrollTop: 0 },
+        }),
+      );
+      publish();
       flushFrame();
     };
     resize(600, 601);
@@ -297,6 +301,7 @@ describe("conversation position rail", () => {
     "focus-resize",
     "pointer",
     "hidden",
+    "skipped",
     "composer-resize-reversal-navigation",
   ] as const;
 
@@ -343,11 +348,15 @@ describe("conversation position rail", () => {
       flushRailFrames();
       expect(marks.scrollTop).toBe(startsAtTop ? 0 : 517);
       expect(marks.querySelectorAll(".chat-position-rail__marker").length).toBeLessThan(50);
-      if (scenario === "hidden") {
+      if (scenario === "hidden" || scenario === "skipped") {
         const mounted = [...marks.querySelectorAll(".chat-position-rail__marker")];
-        marksHeight = 0;
+        if (scenario === "skipped") {
+          marks.checkVisibility = () => false;
+        } else {
+          marksHeight = 0;
+        }
         railOffset = 0;
-        emitTranscriptResize(marks, 44, 0);
+        emitTranscriptResize(marks, 44, marksHeight);
         flushFrame();
         renderRail();
         flushFrame();
@@ -357,8 +366,11 @@ describe("conversation position rail", () => {
         // Reader navigation while hidden must be reflected once the rail returns.
         root.scrollTop = 0;
         activeMessage.mockReturnValue("message-0");
-        marksHeight = 283;
-        emitTranscriptResize(marks, 44, 283);
+        if (scenario === "skipped") {
+          marks.checkVisibility = () => true;
+        }
+        marksHeight = scenario === "skipped" ? 240 : 283;
+        emitTranscriptResize(marks, 44, marksHeight);
         flushFrame();
         expect(marker(0).getAttribute("aria-current")).toBe("true");
         expect(marks.style.getPropertyValue("--chat-position-scroll-top")).toBe("0px");
@@ -678,8 +690,8 @@ describe("conversation position rail", () => {
     const marks = part(container, "marks")!;
     measure(marks, { clientHeight: 600 });
     emitTranscriptResize(marks, 44, 600);
-    await settleFrames();
-    expect(observed.has(streamBubble)).toBe(true);
+    // Observer registration follows settled refs and queued layout, not a fixed frame budget.
+    await waitForSolid(() => expect(observed.has(streamBubble)).toBe(true));
     const queryBubbles = vi.spyOn(root, "querySelectorAll");
     props.stream = "Draft **updated** response";
     rerender();
@@ -705,8 +717,7 @@ describe("conversation position rail", () => {
     const persistedBubble = query('[data-entry-id="persisted-answer"]')!;
     // Ref retirement releases the old target before queued additions and layout.
     expect(observed.has(streamBubble)).toBe(false);
-    await settleFrames();
-    expect(observed.has(persistedBubble)).toBe(true);
+    await waitForSolid(() => expect(observed.has(persistedBubble)).toBe(true));
     marker().click();
     await settleFrames();
     expect(persistedBubble.classList.contains("chat-bubble--reply-target")).toBe(true);

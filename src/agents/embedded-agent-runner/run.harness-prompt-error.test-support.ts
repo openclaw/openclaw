@@ -84,7 +84,7 @@ describe("harness prompt failure presentation", () => {
         expect(text).not.toContain(error.message);
         if (known) {
           expect(text).toContain(
-            "Choose another model in the Control UI or run `openclaw configure`.",
+            "Choose another model in the OpenClaw app or run `openclaw configure`.",
           );
         }
         if (hadPotentialSideEffects) {

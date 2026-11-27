@@ -15,7 +15,7 @@ import {
 import { shellEscapeBackslash } from "../../../src/shared/shell-quote.js";
 import type { ToolsEffectiveResult } from "../api/types.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
-import { registerMcpEnglish } from "../i18n/locales/en-mcp.ts";
+import { registerMcpManagementEnglish } from "../i18n/locales/en-mcp-management.ts";
 import { resolveEditableSnapshotConfig } from "../lib/config/config-state-model.ts";
 import {
   resolveReadMcpServerRuntime,
@@ -51,12 +51,12 @@ import {
   SettingsLoadingSkeleton,
   SettingsSection,
   SettingsStatus,
-  SettingsToggle,
 } from "./solid/settings-ui.tsx";
+import { Switch } from "./solid/switch.tsx";
 import { createWizardLogin, WizardLogin } from "./wizard-login-controller.tsx";
 import "../styles/exec-approval-card.css";
 
-registerMcpEnglish();
+registerMcpManagementEnglish();
 
 export type McpServerEditorRenderer = (
   server: McpServerSummary,
@@ -93,21 +93,19 @@ function McpServersHelp() {
   let popover!: PopoverHandle;
   return (
     <span class="settings-section__docs">
-      <openclaw-tooltip prop:content={t("mcpPage.serversHelp")}>
-        <button
-          ref={setTrigger}
-          type="button"
-          class="settings-section__help-button"
-          aria-label={t("mcpPage.serversHelp")}
-          aria-controls="mcp-servers-help"
-          aria-haspopup="dialog"
-          onClick={() => popover.overlay.request(!popover.overlay.open)}
-        >
-          <span aria-hidden="true">
-            <Icon name="circleQuestionMark" />
-          </span>
-        </button>
-      </openclaw-tooltip>
+      <button
+        ref={setTrigger}
+        type="button"
+        class="settings-section__help-button"
+        aria-label={t("mcpPage.serversHelp")}
+        aria-controls="mcp-servers-help"
+        aria-haspopup="dialog"
+        onClick={() => popover.overlay.request(!popover.overlay.open)}
+      >
+        <span aria-hidden="true">
+          <Icon name="circleQuestionMark" />
+        </span>
+      </button>
       <Show when={trigger()}>
         {(anchor) => (
           <Popover
@@ -292,7 +290,7 @@ function McpServerRow(props: {
           <Icon name="chevronDown" class="mcp-server-row__chevron" />
         </button>
         <span title={props.blockedReason ?? undefined}>
-          <SettingsToggle
+          <Switch
             ariaLabel={props.server.name}
             checked={props.server.enabled}
             disabled={props.blockedReason !== null}

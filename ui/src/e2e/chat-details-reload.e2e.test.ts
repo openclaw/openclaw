@@ -191,14 +191,16 @@ suite.define(() => {
               progress: string | null;
               sections: Array<{ id: string; top: number; height: number }>;
             }> = [];
+            // Active panes can still be fully transparent before presentation.
+            const visibility = { checkOpacity: true, visibilityProperty: true };
             const sample = () => {
               const pane = document.querySelector(".chat-pane-cache__pane--active");
               const panel = pane?.querySelector(".chat-details");
               const session = panel?.querySelector("section.chat-details-session");
-              if (pane?.querySelector(".chat-pane__header")?.checkVisibility()) {
+              if (pane?.querySelector(".chat-pane__header")?.checkVisibility(visibility)) {
                 const top = panel?.getBoundingClientRect().top ?? 0;
                 frames.push({
-                  details: Boolean(session?.checkVisibility()),
+                  details: Boolean(session?.checkVisibility(visibility)),
                   environment:
                     panel?.querySelector(".chat-environment__branch-name")?.textContent ?? null,
                   progress:
@@ -265,17 +267,19 @@ suite.define(() => {
             return;
           }
           if (environmentModule && compositionModule) {
-            // Let the pane paint after Desktop arrives while Environment is still in flight.
+            // A cached pane cannot reveal its header while Environment code is still in flight.
             await compositionModule.request;
             compositionModule.release();
             await environmentModule.request;
-            await page.locator(".chat-pane-cache__pane--active .chat-pane__header").waitFor();
             await page.evaluate(
               () =>
                 new Promise((resolve) => {
                   requestAnimationFrame(() => requestAnimationFrame(resolve));
                 }),
             );
+            expect(
+              await page.locator(".chat-pane-cache__pane--active .chat-pane__header").count(),
+            ).toBe(0);
             environmentModule.release();
           }
           await gateway.waitForRequest("connect");
@@ -316,7 +320,7 @@ suite.define(() => {
                 )
             );
           });
-          const captured = await page.evaluate(async () => {
+          const frames = await page.evaluate(async () => {
             await new Promise(requestAnimationFrame);
             return Reflect.get(window, "progressReloadFrames") as Array<{
               details: boolean;
@@ -325,7 +329,6 @@ suite.define(() => {
               sections: Array<{ id: string; top: number; height: number }>;
             }>;
           });
-          const frames = delayedEnvironment ? captured.filter((frame) => frame.details) : captured;
           expect(frames.length).toBeGreaterThan(1);
           expect(await page.evaluate(() => Reflect.get(window, "detailsDockFlips"))).toEqual([]);
           expect(frames[0]!.details).toBe(true);

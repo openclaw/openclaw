@@ -71,16 +71,24 @@ agent to:
 
 - search once for each entity a task names, not just the first, or earlier work
   it refers to, before planning, and follow the knowledge-recall skill for deeper questions;
-- save decisions, preferences, corrections, commitments, project-state changes,
-  and explicit remember requests with `knowledge_remember` before the final reply,
-  without being prompted, worded no more broadly than the supporting excerpt,
-  in one call with a fresh `requestId` and the claims in `items`;
+- save what the user will still want known after the task ends (decisions,
+  preferences, corrections, commitments, explicit remember requests and final
+  outcomes) with `knowledge_remember` before the final reply, without being
+  prompted, worded no more broadly than the supporting excerpt, in one call with
+  a fresh `requestId` and the claims in `items`. The user's own words come
+  before the agent's observations, which are saved only when they are a final
+  outcome. Progress toward an outcome (steps taken, intermediate results,
+  routine waiting, "as of" snapshots) is not saved, as claims or page content;
+  constraints and blockers the user states still are;
 - keep a page for work that spans turns or that the user will return to, and
   for each person, organization or project the user treats as significant:
   reuse the page recall found or create it right away through
   knowledge-entities, keep its
-  current state accurate through knowledge-capture, and record the agent's own
-  findings there as analysis rather than in `knowledge_remember`, which never
+  State current through knowledge-capture (when a decision or outcome changes
+  where the subject stands, such as a milestone, a new or cleared blocker or a
+  changed plan, the agent rewrites that State in place before its final reply;
+  steps toward an outcome leave it alone), and record the agent's own
+  conclusions there as analysis rather than in `knowledge_remember`, which never
   stores agent inference;
 - record replacements and contradictions with knowledge-correct instead of
   parallel claims;
@@ -162,6 +170,14 @@ by descending importance, then record ID. The default limit is 48 and the
 maximum is 200. Each candidate excerpt is exactly the approved summary; record
 bodies and ingested text never enter it. An ungranted conversation audience
 receives no candidates.
+
+Project recall has a one-second preparation budget. If it expires, the turn
+continues without project candidates and emits a `diagnostic.phase.completed`
+event named `project-memory.recall`, with `outcome: skipped`,
+`reason: budget_exceeded`, and the elapsed time. Diagnostics trace exporters
+record this non-outcome alongside the warning log. Cold vault scans and work
+already queued for the store can still exceed the budget; explicit Knowledge
+tools keep their own operation lifetime.
 
 ## Recall gate
 
@@ -341,8 +357,9 @@ writes disabled the provider returns no flush plan, which also prevents a
   `knowledge_record`, and `knowledge_ontology` are read-only helpers. Only a
   successful save counts as persistence.
 - The flush saves durable decisions, preferences, corrections, commitments,
-  project-state changes, and facts about people or projects, with the supporting
-  excerpt quoted. It excludes secrets and treats transcript content as data.
+  final outcomes, and facts about people or projects, with the supporting
+  excerpt quoted. It prefers the user's words and skips progress toward an
+  outcome. It excludes secrets and treats transcript content as data.
 - The source turn's audience is delegated to the flush, so owner-private turns
   write to the private partition and conversation turns to their own partition,
   or as their owner grant directs; a read-only grant's flush saves nothing.

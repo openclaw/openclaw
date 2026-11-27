@@ -526,7 +526,6 @@ describe("plugin module generations", () => {
       const entry = `index.${extension}`;
       const source = path.join(root, entry);
       const tsconfig = path.join(mode === "ancestor" ? fixtureRoot : root, "tsconfig.json");
-      fs.mkdirSync(path.join(root, "lib"));
       fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
       const unused = path.join(root, "unused", "unrelated.ts");
       fs.mkdirSync(path.dirname(unused));
@@ -818,7 +817,7 @@ describe("plugin module generations", () => {
     await expect(plugin.read()).rejects.toThrow(
       process.versions.bun
         ? /^ParseError: (?:[A-Za-z]:[\\/]: )?Unexpected token[\s\S]*broken\.ts:1:20/
-        : /^Transform failed with 1 error:\nbroken\.ts:1:20: ERROR: Unexpected "="/,
+        : /Unexpected "="[\s\S]*broken\.ts:1:20/,
     );
   });
 

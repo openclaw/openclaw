@@ -158,6 +158,32 @@ it.each(["openclaw", "codex"])(
   },
 );
 
+it("defaults a model that cannot run at Standard to its one advertised program", () => {
+  const project = (
+    cyber: (typeof observation)["cyber"] | readonly ["daybreak_red"] | readonly [],
+    config: Parameters<typeof projectModelCatalogAccessPrograms>[0]["config"] = {},
+  ) =>
+    projectModelCatalogAccessPrograms({
+      snapshot: {
+        ...snapshot,
+        providerOutcomes: [{ ...outcome, modelAccessPrograms: [{ ...observation, cyber }] }],
+      },
+      entry,
+      evaluation,
+      runtimeId: "openclaw",
+      isCurrent: () => true,
+      config,
+    }).cyberAccessProgramDefault;
+  expect(project(["daybreak_red"])).toBe("daybreak_red");
+  expect(project(["standard", "daybreak_blue"])).toBe("standard");
+  expect(project([])).toBe("standard");
+  expect(
+    project(["daybreak_red"], {
+      agents: { defaults: { params: { accessPrograms: { cyber: "standard" } } } },
+    }),
+  ).toBe("standard");
+});
+
 it.each([
   ["daybreak_blue", "anthropic", "standard"],
   ["daybreak_red", "claude-cli", "standard"],

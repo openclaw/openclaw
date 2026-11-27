@@ -16,6 +16,7 @@ import {
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { ExecApprovalManager, type ExecApprovalRecord } from "../exec-approval-manager.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
+import { isApprovalRecordVisibleToClient } from "./approval-record-lookup.js";
 import {
   createApprovalClient,
   createApprovalClientLookup,
@@ -24,7 +25,6 @@ import {
   bindApprovalReviewerDeviceIds,
   handleApprovalWaitDecision,
   handlePendingApprovalRequest,
-  isApprovalRecordVisibleToClient,
 } from "./approval-shared.js";
 import { handleApprovalResolve, requestedEvent } from "./approval.test-support.js";
 import type { GatewayRequestContext } from "./types.js";

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   publicationPullRequestResponse,
@@ -187,6 +188,62 @@ describe("GitHub publication branch history", () => {
   beforeEach(async () => {
     f = await historyFixture();
   });
+
+  it.each(["rev-list", "show"] as const)(
+    "stops before publishing when first-commit %s cleanup is uncertain",
+    async (stage) => {
+      const oid = await f.head();
+      let injected = false;
+      interceptCommand((args) => {
+        if (args.includes("rev-list") && args.includes("--first-parent")) {
+          if (stage === "show") {
+            return commandResult(oid);
+          }
+        } else if (
+          stage !== "show" ||
+          !args.some((arg) => arg.startsWith("--format=%s%x00%b%x00%(trailers)"))
+        ) {
+          return undefined;
+        }
+        injected = true;
+        return {
+          ...commandResult(stage === "rev-list" ? oid : "Subject\0Body\0"),
+          error: new CommandProcessCleanupError(),
+        };
+      });
+      const result = await f.publish(`cleanup-uncertain-${stage}`);
+      expect(injected).toBe(true);
+      expect(
+        f.calls.filter((args) =>
+          args.some((arg) => ["push", "POST", "PATCH", "graphql"].includes(arg)),
+        ),
+      ).toEqual([]);
+      expect(result).toMatchObject({ status: "failed" });
+    },
+  );
+
+  it.each([0, 128])(
+    "uses the branch fallback when the first-commit list is empty (exit %i)",
+    async (code) => {
+      let created: { title: string; body: string } | undefined;
+      interceptCommand((args, input) => {
+        if (args.includes("rev-list") && args.includes("--first-parent")) {
+          return commandResult("", code);
+        }
+        if (args.includes("POST") && args.some((arg) => arg.endsWith("/pulls"))) {
+          created = JSON.parse(input!);
+        }
+        return undefined;
+      });
+      await f.published(`missing-first-commit-${code}`);
+      expect(created).toMatchObject({
+        title: `Publish ${BRANCH}`,
+        body: expect.stringContaining(
+          "Published by the Gateway after authoritative workspace reconciliation.",
+        ),
+      });
+    },
+  );
 
   it("publishes initial work and fast-forward edits, then reuses an attributed published head across requests", async () => {
     // Signature display must not prepend diagnostics to machine-readable commit facts.
@@ -401,28 +458,6 @@ describe("GitHub publication branch history", () => {
     await f.published("case-alias-update");
   });
 
-  it.each(["branch", "published-pr"])(
-    "retains identity-change semantics during %s observation",
-    async (observation) => {
-      if (observation === "published-pr") {
-        await f.published("initial");
-      }
-      const fallback = mocks.runCommand.getMockImplementation()!;
-      mocks.runCommand.mockImplementation(async (args: string[], options) => {
-        const result = await fallback(args, options);
-        if (
-          observation === "branch"
-            ? args.includes("ls-remote")
-            : args.includes("repos/openclaw/openclaw/pulls/125200")
-        ) {
-          mocks.matchesIdentity.mockReturnValue(false);
-        }
-        return result;
-      });
-      await f.rejected("revoked-identity", "identity_changed", "Reconnect");
-    },
-  );
-
   it("rejects a receipt PR naming another head repository without changing saved work", async () => {
     await f.published("initial");
     const fallback = mocks.runCommand.getMockImplementation()!;
@@ -459,7 +494,7 @@ describe("GitHub publication branch history", () => {
           fault === "failed" || fault === "wrong-ref"
             ? argv.includes("ls-remote")
             : fault === "fetch"
-              ? argv.includes("fetch") && argv.at(-1) === remoteCommit
+              ? argv.includes("fetch") && argv.at(-1)?.split(":")[0] === remoteCommit
               : argv.includes("--is-ancestor") && argv.at(-2) === remoteCommit;
         if (targeted) {
           faultInjected = true;

@@ -7,6 +7,14 @@ import type { SqliteFileContent } from "./sqlite-snapshot-file.js";
 
 export type SqliteSnapshotValidator = (database: DatabaseSync, databaseLabel: string) => void;
 
+type SqliteSnapshotStage =
+  | "source-acquisition"
+  | "source-integrity"
+  | "online-copy"
+  | "vacuum"
+  | "hash"
+  | "published-integrity";
+
 export type CreateVerifiedSqliteSnapshotOptions = {
   sourcePath: string;
   targetPath: string;
@@ -16,10 +24,11 @@ export type CreateVerifiedSqliteSnapshotOptions = {
     stagingRoot: string;
     preserveSourceArtifacts?: boolean;
     preparedSource?: PreparedSqliteSnapshotSource;
-    /** Log a failed private-copy removal instead of failing a published snapshot. */
-    bestEffortCleanup?: boolean;
+    /** Candidate updates keep cleanup warnings separate from backup validation failures. */
+    cleanupFailure?: "warn";
   };
   onProgress?: (progress: BackupProgressInfo) => void;
+  onStage?: (stage: SqliteSnapshotStage, phase: "start" | "done", bytes: number) => void;
   /** Final caller checks around publication; failures remove only this helper's target. */
   afterPublish?: (guard: PublishedSqliteFileGuard) => void;
   beforePublish?: () => void | Promise<void>;
@@ -30,6 +39,8 @@ export type CreateVerifiedSqliteSnapshotOptions = {
   integrity?: SqliteIntegrityCheckOptions;
   transform?: (database: DatabaseSync) => void | Promise<void>;
   validate?: SqliteSnapshotValidator;
+  /** Backup archives only: caller must compare the consumed bytes after hard-link-only publication. */
+  deferPublishedContentCheck?: boolean;
 };
 
 export type PublishedSqliteFileGuard = {
@@ -64,4 +75,6 @@ export type PublishVerifiedSqliteFileOptions = {
 export type VerifiedSqliteSnapshot = SqliteFileContent & {
   path: string;
   userVersion: number;
+  /** Caller still owes the full published-byte comparison against this receipt. */
+  deferredContentCheck?: { identity: BigIntStats };
 };

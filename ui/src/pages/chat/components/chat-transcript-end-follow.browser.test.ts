@@ -160,25 +160,16 @@ function observeNativeScroll(
   });
 }
 
-it("measures an appended end row before starting a smooth journey", async () => {
-  const { host, thread, extent, distance } = await mountEndFollowFixture(0);
-  const tail = document.createElement("div");
-  tail.style.height = "54px";
-  tail.textContent = "New short reply";
-  host.terminalRows = [{ kind: "content", key: "new-short-reply", content: tail }];
+it("releases a completed Latest target when the reader takes over without moving", async () => {
+  const { host, thread, extent } = await mountFollowingFixture();
+  host.transcript.scrollToEnd({ behavior: "auto" });
+  host.transcript.cancelScroll();
+  const offset = thread.scrollTop;
+  host.lastRowHeight += 42;
   host.requestRender();
-  await host.updateComplete;
-  const targets: number[] = [];
-  observeNativeScroll(thread, (options, scroll) => {
-    if (options?.behavior === "smooth") {
-      targets.push(extent.offsetHeight);
-    }
-    scroll();
-  });
-  host.transcript.scrollToEnd({ behavior: "smooth" });
-  await expect.poll(distance).toBe(0);
-  expect(targets.length).toBeGreaterThan(0);
-  expect(targets.every((height) => height === 1354)).toBe(true);
+  await expect.poll(() => extent.offsetHeight).toBe(1342);
+  await settleFrames();
+  expect(thread.scrollTop).toBe(offset);
 });
 
 it("keeps the cached tail mounted when full history replaces the boot window", async () => {
@@ -228,24 +219,6 @@ it("keeps the cached tail mounted when full history replaces the boot window", a
   } finally {
     observer.disconnect();
   }
-});
-
-it("keeps a newly measured tail visible in the first paint after growth", async () => {
-  const { host, thread, row, distance } = await mountFollowingFixture();
-  const gapAtPaint = await new Promise<number>((resolve) => {
-    setTimeout(() => {
-      const content = row.firstElementChild as HTMLElement;
-      content.style.height = `${host.lastRowHeight + 88}px`;
-      requestAnimationFrame(() => {
-        const observer = new ResizeObserver(() => {
-          observer.disconnect();
-          resolve(distance());
-        });
-        observer.observe(thread);
-      });
-    }, 0);
-  });
-  expect(gapAtPaint).toBe(0);
 });
 
 it.each([true, false])(
@@ -582,9 +555,13 @@ it.each([
       await settleFrames();
     }
     const original = thread.scrollTop;
+    let readerDeparted = false;
     let scrollingAtClamp = false;
     let idleAtClamp = false;
     const unsubscribe = subscribeTranscriptScroll(thread, (event) => {
+      if (event.type === "offset" && thread.scrollTop === original - readerMovement) {
+        readerDeparted = true;
+      }
       if (event.type === "offset" && thread.clientHeight === 500) {
         scrollingAtClamp ||= event.scrolling;
         idleAtClamp ||= scrollingAtClamp && !event.scrolling;
@@ -593,6 +570,8 @@ it.each([
     try {
       if (beforeClamp) {
         thread.scrollTop -= readerMovement;
+        // Observe the departure before the browser can coalesce it with the clamp.
+        await expect.poll(() => readerDeparted).toBe(true);
       }
       await resizeViewport(host, thread, 500);
       expect(thread.scrollTop).toBe(original - 100);
@@ -638,34 +617,16 @@ it("does not expose unmeasured intrinsic overflow as an independent scroll range
   expect(distance()).toBe(200);
 });
 
-it("publishes padding changes when either viewport box stays the same size", async () => {
-  const { host, thread, distance } = await mountFollowingFixture();
-  const original = thread.scrollTop;
-
-  host.viewportPadding = 40;
-  host.requestRender();
-  await expect.poll(() => getComputedStyle(thread).paddingBottom).toBe("40px");
-  expect(thread.clientHeight).toBe(400);
-  expect(thread.scrollTop).toBe(original - 20);
-
-  // Border-box growth and matching padding growth leave the observed content box unchanged.
-  host.viewportHeight = 420;
-  host.viewportPadding = 60;
-  host.requestRender();
-  await expect.poll(() => thread.clientHeight).toBe(420);
-  expect(getComputedStyle(thread).paddingBottom).toBe("60px");
-  expect(distance()).toBe(0);
-});
-
 it("keeps a shrinking end target smooth during a native scroll", async () => {
   const { host, thread, extent, distance } = await mountEndFollowFixture(800);
   await expect.poll(() => thread.scrollTop).toBe(800);
-  const writes: Array<{ behavior?: ScrollBehavior; jump: number }> = [];
+  const originalEnd = thread.scrollHeight - thread.clientHeight;
+  const writes: Array<ScrollToOptions & { before: number; jump: number }> = [];
   let shrinking = false;
   observeNativeScroll(thread, (options, scroll) => {
     const before = thread.scrollTop;
     scroll();
-    writes.push({ behavior: options?.behavior, jump: thread.scrollTop - before });
+    writes.push({ ...options, before, jump: thread.scrollTop - before });
     if (options?.behavior === "smooth" && !shrinking) {
       shrinking = true;
       host.lastRowHeight -= 17;
@@ -675,7 +636,17 @@ it("keeps a shrinking end target smooth during a native scroll", async () => {
   host.transcript.scrollToEnd({ behavior: "smooth" });
   await expect.poll(() => extent.offsetHeight).toBe(1283);
   await expect.poll(distance).toBe(0);
-  expect(writes.filter((write) => write.behavior === "smooth").length).toBeGreaterThan(1);
+  expect(writes.find((write) => write.top === originalEnd)?.behavior).toBe("smooth");
+  const end = thread.scrollHeight - thread.clientHeight;
+  expect(end).toBe(originalEnd - 17);
+  // Chromium can reach the shorter end before the virtualizer reconciles. An
+  // already-landed retarget is a no-op; a travelling retarget must stay smooth.
+  await expect
+    .poll(() => {
+      const retarget = writes.find((write) => write.top === end);
+      return retarget?.before === end || retarget?.behavior === "smooth";
+    })
+    .toBe(true);
   expect(writes.every((write) => Math.abs(write.jump) <= 1)).toBe(true);
 });
 

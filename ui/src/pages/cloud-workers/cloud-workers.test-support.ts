@@ -157,7 +157,8 @@ export function click(page: Element, label: string) {
 
 export const configSnapshot = (config: Record<string, unknown>, hash: string) => ({
   ...sourceConfigSnapshot(config, hash),
-  appliedConfigHash: hash,
+  configRevisionHash: `resolved:${hash}`,
+  appliedConfigHash: `resolved:${hash}`,
 });
 
 type Request = ReturnType<typeof mountPage>["request"];

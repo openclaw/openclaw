@@ -6,6 +6,7 @@ import {
   SessionTranscriptWriterClaimReboundError,
 } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
+import type { RunToolUsageRecorder } from "../tool-usage-recorder.js";
 import type { SessionManagerCore } from "./session-manager-core.js";
 import {
   captureSessionManagerWriteAssertion,
@@ -16,6 +17,7 @@ import {
 
 type SessionManagerActorAppendAdmission = {
   actor: SessionActor;
+  toolUsageRecorder?: RunToolUsageRecorder;
   options: OpenClawAgentDatabaseOptions;
   assertCurrent(): void;
 };
@@ -55,7 +57,8 @@ export async function withSessionManagerAppend<T>(
     return actor.withPhase(
       "session-manager.append",
       { assertCurrent, authorize: assertCurrent },
-      async () => append({ actor, options, assertCurrent }),
+      async () =>
+        append({ actor, options, assertCurrent, toolUsageRecorder: binding.toolUsageRecorder }),
     );
   });
 }

@@ -97,12 +97,29 @@ it("pins from a recovered turn that keeps the session's inline widget catalog", 
   const recorded = createWidget({ agentSessionKey, clientCaps: ["inline-widgets"] });
   const recovered = createWidget({
     agentSessionKey,
-    pinnedWidgetAuthoring: true,
     listingClientCaps: ["inline-widgets"],
     clientCaps: [],
   });
+  const scheduled = createWidget({
+    agentSessionKey,
+    listingClientCaps: ["inline-widgets"],
+    clientCaps: [],
+    gatewayCallerScheduled: true,
+  });
+  expect(scheduled?.requiredClientCaps).toEqual(["inline-widgets"]);
   expect(recovered?.parameters).toEqual(recorded?.parameters);
   expect(recovered?.description).toBe(recorded?.description);
+  expect(
+    widget(
+      createOpenClawCodingTools({
+        sessionKey: agentSessionKey,
+        listingClientCaps: ["inline-widgets"],
+        clientCaps: [],
+        config: { tools: { deny: ["show_widget"] } },
+        toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
+      }),
+    ),
+  ).toBeUndefined();
   const put = vi.spyOn(gateway, "callInProcessGatewayTool").mockResolvedValue({
     widgets: [{ name: "status", tabId: "main", grantState: "none" }],
     resolvedWidgetName: "status",
@@ -114,7 +131,7 @@ it("pins from a recovered turn that keeps the session's inline widget catalog", 
     "board.widget.put",
     expect.objectContaining({ sessionKey: agentSessionKey, name: "status" }),
   );
-  expect(pinned.content[0]).toMatchObject({ text: expect.stringContaining('"status": "pinned"') });
+  expect(pinned.content[0]).toMatchObject({ text: expect.stringContaining('"status":"pinned"') });
   await expect(recovered!.execute("inline-call", call)).rejects.toThrow(
     "no connected client can show inline widgets this turn; set pin=true",
   );

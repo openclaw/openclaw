@@ -1,2 +1,0 @@
-# Keep the release parity manifest aligned with canonical scenario titles.
-6

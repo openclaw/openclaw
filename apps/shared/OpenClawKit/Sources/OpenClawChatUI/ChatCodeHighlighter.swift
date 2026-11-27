@@ -80,7 +80,7 @@ enum ChatCodeHighlighter {
             if startsLineComment {
                 flushPlain()
                 var end = index
-                while end < chars.count, chars[end] != "\n" {
+                while end < chars.count, !self.isLineBreak(chars[end]) {
                     end += 1
                 }
                 tokens.append(ChatCodeToken(kind: .comment, text: String(chars[index..<end])))
@@ -141,6 +141,11 @@ enum ChatCodeHighlighter {
 
     // MARK: - Scanning helpers
 
+    private static func isLineBreak(_ character: Character) -> Bool {
+        // Swift represents a CRLF pair as one Character.
+        character == "\n" || character == "\r\n" || character == "\r"
+    }
+
     private static func consumeBlockComment(
         _ chars: [Character],
         from start: Int,
@@ -173,7 +178,7 @@ enum ChatCodeHighlighter {
 
     static func isWithinHighlightLimits(_ code: String) -> Bool {
         guard code.utf8.count <= self.maxHighlightedBytes else { return false }
-        let newlineCount = code.lazy.count(where: { $0 == "\n" })
+        let newlineCount = code.lazy.count(where: self.isLineBreak)
         let lineCount = code.isEmpty ? 0 : newlineCount + 1
         return lineCount <= self.maxHighlightedLines
     }
@@ -202,7 +207,7 @@ enum ChatCodeHighlighter {
                 end += delimiter.count
                 break
             }
-            if !multiline, chars[end] == "\n" { break }
+            if !multiline, self.isLineBreak(chars[end]) { break }
             end += 1
         }
         end = min(end, chars.count)
@@ -302,10 +307,40 @@ enum ChatCodeHighlighter {
 /// Public so app file previews reuse the chat renderer's highlighting.
 @MainActor
 public enum ChatCodeHighlightCache {
-    private static var cache: [String: AttributedString] = [:]
-    // Bounded: wholesale reset past the cap keeps long sessions flat; a miss
-    // just re-tokenizes one visible block, which is cheap.
-    private static let capacity = 160
+    private static var storage = Storage()
+
+    struct Storage {
+        private struct Entry {
+            let value: AttributedString
+            var lastUse: UInt64
+        }
+
+        private var entries: [Data: Entry] = [:]
+        private var access: UInt64 = 0
+        private let capacity = 160
+
+        mutating func value(for contentKey: String, create: () -> AttributedString) -> AttributedString {
+            // Swift String equality merges canonical spellings, but the cached text retains the original bytes.
+            let key = Data(contentKey.utf8)
+            self.access &+= 1
+            if var entry = self.entries[key] {
+                entry.lastUse = self.access
+                self.entries[key] = entry
+                return entry.value
+            }
+
+            let value = create()
+            // Keep recently displayed blocks warm when another chat or file preview
+            // fills the cache. Only misses scan this bounded set to evict one entry.
+            if self.entries.count >= self.capacity,
+               let oldest = self.entries.min(by: { $0.value.lastUse < $1.value.lastUse })?.key
+            {
+                self.entries.removeValue(forKey: oldest)
+            }
+            self.entries[key] = Entry(value: value, lastUse: self.access)
+            return value
+        }
+    }
 
     public static func highlighted(code: String, languageId: String?) -> AttributedString {
         guard let language = ChatCodeHighlighter.language(for: languageId),
@@ -314,20 +349,17 @@ public enum ChatCodeHighlightCache {
             return AttributedString(code)
         }
         let key = "\(languageId ?? "")\u{0}\(code)"
-        if let hit = self.cache[key] { return hit }
-        var value = AttributedString()
-        for token in ChatCodeHighlighter.tokens(code: code, language: language) {
-            var piece = AttributedString(token.text)
-            if let color = ChatCodeSyntaxPalette.color(for: token.kind) {
-                piece.foregroundColor = color
+        return self.storage.value(for: key) {
+            var value = AttributedString()
+            for token in ChatCodeHighlighter.tokens(code: code, language: language) {
+                var piece = AttributedString(token.text)
+                if let color = ChatCodeSyntaxPalette.color(for: token.kind) {
+                    piece.foregroundColor = color
+                }
+                value += piece
             }
-            value += piece
+            return value
         }
-        if self.cache.count >= self.capacity {
-            self.cache.removeAll(keepingCapacity: true)
-        }
-        self.cache[key] = value
-        return value
     }
 }
 

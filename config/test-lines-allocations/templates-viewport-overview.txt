@@ -1,2 +1,0 @@
-208
-# Protect viewport coverage/resize and single-read overview, publisher filtering, fallback boundaries, and retirement.

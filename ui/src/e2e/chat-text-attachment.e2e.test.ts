@@ -85,6 +85,12 @@ suite.define(() => {
         const panel = page.locator("openclaw-chat-detail-panel:visible");
         const reader = panel.locator(extension === "md" ? "article" : "pre");
         await reader.waitFor();
+        if (width === 1280 && extension === "md") {
+          const rail = await panel.locator(".sidebar-file-toolbar").boundingBox();
+          const content = await reader.boundingBox();
+          expect(content!.x - rail!.x).toBeCloseTo(16, 0);
+          expect(rail!.x + rail!.width - content!.x - content!.width).toBeCloseTo(16, 0);
+        }
         const downloadAction = panel.getByRole("link", {
           name: `Download ${filename}`,
           exact: true,

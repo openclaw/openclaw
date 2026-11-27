@@ -5,19 +5,23 @@ import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { registerSessionMenuEnglish } from "../i18n/locales/en-session-menu.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
+import { showToast } from "../lib/toast.ts";
 import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
 import { SidebarDropdown } from "./app-sidebar-dropdown.tsx";
 import { countSidebarSessionFilters } from "./app-sidebar-session-filter-summary.tsx";
 import {
+  DEFAULT_SIDEBAR_SESSION_SORT_MODE,
   SIDEBAR_SESSION_SORT_OPTIONS,
   SIDEBAR_SESSION_STATUS_OPTIONS,
+  setStoredSessionCatalogHidden,
 } from "./app-sidebar-session-types.ts";
-import { createPersonalSessionGroupActions } from "./personal-session-group-actions.ts";
 import type { PickerFocusHandle } from "./select-picker-types.ts";
 import {
+  archiveSessionGroupFromMenu,
   createSessionGroup,
   renameSessionGroupFromMenu,
   deleteSessionGroupFromMenu,
@@ -49,6 +53,7 @@ type SidebarSessionGroupMenuAction =
   | "group-defaults"
   | "rename-group"
   | "new-group"
+  | "archive-group"
   | "delete-group";
 
 const EMPTY_GROUPS_OPTIONS = [
@@ -75,6 +80,7 @@ export function renderSidebarSessionGroupMenuForMenus(
     "group-defaults": "sessions.groups.update",
     "rename-group": "sessions.groups.rename",
     "new-group": "sessions.groups.put",
+    "archive-group": "sessions.patchMany",
     "delete-group": "sessions.groups.delete",
   } as const;
   const actionDisabledReasons = createMemo(() =>
@@ -99,12 +105,13 @@ export function renderSidebarSessionGroupMenuForMenus(
     action: SidebarSessionGroupMenuAction,
     label: string,
     icon: JSX.Element,
+    destructive = false,
   ): MenuItem => ({
     id: action,
     label,
     icon,
-    class: `session-menu__item${action === "delete-group" ? " session-menu__item--destructive" : ""}`,
-    variant: action === "delete-group" ? "danger" : undefined,
+    class: `session-menu__item${destructive ? " session-menu__item--destructive" : ""}`,
+    variant: destructive ? "danger" : undefined,
     disabled: !host.connected || Boolean(actionDisabledReasons()[action]),
     attributes: { title: actionDisabledReasons()[action] },
     content: <span class="session-menu__text">{label}</span>,
@@ -124,7 +131,13 @@ export function renderSidebarSessionGroupMenuForMenus(
       id: "separator",
       content: <div class="session-menu__separator" role="separator" />,
     },
-    renderAction("delete-group", t("sessionsView.deleteGroupMenu"), <Icon name="trash" />),
+    renderAction(
+      "archive-group",
+      t("sessionsView.archiveGroupMenu"),
+      <Icon name="archive" />,
+      true,
+    ),
+    renderAction("delete-group", t("sessionsView.deleteGroupMenu"), <Icon name="trash" />, true),
   ]);
   return (
     <SidebarDropdown
@@ -136,6 +149,7 @@ export function renderSidebarSessionGroupMenuForMenus(
           (value === "group-defaults" ||
             value === "rename-group" ||
             value === "new-group" ||
+            value === "archive-group" ||
             value === "delete-group") &&
           !actionDisabledReasons()[value]
         ) {
@@ -155,6 +169,9 @@ export function renderSidebarSessionGroupMenuForMenus(
             case "new-group":
               void createSessionGroup(host.sessionOrganizer);
               break;
+            case "archive-group":
+              void archiveSessionGroupFromMenu(host.sessionOrganizer, menu.group);
+              break;
             case "delete-group":
               void deleteSessionGroupFromMenu(host.sessionOrganizer, menu.group);
               break;
@@ -170,6 +187,40 @@ export function renderSidebarSessionGroupMenuForMenus(
       items={items()}
     />
   );
+}
+
+function hidePersonalSidebarCatalog(host: SidebarMenusOwner, catalogId: string): void {
+  const label =
+    host.sessionData.sessionCatalogs.find((catalog) => catalog.id === catalogId)?.label ??
+    catalogId;
+  setStoredSessionCatalogHidden(catalogId, true);
+  // Reuse the settings-search destination for the Sidebar preferences block so the
+  // toast opens the same place the rest of the app calls "Appearance > Sidebar".
+  const recovery = SETTINGS_ROUTE_TARGETS.appearanceSidebar;
+  const recoveryHref =
+    pathForRoute(recovery.routeId, host.basePath) + recovery.search + recovery.hash;
+  // The section disappears instantly and its only standing recovery lives on another
+  // page, so the outcome is announced where the action happened: undo here, plus a
+  // link that opens the re-enable block for after the toast is gone. Longer than the
+  // 6s default because that text is a recovery instruction, not an acknowledgement.
+  const message = host.ownerDocument.createDocumentFragment();
+  const recoveryLink = host.ownerDocument.createElement("a");
+  recoveryLink.className = "session-link";
+  recoveryLink.href = recoveryHref;
+  recoveryLink.textContent = t("chat.sidebar.sectionHiddenRecovery");
+  listen(recoveryLink, "click", (event) =>
+    handleNavigationClick(event, () =>
+      host.onNavigate?.(recovery.routeId, { search: recovery.search, hash: recovery.hash }),
+    ),
+  );
+  message.append(t("chat.sidebar.sectionHidden", { section: label }), " ", recoveryLink);
+  showToast({
+    severity: "success",
+    message,
+    actionLabel: t("common.undo"),
+    onAction: () => setStoredSessionCatalogHidden(catalogId, false),
+    durationMs: 12_000,
+  });
 }
 
 export function renderSidebarCatalogViewMenuForMenus(
@@ -259,7 +310,7 @@ export function renderSidebarCatalogViewMenuForMenus(
         } else if (value === "involving-me") {
           setOwnerFilter(null, true);
         } else if (value === "hide-catalog" && menus.catalogViewMenuPosition === position) {
-          host.hideSessionCatalog(position.catalogId);
+          hidePersonalSidebarCatalog(host, position.catalogId);
           menus.closePositionedMenu("catalogView");
         }
       }}
@@ -289,7 +340,7 @@ export function renderSidebarSessionSortMenuForMenus(
       host.sessionsShowCron ||
       host.sessionsShowSystem ||
       host.sessionsShowPreview ||
-      host.effectiveSessionSortMode() !== "created" ||
+      host.effectiveSessionSortMode() !== DEFAULT_SIDEBAR_SESSION_SORT_MODE ||
       (!rosterMode() &&
         (grouping() !== "category" || host.sessionsEmptyGroupsMode !== "filtering")),
   );
@@ -349,9 +400,8 @@ export function renderSidebarSessionSortMenuForMenus(
                       setSessionsShowCron(host.sessionOrganizer, false);
                       setSessionsShowSystem(host.sessionOrganizer, false);
                       setSessionsShowPreview(host.sessionOrganizer, false);
-                      host.setSessionSortMode("created");
+                      host.setSessionSortMode(DEFAULT_SIDEBAR_SESSION_SORT_MODE);
                       if (!rosterMode()) {
-                        // A displayed default can hide a saved Person choice until owners return.
                         if (grouping() !== "category") {
                           setSessionsGrouping(host.sessionOrganizer, "category");
                         }
@@ -425,9 +475,7 @@ export function renderSidebarSessionSortMenuForMenus(
                 options={[
                   { value: "category", label: t("sessionsView.groupByCategory") },
                   { value: "project", label: t("chat.sidebar.catalogGroupByProject") },
-                  ...(peopleSortAvailable()
-                    ? [{ value: "person", label: t("sessionsView.groupByPerson") }]
-                    : []),
+                  { value: "person", label: t("sessionsView.groupByPerson") },
                   { value: "none", label: t("sessionsView.groupByNone") },
                 ]}
                 onChange={(value) => {
@@ -483,24 +531,20 @@ export function renderSidebarSessionSortMenuForMenus(
             )}
           </section>
           <footer class="sidebar-session-menu-footer">
-            <button
-              ref={(element) => controls.set("new-collection", element)}
-              type="button"
+            <a
+              ref={(element) => controls.set("all-sessions", element)}
               class="sidebar-session-filter-footer"
-              disabled={!host.connected}
-              onClick={() => {
-                const context = host.sessionDataContext;
-                if (context && host.connected) {
+              href={pathForRoute("sessions", host.basePath)}
+              onClick={(event: MouseEvent) =>
+                handleNavigationClick(event, () => {
                   menus.closePositionedMenu("sessionSort");
-                  void createPersonalSessionGroupActions(context).edit();
-                }
-              }}
+                  host.onNavigate?.("sessions");
+                })
+              }
             >
-              <span aria-hidden="true">
-                <Icon name="plus" />
-              </span>
-              {t("sessionsView.personalGroupNew")}
-            </button>
+              <span aria-hidden="true">{<Icon name="messageCircle" />}</span>
+              {t("chat.sidebar.viewAllSessions")}
+            </a>
             <a
               ref={(element) => controls.set("sources", element)}
               id="sidebar-sessions-sources"

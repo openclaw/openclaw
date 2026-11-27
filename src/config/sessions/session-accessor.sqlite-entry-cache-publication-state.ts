@@ -51,6 +51,13 @@ const unknownSharingAuthorities = resolveGlobalSet<string>(
   "close-and-restart",
 );
 
+export class SessionSharingAuthorityUnknownError extends Error {
+  constructor() {
+    super("Session sharing authority is unknown until the Gateway restarts");
+    this.name = "SessionSharingAuthorityUnknownError";
+  }
+}
+
 /** ID selection cannot pass a worker commit whose identity facts are not yet published. */
 export function isSessionIdSelectionPublished(params: {
   databaseIdentity: string;
@@ -261,6 +268,7 @@ export function publishRetainedSessionEntryChange(
   metadataEntry?: SessionEntry,
   fullEntry?: SessionEntry,
   membership?: ReadonlySet<string>,
+  memberAccess?: CommittedSessionSharingFacts["memberAccess"],
 ): void {
   recordCommittedSessionEntryPublication(database, sessionKey);
   for (const read of retainedSharingReads(database, sessionKey) ?? []) {
@@ -269,6 +277,8 @@ export function publishRetainedSessionEntryChange(
     if (read.acquisition && membership) {
       // A complete actor postimage supersedes older deltas and an in-flight read's membership.
       read.acquisition.membershipPostimage = membership;
+      read.acquisition.memberAccessPostimage = memberAccess;
+      read.acquisition.memberAccess = {};
       read.acquisition.membership.clear();
     }
     publishRetainedSessionGeneration(read, entry, known);
@@ -279,7 +289,11 @@ export function publishRetainedSessionEntryChange(
       ((previous.entry.sessionId === entry.sessionId &&
         (read.followLifecycle || previous.entry.lifecycleRevision === entry.lifecycleRevision)) ||
         (read.followTranscript && previous.entry.lifecycleRevision === entry.lifecycleRevision))
-        ? { entry, membership: membership ?? previous.membership }
+        ? {
+            entry,
+            membership: membership ?? previous.membership,
+            memberAccess: membership ? memberAccess : previous.memberAccess,
+          }
         : undefined;
   }
 }
@@ -298,6 +312,7 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
       entry: initial.entry,
       placeholder: initial.placeholder,
       membership: initial.membership,
+      memberAccess: initial.memberAccess,
     },
     generation: initial?.generation,
     acquisition: initial ? undefined : { invalidated: false, membership: new Map() },
@@ -403,7 +418,10 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
     },
     initialize: (snapshot: CommittedSessionSharingFacts) => {
       const acquisition = read.acquisition;
-      if (!active || !acquisition || unknownSharingAuthorities.has(key)) {
+      if (unknownSharingAuthorities.has(key)) {
+        throw new SessionSharingAuthorityUnknownError();
+      }
+      if (!active || !acquisition) {
         throw new Error("Session sharing acquisition is no longer current");
       }
       read.facts = reconcileSessionSharingAcquisition(acquisition, snapshot);

@@ -16,7 +16,7 @@ import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { handleDirList } from "../node-host/dir-list.js";
 import { handleFileFetch } from "../node-host/file-fetch.js";

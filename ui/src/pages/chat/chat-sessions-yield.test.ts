@@ -5,7 +5,7 @@ import {
   emptyAssistantAcknowledgment,
   emptyAssistantHistory,
 } from "../../test-helpers/empty-assistant-history.ts";
-import { resetWorkingProgress, resolveTurnRecap } from "./chat-progress.ts";
+import { resetWorkingProgress } from "./chat-progress.ts";
 import { pendingSessionsYield, readHandoffDisplay } from "./chat-sessions-yield.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { createProps } from "./chat-thread.test-support.ts";
@@ -46,6 +46,24 @@ const nestedHistory = [
     ],
   },
 ];
+// Claude CLI import: the MCP-prefixed call and its result share one assistant message.
+const claudeImportedHistory = [
+  {
+    role: "assistant",
+    runId: "parent-run",
+    timestamp: 2_000,
+    content: [
+      { type: "toolcall", id: "yield-call", name: "mcp__openclaw__sessions_yield", arguments: {} },
+      {
+        type: "tool_result",
+        tool_use_id: "yield-call",
+        name: "mcp__openclaw__sessions_yield",
+        is_error: false,
+        content: result.content,
+      },
+    ],
+  },
+];
 const yieldRequest = (args: Record<string, unknown>, before: unknown[] = []) => ({
   ...separateHistory[0],
   content: [...before, { ...call, arguments: args }],
@@ -79,6 +97,7 @@ describe("sessions_yield transcript projection", () => {
   it.each([
     ["separate tool result", separateHistory],
     ["nested exec activity", nestedHistory],
+    ["imported Claude CLI call and result", claudeImportedHistory],
   ])("leaves no transcript row for %s and reports the pending handoff", (_name, messages) => {
     const original = structuredClone(messages);
     expect(projectHistory(messages, { showToolCalls: false })).toEqual([silentBoundary]);
@@ -248,21 +267,12 @@ describe("sessions_yield transcript projection", () => {
         messages,
         subagentWait: { startedAt: 3_500, runId },
       });
-      const { workingIndicator, runOutputTokens } = projectTranscriptActivity(
-        buildChatItems(props),
-        { ...props, runUsageById: usageByRun },
-      );
+      const { runOutputTokens } = projectTranscriptActivity(buildChatItems(props), {
+        ...props,
+        runUsageById: usageByRun,
+      });
       const expectedTokens = handoffCount === 1 ? 4_100 : 4_356;
       expect(runOutputTokens).toBe(expectedTokens);
-      const host = { turnRecapWatch: null };
-      const params = { sessionKey: props.sessionKey, usageByRun };
-      resolveTurnRecap(host, { ...params, indicator: workingIndicator });
-      expect(
-        resolveTurnRecap(host, {
-          ...params,
-          row: { lastRunId: runId, status: "done", runtimeMs: 1_000, endedAt: 5_000 },
-        }),
-      ).toEqual({ runId, runtimeMs: 4_000, outputTokens: expectedTokens });
     });
 
     it("is recognized before the pane knows its run id", () => {

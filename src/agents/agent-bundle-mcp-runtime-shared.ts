@@ -3,6 +3,7 @@ import type { SessionToolOverrides } from "../config/sessions/types.js";
 /** Shared session MCP runtime constants and ownership contracts. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { McpToolCatalog, McpToolCatalogDiagnostic } from "./agent-bundle-mcp-catalog.types.js";
 import type {
   RequesterMcpConnect,
   SessionMcpRequesterScope,
@@ -11,6 +12,8 @@ import type {
 } from "./agent-bundle-mcp-types.js";
 import type { bindMcpClientElicitation } from "./mcp-client-elicitation.runtime.js";
 import type { McpServerConnectionResolved } from "./mcp-connection-resolver.js";
+import { McpOAuthDiagnosticError } from "./mcp-oauth-identity.js";
+import { McpStartupBackoffError } from "./mcp-startup-backoff.js";
 import type { McpToolCatalogMetadata } from "./mcp-tool-metadata.js";
 import type { createNativeMcpClientBridge } from "./native-mcp-runtime-client.js";
 
@@ -18,6 +21,45 @@ export const SESSION_MCP_RUNTIME_MANAGER_KEY = Symbol.for("openclaw.sessionMcpRu
 export const SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS = 60 * 1000;
 // Includes runtimes being created or drained; idle owners yield capacity at the limit.
 export const SESSION_MCP_MAX_LIVE_RUNTIMES = 256;
+
+export type McpServerBackoffState = {
+  session: BundleMcpSession;
+  failures: number;
+  retryAfterMs?: number;
+};
+
+export function projectBundleMcpCatalogFailure(
+  catalog: McpToolCatalog | undefined,
+  diagnostic: McpToolCatalogDiagnostic,
+  error?: unknown,
+): McpToolCatalog {
+  const promptMessage =
+    error instanceof McpStartupBackoffError || error instanceof McpOAuthDiagnosticError
+      ? error.promptMessage
+      : undefined;
+  return {
+    ...(catalog ?? { version: 1, servers: {}, tools: [] }),
+    generatedAt: Date.now(),
+    diagnostics: [{ ...diagnostic, ...(promptMessage ? { promptMessage } : {}) }],
+  };
+}
+
+/** Reuse known server metadata when a live catalog needs an immediate retry. */
+export function projectBundleMcpCatalogRetry(
+  catalog: McpToolCatalog | undefined,
+  serverName: string,
+  message: string,
+): McpToolCatalog | undefined {
+  const server = catalog?.servers[serverName];
+  return server
+    ? projectBundleMcpCatalogFailure(catalog, {
+        serverName,
+        safeServerName: server.safeServerName ?? serverName,
+        launchSummary: server.launchSummary,
+        message,
+      })
+    : undefined;
+}
 
 export class SessionMcpRuntimeCapacityError extends Error {
   constructor(
@@ -37,10 +79,21 @@ export function resolveSessionMcpRuntimeIdleTtlMs(cfg?: OpenClawConfig): number 
 export function shouldLoadRequesterScopedMcpHarnessRuntime(params: {
   sessionId: string;
   requesterSenderId?: string | null;
+  policyContext?: {
+    operatorProfileId?: string;
+    messageChannel?: string | null;
+    messageProvider?: string | null;
+  };
 }): boolean {
-  if (params.requesterSenderId?.trim()) {
+  // This is a load hint only. The runtime requires the host's live turn capture.
+  if (
+    params.requesterSenderId?.trim() ||
+    (params.policyContext?.operatorProfileId &&
+      (params.policyContext.messageChannel ?? params.policyContext.messageProvider) === "webchat")
+  ) {
     return true;
   }
+
   const manager = (globalThis as Record<PropertyKey, unknown>)[SESSION_MCP_RUNTIME_MANAGER_KEY] as
     | SessionMcpRuntimeManager
     | undefined;
@@ -48,6 +101,7 @@ export function shouldLoadRequesterScopedMcpHarnessRuntime(params: {
 }
 
 export type CreateSessionMcpRuntime = (params: {
+  lastListedCatalogByServerIdentity?: Map<string, McpToolCatalog>;
   sessionId: string;
   sessionKey?: string;
   agentId?: string;

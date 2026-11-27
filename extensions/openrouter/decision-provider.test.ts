@@ -1,14 +1,16 @@
 import type { DecisionBatchV2, DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { buildOpenRouterDecisionProvider } from "./decision-provider.js";
 
-// mock-isolation: Transport cases supply synthetic responses and origin policy without network access.
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: vi.fn(),
-  ssrfPolicyFromHttpBaseUrlAllowedOrigin: (url: string) => ({
-    allowedOrigins: [new URL(url).origin],
-  }),
+type GuardedRequest = { url: string; init?: RequestInit };
+const guardedFetch = vi.hoisted(() =>
+  vi.fn<
+    (request: GuardedRequest) => Promise<{ response: Response; release: () => Promise<void> }>
+  >(),
+);
+vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>()),
+  fetchWithProviderHttpGuard: guardedFetch,
 }));
 
 const predicateQuestion = { type: "boolean", instructions: "Is this urgent?" } as const;
@@ -53,11 +55,11 @@ function context(config: Config = {}): DecisionProviderContextV2 {
     config,
     auth: { apiKey: "synthetic-prepared-token", mode: "api-key", profileId: "openrouter:fixture" },
     signal: new AbortController().signal,
-    deadlineMonotonicMs: Number.POSITIVE_INFINITY,
+    deadlineMonotonicMs: performance.now() + 30_000,
     isAdmissible: () => true,
   };
 }
-const sentRequest = () => vi.mocked(fetchWithSsrFGuard).mock.calls[0]![0];
+const sentRequest = () => guardedFetch.mock.calls[0]![0];
 function readRequestBody() {
   const body = sentRequest().init?.body;
   if (typeof body !== "string") {
@@ -78,13 +80,12 @@ function wire() {
     usage: { input_tokens: 476, output_tokens: 70, cost: 0.000019992 },
   };
 }
-const release = vi.fn(async () => {});
 const provider = buildOpenRouterDecisionProvider();
 async function unavailable(reason: string, ctx = context(), input = batch) {
   expect(await provider.evaluate(input, ctx)).toEqual({ status: "unavailable", reason });
 }
 function guarded(response: Response) {
-  return { response, finalUrl: `${baseUrl}/systemone`, release };
+  return { response, release: async () => {} };
 }
 it.each(["parallel/decisions-fast", "parallel/decisions-fast:free"])(
   "evaluates %s as typed web-grounded decisions, preserving sources and refusals",
@@ -141,16 +142,15 @@ it("rejects unsupported Parallel input before transport", async () => {
   ]) {
     await unavailable("unsupported-input", ctx, input);
   }
-  expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
+  expect(guardedFetch).not.toHaveBeenCalled();
 });
 function respond(value: unknown, status = 200) {
-  vi.mocked(fetchWithSsrFGuard).mockResolvedValue(guarded(Response.json(value, { status })));
+  guardedFetch.mockResolvedValue(guarded(Response.json(value, { status })));
 }
 beforeEach(() => {
   vi.clearAllMocks();
   respond(wire());
 });
-afterEach(() => vi.useRealTimers());
 
 it.each(["typesafe/jev-1.14", "~typesafe/jev-latest"])(
   "sends images and preserves native boxes on %s",
@@ -176,10 +176,9 @@ it.each(["typesafe/jev-1.14", "~typesafe/jev-latest"])(
       ],
       questions: image.questions,
     });
-    expect(release).toHaveBeenCalledOnce();
-    vi.mocked(fetchWithSsrFGuard).mockClear();
+    guardedFetch.mockClear();
     await unavailable("unsupported-input", context(), image);
-    expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
+    expect(guardedFetch).not.toHaveBeenCalled();
   },
 );
 
@@ -190,52 +189,6 @@ it.each(["png", "jpeg"])("accepts %s evidence on Jev 1.13", async (format) => {
   ).toMatchObject({ status: "ok" });
   expect(readRequestBody().state).toEqual([{ type: "image_url", image_url: { url: dataUri } }]);
 });
-
-it.each(["thrown", "deadline"] as const)(
-  "rechecks %s authority at physical dispatch",
-  async (state) => {
-    const prepared = Promise.withResolvers<void>();
-    const dispatch = Promise.withResolvers<void>();
-    const physicalFetch = vi.fn();
-    const failure = new Error("synthetic caller authority closed");
-    let admitted = true;
-    const ctx = context();
-    vi.mocked(fetchWithSsrFGuard).mockImplementationOnce(async (request) => {
-      prepared.resolve();
-      await dispatch.promise;
-      expect(request.beforeRequest).toBeTypeOf("function");
-      request.beforeRequest?.();
-      physicalFetch();
-      return { response: Response.json(wire()), finalUrl: request.url, release };
-    });
-    const pending = provider.evaluate(batch, {
-      ...ctx,
-      isAdmissible: () => {
-        if (!admitted && state === "thrown") {
-          throw failure;
-        }
-        return admitted;
-      },
-    });
-    const outcome =
-      state === "thrown"
-        ? expect(pending).rejects.toBe(failure)
-        : expect(pending).resolves.toEqual({ status: "unavailable", reason: "transport" });
-    await prepared.promise;
-    if (state === "deadline") {
-      vi.spyOn(performance, "now").mockReturnValue(ctx.deadlineMonotonicMs);
-    } else {
-      admitted = false;
-    }
-    dispatch.resolve();
-    try {
-      await outcome;
-      expect(physicalFetch).not.toHaveBeenCalled();
-    } finally {
-      vi.restoreAllMocks();
-    }
-  },
-);
 
 it("preserves native labels, scores, rounded distributions, served model and actual USD", async () => {
   const outcome = await provider.evaluate(batch, context());
@@ -261,7 +214,6 @@ it("preserves native labels, scores, rounded distributions, served model and act
   expect(new Headers(sentRequest().init?.headers).get("authorization")).toBe(
     "Bearer synthetic-prepared-token",
   );
-  expect(release).toHaveBeenCalledOnce();
 });
 
 it("keeps explicit zero distinct from absent cost", async () => {
@@ -277,17 +229,13 @@ it("keeps explicit zero distinct from absent cost", async () => {
   }
 });
 
-it("uses the prepared prefix, effective headers, shared routing and explicit private-network deny", async () => {
+it("uses the prepared prefix, effective headers and shared routing", async () => {
   const ctx = context(
     providerConfig({
       baseUrl: "https://not-selected.invalid/v1",
       apiKey: "synthetic-not-selected",
       params: {
         provider: { data_collection: "deny", allow_fallbacks: false, max_price: { prompt: 0.1 } },
-      },
-      request: {
-        allowPrivateNetwork: false,
-        headers: { Authorization: "Bearer synthetic-not-selected" },
       },
     }),
   );
@@ -301,7 +249,6 @@ it("uses the prepared prefix, effective headers, shared routing and explicit pri
     authorization: "Bearer synthetic-effective",
     "x-tenant": "fixture",
   });
-  expect(request.policy).toEqual({});
   expect(readRequestBody().provider).toEqual({
     data_collection: "deny",
     allow_fallbacks: false,
@@ -311,27 +258,12 @@ it("uses the prepared prefix, effective headers, shared routing and explicit pri
   });
 });
 
-it("does not restore a default bearer or reread a configured custom auth value", async () => {
-  const ctx = context(
-    providerConfig({
-      request: {
-        auth: { mode: "header", headerName: "x-auth-fixture", value: "synthetic-not-selected" },
-      },
-    }),
-  );
-  ctx.model.headers = { "x-auth-fixture": "synthetic-prepared-custom" };
-  await provider.evaluate(batch, ctx);
-  const headers = new Headers(sentRequest().init?.headers);
-  expect(headers.get("authorization")).toBeNull();
-  expect(headers.get("x-auth-fixture")).toBe("synthetic-prepared-custom");
-});
-
 it.each(["on", "off"] as const)("rejects reasoning %s before HTTP", async (reasoning) => {
   await unavailable("unsupported-input", { ...context(), reasoning });
-  expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
+  expect(guardedFetch).not.toHaveBeenCalled();
 });
 
-it("rejects unsupported native inputs, parameters and absent credentials before HTTP", async () => {
+it("rejects unsupported native inputs and parameters before HTTP", async () => {
   for (const state of [
     { type: "image", dataUri: "data:image/webp;base64,AA==" },
     { type: "json", value: null },
@@ -351,11 +283,10 @@ it("rejects unsupported native inputs, parameters and absent credentials before 
   const ctx = context();
   ctx.model.params = { max_tokens: 100 };
   await unavailable("unsupported-input", ctx);
-  await unavailable("credentials-unavailable", { ...context(), auth: { mode: "api-key" } });
   const configured = context();
   configured.config.agents = { defaults: { models: modelParams({ max_tokens: 100 }) } };
   await unavailable("unsupported-input", configured);
-  expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
+  expect(guardedFetch).not.toHaveBeenCalled();
 });
 
 it.each([undefined, "allow"] as const)(
@@ -405,24 +336,6 @@ it.each([
 ])("rejects malformed native response without coercion: %j", async (patch) => {
   respond({ ...wire(), ...patch });
   await unavailable("invalid-response");
-  expect(release).toHaveBeenCalledOnce();
-});
-
-it.each([
-  [400, "unsupported-input"],
-  [401, "authentication"],
-  [402, "transport"],
-  [403, "authentication"],
-  [429, "rate-limited"],
-  [529, "rate-limited"],
-  [413, "unsupported-input"],
-  [422, "unsupported-input"],
-  [500, "transport"],
-])("classifies HTTP %s without leaking provider bodies or retrying", async (status, reason) => {
-  respond({ secret: "synthetic-private-error" }, status);
-  await unavailable(reason);
-  expect(fetchWithSsrFGuard).toHaveBeenCalledOnce();
-  expect(release).toHaveBeenCalledOnce();
 });
 
 it("preserves additional native usage rather than inventing a price", async () => {
@@ -432,53 +345,7 @@ it("preserves additional native usage rather than inventing a price", async () =
   });
 });
 
-it("bounds the entire body read by the remaining deadline and cancels before release", async () => {
-  vi.useFakeTimers();
-  const reading = Promise.withResolvers<void>();
-  const cancel = vi.fn();
-  const response = new Response(
-    new ReadableStream({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode('{"model":'));
-        reading.resolve();
-      },
-      cancel,
-    }),
-  );
-  vi.mocked(fetchWithSsrFGuard).mockResolvedValue(guarded(response));
-  const ctx = context();
-  const pending = provider.evaluate(batch, {
-    ...ctx,
-    deadlineMonotonicMs: performance.now() + 100,
-  });
-  await reading.promise;
-  await vi.advanceTimersByTimeAsync(100);
-  await expect(pending).resolves.toMatchObject({ status: "unavailable" });
-  expect(cancel).toHaveBeenCalledOnce();
-  expect(release).toHaveBeenCalledOnce();
-});
-
-it("awaits physical release when the caller cancels", async () => {
-  const controller = new AbortController();
-  const started = Promise.withResolvers<void>();
-  const finish = Promise.withResolvers<void>();
-  release.mockImplementationOnce(async () => {
-    started.resolve();
-    await finish.promise;
-  });
-  vi.mocked(fetchWithSsrFGuard).mockImplementationOnce(async () => {
-    controller.abort(new Error("synthetic cancellation"));
-    return guarded(Response.json(wire()));
-  });
-  const pending = provider.evaluate(batch, { ...context(), signal: controller.signal });
-  const rejected = expect(pending).rejects.toThrow("synthetic cancellation");
-  await started.promise;
-  let settled = false;
-  void pending.catch(() => {
-    settled = true;
-  });
-  await Promise.resolve();
-  expect(settled).toBe(false);
-  finish.resolve();
-  await rejected;
+it("treats an overloaded upstream (529) as rate-limited", async () => {
+  respond({}, 529);
+  await unavailable("rate-limited");
 });

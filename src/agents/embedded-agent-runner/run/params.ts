@@ -1,8 +1,10 @@
+import type { ProviderStateScope } from "@openclaw/ai/internal/runtime";
 import type { ReasoningStreamPayload } from "../../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { SessionDeliveryState } from "../../../config/sessions/types.js";
 import type { CronRuntimeAuthority } from "../../../cron/runtime-authority.js";
 import type { CronScheduledToolCallerOrigin } from "../../../cron/scheduled-tool-policy.js";
+import type { CronCreatorAuthorityCapability } from "../../../gateway/cron-creator-authority-grant.types.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
 import type { ExplicitSkillSelection } from "../../../skills/types.js";
 import type { MemoryFlushToolRunContext } from "../../agent-tools.memory-flush.types.js";
@@ -17,7 +19,6 @@ import type {
 import type { QueuedAgentRunParams } from "../../command/queued-run-params.types.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
 import type { ConversationRecallContext } from "../../conversation-recall.types.js";
-import type { CronCreatorAuthorityCapability } from "../../cron-creator-authority-context.js";
 import type {
   BlockReplyChunking,
   EmbeddedAgentEvent,
@@ -36,6 +37,7 @@ import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import type { PromptMode } from "../../system-prompt.types.js";
 import type { EmbeddedAgentExecutionPhaseInfo } from "../execution-phase.js";
+import type { SessionForkRequest } from "../session-fork-request.js";
 import type { BlockReplyFlushContext } from "../types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 export type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
@@ -68,6 +70,10 @@ export type RunEmbeddedAgentParams = Pick<
   memoryAudience?: import("../../../plugins/memory-provider-types.js").MemoryAudience;
   /** Detached runs may read session identity but never write its durable transcript or metadata. */
   sessionPersistence?: "durable" | "detached";
+  /** The session's last cache prewarm, which its cache-TTL clock counts; a fork passes its source's. */
+  promptCacheKeepWarm?: import("../../../config/sessions/types.js").SessionEntry["promptCacheKeepWarm"];
+  /** Set only by the writer claim at lane admission; owns the conversation's provider state. */
+  providerStateScope?: ProviderStateScope;
   /** Storage-neutral transcript/session target. Defaults to sessionId/sessionKey/agentId. */
   sessionTarget?: AgentRunSessionTarget;
   /** Provider prompt-cache affinity key; distinct from transcript/session identity. */
@@ -156,6 +162,11 @@ export type RunEmbeddedAgentParams = Pick<
   };
   /** Disable fallback from the user-selected auth profile for a verification run. */
   allowAuthProfileFallback?: boolean;
+  /**
+   * A scheduled candidate on a provider its job records no account for (a configured fallback):
+   * it selects credentials live, like an interactive run, instead of being refused as unrecorded.
+   */
+  scheduledLiveProviderAuth?: boolean;
   toolResultFormat?: ToolResultFormat;
   toolProgressDetail?: ToolProgressDetailMode;
   /** Bootstrap context mode for workspace file injection. */
@@ -164,6 +175,8 @@ export type RunEmbeddedAgentParams = Pick<
   toolsAllow?: string[];
   /** Preserve the visible tool schemas while allowing execution only for these names. */
   toolExecutionAllow?: readonly string[];
+  /** Set only by `runSessionFork`: each request replays the source session's request first. */
+  sessionForkRequest?: SessionForkRequest;
   /** Host-stamped exact-run capability for late Codex creator-authority capture. */
   cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
   /** Ephemeral reason fresh local-operator cron authority cannot survive this queued turn. */

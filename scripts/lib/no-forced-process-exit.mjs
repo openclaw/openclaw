@@ -75,6 +75,12 @@ export default {
     },
   },
   create(context) {
+    const text = context.sourceCode.text;
+    // Escaped identifiers and property strings can spell either name without
+    // its literal text; keep those files on the AST path.
+    if (!text.includes("exit") && !text.includes("Exit") && !text.includes("\\")) {
+      return {};
+    }
     const filename = context.physicalFilename.replaceAll("\\", "/");
     const cwd = context.cwd.replaceAll("\\", "/");
     const repoPath = filename.startsWith(`${cwd}/`) ? filename.slice(cwd.length + 1) : filename;
@@ -108,7 +114,7 @@ export default {
       }
     }
 
-    const references = new Map();
+    let references;
     function valueKind(expression, visited = new Set()) {
       const node = unwrap(expression);
       if (node.type === "MemberExpression") {
@@ -133,6 +139,14 @@ export default {
       }
       if (node.type !== "Identifier") {
         return null;
+      }
+      if (references === undefined) {
+        references = new Map();
+        for (const scope of context.sourceCode.scopeManager.scopes) {
+          for (const reference of scope.references) {
+            references.set(reference.identifier.start, reference.resolved);
+          }
+        }
       }
       const variable = references.get(node.start);
       if (!variable || variable.defs.length === 0) {
@@ -183,13 +197,6 @@ export default {
 
     const report = (node) => context.report({ node, messageId: "forcedExit" });
     return {
-      Program() {
-        for (const scope of context.sourceCode.scopeManager.scopes) {
-          for (const reference of scope.references) {
-            references.set(reference.identifier.start, reference.resolved);
-          }
-        }
-      },
       // Reject obtaining the function as well as calling it: callbacks, .call,
       // .apply, .bind, and renamed exit aliases must not bypass the policy.
       MemberExpression(node) {
@@ -211,14 +218,20 @@ export default {
         }
       },
       VariableDeclarator(node) {
-        if (!node.init || node.id.type !== "ObjectPattern" || valueKind(node.init) !== "process") {
+        if (!node.init || node.id.type !== "ObjectPattern") {
           return;
         }
+        let receiver;
         for (const property of node.id.properties) {
           if (
             property.type === "Property" &&
             FORCED_EXITS.has(propertyName(property.key, property.computed))
           ) {
+            // Scope analysis is needed only when a property can violate the rule.
+            receiver ??= valueKind(node.init);
+            if (receiver !== "process") {
+              return;
+            }
             report(property);
           }
         }

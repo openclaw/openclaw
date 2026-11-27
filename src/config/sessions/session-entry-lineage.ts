@@ -8,6 +8,17 @@ export function sessionEntryForkedFromParent(
   return entry?.forkSource !== undefined || entry?.forkedFromParent === true;
 }
 
+/** Direct operator forks and the channel /fork command; automatic thread inheritance is not a chat fork. */
+export function isExplicitChatFork(
+  key: string,
+  via: SessionEntry["createdVia"],
+  spawnDepth: number | undefined,
+): boolean {
+  return (
+    !spawnDepth && (via === "operator" || (via === "channel" && /^agent:[^:]+:fork:/u.test(key)))
+  );
+}
+
 type SessionParentLink = Pick<
   SessionEntry,
   | "parentSessionKey"
@@ -26,6 +37,7 @@ type InheritedSessionToolPolicy = Pick<
   SessionEntry,
   | "inheritedToolPolicyVersion"
   | "inheritedToolPolicySource"
+  | "delegatedOperatorSource"
   | "inheritedToolAllow"
   | "inheritedToolDeny"
   | "delegatedToolPolicy"
@@ -45,9 +57,23 @@ export function preserveSessionInheritedToolPolicy(
     ...(entry?.inheritedToolPolicySource
       ? { inheritedToolPolicySource: entry.inheritedToolPolicySource }
       : {}),
+    ...(entry?.delegatedOperatorSource
+      ? { delegatedOperatorSource: structuredClone(entry.delegatedOperatorSource) }
+      : {}),
     ...(entry?.inheritedToolAllow ? { inheritedToolAllow: [...entry.inheritedToolAllow] } : {}),
     ...(entry?.inheritedToolDeny ? { inheritedToolDeny: [...entry.inheritedToolDeny] } : {}),
   };
+}
+
+/** A logical child retains its original constraints through reset and stale full-row writes. */
+export function preserveSessionDelegatedOperatorSource<T extends SessionEntry>(
+  next: T,
+  previous: SessionEntry | undefined,
+): T {
+  if (previous?.delegatedOperatorSource === undefined) {
+    return next;
+  }
+  return { ...next, delegatedOperatorSource: previous.delegatedOperatorSource };
 }
 
 /**

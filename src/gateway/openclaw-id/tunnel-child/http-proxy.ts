@@ -47,7 +47,8 @@ export function proxyHttp(params: {
       socketPath: target.socketPath,
       method: head.method,
       path: head.path,
-      headers,
+      // Node leaves some method bodies unframed unless transfer encoding is explicit.
+      headers: { ...headers, "transfer-encoding": "chunked" },
     });
     req.setTimeout(params.idleMs ?? HTTP_STREAM_IDLE_TIMEOUT_MS, () =>
       fail(STREAM_RESET.gateway_unreachable),
@@ -72,6 +73,8 @@ export function proxyHttp(params: {
         }
       })();
     });
+    // Send the head before waiting for DATA so a reused socket is no longer idle.
+    req.flushHeaders();
     pumpBody(reader, req).catch((error: unknown) =>
       fail(
         error instanceof TunnelProtocolError

@@ -96,7 +96,6 @@ describe("Testbox spending admission", () => {
       `
           import assert from "node:assert/strict";
           import fs from "node:fs";
-          import { syncBuiltinESMExports } from "node:module";
           import { pathToFileURL } from "node:url";
           const read = fs.readFileSync;
           fs.readFileSync = (path, ...args) =>
@@ -106,7 +105,6 @@ describe("Testbox spending admission", () => {
             assert.equal(value, "15\\n");
             console.log("idle setting updated");
           };
-          syncBuiltinESMExports();
           process.argv = [process.execPath, ${JSON.stringify(script)}, "configure"];
           await import(pathToFileURL(process.argv[1]).href);
         `,
@@ -218,7 +216,6 @@ describe("Testbox admission GitHub response", () => {
       `
       import assert from "node:assert/strict";
       import fs from "node:fs";
-      import { syncBuiltinESMExports } from "node:module";
       import { pathToFileURL } from "node:url";
       const fixture = ${JSON.stringify(fixture)};
       let requests = 0;
@@ -229,7 +226,6 @@ describe("Testbox admission GitHub response", () => {
         assert.equal(path, "admission-output");
         output += text;
       };
-      syncBuiltinESMExports();
       globalThis.fetch = async (url, options) => {
         assert.equal(++requests, 1);
         assert.equal(url, "https://api.github.com/repos/example/project/actions/runs/123");

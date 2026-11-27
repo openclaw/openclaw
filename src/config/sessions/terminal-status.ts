@@ -22,3 +22,24 @@ export function recoverTerminalSessionEntryForVisibleTurn(entry: SessionEntry): 
     abortedLastRun: undefined,
   };
 }
+
+/** The row narrows candidates; the initiating transcript key confirms the exact wire ID. */
+export function matchesPersistedClientRunId(stored: string, wire: string): boolean {
+  return stored === wire || stored === wire.trim();
+}
+
+/** Projection refreshes can retain a recovered result only while the same attempt owns the row. */
+export function samePersistedSessionRun(
+  before: SessionEntry | undefined,
+  after: SessionEntry | undefined,
+): boolean {
+  return (
+    before === after ||
+    (before?.sessionId === after?.sessionId &&
+      before?.lastRunId === after?.lastRunId &&
+      before?.lifecycleRunId === after?.lifecycleRunId &&
+      before?.status === after?.status &&
+      before?.startedAt === after?.startedAt &&
+      before?.endedAt === after?.endedAt)
+  );
+}

@@ -1,0 +1,3 @@
+# Paired-node Claude runtime suite now runs on the detached Gateway resolver path, where the
+# originating request context is gone (#145636). Exact net test growth.
+3

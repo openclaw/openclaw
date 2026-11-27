@@ -178,7 +178,7 @@ function installPolicyWorkerStub(fallbackOwner?: FixtureOwner) {
                 ),
                 [...postimages.keys()],
               );
-              acknowledgeMockSubagentRegistryWrite(options?.createAdmission, write.writeId);
+              await acknowledgeMockSubagentRegistryWrite(options?.createAdmission, write.writeId);
             },
           ),
       });
@@ -343,7 +343,6 @@ export function createLifecycleControllerFixture(
     controller.startSubagentAnnounceCleanupFlow,
   );
   controller.completeCleanupBookkeeping = runOwned(controller.completeCleanupBookkeeping);
-  controller.refreshFrozenResultFromSession = runOwned(controller.refreshFrozenResultFromSession);
   controller.finalizeResumedAnnounceGiveUp = runOwned(controller.finalizeResumedAnnounceGiveUp);
   controller.markRequesterTurnYielded = runOwned(controller.markRequesterTurnYielded);
   controller.settleRequesterTurnAfterSessionSpawns = runOwned(

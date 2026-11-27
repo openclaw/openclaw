@@ -1,9 +1,12 @@
 import { assert, expect, vi } from "vitest";
 import type WebSocket from "ws";
+import { observeCronJobCommits } from "../../test/helpers/cron/runtime-mutation.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent-runner/run.js";
 import { withFullRuntimeReplyConfig } from "../auto-reply/reply/get-reply-fast-path.js";
 import { prewarmReplyRunRuntimes } from "../auto-reply/reply/get-reply-run-helpers.js";
 import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
+import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { CronJobCreate } from "../cron/types.js";
 import type { GatewayCronState } from "./server-cron-contract.js";
@@ -122,4 +125,36 @@ export async function runCronJobAndWaitForFinished(ws: WebSocket, jobId: string)
   expect(response.ok).toBe(true);
   expectEnqueuedRunPayload(response.payload);
   return await finished;
+}
+
+/** The finished cron event precedes the alert commit and any in-app fallback turn. */
+export async function runCronJobAndWaitForFailureAlert(
+  ws: WebSocket,
+  jobId: string,
+  options: { fallback: boolean; signal: AbortSignal },
+) {
+  const committed = createDeferred();
+  const stopObserving = observeCronJobCommits(jobId, (state) => {
+    if (state.lastFailureNotificationDelivered !== undefined) {
+      committed.resolve();
+    }
+  });
+  const fallback = createDeferred<unknown>();
+  const enqueue = sessionEvents.enqueueSessionEventForHost;
+  using _ = vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation((...args) => {
+    const receipt = enqueue(...args);
+    if (args[1].contextKey === `cron:${jobId}:failure-alert`) {
+      fallback.resolve(receipt.settled);
+    }
+    return receipt;
+  });
+  try {
+    await runCronJobAndWaitForFinished(ws, jobId);
+    await withinTest(committed.promise, options.signal);
+    if (options.fallback) {
+      await withinTest(fallback.promise, options.signal);
+    }
+  } finally {
+    stopObserving();
+  }
 }

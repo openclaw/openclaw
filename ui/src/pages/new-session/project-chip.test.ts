@@ -87,6 +87,27 @@ describe("What chip state", () => {
   });
 
   it.each([
+    { name: "beside the workspace row", workspace: "/workspace", expected: 4 },
+    { name: "without a workspace row", workspace: "", expected: 5 },
+  ])("keeps Recent to five rows $name", ({ workspace, expected }) => {
+    const recents = Array.from({ length: 8 }, (_, index) => ({
+      kind: "folder" as const,
+      folder: `/work/folder-${index}`,
+      displayName: `folder-${index}`,
+    }));
+    const state = resolveProjectChip({
+      folder: "",
+      workspace,
+      projectId: "",
+      selectedRemoteProject: null,
+      projects,
+      recents,
+      projectQuery: "",
+    });
+    expect(state.recents).toEqual(recents.slice(0, expected));
+  });
+
+  it.each([
     ["https://github.com/openclaw/openclaw.git", true],
     ["git@github.com:openclaw/openclaw.git", true],
     ["file:///tmp/openclaw.git", false],

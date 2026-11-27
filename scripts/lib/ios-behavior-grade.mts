@@ -1,0 +1,407 @@
+// Turns the iOS chat probe log (`behavior-probe.jsonl`, see ChatBehaviorProbe.swift) into
+// metrics for `pnpm ios:behavior`. Pure functions so cases and tests share one reading.
+
+export type ProbeFrame = { t: number; f: Record<string, [number, number]> };
+export type ProbeEvent = { t: number; e: string; k?: string; v?: string };
+export type ProbeLog = { frames: ProbeFrame[]; events: ProbeEvent[] };
+
+/** Fastest real fling step is about 8000 pt/s at 60 Hz; a bigger one-frame move is a jump. */
+const TELEPORT_PT = 400;
+/** Sub-point moves are rounding between layout passes, not motion a reader sees. */
+const STILL_PT = 0.5;
+
+export function parseProbeLog(text: string): ProbeLog {
+  const frames: ProbeFrame[] = [];
+  const events: ProbeEvent[] = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) {
+      continue;
+    }
+    const entry = JSON.parse(line) as ProbeFrame & ProbeEvent;
+    if (entry.f) {
+      frames.push(entry);
+    } else {
+      events.push(entry);
+    }
+  }
+  return { frames, events };
+}
+
+/** User drags and their deceleration: frames inside these windows are the reader's own motion. */
+function userScrollWindows(events: ProbeEvent[]): Array<[number, number]> {
+  const windows: Array<[number, number]> = [];
+  let start: number | undefined;
+  for (const event of events) {
+    if (event.e !== "phase") {
+      continue;
+    }
+    if (event.v === "interacting" && start === undefined) {
+      start = event.t;
+    } else if (event.v === "idle" && start !== undefined) {
+      windows.push([start, event.t]);
+      start = undefined;
+    }
+  }
+  if (start !== undefined) {
+    windows.push([start, Number.POSITIVE_INFINITY]);
+  }
+  return windows;
+}
+
+/**
+ * Frames and events between `from` and `to`, minus the reader's own scrolling unless
+ * `keepUserScroll` (cases where a gesture must not scroll at all, so any scroll is the bug). The
+ * probe writes a frame only when something moved, so the last frame before `from` is the layout at
+ * `from`; it leads the window so a jump in the first frame inside it is measured.
+ */
+export function window(
+  log: ProbeLog,
+  from: number,
+  to: number,
+  options: { keepUserScroll?: boolean } = {},
+): ProbeLog {
+  const scrolling = options.keepUserScroll ? [] : userScrollWindows(log.events);
+  const userMoved = (t: number) => scrolling.some(([start, end]) => t >= start && t <= end);
+  const inside = log.frames.filter(
+    (frame) => frame.t >= from && frame.t <= to && !userMoved(frame.t),
+  );
+  const atStart = userMoved(from) ? undefined : log.frames.findLast((frame) => frame.t < from);
+  return {
+    frames: atStart ? [atStart, ...inside] : inside,
+    events: log.events.filter((event) => event.t >= from && event.t <= to),
+  };
+}
+
+/**
+ * One write to the transcript scroll view's contentOffset (`{e:"offset",k:writer,v:"old->new"}`,
+ * y only). Writers: the reading-position owner's `ReadingPosition.follow`, `.turn`, `.anchor`,
+ * `.prepend` and `.jump`, `user` (dragging or decelerating), `system:<frames>` (untagged);
+ * animated writes carry a `~anim` suffix and log the target.
+ */
+export type OffsetWrite = { t: number; writer: string; from: number; to: number };
+
+export function offsetWrites(events: ProbeEvent[], from: number, to: number): OffsetWrite[] {
+  const writes: OffsetWrite[] = [];
+  for (const event of events) {
+    if (event.e !== "offset" || event.t < from || event.t > to || !event.k || !event.v) {
+      continue;
+    }
+    const [before, after] = event.v.split("->").map(Number);
+    if (before !== undefined && after !== undefined && Number.isFinite(before + after)) {
+      writes.push({ t: event.t, writer: event.k, from: before, to: after });
+    }
+  }
+  return writes;
+}
+
+/** The scroll view's own pan: the reader dragging or decelerating. */
+export const isReaderWrite = (write: OffsetWrite) => write.writer.startsWith("user");
+
+/** Per writer: how many writes and how far they moved the offset in total (points). */
+export function offsetWriters(writes: OffsetWrite[]) {
+  const writers: Record<string, { writes: number; movedPt: number }> = {};
+  for (const write of writes) {
+    const entry = (writers[write.writer] ??= { writes: 0, movedPt: 0 });
+    entry.writes += 1;
+    entry.movedPt = round(entry.movedPt + Math.abs(write.to - write.from));
+  }
+  return writers;
+}
+
+/** Total distance every writer moved the offset, back-and-forth included. */
+export function offsetMovedPt(writes: OffsetWrite[]) {
+  return round(writes.reduce((sum, write) => sum + Math.abs(write.to - write.from), 0));
+}
+
+/**
+ * Row motion between `from` and `to` while the reader is not scrolling. Each stretch between their
+ * drags (and decelerations) is measured on its own, so a drag never reads as a one-frame step from
+ * the layout before it to the layout after it.
+ */
+export function restingMotion(log: ProbeLog, from: number, to: number) {
+  const scrolling = userScrollWindows(log.events);
+  const stretches: ProbeFrame[][] = [];
+  let current: ProbeFrame[] = [];
+  for (const frame of log.frames) {
+    if (frame.t < from || frame.t > to) {
+      continue;
+    }
+    if (scrolling.some(([start, end]) => frame.t >= start && frame.t <= end)) {
+      if (current.length > 0) {
+        stretches.push(current);
+        current = [];
+      }
+    } else {
+      current.push(frame);
+    }
+  }
+  stretches.push(current);
+  let largestStepPt = 0;
+  let teleports = 0;
+  for (const stretch of stretches) {
+    const moved = motion(stretch);
+    largestStepPt = Math.max(largestStepPt, moved.largestStepPt);
+    teleports += moved.teleports;
+  }
+  return { largestStepPt, teleports };
+}
+
+/** Times of `{e:"mark",k:name}` events. */
+export function marks(events: ProbeEvent[], name: string) {
+  return events.filter((event) => event.e === "mark" && event.k === name).map((event) => event.t);
+}
+
+/** Scroll phases the transcript reported between `from` and `to` other than idle. */
+export function scrollPhases(events: ProbeEvent[], from: number, to: number) {
+  return events.filter(
+    (event) => event.e === "phase" && event.v !== "idle" && event.t >= from && event.t <= to,
+  ).length;
+}
+
+/**
+ * How far the visible rows moved across an older-page prepend at `at` beyond what the reader's own
+ * scrolling explains: the median, over rows on screen before and after, of each row's shift plus
+ * the reader's offset change in between (a reader offset increase moves rows up by as much). Zero
+ * when the prepend kept the reading position, even mid-deceleration. Compares the layout at `at`
+ * with the one `settleMs` later, after the restore's settle passes. Undefined without rows in both.
+ */
+export function prependShift(log: ProbeLog, at: number, settleMs = 400) {
+  const before = lastFrameBefore(log.frames, at);
+  const after = lastFrameBefore(log.frames, at + settleMs);
+  if (!before || !after) {
+    return undefined;
+  }
+  if (before === after) {
+    return 0;
+  }
+  const reader = offsetWrites(log.events, before.t + 0.5, after.t)
+    .filter(isReaderWrite)
+    .reduce((sum, write) => sum + write.to - write.from, 0);
+  const visibleBottom = after.f.composer?.[0] ?? Number.POSITIVE_INFINITY;
+  const shifts: number[] = [];
+  for (const [key, edges] of Object.entries(after.f)) {
+    const earlier = before.f[key];
+    if (!isRow(key) || !earlier) {
+      continue;
+    }
+    const dy = visibleShift(earlier, edges, visibleBottom);
+    if (dy !== undefined) {
+      shifts.push(dy + reader);
+    }
+  }
+  const median = percentile(shifts, 0.5);
+  return median === undefined ? undefined : round(median);
+}
+
+const isRow = (key: string) => key !== "composer";
+
+type Edges = [number, number];
+
+/** Whether any part of the row is between the top of the screen and the composer. */
+const rowOnScreen = ([top, bottom]: Edges, visibleBottom: number) =>
+  bottom > 0 && top < visibleBottom;
+
+/**
+ * How far a row moved between two recorded positions, as the reader saw it. Undefined when the
+ * row was off screen in both: rows mounted above the fold shift when an earlier height changes.
+ * A row that kept its height moved as a whole, including a long reply spanning the screen. When
+ * the height changed, read an edge the reader can see: the top when it is on screen in both, else
+ * the bottom. Replies grow taller than the screen; their off-screen top can move thousands of
+ * points while the visible text holds still. Undefined when neither edge is visible in both.
+ */
+function visibleShift(before: Edges, after: Edges, visibleBottom: number) {
+  if (!rowOnScreen(before, visibleBottom) && !rowOnScreen(after, visibleBottom)) {
+    return undefined;
+  }
+  const top = after[0] - before[0];
+  if (Math.abs(after[1] - before[1] - top) <= STILL_PT) {
+    return top;
+  }
+  const onScreen = (y: number) => y >= 0 && y <= visibleBottom;
+  if (onScreen(before[0]) && onScreen(after[0])) {
+    return top;
+  }
+  if (onScreen(before[1]) && onScreen(after[1])) {
+    return after[1] - before[1];
+  }
+  return undefined;
+}
+
+/**
+ * How tagged rows moved between consecutive recorded frames. Any downward step counts as backward
+ * motion. A key in `aliases` continues the key it maps to (the final message row replacing the
+ * live bubble); in the frame where both exist, the outgoing one is already leaving and is ignored.
+ */
+export function motion(
+  frames: ProbeFrame[],
+  options: { aliases?: Record<string, string> } = {},
+): { teleports: number; backwardPt: number; largestStepPt: number; maxDriftPt: number } {
+  const aliases = options.aliases ?? {};
+  const rows = (frame: ProbeFrame) => {
+    const edges = new Map<string, Edges>();
+    const replaced = new Set(
+      Object.keys(frame.f).flatMap((key) => (aliases[key] ? [aliases[key]] : [])),
+    );
+    for (const [key, rect] of Object.entries(frame.f)) {
+      if (isRow(key) && !replaced.has(key)) {
+        edges.set(aliases[key] ?? key, rect);
+      }
+    }
+    return edges;
+  };
+  let teleports = 0;
+  let backwardPt = 0;
+  let largestStepPt = 0;
+  let maxDriftPt = 0;
+  const firstSeen = new Map<string, Edges>();
+  let previous: Map<string, Edges> | undefined;
+  for (const frame of frames) {
+    // Rows below the composer's top are hidden behind it.
+    const visibleBottom = frame.f.composer?.[0] ?? Number.POSITIVE_INFINITY;
+    const current = rows(frame);
+    for (const [key, edges] of current) {
+      const first = firstSeen.get(key) ?? edges;
+      firstSeen.set(key, first);
+      maxDriftPt = Math.max(maxDriftPt, Math.abs(visibleShift(first, edges, visibleBottom) ?? 0));
+    }
+    if (previous) {
+      let stepBackward = 0;
+      for (const [key, edges] of current) {
+        const before = previous.get(key);
+        if (!before) {
+          continue;
+        }
+        // A jump moves both edges; a reply finishing or growing moves only one.
+        const top = edges[0] - before[0];
+        const bottom = edges[1] - before[1];
+        if (
+          (rowOnScreen(before, visibleBottom) || rowOnScreen(edges, visibleBottom)) &&
+          Math.sign(top) === Math.sign(bottom) &&
+          Math.min(Math.abs(top), Math.abs(bottom)) > TELEPORT_PT
+        ) {
+          teleports += 1;
+        }
+        const dy = visibleShift(before, edges, visibleBottom);
+        if (dy === undefined) {
+          continue;
+        }
+        largestStepPt = Math.max(largestStepPt, Math.abs(dy));
+        if (dy > STILL_PT) {
+          stepBackward = Math.max(stepBackward, dy);
+        }
+      }
+      backwardPt += stepBackward;
+    }
+    previous = current;
+  }
+  return {
+    teleports,
+    backwardPt: round(backwardPt),
+    largestStepPt: round(largestStepPt),
+    maxDriftPt: round(maxDriftPt),
+  };
+}
+
+/**
+ * Mounts between `from` and `to` of a row that had already mounted earlier in the log: SwiftUI
+ * rebuilt it from scratch. Takes the whole log's events, so rows mounted before the window count.
+ */
+export function remounts(
+  events: ProbeEvent[],
+  from = Number.NEGATIVE_INFINITY,
+  to = Number.POSITIVE_INFINITY,
+) {
+  const mounted = new Set<string>();
+  let count = 0;
+  for (const event of events) {
+    if (event.e !== "mount" || !event.k || !isRow(event.k) || event.t > to) {
+      continue;
+    }
+    if (event.t >= from && mounted.has(event.k)) {
+      count += 1;
+    }
+    mounted.add(event.k);
+  }
+  return count;
+}
+
+export function bodyCounts(events: ProbeEvent[]) {
+  const counts: Record<string, number> = {};
+  for (const event of events) {
+    if (event.e === "body" && event.k) {
+      counts[event.k] = (counts[event.k] ?? 0) + 1;
+    }
+  }
+  return counts;
+}
+
+export function firstEvent(events: ProbeEvent[], predicate: (event: ProbeEvent) => boolean) {
+  return events.find(predicate)?.t;
+}
+
+export function firstFrame(frames: ProbeFrame[], predicate: (frame: ProbeFrame) => boolean) {
+  return frames.find(predicate)?.t;
+}
+
+/** Gap between the lowest row bottom above the composer and the composer top. */
+export function composerGap(frame: ProbeFrame | undefined) {
+  const composer = frame?.f.composer;
+  if (!frame || !composer) {
+    return undefined;
+  }
+  const bottoms = Object.entries(frame.f)
+    .filter(([key, [, maxY]]) => isRow(key) && maxY <= composer[0] + 1)
+    .map(([, [, maxY]]) => maxY);
+  return bottoms.length > 0 ? round(composer[0] - Math.max(...bottoms)) : undefined;
+}
+
+/** How far the lowest row reaches below the composer top: content the reader cannot see. */
+export function hiddenBelowComposer(frame: ProbeFrame | undefined) {
+  const composer = frame?.f.composer;
+  if (!frame || !composer) {
+    return undefined;
+  }
+  const bottoms = Object.entries(frame.f)
+    .filter(([key]) => isRow(key))
+    .map(([, [, maxY]]) => maxY);
+  return bottoms.length > 0 ? round(Math.max(0, Math.max(...bottoms) - composer[0])) : undefined;
+}
+
+/** One line of text recognized on a screenshot; box normalized to the image, origin top left. */
+export type ScreenLine = { text: string; x: number; y: number; w: number; h: number };
+export type Rect = { x: number; y: number; width: number; height: number };
+
+/**
+ * Text drawn inside the transcript: recognized lines whose center lies in `transcript` (points)
+ * and outside every `exclude` rect (progress card, run footer: chrome that stays drawn while the
+ * messages are gone). This is the screen oracle: it judges pixels, not the view or accessibility
+ * tree, which both still listed content while a real iPhone showed a blank chat (#191478).
+ */
+export function transcriptText(
+  lines: ScreenLine[],
+  screen: { width: number; height: number },
+  transcript: Rect,
+  exclude: Rect[] = [],
+) {
+  const inside = (x: number, y: number, rect: Rect) =>
+    x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height;
+  return lines.filter((line) => {
+    const x = (line.x + line.w / 2) * screen.width;
+    const y = (line.y + line.h / 2) * screen.height;
+    return inside(x, y, transcript) && !exclude.some((rect) => inside(x, y, rect));
+  });
+}
+
+export function lastFrameBefore(frames: ProbeFrame[], t: number) {
+  return frames.findLast((frame) => frame.t <= t);
+}
+
+export function percentile(values: number[], p: number) {
+  const sorted = values.toSorted((a, b) => a - b);
+  const value = sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))];
+  return value === undefined ? undefined : round(value);
+}
+
+function round(value: number) {
+  return Math.round(value * 10) / 10;
+}

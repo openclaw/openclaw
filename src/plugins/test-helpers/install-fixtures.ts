@@ -67,21 +67,3 @@ export function createBundleInstallFixtureFactory(makeTempDir: () => string) {
     return { pluginDir, extensionsDir: path.join(stateDir, "extensions") };
   };
 }
-
-export function createDualFormatInstallFixtureFactory(makeTempDir: () => string) {
-  const setupBundle = createBundleInstallFixtureFactory(makeTempDir);
-  return ({ bundleFormat }: { bundleFormat: "codex" | "claude" }) => {
-    const fixture = setupBundle({ bundleFormat, name: "Bundle Fallback" });
-    writeFixtureFiles(fixture.pluginDir, {
-      "package.json": {
-        name: "@openclaw/native-dual",
-        version: "0.0.1",
-        openclaw: { extensions: ["./dist/index.js"] },
-        dependencies: { "left-pad": "1.3.0" },
-      },
-      "openclaw.plugin.json": { id: "native-dual", configSchema: { type: "object" } },
-      "dist/index.js": "export {};",
-    });
-    return fixture;
-  };
-}

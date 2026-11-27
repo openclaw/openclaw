@@ -15,9 +15,9 @@ import {
   REMOTE_WORKSPACE_MANIFEST_JS,
   WORKSPACE_MANIFEST_PROGRAM,
 } from "../src/gateway/worker-environments/workspace-sync-scripts.ts";
+import { runtimeProcessDependencyEntrypoints } from "../src/infra/runtime-process-dependency-manifest.ts";
 import { runtimeProcessEntrypoints } from "../src/infra/runtime-process-entrypoints.ts";
 import {
-  runtimeProcessDependencyEntrypoints,
   runtimeProcessExternalPackageEntrypoints,
   runtimeProcessScriptEntrypoints,
   runtimeProcessToolingEntrypoints,
@@ -144,10 +144,13 @@ async function generateRuntimeScriptAssets(rootDir = ROOT) {
   const materializer = buildSync({
     absWorkingDir: rootDir,
     stdin: {
-      contents: `import { materializeRuntimeProcessScriptFile } from "./src/infra/runtime-process-script-file.ts";
+      contents: `import { materializeRuntimeProcessScriptFile, materializeRuntimeProcessScriptFileAsync } from "./src/infra/runtime-process-script-file.ts";
 const scripts = ${JSON.stringify(materialized)};
 export function createRuntimeProcessScriptFile(name, options) {
   return materializeRuntimeProcessScriptFile(scripts[name], options);
+}
+export function createRuntimeProcessScriptFileAsync(name, options) {
+  return materializeRuntimeProcessScriptFileAsync(scripts[name], options);
 }
 `,
       resolveDir: rootDir,
@@ -195,6 +198,10 @@ export declare function createRuntimeProcessScriptFile(
     .join(" | ")},
   options?: RuntimeProcessScriptFileOptions,
 ): RuntimeProcessScriptFile;
+export declare function createRuntimeProcessScriptFileAsync(
+  name: Parameters<typeof createRuntimeProcessScriptFile>[0],
+  options?: RuntimeProcessScriptFileOptions,
+): Promise<{ url: URL; dispose(): Promise<void> }>;
 `,
   });
   for (const [action, program] of Object.entries(localWorkspaceQuiescenceScripts)) {
