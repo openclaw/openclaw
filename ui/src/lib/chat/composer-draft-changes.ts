@@ -21,11 +21,11 @@ export function createComposerDraftSource(read: ComposerDraftSource["read"]) {
     read,
     subscribe: listeners.subscribe,
     /** Fence completed owner mutations, including equal-text replacement intents. */
-    captureRevision() {
+    captureRevision: () => {
       const captured = revision;
       return () => revision === captured;
     },
-    publish() {
+    publish: () => {
       revision += 1;
       listeners.publish();
     },
