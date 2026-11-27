@@ -343,7 +343,9 @@ function projectRangesOntoMessage(
 }
 
 /** Projection plus the removal ranges it applied, including any open tail (scrub-reuse input). */
-type ScrubProjection = PlainTextToolCallMessageProjection & { ranges: ScannedCallSequence[] };
+type ScrubProjection = PlainTextToolCallMessageProjection & {
+  ranges: ScannedCallSequence[];
+};
 
 /** Scrubs unsafe or mixed calls and maps each retained source content block. */
 export function projectScrubbedPlainTextToolCallMessage(params: {
@@ -354,7 +356,12 @@ export function projectScrubbedPlainTextToolCallMessage(params: {
   preserveEmptyTextBlocks?: boolean;
   resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver;
   requireAssistantRole?: boolean;
-}): ScrubProjection | undefined {
+}):
+  | (ScrubProjection & {
+      /** The removed call that ended the reply and will never run, as written. */
+      endingCall?: string;
+    })
+  | undefined {
   const record = asOptionalObjectRecord(params.message);
   const candidate = extractStandaloneCandidate(
     params.message,
@@ -375,7 +382,8 @@ export function projectScrubbedPlainTextToolCallMessage(params: {
       visibleOutsideCalls ||
       (params.forceIncompleteCandidates && sequence.activeStart !== undefined),
   );
-  return ranges.length > 0
+  const last = ranges.at(-1);
+  return last
     ? {
         ...projectRangesOntoMessage(
           record,
@@ -383,6 +391,15 @@ export function projectScrubbedPlainTextToolCallMessage(params: {
           ranges,
           params.preserveEmptyTextBlocks === true,
         ),
+        // An unfinished call runs to the end. After a complete one only an orphaned wrapper
+        // closer may follow; later prose makes the call an example.
+        ...(last.activeStart !== undefined ||
+        !candidate.text
+          .slice(last.end)
+          .replace(/<\/tool_calls?>/gi, "")
+          .trim()
+          ? { endingCall: candidate.text.slice(last.start, last.end) }
+          : {}),
         ranges,
       }
     : undefined;

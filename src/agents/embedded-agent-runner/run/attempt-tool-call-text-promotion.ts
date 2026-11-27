@@ -3,6 +3,7 @@ import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports"
 import {
   createPromotedPlainTextToolCallEvents,
   normalizePlainTextToolCallStreamEvents,
+  parseStandalonePlainTextToolCallBlocks,
   projectScrubbedPlainTextToolCallMessage,
   projectStandalonePlainTextToolCallMessage as projectPlainTextToolCallMessage,
   type PlainTextToolCallBlock,
@@ -24,6 +25,7 @@ const STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS = new Set<unknown>(["stop
 function wrapStreamPromoteStandaloneTextToolCalls(
   stream: AssistantStream,
   allowedToolNames: Set<string>,
+  onResult?: (scrubbedEndingToolName: string | undefined) => void,
 ): AssistantStream {
   const matcher: PlainTextToolCallNameMatcher = {
     hasExactName: (name) => Boolean(resolveToolCallName(name, allowedToolNames, undefined, true)),
@@ -31,6 +33,7 @@ function wrapStreamPromoteStandaloneTextToolCalls(
   };
   const resolveProtectedRanges = createCodeRegionResolver();
   const promotedIdBySource = new Map<string, string>();
+  let scrubbedEndingToolName: string | undefined;
   const normalizeTerminalMessage = (params: {
     allowPromotion: boolean;
     message: unknown;
@@ -44,6 +47,14 @@ function wrapStreamPromoteStandaloneTextToolCalls(
       resolveProtectedRanges,
       requireAssistantRole: true,
     });
+    // Name the call that ended the reply; an unfinished one only has its opening line.
+    scrubbedEndingToolName = scrubbed?.endingCall
+      ? (parseStandalonePlainTextToolCallBlocks(scrubbed.endingCall)?.at(-1)?.name ??
+        /^\s*(?:<function=([^<>\s]+)>|\[(?:tool:)?([^\]\s]+)\])/
+          .exec(scrubbed.endingCall)
+          ?.slice(1)
+          .find(Boolean))
+      : undefined;
     if (scrubbed) {
       stripCompactionReplayCheckpointInPlace(scrubbed.message);
       return { kind: "scrubbed", ...scrubbed };
@@ -87,10 +98,13 @@ function wrapStreamPromoteStandaloneTextToolCalls(
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();
-    return (normalizeTerminalMessage({
+    const normalized = normalizeTerminalMessage({
       allowPromotion: STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS.has(message.stopReason),
       message,
-    })?.message ?? message) as Awaited<ReturnType<typeof originalResult>>;
+    });
+    // Scrubbing hides the call from terminal recovery; report it so the turn is not a success.
+    onResult?.(scrubbedEndingToolName);
+    return (normalized?.message ?? message) as Awaited<ReturnType<typeof originalResult>>;
   };
 
   const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
@@ -140,12 +154,13 @@ function wrapStreamPromoteStandaloneTextToolCalls(
 export function wrapStreamFnPromoteStandaloneTextToolCalls(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
+  onResult?: (scrubbedEndingToolName: string | undefined) => void,
 ): StreamFn {
   if (!allowedToolNames || allowedToolNames.size === 0) {
     return baseFn;
   }
   return (model, context, streamOptions) =>
     mapAssistantMessageStream(baseFn(model, context, streamOptions), (stream) =>
-      wrapStreamPromoteStandaloneTextToolCalls(stream, allowedToolNames),
+      wrapStreamPromoteStandaloneTextToolCalls(stream, allowedToolNames, onResult),
     );
 }

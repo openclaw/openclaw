@@ -18,6 +18,10 @@ export type PreparedStreamRuntime = {
   isProbeSession: boolean;
   /** Whether stopping at the current request boundary leaves the tool batch continuable. */
   isToolBoundarySafe?: () => boolean;
+  /** The tool named by a text call that ended the newest model reply and was scrubbed, not run. */
+  lastReplyScrubbedEndingToolName?: ReturnType<
+    typeof installEmbeddedAttemptStreamGuards
+  >["lastReplyScrubbedEndingToolName"];
   onBlockReplyFlush: Parameters<typeof prepareEmbeddedAttemptStream>[0]["onBlockReplyFlush"];
   promptActiveSession: (
     prompt: string,

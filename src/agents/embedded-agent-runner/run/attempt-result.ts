@@ -6,6 +6,7 @@ import {
   extractAssistantTextForPhase,
   extractAssistantTranscriptSourceText,
 } from "../../../shared/chat-message-content.js";
+import { findCodeRegions, isInsideCode } from "../../../shared/text/code-regions.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { prepareTerminalAssistantReply } from "../../assistant-terminal-reply.js";
 import type { CompletedAssistantAnswer } from "../../embedded-agent-subscribe.handlers.types.js";
@@ -303,13 +304,28 @@ export function completeEmbeddedAttemptResult(
         : prepareTerminalAssistantReply(assistant).text;
     const commentary = extractAssistantTextForPhase(assistant, { phase: "commentary" });
     const renderedSource = commentary ? `${commentary}\n${renderedText}` : renderedText;
+    // A reply can also stop inside, or right after, a call written in the middle of a line.
+    // A bare opening tag with nothing else is prose that names the tag.
+    const inlineStart = sourceText.lastIndexOf("<function=");
+    const inlineTail = sourceText.slice(Math.max(inlineStart, 0));
+    const inlineOpen = inlineTail.replace(/<\/function>\s*(?:<\/tool_calls?>\s*)?$/i, "");
+    const inlineCall =
+      /^<function=([^<>\s]+)>\s*(<parameter=(?![\s\S]*<\/function>)[\s\S]*)?$/.exec(inlineOpen);
     const name =
-      allowedToolNames.size > 0
+      input.preparedStreamRuntime.lastReplyScrubbedEndingToolName?.() ??
+      (allowedToolNames.size > 0
         ? (findPlainTextToolCallName(sourceText, hasToolName) ??
           (renderedSource !== sourceText
             ? findPlainTextToolCallName(renderedSource, hasToolName)
+            : undefined) ??
+          (inlineCall !== null &&
+          (inlineCall[2] !== undefined ||
+            inlineOpen !== inlineTail ||
+            /<tool_calls?>\s*$/i.test(sourceText.slice(0, inlineStart))) &&
+          !isInsideCode(inlineStart, findCodeRegions(sourceText))
+            ? inlineCall[1]
             : undefined))
-        : undefined;
+        : undefined);
     textToolCallName = name
       ? (resolveToolCallName(name, allowedToolNames, undefined, true) ?? undefined)
       : undefined;
