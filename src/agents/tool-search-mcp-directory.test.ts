@@ -157,7 +157,7 @@ describe("MCP directory in the system prompt", () => {
     expect(capped).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
   });
 
-  it("degrades to inputs, then names, then per-server counts, without dropping servers", () => {
+  it("degrades to input signatures, then names, then per-server counts, without dropping servers", () => {
     const longDescription =
       "Does something useful for the caller with a fairly long description text.";
     const names = apply(
@@ -176,7 +176,7 @@ describe("MCP directory in the system prompt", () => {
     ];
     const summarized = apply(tools).directory;
     expect(Buffer.byteLength(summarized)).toBeLessThanOrEqual(4_096);
-    expect(summarized).toMatch(/- github server: \d+ more tools, names omitted/u);
+    expect(summarized).toContain("- github server: 400 tools, names omitted");
     expect(summarized).toContain("- mcp:world:world__op_0");
     expect(summarized).toContain("- mcp:zeta:zeta__only");
     expect(summarized).toContain("Use tool_search to find tools whose names are omitted.");
@@ -257,21 +257,18 @@ describe("MCP directory in the system prompt", () => {
           { additionalProperties: false },
         ),
       });
-    /** Signed and total listed rows per server. */
-    const coverage = (directory: string) => {
-      const counts = new Map<string, { signed: number; listed: number }>();
+    /** Rows with an input per server, among its listed rows. */
+    const signedPerServer = (directory: string) => {
+      const counts = new Map<string, number>();
       for (const row of directory.split("\n").filter((line) => line.startsWith("- mcp:"))) {
         const server = row.split(":")[1] ?? "";
-        const count = counts.get(server) ?? { signed: 0, listed: 0 };
-        count.listed += 1;
-        count.signed += row.includes(" { ") ? 1 : 0;
-        counts.set(server, count);
+        counts.set(server, (counts.get(server) ?? 0) + (row.includes(" { ") ? 1 : 0));
       }
       return counts;
     };
 
     it("shares inputs across servers, whatever their size or name", () => {
-      // The needed server is both the largest and last by name; inputs are all equally wide.
+      // The needed server is both the largest and last by name; inputs are equally wide.
       const directory = apply([
         ...["alpha", "bravo", "charlie", "delta"].flatMap((server) =>
           Array.from({ length: 6 }, (_, i) => tool(server, `op_${i}`)),
@@ -279,27 +276,36 @@ describe("MCP directory in the system prompt", () => {
         ...Array.from({ length: 35 }, (_, i) => tool("tracker", `op_${i}`)),
       ]).directory;
       expect(Buffer.byteLength(directory)).toBeLessThanOrEqual(4_096);
-      const counts = [...coverage(directory).values()];
-      expect(counts.every(({ signed }) => signed > 0)).toBe(true);
-      // Taking turns: no server with unsigned rows is more than one input behind another.
-      const open = counts.filter(({ signed, listed }) => signed < listed);
-      const signed = open.map((count) => count.signed);
-      expect(Math.max(...signed) - Math.min(...signed)).toBeLessThanOrEqual(1);
+      const counts = [...signedPerServer(directory).values()];
+      expect(counts).toHaveLength(5);
+      // Taking turns: every server gets inputs, none more than one ahead of another.
+      expect(Math.min(...counts)).toBeGreaterThan(0);
+      expect(Math.max(...counts) - Math.min(...counts)).toBeLessThanOrEqual(1);
       expect(directory.split("\n")[0]).toContain(
         "For a name listed without input, call tool_describe first.",
       );
     });
 
-    it("still gives inputs to listed rows when larger servers collapse to counts", () => {
-      const directory = apply([
-        ...Array.from({ length: 5 }, (_, i) => tool("tracker", `op_${i}`)),
-        ...["alpha", "bravo", "charlie", "delta"].flatMap((server) =>
-          Array.from({ length: 30 }, (_, i) => tool(server, `operation_number_${i}`)),
-        ),
-      ]).directory;
-      expect(Buffer.byteLength(directory)).toBeLessThanOrEqual(4_096);
-      expect(directory).toMatch(/server: \d+ more tools, names omitted/u);
-      expect(directory).toContain("- mcp:tracker:tracker__op_0 { project: string");
+    it("stays within the byte budget with an instruction row under names overflow", () => {
+      for (let size = 90; size <= 130; size += 1) {
+        const guided = tool("guided", "query");
+        setPluginToolMeta(guided, {
+          pluginId: "bundle-mcp",
+          optional: false,
+          mcp: {
+            serverName: "guided",
+            safeServerName: "guided",
+            toolName: "query",
+            operation: "tool",
+            instructions: "Read the guide first.",
+          },
+        });
+        const directory = apply([
+          guided,
+          ...Array.from({ length: size }, (_, i) => tool("big", `operation_${i}`)),
+        ]).directory;
+        expect(Buffer.byteLength(directory)).toBeLessThanOrEqual(4_096);
+      }
     });
   });
 
@@ -426,7 +432,7 @@ describe("usage-ranked MCP directory", () => {
       ...Array.from({ length: 3 }, (_, i) => mcpTool("world", `op_${i}`, longDescription)),
       mcpTool("zeta", "only", longDescription),
     ]);
-    expect(applied.directory).toMatch(/- github server: \d+ more tools, names omitted/u);
+    expect(applied.directory).toContain("- github server: 400 tools, names omitted");
     const directory = rankedDirectory(
       applied,
       ranking(["mcp:github:github__op_321", "mcp:github:github__op_7"], {
