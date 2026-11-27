@@ -87,6 +87,13 @@ describe("failover classification", () => {
       noPlugin,
     ],
     ["auth", { message: "Not logged in · Please run /login", provider: "claude-cli" }],
+    [
+      "auth_permanent",
+      {
+        message:
+          "Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access",
+      },
+    ],
     [null, { message: "Not logged in · Please run /login", provider: "openai" }],
     [null, "Not logged in · Please run /login"],
     [

@@ -85,6 +85,7 @@ const HIGH_CONFIDENCE_AUTH_PERMANENT_PATTERNS = [
   "key has been revoked",
   "account has been deactivated",
   "not allowed for this organization",
+  "organization has disabled claude subscription access",
 ] as const satisfies readonly ErrorPattern[];
 // Providers use both "invalid API key" and "API key is/not valid" word order.
 // Keep them in one matcher so every result/exception classifier agrees on auth failover.
