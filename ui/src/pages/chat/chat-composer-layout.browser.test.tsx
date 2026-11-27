@@ -478,9 +478,12 @@ describe("composer layout", () => {
       const edge = f.edge();
       expect(edge).not.toBeNull();
       f.props.disabledBanner = { kind: "composer-replacement", text: "Archived" };
+      f.props.canAbort = true;
       f.draw();
       await settled();
       expect(container.querySelector('[role="separator"]')).toBeNull();
+      const stop = container.querySelector(".chat-send-btn--stop svg")!;
+      expect(stop.getBoundingClientRect()).toMatchObject({ width: 18, height: 18 });
       edge.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
       expect(f.width()).toBe("1081px");
       f.props.disabledBanner = undefined;
