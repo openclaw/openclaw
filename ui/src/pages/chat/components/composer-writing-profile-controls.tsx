@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import type { WritingProfileSnapshot } from "../../../../../src/shared/dictation-writing-profiles.js";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import { registerDictationWritingProfilesEnglish } from "../../../i18n/locales/en-dictation-writing-profiles.ts";
@@ -42,7 +42,7 @@ export function ComposerWritingProfileControls(props: {
   const context = useOptionalApplication();
   const profiles = () => props.readDictation()?.writingProfiles;
   const selection = createMemo(() => profiles()?.selection);
-  const [previewBlocked, setPreviewBlocked] = createSignal(false);
+  const previewStatus = () => profiles()?.previewStatus;
   return (
     <details class="composer-writing-profiles">
       <summary>
@@ -66,7 +66,6 @@ export function ComposerWritingProfileControls(props: {
             }
             disabled={profiles()?.loadStatus !== "ready" || !profiles()?.catalog.enabled}
             onChange={(event) => {
-              setPreviewBlocked(false);
               if (event.currentTarget.value === "disabled") {
                 profiles()?.disable();
               } else {
@@ -122,7 +121,11 @@ export function ComposerWritingProfileControls(props: {
           <pre>{JSON.stringify(profiles()?.diagnostics, null, 2)}</pre>
         </details>
         <p role="status" aria-live="polite">
-          {t(copy + "outcomes." + (profiles()?.outcome ?? "none"))}
+          {t(
+            copy +
+              "outcomes." +
+              (previewStatus() === "ready" ? "preview" : (profiles()?.outcome ?? "none")),
+          )}
         </p>
         <Show when={profiles()?.original !== null && profiles()?.original !== undefined}>
           <details>
@@ -135,14 +138,14 @@ export function ComposerWritingProfileControls(props: {
               class="btn btn--sm"
               type="button"
               disabled={props.readDictation()?.active || props.readDictation()?.transcribing}
-              onClick={() => setPreviewBlocked(!profiles()?.reprocess())}
+              onClick={() => profiles()?.reprocess()}
             >
               {t(copy + "reprocess")}
             </button>
-            <Show when={profiles()?.outcome === "preview"}>
+            <Show when={previewStatus() === "ready"}>
               <p role="status">{t(copy + "preview")}</p>
             </Show>
-            <Show when={previewBlocked()}>
+            <Show when={previewStatus() === "blocked"}>
               <p role="status">{t(copy + "previewUnavailable")}</p>
             </Show>
           </details>

@@ -21,7 +21,8 @@ export type DictationProfileCapture = Readonly<{
   snapshot: WritingProfileSnapshot;
 }>;
 
-type Outcome = "none" | "committed" | "not-applied" | "unknown" | "preview" | "stale";
+type Outcome = "none" | "committed" | "not-applied" | "unknown" | "stale";
+type PreviewStatus = "idle" | "ready" | "blocked";
 type Receipt = {
   capture: DictationProfileCapture;
   outcome: Outcome;
@@ -54,6 +55,7 @@ export class ComposerDictationProfiles {
   private providerAllowed = false;
   private readDraft: (() => string) | undefined;
   private receipt: Receipt | undefined;
+  private preview: PreviewStatus = "idle";
   private activeCapture: DictationProfileCapture | undefined;
 
   constructor(
@@ -104,6 +106,10 @@ export class ComposerDictationProfiles {
 
   get outcome(): Outcome {
     return this.receipt?.outcome ?? "none";
+  }
+
+  get previewStatus(): PreviewStatus {
+    return this.preview;
   }
 
   get diagnostics() {
@@ -286,6 +292,7 @@ export class ComposerDictationProfiles {
       draft: undefined,
     };
     this.receipt = receipt;
+    this.preview = "idle";
     try {
       receipt.outcome = commit() ? "committed" : "not-applied";
       if (capture.epoch === this.epoch && receipt.outcome === "committed") {
@@ -304,29 +311,27 @@ export class ComposerDictationProfiles {
   /** Explicit review only. There is no semantic processor to apply to this draft. */
   reprocess(): boolean {
     const receipt = this.receipt;
-    if (
-      !receipt?.original ||
-      receipt.capture.epoch !== this.epoch ||
-      this.busy() ||
-      (receipt.outcome !== "committed" && receipt.outcome !== "preview") ||
-      receipt.draft === undefined ||
-      receipt.draft !== this.readDraft?.()
-    ) {
-      return false;
+    const allowed =
+      receipt !== undefined &&
+      receipt.original !== null &&
+      receipt.capture.epoch === this.epoch &&
+      !this.busy() &&
+      receipt.outcome === "committed" &&
+      receipt.draft !== undefined &&
+      receipt.draft === this.readDraft?.() &&
+      this.selection.captureAllowed;
+    if (allowed) {
+      this.generation += 1;
     }
-    const capture = this.begin();
-    if (!capture) {
-      return false;
-    }
-    this.receipt = { ...receipt, capture, outcome: "preview" };
-    this.activeCapture = undefined;
+    this.preview = allowed ? "ready" : "blocked";
     this.changed();
-    return true;
+    return allowed;
   }
 
   retire(): void {
     this.epoch = {};
     this.activeCapture = undefined;
+    this.preview = "idle";
     if (this.receipt) {
       // Preserve the actual effect receipt but release all recoverable content.
       this.receipt.original = null;
