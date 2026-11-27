@@ -6,6 +6,7 @@ import {
   type SidebarAttentionDismissal,
 } from "../components/sidebar-attention-dismissals.ts";
 import type { SidebarInboxEntry } from "../components/sidebar-attention-entries.ts";
+import { createVisitorAccessNoticeSource } from "../components/sidebar-visitor-access.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
 import type { ApplicationConfigCapability } from "./config.ts";
@@ -23,6 +24,7 @@ export type SidebarAttentionStoreSources = {
   overlays: ApplicationOverlays;
   scopeUpgrade: ScopeUpgradeCapability;
   connectionBootstrap?: ConnectionBootstrapCoordinator;
+  visitorAccess?: ReturnType<typeof createVisitorAccessNoticeSource>;
 };
 
 export type SidebarAttentionStoreOwner = {
@@ -45,6 +47,7 @@ export type SidebarAttentionStore = ReturnType<typeof createSidebarAttentionStor
 export function createSidebarAttentionStore(sources: SidebarAttentionStoreSources) {
   const listeners = createChangeListeners();
   let owner: SidebarAttentionStoreOwner | null = null;
+  let visitorAccess: ReturnType<typeof createVisitorAccessNoticeSource> | undefined;
   // Retire dismissals even when no Inbox presenter is mounted, such as mobile Settings.
   const synchronizeScopeUpgradeDismissal = () => {
     const snapshot = sources.gateway.snapshot;
@@ -69,11 +72,17 @@ export function createSidebarAttentionStore(sources: SidebarAttentionStoreSource
       return owner?.hasFailedAutomation ?? false;
     },
     activate(Owner: SidebarAttentionStoreOwnerConstructor) {
-      owner ??= new Owner(sources, listeners.publish);
+      if (!owner) {
+        visitorAccess = createVisitorAccessNoticeSource(sources.gateway, listeners.publish);
+        owner = new Owner({ ...sources, visitorAccess }, listeners.publish);
+      }
       return owner.mentions;
     },
     refreshOpenClawId() {
       owner?.refreshOpenClawId();
+    },
+    refreshVisitorNotice() {
+      visitorAccess?.refresh();
     },
     dismiss(dismissal: SidebarAttentionDismissal) {
       owner?.dismiss(dismissal);
@@ -82,6 +91,8 @@ export function createSidebarAttentionStore(sources: SidebarAttentionStoreSource
     dispose() {
       stopGateway();
       stopScopeUpgrade();
+      visitorAccess?.dispose();
+      visitorAccess = undefined;
       owner?.dispose();
       owner = null;
       listeners.clear();

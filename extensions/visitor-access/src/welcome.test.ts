@@ -82,7 +82,19 @@ async function welcomeHarness(grants: VisitorGrant[], config: OpenClawConfig = g
     }),
   };
   const logger = { warn: vi.fn() };
-  const restart = () => new VisitorWelcome(fixture.service, gateway, () => config, logger);
+  const welcomed = new Map<string, string>();
+  const welcomedProfiles = {
+    lookup: async (profileId: string) => welcomed.get(profileId),
+    registerIfAbsent: async (profileId: string, grantId: string) => {
+      if (welcomed.has(profileId)) {
+        return false;
+      }
+      welcomed.set(profileId, grantId);
+      return true;
+    },
+  };
+  const restart = () =>
+    new VisitorWelcome(fixture.service, gateway, () => config, logger, welcomedProfiles);
   const creates = () =>
     vi.mocked(gateway.request).mock.calls.filter(([method]) => method === "sessions.create");
   const welcome = restart();
@@ -368,12 +380,60 @@ describe("visitor-access.welcome.ensure", () => {
       const reinvited = h.fixture.grants.get(EMAIL)!;
       expect(reinvited.grantId).not.toBe(grant.grantId);
       expect(reinvited.onboarding).toEqual({ state: "pending", updatedAt: NOW });
-      expect(await h.ensure(reinvited)).toMatchObject({ status: "ready", created: true });
-      // The session created before revocation stays the guest's; the new invitation gets its own.
-      expect(h.sessions.size).toBe(2);
-      expect(h.messages.size).toBe(step === "append" ? 1 : 2);
+      if (step === "append") {
+        // A failed append never welcomed the guest, so they still get the first-time flow.
+        expect(await h.ensure(reinvited)).toMatchObject({ status: "ready", created: true });
+        expect(h.sessions.size).toBe(2);
+      } else {
+        expect(await h.ensure(reinvited)).toEqual({ status: "not_applicable" });
+        expect(h.welcome.notice(guestClient(reinvited.grantId!))).toMatchObject({
+          kind: "restored",
+        });
+        expect(h.sessions.size).toBe(1);
+      }
+      expect(h.messages.size).toBe(1);
     },
   );
+
+  it("welcomes a returning profile through its own invite without touching its old chat", async () => {
+    const grant = pendingWelcomeGrant();
+    const h = await welcomeHarness([grant]);
+    expect(await h.ensure()).toMatchObject({ status: "ready", created: true });
+    await h.fixture.revoke({ email: EMAIL });
+    await h.fixture.invite({ email: EMAIL, days: 7, note: "Welcome back, Sam." });
+    const current = h.fixture.grants.get(EMAIL)!;
+    const client = guestClient(current.grantId!);
+    expect(await h.restart().ensure(client)).toEqual({ status: "not_applicable" });
+    const notice = h.welcome.notice(client);
+    expect(notice).toMatchObject({
+      kind: "restored",
+      expiresAt: current.expiresAt,
+      note: "Welcome back, Sam.",
+    });
+    expect(await h.ensure(current)).toEqual({ status: "not_applicable" });
+    expect(h.restart().notice(client)).toEqual(notice);
+    expect(h.welcome.notice(guestClient(grant.grantId!))).toBeNull();
+    expect(h.welcome.notice(guestClient(current.grantId!, JOSH))).toBeNull();
+    expect(h.gateway.request).toHaveBeenCalledTimes(1);
+    expect(h.messages.size).toBe(1);
+  });
+
+  it("returns the new expiry only when existing access is extended", async () => {
+    const grant = visitorGrant(EMAIL, { expiresAt: NOW + 7 * DAY_MS });
+    const h = await welcomeHarness([grant]);
+    const client = guestClient(grant.grantId!);
+    expect(h.welcome.notice(client)).toBeNull();
+    await h.fixture.invite({ email: EMAIL, days: 14 });
+    const extension = h.restart().notice(client);
+    expect(extension).toMatchObject({ kind: "extended", expiresAt: NOW + 14 * DAY_MS });
+    await h.fixture.invite({ email: EMAIL, days: 14 });
+    expect(h.welcome.notice(client)).toEqual(extension);
+    await h.fixture.invite({ email: EMAIL, days: 3 });
+    expect(h.welcome.notice(client)).toBeNull();
+    await h.fixture.invite({ email: EMAIL, forever: true });
+    expect(h.welcome.notice(client)).toMatchObject({ kind: "extended", expiresAt: null });
+    expect(h.creates()).toHaveLength(0);
+  });
 
   it("does not recreate a deleted welcome session or send the guest to it", async () => {
     const grant = pendingWelcomeGrant();

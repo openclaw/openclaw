@@ -9,7 +9,7 @@ import { profileUsesVisitorRole, resolveVisitorRole } from "./src/roles.js";
 import { visitorRuntimeStore, type VisitorRuntime } from "./src/runtime.js";
 import { createVisitorTools } from "./src/tools.js";
 import { VisitorAccessService } from "./src/visitors.js";
-import { VisitorWelcome, WELCOME_ENSURE_METHOD } from "./src/welcome.js";
+import { ACCESS_NOTICE_METHOD, VisitorWelcome, WELCOME_ENSURE_METHOD } from "./src/welcome.js";
 
 function registerVisitorPlugin(api: OpenClawPluginApi): void {
   if (api.registrationMode === "cli-metadata") {
@@ -79,6 +79,11 @@ function registerVisitorPlugin(api: OpenClawPluginApi): void {
     api.runtime.gateway,
     () => api.runtime.config.current({ clone: true }),
     api.logger,
+    api.runtime.state.openKeyedStore<string>({
+      namespace: "welcomed-profiles",
+      maxEntries: 10_000,
+      overflowPolicy: "evict-oldest",
+    }),
   );
   // Pulled by the guest Control UI on load; params select nothing (see README "Welcome session").
   api.registerGatewayMethod(
@@ -87,6 +92,11 @@ function registerVisitorPlugin(api: OpenClawPluginApi): void {
       respond(true, await welcome.ensure(client));
     },
     { scope: "operator.sessions.write", profileAccess: "required" },
+  );
+  api.registerGatewayMethod(
+    ACCESS_NOTICE_METHOD,
+    ({ client, respond }) => respond(true, { notice: welcome.notice(client) }),
+    { scope: "operator.sessions.read", profileAccess: "required" },
   );
 
   api.registerGatewayAccessPolicy({

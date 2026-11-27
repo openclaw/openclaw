@@ -15,6 +15,7 @@ export type GuestWelcomeOptions = {
   /** True only while the guest still sits on the default Home landing, never a deep link. */
   isHomeLanding: () => Promise<boolean>;
   openSession: (sessionKey: string, agentId: string) => void;
+  onNoWelcomeChat?: () => void;
 };
 
 type GuestWelcomeOwner = {

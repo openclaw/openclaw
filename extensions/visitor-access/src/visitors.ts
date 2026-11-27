@@ -413,6 +413,14 @@ export class VisitorAccessService {
       if (!continuous) {
         // Welcome setup belongs to one grant; a new invitation after an ended one starts over.
         grant.onboarding = { state: "pending", updatedAt: now };
+      } else if (previous.expiresAt === expiresAt) {
+        grant.accessExtendedAt = previous.accessExtendedAt;
+      } else if (
+        previous.expiresAt !== null &&
+        (expiresAt === null || expiresAt > previous.expiresAt)
+      ) {
+        // The serialized renewal follows any restored notice, even in the same clock tick.
+        grant.accessExtendedAt = Math.max(now, (previous.onboarding?.updatedAt ?? -1) + 1);
       }
       await this.registerGrant(
         grant,

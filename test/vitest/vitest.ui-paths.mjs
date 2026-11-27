@@ -147,6 +147,7 @@ export function isUiTestTarget(relative) {
 
 export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/theme-startup.real-gateway.e2e.test.ts",
+  "ui/src/e2e/guest-access-notice.real-gateway.e2e.test.ts",
   "ui/src/e2e/guest-owner-filter.real-gateway.e2e.test.ts",
   "ui/src/e2e/browser-pair-code.real-gateway.e2e.test.ts",
   "ui/src/e2e/template-upload.real-gateway.e2e.test.ts",

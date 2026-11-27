@@ -81,6 +81,51 @@ async function expectQuietLanding(
 }
 
 suite.define(() => {
+  it("shows restored and extended access in System without opening another chat", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 800 }, timezoneId: "UTC" },
+      async ({ page }) => {
+        const method = "visitor-access.notice.get";
+        const scenario = guestScenario({ status: "not_applicable" });
+        const restored = {
+          id: "restored",
+          kind: "restored",
+          createdAt: Date.now(),
+          expiresAt: Date.parse("2027-01-04T15:30:00Z"),
+          note: "Thanks for coming back to help with onboarding.",
+        };
+        const gateway = await installMockGateway(page, {
+          ...scenario,
+          featureMethods: [...(scenario.featureMethods ?? []), method],
+          methodResponses: { ...scenario.methodResponses, [method]: { notice: restored } },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, shared.key));
+        await expectBrowser(page.getByText("Onboarding notes.")).toBeVisible();
+        const inbox = page.locator("#sidebar-issues-panel");
+        await page.locator(".sidebar-issues-button:visible").click();
+        await inbox.getByRole("tab", { name: /System/ }).click();
+        await expectBrowser(inbox.getByText("Welcome back — access restored")).toBeVisible();
+        await inbox.getByText("Welcome back — access restored").click();
+        await expectBrowser(inbox.getByText(restored.note)).toBeVisible();
+        await gateway.setMethodResponse(method, {
+          notice: {
+            ...restored,
+            kind: "extended",
+            id: "extended",
+            expiresAt: Date.parse("2027-01-19T18:00:00Z"),
+            note: undefined,
+          },
+        });
+        await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+        await expectBrowser(inbox.getByText("Guest access extended")).toBeVisible();
+        await expectBrowser(inbox.getByText(/Expires Jan 19/).first()).toBeVisible();
+        await expectBrowser(inbox.getByText("Welcome back — access restored")).toHaveCount(0);
+        await expectBrowser(page).toHaveURL(onSession(shared.sessionId));
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      },
+    );
+  });
+
   it("lands a guest from Home on the welcome session once, then leaves Home reachable", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
       const gateway = await installMockGateway(

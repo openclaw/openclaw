@@ -29,6 +29,7 @@ const emptySidebarAttentionStore = {
   entries: [],
   hasFailedAutomation: false,
   refreshOpenClawId: () => undefined,
+  refreshVisitorNotice: () => undefined,
   activate: () => unavailableMentionsCapability,
   dismiss: () => undefined,
   subscribe: () => () => undefined,

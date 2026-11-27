@@ -50,6 +50,7 @@ it.each([
         throw new Error("not used by renderer");
       },
       refreshOpenClawId: vi.fn(),
+      refreshVisitorNotice: vi.fn(),
       dismiss: vi.fn(),
       subscribe: () => () => {},
       dispose() {},

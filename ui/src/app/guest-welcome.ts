@@ -198,6 +198,7 @@ export class GuestWelcome {
       case "not_applicable":
         this.settled = true;
         this.publish({ kind: "hidden" });
+        this.options.onNoWelcomeChat?.();
         return;
       case "pending": {
         const now = Date.now();
