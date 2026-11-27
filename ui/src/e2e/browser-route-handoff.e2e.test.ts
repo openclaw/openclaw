@@ -33,10 +33,13 @@ function browserCases(
   tabs: BrowserTab[] = [tab],
 ) {
   const result = { cssWidth: 100, cssHeight: 100, title: tab.title, url: tab.url };
+  const passiveAddress = address.query
+    ? { ...address, query: { operatorInput: false, ...asNullableRecord(address.query) } }
+    : address;
   return [
     browserCase("/tabs", { running: true, tabs }, address),
-    browserCase("/screenshot", screenshot, address),
-    browserCase("/act", { result }, address),
+    browserCase("/screenshot", screenshot, passiveAddress),
+    browserCase("/act", { result }, passiveAddress),
     browserCase("/operator/input", { sent: 1, navigated: false, blockedByDialog: false }, address),
   ];
 }
