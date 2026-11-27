@@ -663,7 +663,7 @@ export function presentSessionRow(
       });
       if (contribution.included) {
         keys.push(child.key);
-        active ||= contribution.active === true;
+        active ||= contribution.active;
       }
     }
     children = { childSessions: keys.length ? keys : undefined, hasActiveSubagentRun: active };

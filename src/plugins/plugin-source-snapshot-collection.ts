@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { canCollectPluginSourceSnapshots } from "../infra/update-run-recovery-store.js";
+import { pluginCohortPublicationContext } from "../infra/update-plugin-cohort-context.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { updateInstalledPluginSourceSnapshots } from "./installed-plugin-index-store-write.js";
 import { readCurrentInstalledPluginIndex } from "./installed-plugin-index-store.js";
@@ -17,7 +17,7 @@ export async function collectInstalledPluginSourceSnapshots(
   stateDir: string,
   unpublished: readonly Omit<PluginSourceSnapshotDescriptor, "installedRevision">[] = [],
 ): Promise<void> {
-  if (isArtifactPreservingStateRead()) {
+  if (isArtifactPreservingStateRead() || pluginCohortPublicationContext.getStore()) {
     return;
   }
   try {
@@ -58,12 +58,7 @@ export async function collectInstalledPluginSourceSnapshots(
           index = recorded.index;
         }
       }
-      const allowed = await canCollectPluginSourceSnapshots({ env });
       await lease.assertOwned();
-      // With no index, caller-owned candidates were never published and cannot be rollback roots.
-      if (!allowed) {
-        return;
-      }
       const retainedPaths = new Set(
         (index?.plugins ?? []).flatMap((entry) => {
           const artifactPath = pluginSourceSnapshotArtifactPath(entry.sourceSnapshot);

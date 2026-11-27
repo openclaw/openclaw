@@ -7,7 +7,6 @@ import { prepareChildRuntimeViability } from "../../infra/child-runtime-viabilit
 import { startDiagnosticsTimeline } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
-import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { consumeGatewaySuspendHandoff } from "../../infra/gateway-suspend-coordinator.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { findStartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
@@ -296,11 +295,7 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
       }
       if (!updateSuccessor.stopRequested && !hostExitRequested) {
         try {
-          lock = await acquireGatewayLock({
-            port: params.lockPort,
-            listenerMode: supervisorMode ? "supervised" : "foreground",
-            supervisor,
-          });
+          lock = await restartRecovery.reacquireLock();
         } catch (err) {
           if (forcedExitStarted) {
             return;
@@ -1129,6 +1124,7 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
         }
         runtimeResetPending = false;
         signals.openStore();
+        restartRecovery.throwPreparationFailure();
         if (installationReplacement) {
           await exitReplacedInstallation(installationReplacement);
           break;

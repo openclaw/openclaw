@@ -177,6 +177,45 @@ function mountRows(
     return method === "sessions.abort" ? (handlers.abort?.() ?? {}) : {};
   }, mobile);
 }
+
+it.each([false, true])(
+  "files a child paused on sessions_yield as waiting on what it waits for (mobile=%s)",
+  async (mobile) => {
+    const idle = { status: undefined, hasActiveRun: false, activeRunIds: [], endedAt: 2 };
+    const rows = [
+      { ...child("background"), ...idle, subagentRunState: "paused", backgroundProcessCount: 1 },
+      { ...child("paused"), ...idle, subagentRunState: "paused" },
+      { ...child("delegating"), ...idle, subagentRunState: "paused", hasActiveSubagentRun: true },
+    ] satisfies GatewaySessionRow[];
+    const f = mountRows(() => rows, mobile);
+    await f.waitForCount(openSelector(mobile), rows.length);
+    const status = (id: string) => {
+      const row = f.panel.querySelector(`[data-session-key="${child(id).key}"]`)!;
+      return mobile
+        ? [
+            row.querySelector("[data-status]")!.getAttribute("data-status"),
+            row.querySelector("[data-status]")!.getAttribute("aria-label"),
+          ]
+        : [
+            row.getAttribute("data-group"),
+            row.querySelector(".subagents-desktop__status")!.textContent,
+          ];
+    };
+    expect([status("background"), status("paused"), status("delegating")]).toEqual(
+      mobile
+        ? [
+            ["waiting", "Running in background"],
+            ["waiting", "Paused"],
+            ["waiting", "Waiting on subagents"],
+          ]
+        : [
+            ["waiting", "Running in background"],
+            ["waiting", "Paused"],
+            ["waiting", "Waiting for subagents"],
+          ],
+    );
+  },
+);
 it("resynchronizes descendants when a retained panel switches presentation", async () => {
   const coordinator = child("coordinator");
   const reviewer = { ...child("reviewer"), spawnedBy: coordinator.key };

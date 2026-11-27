@@ -14,6 +14,7 @@ import {
   type RelayCommandBody,
   type RelayTabInfo,
   type RelayToExtensionMessage,
+  toErrorPayload,
 } from "./relay-protocol.js";
 import { RelaySessionOwner, type RelaySessionClient } from "./relay-session-owner.js";
 
@@ -69,15 +70,6 @@ type ExtensionIdentity = {
   browserVersion: string;
   extensionVersion: string;
 };
-
-function toErrorPayload(
-  id: number | null,
-  sessionId: string | undefined,
-  message: string,
-  code = -32000,
-): string {
-  return JSON.stringify({ id, ...(sessionId ? { sessionId } : {}), error: { code, message } });
-}
 
 /**
  * One relay bridge per extension-driver profile. Accepts at most one extension
@@ -559,6 +551,16 @@ export class ExtensionRelayBridge {
         },
       );
       current.restoreAttachment = false;
+      // Chrome stops requestAnimationFrame in a hidden tab, and Playwright's click
+      // waits on it. Playwright's default bootstrap sent this; noDefaults drops it
+      // together with the forced light color scheme. It runs after the target is set
+      // so a failure leaves a known attachment that detachUnusedAttachments releases.
+      await this.callExtension({
+        type: "cdp",
+        tabId,
+        method: "Emulation.setFocusEmulationEnabled",
+        params: { enabled: true },
+      });
       return attached;
     });
     tab.attaching = attaching;

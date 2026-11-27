@@ -1,6 +1,6 @@
 import { execFile, spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { managedHandoffBootSchema } from "./update-managed-service-handoff-schema.js";
+import { managedHandoffBootSchema } from "./update-managed-service-handoff-boot-schema.js";
 
 const windowsBootIdentityArgs = [
   "-NoProfile",
