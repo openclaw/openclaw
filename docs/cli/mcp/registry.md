@@ -263,3 +263,37 @@ These examples save server definitions only. Run `openclaw mcp doctor --probe` a
 
   </Tab>
 </Tabs>
+
+### OpenCode Browse with Chrome
+
+[OpenCode Browse](https://github.com/anomalyco/browse) connects an MCP client to
+Chrome through the Browse extension. It is a third-party MCP server, not an
+OpenClaw `browser` profile. OpenClaw's browser profile settings do not apply to
+Browse tools.
+
+1. Follow Browse's [installation and pairing instructions](https://github.com/anomalyco/browse#install)
+   on the Gateway host. Set up Browse as the OS user that runs the Gateway so
+   its MCP process can access the relay. Pair the extension in a dedicated Chrome
+   profile on that machine. If you run `browse install`, use `--agent none` to
+   skip edits to other MCP clients' configuration.
+2. With the Gateway stopped, register the server and check what it exposes:
+
+   ```bash
+   openclaw mcp add browse --command browse --arg mcp
+   openclaw mcp probe browse
+   ```
+
+   If `browse` isn't on the Gateway process's `PATH`, use its full path for
+   `--command`. To add the server while the Gateway is running, pass `--no-probe`
+   and verify it in an agent turn instead.
+
+3. Start a fresh embedded OpenClaw chat with the `coding` or `messaging` tool
+   profile. Ask the agent to use the **Browse MCP status tool**, then to open and
+   read a test page that contains no private data. A successful probe lists MCP
+   tools; it does not prove Chrome is paired or that the chat can use them.
+
+Pair only a profile whose data the agent may access. Browse drives that Chrome
+profile, not the isolated `openclaw` profile, and can act with its site logins.
+Use OpenClaw's [MCP tool access controls](/tools/mcp#add-a-server-from-the-composer)
+to limit which chats can call Browse. To disconnect Chrome, revoke the pairing in
+Browse; to remove the definition from OpenClaw, run `openclaw mcp unset browse`.
