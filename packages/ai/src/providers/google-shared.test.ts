@@ -316,7 +316,56 @@ it("closes partial text before reporting a failed candidate", async () => {
     errorCode: "SAFETY",
     errorType: "google_generation_failed",
     errorMessage: "Google generation stopped (SAFETY): Provider rejected the generated response",
+    diagnostics: [
+      {
+        type: "provider_refusal",
+        timestamp: 123,
+        details: { provider: "google", category: "safety" },
+      },
+    ],
   });
+});
+
+it.each([
+  [FinishReason.PROHIBITED_CONTENT, "prohibited_content"],
+  [FinishReason.BLOCKLIST, "blocklist"],
+  [FinishReason.SPII, "spii"],
+  [FinishReason.RECITATION, "recitation"],
+  [FinishReason.IMAGE_SAFETY, "image_safety"],
+  [FinishReason.IMAGE_PROHIBITED_CONTENT, "image_prohibited_content"],
+  [FinishReason.IMAGE_RECITATION, "image_recitation"],
+] as const)(
+  "attaches a provider_refusal diagnostic for %s candidate finishes",
+  async (finishReason, category) => {
+    const { result } = await runFixture([candidate(undefined, finishReason)]);
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorCode: finishReason,
+      errorType: "google_generation_failed",
+      diagnostics: [
+        {
+          type: "provider_refusal",
+          timestamp: 123,
+          details: { provider: "google", category },
+        },
+      ],
+    });
+  },
+);
+
+it.each([
+  FinishReason.MALFORMED_FUNCTION_CALL,
+  FinishReason.OTHER,
+  FinishReason.LANGUAGE,
+  FinishReason.TOO_MANY_TOOL_CALLS,
+])("does not classify %s candidate failures as provider refusals", async (finishReason) => {
+  const { result } = await runFixture([candidate(undefined, finishReason)]);
+  expect(result).toMatchObject({
+    stopReason: "error",
+    errorCode: finishReason,
+    errorType: "google_generation_failed",
+  });
+  expect(result.diagnostics?.some((entry) => entry.type === "provider_refusal")).not.toBe(true);
 });
 
 it("preserves cancellation precedence over an observed candidate failure", async () => {
@@ -336,6 +385,7 @@ it("preserves cancellation precedence over an observed candidate failure", async
     errorCode: "GATEWAY_RESTART",
     errorMessage: "Google run restarted",
   });
+  expect(result.diagnostics?.some((entry) => entry.type === "provider_refusal")).not.toBe(true);
 });
 
 it("surfaces blocked Google prompts without a reason as typed stream errors", async () => {
@@ -352,9 +402,45 @@ it("surfaces blocked Google prompts without a reason as typed stream errors", as
     errorMessage: "Google prompt blocked (PROMPT_BLOCKED): Prompt violates provider safety policy",
     content: [],
     usage: { input: 10, cacheRead: 2, totalTokens: 12 },
+    diagnostics: [
+      {
+        type: "provider_refusal",
+        timestamp: 123,
+        details: { provider: "google" },
+      },
+    ],
   });
   expect(result.usage.cost.total).toBeGreaterThan(0);
 });
+
+it.each([
+  ["PROHIBITED_CONTENT", "prohibited_content"],
+  ["SAFETY", "safety"],
+  ["MODEL_ARMOR", "model_armor"],
+  ["JAILBREAK", "jailbreak"],
+  ["OTHER", undefined],
+] as const)(
+  "attaches a provider_refusal diagnostic for %s prompt blocks",
+  async (blockReason, category) => {
+    const { result } = await runFixture([
+      {
+        promptFeedback: { blockReason },
+      } as Partial<GenerateContentResponse>,
+    ]);
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorCode: blockReason,
+      errorType: "google_prompt_blocked",
+      diagnostics: [
+        {
+          type: "provider_refusal",
+          timestamp: 123,
+          details: category ? { provider: "google", category } : { provider: "google" },
+        },
+      ],
+    });
+  },
+);
 
 it("redacts generated video bytes from Google terminal fields", async () => {
   const media = "QUJDRA==";

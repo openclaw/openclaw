@@ -1,4 +1,5 @@
 import type { FinishReason } from "@google/genai";
+import { appendAssistantMessageDiagnostic } from "@openclaw/llm-core/diagnostics";
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { calculateCost } from "../model-utils.js";
 import {
@@ -97,6 +98,48 @@ function mapStopReason(reason: string): StopReason {
   return mapped;
 }
 
+// Content-policy and safety finish/block codes that indicate provider refusal
+// rather than technical generation errors such as MALFORMED_FUNCTION_CALL.
+const GOOGLE_CANDIDATE_REFUSAL_REASONS: ReadonlySet<string> = new Set([
+  "SAFETY",
+  "PROHIBITED_CONTENT",
+  "BLOCKLIST",
+  "SPII",
+  "RECITATION",
+  "IMAGE_SAFETY",
+  "IMAGE_PROHIBITED_CONTENT",
+  "IMAGE_RECITATION",
+]);
+
+const GOOGLE_PROMPT_BLOCK_CATEGORIES: ReadonlySet<string> = new Set([
+  ...GOOGLE_CANDIDATE_REFUSAL_REASONS,
+  "MODEL_ARMOR",
+  "JAILBREAK",
+]);
+
+function resolveGoogleRefusalCategory(
+  reason: string | undefined,
+  allowedReasons: ReadonlySet<string>,
+): string | undefined {
+  const normalized = reason?.trim().toUpperCase();
+  return normalized && allowedReasons.has(normalized) ? normalized.toLowerCase() : undefined;
+}
+
+function appendGoogleRefusalDiagnostic(
+  output: AssistantMessage,
+  provider: string,
+  category: string | undefined,
+): void {
+  appendAssistantMessageDiagnostic(output, {
+    type: "provider_refusal",
+    timestamp: Date.now(),
+    details: {
+      provider,
+      ...(category ? { category } : {}),
+    },
+  });
+}
+
 /** @internal Directly tested provider implementation detail. */
 export async function consumeGoogleGenerateContentStream(params: {
   chunks: AsyncIterable<GoogleStreamChunk>;
@@ -119,6 +162,7 @@ export async function consumeGoogleGenerateContentStream(params: {
   const blocks = params.output.content;
   let sawTerminalReason = false;
   let terminalGenerationError: (Error & { code: string; type: string }) | undefined;
+  let terminalRefusal: { category: string | undefined } | undefined;
   const knownUsage = {
     promptTokenCount: 0,
     cachedContentTokenCount: 0,
@@ -199,16 +243,17 @@ export async function consumeGoogleGenerateContentStream(params: {
           ? promptFeedback.blockReason
           : promptFeedback.blockReason?.trim() || undefined) ?? "PROMPT_BLOCKED";
       const blockMessage = promptFeedback.blockReasonMessage?.trim();
-      if (preserveParts) {
-        params.output.errorCode = blockReason;
-        params.output.errorType = "google_prompt_blocked";
-      }
-      throw Object.assign(
+      sawTerminalReason = true;
+      terminalRefusal = {
+        category: resolveGoogleRefusalCategory(blockReason, GOOGLE_PROMPT_BLOCK_CATEGORIES),
+      };
+      terminalGenerationError = Object.assign(
         new Error(
           `Google prompt blocked (${blockReason})${blockMessage ? `: ${blockMessage}` : ""}`,
         ),
         { code: blockReason, type: "google_prompt_blocked" },
       );
+      break;
     }
     if (candidate?.content?.parts) {
       for (const [partIndex, part] of candidate.content.parts.entries()) {
@@ -360,6 +405,11 @@ export async function consumeGoogleGenerateContentStream(params: {
       );
       if (params.output.stopReason === "error") {
         const finishMessage = candidate.finishMessage?.trim();
+        const refusalCategory = resolveGoogleRefusalCategory(
+          candidate.finishReason,
+          GOOGLE_CANDIDATE_REFUSAL_REASONS,
+        );
+        terminalRefusal = refusalCategory ? { category: refusalCategory } : undefined;
         terminalGenerationError = Object.assign(
           new Error(
             `Google generation stopped (${candidate.finishReason})${finishMessage ? `: ${finishMessage}` : ""}`,
@@ -391,6 +441,9 @@ export async function consumeGoogleGenerateContentStream(params: {
     );
   }
   if (terminalGenerationError) {
+    if (terminalRefusal) {
+      appendGoogleRefusalDiagnostic(params.output, params.model.provider, terminalRefusal.category);
+    }
     if (preserveParts) {
       params.output.errorCode = terminalGenerationError.code;
       params.output.errorType = terminalGenerationError.type;
