@@ -5,6 +5,7 @@ import { serialize } from "node:v8";
 import { expect, it, vi, onTestFinished } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createSqliteFamilyEngines } from "./database-engine/selection-fixture.test-support.js";
 import { captureSqliteWorkerOpen } from "./sqlite-worker-broker-admission.js";
 import { createSqliteWorkerLifecycle } from "./sqlite-worker-broker-lifecycle.js";
 import { receiveSqliteWorkerReply, settleSqliteWorkerJob } from "./sqlite-worker-broker-reply.js";
@@ -84,6 +85,25 @@ function activeJob(slot: Slot, id = 1) {
   };
   return { job, completion };
 }
+
+it("keeps PostgreSQL out of a live hosted slot without borrowing its generation capacity", async () => {
+  const { lifecycle, workers, options, replyOwner, createSlot } = runtimeFixture();
+  const opening = { ...options, runtimeGeneration: { resolve: (url: URL) => url, retain() {} } };
+  const incumbent = createSlot(opening);
+  incumbent.postgresPool = "unsupported";
+  const limits = { maxWorkers: 1, maxStores: 8 };
+  const mixed = {
+    databaseEngineSelection: { effectiveEngines: createSqliteFamilyEngines({ state: "postgres" }) },
+    environment: { OPENCLAW_STATE_DIR: "/fixture" },
+  };
+  const pg = captureSqliteWorkerOpen({ ...opening, input: undefined }, mixed);
+  await expect(lifecycle.acquireSlot(pg, limits, replyOwner)).rejects.toMatchObject({
+    code: "overloaded",
+  });
+  expect(workers).toHaveLength(1);
+  expect(workers[0]?.terminate).not.toHaveBeenCalled();
+  expect(await lifecycle.acquireSlot(opening, limits, replyOwner)).toBe(incumbent);
+});
 
 it("cancels slot waiters while retaining the worker until exit", async ({ signal }) => {
   const { lifecycle, slots, workers, options, replyOwner, createSlot } = runtimeFixture();

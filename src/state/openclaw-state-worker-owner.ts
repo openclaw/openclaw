@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isWorkerIdleForPressure } from "@openclaw/worker-runtime";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { usesPostgresDatabaseEngine } from "../infra/database-engine/context.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { observeSqliteDatabaseAdmissionLocation } from "../infra/sqlite-database-admission.js";
@@ -54,6 +55,11 @@ function createSharedStateWorkerOwner() {
   );
   const matches = (entry: Entry, identity?: DatabasePathIdentity) =>
     identity === undefined || entry.context.admission.identity.key === identity.key;
+  const matchesPolicy = (entry: Entry, context: OpenClawStateWorkerContext) =>
+    entry.context.existingSchemaPath === context.existingSchemaPath &&
+    usesPostgresDatabaseEngine(entry.context.databaseEngineSelection) ===
+      usesPostgresDatabaseEngine(context.databaseEngineSelection) &&
+    isDeepStrictEqual(entry.context.gatewayServiceInstallation, context.gatewayServiceInstallation);
   const hasActiveActorOperations = (entry: Entry) =>
     [...activeEntries].some((active) =>
       entry.actor ? active.actor === entry.actor : active === entry,
@@ -341,11 +347,7 @@ function createSharedStateWorkerOwner() {
         }
         if (
           stores.has(candidate) &&
-          (candidate.context.existingSchemaPath !== context.existingSchemaPath ||
-            !isDeepStrictEqual(
-              candidate.context.gatewayServiceInstallation,
-              context.gatewayServiceInstallation,
-            ) ||
+          (!matchesPolicy(candidate, context) ||
             candidate.source.moduleUrl.href !== source.moduleUrl.href)
         ) {
           // A nested caller cannot join closure of the client scope retaining its
@@ -397,11 +399,7 @@ function createSharedStateWorkerOwner() {
         (candidate) =>
           matches(candidate, admission.identity) &&
           candidate.context.maintenanceScope === context.maintenanceScope &&
-          candidate.context.existingSchemaPath === context.existingSchemaPath &&
-          isDeepStrictEqual(
-            candidate.context.gatewayServiceInstallation,
-            context.gatewayServiceInstallation,
-          ),
+          matchesPolicy(candidate, context),
       );
       const ownsOpening = !entry;
       if (!entry) {

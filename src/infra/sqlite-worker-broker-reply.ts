@@ -11,6 +11,7 @@ import {
   type OpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
 import { acquireWithWait } from "./acquire-with-wait.js";
+import { usesPostgresDatabaseEngine } from "./database-engine/context.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-errors.js";
 import {
   acquireStateDatabaseSchemaLease,
@@ -19,7 +20,10 @@ import {
 import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { installSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
 import { resolveIdentityPathViaExistingAncestor } from "./path-existence.js";
-import { createPostgresPoolEndpoints, postgresPoolTransferList } from "./postgres-sync/pool.js";
+import {
+  createPostgresWorkerPoolEndpoints,
+  postgresPoolTransferList,
+} from "./postgres-sync/pool.js";
 import {
   captureSqliteDatabaseAdmissions,
   createSqliteDatabaseAdmissionCursor,
@@ -272,9 +276,11 @@ export async function dispatchSqliteWorkerJob(
     const request = prepareSqliteWorkerRequest(job);
     assertDispatchable();
     const selection = request.stateContext?.databaseEngineSelection;
-    if (!slot.postgresPoolSent && selection) {
-      // A carrier can be created before boot selects its database engines.
-      request.postgresPool = createPostgresPoolEndpoints(selection);
+    if (slot.postgresPool === undefined && (actor?.requiresPostgresPool || selection)) {
+      // Only a dedicated carrier can bind a pool when its first PostgreSQL actor arrives.
+      request.postgresPool = createPostgresWorkerPoolEndpoints(
+        actor?.requiresPostgresPool || usesPostgresDatabaseEngine(selection),
+      );
     }
     assertStateAccess?.();
     job.custody.accept();
@@ -296,7 +302,7 @@ export async function dispatchSqliteWorkerJob(
       ...(request.type === "open" && request.preparation ? [request.preparation.buffer] : []),
     ]);
     if (request.postgresPool) {
-      slot.postgresPoolSent = true;
+      slot.postgresPool = "sent";
     }
     if (actor && deliveredStateContext) {
       actor.deliveredStateContext = deliveredStateContext;

@@ -10,6 +10,10 @@ import { INCOGNITO_AGENT_SQLITE_BASENAME } from "../state/openclaw-agent-db.path
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import {
+  getDatabaseEngineSelection,
+  usesPostgresDatabaseEngine,
+} from "./database-engine/context.js";
+import {
   resolveIdentityPathViaExistingAncestor,
   resolveIdentityPathViaExistingAncestorSync,
 } from "./path-existence.js";
@@ -154,6 +158,11 @@ export function captureSqliteWorkerOpen(
   const carrierUrl = resolveRuntimeWorkerGenerationUrl(carrier, options.runtimeGeneration);
   return {
     ...native,
+    requiresPostgresPool:
+      custody.requiresPostgresPool === true ||
+      usesPostgresDatabaseEngine(
+        stateContext?.databaseEngineSelection ?? getDatabaseEngineSelection(),
+      ),
     carrierClass: custody.carrierClass ?? options.isolation,
     retireIdle: retireIdle ? () => inCaller(retireIdle) : undefined,
     maintenanceScope: custody.cleanupAccess
@@ -362,7 +371,11 @@ export async function resolveSqliteWorkerModuleUrl(sourceUrl: URL) {
 function assertSqliteWorkerActorStateContext(
   actor: Actor,
   stateContext: SqliteWorkerStateContext | undefined,
+  requiresPostgresPool = usesPostgresDatabaseEngine(stateContext?.databaseEngineSelection),
 ): void {
+  if (requiresPostgresPool && actor.slot.postgresPool === "unsupported") {
+    throw new Error("PostgreSQL requires a dedicated worker; close the hosted SQLite actor first");
+  }
   const suppliedInstallation = stateContext?.gatewayServiceInstallation;
   if (
     actor.stateContext?.existingSchemaPath !== stateContext?.existingSchemaPath ||
@@ -373,16 +386,21 @@ function assertSqliteWorkerActorStateContext(
   }
 }
 
-export function assertSqliteWorkerActorReusable(
+export function retainSqliteWorkerActor(
   actor: Actor,
   moduleUrl: string,
   inputHash: string,
-  stateContext: SqliteWorkerStateContext | undefined,
+  options: Pick<PreparedSqliteWorkerOpen, "stateContext" | "requiresPostgresPool" | "onNativeLost">,
 ): void {
   if (actor.moduleUrl !== moduleUrl || actor.inputHash !== inputHash) {
     throw new Error("SQLite database already belongs to another worker backend");
   }
-  assertSqliteWorkerActorStateContext(actor, stateContext);
+  assertSqliteWorkerActorStateContext(actor, options.stateContext, options.requiresPostgresPool);
+  actor.requiresPostgresPool ||= options.requiresPostgresPool;
+  if (options.onNativeLost) {
+    (actor.nativeLostObservers ??= new Set()).add(options.onNativeLost);
+  }
+  actor.references += 1;
 }
 
 export function prepareSqliteWorkerActorContext(

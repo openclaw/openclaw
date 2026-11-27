@@ -22,6 +22,12 @@ export function getDatabaseEngineSelection() {
   return maintenance.getStore() ?? state.selection;
 }
 
+export function usesPostgresDatabaseEngine(
+  selection: DatabaseEngineSelection | undefined,
+): boolean {
+  return selection !== undefined && Object.values(selection.effectiveEngines).includes("postgres");
+}
+
 /** Config-driven operations reuse only their own captured selection, never a running Gateway's. */
 export function getScopedDatabaseEngineSelection() {
   return maintenance.getStore();

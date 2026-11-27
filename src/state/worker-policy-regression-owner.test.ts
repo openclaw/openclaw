@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSqliteFamilyEngines } from "../infra/database-engine/selection-fixture.test-support.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 const fixture = vi.hoisted(() => ({ open: vi.fn(), close: vi.fn() }));
@@ -119,6 +120,39 @@ describe("worker policy owner comparisons", () => {
       }
     },
   );
+  it("reopens the same locator for PostgreSQL after the SQLite lease releases", async () => {
+    const owner = getOpenClawStateWorkerOwner();
+    const sqlite = context(undefined);
+    const mixed = {
+      ...sqlite,
+      databaseEngineSelection: {
+        effectiveEngines: createSqliteFamilyEngines({ state: "postgres" }),
+      },
+    };
+    const store = (await owner.open(sqlite))!;
+    const release = owner.retainOperation(store);
+    try {
+      await expect(owner.open(mixed)).rejects.toThrow("policy changed while its actor is in use");
+      expect(
+        await owner.open({
+          ...sqlite,
+          databaseEngineSelection: { effectiveEngines: createSqliteFamilyEngines() },
+        }),
+      ).toBe(store);
+      expect(fixture.close).not.toHaveBeenCalled();
+    } finally {
+      await release();
+    }
+    try {
+      const reopened = await owner.open(mixed);
+      expect(reopened).toBeDefined();
+      expect(reopened).not.toBe(store);
+      expect(fixture.open).toHaveBeenCalledTimes(2);
+      expect(fixture.close).toHaveBeenCalledOnce();
+    } finally {
+      await owner.close();
+    }
+  });
   it("refuses to join an already-retiring actor held by a live operation", async () => {
     let settleClose!: () => void;
     fixture.close.mockImplementation(

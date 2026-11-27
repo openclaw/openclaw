@@ -5,7 +5,10 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
-import { createPostgresPoolEndpoints, postgresPoolTransferList } from "./postgres-sync/pool.js";
+import {
+  createPostgresWorkerPoolEndpoints,
+  postgresPoolTransferList,
+} from "./postgres-sync/pool.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
 import {
@@ -127,16 +130,21 @@ export function createSqliteWorkerLifecycle({
     const pool = [...slots].filter((slot) => slot.carrierClass === options.carrierClass);
     const maxWorkers =
       options.carrierClass && options.carrierClass !== "agent" ? 1 : limits.maxWorkers;
-    const available = pool.filter(
+    const sameGeneration = pool.filter(
       (slot) =>
         !slot.failed && !slot.retiring && slot.runtimeGeneration === options.runtimeGeneration,
     );
+    // The physical shared host cannot install a PostgreSQL bridge for one logical actor.
+    // Compare the opener's captured selection even when the queue runs outside its scope.
+    const available = options.requiresPostgresPool
+      ? sameGeneration.filter((slot) => slot.postgresPool !== "unsupported")
+      : sameGeneration;
     // A retained updater cannot borrow another generation's carrier or evict its actors.
     // Each pool can lend one extra carrier; further generations must wait for retirement.
     const borrowedGenerationSlot =
       shareWorkers &&
       options.runtimeGeneration !== undefined &&
-      available.length === 0 &&
+      sameGeneration.length === 0 &&
       pool.length >= maxWorkers &&
       !pool.some((slot) => slot.borrowedGenerationSlot);
     if (
@@ -205,7 +213,12 @@ export function createSqliteWorkerLifecycle({
   function createSlot(
     options: Pick<
       PreparedSqliteWorkerOpen,
-      "carrierUrl" | "runtimeGeneration" | "assertCurrent" | "signal" | "carrierClass"
+      | "carrierUrl"
+      | "runtimeGeneration"
+      | "assertCurrent"
+      | "signal"
+      | "carrierClass"
+      | "requiresPostgresPool"
     >,
     borrowedGenerationSlot: boolean,
     createReplyOwner: (slot: Slot) => SqliteWorkerReplyOwner,
@@ -219,7 +232,6 @@ export function createSqliteWorkerLifecycle({
     const databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
     // The Worker constructor inherits this exact synchronous snapshot.
     captureSqliteDatabaseAdmissions(databaseAdmissionCursor);
-    const postgresPool = createPostgresPoolEndpoints();
     // Lean: one carrier per class is a logical endpoint; external databases stay isolated.
     // A broker that captured unqualified native close retires carriers by worker exit.
     const hostedKey =
@@ -229,14 +241,14 @@ export function createSqliteWorkerLifecycle({
     const hosted =
       hostedKey !== "" &&
       explicitSqliteCloseReleasesNativeResources &&
+      !options.requiresPostgresPool &&
       claimsSharedHostSlot(carrierUrl, hostedKey);
+    const postgresPool = hosted
+      ? undefined
+      : createPostgresWorkerPoolEndpoints(options.requiresPostgresPool === true);
     const { worker, exited } = runInDetachedAsyncContext(() => ({
       worker: hosted
-        ? createHostedWorker(
-            carrierUrl,
-            { workerData: { postgresPool }, transferList: postgresPoolTransferList(postgresPool) },
-            { key: hostedKey, ready: false },
-          )
+        ? createHostedWorker(carrierUrl, {}, { key: hostedKey, ready: false })
         : createCpuTrackedWorker(
             carrierUrl,
             {
@@ -259,7 +271,7 @@ export function createSqliteWorkerLifecycle({
     }
     const slot: Slot = {
       carrierClass: options.carrierClass,
-      postgresPoolSent: postgresPool !== undefined,
+      postgresPool: hosted ? "unsupported" : postgresPool ? "sent" : undefined,
       custody: new SqliteWorkerSlotCustody(),
       databaseAdmissionCursor,
       runtimeGeneration: options.runtimeGeneration,

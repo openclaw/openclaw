@@ -86,7 +86,7 @@ export type Job = {
 };
 export type Slot = {
   carrierClass?: "agent" | "shared-state" | "external";
-  postgresPoolSent?: boolean;
+  postgresPool?: "unsupported" | "sent";
   custody: SqliteWorkerSlotCustody;
   databaseAdmissionCursor: SqliteDatabaseAdmissionCursor;
   runtimeGeneration?: RuntimeWorkerGeneration;
@@ -103,6 +103,7 @@ export type Slot = {
   pendingOpens: number;
 };
 export type Actor = {
+  requiresPostgresPool?: boolean;
   nativeLostObservers?: Set<(reason: Error) => void>;
   runtimeGeneration?: RuntimeWorkerGeneration;
   nativeStopped: Promise<void>;
@@ -176,6 +177,7 @@ export type SqliteWorkerStoreOptions = {
 };
 
 export type PreparedSqliteWorkerOpen = {
+  requiresPostgresPool?: boolean;
   /** Agent preparation must not block shared-state intake or unrelated plugin actors. */
   carrierClass?: Slot["carrierClass"];
   /** The caching owner synchronously seals an idle client, or declines reclamation. */
@@ -223,6 +225,7 @@ export type SqliteWorkerClientBinding = Pick<
 
 export type SqliteWorkerOpenCustody = Pick<
   PreparedSqliteWorkerOpen,
+  | "requiresPostgresPool"
   | "maintenanceScope"
   | "cleanupAccess"
   | "retainCleanup"

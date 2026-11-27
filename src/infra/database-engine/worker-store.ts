@@ -8,7 +8,7 @@ import {
 } from "../sqlite-worker-contract.js";
 import {
   isSqliteWorkerStoreAvailable,
-  openSqliteWorkerStore,
+  openSqliteWorkerStoreOnHost,
   runSqliteWorkerStoreOperation,
   runSqliteWorkerStoreWrite,
 } from "../sqlite-worker-store.js";
@@ -38,7 +38,7 @@ class EngineWorkerStore<
       this.reopening ??= (async () => {
         await this.store.close();
         this.store = await observeDatabaseRequest(this.input ? "postgres" : "sqlite", () =>
-          openSqliteWorkerStore<Operations>(this.options),
+          openSqliteWorkerStoreOnHost<Operations>(this.options, this.input !== undefined),
         );
       })().finally(() => {
         this.reopening = undefined;
@@ -95,7 +95,7 @@ export async function openEngineWorkerStore<Operations extends SqliteWorkerOpera
     input: deserialize(serialize(options.input)),
   };
   const store = await observeDatabaseRequest(input ? "postgres" : "sqlite", () =>
-    openSqliteWorkerStore<Operations>(captured),
+    openSqliteWorkerStoreOnHost<Operations>(captured, input !== undefined),
   );
   return new EngineWorkerStore(captured, input, store);
 }

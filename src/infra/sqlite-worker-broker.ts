@@ -5,7 +5,7 @@ import { captureStateDatabaseAccess } from "./gateway-state-owner.js";
 import { runtimeNeedsTypeScriptLoader } from "./runtime-worker-url.js";
 import {
   SQLITE_WORKER_ADMISSION_TIMEOUT_MS as ADMISSION_TIMEOUT_MS,
-  assertSqliteWorkerActorReusable,
+  retainSqliteWorkerActor,
   createSqliteWorkerAdmissionWarning,
   captureSqliteWorkerOpen,
   captureSqliteWorkerAdmissionPaths,
@@ -255,11 +255,7 @@ export class SqliteWorkerBroker {
       );
     }
     if (actor) {
-      assertSqliteWorkerActorReusable(actor, moduleUrl, inputHash, options.stateContext);
-      if (options.onNativeLost) {
-        (actor.nativeLostObservers ??= new Set()).add(options.onNativeLost);
-      }
-      actor.references += 1;
+      retainSqliteWorkerActor(actor, moduleUrl, inputHash, options);
       resumeScheduledMaintenance = suspendSqliteWorkerScheduledMaintenance(actor, maintenanceScope);
     } else {
       const slot = await this.lifecycle.acquireSlot(
@@ -301,6 +297,7 @@ export class SqliteWorkerBroker {
         databasePath,
         stateAccess,
         stateContext: options.stateContext,
+        requiresPostgresPool: options.requiresPostgresPool,
         stateDatabasePath: options.stateDatabasePath,
       };
       this.actors.set(key, actor);

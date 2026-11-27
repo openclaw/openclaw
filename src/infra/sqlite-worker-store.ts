@@ -198,6 +198,22 @@ export function openSqliteWorkerStore<Operations extends SqliteWorkerOperations>
 export function openSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
   options: SqliteWorkerStoreOptions,
 ): Promise<SqliteWorkerStore<Operations> | undefined> {
+  return openSqliteWorkerStoreOnHost<Operations>(options);
+}
+
+/** A plugin family can require PostgreSQL before a process-wide selection is installed. */
+export function openSqliteWorkerStoreOnHost<Operations extends SqliteWorkerOperations>(
+  options: SqliteWorkerStoreOptions & { existingOnly?: false },
+  requiresPostgresPool: boolean,
+): Promise<SqliteWorkerStore<Operations>>;
+export function openSqliteWorkerStoreOnHost<Operations extends SqliteWorkerOperations>(
+  options: SqliteWorkerStoreOptions,
+  requiresPostgresPool?: boolean,
+): Promise<SqliteWorkerStore<Operations> | undefined>;
+export function openSqliteWorkerStoreOnHost<Operations extends SqliteWorkerOperations>(
+  options: SqliteWorkerStoreOptions,
+  requiresPostgresPool?: boolean,
+): Promise<SqliteWorkerStore<Operations> | undefined> {
   if (!isMainThread) {
     return Promise.reject(
       new SqliteWorkerError(
@@ -206,7 +222,9 @@ export function openSqliteWorkerStore<Operations extends SqliteWorkerOperations>
       ),
     );
   }
-  return resolveSqliteWorkerBroker().open<Operations>(options);
+  return resolveSqliteWorkerBroker().open<Operations>(options, undefined, undefined, {
+    requiresPostgresPool,
+  });
 }
 
 /** Admit the canonical per-agent execution group through its retained host owner. */

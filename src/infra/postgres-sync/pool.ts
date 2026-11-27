@@ -10,6 +10,7 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   getDatabaseEngineSelection,
+  usesPostgresDatabaseEngine,
   type DatabaseEngineSelection,
 } from "../database-engine/context.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../runtime-process-url.js";
@@ -174,10 +175,13 @@ export function getPostgresPool(): PostgresPoolEndpoints {
 export function createPostgresPoolEndpoints(
   selection: DatabaseEngineSelection | undefined = getDatabaseEngineSelection(),
 ): PostgresPoolEndpoints | undefined {
-  if (
-    !state.endpoints &&
-    (!selection || !Object.values(selection.effectiveEngines).includes("postgres"))
-  ) {
+  return createPostgresWorkerPoolEndpoints(usesPostgresDatabaseEngine(selection));
+}
+
+export function createPostgresWorkerPoolEndpoints(
+  requiresPool: boolean,
+): PostgresPoolEndpoints | undefined {
+  if (!state.endpoints && !requiresPool) {
     return undefined;
   }
   const pool = getPostgresPool();
