@@ -52,6 +52,24 @@ it.each([NOW, undefined])(
   },
 );
 
+it.each([
+  ["clearing the check", { check: null }],
+  ["removing the agent prompt", { payload: { kind: "none" } }],
+] as const)("restores the natural deadline after %s", async (_name, patch) => {
+  const pacedAtMs = NOW + 2 * 60 * 60_000;
+  const job = makeCronJob({
+    createdAtMs: NOW,
+    check: { script: 'return { nextCheck: "2h" }' },
+    pacing: { max: "4h" },
+    state: { nextRunAtMs: pacedAtMs, pacedNextRunAtMs: pacedAtMs },
+  });
+  await saveCronStore(state.deps.storePath, { version: 1, jobs: [job] });
+
+  const updated = await update(state, job.id, patch);
+  expect(updated.state.nextRunAtMs).toBe(NOW + 60_000);
+  expect(updated.state.pacedNextRunAtMs).toBeUndefined();
+});
+
 it("requires clearing pacing when converting a recurring job to a one-shot", async () => {
   const job = await add(state, {
     name: "paced job",

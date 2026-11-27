@@ -62,7 +62,8 @@ it.skipIf(process.platform !== "win32")(
             sessionTarget: "main",
             wakeMode: "next-heartbeat",
             // Exercise receipt ownership without waiting for a session to adopt a reminder.
-            payload: { kind: "script", script: "return {};", toolsAllow: [] },
+            payload: { kind: "none", toolsAllow: [] },
+            check: { script: "return {};" },
           },
           { signal },
         );

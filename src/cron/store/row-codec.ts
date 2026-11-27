@@ -373,14 +373,7 @@ export function replaceCronRows(
     }
     // Reconcile removed jobs only; deleting the partition first rewrites every
     // unrelated row and defeats SQLite's row-owned cron storage boundary.
-    revokeCronJobStandingGrants(db, row.job_id);
-    executeSqliteQuerySync(
-      db,
-      getCronStoreKysely(db)
-        .deleteFrom("cron_jobs")
-        .where("store_key", "=", storeKey)
-        .where("job_id", "=", row.job_id),
-    );
+    deleteCronJobConfigRowInDatabase(db, storeKey, row.job_id);
   }
   return { existingJobIds, jobs: normalizedJobs, legacyAuthorityJobIds };
 }
@@ -594,7 +587,6 @@ export function deleteCronJobRowInDatabase(
   storeKey: string,
   jobId: string,
 ): void {
-  revokeCronJobStandingGrants(db, jobId);
   executeSqliteQuerySync(
     db,
     getCronStoreKysely(db)
@@ -602,6 +594,15 @@ export function deleteCronJobRowInDatabase(
       .where("store_key", "=", storeKey)
       .where("job_id", "=", jobId),
   );
+  deleteCronJobConfigRowInDatabase(db, storeKey, jobId);
+}
+
+export function deleteCronJobConfigRowInDatabase(
+  db: EngineConnection,
+  storeKey: string,
+  jobId: string,
+): void {
+  revokeCronJobStandingGrants(db, jobId);
   executeSqliteQuerySync(
     db,
     getCronStoreKysely(db)

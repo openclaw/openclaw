@@ -32,7 +32,8 @@ it("keeps the edited input and focus while its form and validation update", asyn
 
 it("publishes refreshed runtime facts from the mutable selected job", async () => {
   const job = createCronViewJob("job-runtime", {
-    trigger: { script: "json({ fire: false })" },
+    payload: { kind: "none" },
+    check: { script: "return {}" },
     state: { triggerEvalCount: 1 },
   });
   const [props, setProps] = createSignal(

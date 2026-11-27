@@ -291,7 +291,8 @@ export function planCronJobMutation(
           mutation.patch.schedule !== undefined ||
           options.streamSandbox !== undefined ||
           mutation.patch.enabled !== undefined ||
-          "trigger" in mutation.patch ||
+          "check" in mutation.patch ||
+          previousJob.payload.kind !== nextJob.payload.kind ||
           "pacing" in mutation.patch,
         scheduleChanged: mutation.patch.schedule !== undefined,
         explicitTriggerState: mutation.patch.state,

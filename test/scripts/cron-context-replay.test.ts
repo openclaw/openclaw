@@ -170,13 +170,16 @@ describe("cron context replay fixtures", () => {
     });
   });
 
-  it("replaces script and system event bodies but keeps their tool caps", () => {
+  it("replaces check and system event bodies but keeps their tool caps", () => {
     const toolsAllow = ["write", "edit", "exec", "process", "web_search", "message"];
-    for (const payload of [
-      { kind: "script", script: "return 'private script'", toolsAllow },
-      { kind: "systemEvent", text: "private text", toolsAllow },
+    for (const definition of [
+      {
+        check: { script: "return { post: 'private script' }" },
+        payload: { kind: "none", toolsAllow },
+      },
+      { payload: { kind: "systemEvent", text: "private text", toolsAllow } },
     ] as const) {
-      const job = storedJob({ payload });
+      const job = storedJob(definition);
       const fixture = anonymize(job, "ops", 1);
       expect(JSON.stringify(fixture)).not.toMatch(/private/);
       expect(fixture.payload.kind).toBe(job.payload.kind);
@@ -185,7 +188,7 @@ describe("cron context replay fixtures", () => {
   });
 
   it.each([
-    { trigger: { script: "return 'private condition'" } },
+    { check: { script: "return { wake: 'private condition' }" } },
     {
       runtimeAuthority: {
         version: 1,

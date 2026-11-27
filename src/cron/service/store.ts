@@ -14,6 +14,7 @@ import {
   noteCronJobsStoreCommit,
   loadCronJobsStoreWithConfigJobsByKey,
   saveCronJobsStoreWithRevisionByKey,
+  type LoadedCronStore,
   type QuarantinedCronConfigJob,
 } from "../store.js";
 import {
@@ -330,7 +331,7 @@ export async function ensureLoaded(
     quarantinedConfigJobs.sort((left, right) => left.sourceIndex - right.sourceIndex);
     state.pendingQuarantineConfigJobs = quarantinedConfigJobs;
     try {
-      if (await persistQuarantinedJobs(state, state.store)) {
+      if (await persistQuarantinedJobs(state, state.store, loaded)) {
         state.deps.log.warn(
           {
             storePath: state.deps.storePath,
@@ -381,12 +382,17 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
   );
 }
 
-/** Persists quarantine and the surviving rows in one SQLite transaction. */
+/** Moves malformed rows to quarantine without rewriting jobs held for Doctor. */
 async function persistQuarantinedJobs(
   state: CronServiceState,
   store: CronStoreFile,
+  { jobsFingerprint, runtimeFingerprint }: LoadedCronStore,
 ): Promise<boolean> {
-  const quarantine = { entries: state.pendingQuarantineConfigJobs, nowMs: state.deps.nowMs() };
+  const quarantine = {
+    entries: state.pendingQuarantineConfigJobs,
+    nowMs: state.deps.nowMs(),
+    source: { jobsFingerprint, runtimeFingerprint },
+  };
   try {
     const committed = await saveCronJobsStoreWithRevisionByKey(state.deps.storeKey, store, {
       quarantine,

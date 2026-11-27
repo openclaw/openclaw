@@ -5,7 +5,7 @@ import type { CronJob } from "../src/cron/types.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 
 it(
-  "cron edit validates locally and preserves trigger.once across Gateway restart",
+  "cron edit validates locally and preserves check.once across Gateway restart",
   { timeout: 180_000 },
   async ({ onTestFinished }) => {
     const instance = await createOpenClawTestInstance({
@@ -24,14 +24,14 @@ it(
     const replacementScriptPath = path.join(instance.homeDir, "replacement-trigger.js");
     const oversizedScriptPath = path.join(instance.homeDir, "oversized-trigger.js");
     await Promise.all([
-      fs.writeFile(initialScriptPath, "return { fire: false };", "utf8"),
-      fs.writeFile(replacementScriptPath, "return { fire: true };", "utf8"),
+      fs.writeFile(initialScriptPath, "return {};", "utf8"),
+      fs.writeFile(replacementScriptPath, "return { post: 'changed' };", "utf8"),
       fs.writeFile(oversizedScriptPath, "x".repeat(65_537), "utf8"),
     ]);
 
-    const invalid = await cron("edit", "not-yet-created", "--trigger-script", oversizedScriptPath);
+    const invalid = await cron("edit", "not-yet-created", "--check-script", oversizedScriptPath);
     expect(invalid.code).toBe(1);
-    expect(invalid.stderr).toContain("Trigger script exceeds 65536 bytes");
+    expect(invalid.stderr).toContain("Check script exceeds 65536 bytes");
     expect(invalid.stderr).not.toContain("ECONNREFUSED");
 
     await instance.startGateway();
@@ -46,23 +46,21 @@ it(
       "trigger-preservation",
       "--every",
       "1h",
-      "--system-event",
-      "check trigger",
       "--session",
       "main",
-      "--trigger-script",
+      "--check-script",
       initialScriptPath,
-      "--trigger-once",
+      "--check-once",
       "--json",
     );
 
-    const edited = await cron("edit", addedJob.id, "--trigger-script", replacementScriptPath);
+    const edited = await cron("edit", addedJob.id, "--check-script", replacementScriptPath);
     expect(edited.code, edited.stderr).toBe(0);
 
     await instance.stopGateway();
     await instance.startGateway();
-    expect((await cronJson<CronJob>("get", addedJob.id, "--json")).trigger).toEqual({
-      script: "return { fire: true };",
+    expect((await cronJson<CronJob>("get", addedJob.id, "--json")).check).toEqual({
+      script: "return { post: 'changed' };",
       once: true,
     });
   },

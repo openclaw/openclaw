@@ -928,56 +928,55 @@ describe("gateway server cron", () => {
     }
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   }, 45_000);
-  test("rejects malformed cron payload and trigger scripts before persistence", async () => {
+  test("rejects malformed cron check scripts before persistence", async () => {
     testState.cronEnabled = true;
     const cronState = await createDirectCronState();
+    const invalidCheck = { script: "const x = ;" };
+    const expectedError =
+      "cron check script has a syntax error: Unexpected token (line 1, column 10)";
 
     const response = await cronState.addJob("malformed script", {
       sessionTarget: "isolated",
       wakeMode: "now",
-      payload: { kind: "script", script: "const x = ;" },
+      payload: { kind: "none" },
+      check: invalidCheck,
     });
 
     expect(response.ok).toBe(false);
     expect(response.error?.code).toBe("INVALID_REQUEST");
-    expect(response.error?.message).toContain(
-      "cron script payload has a syntax error: Unexpected token (line 1, column 10)",
-    );
+    expect(response.error?.message).toContain(expectedError);
 
-    const triggerInput = makeCronJob("condition watcher", {
+    const watcher = makeCronJob("condition watcher", {
       wakeMode: "now",
-      payload: { kind: "systemEvent", text: "changed" },
+      payload: { kind: "agentTurn", message: "Report the change" },
     });
-    const invalidTrigger = { script: "const x = ;" };
-    const expectedTriggerError =
-      "cron trigger script has a syntax error: Unexpected token (line 1, column 10)";
     const invalidCreate = await cronState.request("cron.add", {
-      ...triggerInput,
-      trigger: invalidTrigger,
+      ...watcher,
+      check: invalidCheck,
     });
 
     expect(invalidCreate.ok).toBe(false);
     expect(invalidCreate.error).toMatchObject({
       code: "INVALID_REQUEST",
-      message: expect.stringContaining(expectedTriggerError),
+      message: expect.stringContaining(expectedError),
     });
     expect((await loadCronStore(cronState.storePath)).jobs).toEqual([]);
 
-    const validTrigger = { script: "return { fire: true }" };
-    const created = await cronState.request("cron.add", { ...triggerInput, trigger: validTrigger });
+    const validCheck = { script: "return { wake: 'changed' }" };
+    const created = await cronState.request("cron.add", { ...watcher, check: validCheck });
     const jobId = expectCronJobIdFromResponse(created);
     const invalidUpdate = await cronState.request("cron.update", {
       id: jobId,
-      patch: { trigger: invalidTrigger },
+      patch: { check: invalidCheck },
     });
 
     expect(invalidUpdate.ok).toBe(false);
     expect(invalidUpdate.error).toMatchObject({
       code: "INVALID_REQUEST",
-      message: expect.stringContaining(expectedTriggerError),
+      message: expect.stringContaining(expectedError),
     });
     expect((await loadCronStore(cronState.storePath)).jobs).toEqual([
-      expect.objectContaining({ id: jobId, trigger: validTrigger }),
+      expect.objectContaining({ id: jobId, check: validCheck }),
     ]);
   });
 

@@ -70,11 +70,14 @@ describe("cron service store seam coverage", () => {
     expect(read).toHaveBeenCalledTimes(2);
   });
 
-  it("quarantines malformed SQLite rows atomically without creating JSON state", async () => {
+  it("quarantines malformed SQLite rows and retains legacy checks for Doctor", async () => {
     const { storePath } = await makeStorePath();
     const malformed = createReloadCronJob({ id: "malformed-sqlite-row" });
     const legacyValid = createReloadCronJob({ id: "legacy-valid" });
-    const legacyValidTrigger = createReloadCronJob({ id: "legacy-valid-trigger" });
+    const legacyValidTrigger = createReloadCronJob({
+      id: "legacy-valid-trigger",
+      state: { triggerEvalCount: 3 },
+    });
     const legacyInvalidTrigger = createReloadCronJob({ id: "legacy-invalid-trigger" });
     const legacyMissingPayload = createReloadCronJob({ id: "legacy-missing-payload" });
     const invalidProjection = {
@@ -119,17 +122,25 @@ describe("cron service store seam coverage", () => {
       "UPDATE cron_jobs SET job_json = json_remove(job_json, '$.payload') WHERE job_id = ?",
     ).run(legacyMissingPayload.id);
     const state = createStoreTestState(storePath);
+    const readLegacyRows = () =>
+      db
+        .prepare(
+          "SELECT job_id, job_json, state_json FROM cron_jobs WHERE store_key = ? AND job_id IN (?, ?) ORDER BY job_id",
+        )
+        .all(cronStoreKey(storePath), legacyValidTrigger.id, legacyInvalidTrigger.id);
+    const before = readLegacyRows();
+    expect(before).toHaveLength(2);
 
     await ensureLoaded(state);
 
-    const expectedActiveJobIds = [legacyValid.id, legacyValidTrigger.id, surviving.id];
+    expect(readLegacyRows()).toEqual(before);
+    const expectedActiveJobIds = [legacyValid.id, surviving.id];
     expect(state.store?.jobs.map((job) => job.id)).toEqual(expectedActiveJobIds);
     expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual(
       expectedActiveJobIds,
     );
     expect(await cronStoreModule.loadCronQuarantinedJobs(storePath)).toMatchObject([
       { sourceIndex: 0, reason: "invalid-schedule", job: { id: malformed.id } },
-      { sourceIndex: 3, reason: "invalid-trigger", job: { id: legacyInvalidTrigger.id } },
       { sourceIndex: 4, reason: "missing-payload", job: { id: legacyMissingPayload.id } },
       { sourceIndex: 6, reason: "invalid-payload", job: { id: invalidProjection.id } },
     ]);
@@ -223,7 +234,7 @@ describe("cron service store seam coverage", () => {
     ]);
   });
 
-  it("retains malformed rows and their quarantine until a load repair commits", async () => {
+  it("retries quarantine from a fresh load if the stored row order changes", async () => {
     const { storePath } = await makeStorePath();
     const malformed = createReloadCronJob({ id: "quarantine-retry-job" });
     const surviving = createReloadCronJob({
@@ -244,8 +255,15 @@ describe("cron service store seam coverage", () => {
     const before = readRows();
     const onEvent = vi.fn();
     const state = createStoreTestState(storePath, onEvent);
-    vi.spyOn(cronStoreModule, "saveCronJobsStoreWithRevisionByKey").mockRejectedValueOnce(
-      new Error("quarantine unavailable"),
+    const save = cronStoreModule.saveCronJobsStoreWithRevisionByKey;
+    vi.spyOn(cronStoreModule, "saveCronJobsStoreWithRevisionByKey").mockImplementationOnce(
+      (...args) => {
+        db.prepare("UPDATE cron_jobs SET sort_order = -1 WHERE store_key = ? AND job_id = ?").run(
+          cronStoreKey(storePath),
+          surviving.id,
+        );
+        return save(...args);
+      },
     );
 
     await ensureLoaded(state);
