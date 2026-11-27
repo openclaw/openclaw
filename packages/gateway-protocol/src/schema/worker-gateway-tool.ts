@@ -116,6 +116,11 @@ export const WorkerToolSurfaceSchema = closedObject({
         executionMode: Type.Optional(Type.Enum(["sequential", "parallel"])),
         catalogMode: Type.Optional(Type.Literal("direct-only")),
         async: Type.Optional(Type.Literal(false)),
+        // Completed-effect budget opt-in: true spends one unit per successful
+        // completion (default budget), a number sets that tool's per-input cap.
+        sideEffect: Type.Optional(
+          Type.Union([Type.Literal(true), Type.Integer({ minimum: 1, maximum: 64 })]),
+        ),
         // Tool-owned repeat-guard exemption: always, or only for the listed `action` values.
         repeatable: Type.Optional(
           Type.Union([

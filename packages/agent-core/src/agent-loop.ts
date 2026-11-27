@@ -56,12 +56,20 @@ import {
 } from "./tool-call-outcome.js";
 import { captureAgentToolInputScope } from "./tool-execution-context.js";
 import {
+  SIDE_EFFECT_BUDGET_CODE,
   TOOL_REPEAT_LIMIT_CODE,
+  createSideEffectBudgetState,
+  createSideEffectBudgetStopResult,
+  formatSideEffectBudgetStopMessage,
   createToolRepeatState,
   createToolRepeatStopResult,
   formatToolRepeatStopMessage,
+  observeSideEffectBudget,
   observeToolRepeat,
+  resetSideEffectBudgetState,
   resetToolRepeatState,
+  type SideEffectBudgetState,
+  type SideEffectVerdict,
   type ToolRepeatState,
   type ToolRepeatVerdict,
 } from "./tool-repeat-guard.js";
@@ -77,6 +85,7 @@ import type {
   AgentLoopTurnUpdate,
   AgentMessage,
   AgentToolCall,
+  AgentToolResult,
   StreamFn,
 } from "./types.js";
 
@@ -95,14 +104,16 @@ export async function runAgentLoop(
 ): Promise<AgentMessage[]> {
   const newMessages: AgentMessage[] = [];
   const repeatState = config.toolRepeatState ?? createToolRepeatState();
+  const budgetState = config.sideEffectBudgetState ?? createSideEffectBudgetState();
   const state = { context: { ...context, messages: [...context.messages] } };
   const promptContext = prompts.filter(isOpenClawSystemUpdateMessage);
   const inputPrompts = prompts.filter((message) => !isOpenClawSystemUpdateMessage(message));
   await emit({ type: "agent_start" });
   await emit({ type: "turn_start" });
-  await commitInputMessages(inputPrompts, state.context, config, emit, newMessages, () =>
-    resetToolRepeatState(repeatState),
-  );
+  await commitInputMessages(inputPrompts, state.context, config, emit, newMessages, () => {
+    resetToolRepeatState(repeatState);
+    resetSideEffectBudgetState(budgetState);
+  });
   if (inputPrompts.length > 0 && newMessages.length === 0) {
     // A drained queue batch can be cancelled while turn_start listeners settle.
     // Close without a provider call so cancelled input cannot become an empty continuation.
@@ -112,7 +123,7 @@ export async function runAgentLoop(
   return runLoop(
     state,
     newMessages,
-    { ...config, toolRepeatState: repeatState },
+    { ...config, toolRepeatState: repeatState, sideEffectBudgetState: budgetState },
     signal,
     emit,
     streamFn,
@@ -163,6 +174,7 @@ async function runLoop(
   let turnOpen = true;
   let turnTainted = isActiveTurnTainted(state.context.messages);
   const toolRepeatState = initialConfig.toolRepeatState ?? createToolRepeatState();
+  const sideEffectBudgetState = initialConfig.sideEffectBudgetState ?? createSideEffectBudgetState();
   let pendingMessages: AgentMessage[] = [];
   const stopIfAborted = async (): Promise<boolean> => {
     if (!signal?.aborted) {
@@ -203,6 +215,7 @@ async function runLoop(
     return commitInputMessages(messagesToInject, state.context, config, emit, newMessages, () => {
       turnTainted = false;
       resetToolRepeatState(toolRepeatState);
+      resetSideEffectBudgetState(sideEffectBudgetState);
     });
   };
   while (true) {
@@ -296,6 +309,7 @@ async function runLoop(
             executionSignal,
             toolEmit,
             toolRepeatState,
+            sideEffectBudgetState,
             toolPlan,
             toolCalls,
             scheduling,
@@ -326,6 +340,7 @@ async function runLoop(
               signal,
               emit,
               toolRepeatState,
+              sideEffectBudgetState,
               toolPlan,
               remainingToolCalls,
               undefined,
@@ -374,10 +389,13 @@ async function runLoop(
         return newMessages;
       }
       if (executedToolBatch?.repeatStop) {
-        const reason = formatToolRepeatStopMessage(executedToolBatch.repeatStop);
+        const budgetVerdict = "completedCount" in executedToolBatch.repeatStop ? executedToolBatch.repeatStop : undefined;
+        const reason = budgetVerdict
+          ? formatSideEffectBudgetStopMessage(budgetVerdict)
+          : formatToolRepeatStopMessage(executedToolBatch.repeatStop);
         const terminalMessage = {
           ...createFailureMessage(config.model, new Error(reason), false),
-          errorCode: TOOL_REPEAT_LIMIT_CODE,
+          errorCode: budgetVerdict ? SIDE_EFFECT_BUDGET_CODE : TOOL_REPEAT_LIMIT_CODE,
           content: [{ type: "text" as const, text: reason }],
         };
         state.context.messages.push(terminalMessage);
@@ -475,6 +493,7 @@ async function executeToolCalls(
   signal: AbortSignal | undefined,
   emit: AgentEventSink,
   toolRepeatState: ToolRepeatState,
+  sideEffectBudgetState: SideEffectBudgetState,
   toolPlan: ToolPlanState,
   toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall"),
   scheduling?: AsyncToolBatchScheduling,
@@ -494,6 +513,7 @@ async function executeToolCalls(
     signal,
     emit,
     resolved: new Map(),
+    sideEffectBudgetState,
     onParallelStarted: scheduling?.onParallelStarted,
     onTerminalLoop: scheduling?.onTerminalLoop,
     hasUnobservedAsyncToolResults,
@@ -524,6 +544,11 @@ async function executeToolCalls(
       }
     }
   }
+  // Completed-effect budget admission now runs per call at the execution
+  // boundary inside executeToolCallGroups/prepareToolCallEntry, so a batch
+  // containing several calls to the same opted-in tool cannot all see a spent
+  // or unspent count together. Only an already-spent budget stops the whole
+  // batch here; calls admitted before the budget was spent settle normally.
   let hasSequentialToolCall = false;
   if (config.toolExecution !== "sequential") {
     for (const toolCall of toolCalls) {
@@ -548,7 +573,8 @@ async function executeToolCalls(
 async function completeToolRepeatStopBatch(
   batch: ToolBatchContext,
   toolCalls: AgentToolCall[],
-  verdict: ToolRepeatVerdict,
+  verdict: ToolRepeatVerdict | (SideEffectVerdict & { count: number }),
+  stopResult?: AgentToolResult<unknown>,
 ): Promise<ExecutedToolCallBatch> {
   // Stop sampling now; results still publish after earlier streamed work.
   batch.onTerminalLoop?.();
@@ -561,7 +587,7 @@ async function completeToolRepeatStopBatch(
       batch,
       {
         toolCall,
-        result: createToolRepeatStopResult(verdict),
+        result: stopResult ?? createToolRepeatStopResult(verdict),
         isError: true,
         executionStarted: false,
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
@@ -588,6 +614,7 @@ export type ToolBatchContext = {
   emit: AgentEventSink;
   resolved: Map<AgentToolCall, ResolvedToolCallOutcome>;
   repeatNotes?: ToolRepeatVerdict[];
+  sideEffectBudgetState?: SideEffectBudgetState;
   onParallelStarted?: () => void;
   onTerminalLoop?: () => void;
   hasUnobservedAsyncToolResults: boolean;
@@ -606,6 +633,10 @@ async function executeToolCallGroups(
   let steeringMessages: AgentMessage[] = [];
   let cursor = 0;
   let fatal: ExecutedToolCallBatch["fatal"];
+  // Per-call budget admission stops individual calls, so unlike the old
+  // batch-level pre-check it must still surface a terminal verdict when every
+  // call in the group was refused; otherwise the loop keeps sampling.
+  let sideEffectStopVerdict: SideEffectVerdict | undefined;
 
   while (cursor < toolCalls.length) {
     if (sequential && batch.toolPlan.executionStarted && !batch.signal?.aborted) {
@@ -641,6 +672,7 @@ async function executeToolCallGroups(
           const entry = await prepareToolCallEntry(batch, toolCall);
           entries.push(entry);
           if (!("kind" in entry)) {
+            sideEffectStopVerdict ??= budgetStopVerdictForToolCall(batch, entry);
             await emitToolExecutionEnd(entry, batch);
           }
           if (sequential || batch.signal?.aborted) {
@@ -768,11 +800,45 @@ async function executeToolCallGroups(
     throw mergeToolExecutionFailure(fatal, error).error;
   }
 
+  const termination = resolveToolBatchTermination(finalizedCalls);
+  if (sideEffectStopVerdict && termination.terminate) {
+    batch.onTerminalLoop?.();
+    return {
+      messages,
+      steeringMessages,
+      ...termination,
+      repeatStop: { ...sideEffectStopVerdict, count: sideEffectStopVerdict.completedCount },
+      ...(fatal ? { fatal } : {}),
+    };
+  }
   return {
     messages,
     steeringMessages,
-    ...resolveToolBatchTermination(finalizedCalls),
+    ...termination,
     ...(fatal ? { fatal } : {}),
+  };
+}
+
+/**
+ * Returns the side-effect budget verdict for a finalized call that was refused
+ * before execution because its tool's completed-effect budget was spent.
+ */
+function budgetStopVerdictForToolCall(
+  batch: ToolBatchContext,
+  finalized: FinalizedToolCallOutcome,
+): SideEffectVerdict | undefined {
+  if (!batch.sideEffectBudgetState || finalized.executionStarted) {
+    return undefined;
+  }
+  const block = finalized.result.details as { deniedReason?: unknown } | undefined;
+  if (block?.deniedReason !== "side_effect_budget") {
+    return undefined;
+  }
+  return observeSideEffectBudget(batch.sideEffectBudgetState, finalized.toolCall, undefined) ?? {
+    kind: "stop",
+    toolCallId: finalized.toolCall.id,
+    toolName: finalized.toolCall.name,
+    completedCount: batch.sideEffectBudgetState.counts.get(finalized.toolCall.name) ?? 0,
   };
 }
 
@@ -783,6 +849,33 @@ async function prepareToolCallEntry(
   toolCall: AgentToolCall,
 ): Promise<FinalizedToolCallEntry> {
   const hideFromChannelProgress = hidesToolCallFromChannelProgress(batch, toolCall);
+  // Completed-effect budget admission happens per call immediately before this
+  // call starts, so several calls to the same opted-in tool in one assistant
+  // message cannot all pass a batch-level pre-check and exceed the cap.
+  if (batch.sideEffectBudgetState) {
+    const resolution = await resolveToolCallTool(batch, toolCall);
+    const budgetVerdict = observeSideEffectBudget(
+      batch.sideEffectBudgetState,
+      toolCall,
+      resolution.kind === "resolved" ? resolution.tool : undefined,
+    );
+    if (budgetVerdict) {
+      batch.config.onSideEffectBudget?.(budgetVerdict);
+      const stopResult = createSideEffectBudgetStopResult(budgetVerdict);
+      await emitToolExecutionStart(batch, toolCall, hideFromChannelProgress);
+      return await finalizeToolCallOutcome(
+        batch,
+        {
+          toolCall,
+          result: stopResult,
+          isError: true,
+          executionStarted: false,
+          ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+        },
+        toolCall.arguments,
+      );
+    }
+  }
   await emitToolExecutionStart(batch, toolCall, hideFromChannelProgress);
   const preparation = await prepareToolCall(batch, toolCall);
   if (preparation.kind === "immediate") {

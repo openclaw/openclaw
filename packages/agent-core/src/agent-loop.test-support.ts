@@ -111,8 +111,15 @@ export function user(content = "run", timestamp = 1): UserMessage {
   return { role: "user", content, timestamp };
 }
 
-export function makeCall(name: string, id = name): AgentTypes.AgentToolCall {
-  return { type: "toolCall", id, name, arguments: {} };
+export function makeCall(
+  name: string,
+  argsOrId?: Record<string, unknown> | string,
+  id?: string,
+): AgentTypes.AgentToolCall {
+  if (typeof argsOrId === "string") {
+    return { type: "toolCall", id: argsOrId, name, arguments: {} };
+  }
+  return { type: "toolCall", id: id ?? name, name, arguments: argsOrId ?? {} };
 }
 
 export function startToolCalls(

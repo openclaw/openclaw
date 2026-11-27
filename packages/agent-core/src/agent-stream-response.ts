@@ -29,7 +29,7 @@ import { createStreamSteering } from "./stream-steering.js";
 import { mergeToolExecutionFailure } from "./tool-batch-completion.js";
 import type { FinalizedToolCallOutcome } from "./tool-call-outcome.js";
 import { resolveAgentAssistantTurnId } from "./tool-execution-context.js";
-import type { ToolRepeatVerdict } from "./tool-repeat-guard.js";
+import type { SideEffectVerdict, ToolRepeatVerdict } from "./tool-repeat-guard.js";
 import { withToolResultContentSource } from "./turn-taint.js";
 import type {
   AgentContext,
@@ -56,8 +56,8 @@ export type ExecutedToolCallBatch = {
   terminalToolCallIds: string[];
   steeringMessages: AgentMessage[];
   terminate: boolean;
-  /** The repeat guard capped this batch; the turn ends with `tool_repeat_limit`. */
-  repeatStop?: ToolRepeatVerdict;
+  /** The repeat guard or completed-effect budget capped this batch; the turn ends. */
+  repeatStop?: ToolRepeatVerdict | (SideEffectVerdict & { count: number });
   fatal?: { error: unknown };
 };
 

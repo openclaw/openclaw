@@ -23,7 +23,12 @@ import { PendingMessageQueue } from "./pending-message-queue.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import { ToolInterruptions } from "./tool-interruption.js";
-import { createToolRepeatState, type ToolRepeatState } from "./tool-repeat-guard.js";
+import {
+  createSideEffectBudgetState,
+  createToolRepeatState,
+  type SideEffectBudgetState,
+  type ToolRepeatState,
+} from "./tool-repeat-guard.js";
 import {
   appendInterruptedTurnMessage,
   createFailureMessage,
@@ -142,6 +147,7 @@ export class Agent {
   private readonly steeringQueue: PendingMessageQueue;
   private readonly followUpQueue: PendingMessageQueue;
   private toolRepeatState: ToolRepeatState = createToolRepeatState();
+  private sideEffectBudgetState: SideEffectBudgetState = createSideEffectBudgetState();
   private readonly toolInterruptions = new ToolInterruptions();
 
   public convertToLlm: NonNullable<AgentOptions["convertToLlm"]>;
@@ -353,6 +359,7 @@ export class Agent {
     this.mutableState.pendingToolCalls = new Set<string>();
     this.mutableState.errorMessage = undefined;
     this.toolRepeatState = createToolRepeatState();
+    this.sideEffectBudgetState = createSideEffectBudgetState();
     this.clearAllQueues();
   }
 
@@ -531,6 +538,7 @@ export class Agent {
       onToolRepeat: getInternalToolRepeatPolicy(this)?.onVerdict,
       completesToolTurn: getInternalToolTurnCompletion(this),
       toolRepeatState: this.toolRepeatState,
+      sideEffectBudgetState: this.sideEffectBudgetState,
       resolveDeferredTool: this.resolveDeferredTool,
       afterToolCall: this.afterToolCall,
       afterToolOutcome: this.afterToolOutcome,
