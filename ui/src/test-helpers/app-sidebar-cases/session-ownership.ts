@@ -203,7 +203,7 @@ describe("AppSidebar session ownership", () => {
 
   it.each(["truncated agents"])(
     "hides session-row owner avatars for one human with %s",
-    async (scenario) => {
+    async () => {
       const gateway = createGatewayHarness({} as GatewayBrowserClient);
       gateway.publish({
         selfUser: {
@@ -224,16 +224,9 @@ describe("AppSidebar session ownership", () => {
         row.participantCount = 1;
       }
       const ada = { type: "human" as const, id: "profile-ada", label: "Ada" };
-      const agent = { type: "agent" as const, id: "research", label: "Research" };
       result.owners = [ada];
-      if (scenario === "agent owner") {
-        result.owners.push(agent);
-        setEffectiveOwner(result.sessions[2]!, agent);
-      }
-      if (scenario === "agent participant" || scenario === "truncated agents") {
-        result.sessions[1]!.participants = [{ identity: { type: "agent", id: "research" } }];
-        result.sessions[1]!.participantCount = scenario === "truncated agents" ? 5 : 1;
-      }
+      result.sessions[1]!.participants = [{ identity: { type: "agent", id: "research" } }];
+      result.sessions[1]!.participantCount = 5;
       const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
       harness.publishList({ result, agentId: "main" });
       await sidebar.updateComplete;
@@ -292,7 +285,7 @@ describe("AppSidebar session ownership", () => {
 
     let menu = await openSessionMenu(sidebar);
     expect(await sessionMenuChoice(menu, "sort:people")).toBeNull();
-    expect((await sessionMenuChoice(menu, "sort:created"))?.getAttribute("aria-selected")).toBe(
+    expect((await sessionMenuChoice(menu, "sort:updated"))?.getAttribute("aria-selected")).toBe(
       "true",
     );
     sidebar.dismissTransientMenus();
@@ -361,7 +354,7 @@ describe("AppSidebar session ownership", () => {
     );
   });
 
-  it("groups sessions by owner based on the live session-owner roster", async () => {
+  it("keeps owner sections tied to readable rows when the owner facet changes", async () => {
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
     gateway.publish({
       hello: sessionSharingHello(false),
@@ -442,12 +435,11 @@ describe("AppSidebar session ownership", () => {
     result.owners = [{ type: "human", id: "profile-zoe", label: "Zoe" }];
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
-    expect(ownerSections()).toHaveLength(0);
+    expect(ownerSections()).toHaveLength(2);
     menu = await openSessionMenu(sidebar);
-    expect(await sessionMenuChoice(menu, "grouping:person")).toBeNull();
-    expect(
-      (await sessionMenuChoice(menu, "grouping:category"))?.getAttribute("aria-selected"),
-    ).toBe("true");
+    expect((await sessionMenuChoice(menu, "grouping:person"))?.getAttribute("aria-selected")).toBe(
+      "true",
+    );
     sidebar.dismissTransientMenus();
 
     result.owners = [

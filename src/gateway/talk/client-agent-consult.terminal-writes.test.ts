@@ -17,7 +17,15 @@ let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let config: OpenClawConfig;
 beforeAll(async () => {
   state = await createOpenClawTestState({ scenario: "minimal", label: "talk-terminal-writes" });
-  config = { agents: { defaults: { workspace: state.workspaceDir, skipBootstrap: true } } };
+  config = {
+    agents: {
+      defaults: {
+        model: "anthropic/claude-opus-4-6",
+        workspace: state.workspaceDir,
+        skipBootstrap: true,
+      },
+    },
+  };
   await state.writeConfig(config);
 });
 afterEach(() => core.mockReset());

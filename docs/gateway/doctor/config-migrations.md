@@ -37,6 +37,9 @@ line-comment and trailing-comma support as model loading. It keeps references
 backed by those local providers and repairs references to unavailable providers.
 This repair leaves `models.json` unchanged, preserving its comments. Unreadable
 or malformed catalogs still produce a warning and leave affected references intact.
+In `models.mode: "replace"`, only explicit providers count as catalog providers;
+model refs routed through an enabled CLI backend also remain available. Doctor
+preserves those runtime pins and fallbacks in default and per-agent scopes.
 
 ## Plugin prompt-modification permission
 
@@ -996,10 +999,13 @@ into model rows.
 
 Doctor reports model rows under `models.providers.*.models` that still pin
 `maxTokens` to 4096 or 8192 as information (`core/doctor/legacy-output-cap`), grouped
-per provider, when removing the value would raise the cap. It skips providers with a
+per provider, when the context-sized default is higher than the saved value. This
+is not a prediction that removing the value will increase the cap: a provider
+catalog limit may keep it unchanged or lower it. Doctor skips providers with a
 provider-level `maxTokens` and Mistral, whose 8192 cap is intentional. A saved cap may
-be deliberate, so Doctor proposes no repair and never rewrites it: remove `maxTokens`
-from those rows to use the catalog limit or the new default.
+be deliberate, so Doctor proposes no repair and never rewrites it. Remove
+`maxTokens` only if you want the catalog limit or default instead; keep the saved
+value if your server needs it.
 
 ## Missing plugins during migration
 
@@ -1154,7 +1160,10 @@ The Codex plugin's `codex-native-assignment-repair` runs during
 `openclaw doctor --fix` and update-time Doctor, after session repair. It collapses
 proven duplicate assignments for the same child and native turn and removes
 assignments whose requester session, lifecycle, or connection is provably
-obsolete. Compatible aliases retain their receipt and recorded-result metadata;
+obsolete. An assignment is kept only when its lifecycle revision equals the
+requester's, including legacy owners where both are absent. A revision on only
+one side, such as after a reset that kept the session ID, cannot be recovered
+and is removed. Compatible aliases retain their receipt and recorded-result metadata;
 conflicting facts produce a recoverable warning without changing the row.
 Separate pending turns of one child are preserved. Repairs use the
 existing SQLite backup and exact-row compare-and-apply owner; no database schema
@@ -1337,7 +1346,7 @@ against the current SQLite owners before the import can rename profiles.
 
     Doctor preserves model choices that a provider still serves. A model's name, age, or absence from the bundled catalog is not evidence of retirement. Retirement repairs require an explicit provider catalog retirement declaration, with any declared route conditions satisfied. Missing retirement or required route evidence leaves the choice unchanged. Canonical spelling and provider-identity migrations still apply.
 
-    When model migrations change a configured consumer between subscription/OAuth and metered API-key billing, Doctor reports the consumer, model, and old and new routes after saving the config. The warning also appears in the diagnostic log and update run record. A later Doctor run does not repeat it when the resolved billing route is unchanged. Missing credentials are not treated as proof of a billing change.
+    When model migrations change a configured consumer between subscription/OAuth, metered API-key, and a CLI runtime's own credentials, for any provider, Doctor reports the consumer, model, and old and new routes after saving the config. The warning also appears in the diagnostic log and update run record. A later Doctor run does not repeat it when the resolved billing route is unchanged. Missing credentials are not treated as proof of a billing change.
 
     During an update, Doctor records model-retirement repairs that must wait until plugin installation finishes. The updated OpenClaw completes those repairs after plugin convergence, even when no plugin version changed. `openclaw update status` records their completion so retired subscription models do not fall through to metered API credentials.
 

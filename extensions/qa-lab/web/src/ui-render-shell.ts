@@ -20,7 +20,7 @@ export function renderHeader(state: UiState): string {
         </div>
       </div>
       <div class="header-right">
-        ${controlUrl ? `<a class="header-link" href="${esc(controlUrl)}" target="_blank" rel="noreferrer">Control UI</a>` : ""}
+        ${controlUrl ? `<a class="header-link" href="${esc(controlUrl)}" target="_blank" rel="noreferrer">OpenClaw</a>` : ""}
         <button class="btn-ghost btn-sm" data-action="toggle-sidebar">${state.sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}</button>
         <button class="btn-ghost btn-sm" data-action="refresh"${state.busy ? " disabled" : ""}>Refresh</button>
         <button class="btn-ghost btn-sm" data-action="reset"${state.busy ? " disabled" : ""}>Reset</button>

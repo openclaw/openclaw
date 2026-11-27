@@ -116,7 +116,7 @@ export function invalidateChatMetadataStore(
       sessionDefaults,
     );
   } else if (catalogInvalidation === "refresh") {
-    invalidateModelCatalogCache(client, scope, sessionDefaults);
+    invalidateModelCatalogCache(client, { ...scope, catalogChanged: true }, sessionDefaults);
   }
   chatMetadataCache.get(client)?.invalidate(scope, sessionDefaults, {
     commandsChanged,

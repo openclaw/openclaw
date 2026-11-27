@@ -6,12 +6,12 @@ import {
 import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { describe, expect, it } from "vitest";
 import {
-  collectMemoryCachedEmbeddings,
   countMemoryEmbeddingCache,
   loadMemoryEmbeddingCache,
   pruneMemoryEmbeddingCache,
   upsertMemoryEmbeddingCache,
 } from "./manager-embedding-cache.js";
+import { collectMemoryCachedEmbeddings } from "./manager-embedding-vectors.js";
 
 describe("memory embedding cache", () => {
   const { DatabaseSync } = requireNodeSqlite();

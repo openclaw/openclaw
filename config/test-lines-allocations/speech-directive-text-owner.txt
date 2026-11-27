@@ -1,2 +1,0 @@
-# Fresh-import proof that streamed directive text never loads provider discovery.
-22

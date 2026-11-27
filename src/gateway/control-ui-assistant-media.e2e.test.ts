@@ -15,7 +15,7 @@ test("serves local assistant media through scoped tickets over the gateway HTTP 
   if (!stateDir) {
     throw new Error("OPENCLAW_STATE_DIR is required for gateway e2e media fixtures");
   }
-  testState.gatewayAuth = { ...auth };
+  testState.gatewayAuth = { ...auth, rateLimit: { maxAttempts: 1 } };
   const mediaDir = path.join(stateDir, "media", "control-ui-assistant-media-e2e");
   await fs.mkdir(mediaDir, { recursive: true });
   const write = async (name: string, body: string) => {
@@ -28,6 +28,10 @@ test("serves local assistant media through scoped tickets over the gateway HTTP 
     async ({ port }) => {
       const route = `http://127.0.0.1:${port}/__openclaw__/assistant-media`;
       const url = (params: Record<string, string>) => `${route}?${new URLSearchParams(params)}`;
+      const preview = (token: string) => readHttp(url({ meta: "1", source: filePath, token }));
+      expect((await preview(auth.token)).status).toBe(200);
+      expect((await preview("retired-test-credential")).status).toBe(401);
+      expect((await preview(auth.token)).status).toBe(429);
       const metadata = await readHttp(url({ meta: "1", source: filePath }), authorized);
       expect(metadata.status).toBe(200);
       const payload = metadata.json() as {
@@ -99,6 +103,28 @@ test("serves local assistant media through scoped tickets over the gateway HTTP 
         byteLength: 0,
         headers: { "content-length": "0" },
       });
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg"><script href="payload.js"/></svg>';
+      const inboundDir = path.join(stateDir, "media", "inbound");
+      await fs.mkdir(inboundDir, { recursive: true });
+      await fs.writeFile(path.join(inboundDir, "preview.svg"), svg);
+      for (const source of [await write("preview.svg", svg), "media://inbound/preview.svg"]) {
+        const svgMetadata = await readHttp(url({ meta: "1", source }), authorized);
+        const ticket = (svgMetadata.json() as { mediaTicket: string }).mediaTicket;
+        expect(ticket).toMatch(/^v1\./);
+        for (const options of [{}, { method: "HEAD" }, { headers: { Range: "bytes=0-3" } }]) {
+          const response = await readHttp(url({ source, mediaTicket: ticket }), options);
+          expect(response).toMatchObject({
+            status: "headers" in options ? 206 : 200,
+            text: "method" in options ? "" : "headers" in options ? "<svg" : svg,
+            headers: {
+              "content-type": "image/svg+xml",
+              "content-security-policy":
+                "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; sandbox",
+              "content-disposition": expect.stringMatching(/^inline;/),
+            },
+          });
+        }
+      }
       expect((await read({}, await write("other-preview.txt", "other media\n"))).status).toBe(401);
     },
     { serverOptions: { auth: { ...auth }, controlUiEnabled: true } },

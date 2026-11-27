@@ -1,10 +1,7 @@
-import type { Locator, Page } from "playwright";
-import { expect } from "vitest";
 import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   type ControlUiSessionPullRequestsChanged,
 } from "../../../src/gateway/control-ui-contract.js";
-import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.ts";
 import {
   defaultControlUiFeatureMethods,
   type ControlUiMockGatewayScenario,
@@ -70,7 +67,6 @@ export function activityPolishFixture(now = Date.now()) {
     methodResponses: {
       "sessions.list": list,
       [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
-      "artifacts.list": { artifacts: [] },
     },
   };
   const pullRequests: ControlUiSessionPullRequestsChanged = {
@@ -83,36 +79,4 @@ export function activityPolishFixture(now = Date.now()) {
     },
   };
   return { list, scenario, pullRequests };
-}
-
-export async function activityPolishImages(_page: Page) {
-  const titles = ["Reconnect check", "Delivery timeline", "Keyboard review", "Preview cache"];
-  return {
-    artifacts: titles.map((title, index) => ({
-      id: `screenshot-${index + 1}`,
-      type: "image",
-      title,
-      mimeType: "image/png",
-      sessionKey: activityPolishKeys.current,
-      image: {
-        url: `data:image/png;base64,${createSolidPngBuffer(800, 450, { r: 237 + index, g: 247, b: 247 }).toString("base64")}`,
-      },
-      download: { mode: "url" },
-    })),
-  };
-}
-
-export async function expectActivityImagesLoaded(images: Locator) {
-  await expect
-    .poll(() =>
-      images.evaluateAll(
-        (elements) =>
-          elements.length > 0 &&
-          elements.every(
-            (element) =>
-              element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0,
-          ),
-      ),
-    )
-    .toBe(true);
 }

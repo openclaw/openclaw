@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-physical-database-generations.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {
@@ -17,6 +18,50 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
 
 const oldVersion = OPENCLAW_AGENT_SCHEMA_VERSION - 1;
+
+it.skipIf(process.platform === "win32")(
+  "reports a real sync child's SIGTERM as interrupted and refuses Doctor repair",
+  async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await state.writeConfig({ plugins: { enabled: false } });
+      const source = openOpenClawStateDatabase({ env: state.env }).path;
+      await closeStateDatabaseForTest();
+      const original = fs.readFileSync(source);
+      const preload = state.path("interrupt-read.mjs");
+      fs.writeFileSync(
+        preload,
+        `import fs from "node:fs";
+const read = fs.readSync;
+fs.readSync = (fd, ...args) => {
+  const count = read(fd, ...args);
+  if (process.argv.includes("sync") && fs.fstatSync(fd).ino === fs.statSync(${JSON.stringify(source)}).ino) {
+    process.kill(process.pid, "SIGTERM");
+  }
+  return count;
+};`,
+      );
+      vi.stubEnv(
+        "NODE_OPTIONS",
+        `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(preload).href}`,
+      );
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+      });
+      const failure = await prepareDoctorDatabasePreflight({ scope: "state" }).catch(
+        (cause: unknown) => cause,
+      );
+      expect(failure).toMatchObject({
+        name: "DoctorUnreadableStateDatabaseError",
+        cause: { cause: { signal: "SIGTERM" } },
+      });
+      expect(String(failure)).toContain("state database inspection was interrupted");
+      expect(String(failure)).toContain("rerun the command");
+      expect(String(failure)).not.toContain("restore this file");
+      expect(fs.readFileSync(source)).toEqual(original);
+    });
+  },
+);
+
 it.each([false, true])(
   "keeps an idle WAL agent store's update generation when preserving sources: %s",
   async (preserveSourceArtifacts) => {

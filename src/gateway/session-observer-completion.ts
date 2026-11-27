@@ -25,13 +25,6 @@ const observerLog = createSubsystemLogger("gateway/session-observer");
 const SESSION_OBSERVER_MODEL_TIMEOUT_MS = 30_000;
 const REJECTED_OUTPUT_MAX_CHARS = 160;
 
-/** One deadline covers the whole utility chain, so every configured candidate needs a call's worth. */
-function resolveObserverDeadlineMs(cfg: OpenClawConfig, agentId: string | undefined): number {
-  const setting = readUtilityModelSetting(cfg, agentId);
-  const candidates = setting.kind === "disabled" ? 1 : setting.fallbacks.length + 1;
-  return SESSION_OBSERVER_MODEL_TIMEOUT_MS * Math.max(1, candidates);
-}
-
 export function reportSessionObserverDegradation(
   state: SessionObserverState,
   error: unknown,
@@ -128,19 +121,19 @@ export function createSessionObserverCompletion(params: {
   return async (state: SessionObserverState, notes: readonly string[]) => {
     const controller = new AbortController();
     state.activeController = controller;
-    const timeout = setTimeout(
-      () => controller.abort(),
-      resolveObserverDeadlineMs(params.getConfig(), state.agentId),
-    );
+    // Bounds preparation only; isolated completion owns each model call's deadline.
+    const timeout = setTimeout(() => controller.abort(), SESSION_OBSERVER_MODEL_TIMEOUT_MS);
     const ownedWork = new AsyncWorkScope();
     try {
       const execute = async () => {
         const prepared = await ensurePrepared(state);
+        clearTimeout(timeout);
         let lastRejectedText = "";
         for (let attempt = 0; attempt < 2; attempt += 1) {
           if (!params.isCurrent(state) || controller.signal.aborted) {
             throw new Error("session observer state is no longer active");
           }
+          let parsed: ReturnType<typeof normalizeSessionObserverModelOutput> = null;
           const result = await params.completeModel({
             ...prepared,
             purpose: "session-observer",
@@ -151,8 +144,18 @@ export function createSessionObserverCompletion(params: {
             abortSignal: controller.signal,
             answerTokenBudget: 300,
             streamParams: { temperature: 0.2 },
+            classifyResult: ({ result: candidateResult }) => {
+              parsed = normalizeSessionObserverModelOutput(candidateResult.text);
+              return parsed
+                ? undefined
+                : {
+                    message: "session observer returned invalid JSON",
+                    code: "invalid_response",
+                    preserveResultOnExhaustion: true,
+                  };
+            },
           });
-          const parsed = normalizeSessionObserverModelOutput(result.text);
+          parsed ??= normalizeSessionObserverModelOutput(result.text);
           if (parsed) {
             return parsed;
           }

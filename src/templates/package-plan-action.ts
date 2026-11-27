@@ -65,3 +65,59 @@ export function packageFromAction(action: TemplateAddPlanAction): PlannedTemplat
       : {}),
   };
 }
+
+export type PlannedTemplateBundledDependency = {
+  kind: "skill" | "plugin";
+  source: "bundled";
+  path: string;
+  name: string;
+  installId: string;
+  snapshot: import("./dependency-directory.js").TemplateDirectorySnapshot;
+  installPolicyWarningDigest?: string;
+  ownerAction: "install" | "reuse";
+  declaredCapabilities?: PluginAcceptedDeclaredSurface;
+  capabilityGrants?: ReturnType<typeof buildPluginCapabilitySummary>["grants"];
+  capabilityGrantsByPluginId?: TemplatePluginCapabilityGrantsById;
+  extension?: import("./manifest-contract.js").TemplateAppliedExtension;
+  riskWarning?: string;
+};
+
+export function bundledDependencyFromAction(
+  action: TemplateAddPlanAction,
+): PlannedTemplateBundledDependency {
+  // SAFETY: Source actions are built from preflight; identity and snapshot binding are checked below.
+  const details = action.details as Partial<PlannedTemplateBundledDependency> | undefined;
+  if (
+    details?.source !== "bundled" ||
+    (details.kind !== "skill" && details.kind !== "plugin") ||
+    typeof details.path !== "string" ||
+    typeof details.name !== "string" ||
+    typeof details.installId !== "string" ||
+    (details.ownerAction !== "install" && details.ownerAction !== "reuse")
+  ) {
+    throw new Error("Bundled dependency action has incomplete source identity.");
+  }
+  const snapshot = details.snapshot;
+  if (!snapshot || snapshot.digest !== action.digest) {
+    throw new Error("Bundled dependency action has no reviewed directory snapshot.");
+  }
+  return {
+    kind: details.kind,
+    source: "bundled",
+    path: details.path,
+    name: details.name,
+    installId: details.installId,
+    ownerAction: details.ownerAction,
+    snapshot,
+    ...(details.installPolicyWarningDigest
+      ? { installPolicyWarningDigest: details.installPolicyWarningDigest }
+      : {}),
+    ...(details.extension ? { extension: details.extension } : {}),
+    ...(details.riskWarning ? { riskWarning: details.riskWarning } : {}),
+    ...(details.declaredCapabilities ? { declaredCapabilities: details.declaredCapabilities } : {}),
+    ...(details.capabilityGrants ? { capabilityGrants: details.capabilityGrants } : {}),
+    ...(details.capabilityGrantsByPluginId
+      ? { capabilityGrantsByPluginId: details.capabilityGrantsByPluginId }
+      : {}),
+  };
+}

@@ -1,6 +1,6 @@
 /** Resolves agent runtime metadata from model/provider policy and ACP session overlays. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
+import { isDefaultAgentRuntimeId, OPENCLAW_AGENT_RUNTIME_ID } from "./agent-runtime-id.js";
 import { resolveAvailableAgentHarnessPolicy } from "./harness/availability.js";
 import type { AgentRuntimePolicyScope } from "./model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
@@ -27,7 +27,10 @@ type ModelAgentRuntimeMetadataParams = {
   agentHarnessRuntimeOverride?: string;
 } & (
   | { agentId: string; agentScope?: never }
-  | Extract<AgentRuntimePolicyScope, { agentScope: unknown }>
+  | {
+      agentId?: never;
+      agentScope: Extract<AgentRuntimePolicyScope["agentScope"], { kind: "prepared" }>;
+    }
 );
 
 /** Resolves the runtime id/source that should be reported for a model-backed agent session. */
@@ -47,6 +50,10 @@ export function resolveModelAgentRuntimeMetadata(
     params.provider && params.model
       ? { provider: params.provider, model: params.model }
       : resolveDefaultModelForAgent({ cfg: params.cfg, agentId });
+  if (!resolved) {
+    // No model selects no plugin harness; the built-in runtime owns the missing-model error.
+    return { id: OPENCLAW_AGENT_RUNTIME_ID, source: "implicit" };
+  }
   const policy = resolveAvailableAgentHarnessPolicy({
     ...params,
     mode: "projection",

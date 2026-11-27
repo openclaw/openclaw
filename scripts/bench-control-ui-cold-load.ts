@@ -50,7 +50,6 @@ import { chromium, type Browser, type CDPSession, type Page } from "playwright";
 import { buildSandboxHostPath } from "../src/agents/sandbox-host.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../src/gateway/control-ui-bootstrap-contract.ts";
 import { captureSessionRowGeneration } from "../src/gateway/session-row-identity.js";
-import { shareSidebarSessionRows } from "../src/gateway/session-row-presentation.js";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
 import { isChatHistoryState } from "../ui/src/lib/protocol-validators.generated/history-state.js";
 import { createColdLoadProbeInitScript } from "../ui/src/test-helpers/control-ui-cold-load-probes.ts";
@@ -117,6 +116,7 @@ import {
   installWidgetReadiness,
 } from "./lib/control-ui-dashboard-probe.ts";
 import {
+  collectInteractionStyleSheets,
   summarizeInteractionSelectors,
   summarizeLongTaskCpuProfiles,
   type InteractionStyleSheet,
@@ -901,6 +901,7 @@ if (!Number.isInteger(primeReloads) || primeReloads < 0 || primeReloads > 10) {
 if (primeReloads > 0 && !primeEligible) {
   throw new Error("prime-reloads requires a fixed-route unprofiled paint-holding capture");
 }
+const { shareSidebarSessionRows } = await import("../src/gateway/session-row-presentation.js");
 const timingCaptureKey = "openclaw-bench-timing-capture";
 const timingCaptureMs = captureMs || 2200;
 const artifactDir = path.resolve(values.output, new Date().toISOString().replaceAll(":", "-"));
@@ -2672,19 +2673,7 @@ try {
     const rawTrace: unknown[] = [];
     const styleSheets = new Map<string, InteractionStyleSheet>();
     if (values["selector-stats"]) {
-      cdp.on(
-        "CSS.styleSheetAdded",
-        ({ header }: { header: InteractionStyleSheet & { styleSheetId: string } }) =>
-          styleSheets.set(header.styleSheetId, {
-            sourceURL: header.sourceURL,
-            origin: header.origin,
-            title: header.title,
-            startLine: header.startLine,
-            startColumn: header.startColumn,
-          }),
-      );
-      await cdp.send("DOM.enable");
-      await cdp.send("CSS.enable");
+      await collectInteractionStyleSheets(cdp, styleSheets);
     }
     let collectedTrace = rawTrace;
     cdp.on("Tracing.dataCollected", (data) => collectedTrace.push(...data.value));

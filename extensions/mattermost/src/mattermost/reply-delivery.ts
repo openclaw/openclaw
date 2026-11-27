@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import {
   deliverTextOrMediaReply,
   isReasoningReplyPayload,
@@ -61,6 +62,7 @@ export async function deliverMattermostReplyPayload(params: {
     text: params.core.channel.text.convertMarkdownTables(presentation.text, params.tableMode),
   });
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.agentId);
+  const mediaAccess = resolveOutboundMediaAccessForConfig(params.cfg);
   const chunkMode = params.core.channel.text.resolveChunkMode(
     params.cfg,
     "mattermost",
@@ -74,7 +76,7 @@ export async function deliverMattermostReplyPayload(params: {
     const result = await params.sendMessage(`channel:${params.channelId}`, text, {
       cfg: params.cfg,
       accountId: params.accountId,
-      ...(mediaUrl ? { mediaUrl, mediaLocalRoots } : {}),
+      ...(mediaUrl ? { mediaUrl, mediaLocalRoots, mediaAccess } : {}),
       // Local media must upload successfully instead of silently posting only its caption.
       ...(requiresMattermostMediaUpload(mediaUrl) ? { requireMediaUpload: true } : {}),
       ...(accepted.size === 0 && reply.mediaUrls.length < 2 && presentation.buttons.length

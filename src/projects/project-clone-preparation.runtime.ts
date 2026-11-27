@@ -30,7 +30,7 @@ export async function warnIfProjectCloneShallow(
         await import("../state/openclaw-state-worker-store.js");
       if (
         !(await executeOpenClawStateWorker(context, {
-          type: "projects.findRoot",
+          type: "projects.findByRoot",
           input: { repoRoot, source: "cloned" },
         }))
       ) {

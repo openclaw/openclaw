@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import * as telegramTransport from "./fetch.js";
+import * as telegramTransport from "./fetch-transport.js";
 import type {
   TelegramIngressWorkerCommand,
   TelegramIngressWorkerMessage,
@@ -25,6 +25,7 @@ function createRuntime(
     stopAfterPollSuccesses?: number;
     timeoutSeconds?: number;
     acknowledge?: () => Promise<number>;
+    initialUpdateId?: number;
   } = {},
 ) {
   const calls: number[] = [];
@@ -73,7 +74,7 @@ function createRuntime(
     const responseIndex = Math.min(calls.length - 1, responses.length - 1);
     return expectDefined(responses[responseIndex], `Telegram response ${responseIndex}`);
   };
-  vi.spyOn(telegramTransport, "resolveTelegramTransport").mockReturnValue({
+  vi.spyOn(telegramTransport, "createTelegramTransport").mockReturnValue({
     fetch: fetchImpl,
     sourceFetch: fetchImpl,
     close: async () => {},
@@ -82,7 +83,7 @@ function createRuntime(
     options: {
       token: "test-auth-token",
       accountId: "acct",
-      initialUpdateId: null,
+      initialUpdateId: options.initialUpdateId ?? null,
       apiRoot: "https://api.telegram.test",
       timeoutSeconds: options.timeoutSeconds ?? 1,
     },
@@ -180,6 +181,24 @@ it("advances getUpdates offset only after the whole response is acknowledged", a
   // Second getUpdates must use offset = lastUpdateId + 1 only after spool-ack.
   expect(pollBodies[1]?.offset).toBe(45);
   expect(pollBodies.map((body) => body.timeout)).toEqual([0, 1]);
+});
+
+it("confirms a response whose update ids restarted below the previous offset", async () => {
+  // Telegram restarts update ids at a random number after a week without updates, and
+  // the Bot API serves an offset past its queue tail from the queue head.
+  const { pollBodies, done } = createRuntime(
+    [jsonResponse(200, { ok: true, result: [{ update_id: 30_739_880 }] }), emptyPoll()],
+    {
+      stopAfterPollSuccesses: 2,
+      initialUpdateId: 879_582_717,
+      acknowledge: async () => 30_739_880,
+    },
+  );
+  await flushRuntime();
+  await vi.advanceTimersByTimeAsync(0);
+  await done;
+
+  expect(pollBodies.map((body) => body.offset)).toEqual([879_582_718, 30_739_881]);
 });
 
 it("honors Telegram retry_after for getUpdates 429 responses", async () => {

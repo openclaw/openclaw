@@ -26,17 +26,9 @@ const enSidebarAttention = {
     },
   },
   attention: {
-    cronErrorUnknown: "Unknown error",
-    cronFailed: "{job} failed",
-    cronOverdue: "{job} overdue",
-    automationFailed: "Failed · {time}",
-    automationOverdue: "Overdue · {time}",
-    failed: "Failed",
-    overdue: "Overdue",
     dismissItem: "Dismiss {item}",
     dismissShown: "Dismiss shown",
     emptyTitle: "No requests or alerts yet.",
-    emptyBody: "New requests and alerts land here.",
     issues: "Inbox",
     issueCount: "{count} inbox item",
     issueCountPlural: "{count} inbox items",
@@ -86,11 +78,6 @@ const enSidebarAttention = {
     alerts: {
       updateQuestion:
         "These are the available update facts:\n{facts}\nSummarize what is new and whether anything needs my attention before updating.",
-      cronFailedQuestion:
-        "These automations failed:\n{facts}\nExplain why they failed and how to fix them.",
-      cronOverdueFact: "{job}: {duration} late",
-      cronOverdueQuestion:
-        "These automations are overdue:\n{facts}\nExplain why they have not run and how to fix them.",
       modelAuthExpiredQuestion:
         "These model-provider credentials need attention:\n{facts}\nExplain what expired and how to re-authenticate them.",
     },

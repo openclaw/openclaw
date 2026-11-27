@@ -550,7 +550,7 @@ extension StatusMenuSessions {
                 await SessionActions.confirmDestructiveAction(
                     title: String(localized: "Delete session?"),
                     message: String(
-                        format: String(localized: "Deletes the “%@” entry and archives its transcript."),
+                        format: String(localized: "Removes “%@” from the list and archives its chat history."),
                         key),
                     action: String(localized: "Delete"))
             }

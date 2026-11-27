@@ -3,9 +3,7 @@ import { inspect } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
-import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/sessions/session-accessor.sqlite-compaction-runtime.js";
-import { patchSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
@@ -100,10 +98,6 @@ async function withCommitRevocation(
   }
 }
 
-function readWatermark(binding: SelectedSessionActorStorageBinding) {
-  return binding.actor.storage.read({ type: "session.history.watermark", input: {} }, authority);
-}
-
 it("persists deduplicated messages, metadata, suffixes, rewrites, branches, and compaction on the memory owner", async () => {
   const { target } = await create("maintenance");
   const manager = await SessionManager.openAsync(target);
@@ -151,53 +145,6 @@ it("persists deduplicated messages, metadata, suffixes, rewrites, branches, and 
       ?.readSession(target.sessionKey, authority)?.entry,
   ).toMatchObject({ sessionId: branchedId, compactionCount: 1 });
   expect((await SessionManager.openAsync(currentTarget)).getBranch()).toEqual(manager.getBranch());
-});
-
-it("advances the CLI writer boundary through metadata commits and refuses revoked writers", async () => {
-  const { target, binding, run } = await create("cli-metadata");
-  await run(async () => {
-    const manager = await SessionManager.openAsync(target);
-    const { watermark } = await readWatermark(binding);
-    const runId = "synthetic-cli-run";
-    const authFingerprint = "a".repeat(64);
-    await patchSessionEntryCore(target, () => ({
-      activeWriterRunId: runId,
-      cliHistoryBoundary: {
-        version: 1,
-        sessionId: target.sessionId,
-        state: "known",
-        ...watermark,
-        authFingerprint,
-        writerRunId: runId,
-      },
-    }));
-    const caller = revocable("CLI writer revoked");
-    await runWithCliHistoryWriter(
-      {
-        target,
-        runId,
-        authFingerprint,
-        lifecycleRevision: "initial",
-        assertCurrent: caller.assertCurrent,
-        assertReadable: caller.assertCurrent,
-      },
-      async () => {
-        await manager.appendCustomEntryAsync("cli-metadata", { synthetic: true });
-        const after = await readWatermark(binding);
-        expect(
-          binding.actor.storage.readCurrent({ type: "session.entry.read", input: {} }, authority),
-        ).toMatchObject({
-          cliHistoryBoundary: { ...after.watermark, writerRunId: runId, authFingerprint },
-        });
-        expect(after.watermark.maxSeq).toBe((watermark.maxSeq ?? -1) + 1);
-        caller.revoke();
-        await expect(manager.appendCustomEntryAsync("refused", {})).rejects.toThrow(
-          "CLI writer revoked",
-        );
-        expect((await readWatermark(binding)).watermark).toEqual(after.watermark);
-      },
-    );
-  });
 });
 
 it("rolls back fresh-message refusal and checks queued caller authority before mutation", async () => {

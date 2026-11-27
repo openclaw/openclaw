@@ -32,7 +32,8 @@ import {
 } from "./config-form.search.ts";
 import { hintForPath, pathKey, schemaType, type JsonSchema } from "./config-form.shared.ts";
 import { Checkbox } from "./solid/checkbox.tsx";
-import { SettingsToggle, SettingsToggleRow } from "./solid/settings-ui.tsx";
+import { SettingsToggleRow } from "./solid/settings-ui.tsx";
+import { Switch as ToggleSwitch } from "./solid/switch.tsx";
 
 // Past this a segmented control stops fitting the control column at a readable size.
 const SEGMENTED_MAX_OPTIONS = 3;
@@ -259,7 +260,12 @@ function ResolvedNode(props: {
     >
       <Match when={props.node.kind === "options"}>
         <Show
-          when={!fitsSegmentedControl(props.node.options ?? []) || props.node.nullable}
+          when={
+            !fitsSegmentedControl(props.node.options ?? []) ||
+            props.node.nullable ||
+            (props.params.schema.default === undefined &&
+              hintForPath(props.params.path, props.params.hints)?.inheritedDefault === true)
+          }
           fallback={
             <FieldRow
               {...field()}
@@ -271,6 +277,9 @@ function ResolvedNode(props: {
                     props.params.value !== undefined
                       ? props.params.value
                       : props.params.schema.default
+                  }
+                  usingDefault={
+                    props.params.value === undefined && props.params.schema.default !== undefined
                   }
                   disabled={props.params.disabled}
                   required={field().required}
@@ -350,6 +359,10 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
     getLocale();
     return resolveConfigFieldMeta(props.params.path, props.params.schema, props.params.hints);
   });
+  const field = createMemo(() => {
+    getLocale();
+    return resolveConfigFieldPresentation(props.params);
+  });
   const checked = () =>
     typeof props.params.value === "boolean"
       ? props.params.value
@@ -370,11 +383,10 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
     <Switch
       fallback={
         <FieldRow
-          label={meta().label}
-          help={meta().help}
+          {...field()}
           showLabel={false}
           control={
-            <SettingsToggle
+            <ToggleSwitch
               checked={checked()}
               disabled={props.params.disabled}
               ariaLabel={meta().label}
@@ -400,6 +412,7 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
           help={meta().help}
           helpContext={props.params.helpContext}
           showLabel={props.params.showLabel ?? true}
+          usingDefault={field().usingDefault}
           control={
             <Checkbox
               aria-label={meta().label}
@@ -431,6 +444,7 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
               </Show>
             </>
           }
+          controlClass={field().usingDefault ? "cfg-default-control" : undefined}
           ariaLabel={meta().label}
           description={
             copy().summary ? <span class="config-field__summary">{copy().summary}</span> : undefined

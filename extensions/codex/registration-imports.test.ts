@@ -14,7 +14,6 @@ describe("Codex prepared-runtime registration import boundary", () => {
         "src/config/sessions/session-accessor.ts",
         "src/infra/exec-approvals-store.ts",
         "src/gateway/session-transcript-readers.ts",
-        "src/infra/provider-usage.fetch.claude.ts",
         "src/infra/provider-usage.fetch.codex.ts",
         "src/infra/provider-usage.fetch.deepseek.ts",
         "src/infra/provider-usage.fetch.gemini.ts",

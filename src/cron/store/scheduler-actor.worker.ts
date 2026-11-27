@@ -30,6 +30,7 @@ import { hasMissedCronSlotSinceLastRun, isRunnableJob } from "../service/timer-r
 import type { CronJob } from "../types.js";
 import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
 import { loadedCronStoreFromRows, loadCronRows, updateCronRuntimeRow } from "./row-codec.js";
+import { waitsForCronRunSlot } from "./run-queue-slots.worker.js";
 import { requestAndDrainCronRunsInWorker } from "./run-queue.worker.js";
 import { readActiveCronRunReceiptsInDatabase } from "./run-receipt-read.js";
 import { listActiveCronRunReceiptJobIdsInDatabase } from "./run-receipt-store.js";
@@ -266,7 +267,8 @@ function boundedCatchup(
   nowMs: number,
   result: CronSchedulerResult,
   jobs: ReadonlyMap<string, CronJob>,
-  options?: { skipJobIds?: string[]; deferAgentWork?: boolean; liveSinceMs?: number },
+  options: { skipJobIds?: string[]; deferAgentWork?: boolean; liveSinceMs?: number } | undefined,
+  lateWake: boolean,
 ): { immediate: CronJob[]; overflow: Map<string, StartupOverflow> } {
   if (jobs.size === 0) {
     return { immediate: [], overflow: new Map() };
@@ -334,7 +336,10 @@ function boundedCatchup(
         }
         if (
           config.cronConfig?.skipMissedJobs &&
-          (job.schedule.kind === "cron" || job.schedule.kind === "every")
+          (job.schedule.kind === "cron" || job.schedule.kind === "every") &&
+          // A wake that is only late, with no restart or clock jump, still runs the slot
+          // that came due while this Gateway was up.
+          !(lateWake && job.state.nextRunAtMs !== undefined && job.state.nextRunAtMs <= nowMs)
         ) {
           if (
             recomputeJobNextRunAtMs({ state, job, nowMs, deferredNotifications: notifications })
@@ -461,9 +466,10 @@ export function runCronSchedulerInWorker(
   const elapsedWallMs = actor.lastWallMs === undefined ? 0 : nowMs - actor.lastWallMs;
   const elapsedMonotonicMs =
     actor.lastMonotonicMs === undefined ? 0 : monotonicMs - actor.lastMonotonicMs;
+  const clockJumped = elapsedWallMs - elapsedMonotonicMs > MIN_REFIRE_GAP_MS;
+  // Refreshes keep the last tick's baselines, so a later tick still sees this jump.
   actor.catchupNeeded ||=
-    elapsedWallMs - elapsedMonotonicMs > MIN_REFIRE_GAP_MS ||
-    (actor.wakeAtMs !== undefined && nowMs > actor.wakeAtMs + MIN_REFIRE_GAP_MS);
+    clockJumped || (actor.wakeAtMs !== undefined && nowMs > actor.wakeAtMs + MIN_REFIRE_GAP_MS);
   const forwardJump = actor.catchupNeeded;
   const result = emptyResult();
   collectChanges(result, settleCronStartupBatchInWorker(database, input.storeKey, nowMs));
@@ -493,6 +499,7 @@ export function runCronSchedulerInWorker(
         result,
         jobs,
         command.type === "cron.schedulerStart" ? command.input : undefined,
+        !starting && !clockJumped,
       );
       candidates = catchup.immediate;
       overflow = catchup.overflow;
@@ -543,7 +550,7 @@ export function runCronSchedulerInWorker(
       command.type !== "cron.schedulerRefresh" &&
       (owned.length > 0 ||
         (input.requests?.length ?? 0) > 0 ||
-        currentJobs().some((job) => job.state.queuedAtMs !== undefined))
+        currentJobs().some((job) => job.state.queuedAtMs !== undefined || waitsForCronRunSlot(job)))
     ) {
       currentJobs();
       for (const job of owned) {
@@ -571,6 +578,9 @@ export function runCronSchedulerInWorker(
           maxConcurrentRuns: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
           schedulingPaused: input.paused,
           preparingAgentIds: snapshot.config.preparingAgentIds,
+          busyConversationJobIds: snapshot.config.busyConversationJobIds,
+          memoryAllowsExtraRun: snapshot.config.memoryAllowsExtraRun,
+          providerBackoff: snapshot.config.providerBackoff,
           hostProcessId: snapshot.config.hostProcessId,
           pluginCommandHosts: snapshot.config.pluginCommandHosts,
         },
@@ -581,6 +591,9 @@ export function runCronSchedulerInWorker(
       result.launches.push(...requested.launches);
       result.preparing.push(...requested.preparing);
       result.skipped.push(...requested.skipped);
+      if (requested.promotedReceiptIds) {
+        result.promotedReceiptIds = requested.promotedReceiptIds;
+      }
       result.jobs.push(...requested.accepted.map((entry) => entry.job));
       result.jobs.push(...requested.launches.map((entry) => entry.job));
       result.jobs.push(...requested.skipped.flatMap((entry) => (entry.job ? [entry.job] : [])));

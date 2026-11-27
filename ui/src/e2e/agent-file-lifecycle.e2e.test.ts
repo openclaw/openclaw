@@ -123,6 +123,91 @@ async function prepareFilePage(page: Page, content: string, options: FileOptions
 }
 
 suite.define(() => {
+  it("wraps long workspace and file paths without widening the phone editor", async () => {
+    const workspace = "/worktrees/" + "0123456789abcdef".repeat(4) + "/review";
+    const content = "# Example file";
+    const file = { name: "AGENTS.md", path: workspace + "/AGENTS.md", missing: false };
+    await withFilePage(
+      content,
+      async ({ page, editor }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await expect.poll(() => editor.inputValue()).toBe(content);
+        for (const [selector, expected] of [
+          [".agent-files-workspace", workspace],
+          [".agent-file-sub", file.path],
+        ] as const) {
+          const label = page.locator(selector);
+          expect(await label.textContent()).toBe(expected);
+          expect(
+            await label.evaluate((element) => {
+              const bounds = element.closest(".settings-section")!.getBoundingClientRect();
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              return Array.from(range.getClientRects()).every(
+                (rect) => rect.left >= bounds.left && rect.right <= bounds.right,
+              );
+            }),
+          ).toBe(true);
+        }
+        expect(
+          await editor.evaluate((element) => {
+            const card = element.closest(".settings-group")!.getBoundingClientRect();
+            return element.getBoundingClientRect().right <= card.right;
+          }),
+        ).toBe(true);
+      },
+      {
+        methodResponses: {
+          "agents.files.list": { agentId: "main", workspace, files: [file] },
+          "agents.files.get": { agentId: "main", workspace, file: { ...file, content } },
+        },
+      },
+    );
+  });
+
+  it("does not ask users to load agent files while the inventory read is already running", async () => {
+    await withFilePage(
+      "# Synthetic agent instructions",
+      async ({ page, gateway, editor }) => {
+        await gateway.waitForRequest("agents.files.list");
+        await page.getByRole("heading", { name: "Core files", exact: true }).waitFor();
+        const manualHints = await page
+          .getByText("Load the agent workspace files to edit core instructions.", { exact: true })
+          .count();
+        await gateway.resolveDeferred("agents.files.list", fileList("main"));
+        await expect.poll(() => editor.inputValue()).toBe("# Synthetic agent instructions");
+        expect(manualHints).toBe(0);
+      },
+      { deferredMethods: ["agents.files.list"] },
+    );
+  });
+
+  it("keeps failed inventory recovery and a genuinely empty workspace reachable", async () => {
+    await withFilePage(
+      "",
+      async ({ page, gateway, editor, refresh }) => {
+        await gateway.waitForRequest("agents.files.list");
+        await page.getByRole("heading", { name: "Core files", exact: true }).waitFor();
+        await gateway.rejectDeferred("agents.files.list", {
+          message: "Workspace inventory unavailable",
+        });
+        const error = page.locator(".agents-main").getByRole("alert");
+        await expect.poll(() => error.textContent()).toContain("Workspace inventory unavailable");
+        expect(await refresh.isEnabled()).toBe(true);
+        expect(await editor.count()).toBe(0);
+        const after = await gateway.deferNext("agents.files.list");
+        await refresh.click();
+        await gateway.waitForRequest("agents.files.list", { after });
+        await gateway.resolveDeferred("agents.files.list", { ...fileList("main"), files: [] });
+        await page.getByText("No files yet.", { exact: true }).waitFor();
+        expect(await error.count()).toBe(0);
+        expect(await editor.count()).toBe(0);
+        expect(await refresh.isEnabled()).toBe(true);
+      },
+      { deferredMethods: ["agents.files.list"] },
+    );
+  });
+
   it.each([false, true])(
     "announces a failed file save (conflict: %s) without losing the draft",
     async (conflict) => {

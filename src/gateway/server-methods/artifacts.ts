@@ -5,6 +5,7 @@ import {
   errorShape,
   type ArtifactsGetParams,
   type ArtifactsListParams,
+  type ArtifactsListResult,
   validateArtifactsDownloadParams,
   validateArtifactsGetParams,
   validateArtifactsListParams,
@@ -32,6 +33,10 @@ import {
   resolveArtifactAvailability,
 } from "../artifacts-content.js";
 import {
+  readGatewayDeviceSourceAuthority,
+  retainGatewayDeviceRevocation,
+} from "../device-revocation.js";
+import {
   parseManagedOutgoingArtifactId,
   resolveManagedOutgoingMediaArtifactDownload,
   resolveManagedOutgoingMediaUrlDownload,
@@ -39,6 +44,7 @@ import {
 import {
   encodeImageThumbnail,
   resolveManagedImageThumbnail,
+  type ManagedImageThumbnail,
 } from "../managed-image-thumbnail-cache.js";
 import { MAX_PAYLOAD_BYTES } from "../payload-limits.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
@@ -55,16 +61,14 @@ import {
 } from "./artifacts-session-resolution.js";
 import { findTranscriptImageArtifact } from "./artifacts-transcript-images.js";
 import { sessionFilesError } from "./session-files-errors.js";
-import {
-  readGatewayRequestMutationAuthority,
-  retainGatewayRequestMutationAuthority,
-} from "./session-mutation-guards.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 type ArtifactCollectionOptions = {
   includeDownloadData?: boolean;
   downloadArtifactId?: string;
+  includeAttachments?: boolean;
 };
 
 type ArtifactDownloadLookup = ArtifactLookup &
@@ -99,14 +103,8 @@ const queuedArtifactDownloads = new Map<
   }
 >();
 
-function createArtifactRequestAccess(
-  request: GatewayRequestHandlerOptions,
-  authority: {
-    assertCurrent: () => void;
-    release?: () => void;
-  } = readGatewayRequestMutationAuthority(request),
-) {
-  const { assertCurrent } = authority;
+function createArtifactRequestAccess(request: GatewayRequestHandlerOptions, release?: () => void) {
+  const { assertCurrent } = readGatewayRequestMutationAuthority(request);
   const { context, respond } = request;
   const access = createArtifactSessionAccess({
     client: request.client,
@@ -116,8 +114,8 @@ function createArtifactRequestAccess(
       return context.getRuntimeConfig();
     },
   });
-  if (authority.release) {
-    access.retain(authority.release);
+  if (release) {
+    access.retain(release);
   }
   try {
     assertCurrent();
@@ -142,6 +140,7 @@ async function loadArtifacts(
   artifacts: ArtifactRecord[];
   sessionKey?: string;
   nextCursor?: string;
+  attachments?: ArtifactsListResult["attachments"];
   omittedOversized?: boolean;
   assertCurrent?: () => void;
 }> {
@@ -183,7 +182,7 @@ async function loadArtifacts(
       readWindow: cursor?.readWindow,
     }).catch((error: unknown) => {
       if (cursor && isSessionTranscriptProjectionUnavailableError(error)) {
-        throw invalidImageCursor("Transcript changed; restart artifacts.list");
+        throw invalidImageCursor("Chat history changed; restart artifacts.list");
       }
       throw error;
     });
@@ -233,16 +232,18 @@ async function loadArtifacts(
     if (queuedKey) {
       queuedArtifactDownloads.delete(queuedKey);
     }
-    const { artifacts } = await readSessionArtifacts(scope, {
+    const { artifacts, attachments } = await readSessionArtifacts(scope, {
       kind: "list",
       sessionKey,
       runId: query.runId,
       messageRole: query.messageRole,
       includeDownloadData: opts.includeDownloadData,
+      includeAttachments: opts.includeAttachments,
       downloadArtifactIds: downloadIds ? [...downloadIds] : undefined,
     });
     return {
       sessionKey,
+      ...(attachments ? { attachments } : {}),
       artifacts: await pMap(artifacts, resolveArtifactAvailability, { concurrency: 8 }),
     };
   };
@@ -346,8 +347,10 @@ async function respondManagedArtifactDownload(
   respond: RespondFn,
   matched?: ArtifactRecord,
 ): Promise<void> {
-  const authority = retainGatewayRequestMutationAuthority(request);
-  using access = createArtifactRequestAccess(request, authority);
+  // A managed URL outlives this RPC; each GET is new work and admits against the issuing device.
+  const sourceCurrent = readGatewayDeviceSourceAuthority(request.hasCurrentClientAuthority);
+  const releaseDevice = retainGatewayDeviceRevocation(request.hasCurrentClientAuthority);
+  using access = createArtifactRequestAccess(request, releaseDevice);
   await runArtifactSessionOperation(respond, async () => {
     const selected = await prepareArtifactSessionRead(query, access);
     const scope = selected?.scope;
@@ -372,14 +375,21 @@ async function respondManagedArtifactDownload(
     const download = createManagedArtifactDownload({
       client: access.client,
       path: managed.url,
-      assertCurrent: selected.assertCurrent,
+      assertCurrent: () => {
+        if (sourceCurrent?.() === false) {
+          throw new Error("Artifact download expired");
+        }
+        selected.assertCurrent();
+      },
       release: () => {
         selected.release();
-        authority.release();
+        releaseDevice?.();
       },
     });
     access.detach(selected.release);
-    access.detach(authority.release);
+    if (releaseDevice) {
+      access.detach(releaseDevice);
+    }
     respond(true, {
       artifact: {
         id: managed.artifactId,
@@ -419,12 +429,18 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     }
     const query = { ...params };
     const loaded = await runArtifactSessionOperation(respond, () =>
-      loadArtifacts(query, access, { includeDownloadData: false }),
+      loadArtifacts(query, access, {
+        includeDownloadData: false,
+        includeAttachments: Boolean(
+          query.sessionKey && !query.type && !query.runId && !query.messageRole,
+        ),
+      }),
     );
     if (!loaded.ok) {
       return;
     }
     const { artifacts, sessionKey, nextCursor, omittedOversized } = loaded.value;
+    const attachments = "attachments" in loaded.value ? loaded.value.attachments : undefined;
     if (!sessionKey && query.runId) {
       respond(
         false,
@@ -436,6 +452,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (artifactResponseIsCurrent(loaded.value, respond)) {
       respond(true, {
         artifacts: artifacts.map(toArtifactSummary),
+        ...(attachments ? { attachments } : {}),
         ...(nextCursor ? { nextCursor } : {}),
         ...(omittedOversized ? { omittedOversized: true } : {}),
       });
@@ -578,8 +595,9 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     }
     let managedUrl: { url: string; expiresAt: string } | undefined;
     if (managedSource) {
-      const authority = retainGatewayRequestMutationAuthority(request);
-      using managedAccess = createArtifactRequestAccess(request, authority);
+      const sourceCurrent = readGatewayDeviceSourceAuthority(request.hasCurrentClientAuthority);
+      const releaseDevice = retainGatewayDeviceRevocation(request.hasCurrentClientAuthority);
+      using managedAccess = createArtifactRequestAccess(request, releaseDevice);
       const selected = await runArtifactSessionOperation(respond, () =>
         prepareArtifactSessionRead(query, managedAccess),
       );
@@ -594,17 +612,24 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       managedUrl = createManagedArtifactDownload({
         client,
         path: managedSource.url,
-        assertCurrent: selection.assertCurrent,
+        assertCurrent: () => {
+          if (sourceCurrent?.() === false) {
+            throw new Error("Artifact download expired");
+          }
+          selection.assertCurrent();
+        },
         release: () => {
           selection.release();
-          authority.release();
+          releaseDevice?.();
         },
       });
       managedAccess.detach(selection.release);
-      managedAccess.detach(authority.release);
+      if (releaseDevice) {
+        managedAccess.detach(releaseDevice);
+      }
     }
     if (query.previewWidth !== undefined && !managedUrl) {
-      let preview: Buffer | undefined;
+      let preview: ManagedImageThumbnail | undefined;
       if (
         artifact.type === "image" &&
         artifact.download.mode === "bytes" &&
@@ -638,9 +663,9 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       artifact = {
         ...artifact,
         image: undefined,
-        mimeType: "image/webp",
-        sizeBytes: preview.byteLength,
-        data: preview.toString("base64"),
+        mimeType: preview.mimeType,
+        sizeBytes: preview.data.byteLength,
+        data: preview.data.toString("base64"),
       };
     }
     const payload = {

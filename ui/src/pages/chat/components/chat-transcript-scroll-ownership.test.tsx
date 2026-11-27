@@ -137,6 +137,7 @@ async function mountRestoration(paneId: string, height: number) {
 }
 
 beforeEach(installTranscriptDomMocks);
+
 afterEach(() => {
   for (const cleanup of cleanups.splice(0).toReversed()) {
     cleanup();
@@ -293,6 +294,94 @@ it.each([
 );
 
 it.each([
+  ["pointer", {}, false, false],
+  ["touch", {}, false, false],
+  ["horizontal wheel", { deltaX: 120, deltaY: 0 }, false, false],
+  ["horizontal up", { deltaX: 120, deltaY: -1 }, false, false],
+  ["horizontal down", { deltaX: 120, deltaY: 1 }, true, true],
+  ["vertical up", { deltaY: -120 }, false, true],
+  ["vertical down", { deltaY: 120 }, true, false],
+  ["ctrl wheel", { ctrlKey: true }, false, false],
+  ["shift wheel", { shiftKey: true }, false, false],
+  ["alt wheel", { altKey: true }, false, false],
+  ["meta wheel", { metaKey: true }, false, false],
+] as const)("preserves reader ownership for %s", async (input, wheel, reading, expectedReader) => {
+  stubAnimationFrames();
+  const { policy, transcript, mount } = createPolicyTranscript(`contact-${input}`);
+  const { container } = await mount();
+  viewport(container, 400, 2000);
+  connectPolicy(policy, transcript, container);
+  transcript.scrollToEnd({ behavior: "auto" });
+  nativeScroll(container, 1600);
+  if (reading) {
+    handleChatScrollTakeover(policy, false);
+  }
+
+  if (input === "pointer") {
+    container.dispatchEvent(new PointerEvent("pointerdown"));
+  } else if (input === "touch") {
+    const touches = [contact(1, container)];
+    container.dispatchEvent(new TouchEvent("touchstart", { touches, changedTouches: touches }));
+    container.dispatchEvent(new TouchEvent("touchend", { touches: [], changedTouches: touches }));
+  } else {
+    container.dispatchEvent(new WheelEvent("wheel", { deltaY: -120, ...wheel }));
+  }
+  expectReader(policy, expectedReader);
+  publishTranscriptScroll(container, { type: "composer-input" });
+  nativeScroll(container, 1572);
+  expect(container.scrollTop).toBe(expectedReader ? 1572 : 1600);
+  expectReader(policy, expectedReader);
+});
+
+it.each([
+  { top: 120, overscroll: "auto", follows: true, input: "wheel" },
+  { top: 0, overscroll: "auto", follows: false, input: "wheel" },
+  { top: 0, overscroll: "contain", follows: true, input: "wheel" },
+  { top: 0, overscroll: "contain", follows: true, input: "PageUp" },
+])(
+  "respects nested $input ownership at $top with $overscroll chaining",
+  async ({ top, overscroll, follows, input }) => {
+    stubAnimationFrames();
+    const { policy, transcript, mount } = createPolicyTranscript(`nested-${top}-${overscroll}`);
+    const { container } = await mount();
+    viewport(container, 400, 2000);
+    connectPolicy(policy, transcript, container);
+    transcript.scrollToEnd({ behavior: "auto" });
+    nativeScroll(container, 1600);
+    const nested = container.appendChild(document.createElement("div"));
+    nested.style.overflowY = "auto";
+    nested.style.overscrollBehaviorY = overscroll;
+    viewport(nested, 100, 400);
+    nested.scrollTop = top;
+    nested.dispatchEvent(
+      input === "wheel"
+        ? new WheelEvent("wheel", { deltaY: -120, bubbles: true })
+        : new KeyboardEvent("keydown", { key: input, bubbles: true }),
+    );
+    expectReader(policy, !follows);
+  },
+);
+
+it("keeps a wheel departure when adjacent composer input precedes its native scroll event", async () => {
+  stubAnimationFrames();
+  const { policy, transcript, mount } = createPolicyTranscript("wheel-before-composer-input");
+  const { container } = await mount();
+  viewport(container, 400, 2000);
+  connectPolicy(policy, transcript, container);
+  transcript.scrollToEnd({ behavior: "auto" });
+  nativeScroll(container, 1600);
+
+  container.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+  publishTranscriptScroll(container, { type: "composer-input" });
+  nativeScroll(container, 1480);
+
+  expect(container.scrollTop).toBe(1480);
+  expectReader(policy, true);
+  publishTranscriptScroll(container, { type: "composer-layout", changed: true });
+  expect(container.scrollTop).toBe(1480);
+});
+
+it.each([
   ["PageUp", () => new KeyboardEvent("keydown", { key: "PageUp" }), true],
   ["ArrowUp", () => new KeyboardEvent("keydown", { key: "ArrowUp" }), true],
   ["Home", () => new KeyboardEvent("keydown", { key: "Home" }), true],
@@ -354,6 +443,65 @@ it("grows the native range before compensating fractional row growth above a rea
   expect(container.scrollTop).toBe(before + 40.375);
   container.dispatchEvent(new Event("scroll"));
   expectReader(policy, true);
+});
+
+it("keeps native reader movement before a queued message-anchor restoration", async () => {
+  const flushFrames = stubAnimationFrames();
+  transcriptDomState.measuredRowHeight = 3000;
+  const paneId = "reader-before-anchor-restoration";
+  const transcript = makeTranscript(() => paneId, { canFollowEnd: () => false });
+  const refs = transcript.renderSession(
+    `agent:main:${paneId}`,
+    (session) => session.messageElements,
+  );
+  const rows: TestContentRow[] = [
+    {
+      kind: "content",
+      key: "long-row",
+      content: (
+        <div
+          ref={refs.forKey("reader-message")}
+          class="chat-bubble"
+          data-message-id="reader-message"
+        >
+          Retained message
+        </div>
+      ),
+    },
+  ];
+  const { container, session, renderRows } = await mountTestTranscript(paneId, rows, transcript);
+  session.layout.ready = true;
+  viewport(container, 600, 3000);
+  const bubble = expectDefined(container.querySelector(".chat-bubble"), "retained message");
+  Object.defineProperty(bubble, "getBoundingClientRect", {
+    value: () => new DOMRect(0, 1000 - container.scrollTop, 800, 100),
+  });
+  const messageRows = new Map([["reader-message", "long-row"]]);
+  session.syncMessageRows(messageRows, messageRows);
+  transcript.scrollToOffset(824);
+  renderRows(rows);
+  flushFrames();
+  await Promise.resolve();
+  await Promise.resolve();
+  container.dispatchEvent(new WheelEvent("wheel", { deltaY: -24 }));
+  nativeScroll(container, 800);
+  expect(transcript.isPositionSettled).toBe(true);
+  expect(container.scrollTop).toBe(800);
+  expect(bubble.getBoundingClientRect().top).toBe(200);
+  session.preserveReaderPosition();
+  renderRows(rows);
+
+  // The browser moves first; its scroll event can follow the queued geometry commit.
+  container.scrollTop = 776;
+  expect(bubble.getBoundingClientRect().top).toBe(224);
+  await Promise.resolve();
+  await Promise.resolve();
+
+  expect(container.scrollTop).toBe(776);
+  expect(bubble.getBoundingClientRect().top).toBe(224);
+  container.dispatchEvent(new Event("scroll"));
+  await Promise.resolve();
+  expect(container.scrollTop).toBe(776);
 });
 
 it("preserves reader policy when row measurement clamps a positive adjustment to the end", async () => {

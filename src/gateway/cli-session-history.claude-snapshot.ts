@@ -21,7 +21,7 @@ const OVERSIZED_HISTORY_PLACEHOLDER =
 type Message = Record<string, unknown>;
 export type ClaudeCliHistoryParams = {
   cliSessionId: string;
-  homeDir?: string;
+  projectsDir?: string;
   localSessionId?: string;
   reseedReceipt?: CliSessionReseedReceipt;
 };
@@ -134,6 +134,8 @@ export async function visitClaudeCliSessionMessages(
   const reseedState = createClaudeReseedImportState(params);
   let bytesSinceYield = 0;
   let lineNumber = 0;
+  // The native prompt, synthetic ones included, that the following rows answer.
+  let turnExternalId: unknown;
   // Production imports already run in the history worker. A pathological decode can
   // fail that read under its heap limit; the external transcript is never changed.
   for await (const line of lines) {
@@ -159,6 +161,18 @@ export async function visitClaudeCliSessionMessages(
       if (!entry) {
         continue;
       }
+      const content = entry.message?.content;
+      // Tool results, skill context, compaction summaries and sidechains continue a turn.
+      const continuesTurn =
+        entry.isSidechain === true ||
+        entry.isCompactSummary === true ||
+        entry.isVisibleInTranscriptOnly === true ||
+        "sourceToolUseID" in entry ||
+        (Array.isArray(content) &&
+          content.some((block) => asOptionalRecord(block)?.type === "tool_result"));
+      if (entry.type === "user" && !continuesTurn) {
+        turnExternalId = entry.uuid;
+      }
       parsedMessage = parseClaudeCliHistoryEntry(
         entry,
         params.cliSessionId,
@@ -166,6 +180,11 @@ export async function visitClaudeCliSessionMessages(
         toolNames,
         { reseedMode: "recover", reseedState },
       );
+      // Parsing built this row's metadata; the history merge strips the anchor.
+      const meta = asOptionalRecord(parsedMessage?.["__openclaw"]);
+      if (meta && typeof turnExternalId === "string") {
+        meta.turnExternalId = turnExternalId;
+      }
     } catch {
       // Ignore malformed external history entries.
     }

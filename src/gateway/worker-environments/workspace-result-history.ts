@@ -1,13 +1,22 @@
-import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import { prepareWorktreeFilesystemMutation } from "../../agents/worktrees/filesystem-native.js";
+import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
+import {
+  composeSessionSourceAssertion,
+  prepareSessionSourceEffect,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
+import { openCommandStdinFile } from "../../process/command-stdin-file.js";
 import { runCommandWithTimeout, runExec, spawnCommand } from "../../process/exec.js";
 import { MAX_WORKSPACE_RESULT_GIT_PACK_BYTES } from "../../worker/node-workspace-transfer-protocol.js";
 import type { RepositoryGitHistory } from "./session-repository-checkpoints.types.js";
 import { boundedWorkerError } from "./worker-error.js";
-import { computeWorkspaceManifest } from "./workspace-manifest-worker.js";
+import {
+  computeWorkspaceManifest,
+  prepareWorkspaceTemporaryDirectory,
+} from "./workspace-manifest-worker.js";
 import {
   requireWorkspaceResultGit as git,
   withWorkspaceResultRefMutation,
@@ -23,7 +32,9 @@ export async function importWorkerWorkspaceHistory(params: {
   root: string;
   gitHistory?: WorkerWorkspaceGitHistory;
   gitPackPath?: string;
-  assertCurrent?: () => void;
+  baseEnv?: NodeJS.ProcessEnv;
+  assertCurrent?: SessionSourceAssertion;
+  workerAuthority?: WorktreeWorkerAuthority;
 }): Promise<void> {
   const history = params.gitHistory;
   if (
@@ -36,13 +47,26 @@ export async function importWorkerWorkspaceHistory(params: {
   if (!params.gitPackPath) {
     throw new Error("Cloud workspace Git history has no pack");
   }
-  const pack = await fs.open(params.gitPackPath, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
-    const info = await pack.stat();
-    if (!info.isFile() || info.size > MAX_WORKSPACE_RESULT_GIT_PACK_BYTES) {
+  {
+    await using pack = await openCommandStdinFile(params.gitPackPath);
+    if (pack.size > MAX_WORKSPACE_RESULT_GIT_PACK_BYTES) {
       throw new Error("Cloud workspace Git pack exceeds its byte limit");
     }
-    params.assertCurrent?.();
+    const commitGuard = composeSessionSourceAssertion([
+      params.assertCurrent,
+      params.workerAuthority?.assertCurrent,
+    ]);
+    const source = await prepareSessionSourceEffect(commitGuard);
+    await using _ = { [Symbol.asyncDispose]: async () => await source.release?.() };
+    await prepareWorktreeFilesystemMutation(
+      {
+        commitGuard,
+        workerAuthority: params.workerAuthority,
+        signal: params.workerAuthority?.signal,
+      },
+      source,
+    );
+    source.assertCurrent();
     await runExec(
       "git",
       workspaceResultGitCommand(params.root, [
@@ -52,16 +76,17 @@ export async function importWorkerWorkspaceHistory(params: {
         "--strict",
       ]).slice(1),
       {
-        stdinFileDescriptor: pack.fd,
+        stdinFile: pack.stdinFile,
+        baseEnv: params.baseEnv,
         timeoutMs: WORKSPACE_RESULT_GIT_TIMEOUT_MS,
         maxBuffer: 1024 * 1024,
       },
     );
-  } finally {
-    await pack.close();
   }
   // Verify the received graph, not just the worker's ancestry claim.
-  await git(params.root, ["merge-base", "--is-ancestor", history.baseCommit, history.headCommit]);
+  await git(params.root, ["merge-base", "--is-ancestor", history.baseCommit, history.headCommit], {
+    baseEnv: params.baseEnv,
+  });
   params.assertCurrent?.();
 }
 
@@ -245,9 +270,7 @@ export async function withRepositoryCheckpointHistory<T>(
           if (!Number.isSafeInteger(size) || size > MAX_WORKSPACE_RESULT_GIT_PACK_BYTES) {
             throw new Error("retained Git pack exceeds its byte limit");
           }
-          directory = await fs.mkdtemp(
-            path.join(resolvePreferredOpenClawTmpDir(), "repository-history-"),
-          );
+          directory = await prepareWorkspaceTemporaryDirectory("repository-history-");
           const gitPackPath = path.join(directory, "history.pack");
           await spawnCommand(workspaceResultGitCommand(params.root, ["cat-file", "blob", object]), {
             stdout: { file: gitPackPath },

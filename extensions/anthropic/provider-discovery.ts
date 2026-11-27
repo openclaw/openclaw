@@ -1,5 +1,5 @@
 /**
- * Claude CLI provider discovery descriptor. It exposes subscription-backed
+ * Claude CLI provider discovery descriptor. It exposes native-login
  * synthetic auth for catalog/runtime discovery without full Anthropic registration.
  */
 import type {
@@ -50,12 +50,27 @@ async function prepareClaudeCliAuth({
   }
   const result = await capture.pending;
   signal?.throwIfAborted();
+  const kind =
+    result.status === "available" && result.authMethod === "claude.ai"
+      ? ("subscription" as const)
+      : result.status === "available" &&
+          ["api_key", "api_key_helper", "third_party"].includes(result.authMethod ?? "")
+        ? ("api" as const)
+        : ("native" as const);
+  const plan = result.status === "available" ? result.subscriptionType : undefined;
   return result.status !== "missing" && result.status !== "not-installed"
     ? {
         apiKey: CLAUDE_CLI_NATIVE_AUTH_MARKER,
         source: "Claude CLI native auth",
         mode: "oauth" as const,
-        nativeAuth: { runtime: CLAUDE_CLI_BACKEND_ID, mode: "oauth" as const },
+        nativeAuth: {
+          runtime: CLAUDE_CLI_BACKEND_ID,
+          mode: "oauth" as const,
+          display: {
+            kind,
+            ...(plan ? { plan: plan[0]!.toUpperCase() + plan.slice(1) } : {}),
+          },
+        },
       }
     : undefined;
 }

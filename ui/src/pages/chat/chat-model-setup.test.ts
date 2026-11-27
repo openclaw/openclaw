@@ -9,6 +9,7 @@ const loaded = {
   connected: true,
   agentsLoaded: true,
   selectedAgentFound: true,
+  modelCatalogState: { hasSnapshot: true, status: "ready" as const },
 };
 
 it.each([
@@ -56,8 +57,8 @@ it.each(["missing-auth", "auth-failed"] as const)(
         modelOverrides: {},
         sessionKey: "agent:main:worker-test",
         sessionsResult: null,
-        catalogError: null,
         onSetup: () => undefined,
+        onOpenModels: () => undefined,
         activeSession: { ...session, placement },
         ...overrides,
       }).modelUnavailableBanner;
@@ -72,10 +73,20 @@ it.each(["missing-auth", "auth-failed"] as const)(
         },
       }),
     ).toBeUndefined();
-    expect(banner(active, { catalogRetired: true })).toBeDefined();
+    expect(
+      banner(active, { modelCatalogState: { ...loaded.modelCatalogState, retired: true } }),
+    ).toBeUndefined();
     expect(
       banner(active, {
-        modelSelectionPolicy: { restricted: true, defaultModel: null },
+        modelCatalogState: { ...loaded.modelCatalogState, retired: true, status: "error" },
+      }),
+    ).toBeDefined();
+    expect(
+      banner(active, {
+        modelCatalogState: {
+          ...loaded.modelCatalogState,
+          modelSelectionPolicy: { restricted: true, defaultModel: null },
+        },
         chatModelCatalog: [],
       }),
     ).toBeDefined();
@@ -83,5 +94,207 @@ it.each(["missing-auth", "auth-failed"] as const)(
     expect(banner({ ...active, state: "local" })).toBeDefined();
     const { inference: _inference, ...proxied } = active;
     expect(banner(proxied)).toBeDefined();
+  },
+);
+
+it("reads credential readiness from the session's selected runtime route", () => {
+  const route = (id: string, ready: boolean) => ({
+    agentRuntime: { id, source: "model" as const },
+    available: ready,
+    ...(ready ? {} : { unavailableReason: "missing-auth" as const }),
+  });
+  const banner = (base: boolean, choice: boolean, runtime?: string) =>
+    resolveChatModelSetup({
+      ...loaded,
+      agentModel: "anthropic/claude-opus-5-5",
+      chatModelCatalog: [
+        {
+          id: "claude-opus-5-5",
+          name: "Claude Opus 5.5",
+          provider: "anthropic",
+          ...route("openclaw", base),
+          runtimeChoices: [route("claude-cli", choice)],
+        },
+      ],
+      modelOverrides: {},
+      sessionKey: "agent:main:main",
+      sessionsResult: null,
+      onSetup: () => undefined,
+      onOpenModels: () => undefined,
+      activeSession: {
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: 1,
+        model: "claude-opus-5-5",
+        modelProvider: "anthropic",
+        ...(runtime ? { agentRuntime: { id: runtime, source: "session-key" as const } } : {}),
+      },
+    }).modelUnavailableBanner;
+
+  expect(banner(false, true, "claude-cli")).toBeUndefined();
+  expect(banner(false, true)).toBeDefined();
+  expect(banner(true, false, "claude-cli")).toBeDefined();
+});
+
+it("offers Models for a rejected sign-in instead of setup or chat commands", () => {
+  const opened: Array<string | undefined> = [];
+  const setup: string[] = [];
+  const banner = resolveChatModelSetup({
+    ...loaded,
+    agentModel: "gemini/gemini-flash",
+    chatModelCatalog: [
+      {
+        id: "gemini-flash",
+        name: "Gemini Flash",
+        provider: "gemini",
+        available: false,
+        unavailableReason: "auth-failed",
+      },
+    ],
+    modelOverrides: {},
+    sessionKey: "agent:main:main",
+    sessionsResult: null,
+    onSetup: () => setup.push("setup"),
+    onOpenModels: (provider) => opened.push(provider),
+    activeSession: {
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt: 1,
+      model: "gemini-flash",
+      modelProvider: "gemini",
+    },
+  }).modelUnavailableBanner;
+  // The failed turn's reply asks for a new sign-in; the banner must not point elsewhere.
+  expect(banner?.text).not.toMatch(/\/models|\/help/u);
+  expect(banner?.actionLabel).toBe("Open Models");
+  banner?.onAction?.();
+  expect([opened, setup]).toEqual([["gemini"], []]);
+});
+
+it.each(["auth-failed", "cooldown"] as const)(
+  "preserves a configured route during %s despite an empty auth inventory",
+  (unavailableReason) => {
+    const route = { available: false, unavailableReason };
+    const model = { id: "model", name: "Model", provider: "example", ...route };
+    for (const entry of [
+      model,
+      {
+        ...model,
+        unavailableReason: "missing-auth" as const,
+        runtimeChoices: [{ ...route, agentRuntime: { id: "openclaw", source: "model" as const } }],
+      },
+    ]) {
+      expect(
+        requiresChatModelSetup({
+          ...loaded,
+          agentModel: "example/model",
+          chatModelCatalog: [entry],
+          modelAuthStatusResult: { ts: 1, providers: [] },
+        }),
+      ).toBe(false);
+    }
+  },
+);
+
+it.each([
+  ["empty catalog with a configured model", { chatModelCatalog: [] }, false],
+  ["empty catalog with no model configured", { chatModelCatalog: [], agentModel: "" }, true],
+  ["unavailable built-in default", {}, true],
+  ["auth still loading", { modelAuthStatusResult: null }, false],
+  ["auth read failed", { modelAuthStatusResult: { ts: 0, providers: [] } }, false],
+  [
+    "catalog still discovering",
+    { modelCatalogState: { ...loaded.modelCatalogState, pendingProviders: ["ollama"] } },
+    false,
+  ],
+  ["retired catalog", { modelCatalogState: { ...loaded.modelCatalogState, retired: true } }, false],
+  [
+    "restricted account",
+    {
+      modelCatalogState: {
+        ...loaded.modelCatalogState,
+        modelSelectionPolicy: { restricted: true, defaultModel: null },
+      },
+    },
+    false,
+  ],
+  [
+    "available local model",
+    {
+      chatModelCatalog: [
+        { id: "local", name: "Local model", provider: "ollama", available: true, local: true },
+      ],
+    },
+    false,
+  ],
+  [
+    "available alternate runtime",
+    {
+      chatModelCatalog: [
+        {
+          id: "model",
+          name: "Model",
+          provider: "example",
+          available: false,
+          runtimeChoices: [{ available: true, agentRuntime: { id: "openclaw", source: "model" } }],
+        },
+      ],
+    },
+    false,
+  ],
+  [
+    "worker-owned inference",
+    { activeSession: { key: "main", kind: "direct", updatedAt: 1, placement: active } },
+    false,
+  ],
+  [
+    "saved rejected key",
+    {
+      modelAuthStatusResult: {
+        ts: 1,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            status: "missing",
+            profiles: [{ profileId: "openai:default", type: "api_key", status: "missing" }],
+          },
+        ],
+      },
+    },
+    false,
+  ],
+  [
+    "environment key",
+    {
+      modelAuthStatusResult: {
+        ts: 1,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            status: "static",
+            profiles: [],
+            apiKey: { source: "env" },
+          },
+        ],
+      },
+    },
+    false,
+  ],
+] satisfies [string, Partial<ModelSetup>, boolean][])(
+  "handles setup readiness: %s",
+  (_name, overrides, expected) => {
+    expect(
+      requiresChatModelSetup({
+        ...loaded,
+        agentModel: "openai/gpt-6-astra",
+        chatModelCatalog: [
+          { id: "gpt-6-astra", name: "GPT-6-Astra", provider: "openai", available: false },
+        ],
+        modelAuthStatusResult: { ts: 1, providers: [] },
+        ...overrides,
+      }),
+    ).toBe(expected);
   },
 );

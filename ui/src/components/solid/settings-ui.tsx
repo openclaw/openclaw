@@ -5,7 +5,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-l
 import { t } from "../../lib/reactive/i18n.ts";
 import { Icon } from "./icon.tsx";
 import type { SettingsSegmentedProps, SettingsToggleControl } from "./settings-ui.types.ts";
-import { Switch, type SwitchSize } from "./switch.tsx";
+import { Switch } from "./switch.tsx";
 import "../tooltip.ts";
 
 export type { SettingsSegmentedProps, SettingsToggleControl } from "./settings-ui.types.ts";
@@ -46,6 +46,8 @@ type SettingsRowProps = {
   title: JSX.Element;
   description?: JSX.Element;
   control?: JSX.Element;
+  /** Preserve the control box while an initial read has no accepted value. */
+  controlPending?: boolean;
   carapace?: boolean;
   stacked?: boolean;
   stackedOnNarrow?: boolean;
@@ -105,21 +107,25 @@ export function SettingsPageHeader(props: {
   let heading!: HTMLHeadingElement;
   // Resolve once: actions may own a portal, which a second read would mount again.
   const actions = children(() => props.actions);
+  const subtitle = children(() => props.subtitle);
   onSettled(() => props.registerHeading?.(heading));
   return (
     <ShellLayoutBoundary traits={{ toolbarHeader: !props.stacked }}>
       <section
         class={[
           "content-header content-header--settings",
-          { "content-header--stacked": props.stacked },
+          {
+            "content-header--stacked": props.stacked,
+            "content-header--intro": Boolean(subtitle()),
+          },
         ]}
       >
         <div>
           <h1 class="page-title" ref={(element) => (heading = element)}>
             {props.title}
           </h1>
-          <Show when={props.subtitle}>
-            <div class="page-subtitle">{props.subtitle}</div>
+          <Show when={subtitle()}>
+            <div class="page-subtitle">{subtitle()}</div>
           </Show>
         </div>
         <Show when={actions()}>
@@ -130,48 +136,59 @@ export function SettingsPageHeader(props: {
   );
 }
 
-export function SettingsSection(props: {
+type SettingsSectionHeaderProps = {
   title?: JSX.Element;
   description?: JSX.Element;
   actions?: JSX.Element;
-  notice?: JSX.Element;
   count?: number;
-  danger?: boolean;
   carapace?: boolean;
-  children?: JSX.Element;
-}) {
+};
+
+export function SettingsSectionHeader(props: SettingsSectionHeaderProps) {
+  return (
+    <Show when={props.title || props.description || props.actions}>
+      <div class={["settings-section__header", { "oc-settings-section-header": props.carapace }]}>
+        <Show when={props.title || props.description}>
+          <div
+            class={["settings-section__copy", { "oc-settings-section-heading": props.carapace }]}
+          >
+            <Show when={props.title}>
+              <h2
+                class={[
+                  "settings-section__heading",
+                  { "oc-settings-section-title": props.carapace },
+                ]}
+              >
+                {props.title}
+                <Show when={props.count !== undefined}>
+                  {" "}
+                  <span class="settings-count">{props.count}</span>
+                </Show>
+              </h2>
+            </Show>
+            <Show when={props.description}>
+              <p class="settings-section__desc">{props.description}</p>
+            </Show>
+          </div>
+        </Show>
+        <Show when={props.actions}>
+          <div class="settings-section__actions">{props.actions}</div>
+        </Show>
+      </div>
+    </Show>
+  );
+}
+
+export function SettingsSection(
+  props: SettingsSectionHeaderProps & {
+    notice?: JSX.Element;
+    danger?: boolean;
+    children?: JSX.Element;
+  },
+) {
   return (
     <section class={["settings-section", { "oc-settings-section": props.carapace }]}>
-      <Show when={props.title || props.description || props.actions}>
-        <div class={["settings-section__header", { "oc-settings-section-header": props.carapace }]}>
-          <Show when={props.title || props.description}>
-            <div
-              class={["settings-section__copy", { "oc-settings-section-heading": props.carapace }]}
-            >
-              <Show when={props.title}>
-                <h2
-                  class={[
-                    "settings-section__heading",
-                    { "oc-settings-section-title": props.carapace },
-                  ]}
-                >
-                  {props.title}
-                  <Show when={props.count !== undefined}>
-                    {" "}
-                    <span class="settings-count">{props.count}</span>
-                  </Show>
-                </h2>
-              </Show>
-              <Show when={props.description}>
-                <p class="settings-section__desc">{props.description}</p>
-              </Show>
-            </div>
-          </Show>
-          <Show when={props.actions}>
-            <div class="settings-section__actions">{props.actions}</div>
-          </Show>
-        </div>
-      </Show>
+      <SettingsSectionHeader {...props} />
       {props.notice}
       <SettingsGroup carapace={props.carapace}>{props.children}</SettingsGroup>
     </section>
@@ -241,7 +258,18 @@ export function SettingsRow(props: SettingsRowProps & { role?: "alert" | "status
         carapace={props.carapace}
       />
       <Show when={control() !== undefined && control() !== null && control() !== false}>
-        <div class={["settings-row__control", { "oc-settings-row-control": props.carapace }]}>
+        <div
+          class={[
+            "settings-row__control",
+            {
+              "oc-settings-row-control": props.carapace,
+              "settings-row__control--pending": props.controlPending,
+              skeleton: props.controlPending,
+            },
+          ]}
+          aria-busy={props.controlPending ? "true" : undefined}
+          inert={props.controlPending}
+        >
           {control()}
         </div>
       </Show>
@@ -265,16 +293,6 @@ export function SettingsNavRow(
   );
 }
 
-export function SettingsToggle(
-  props: SettingsToggleControl & {
-    ariaLabel: string;
-    size?: SwitchSize;
-    inputRef?: (element: HTMLInputElement) => void;
-  },
-) {
-  return <Switch {...props} />;
-}
-
 export function SettingsToggleRow(
   props: SettingsToggleControl & {
     icon?: JSX.Element;
@@ -283,6 +301,7 @@ export function SettingsToggleRow(
     description?: JSX.Element;
     /** Secondary actions beside the switch, such as opening related settings. */
     actions?: JSX.Element;
+    controlClass?: string;
   },
 ) {
   const titleId = nextSettingsRadioName();
@@ -306,7 +325,7 @@ export function SettingsToggleRow(
     >
       {props.icon}
       <SettingsRowText id={titleId} title={props.title} description={props.description} />
-      <div class="settings-row__control">
+      <div class={["settings-row__control", props.controlClass]}>
         {props.actions}
         <Switch
           {...props}
@@ -317,12 +336,6 @@ export function SettingsToggleRow(
         />
       </div>
     </div>
-  );
-}
-
-export function SettingsDefaultDescription(props: { value: string; overridden: boolean }) {
-  return (
-    <Show when={props.overridden}>{t("configForm.defaultValue", { value: props.value })}</Show>
   );
 }
 
@@ -603,8 +616,6 @@ export function SettingsSecretInput(props: {
   placeholder?: string;
   visible: boolean;
   disabled?: boolean;
-  showLabel: string;
-  hideLabel: string;
   toggleLabel: string;
   onInput: (next: string) => void;
   onToggle: () => void;
@@ -622,18 +633,16 @@ export function SettingsSecretInput(props: {
         disabled={props.disabled}
         onInput={(event) => props.onInput(event.currentTarget.value)}
       />
-      <openclaw-tooltip prop:content={props.visible ? props.hideLabel : props.showLabel}>
-        <button
-          type="button"
-          class="settings-secret__toggle"
-          aria-label={props.toggleLabel}
-          aria-pressed={props.visible ? "true" : "false"}
-          disabled={props.disabled}
-          onClick={() => props.onToggle()}
-        >
-          <Icon name={props.visible ? "eye" : "eyeOff"} />
-        </button>
-      </openclaw-tooltip>
+      <button
+        type="button"
+        class="settings-secret__toggle"
+        aria-label={props.toggleLabel}
+        aria-pressed={props.visible ? "true" : "false"}
+        disabled={props.disabled}
+        onClick={() => props.onToggle()}
+      >
+        <Icon name={props.visible ? "eye" : "eyeOff"} />
+      </button>
     </span>
   );
 }

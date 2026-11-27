@@ -112,8 +112,10 @@ enum ChatTranscriptRow: Hashable, Identifiable {
     var startsTurn: Bool {
         switch self {
         case let .message(message):
+            // A continuation keeps the turn it resumes, even where it also carries `turnBoundary`
+            // (web chat-turn-boundary.ts:88-102).
             message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user" ||
-                message.turnBoundary == true || message.isForwardedTurnBoundary
+                (message.turnBoundary == true && !message.resumesProjectedTurn) || message.isForwardedTurnBoundary
         case .systemNotice:
             true
         case .historyDivider, .completedWork:
@@ -251,5 +253,12 @@ extension ChatTranscriptRow {
         }
 
         return result
+    }
+}
+
+extension OpenClawChatMessage {
+    /// A row woken by its own exec, a restart, or a subagent: it resumes this session's work.
+    var resumesProjectedTurn: Bool {
+        ["exec", "restart", "subagent"].contains(self.sourceMetadata?.continuation?.source ?? "")
     }
 }

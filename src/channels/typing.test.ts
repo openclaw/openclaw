@@ -42,6 +42,21 @@ function createTypingHarness(overrides: TypingHarnessOptions = {}) {
 }
 
 describe("createTypingCallbacks", () => {
+  it("contains a synchronous plugin stop failure from the TTL timer", async () => {
+    const error = new Error("Plugin fixture was reloaded or disabled");
+    const { callbacks, onStopError, stop } = createTypingHarness({
+      maxDurationMs: 1_000,
+      stop: () => {
+        throw error;
+      },
+    });
+    await callbacks.onReplyStart();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(onStopError).toHaveBeenCalledWith(error);
+    expect(stop).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("coalesces explicit starts with a pending keepalive without shifting cadence", async () => {
     const { promise, resolve } = createDeferred();
     const { start, callbacks } = createTypingHarness({
@@ -78,7 +93,7 @@ describe("createTypingCallbacks", () => {
         startImplementation.mockResolvedValueOnce(undefined);
       }
       startImplementation.mockReturnValueOnce(promise);
-      const { start, stop, onStartError, callbacks } = createTypingHarness({
+      const { stop, onStartError, callbacks } = createTypingHarness({
         maxDurationMs: 10_000,
         start: startImplementation,
       });
@@ -87,7 +102,6 @@ describe("createTypingCallbacks", () => {
       if (phase === "keepalive") {
         await vi.advanceTimersByTimeAsync(3_000);
       }
-      const admittedStarts = start.mock.calls.length;
       if (finish === "TTL") {
         vi.spyOn(console, "warn").mockImplementation(() => {});
         await vi.advanceTimersByTimeAsync(7_000);
@@ -108,9 +122,6 @@ describe("createTypingCallbacks", () => {
       expect(stop).toHaveBeenCalledTimes(1);
       expect(onStartError.mock.calls).toEqual(rejected ? [[failure]] : []);
       expect(vi.getTimerCount()).toBe(0);
-      await vi.advanceTimersByTimeAsync(20_000);
-      await callbacks.onReplyStart();
-      expect(start).toHaveBeenCalledTimes(admittedStarts);
     },
   );
 

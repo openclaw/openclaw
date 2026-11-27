@@ -1,3 +1,4 @@
+import { abortControlledSubagents } from "../../agents/subagents/cancel-descendants.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
@@ -14,7 +15,6 @@ import {
 } from "../../sessions/session-controller.stop.js";
 import { notifySessionRunStopped } from "../../sessions/session-run-stopped.js";
 import { abortChatRunById, createChatAbortSignalReason, type ChatAbortOps } from "../chat-abort.js";
-import { abortControlledSubagents } from "./chat-abort-descendants.js";
 
 type ExactClientRunStopResult = {
   aborted: boolean;
@@ -48,6 +48,7 @@ export async function stopExactClientRun(params: {
   runId: string;
   active: RpcSourceRef;
   userInitiated?: boolean;
+  participationOnly?: boolean;
   lifecycleRevision?: string;
   assertCurrent?: () => void;
   hookContext: Omit<SessionStopHookContext, "sessionKey" | "sessionId">;
@@ -105,6 +106,14 @@ export async function stopExactClientRun(params: {
           cancel,
           assertCurrent,
           stopReason: "rpc",
+          // An exact chat.abort is a deliberate cancellation of the pending input,
+          // independently of the caller's userInitiated presentation flag.
+          pendingInputEndCause:
+            params.stoppedSession &&
+            active.adapter.kind === "chat-send" &&
+            active.input.phase === "injecting"
+              ? "user-stop"
+              : undefined,
           onAbortPrepared: () => {
             // Announce before the run commits cancellation, so consumers act before its own
             // completion arrives. The notification never fails Stop.
@@ -120,6 +129,10 @@ export async function stopExactClientRun(params: {
           onAbortCommitted: markAborted,
         }).aborted,
       stopChildren: async (applyParentStop) => {
+        if (params.participationOnly) {
+          await applyParentStop();
+          return { stopped: 0, failed: 0 };
+        }
         result.descendants = await abortControlledSubagents({
           cfg: params.cfg,
           sessionKey,

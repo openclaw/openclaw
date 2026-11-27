@@ -84,7 +84,7 @@ it("keeps Retry and Discard reachable when exact history deduplicates the reject
     onRetrySessionPlacementStartup,
     onDiscardSessionPlacementStartup,
   });
-  expect(container.querySelectorAll(".chat-group.user")).toHaveLength(1);
+  await waitForSolid(() => expect(container.querySelectorAll(".chat-group.user")).toHaveLength(1));
   expect(container.querySelector(".chat-send-status__retry")).toBeNull();
   const errorAction = (label: string) =>
     Array.from(container.querySelectorAll<HTMLButtonElement>(".chat-error button")).find(
@@ -127,6 +127,9 @@ it("keeps the retained initial turn's Retry action usable while ordinary sending
     onRetrySessionPlacementStartup,
     onQueueRetry,
   });
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-thread")?.textContent).toContain("original prompt"),
+  );
   const transcript = container.querySelector(".chat-thread")?.textContent ?? "";
   expect(transcript).toContain("original prompt");
   expect(transcript).toContain("later draft");

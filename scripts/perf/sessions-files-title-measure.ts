@@ -28,6 +28,7 @@ import {
   createGatewayBenchEnv,
   writePluginFixtures,
 } from "../lib/gateway-bench-runtime.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -233,12 +234,7 @@ for (let i = 0; i < 20; i++) {
 globalThis.gc?.();
 const inspector = values.instrument === "allocation" ? new Session() : undefined;
 if (inspector) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 4096,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 4096);
 }
 const workerBefore = new Map(
   getWorkerMessageMetrics().map((metric) => [

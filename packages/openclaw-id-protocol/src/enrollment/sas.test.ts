@@ -40,4 +40,36 @@ describe("SAS approval", () => {
     const sealed = await sealHandoff(ssE, transcript, { root_pub: "ed25519:r" });
     await expect(openHandoff(ssN, transcript, sealed)).resolves.toEqual({ root_pub: "ed25519:r" });
   });
+
+  it("binds the claimed member account without changing ordinary device commitments", async () => {
+    const n = await generateEphemeralKey(new Uint8Array(32).fill(1));
+    const member = { ...start, member_account_id: "alice" };
+    const commit = await sasCommitment(n.publicKey, member);
+    expect(await verifySasCommitment(commit, n.publicKey, member)).toBe(true);
+    expect(await verifySasCommitment(commit, n.publicKey, start)).toBe(false);
+    expect(
+      await verifySasCommitment(commit, n.publicKey, { ...member, member_account_id: "bob" }),
+    ).toBe(false);
+  });
+
+  it("binds an app's node key and surface into the commitment and code", async () => {
+    const n = await generateEphemeralKey(new Uint8Array(32).fill(1));
+    const node = {
+      peer_key: `iroh:${"33".repeat(32)}`,
+      description: { display_name: "Mac", platform: "macos", commands: ["system.run"], caps: [] },
+    };
+    const withNode: SasStart = { ...start, node };
+    const plain = await sasCommitment(n.publicKey, start);
+    const bound = await sasCommitment(n.publicKey, withNode);
+    expect(bound).not.toBe(plain);
+    // A browser's start (no node) commits exactly as before.
+    expect(plain).toBe(await sasCommitment(n.publicKey, { ...start }));
+    const swapped: SasStart = { ...start, node: { ...node, peer_key: `iroh:${"44".repeat(32)}` } };
+    expect(await verifySasCommitment(bound, n.publicKey, swapped)).toBe(false);
+    const widened: SasStart = {
+      ...start,
+      node: { ...node, description: { ...node.description, caps: ["screen"] } },
+    };
+    expect(await verifySasCommitment(bound, n.publicKey, widened)).toBe(false);
+  });
 });

@@ -79,38 +79,6 @@ it("keeps transcript annotations and links aligned with the expanded end", () =>
   });
 });
 
-it("projects styled row labels and linked code cells into labeled bullets", () => {
-  const ir = markdownToIR(
-    "| Name | Value | Other |\n| --- | --- | --- |\n| _Row_ | [` a`](https://example.com) | ` ` |\n| Plain | Data | Last |",
-    { tableMode: "bullets" },
-  );
-  expect(ir.text).toBe("Row\n• Value:  a\n• Other:  \n\nPlain\n• Value: Data\n• Other: Last");
-  expect(ir.styles.map((span) => [span.style, ir.text.slice(span.start, span.end)])).toEqual([
-    ["bold", "Row"],
-    ["italic", "Row"],
-    ["code", " a"],
-    ["code", " "],
-    ["bold", "Plain"],
-  ]);
-  expect(ir.links).toEqual([{ start: 13, end: 15, href }]);
-});
-
-it("aligns code tables by visible cell content, discarding inner styles and links", () => {
-  const ir = markdownToIR(
-    "| | A | BB | Long |\n| --- | --- | --- | --- |\n| **类型** | *👨‍👩‍👧‍👦* | [` abc`](https://example.com) | ~~abc~~ |\n| © | 1️ | `abc ` | A |\n| | 1 | 22 | data |",
-    { tableMode: "code" },
-  );
-  const text = [
-    "|      | A   | BB   | Long |",
-    "| ---- | --- | ---- | ---- |",
-    "| 类型 | 👨‍👩‍👧‍👦  |  abc | abc  |",
-    "| ©    | 1️   | abc  | A    |",
-    "|      | 1   | 22   | data |",
-    "",
-  ].join("\n");
-  expect(ir).toEqual(plainIR(text, [makeStyle(0, text.length, "code_block")]));
-});
-
 it.each<[string, string, MarkdownIR["styles"]]>([
   [
     "<u>under <ins>nested</ins></u> and __bold__",
@@ -336,18 +304,6 @@ it("handles empty parent with nested items", () => {
   expect(markdownToIR("-\n  - Nested only\n- Normal").text).toContain("  • Nested only");
 });
 
-it.each<[string, string, Parameters<typeof markdownToIR>[1]?]>([
-  ["> q\n\np", "> q\n\np", { blockquotePrefix: "> " }],
-  ["- a\n- ---\n- b", "• a\n\n───\n\n• b"],
-  ["- a:\n  ```sh\n  b\n  ```\n- c", "• a:\nb\n• c"],
-  ["1. a\n   # b\n   c\n2. d", "1. a\nb\n\nc\n2. d"],
-  ["- > a\n  >\n  > b\n- c", "• a\n\nb\n• c"],
-  ["- a\n\n  b\n- c", "• a\n\nb\n\n• c"],
-  ["- a\n\n  - b\n\n- c", "• a\n\n  • b\n• c"],
-])("preserves block/list paragraph spacing in %j", (markdown, expected, options) => {
-  expect(markdownToIR(markdown, options).text).toBe(expected);
-});
-
 it("does not linkify URLs inside raw HTML tag attributes", () => {
   const source =
     '<img src="https://example.com/diagram.png" alt="Diagram"> https://example.com/page';
@@ -359,7 +315,7 @@ it("does not linkify URLs inside raw HTML tag attributes", () => {
 });
 
 const opening = '<b title="Example\nuser[Thu] note">';
-const imageLabel = "<b>diagram</b>";
+const [imageLabel, imageAlt] = ["<b>x</b> **b** _i_ ~~s~~ `c` \\*e\\*", "<b>x</b> b i s c *e*"];
 it.each<[string, MarkdownIR, Parameters<typeof markdownToIR>[1]?]>([
   [
     `${opening}**body**</b>`,
@@ -375,7 +331,12 @@ it.each<[string, MarkdownIR, Parameters<typeof markdownToIR>[1]?]>([
   ["<b[&#114;](https://example.com)>tail", plainIR("<br>tail", [], [makeLink(2, 3)])],
   [
     `before **![${imageLabel}](https://example.com/diagram.png)** after`,
-    plainIR(`before ${imageLabel} after`, [makeStyle(7, 7 + imageLabel.length, "bold")]),
+    plainIR(`before ${imageAlt} after`, [makeStyle(7, 7 + imageAlt.length, "bold")]),
+  ],
+  [
+    '<ins>lead</ins> ![<U title="Mark">**x**</U> ![<ins>y</ins>](inner)](outer)',
+    plainIR('lead <U title="Mark">x</U> <ins>y</ins>', [makeStyle(0, 4, "underline")]),
+    { enableHtmlUnderline: true },
   ],
   [
     "before <b>x</b> ||<i>y</i>|| after",

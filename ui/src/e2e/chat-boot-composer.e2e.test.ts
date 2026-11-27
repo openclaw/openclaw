@@ -194,6 +194,24 @@ suite.define(() => {
     },
   );
 
+  it("drops an empty early composer when the route cannot open", async () => {
+    await suite.withPage({ viewport }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        mainSessionKey: "agent:main:main",
+        heldMethods: ["connect"],
+        awaitInitialRoster: false,
+      });
+      await page.goto(`${suite.server.baseUrl}chat/main/deadbeef`, {
+        waitUntil: "domcontentloaded",
+      });
+      await page.locator("#openclaw-boot-composer").waitFor({ state: "visible" });
+      await gateway.waitForRequest("connect");
+      await gateway.resolveDeferred("connect");
+      await page.locator(".session-route-not-found").waitFor({ state: "visible" });
+      expect(await page.locator("#openclaw-boot-composer").count()).toBe(0);
+    });
+  });
+
   it("never sends early input to a session the route cannot open", async () => {
     await suite.withPage({ viewport }, async ({ page }) => {
       const gateway = await installMockGateway(page, {

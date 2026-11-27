@@ -41,5 +41,6 @@
   color: var(--danger);
   font-size: var(--control-ui-text-xs);
   line-height: 1.45;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
 }

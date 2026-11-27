@@ -13,10 +13,7 @@ import {
   ToolAuthorizationError,
   ToolInputError,
 } from "./common.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   getInProcessGatewayToolContext,
   type AgentToolGatewayRequestCaller,
@@ -30,7 +27,7 @@ type ControlTarget = {
   key: string;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string | null;
-  operation: "archive" | "restore" | "stop";
+  operation: "archive" | "restore" | "stop" | "snooze";
   restricted: boolean;
 };
 
@@ -69,14 +66,12 @@ export async function callSessionToolControl<T>(
 
 export function captureSessionStopCaller() {
   const caller = getGatewayToolCallerIdentity();
-  const assertCurrent = captureGatewayToolCallerAssertion();
-  if (!caller || !assertCurrent || !getInProcessGatewayToolContext()) {
+  if (!caller?.operationalRunInstance || !getInProcessGatewayToolContext()) {
     throw new ToolAuthorizationError(
       "Session stop requires its admitted in-process Gateway caller",
     );
   }
-  assertCurrent();
-  return { agentId: caller.agentId, sessionKey: caller.sessionKey, assertCurrent };
+  return { agentId: caller.agentId, sessionKey: caller.sessionKey };
 }
 
 export async function stopSessionTool(
@@ -101,7 +96,6 @@ export async function stopSessionTool(
   if (runId && params.clearQueued === true) {
     throw new ToolInputError("Exact-run stop cannot clear unrelated queued followups");
   }
-  agentToolCaller.assertCurrent();
   signal?.throwIfAborted();
   const gateway = getInProcessGatewayToolContext();
   const custody = await captureOperatorToolGatewayContinuationContext({
@@ -116,7 +110,6 @@ export async function stopSessionTool(
   let settling = false;
   try {
     control = await custody.run(() => prepareSessionToolControlTarget(target));
-    agentToolCaller.assertCurrent();
     signal?.throwIfAborted();
     const selected = control;
     // Accepted Stop belongs to the Gateway, not the calling turn's reply deadline.

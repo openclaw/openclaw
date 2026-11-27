@@ -26,6 +26,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { Context, Model } from "@openclaw/llm-core";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -199,12 +200,7 @@ const elapsedMs = performance.now() - started;
 const used = process.threadCpuUsage(cpu);
 global.gc();
 const inspector = new Session();
-inspector.connect();
-await inspector.post("HeapProfiler.startSampling", {
-  samplingInterval: 16384,
-  includeObjectsCollectedByMajorGC: true,
-  includeObjectsCollectedByMinorGC: true,
-});
+await startCollectedHeapSampling(inspector, 16384);
 run(iterations);
 const { profile } = await inspector.post("HeapProfiler.stopSampling");
 await inspector.post("Profiler.enable");

@@ -1,5 +1,6 @@
 import { bindAbortRelay } from "../utils/fetch-timeout.js";
 import { normalizeRequestInitHeadersForFetch } from "./fetch-headers.js";
+import { responseWithAbortSignal } from "./net/guarded-body-stream.js";
 
 type FetchWithPreconnect = typeof fetch & {
   preconnect: (url: string, init?: { credentials?: RequestCredentials }) => void;
@@ -78,7 +79,13 @@ export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch 
     };
     try {
       const response = fetchImpl(input, { ...patchedInit, signal: controller.signal });
-      return response.finally(cleanup);
+      // Fetch settles at headers; the relay belongs to the response body's lifetime.
+      return response
+        .then((value) => responseWithAbortSignal(value, controller.signal, cleanup))
+        .catch((error: unknown) => {
+          cleanup();
+          throw error;
+        });
     } catch (error) {
       cleanup();
       throw error;

@@ -3,6 +3,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { getPluginCliCommandDescriptors } from "./cli-root-descriptors.js";
 
 const mocks = vi.hoisted(() => ({ load: vi.fn(), snapshot: vi.fn() }));
+// mock-isolation: Manifest help must not initialize the runtime registry or hook runner.
+vi.mock("./loader-shared.js", () => {
+  throw new Error("Manifest CLI help imported the plugin runtime loader");
+});
 // mock-isolation: CLI discovery uses fixture registries without loading plugin runtimes.
 vi.mock("./loader.js", () => ({ loadOpenClawPluginCliRegistry: mocks.load }));
 // mock-isolation: Metadata selection uses the fixture snapshot, never host config or plugin state.

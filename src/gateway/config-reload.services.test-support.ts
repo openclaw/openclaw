@@ -7,7 +7,6 @@ import {
 } from "../config/runtime-write-application.js";
 import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
 import * as sqliteRuntime from "../plugin-sdk/sqlite-runtime.js";
-import { PluginHostCleanupTimeoutError } from "../plugins/host-hook-cleanup-timeout.js";
 import { getPluginRuntimeGeneration, PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
 import type { OpenClawPluginDefinition } from "../plugins/plugin-definition.types.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
@@ -42,7 +41,7 @@ import {
   makeWrite,
   makeZeroDebounceHookWrite,
 } from "./config-reload.test-support.js";
-import { PluginAdmittedWorkTimeoutError } from "./server-plugin-reload-cleanup.js";
+import { PluginAdmittedWorkDeferredError } from "./server-plugin-reload-cleanup.js";
 
 const loadedPlugins = await Promise.all(
   ["browser", "workboard", "file-transfer"].map(async (pluginId) => {
@@ -288,7 +287,7 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
         expect(harness.onRestart).not.toHaveBeenCalled();
       });
 
-      it("defers a saved replacement until work and cleanup settle after its bounded receipt fails", async () => {
+      it("reports a saved replacement as deferred and retries only after work and cleanup settle", async () => {
         const initialConfig: OpenClawConfig = {
           ...codexConfig("read-only"),
           agents: { entries: { main: {} } },
@@ -309,16 +308,14 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
         let cleanupCall: Promise<void> | undefined;
         const harness = createReloaderHarness(async () => snapshotOf(config, configHash), {
           initialConfig,
-          // Stands in for the reload owner's 60s pre-stop drain expiring on the held work.
+          // Stands in for the reload owner deferring a replacement while work is retained.
           onHotReload: async (plan) => {
             if (plan.reloadPlugins && instance.retainedWorkCount > 0) {
               throw drainFailure(
                 "failed-automatic-drain",
-                new PluginAdmittedWorkTimeoutError(
-                  new Set(["codex"]),
+                new PluginAdmittedWorkDeferredError(
+                  "plugin codex has retained work; the previous plugin generation stays active",
                   [instance],
-                  new PluginHostCleanupTimeoutError("plugin codex admitted work"),
-                  60_000,
                 ),
               );
             }
@@ -337,7 +334,13 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
           );
           await flushReload(harness.reloader);
           // Release a waiting writer so its own admitted plugin work can finish.
-          await expect(application.result).resolves.toBe("failed");
+          await expect(application.result).resolves.toMatchObject({
+            status: "deferred",
+            reason: expect.stringContaining("previous plugin generation stays active"),
+            appliesWhen: expect.stringContaining("After the retained plugin work finishes"),
+          });
+          await flushWatcherChange(harness);
+          expect(harness.onHotReload).toHaveBeenCalledTimes(1);
           config = { ...config, agents: { entries: { main: { skills: [] } } } };
           configHash = "pending-plugin-and-skills-config";
           await flushWatcherChange(harness);

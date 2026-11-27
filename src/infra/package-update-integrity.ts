@@ -7,6 +7,14 @@ import { ignoreMissingPath } from "./errno.js";
 import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
 import { repairPackagePermissions } from "./package-update-activation-paths.js";
+import {
+  formatPackageMetadataDriftWarning,
+  packageStatChanges,
+  packageStatMetadataOnlyDrift,
+  packageStatUnchanged,
+  sweepPackageTreeObservations,
+  type PackageMetadataDriftChange,
+} from "./package-update-integrity-drift.js";
 import * as fileHashing from "./package-update-integrity-hasher.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
 
@@ -65,7 +73,7 @@ export function repairPackageIntegrityPermissions(
   for (const { file, stat } of entries) {
     assertCurrent();
     try {
-      repairPackagePermissions(file, stat, Number(stat.mode & 0o7700n));
+      repairPackagePermissions(file, stat, Number(stat.mode & 0o7755n));
       repaired++;
     } catch (error) {
       if (!["EACCES", "EPERM", "EROFS"].some((code) => hasErrnoCode(error, code))) {
@@ -81,7 +89,7 @@ export function repairPackageIntegrityPermissions(
       .map(({ file }) => JSON.stringify(file))
       .join(", ");
     onWarning(
-      `Repaired permissions on ${repaired} retained package objects: ${paths}. Group/other permissions and POSIX ACL access masks were cleared.${
+      `Repaired permissions on ${repaired} retained package objects: ${paths}. Group/other write permissions and POSIX ACL write masks were cleared; read/execute access was preserved.${
         failures.length
           ? ` Could not tighten ${failures.length} objects (${failures
               .slice(0, 3)
@@ -226,23 +234,38 @@ function metadata(stat: BigIntStats) {
   };
 }
 
-export function packageStatUnchanged(left: BigIntStats, right: BigIntStats): boolean {
-  return (
-    left.ino !== 0n &&
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mode === right.mode &&
-    left.uid === right.uid &&
-    left.gid === right.gid &&
-    left.nlink === right.nlink &&
-    left.size === right.size &&
-    left.mtimeNs === right.mtimeNs &&
-    left.ctimeNs === right.ctimeNs
+function packageTreeStatMismatchError(
+  relative: string,
+  stat: BigIntStats,
+  current = stat,
+  confirmed?: PackageMetadataDriftChange,
+): PackageIntegrityMismatchError {
+  const entry = JSON.stringify(relative || ".");
+  if (stat.ino === 0n) {
+    return new PackageIntegrityMismatchError(
+      `Package rollback original inode unavailable; entry=${entry}; ino=0`,
+      ["Package rollback original inode unavailable"],
+    );
+  }
+  const { fields, changes } = packageStatChanges(stat, current);
+  // Keep relative paths and primitive values locally; public reports
+  // project only closed classifications in differences.
+  return new PackageIntegrityMismatchError(
+    `Package rollback tree changed during verification; entry=${entry}; changes=${changes}${
+      confirmed ? `; ${confirmed} changed` : ""
+    }`,
+    [`Package rollback stat changed: fields=${fields.join(",")}`],
   );
 }
 
-/** Read-only, bounded observations. These do not exclude writers or seal an inode. */
-export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_MS) {
+/**
+ * Read-only, bounded observations. These do not exclude writers or seal an inode.
+ * Accepted metadata-only drift is reported to `warnings` when the caller passes it.
+ */
+export function createPackageIntegrityReader(
+  timeoutMs = UPDATE_RUNNER_TIMEOUT_MS,
+  { warnings }: { warnings?: string[] } = {},
+) {
   const now = () => performance.now();
   const startedAtMonotonicMs = now();
   const budget = Number.isFinite(timeoutMs) ? Math.max(1, timeoutMs) : UPDATE_RUNNER_TIMEOUT_MS;
@@ -309,8 +332,12 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       () => fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK),
       (late) => late.close(),
     );
+    // Metadata-only drift does not invalidate the bytes read here. Every caller
+    // compares its observed stat again afterwards and confirms drifted bytes.
+    const stable = (current: BigIntStats) =>
+      packageStatUnchanged(stat, current) || packageStatMetadataOnlyDrift(stat, current);
     try {
-      if (!packageStatUnchanged(stat, await read(() => handle.stat({ bigint: true })))) {
+      if (!stable(await read(() => handle.stat({ bigint: true })))) {
         throw new Error("Package rollback file changed before reading");
       }
       const hash = createHash("sha256");
@@ -328,7 +355,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         position += bytesRead;
         hash.update(buffer.subarray(0, bytesRead));
       }
-      if (!packageStatUnchanged(stat, await read(() => handle.stat({ bigint: true })))) {
+      if (!stable(await read(() => handle.stat({ bigint: true })))) {
         throw new Error("Package rollback file changed while reading");
       }
       return { digest: hash.digest("hex"), bytes: position };
@@ -363,6 +390,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     // One chmod covers every alias; a second repair would use a pre-chmod stat.
     const permissive = new Map<string, { file: string; stat: BigIntStats }>();
     const entriesObserved = new Map<string, EntryObservation>();
+    const directoryChildren = new Map<string, string[]>();
     let bytes = 0;
     let remainingEntries = MAX_TREE_ENTRIES - 1;
     let device: bigint | undefined;
@@ -438,7 +466,10 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       if (fileFailed) {
         await drainFiles();
       }
-      if (stat.ino === 0n || (device !== undefined && device !== stat.dev)) {
+      if (stat.ino === 0n) {
+        throw packageTreeStatMismatchError(relative, stat);
+      }
+      if (device !== undefined && device !== stat.dev) {
         throw new Error("Package rollback filesystem identity is unavailable");
       }
       if (!relative) {
@@ -449,7 +480,9 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         rootIdentity = identity(stat);
       }
       observed.push({ file, stat });
-      if ((stat.isFile() || stat.isDirectory()) && (stat.mode & 0o077n) !== 0n) {
+      // Package contents retain npm's public read/execute modes, unlike private
+      // activation controls. Group bits also bound named POSIX ACL write grants.
+      if ((stat.isFile() || stat.isDirectory()) && (stat.mode & 0o022n) !== 0n) {
         permissive.set(identity(stat), { file, stat });
       }
       // npm's disposable hidden lockfile is a cache, not package content:
@@ -546,6 +579,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         return;
       } else if (stat.isDirectory()) {
         const children = await entries(file, remainingEntries);
+        directoryChildren.set(relative, children);
         // Reserve pending siblings before descending so wide ancestor lists
         // cannot each retain another full tree budget.
         remainingEntries -= children.length;
@@ -576,19 +610,27 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       if (!version) {
         throw new Error("Package rollback version is unavailable");
       }
-      for (let start = 0; start < observed.length; start += 32) {
-        const results = await Promise.allSettled(
-          observed.slice(start, start + 32).map(async ({ file, stat }) => {
-            if (!packageStatUnchanged(stat, await read(() => fs.lstat(file, { bigint: true })))) {
-              throw new Error("Package rollback tree changed during verification");
-            }
-          }),
-        );
-        // Preserve traversal-order refusals, even when a later read times out first.
-        const failure = results.find((result) => result.status === "rejected");
-        if (failure) {
-          throw failure.reason;
+      const drifted = await sweepPackageTreeObservations(observed, {
+        // Legacy digests seal change times, so drift there cannot match its record.
+        acceptMetadataDrift: !legacy,
+        relative: (file) => path.relative(root, file).split(path.sep).join("/"),
+        lstat: (file) => read(() => fs.lstat(file, { bigint: true })),
+        refuse: packageTreeStatMismatchError,
+        recorded: (relative) => entriesObserved.get(relative)?.fields,
+        hash: async (file, stat) => (await hashFile(file, stat, Number(stat.size))).digest,
+        readlink: (file) => read(() => fs.readlink(file)),
+        children: (relative) => directoryChildren.get(relative) ?? [],
+        entries: (directory) => entries(directory),
+      });
+      for (const { current } of drifted) {
+        // Later owner checks (permission repair) compare the accepted stat.
+        const repair = permissive.get(identity(current));
+        if (repair) {
+          repair.stat = current;
         }
+      }
+      if (drifted.length) {
+        warnings?.push(formatPackageMetadataDriftWarning(drifted));
       }
       if (legacy) {
         for (const { file, stat } of observed) {

@@ -87,6 +87,22 @@ suite.define(() => {
         stream: "assistant",
         data: { text: "First result." },
       });
+      // The first response has finished before this same run requests another model turn.
+      await gateway.emitGatewayEvent("session.message", {
+        sessionKey,
+        runId,
+        messageId: "first-response",
+        messageSeq: 1,
+        hasActiveRun: true,
+        activeRunIds: [runId],
+        message: {
+          role: "assistant",
+          phase: "commentary",
+          content: "First result.",
+          timestamp: Date.now(),
+          __openclaw: { id: "first-response", seq: 1, runId },
+        },
+      });
       await expect.poll(() => working.count()).toBe(0);
       await status(4, "waiting_for_model", "response");
       await expect
@@ -133,7 +149,7 @@ suite.define(() => {
         data: { ...activity, phase: "start", status: "running" },
       });
       const workBubble = page.locator(".chat-activity-group--working");
-      await expect.poll(() => workBubble.textContent()).toContain("Checking the tests");
+      await expect.poll(() => workBubble.textContent()).toContain("pnpm test");
       expect(await bubble.count()).toBe(0);
       expect(await page.locator(".chat-bubble-dots--working").count()).toBe(1);
       await writeFile(

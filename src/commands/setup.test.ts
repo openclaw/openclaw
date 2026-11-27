@@ -73,37 +73,46 @@ afterEach(() => {
 });
 
 describe("setupCommand", () => {
-  it.each([false, true])("initializes local setup (json: %s)", async (json) => {
-    await withSetupHome(async (home, { runtime, configPath }) => {
-      const workspace = path.join(home, ".openclaw", "workspace");
+  it.each([
+    { json: false, skipBootstrap: false },
+    { json: true, skipBootstrap: false },
+    { json: true, skipBootstrap: true },
+  ])(
+    "initializes local setup (json: $json, skipBootstrap: $skipBootstrap)",
+    async ({ json, skipBootstrap }) => {
+      await withSetupHome(async (home, { runtime, configPath }) => {
+        const workspace = path.join(home, ".openclaw", "workspace");
 
-      await setupCommand({ workspace, json }, runtime);
-      const raw = JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
+        await setupCommand({ workspace, json, skipBootstrap }, runtime);
+        const raw = JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
 
-      expect(raw).toMatchObject({
-        agents: { defaults: { workspace }, entries: { main: {} } },
-        gateway: { mode: "local" },
-      });
-      expect(raw.messages?.queue).toBeUndefined();
-      const snapshot = await readConfigFileSnapshot();
-      expect(snapshot.valid).toBe(true);
-      expect(snapshot.sourceConfig.messages?.queue).toBeUndefined();
-      expect(snapshot.runtimeConfig.messages?.queue).toMatchObject({
-        allowCollaborativeSteering: true,
-      });
-      if (json) {
-        expect(runtime.log).toHaveBeenCalledOnce();
-        expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
-          ok: true,
-          configPath,
-          configStatus: "created",
-          workspaceDir: workspace,
-          sessionsDir: path.join(home, ".openclaw", "agents", "main", "sessions"),
+        expect(raw).toMatchObject({
+          agents: { defaults: { workspace }, entries: { main: {} } },
+          gateway: { mode: "local" },
         });
-      }
-      expect((await fs.stat(path.join(workspace, "AGENTS.md"))).isFile()).toBe(true);
-    });
-  });
+        expect(raw.messages?.queue).toBeUndefined();
+        const snapshot = await readConfigFileSnapshot();
+        expect(snapshot.valid).toBe(true);
+        expect(snapshot.sourceConfig.messages?.queue).toBeUndefined();
+        expect(snapshot.runtimeConfig.messages?.queue).toMatchObject({
+          allowCollaborativeSteering: true,
+        });
+        if (json) {
+          expect(runtime.log).toHaveBeenCalledOnce();
+          expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
+            ok: true,
+            configPath,
+            configStatus: "created",
+            workspaceDir: workspace,
+            sessionsDir: path.join(home, ".openclaw", "agents", "main", "sessions"),
+            starterFiles: skipBootstrap ? "skipped" : "first-conversation",
+          });
+        }
+        // The first conversation owns seeding; baseline leaves the workspace empty, with no git repo.
+        expect(await fs.readdir(workspace)).toEqual([]);
+      });
+    },
+  );
 
   it.each([false, true])(
     "preserves an included skip-bootstrap leaf (value: %s)",

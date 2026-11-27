@@ -79,8 +79,8 @@ Archive locally without upload:
 pnpm android:release:archive
 ```
 
-An ordinary archive uses the defaults in `apps/android/version.json` and
-`Config/Version.properties`. To build a previously prepared store version, use
+An ordinary archive derives its default version from the root `package.json`.
+To build a previously prepared store version, use
 its saved plan at the recorded source commit; see
 [Archive a saved store release](../VERSIONING.md#archive-a-saved-store-release).
 
@@ -127,9 +127,10 @@ Public versions append a single revision digit to the Gateway patch: Gateway
 `2026.9.4`, revision `0` becomes `2026.9.40`. Candidates keep that revision until
 it is public on either phone or Wear, then advance it; revisions run from `0`
 through `9`. Each revision starts at build `1`. Native codes increase separately:
-phone uses the observed maximum plus `1`, Wear plus `2`, including the pinned
-phone code plus `50` as a floor. See [Version model](../VERSIONING.md#version-model)
-for limits and the distinction from ordinary pinned archives.
+phone uses the observed maximum plus `1`, Wear plus `2`. Uploaded codes,
+recorded store codes, and the legacy cutover all contribute to that maximum.
+See [Version model](../VERSIONING.md#version-model) for limits and the distinction
+from ordinary local archives.
 
 The environment supplies these secrets:
 
@@ -197,28 +198,22 @@ explicitly requested. Agent-driven releases must use
 
 Release rules:
 
-- `apps/android/version.json` supplies the pinned defaults for APK publication and ordinary archives.
-- `apps/android/Config/Version.properties` is generated from that source and supplies Gradle's defaults. Store releases override them at runtime without writing either file.
-- The root `package.json` supplies the Gateway version for automatic preparation.
-- `apps/android/CHANGELOG.md` supplies hand-authored notes for pinned APK/archive defaults, selecting the exact pinned version's section first, then `Unreleased`.
-- `apps/android/fastlane/metadata/android/en-US/release_notes.txt` is generated for the pin by `pnpm android:version:sync`. Store uploads use separate generated phone and Wear notes from `OPENCLAW_MOBILE_RELEASE_NOTES` and leave this file unchanged.
+- The root `package.json` supplies the Gateway version for automatic preparation and the default version for local builds. There is no separate Android version pin.
+- Store uploads use generated phone and Wear notes from `OPENCLAW_MOBILE_RELEASE_NOTES`, bound to the selected source commit and release plan.
 - `apps/android/Config/ReleaseSigning.json` pins the encrypted Android signing assets in the shared signing repo.
 - `apkCertificateSha256` in that manifest pins the upload certificate accepted for standalone release APKs; rotate it only with the encrypted keystore.
 - `MATCH_PASSWORD` enables Fastlane to pull encrypted Android signing assets into `apps/android/build/release-signing/` before release validation or archive builds.
-- Supported pinned Android versions use CalVer: `YYYY.M.PATCH`.
-- Pinned phone `versionCode` uses `YYYYMMPPNN`, where `NN` is `01` through `49`; the matching Wear archive adds `50` and uses `51` through `99`. Store releases override these defaults with independent sequential codes, each at most `2,100,000,000`.
-- `pnpm android:version:pin` writes the Android version and synchronizes its properties and notes.
-- `pnpm android:version:sync` regenerates properties and notes from the Android pin and changelog.
-- `pnpm android:version:check` validates properties and notes against the pin without changing files.
+- Local defaults are calculated at build time: version `YYYY.M.P` from the root package version, phone code `YYYYMMPP01` (plus `N` for a root-package correction suffix `-N`), and Wear code equal to the phone code plus `50`. They are for development and archive validation. Store releases use planned independent sequential codes, each at most `2,100,000,000`.
+- `pnpm android:version` displays the local build defaults.
 - `pnpm android:release:preflight` requires the saved store plan and generated notes, validates Google Play auth, production baselines, signing, and release identity, and prints the package/track/version/versionCode that will be uploaded.
 - `pnpm android:release:signing:sync:pull` pulls encrypted Android signing assets from `apps-signing`.
 - `pnpm android:release:signing:sync:push` creates or refreshes encrypted Android signing assets in `apps-signing`.
 - `pnpm android:screenshots` builds and installs the phone and Wear OS debug
   apps, launches fixed screenshot scenes, and writes Play-ready JPEGs
   to the matching `phoneScreenshots` and `wearScreenshots` metadata folders.
-- `pnpm android:release:archive` builds the signed phone Play AAB, Wear AAB, and third-party APK into `apps/android/build/release-artifacts/`. It uses pinned defaults unless `OPENCLAW_ANDROID_RELEASE_PLAN` selects a saved plan matching the source commit; replay also requires the saved `OPENCLAW_MOBILE_RELEASE_NOTES` artifact.
+- `pnpm android:release:archive` builds the signed phone Play AAB, Wear AAB, and third-party APK into `apps/android/build/release-artifacts/`. It uses root-package-derived defaults unless `OPENCLAW_ANDROID_RELEASE_PLAN` selects a saved plan matching the source commit; replay also requires the saved `OPENCLAW_MOBILE_RELEASE_NOTES` artifact.
 - `pnpm android:release:upload` commits the phone AAB, Wear AAB, metadata, and screenshots in one Google Play edit across the configured phone and `wear:` form-factor tracks. The default tracks are `internal` and `wear:internal`. With `--destination internal`, it uses those Internal testing tracks and generated notes without screenshot capture or listing updates.
-- Stable GitHub Release APK publication is separate from Google Play: `OpenClaw Release Publish` dispatches `.github/workflows/android-release.yml`, whose protected `android-release` environment provides `MATCH_PASSWORD`; the repository GitHub App reads the encrypted signing repo.
+- Current Android releases are independent of Gateway publication. Gateway releases skip Android when the source has no legacy version manifest. `.github/workflows/android-release.yml` remains available for APK builds and legacy recovery, retaining exact-source qualification, protected `android-release` approval, signing, and artifact verification. Builds without a legacy manifest use runtime defaults from the root package version.
 - Production promotion remains manual in Google Play Console.
 - If `pnpm android:release:upload` fails, agent-driven releases must stop and report the failing step. Do not fall back to `pnpm android:release:archive`, `pnpm android:release:metadata`, direct Fastlane lanes, Gradle release artifacts plus Google Play upload commands, or mobile release ref recording.
 - Recovery needs explicit maintainer direction after the failure is reported. Record-only repair of a missing success ref requires verifying the saved plan and exact uploaded AAB hashes/codes against Play.
