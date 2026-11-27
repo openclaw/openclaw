@@ -219,10 +219,12 @@ function shouldCatalogTool(tool: AnyAgentTool): boolean {
 }
 
 /**
- * Core file/shell primitives and caller-required names (e.g. message when it is
- * the only reply path) stay visible while remaining searchable. Both must
- * resolve to trusted OpenClaw tools: an MCP lookalike must never become a
- * direct delivery or core-coding tool.
+ * Core file/shell primitives, caller-required names (e.g. message when it is
+ * the only reply path) and tools that poll by design stay visible while
+ * remaining searchable. A polling tool behind dispatch_action would hide its
+ * `repeatable` declaration from the repeat guard. All must resolve to trusted
+ * OpenClaw tools: an MCP lookalike must never become a direct delivery or
+ * core-coding tool.
  */
 export function isDirectVisibleCatalogTool(
   tool: AnyAgentTool,
@@ -232,6 +234,7 @@ export function isDirectVisibleCatalogTool(
   return (
     classified.source === "openclaw" &&
     (directToolNames.has(tool.name) ||
+      tool.repeatable !== undefined ||
       (isCoreCodingSurfaceToolName(tool.name) && classified.sourceName === "core"))
   );
 }
