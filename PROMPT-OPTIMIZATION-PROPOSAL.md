@@ -65,9 +65,9 @@ On November 26 — 108 days after our submission — [upstream PR #206126](https
 
 ### Why today's work goes further
 
-Our August fix addressed cache invalidation caused by changing tool authority. Today's work addresses unnecessary context growth even when the sender, permissions and tool catalog remain unchanged.
+Our August fix stopped avoidable cache loss when tool permissions changed. Today's work tackles something more fundamental: unnecessary context growth on ordinary turns.
 
-That is a more fundamental context-management problem: not merely whether existing context can be cached, but how much unnecessary context exists in the first place, how quickly it exhausts the window, and how often that forces operations that can drop the cache. The earlier fix establishes our track record. The broader context-growth optimizations are the main contribution here. Comparative total usage savings have not yet been measured.
+**Even if cached tokens are free, context space isn't.** The faster we fill the context window, the sooner we force compaction or resets, potentially dropping the cache and driving up fresh-token usage. We've demonstrated an 80.5% reduction in context growth per short exchange. The resulting long-term usage savings remain to be measured.
 
 ## In summary: we have solutions, not just suggestions
 
