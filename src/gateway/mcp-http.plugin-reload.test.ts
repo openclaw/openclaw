@@ -11,11 +11,16 @@ import * as configSnapshot from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import * as hooks from "../plugins/hook-runner-global.js";
+import type { PluginLoadOptions } from "../plugins/loader-types.js";
 import { loadPluginRegistryHandle } from "../plugins/loader.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { getPluginInstance, type PluginInstanceHandle } from "../plugins/plugin-instance-scope.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+  waitForPluginRegistryRetirement,
+} from "../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import * as mcp from "./mcp-http-request.test-support.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
@@ -209,10 +214,15 @@ function writeProbePlugin(bundledDir: string, id: string, tool: string) {
   );
 }
 
-it("keeps a run-bound grant's tools working after a plugin reload retires its generation", async ({
-  signal,
-}) =>
-  fixtureLifetime.run(async () => {
+// A reload either replaces the run's plugin (its old instance fails) or leaves it loaded (its
+// old registry handle only refuses callbacks); both retire the run's generation.
+it.for(["disposes", "keeps"] as const)(
+  "keeps a run-bound grant's tools working after a plugin reload retires its generation (%s the old instance)",
+  (variant, { signal }) => expectGrantToolsAfterReload(variant, signal),
+);
+
+function expectGrantToolsAfterReload(variant: "disposes" | "keeps", signal: AbortSignal) {
+  return fixtureLifetime.run(async () => {
     const root = fixtureLifetime.createTempDir("mcp-grant-generation-");
     const bundledDir = path.join(root, "bundled");
     const workspaceDir = path.join(root, "workspace");
@@ -226,7 +236,9 @@ it("keeps a run-bound grant's tools working after a plugin reload retires its ge
       tools: { allow: ["steady_probe", "reloaded_probe"] },
     };
     const instances: PluginInstanceHandle[] = [];
-    const loadGeneration = () => {
+    const loadGeneration = (
+      reload?: Pick<PluginLoadOptions, "previousRegistry" | "replacePluginIds">,
+    ) => {
       const generation = withPluginCache(createPluginCache(), () => {
         const metadataSnapshot = resolvePluginMetadataSnapshot({ config, workspaceDir });
         const pluginRegistry = loadPluginRegistryHandle({
@@ -234,6 +246,7 @@ it("keeps a run-bound grant's tools working after a plugin reload retires its ge
           workspaceDir,
           manifestRegistry: metadataSnapshot.manifestRegistry,
           onlyPluginIds: pluginIds,
+          ...reload,
         });
         const record = pluginRegistry.plugins.find((plugin) => plugin.id === "reloaded-probe");
         const reloaded = expectDefined(record && getPluginInstance(record), "plugin instance");
@@ -292,8 +305,18 @@ it("keeps a run-bound grant's tools working after a plugin reload retires its ge
           );
 
         // One plugin reloads while the run continues; the run's generation retires.
-        loadGeneration();
-        await original.reloaded.dispose();
+        if (variant === "disposes") {
+          loadGeneration();
+          await original.reloaded.dispose();
+        } else {
+          // A reload that replaces none of the run's plugins hands every one of them over.
+          const next = loadGeneration({
+            previousRegistry: original.pluginRegistry,
+            replacePluginIds: [],
+          });
+          expect(next.reloaded).toBe(original.reloaded);
+          await waitForPluginRegistryRetirement(original.pluginRegistry);
+        }
 
         // The unrelated plugin's tool and the reloaded plugin's tool both keep working,
         // and later requests stay on the published generation.
@@ -318,4 +341,5 @@ it("keeps a run-bound grant's tools working after a plugin reload retires its ge
           }),
       ),
     );
-  }));
+  });
+}
