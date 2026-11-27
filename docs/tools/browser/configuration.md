@@ -354,3 +354,30 @@ Or set it in config, per platform:
 Per-profile `executablePath` only affects local managed profiles that OpenClaw
 launches. `existing-session` profiles attach to an already-running browser
 instead, and remote CDP profiles use the browser behind `cdpUrl`.
+
+### Try Ardia on Linux
+
+[Ardia](https://ardia.dev/) can run in an opt-in managed profile on Linux x86-64.
+Install Ardia's native Linux package on the Gateway host, then add a profile
+using a free CDP port. The example uses the executable from the `.deb` package.
+It starts a separate browser data directory, not your signed-in Ardia session,
+and leaves your default OpenClaw profile unchanged.
+
+```bash
+openclaw config set browser.profiles.ardia '{"cdpPort":18802,"executablePath":"/usr/bin/ardia","headless":false}' --strict-json --merge
+openclaw browser --browser-profile ardia start
+openclaw browser --browser-profile ardia open https://example.com
+```
+
+The headed profile needs a display. In testing with Ardia 0.2.49 on Linux, a new
+tab could open with a zero-size viewport. If clicks time out even though the
+element is in the snapshot, replace `TAB_ID` with the ID returned by `open`
+and resize before retrying:
+
+```bash
+openclaw browser --browser-profile ardia resize 1280 720 --target-id TAB_ID
+```
+
+This uses OpenClaw's Chromium control path, not Ardia's native `ardia browse`
+command. The workaround was verified in headed mode only; if you need an
+unattended headless profile, use the default managed Chromium browser.
