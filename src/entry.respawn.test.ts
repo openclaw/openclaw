@@ -16,12 +16,13 @@ const caReady = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
 const optionsReady = "OPENCLAW_NODE_OPTIONS_READY";
 
 type PlanOptions = NonNullable<Parameters<typeof buildCliRespawnPlan>[0]> & { args?: string[] };
-function buildPlan({ args = ["status"], ...params }: PlanOptions) {
+function buildPlan({ args = ["status"], autoNodeExtraCaCerts = "", ...params }: PlanOptions) {
   return buildCliRespawnPlan({
     argv: ["node", "openclaw", ...args],
     env: {},
     execArgv: [],
     platform: "linux",
+    autoNodeExtraCaCerts,
     ...params,
   });
 }

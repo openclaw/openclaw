@@ -2,7 +2,6 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPackageVersion } from "../../infra/package-json.js";
-import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { resolveManagedServiceUpdateFailureExitCode } from "../../infra/update-control-plane-sentinel.js";
 import {
   isMainPackageTarget,
@@ -33,7 +32,6 @@ import {
 } from "./shared.js";
 import { resolveUpdateOwnershipFailure } from "./update-command-config-failure.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
-import { readUpdateDatabaseEngineConfig } from "./update-command-database-engine.js";
 import {
   createPreMutationUpdateResult,
   createUpdateCommandFailureResult,
@@ -45,10 +43,7 @@ import {
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
 import { completeUpdateCommandRun, type prepareUpdateCommand } from "./update-command-run.js";
-import {
-  resolveServiceRefreshEnv,
-  withOwnedManagedUpdateEnv,
-} from "./update-command-service-env.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 
 type Run = NonNullable<UpdateCommandOptions["run"]>;
@@ -166,25 +161,8 @@ export async function withUpdateAdmissionReporting<T>(
   opts: UpdateCommandOptions,
   admit: () => Promise<T>,
   mode: "unknown" | "finalize" = "unknown",
-  reportHints: NonNullable<Parameters<typeof reportUpdateCommandPendingRecovery>[2]> = {},
 ): Promise<T> {
   const startedAt = Date.now();
-  const sourceEnv =
-    opts.dryRun && reportHints.writeArtifacts === undefined
-      ? resolveServiceRefreshEnv(process.env, tryProcessCwd())
-      : undefined;
-  const resolveReportHints = async () => {
-    if (reportHints.writeArtifacts !== undefined || !sourceEnv) {
-      return reportHints;
-    }
-    try {
-      const { readFailed, sourceInvalid } = await readUpdateDatabaseEngineConfig(sourceEnv);
-      return { ...reportHints, writeArtifacts: readFailed || !sourceInvalid };
-    } catch {
-      // Source diagnostics must not replace the original admission refusal.
-      return reportHints;
-    }
-  };
   try {
     return await admit();
   } catch (error) {
@@ -210,7 +188,7 @@ export async function withUpdateAdmissionReporting<T>(
       return exitCliAfterOutput(defaultRuntime, result.mode === "finalize" ? 1 : 0);
     }
     if (error instanceof UpdateCommandPendingRecoveryFailure) {
-      return reportUpdateCommandPendingRecovery(error, opts, await resolveReportHints());
+      return reportUpdateCommandPendingRecovery(error, opts);
     }
     const ownershipFailure = !hasCommandProcessCleanupError(error)
       ? resolveUpdateOwnershipFailure(error)
@@ -245,7 +223,6 @@ export async function withUpdateAdmissionReporting<T>(
       }),
       opts,
       {
-        ...(await resolveReportHints()),
         readHistory: false,
         nextAction:
           ownershipFailure?.nextAction ??
@@ -433,7 +410,6 @@ async function preparePreMutationUpdateOutcome(
         {
           nextAction,
           ...(detached || malformedPreview ? { readHistory: false } : {}),
-          ...(malformedPreview ? { writeArtifacts: false } : {}),
         },
         assertCurrent,
       );

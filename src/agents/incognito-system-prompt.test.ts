@@ -8,6 +8,7 @@ describe("incognito system prompt", () => {
       (
         await prepareAttemptSystemPromptAdditions({
           agentId: "main",
+          workspaceDir: "/workspace",
           modelId: "synthetic-model",
           provider: "synthetic",
           sessionId: "synthetic-session",

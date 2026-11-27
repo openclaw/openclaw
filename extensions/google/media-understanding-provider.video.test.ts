@@ -33,6 +33,13 @@ it.each([
     apiKey: "override",
   },
   { method: "transcribeAudio", baseUrl: "   ", mime: "audio/wav" },
+  {
+    method: "transcribeAudio",
+    baseUrl: origin,
+    mime: "audio/wav",
+    language: "fr",
+    prompt: "Preserve the spelling of Lyon.",
+  },
 ] as const)("builds registered $method requests at '$baseUrl'", async (row) => {
   const { method, baseUrl, mime } = row;
   const model = "model" in row ? row.model : undefined;
@@ -52,6 +59,7 @@ it.each([
     model,
     fetchFn,
     fileName: method === "describeVideo" ? "clip.mp4" : "clip.wav",
+    ...("language" in row ? { language: row.language, prompt: row.prompt } : {}),
     headers: { "X-Other": "1", ...(apiKey ? { "X-Goog-Api-Key": apiKey } : {}) },
   });
   const expectedModel = model ? "gemini-3.1-pro-preview" : "gemini-3-flash-preview";
@@ -66,10 +74,19 @@ it.each([
     "x-goog-api-client": expect.stringMatching(/^openclaw\//u),
   });
   assert(typeof init?.body === "string", "Expected a JSON string request body");
-  expect(JSON.parse(init.body).contents?.[0]?.parts).toMatchObject([
-    { text: method === "describeVideo" ? "Describe the video." : "Transcribe the audio." },
-    { inline_data: { mime_type: mime, data: mediaRequest.buffer.toString("base64") } },
-  ]);
+  const parts = JSON.parse(init.body).contents?.[0]?.parts;
+  expect(parts).toHaveLength(2);
+  if ("language" in row) {
+    expect(parts?.[0]?.text).toContain(row.prompt);
+    expect(parts?.[0]?.text).toMatch(/\bfr\b/u);
+  } else {
+    expect(parts?.[0]?.text).toBe(
+      method === "describeVideo" ? "Describe the video." : "Transcribe the audio.",
+    );
+  }
+  expect(parts?.[1]).toMatchObject({
+    inline_data: { mime_type: mime, data: mediaRequest.buffer.toString("base64") },
+  });
 });
 
 it("bounds oversized video JSON responses and closes the stream early", async () => {

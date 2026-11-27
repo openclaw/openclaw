@@ -57,22 +57,30 @@ function NewReaderTabAction(props: { view: () => LinkReaderPanelOwner; internal?
   );
 }
 
-function ReaderLoading(props: { url: string }) {
+/** First load: the document's own geometry, so the header and section bar do not jump in. */
+function ReaderLoading() {
   return (
     <div class="lr-loading" role="status">
-      <div class="lr-eyebrow">{new URL(props.url).hostname + new URL(props.url).pathname}</div>
-      <p class="lr-loading-label">{t("linkReader.loadingPreview")}</p>
+      <span class="sr-only">{t("linkReader.loadingPreview")}</span>
       <div class="lr-skeleton" aria-hidden="true">
+        <div class="lr-skeleton-identity">
+          <span />
+          <span />
+        </div>
         <div class="lr-skeleton-title" />
-        <div class="lr-skeleton-title lr-skeleton-short" />
-        <div class="lr-skeleton-meta" />
-        <div class="lr-skeleton-nav" />
+        <div class="lr-skeleton-byline">
+          <span />
+          <span />
+        </div>
+        <div class="lr-skeleton-nav">
+          <Repeat count={3}>{() => <span />}</Repeat>
+        </div>
         <Repeat count={2}>
           {() => (
             <div class="lr-skeleton-paragraph">
               <div />
               <div />
-              <div class="lr-skeleton-short" />
+              <div />
             </div>
           )}
         </Repeat>
@@ -87,6 +95,7 @@ function PanelContent(props: {
   refresh: () => void;
   loadSection: (section: ReaderSection) => void;
   onScrollPortRef?: (element: HTMLElement) => void | (() => void);
+  scrollPort: () => HTMLElement | undefined;
 }) {
   const target = () => tabTarget(props.tab);
   return (
@@ -122,7 +131,7 @@ function PanelContent(props: {
           </a>
         </div>
       ) : props.tab.view.status !== "ready" ? (
-        <ReaderLoading url={target()!.href} />
+        <ReaderLoading />
       ) : (
         <LinkReaderContent
           detail={props.tab.view.detail}
@@ -131,6 +140,7 @@ function PanelContent(props: {
           sections={props.tab.view.sections}
           onLoadSection={(section) => props.loadSection(section)}
           onScrollPortRef={props.onScrollPortRef}
+          scrollPort={props.scrollPort}
         />
       )}
     </>
@@ -552,6 +562,7 @@ function PanelView(
                       refresh={() => owner.refresh()}
                       loadSection={(section) => owner.requestSection(section)}
                       onScrollPortRef={props.onScrollPortRef}
+                      scrollPort={() => content.get(item().id)}
                     />
                   </div>
                 );

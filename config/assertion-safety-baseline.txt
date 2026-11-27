@@ -1222,7 +1222,6 @@ src/agents/sessions/tools/edit.ts	3
 src/agents/sessions/tools/tool-definition-wrapper.ts	1
 src/agents/shell-snapshot.ts	1
 src/agents/spawn-plan.ts	1
-src/agents/subagents/announce/subagent-announce-completion-delivery.ts	1
 src/agents/subagents/announce/subagent-announce-origin.ts	2
 src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	2
 src/agents/subagents/registry/subagent-registry.ts	1
@@ -1600,7 +1599,6 @@ src/config/sessions/transcript-replay.ts	1
 src/config/sessions/transcript-tree.ts	3
 src/config/sessions/transcript.ts	8
 src/config/sessions/types.ts	1
-src/config/validation-channel-rules.ts	1
 src/config/validation-core.ts	1
 src/config/validation-plugin-config.ts	2
 src/config/validation.ts	1

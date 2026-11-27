@@ -577,6 +577,7 @@ async function resolveTrustedToolsEffectiveContext(
       loaded.cfg,
       sessionAgentId,
       loaded.entry,
+      normalizeOptionalString(loaded.entry.spawnedCwd) ?? workspaceDir,
     ),
     toolOverrides: loaded.entry.toolOverrides,
     replyToMode: resolveReplyToMode(

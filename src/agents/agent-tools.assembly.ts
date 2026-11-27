@@ -319,10 +319,11 @@ export function* assembleOpenClawCodingTools(
               timeoutSec: options?.exec?.timeoutSec ?? execConfig.timeoutSec,
               approvalRunningNoticeMs:
                 options?.exec?.approvalRunningNoticeMs ?? execConfig.approvalRunningNoticeMs,
-              // Participation has no authority to create an uncapped completion turn.
-              notifyOnExit: participationCeiling
-                ? false
-                : (options?.exec?.notifyOnExit ?? execConfig.notifyOnExit),
+              // Participation cannot create an uncapped turn; a one-shot CLI has no next turn.
+              notifyOnExit:
+                participationCeiling || options?.oneShotCliRun
+                  ? false
+                  : (options?.exec?.notifyOnExit ?? execConfig.notifyOnExit),
               approvalFollowupMode: participationCeiling
                 ? undefined
                 : options?.exec?.approvalFollowupMode,

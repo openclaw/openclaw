@@ -12,10 +12,6 @@ import { readReleasedTriageUpdateFailure } from "../../commands/triage-update.re
 import { UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV } from "../../infra/update-doctor-result.js";
 import { writeTriageUpdateFailure } from "../../infra/update-failure-report-artifact.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
-import {
-  renderUpdateRunReport,
-  updateRunReportInputFromResult,
-} from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import type { CommandOptions } from "../../process/exec.js";
@@ -278,16 +274,13 @@ export function registerFreshDoctorDiagnosticTests({
         },
       ],
     };
-    const report = renderUpdateRunReport(updateRunReportInputFromResult(updateResult));
     const publicReport = await prepareUpdateFailureReport(
       { attemptId: "validator-missing-module", result: updateResult },
       { env: process.env, stateDir },
     );
-    for (const body of [report.markdown, publicReport.body]) {
-      expect(body).toContain("ERR_MODULE_NOT_FOUND");
-      expect(body).not.toContain(secret);
-      expect(body).not.toContain(root);
-    }
+    expect(publicReport.body).toContain("ERR_MODULE_NOT_FOUND");
+    expect(publicReport.body).not.toContain(secret);
+    expect(publicReport.body).not.toContain(root);
     const outputPath = await writeTriageUpdateFailure(
       { result: updateResult },
       { env: process.env, outputPath: path.join(root, "failure.json") },

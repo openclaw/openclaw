@@ -5,6 +5,7 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { authorizeHttpGatewayConnect } from "./auth.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { classifyGatewayProbePath } from "./gateway-http-route-contracts.js";
+import type { PreparedReadinessChecker } from "./health/types.js";
 import {
   hasGatewayProxyIdentityHeaders,
   readPreparedGatewayIngressAttribution,
@@ -17,11 +18,7 @@ import {
   resolveHostName,
 } from "./net.js";
 import { getHttpAuthUtilsModule } from "./server-http-modules.js";
-import type {
-  PreparedReadinessChecker,
-  StartupChecker,
-  StartupResult,
-} from "./server/readiness.js";
+import type { StartupChecker, StartupResult } from "./server/readiness.js";
 import { hasGatewayDelegationClaim } from "./trusted-proxy-delegation.js";
 
 function startupProbeBody(

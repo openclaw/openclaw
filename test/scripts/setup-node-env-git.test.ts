@@ -17,10 +17,12 @@ describe.skipIf(process.platform === "win32")("CI Git capability setup", () => {
   function fixture(options: { capable?: boolean; codename?: string } = {}) {
     const root = tempDirs.make("openclaw-git-capability-");
     const bin = path.join(root, "bin");
+    const actionPath = path.join(root, path.dirname(helper));
     const githubPath = path.join(root, "github-path");
     const log = path.join(root, "commands");
     const archive = "test Git package";
     mkdirSync(bin);
+    mkdirSync(actionPath, { recursive: true });
     writeFileSync(githubPath, "");
     writeFileSync(log, "");
     writeFileSync(
@@ -71,7 +73,7 @@ cat "$GIT_EXEC_PATH/version"`,
     }
     // Use real checksum validation with synthetic bytes, and never touch the runner /etc.
     writeFileSync(
-      path.join(root, "ensure-git.sh"),
+      path.join(root, helper),
       readFileSync(helper, "utf8")
         .replaceAll("/etc/", `${root}/`)
         .replace(
@@ -79,13 +81,14 @@ cat "$GIT_EXEC_PATH/version"`,
           `checksum=${createHash("sha256").update(archive).digest("hex")}`,
         ),
     );
-    const run = (extra: Record<string, string> = {}) =>
-      spawnSync("/bin/bash", ["-c", step.run], {
+    const run = (extra: Record<string, string> = {}, script = step.run) =>
+      spawnSync("/bin/bash", ["-c", script], {
+        cwd: root,
         encoding: "utf8",
         timeout: 5_000,
         env: {
           PATH: bin,
-          GITHUB_ACTION_PATH: root,
+          GITHUB_ACTION_PATH: actionPath,
           RUNNER_ARCH: "X64",
           RUNNER_TEMP: root,
           GITHUB_PATH: githubPath,
@@ -119,6 +122,19 @@ cat "$GIT_EXEC_PATH/version"`,
   it("provides capable Git when the Noble Git PPA is unavailable", () => {
     const setup = fixture();
     const result = setup.run();
+    expect(result.status, result.stderr).toBe(0);
+    const next = setup.runNextStep();
+    expect(next.status, next.stderr).toBe(0);
+    expect(next.stdout).toBe("git version 2.47.3\n");
+  });
+
+  it("provides capable Git to subsequent Crabbox hydration steps", () => {
+    const workflow = parse(readFileSync(".github/workflows/crabbox-hydrate.yml", "utf8"));
+    const hydrateStep = workflow.jobs.hydrate.steps.find(
+      (candidate: { name?: string }) => candidate.name === "Prepare Git capabilities",
+    );
+    const setup = fixture();
+    const result = setup.run({}, hydrateStep?.run ?? "");
     expect(result.status, result.stderr).toBe(0);
     const next = setup.runNextStep();
     expect(next.status, next.stderr).toBe(0);

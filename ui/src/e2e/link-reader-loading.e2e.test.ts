@@ -44,12 +44,42 @@ it("makes the overview readable before extras and retains visible content throug
       await gateway.waitForRequest("forge.detail", { match: { section: "discussion" } });
       expect((await gateway.getRequests("forge.detail", { section: "files" })).length).toBe(0);
       expect(await panel.getByText("Loading Checks…", { exact: true }).count()).toBe(1);
+      // Late checks never move what the reader is already looking at.
+      const geometry = () =>
+        content.evaluate((node) => ({
+          description: node.querySelector(".lr-description")!.getBoundingClientRect().top,
+          tabs: [...node.querySelectorAll(".lr-section-nav button")].map(
+            (tab) => tab.getBoundingClientRect().left,
+          ),
+        }));
+      const waiting = await geometry();
       await gateway.rejectDeferred(
         "forge.detail",
         { code: "UNAVAILABLE", message: "Temporarily unavailable", retryable: true },
         { match: { section: "checks" } },
       );
       await panel.getByText("Couldn’t load Checks. Try again.", { exact: true }).waitFor();
+      expect(await geometry()).toEqual(waiting);
+      await panel.locator(".lr-checks .lr-retry").click();
+      await gateway.waitForRequest("forge.detail", { after: 1, match: { section: "checks" } });
+      await gateway.resolveDeferred(
+        "forge.detail",
+        {
+          ...overview,
+          checks: {
+            state: "failure",
+            summary: "5 failed · 80 passed",
+            total: 85,
+            items: Array.from({ length: 85 }, (_, index) => ({
+              name: "check with a long descriptive name " + index,
+              state: index < 5 ? "failure" : "success",
+            })),
+          },
+        },
+        { match: { section: "checks" } },
+      );
+      await panel.locator(".lr-checks--failure").waitFor();
+      expect(await geometry()).toEqual(waiting);
       await gateway.resolveDeferred(
         "forge.detail",
         {
