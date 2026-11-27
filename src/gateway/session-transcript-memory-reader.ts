@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { isSubagentSessionFromEntry } from "../agents/subagents/spawn/subagent-depth-policy.js";
+import { isPrivateSubagentCoordinationFromEntry } from "../agents/subagents/spawn/subagent-depth-policy.js";
 import type { SessionActorMemoryHistoryReads } from "../config/sessions/session-actor-memory-history-contract.js";
 import type { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
 import { readSessionTranscriptRunId } from "../sessions/transcript-events.js";
@@ -82,7 +82,7 @@ export function createSessionActorTranscriptReader(
       });
     }
     for (const sessionKey of sourceKeys) {
-      if (isSubagentSessionFromEntry(sessionKey, undefined)) {
+      if (isPrivateSubagentCoordinationFromEntry(sessionKey, undefined)) {
         sources.set(sessionKey, true);
         sourceKeys.delete(sessionKey);
       }
@@ -103,7 +103,7 @@ export function createSessionActorTranscriptReader(
           });
           sources.set(
             sessionKey,
-            isSubagentSessionFromEntry(sessionKey, source?.entry, source?.acp),
+            isPrivateSubagentCoordinationFromEntry(sessionKey, source?.entry, source?.acp),
           );
         }),
       );

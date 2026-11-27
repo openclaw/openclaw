@@ -449,7 +449,9 @@ export async function executeSessionsSend(
         sourceSessionKey: requesterSessionKey,
         sourceChannel: opts?.agentChannel,
         sourceTool: "sessions_send",
-        ...(requesterIsSubagent ? { sourceRole: "subagent" as const } : {}),
+        ...(requesterIsSubagent && requesterSessionEntry?.createdIndependently !== true
+          ? { sourceRole: "subagent" as const }
+          : {}),
       };
       let dispatchMessage = annotateInterSessionPromptText(message, inputProvenance);
       let targetAcpMeta = await readAcpSessionMetaForEntryAsync({

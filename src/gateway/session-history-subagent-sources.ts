@@ -1,5 +1,5 @@
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
-import { isSubagentSessionFromEntry } from "../agents/subagents/spawn/subagent-depth-policy.js";
+import { isPrivateSubagentCoordinationFromEntry } from "../agents/subagents/spawn/subagent-depth-policy.js";
 import {
   readExactSessionEntryRow,
   readExactSessionEntryRowValidated,
@@ -74,7 +74,7 @@ export function createBoundSessionHistorySubagentSource(
     if (cached !== undefined) {
       return cached;
     }
-    if (isSubagentSessionFromEntry(sessionKey, undefined)) {
+    if (isPrivateSubagentCoordinationFromEntry(sessionKey, undefined)) {
       sources.set(sessionKey, true);
       return true;
     }
@@ -109,7 +109,7 @@ export function createBoundSessionHistorySubagentSource(
       source: ownCandidate ?? ownSource,
       entry: ownEntry,
     });
-    let child = isSubagentSessionFromEntry(sessionKey, entry);
+    let child = isPrivateSubagentCoordinationFromEntry(sessionKey, entry);
     if (!child && entry && (entry.parentSessionKey || entry.spawnedBy) && stateDatabase) {
       const acp = readAcpSessionMetaForEntry({
         sessionKey,
@@ -118,7 +118,7 @@ export function createBoundSessionHistorySubagentSource(
         databasePath: stateDatabase.path,
         env: stateDatabase.environment,
       });
-      child = isSubagentSessionFromEntry(sessionKey, entry, acp);
+      child = isPrivateSubagentCoordinationFromEntry(sessionKey, entry, acp);
     }
     sources.set(sessionKey, child);
     return child;

@@ -68,3 +68,14 @@ export function isSubagentSessionFromEntry(
     isParentOwnedBackgroundAcpSession(entry ? { ...entry, acp: acpMeta } : entry)
   );
 }
+
+/** Classifies transcript privacy without changing task ownership or reply policy. */
+export function isPrivateSubagentCoordinationFromEntry(
+  sessionKey: string,
+  entry: SessionEntry | null | undefined,
+  acpMeta?: unknown,
+): boolean {
+  return (
+    entry?.createdIndependently !== true && isSubagentSessionFromEntry(sessionKey, entry, acpMeta)
+  );
+}

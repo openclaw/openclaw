@@ -11,7 +11,7 @@ import {
   findAuthorizedSwarmCollectorRequest,
   findSwarmCollectorSession,
 } from "../../agents/subagents/registry/subagent-registry-memory.js";
-import { isSubagentSessionFromEntry } from "../../agents/subagents/spawn/subagent-depth-policy.js";
+import { isPrivateSubagentCoordinationFromEntry } from "../../agents/subagents/spawn/subagent-depth-policy.js";
 import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
 import { validateStructuredOutputSchema } from "../../agents/subagents/swarm/swarm-output-schema.js";
 import { getSwarmRunExecutionLane } from "../../agents/subagents/swarm/swarm-scheduler.js";
@@ -235,7 +235,8 @@ export async function prepareAgentRequestPreflight(params: {
         : undefined;
     const sourceEntry = sourceTarget ? sourceTarget.store[sourceTarget.canonicalKey] : undefined;
     let sourceIsSubagent = Boolean(
-      sourceTarget && isSubagentSessionFromEntry(sourceTarget.canonicalKey, sourceEntry),
+      sourceTarget &&
+      isPrivateSubagentCoordinationFromEntry(sourceTarget.canonicalKey, sourceEntry),
     );
     if (
       !sourceIsSubagent &&
@@ -253,7 +254,7 @@ export async function prepareAgentRequestPreflight(params: {
         ],
         cfg,
       });
-      sourceIsSubagent = isSubagentSessionFromEntry(
+      sourceIsSubagent = isPrivateSubagentCoordinationFromEntry(
         sourceTarget.canonicalKey,
         sourceEntry,
         sourceAcp,
