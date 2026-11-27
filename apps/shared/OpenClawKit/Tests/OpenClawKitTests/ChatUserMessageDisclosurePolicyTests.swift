@@ -22,9 +22,9 @@ struct ChatUserMessageDisclosurePolicyTests {
     @Test func `mixed CRLF and LF count as lines and keep the original preview text`() {
         let twelveLines = "x\r\nx" + String(repeating: "\nx", count: 10)
         #expect(ChatUserMessageDisclosurePolicy.collapsedPreview(twelveLines) == nil)
-        #expect(ChatUserMessageDisclosurePolicy.collapsedPreview(twelveLines + "\nx") == twelveLines + "…")
+        #expect(ChatUserMessageDisclosurePolicy.collapsedPreview(twelveLines + "\nx") == twelveLines)
 
         let twelveLFLines = Array(repeating: "x", count: 12).joined(separator: "\n")
-        #expect(ChatUserMessageDisclosurePolicy.collapsedPreview(twelveLFLines + "\r\nx") == twelveLFLines + "…")
+        #expect(ChatUserMessageDisclosurePolicy.collapsedPreview(twelveLFLines + "\r\nx") == twelveLFLines)
     }
 }
