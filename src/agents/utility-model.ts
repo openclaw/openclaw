@@ -11,6 +11,7 @@ import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
 import { resolveNativeModelPrimary } from "./agent-scope.js";
+import { DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
@@ -19,8 +20,13 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "./model-selection.js";
+import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
 import { getPublishedPreparedModelCatalogOwnerSnapshot } from "./prepared-model-catalog.js";
 import { readUtilityModelSetting } from "./utility-model-setting.js";
+
+/** Why no utility model runs; `role-policy` never falls back to the main model. */
+export type UtilityModelDisabledReason = "config" | "role-policy" | "not-offered";
+type RolePolicy = Pick<PreparedOperatorModelPolicy, "allows">;
 
 /** Published inventory, never configured/static hints, decides automatic selection. */
 type OfferedModels = {
@@ -136,17 +142,25 @@ export function resolveAutomaticUtilityModelRef(params: {
   agentId?: string;
   catalog?: OfferedModels;
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
+  /** Session owner's role; a refused candidate is never replaced by the main model. */
+  modelPolicy?: RolePolicy;
 }): string | undefined {
-  return resolveAutomaticUtilityModel(params)?.modelRef;
+  const automatic = resolveAutomaticUtilityModel(params);
+  return "modelRef" in automatic ? automatic.modelRef : undefined;
 }
 
 function resolveAutomaticUtilityModel(
   params: Parameters<typeof resolveAutomaticUtilityModelRef>[0],
-): { modelRef: string; source: "declared" | "fallback" | "primary" } | undefined {
+):
+  | { modelRef: string; source: "declared" | "fallback" | "primary" }
+  | { disabled: UtilityModelDisabledReason } {
   const provider = params.primaryProvider.trim().toLowerCase();
   if (!provider) {
-    return undefined;
+    return { disabled: "config" };
   }
+  const refused = (ref: { provider: string; model: string }) =>
+    params.modelPolicy?.allows(ref) === false;
+  let roleRefused = false;
   const snapshot =
     params.metadataSnapshot ??
     getCurrentPluginMetadataSnapshot({
@@ -195,38 +209,25 @@ function resolveAutomaticUtilityModel(
         routed ? undefined : primary?.profile,
       )
     : undefined;
-  // Routers require a positive grant. Ordinary providers retain their preference
-  // when discovery is unknown; an acquisition failure is not a model retirement.
-  if (declaredRef && (routed ? offered === true : offered !== false)) {
+  // A role refusal is checked before inventory, so the outcome never depends on
+  // whether the catalog has published yet.
+  if (declaredModelId && refused({ provider, model: declaredModelId })) {
+    roleRefused = true;
+  } else if (declaredRef && (routed ? offered === true : offered !== false)) {
+    // Routers require a positive grant. Ordinary providers retain their preference
+    // when discovery is unknown; an acquisition failure is not a model retirement.
     return { modelRef: declaredRef, source: "declared" };
   }
   const setting = readUtilityModelSetting(params.cfg, params.agentId);
   const fallbacks = setting.kind === "disabled" ? [] : setting.fallbacks;
   if (fallbacks.length) {
-    // Configured fallback shorthand belongs to the agent primary, not a session override.
-    const defaultProvider =
-      resolveDefaultModelForAgent({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        allowPluginNormalization: false,
-        manifestPlugins: snapshot?.plugins,
-      })?.provider ?? provider;
-    const aliasIndex = buildModelAliasIndex({
+    for (const { raw, split: ref, resolved } of resolveUtilityRefs({
       cfg: params.cfg,
       agentId: params.agentId,
-      defaultProvider,
-      manifestPlugins: snapshot?.plugins,
-    });
-    for (const raw of fallbacks) {
-      const ref = splitTrailingAuthProfile(raw.trim());
-      const resolved = resolveModelRefFromString({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        raw: ref.model,
-        defaultProvider,
-        aliasIndex,
-        manifestPlugins: snapshot?.plugins,
-      });
+      raws: fallbacks,
+      plugins: snapshot?.plugins,
+      providerFallback: provider,
+    })) {
       if (!resolved) {
         continue;
       }
@@ -234,6 +235,10 @@ function resolveAutomaticUtilityModel(
       // Match execution's existing same-provider profile inheritance without
       // transferring a primary account to a different provider or overriding a pin.
       const profile = ref.profile || (fallbackProvider === provider ? primary?.profile : undefined);
+      if (refused({ provider: fallbackProvider, model: resolved.ref.model })) {
+        roleRefused = true;
+        continue;
+      }
       if (isUtilityModelOffered(catalog, fallbackProvider, resolved.ref.model, profile) === false) {
         continue;
       }
@@ -243,21 +248,24 @@ function resolveAutomaticUtilityModel(
       };
     }
   }
-  if (!routed && declaredRef) {
-    if (
-      primaryModelId &&
-      isUtilityModelOffered(catalog, provider, primaryModelId, primary?.profile) === true
-    ) {
-      return {
-        modelRef: params.primaryModelRef?.trim() || withProfile(primaryModelId),
-        source: "primary",
-      };
-    }
-    // Do not silently disable utility work when every alternative is missing:
-    // execution owns the actionable missing-model and exhausted-fallback error.
-    return { modelRef: declaredRef, source: "declared" };
+  // The operator restricted this role; spending the main model would override that.
+  if (roleRefused) {
+    return { disabled: "role-policy" };
   }
-  return undefined;
+  if (
+    !routed &&
+    declaredRef &&
+    primaryModelId &&
+    isUtilityModelOffered(catalog, provider, primaryModelId, primary?.profile) === true
+  ) {
+    return refused({ provider, model: primaryModelId })
+      ? { disabled: "role-policy" }
+      : {
+          modelRef: params.primaryModelRef?.trim() || withProfile(primaryModelId),
+          source: "primary",
+        };
+  }
+  return { disabled: "not-offered" };
 }
 
 function readPublishedModelCatalog(params: { config: OpenClawConfig; agentId: string }) {
@@ -270,11 +278,46 @@ function readPublishedModelCatalog(params: { config: OpenClawConfig; agentId: st
   }
 }
 
+/** Utility refs resolve like the agent primary's shorthand, never a session override's. */
+function resolveUtilityRefs(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  raws: readonly string[];
+  plugins: Pick<PluginMetadataSnapshot, "plugins">["plugins"] | undefined;
+  providerFallback: string;
+}) {
+  const defaultProvider =
+    resolveDefaultModelForAgent({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      allowPluginNormalization: false,
+      manifestPlugins: params.plugins,
+    })?.provider ?? params.providerFallback;
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    defaultProvider,
+    manifestPlugins: params.plugins,
+  });
+  return params.raws.map((raw) => {
+    const split = splitTrailingAuthProfile(raw.trim());
+    const resolved = resolveModelRefFromString({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      raw: split.model,
+      defaultProvider,
+      aliasIndex,
+      manifestPlugins: params.plugins,
+    });
+    return { raw, split, resolved };
+  });
+}
+
 /**
- * The utility selection and provenance for the agent, or undefined when utility
- * routing is disabled or no default exists. Callers with a session-specific
- * selection pass both primary fields so automatic routing keeps that session's
- * provider and auth owner.
+ * The one owner of utility model choice: a selection with provenance, or the
+ * reason no utility model runs. Callers with a session-specific selection pass
+ * both primary fields so automatic routing keeps that session's provider and
+ * auth owner; callers acting for a session owner pass that owner's role policy.
  */
 export function resolveUtilityModelSelectionForAgent(params: {
   cfg: OpenClawConfig;
@@ -287,13 +330,35 @@ export function resolveUtilityModelSelectionForAgent(params: {
   primaryModelId?: string;
   catalog?: OfferedModels;
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
-}): { modelRef: string; source: "config" | "provider-default" } | undefined {
+  modelPolicy?: RolePolicy;
+}):
+  | { modelRef: string; source: "config" | "provider-default" }
+  | { disabled: UtilityModelDisabledReason } {
   const setting = readUtilityModelSetting(params.cfg, params.agentId);
-  if (setting.kind === "explicit") {
-    return { modelRef: setting.modelRef, source: "config" };
-  }
   if (setting.kind === "disabled") {
-    return undefined;
+    return { disabled: "config" };
+  }
+  if (setting.kind === "explicit") {
+    const policy = params.modelPolicy;
+    if (!policy) {
+      return { modelRef: setting.modelRef, source: "config" };
+    }
+    // Execution picks among the explicit chain; this only decides whether the
+    // role leaves any of it runnable. An unresolvable ref is execution's
+    // missing-model error, never a role refusal.
+    const runnable = resolveUtilityRefs({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      raws: [setting.modelRef, ...setting.fallbacks],
+      plugins: (
+        params.metadataSnapshot ??
+        getCurrentPluginMetadataSnapshot({ config: params.cfg, allowWorkspaceScopedSnapshot: true })
+      )?.plugins,
+      providerFallback: DEFAULT_PROVIDER,
+    }).some(({ resolved }) => !resolved || policy.allows(resolved.ref));
+    return runnable
+      ? { modelRef: setting.modelRef, source: "config" }
+      : { disabled: "role-policy" };
   }
   const primary = params.primaryProvider?.trim()
     ? { provider: params.primaryProvider.trim(), model: params.primaryModelId }
@@ -304,7 +369,7 @@ export function resolveUtilityModelSelectionForAgent(params: {
       });
   // No configured model means no primary to derive a utility model from.
   if (!primary) {
-    return undefined;
+    return { disabled: "config" };
   }
   const automatic = resolveAutomaticUtilityModel({
     cfg: params.cfg,
@@ -315,19 +380,23 @@ export function resolveUtilityModelSelectionForAgent(params: {
     primaryModelId: primary.model,
     catalog: params.catalog,
     metadataSnapshot: params.metadataSnapshot,
+    modelPolicy: params.modelPolicy,
   });
-  return automatic
+  return "modelRef" in automatic
     ? {
         modelRef: automatic.modelRef,
         source: automatic.source === "fallback" ? "config" : "provider-default",
       }
-    : undefined;
+    : automatic;
 }
 
 export function resolveUtilityModelRefForAgent(
-  params: Parameters<typeof resolveUtilityModelSelectionForAgent>[0],
+  // A ref alone drops the disabled reason, and simple completion would then fall
+  // back to the main model; role-aware callers use the selection.
+  params: Omit<Parameters<typeof resolveUtilityModelSelectionForAgent>[0], "modelPolicy">,
 ): string | undefined {
-  return resolveUtilityModelSelectionForAgent(params)?.modelRef;
+  const selection = resolveUtilityModelSelectionForAgent(params);
+  return "modelRef" in selection ? selection.modelRef : undefined;
 }
 
 /** Candidate runtime for an automatic utility model; preparation checks auth availability. */
@@ -364,7 +433,8 @@ export function resolveAutomaticUtilityRuntimeOverride(params: {
   });
   const utilityRef = utilityProvider + "/" + params.utilityModelId.trim().toLowerCase();
   if (
-    automatic?.source !== "declared" ||
+    !("modelRef" in automatic) ||
+    automatic.source !== "declared" ||
     splitTrailingAuthProfile(automatic.modelRef).model.toLowerCase() !== utilityRef
   ) {
     return undefined;
