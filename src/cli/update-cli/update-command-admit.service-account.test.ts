@@ -154,7 +154,7 @@ describe("candidate admission for a system unit run by another account", () => {
 
     expect(process.exitCode).toBe(3);
     expect(verdict.verdict).toBe("refuse");
-    const message = `Gateway service openclaw-gateway.service runs as openclaw, but this update runs as root and would back up and check root's own state instead of the service's. The package, the service state and the Gateway were not changed.`;
+    const message = `Gateway service openclaw-gateway.service runs as openclaw, but this update runs as root and would back up and check root's own state instead of the service's.`;
     expect(verdict.facts.checks).toEqual([
       { name: "managed-service-account", status: "refuse", detail: message },
     ]);
@@ -163,12 +163,15 @@ describe("candidate admission for a system unit run by another account", () => {
         code: "service-account-mismatch",
         message,
         nextAction:
+          "Nothing was changed: the package, the service state and the running Gateway are as they were. " +
           "Update this system service by hand (https://docs.openclaw.ai/install/updating#linux-system-service-run-by-another-account). " +
           "First make a verified backup of its state as openclaw: sudo -u openclaw env HOME=/var/lib/openclaw OPENCLAW_STATE_DIR=/var/lib/openclaw/.openclaw openclaw backup create --verify --output /var/lib/openclaw. " +
           `Then run sudo npm install -g openclaw@${candidateVersion} --allow-scripts=openclaw and sudo systemctl restart openclaw-gateway.service.`,
       },
     ]);
     expect(JSON.stringify(verdict.reasons)).not.toMatch(/doctor|update repair|stop --force/u);
+    // Published drivers print at most 200 characters of a failing check.
+    expect(message.length).toBeLessThanOrEqual(200);
     expect(snapshotUpdateFixtureFiles(home)).toEqual(before);
   });
 
