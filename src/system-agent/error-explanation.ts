@@ -49,11 +49,14 @@ export function explainPastedSystemAgentError(input: string | undefined): string
   if (pasteOffset === undefined) {
     return undefined;
   }
-  if (input.length - pasteOffset > MAX_ERROR_LENGTH) {
+  return explainSystemAgentError(input.slice(pasteOffset));
+}
+
+export function explainSystemAgentError(error: string): string {
+  if (error.length > MAX_ERROR_LENGTH) {
     return "That paste is too long for a local check. Send `explain error:` followed by just the relevant error line, with secrets removed.";
   }
-  const [headline, ...details] = input
-    .slice(pasteOffset)
+  const [headline, ...details] = error
     .split(/\r?\n/u)
     .map((line) => line.trim().replace(/^(?:Error|InvalidConfigError):[ \t]*/u, ""))
     .filter(Boolean);

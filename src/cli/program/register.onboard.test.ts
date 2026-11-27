@@ -205,6 +205,20 @@ describe("setup routing", () => {
   }
   beforeEach(() => configSnapshot({}, false));
 
+  it("explains only the explicit offline request without reading setup config", async () => {
+    const args = ["--json", "--explain-error", "OpenClaw config is invalid"];
+    await runSetup(args);
+    const call = expectDefined(runtime.log.mock.calls[0], "offline JSON reply");
+    expect(JSON.parse(call[0])).toEqual({
+      reply: expect.stringContaining("openclaw config validate"),
+    });
+    expectNoCalls(config, setup, wizard, systemAgent);
+    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "setup", ...args])).toBe("bypass");
+    expect(
+      resolveCliNetworkProxyPolicy(["node", "openclaw", "setup", "-m", "--explain-error"]),
+    ).toBe("default");
+  });
+
   it.skipIf(process.platform === "win32").each(["default", "configured", "missing"])(
     "exposes the verified desktop CLI without reading config or running setup (home=%s)",
     async (homeKind) => {

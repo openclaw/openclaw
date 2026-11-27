@@ -51,10 +51,10 @@ OpenClaw uses the same reference discovery as regular agents: in a Git checkout 
 ## Explain an error without a model
 
 In the OpenClaw TUI, type `explain error:` followed by the error message. If you
-can't start the TUI, use a one-shot request with a redacted error:
+can't start the TUI, pass the redacted error directly to the offline flag:
 
 ```bash
-openclaw setup --message 'explain error: OpenClaw config is invalid'
+openclaw setup --explain-error 'OpenClaw config is invalid'
 ```
 
 OpenClaw recognizes a small set of error messages. It gives a likely cause and

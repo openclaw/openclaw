@@ -123,22 +123,6 @@ describe("runSystemAgentWithInference", () => {
     expect(inferenceMocks.runSystemAgent).not.toHaveBeenCalled();
   });
 
-  it("explains an error as a one-shot request without probing inference", async () => {
-    verifySetupInference.mockResolvedValue(expiredAuth);
-    await runSystemAgentWithInference(
-      { message: '\nexplain error: No API key found for provider "fixture-private".', yes: true },
-      currentRuntime,
-    );
-    expect(currentRuntime.log).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("`openclaw models status`"),
-    );
-    expect(currentRuntime.log).not.toHaveBeenCalledWith(expect.stringContaining("fixture-private"));
-    expect(currentRuntime.error).not.toHaveBeenCalled();
-    expect(verifySetupInference).not.toHaveBeenCalled();
-    expect(runSystemAgent).not.toHaveBeenCalled();
-    expect(requestExitAfterOneShotOutput).toHaveBeenCalledExactlyOnceWith(currentRuntime);
-  });
-
   it("rejects an impossible interactive request before probing inference", async () => {
     await runSystemAgentWithInference({ input: pipe, output: pipe }, currentRuntime);
 
@@ -165,7 +149,7 @@ describe("runSystemAgentWithInference", () => {
     verifySetupInference.mockResolvedValue(
       json ? expiredAuth : { ok: false, status: "unavailable", error: "no configured model" },
     );
-    await runSystemAgentWithInference({ json, message: "status" }, currentRuntime);
+    await runSystemAgentWithInference({ json, message: "explain error:" }, currentRuntime);
     expect(json ? currentRuntime.log : currentRuntime.error).toHaveBeenCalledWith(
       expect.stringContaining("Run `openclaw onboard`"),
     );
