@@ -58,12 +58,15 @@ export function prepareGatewayOperatorSessionRun(params: {
     operatorRunAuthority: params.authority,
     scopes: [...params.authority.scopes],
   });
-  const creation = resolveSandboxedSessionCreation(
-    { ...client, authenticatedUserProfile: { profileId: params.authority.profileId } },
-    params.cfg,
-  );
+  // Attribution is not optional here: a run-created session with no creator profile
+  // cannot be continued by that same person once session sharing is restricted.
+  const creation = resolveOperatorSessionCreation({
+    ...client,
+    authenticatedUserProfile: { profileId: params.authority.profileId },
+  });
+  const sandbox = resolveCreatorSandbox(params.cfg, creation);
   return {
-    creation: creation ? { ...creation, via: "run" as const } : undefined,
+    creation: { ...creation, via: "run" as const, ...(sandbox ? { sandbox } : {}) },
     assertCurrent,
     assertAuthorized: (entry: SessionEntry | undefined) => {
       assertCurrent();

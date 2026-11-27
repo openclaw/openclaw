@@ -47,6 +47,7 @@ const endpointCases = [
 
 let state: OpenClawTestState;
 let profileId: string;
+let memberProfileId: string;
 let proxyListener: Awaited<ReturnType<typeof reserveTestPortListener>>;
 let ownerListener: Awaited<ReturnType<typeof reserveTestPortListener>>;
 let releaseProfileCatalog: (() => void) | undefined;
@@ -82,6 +83,7 @@ beforeAll(async () => {
         definitions: {
           guest: { ...ordinaryRole, sandbox: "required" },
           ordinary: ordinaryRole,
+          private: { ...ordinaryRole, sessions: { others: "none" as const } },
         },
       },
     },
@@ -92,6 +94,9 @@ beforeAll(async () => {
   profileId = ensureProfileForEmail("sandbox-guest@example.test").id;
   const ordinary = ensureProfileForEmail("ordinary@example.test");
   setUserProfileRole(ordinary.id, "ordinary");
+  memberProfileId = ensureProfileForEmail("member@example.test").id;
+  setUserProfileRole(memberProfileId, "private");
+  setUserProfileRole(ensureProfileForEmail("other-member@example.test").id, "private");
   releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
   const overrides = {
     openAiChatCompletionsEnabled: true,
@@ -226,5 +231,38 @@ describe.each(endpointCases)("$name session sandbox boundary", (endpoint) => {
     expect(loadSessionEntryReadOnly({ agentId: "main", sessionKey })?.sandbox).toBe(
       kind === "host" ? undefined : "required",
     );
+  });
+
+  it("lets a restricted member continue their own conversation without granting another member access", async () => {
+    const sessionKey = `agent:main:http-${endpoint.key}-private-member`;
+    const first = await post({ endpoint, sessionKey, email: "member@example.test" });
+    expect(first.status, first.body).toBe(200);
+    const second = await post({ endpoint, sessionKey, email: "member@example.test" });
+    expect(second.status, second.body).toBe(200);
+
+    const entry = loadSessionEntryReadOnly({ agentId: "main", sessionKey });
+    expect(entry).toMatchObject({
+      createdActor: { type: "human", source: "profile", id: memberProfileId },
+    });
+    expect(entry?.sandbox).toBeUndefined();
+
+    const calls = vi.mocked(runEmbeddedAgent).mock.calls.length;
+    const denied = await post({ endpoint, sessionKey, email: "other-member@example.test" });
+    expect(denied.status, denied.body).toBe(403);
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(calls);
+    expect(loadSessionEntryReadOnly({ agentId: "main", sessionKey })).toMatchObject({
+      sessionId: entry?.sessionId,
+      createdActor: entry?.createdActor,
+    });
+  });
+
+  it("does not assign an existing unattributed session to a restricted caller", async () => {
+    const sessionKey = `agent:main:http-${endpoint.key}-unattributed`;
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey },
+      { sessionId: `old-${endpoint.key}`, updatedAt: Date.now(), visibility: "shared" },
+    );
+    const denied = await post({ endpoint, sessionKey, email: "member@example.test" });
+    expect(denied.status, denied.body).toBe(403);
   });
 });

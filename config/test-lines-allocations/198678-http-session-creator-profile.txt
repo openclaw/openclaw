@@ -1,0 +1,2 @@
+# Exact net regression-test lines for #198678: trusted-proxy operator runs attribute run-created sessions to the caller profile.
+38
