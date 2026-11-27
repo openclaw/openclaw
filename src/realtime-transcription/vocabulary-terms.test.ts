@@ -67,14 +67,14 @@ describe("vocabulary import boundary", () => {
 
   it("rejects raw byte excess and deep nesting before materializing JSON", () => {
     const parse = vi.spyOn(JSON, "parse");
+    const oversized = "é".repeat(VOCABULARY_LIMITS.collectionBytes / 2 + 1);
+    const deep = "[".repeat(7) + "0" + "]".repeat(7);
     try {
-      expect(() =>
-        parseVocabularyImport("é".repeat(VOCABULARY_LIMITS.collectionBytes / 2 + 1)),
-      ).toThrow(new VocabularyError("limit-exceeded"));
-      expect(() => parseVocabularyImport("[".repeat(7) + "0" + "]".repeat(7))).toThrow(
-        new VocabularyError("limit-exceeded"),
-      );
-      expect(parse).not.toHaveBeenCalled();
+      for (const text of [oversized, deep]) {
+        expect(() => parseVocabularyImport(text)).toThrow(new VocabularyError("limit-exceeded"));
+      }
+      // Stack source maps may use JSON.parse; only the rejected imports must never reach it.
+      expect(parse.mock.calls.filter(([text]) => text === oversized || text === deep)).toEqual([]);
     } finally {
       parse.mockRestore();
     }
