@@ -72,9 +72,8 @@ describe("models-config merge", () => {
     }
   });
 
-  it("normalizes providers, retaining valid secrets and dropping invalid stale catalogs", () => {
+  it("normalizes providers and retains valid existing secrets", () => {
     const merged = mergeSecrets(merge.mergeProviders({ explicit: { openai: provider() } }), {
-      invalid: provider({ baseUrl: undefined }),
       "auth-only": provider({ models: [], apiKey: "AGENT_KEY" }),
       " OpenAI ": provider({ baseUrl: agentUrl, apiKey: "AGENT_KEY" }),
     });

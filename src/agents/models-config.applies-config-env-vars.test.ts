@@ -163,15 +163,18 @@ describe("models-config planning", () => {
     });
   });
 
-  it("omits a configured provider the registry rejects and keeps the rest loadable", async () => {
+  it("omits providers the registry rejects, reports why, and keeps the rest loadable", async () => {
     discover({});
     const { api: _api, ...withoutApi } = provider({ baseUrl: "https://legacy.example/v1" });
     const plan = await generate({
       cfg: { models: { providers: { valid: provider(), legacy: withoutApi } } },
+      // An authored entry left only in the existing file is reported too.
+      existingParsed: { providers: { authored: withoutApi } },
     });
 
     expect(Object.keys(plan.providers)).toEqual(["valid"]);
-    expect(plan.skippedProviders).toEqual([
+    expect(plan.skippedProviders?.toSorted()).toEqual([
+      'Provider authored, model gpt-5.5: no "api" specified. Set at provider or model level.',
       'Provider legacy, model gpt-5.5: no "api" specified. Set at provider or model level.',
     ]);
     const registry = ModelRegistry.create(
