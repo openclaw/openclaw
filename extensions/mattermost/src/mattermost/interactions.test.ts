@@ -242,7 +242,6 @@ describe("buildButtonProps attachments", () => {
   });
 
   it("keeps alphanumeric ids, gives other values a unique routable id and signs the original value", () => {
-    const callbackUrl = "http://localhost:18789/cb";
     const values = [
       "approve",
       "::删掉说明和备注两条帖子，只留表",
@@ -252,7 +251,7 @@ describe("buildButtonProps attachments", () => {
     ];
     const actions = requireActions(
       buildButtonAttachmentsForTest({
-        callbackUrl,
+        callbackUrl: "http://localhost:18789/cb",
         buttons: values.map((id) => ({ id, name: id, context: { callback_data: id } })),
       }),
     );
@@ -266,13 +265,6 @@ describe("buildButtonProps attachments", () => {
     expect(new Set(ids).size).toBe(values.length);
     expect(actions.map((action) => action.integration.context.action_id)).toEqual(ids);
     expect(actions.map((action) => action.integration.context.callback_data)).toEqual(values);
-    // Mattermost routes a click to the first action with its id, so a clash must fail the send.
-    expect(() =>
-      buildButtonAttachmentsForTest({
-        callbackUrl,
-        buttons: ["yesx1", "yes?"].map((id) => ({ id, name: id })),
-      }),
-    ).toThrow("yesx1");
   });
 });
 

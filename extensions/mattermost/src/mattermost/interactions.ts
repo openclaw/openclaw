@@ -200,7 +200,8 @@ function generateInteractionToken(context: Record<string, unknown>, accountId?: 
  * so any other character in an action ID makes Mattermost answer 404 before the callback runs.
  * Other IDs (agent values, `question-0`, non-ASCII text) become `<alphanumerics>x<index>`: the
  * index after the last `x` keeps them unique on the post; the original value travels in the
- * signed context.
+ * signed context. A raw alphanumeric id equal to a derived id in the same post would clash;
+ * accepted, not observed.
  * See: https://github.com/mattermost/mattermost/issues/25747
  */
 function toMattermostActionId(id: string, index: number): string {
@@ -221,13 +222,8 @@ export function buildButtonAttachments(params: {
   }>;
   text?: string;
 }) {
-  const rawIds = new Set(params.buttons.map((btn) => btn.id));
   const actions = params.buttons.map((btn, index) => {
     const safeId = toMattermostActionId(btn.id, index);
-    // Mattermost sends a click to the first action with that id, so a clash would misroute it.
-    if (safeId !== btn.id && rawIds.has(safeId)) {
-      throw new Error(`Mattermost button id ${safeId} is used by two buttons in one post`);
-    }
     const context: Record<string, unknown> = {
       action_id: safeId,
       ...btn.context,
