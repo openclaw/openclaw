@@ -8,8 +8,9 @@ import { isStateDatabaseMaintenanceContention } from "../../infra/gateway-state-
 import { AUTOMATIC_RECOVERY_CLEANUP_STEP } from "../../infra/update-automatic-cleanup-result.js";
 import { formatUpdateDoctorLintFinding } from "../../infra/update-doctor-lint.js";
 import { formatUpdateFailureFact } from "../../infra/update-failure-facts-format.js";
-import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
+import { renderUpdateRunSummary } from "../../infra/update-run-notice.js";
+import { formatUpdateOwedStep, listUpdateOwedSteps } from "../../infra/update-run-owed-step.js";
 import { getUpdateRunForProgressAsync } from "../../infra/update-run-reader.js";
 import {
   toPublicUpdateRun,
@@ -17,17 +18,17 @@ import {
   type UpdateRunPhase,
   type UpdateRunRecord,
 } from "../../infra/update-run-record.js";
+import { updateRunReportInputFromResult } from "../../infra/update-run-report.js";
 import {
-  renderUpdateRunReport,
-  updateRunReportInputFromResult,
-} from "../../infra/update-run-report.js";
-import { isFailedUpdateStep, projectUpdateRunResultSteps } from "../../infra/update-run-step.js";
+  isFailedUpdateStep,
+  projectUpdateRunResultSteps,
+  updateRunWarningMessages,
+} from "../../infra/update-run-step.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { formatJsonConsoleLine, getConsoleSettings } from "../../logging/console.js";
 import { isLogLevelEnabled } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
-import { formatUpdateReportReadHint } from "./report-path.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
 // One command owns each observer. The final report flushes it before printing so
@@ -309,25 +310,20 @@ function printStep(step: Omit<UpdateStepResult, "cwd">): void {
   }
 }
 
-/** Prepare history and report artifacts while the caller still owns terminal effects. */
+/** Capture the completion history while the caller still owns terminal effects. */
 export async function prepareResult(
   result: UpdateRunResult,
   opts: UpdateCommandOptions,
   reportHints: {
-    doctorHint?: string | null;
     nextAction?: string;
     record?: UpdateRunRecord;
     readHistory?: boolean;
-    writeArtifacts?: boolean;
   } = {},
   assertCurrent?: () => void,
 ): Promise<(additionalSteps?: readonly UpdateStepResult[]) => void> {
   assertCurrent?.();
   const finalizeProgress = result.runId ? activeUpdateProgress.get(result.runId) : undefined;
-  // Retire polling before waiting for report IO, including detached recovery.
   finalizeProgress?.pause();
-  let run: UpdateRunRecord | undefined;
-  let report: ReturnType<typeof renderUpdateRunReport> | undefined;
   const readRun =
     result.runId && !reportHints.record && reportHints.readHistory !== false
       ? () => {
@@ -340,69 +336,32 @@ export async function prepareResult(
           }
         }
       : undefined;
-  // The artifact owner reads under its lock and reconciles after publication.
-  // Captured and detached reports never reopen retained history.
-  const renderReport = (current?: UpdateRunRecord) => {
-    assertCurrent?.();
-    run = reportHints.record ?? current;
-    report = renderUpdateRunReport(updateRunReportInputFromResult(result, run), {
-      ...reportHints,
-      mode: result.mode === "unknown" ? run?.target.kind : result.mode,
-      markdownLimit: Infinity,
-    });
-    return report;
-  };
-  const reportPath =
-    reportHints.writeArtifacts === false
-      ? undefined
-      : await writeUpdateRunReportArtifact({
-          result,
-          report: renderReport,
-          record: reportHints.record,
-          readRun,
-          env: opts.run?.env,
-          detached: reportHints.readHistory === false,
-          assertCurrent,
-        }).catch((error: unknown) => {
-          assertCurrent?.();
-          defaultRuntime.error(`Update report could not be saved: ${formatErrorMessage(error)}`);
-          return undefined;
-        });
-  assertCurrent?.();
-  report ??= renderReport(readRun?.());
-  const preparedReport = report;
+  const run = reportHints.record ?? readRun?.();
   return (additionalSteps = []) => {
-    // Optional post-success maintenance runs after executor settlement. Its
-    // diagnostics enrich captured output without reopening history or changing
-    // the update's already prepared outcome/report artifact.
+    // Supplemental diagnostics enrich output without reopening history.
     const reportedResult = additionalSteps.length
       ? { ...result, steps: [...result.steps, ...additionalSteps] }
       : result;
     const reportedRun = run ? projectUpdateRunResultSteps(run, additionalSteps) : undefined;
-    const outputReport = additionalSteps.length
-      ? renderUpdateRunReport(updateRunReportInputFromResult(reportedResult, reportedRun), {
-          ...reportHints,
-          mode: result.mode === "unknown" ? run?.target.kind : result.mode,
-          markdownLimit: Infinity,
-        })
-      : preparedReport;
+    const summary = updateRunReportInputFromResult(reportedResult, reportedRun);
+    if (reportHints.nextAction) {
+      summary.origin = { ...summary.origin, nextAction: reportHints.nextAction };
+    }
     finalizeProgress?.finish(reportedRun);
     if (opts.json) {
       defaultRuntime.writeJson({
         ...reportedResult,
         ...(reportedRun ? { run: toPublicUpdateRun(reportedRun) } : {}),
-        reportPath,
       });
       return;
     }
     defaultRuntime.log("");
-    defaultRuntime.log(theme.heading(outputReport.headline));
-    if (reportPath) {
-      defaultRuntime.log(`Report: ${reportPath}`);
-      defaultRuntime.log(formatUpdateReportReadHint(reportPath));
+    defaultRuntime.log(theme.heading(renderUpdateRunSummary(summary)));
+    for (const warning of updateRunWarningMessages(summary.steps)) {
+      defaultRuntime.log(`Warning: ${warning}`);
     }
-    for (const line of outputReport.lines) {
-      defaultRuntime.log(line);
+    for (const owed of reportedRun ? listUpdateOwedSteps(reportedRun) : []) {
+      defaultRuntime.log(`Warning: ${formatUpdateOwedStep(owed)}`);
     }
     // Cleanup states what it removed and kept even when nothing needs attention.
     for (const step of additionalSteps) {

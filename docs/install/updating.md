@@ -69,9 +69,9 @@ Managed start/restart keeps the selected release. Use
 `openclaw update --tag <version>` for an explicit downgrade. An explicit
 `--tag` or `--channel` remains your target selection instead of the npm package.
 
-Plugin maintenance failures are warnings, not failed core updates. Retry them
-with `openclaw plugins update --all`. An already-current installation still maintains
-plugins and restarts only when needed and restart was requested.
+Plugin maintenance failures are warnings, not failed core updates. The final
+summary names the failed step and its recovery command. An already-current
+installation still maintains plugins and restarts only when needed and requested.
 
 Older installed updaters still perform their first hop with their shipped update
 flow. The compatibility and recovery details below also cover those older
@@ -166,16 +166,19 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    After activation of a modern launcher trial, only the Gateway that is ready settles the run
    from the launcher trial and preparation lock. A published trial takes precedence
    over an expired lock for the same run. Only a Gateway that runs the target build
-   records success; restored files alone do not prove that the previous Gateway
-   is serving. Startup does not infer a failed update from PID reuse or uptime.
-7. After success is recorded, the serving release runs advisory Doctor inspections
+   records success. It settles once after required plugin work, so the final
+   summary and notice include its result. Restored files alone do not prove that
+   the previous Gateway is serving. Startup does not infer a failed update from
+   PID reuse or uptime.
+7. After the result is recorded, the serving release runs advisory Doctor inspections
    in the background. The same update details receive their results without a page
    reload. Only warning and error findings add advice; inspections do not delay
    completion, fail the update, or trigger rollback.
 8. The serving release updates installed plugins in the background, then reloads
-   changed plugins through the existing runtime lifecycle. Plugin failures appear
-   in the same update details and warning count; they never fail the core update
-   or trigger rollback.
+   changed plugins through the existing runtime lifecycle. The run settles and
+   sends one notice after this work finishes. Plugin failures appear in that
+   summary with the failed step and exact next command; they never fail the core
+   update or trigger rollback.
 
 Packaged bundled plugins belong to the selected core release, not a second
 plugin installation. Channel synchronization retires obsolete compiled-bundle

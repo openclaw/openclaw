@@ -1402,6 +1402,7 @@ const reviewedOperations = new Map([
         operations: [
           "readGatewayLastShutdownInDatabase",
           "inspectGatewayCrashLoopBreakerInDatabase",
+          "countRepairableMaintenanceStartupFailuresInDatabase",
         ],
         evidence:
           "SQL readers execute only through gatewayBootReadOperations in the shared-state read worker or gatewayBootOperations begin/recover in the shared-state writer. Host lifecycle APIs dispatch these operations; remaining host imports from this kernel are pure helpers and constants.",

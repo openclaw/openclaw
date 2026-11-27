@@ -1048,6 +1048,7 @@ const configs: UserConfig[] = [
     const firstEntry = Object.keys(entry)[0]!;
     const bundleFsSafe = Object.keys(entry).some((name) =>
       [
+        "config/sessions/disk-budget.worker",
         "infra/fs-safe-copy.worker",
         "infra/sqlite-readonly-location.worker",
         "plugins/plugin-generation-preparation.worker",

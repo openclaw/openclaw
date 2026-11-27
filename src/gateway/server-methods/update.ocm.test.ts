@@ -8,7 +8,6 @@ import { resolveConfigPath, resolveStateDir } from "../../config/paths.js";
 import { resolveOcmUpdateManager } from "../../infra/ocm-update-client.js";
 import { createUpdateRun, finishUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import {
   invokeUpdateRun,
@@ -607,8 +606,7 @@ it("redacts manager diagnostics before RPC/UI projection and probe errors", asyn
     )({ params: { runId: `ocm:${job.id}` }, respond } as never);
     const response = expectDefined(respond.mock.calls[0]?.[1], "managed update response");
     expect(JSON.stringify(response)).not.toContain(secret);
-    expect(renderUpdateRunReport(response.run).markdown).toContain("Package fetch failed");
-    expect(renderUpdateRunReport(response.run).markdown).not.toContain(secret);
+    expect(JSON.stringify(response.run.steps)).toContain("Package fetch failed");
     exec.mockRejectedValue(new Error(diagnostic));
     const error = await invokeUpdateRun({}).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(Error);

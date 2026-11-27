@@ -11,7 +11,7 @@ import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-
 import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import {
   buildGatewayCrashLoopBreakerDecision,
-  maintenanceStartupReasons,
+  isRepairableMaintenanceStartupFailure,
 } from "./gateway-boot-lifecycle.kernel.js";
 import {
   publishGatewayRecentCrashes,
@@ -301,6 +301,21 @@ export async function completeGatewayBootLifecycle(
   }
 }
 
+/** Read-only: the rows `repairGatewayMaintenanceStartupFailures` would change. */
+export async function countRepairableGatewayMaintenanceStartupFailures(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<number> {
+  if (!pathMayExistSync(resolveOpenClawStateSqlitePath(env))) {
+    return 0;
+  }
+  const reply = await executeExistingOpenClawStateRead(
+    { env },
+    { type: "gatewayBoot.repairableMaintenanceFailures", input: undefined },
+    { signal: getAsyncWorkSignal(), current: true },
+  );
+  return reply?.count ?? 0;
+}
+
 export function repairGatewayMaintenanceStartupFailures(
   env: NodeJS.ProcessEnv = process.env,
 ): number {
@@ -316,8 +331,7 @@ export function repairGatewayMaintenanceStartupFailures(
           kysely
             .updateTable("gateway_boot_lifecycle")
             .set({ outcome: "startup_failure_repaired" })
-            .where("outcome", "=", "startup_failed")
-            .where("startup_reason", "in", maintenanceStartupReasons),
+            .where(isRepairableMaintenanceStartupFailure),
         );
         return Number(result.numAffectedRows ?? 0);
       },

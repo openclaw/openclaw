@@ -51,7 +51,7 @@ export function registerAlreadyCurrentUpdateTests() {
         exitCode: 0,
       },
       {
-        name: "a plugin failure without failing the core update",
+        name: "a required plugin failure without replacing the current core",
         result: pluginResult({ status: "error", reason: "fixture plugin update failed" }),
         changed: false,
         detail: "fixture plugin update failed\nRun `openclaw plugins update --all` to retry.",
