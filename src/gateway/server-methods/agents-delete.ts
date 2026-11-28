@@ -198,7 +198,7 @@ async function deleteGatewayAgentAttempt(
         // A retired agent is no longer in config; only its completed deletion records its paths.
         const recorded = retired && lockedJournal?.cleanupCompleted ? lockedJournal : undefined;
         if (recorded && !requestedDeleteFiles) {
-          // A completed keep-files deletion keeps the registration; repeating it changes nothing.
+          // The completed deletion kept the registration; a repeat without files changes nothing.
           return undefined;
         }
         if ((configured || retired) && lockedJournal?.cleanupCompleted) {

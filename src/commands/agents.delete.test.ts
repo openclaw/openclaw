@@ -648,39 +648,49 @@ describe("agents delete command", () => {
     },
   );
 
-  it("deletes the recorded files of a retired agent after a keep-files deletion", async ({
-    state,
-  }) => {
-    // A keep-files deletion keeps the registration; its journal is the only record of a
-    // custom workspace once config no longer names the agent.
-    await state.setup();
-    const agentDir = path.join(state.stateDir, "agents", "retired", "agent");
-    const workspace = path.join(state.stateDir, "custom-retired-workspace");
-    await Promise.all([agentDir, workspace].map((dir) => fs.mkdir(dir, { recursive: true })));
-    registerOpenClawAgentDatabase({
-      agentId: "retired",
-      path: path.join(agentDir, "openclaw-agent.sqlite"),
-    });
-    beginAgentDeletionJournal({
-      agentId: "retired",
-      operationId: "kept-files",
-      agentDir,
-      workspaceDir: workspace,
-      sessionsDir: path.join(state.stateDir, "agents", "retired", "sessions"),
-      deleteFiles: false,
-    });
-    runOpenClawStateWriteTransaction((database) =>
-      completeAgentDeletionJournalInDatabase(database, "retired", "kept-files"),
-    );
-    const confirm = vi.fn(async () => true);
-    wizardMocks.createClackPrompter.mockReturnValue({ confirm });
-    await agentsDeleteCommand({ id: "retired" });
-    expect(confirm).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining(workspace) }),
-    );
-    expect(moveToTrash.mock.calls.map(([target]) => target)).toContain(workspace);
-    expect(registeredAgentIds()).not.toContain("retired");
-  });
+  it.for(["own workspace", "workspace now used by ops"] as const)(
+    "deletes the recorded files of a retired agent after a keep-files deletion (%s)",
+    async (shape, { state }) => {
+      // A keep-files deletion keeps the registration; its journal is the only record of a
+      // custom workspace once config no longer names the agent.
+      await state.setup();
+      const agentDir = path.join(state.stateDir, "agents", "retired", "agent");
+      const workspace = path.join(
+        state.stateDir,
+        shape === "own workspace" ? "custom-retired-workspace" : "workspace-ops",
+      );
+      await Promise.all([agentDir, workspace].map((dir) => fs.mkdir(dir, { recursive: true })));
+      registerOpenClawAgentDatabase({
+        agentId: "retired",
+        path: path.join(agentDir, "openclaw-agent.sqlite"),
+      });
+      beginAgentDeletionJournal({
+        agentId: "retired",
+        operationId: "kept-files",
+        agentDir,
+        workspaceDir: workspace,
+        sessionsDir: path.join(state.stateDir, "agents", "retired", "sessions"),
+        deleteFiles: false,
+      });
+      runOpenClawStateWriteTransaction((database) =>
+        completeAgentDeletionJournalInDatabase(database, "retired", "kept-files"),
+      );
+      const confirm = vi.fn(async () => true);
+      wizardMocks.createClackPrompter.mockReturnValue({ confirm });
+      await agentsDeleteCommand({ id: "retired" });
+      const trashed = moveToTrash.mock.calls.map(([target]) => target);
+      expect(registeredAgentIds()).not.toContain("retired");
+      if (shape === "workspace now used by ops") {
+        // A surviving agent's workspace is never trashed.
+        expect(trashed).not.toContain(workspace);
+        return;
+      }
+      expect(confirm).toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringContaining(workspace) }),
+      );
+      expect(trashed).toContain(workspace);
+    },
+  );
 
   it("shows Doctor's restore-first warning for a held store before confirming", async ({
     state,
