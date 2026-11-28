@@ -124,18 +124,36 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
     },
   );
 
-  it("does not infer titles for control-only or unregistered commands", async () => {
+  it("does not infer titles for control commands", async () => {
     await withTitleProvider("Must not be used", async ({ cfg, storePath, requests }) => {
       const scope = { agentId: "main", sessionKey: "agent:main:dashboard:controls", storePath };
       const sessionId = "control-session";
       await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
-      for (const userMessage of ["/status", "/model choose-a-model", "/unknown task"]) {
+      for (const userMessage of ["/status", "/model choose-a-model"]) {
         await expect(
           maybeGenerateDashboardSessionTitle({ ...scope, cfg, sessionId, userMessage }),
         ).resolves.toBe(false);
       }
       expect(requests).toHaveLength(0);
       expect(loadSessionEntry(scope)?.displayName).toBeUndefined();
+    });
+  });
+
+  it("titles a session opened with an unregistered slash task", async () => {
+    await withTitleProvider("Slash task title", async ({ cfg, storePath, requests }) => {
+      const scope = { agentId: "main", sessionKey: "agent:main:dashboard:slash-task", storePath };
+      const sessionId = "slash-task-session";
+      await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
+      await expect(
+        maybeGenerateDashboardSessionTitle({
+          ...scope,
+          cfg,
+          sessionId,
+          userMessage: "/unknown task",
+        }),
+      ).resolves.toBe(true);
+      expect(requests).toHaveLength(1);
+      expect(loadSessionEntry(scope)?.displayName).toBe("Slash task title");
     });
   });
   it("disables configured native Ollama thinking only for the utility request", async ({
