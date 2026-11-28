@@ -31,6 +31,11 @@ type SkillsCheckOptions = {
   agent?: string;
 };
 
+function formatSkillsListCommand(report: SkillStatusReport): string {
+  const agent = report.agentId ? ` --agent ${quoteCliArg(terminalText`${report.agentId}`)}` : "";
+  return formatCliCommand(`openclaw skills list${agent}`);
+}
+
 function appendClawHubHint(output: string): string {
   const command = formatCliCommand("openclaw skills");
   return `${output}\n\nTip: use \`${command} search\`, \`${command} install\`, and \`${command} update\` for ClawHub-backed skills.`;
@@ -132,7 +137,7 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
 
   if (skills.length === 0) {
     const message = opts.eligible
-      ? `No eligible skills found. Run \`${formatCliCommand("openclaw skills list")}\` to see all skills.`
+      ? `No eligible skills found. Run \`${formatSkillsListCommand(report)}\` to see all skills.`
       : "No skills found.";
     return appendClawHubHint(message);
   }
@@ -175,7 +180,7 @@ export function formatSkillInfo(
       });
     }
     return appendClawHubHint(
-      terminalText`Skill "${requestedName}" not found. Run \`${formatCliCommand("openclaw skills list")}\` to see available skills.`,
+      terminalText`Skill "${requestedName}" not found. Run \`${formatSkillsListCommand(report)}\` to see available skills.`,
     );
   }
 

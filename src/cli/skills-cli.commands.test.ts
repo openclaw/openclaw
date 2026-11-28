@@ -392,6 +392,28 @@ describe("skills cli commands", () => {
     expect(errors).toEqual([]);
     expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
   });
+  it.each(["info missing-skill", "list --eligible"])(
+    "keeps the selected agent when following the list hint from %s",
+    async (action) => {
+      mocks.inferredAgent.mockReturnValue("reader");
+      mocks.gateway.mockImplementation(async ({ params }) => ({
+        ...mocks.report,
+        agentId: params.agentId,
+        skills: [],
+      }));
+      if (action.startsWith("info")) {
+        await expectFailure(`${action} --agent writer`);
+      } else {
+        await run(`${action} --agent writer`);
+      }
+      const hint = stdout[0]?.match(/Run `openclaw skills ([^`]+)`/)?.[1];
+      expect(hint).toBeDefined();
+      await run(hint!);
+      expect(mocks.gateway).toHaveBeenLastCalledWith(
+        expect.objectContaining({ method: "skills.status", params: { agentId: "writer" } }),
+      );
+    },
+  );
   it("renders sanitized colored skill names with normalized and fallback emoji", async () => {
     setTty(false);
     vi.stubEnv("TERM", "dumb");
