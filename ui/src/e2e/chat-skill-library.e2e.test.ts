@@ -141,12 +141,16 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
       const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill("Use $release");
+      const editor = page.locator(
+        ".agent-chat__composer-combobox textarea:visible, .agent-chat__composer-combobox [data-composer-editor]",
+      );
+      await editor.fill("Use $release");
       const references = page.getByRole("listbox", { name: "Skill references" });
       await references.getByRole("option").filter({ hasText: "Alice" }).waitFor();
-      await composer.press("Enter");
+      await editor.press("Enter");
       await expect.poll(() => composer.inputValue()).toBe(`Use $${alice.entry.name} `);
-      await composer.fill("");
+      await editor.fill("");
+      await expect.poll(() => composer.inputValue()).toBe("");
 
       let menu = await openSkills(page);
       const item = (name: string | RegExp, exact = true) =>
