@@ -101,12 +101,13 @@ internal interface ChatDictationRecognizer {
   fun destroy()
 }
 
+internal fun isOnDeviceDictationAvailable(context: Context): Boolean = runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(context.applicationContext) }.getOrDefault(false)
+
 internal class AndroidChatDictationRecognizer(
   context: Context,
 ) : ChatDictationRecognizer {
   private val appContext = context.applicationContext
-  override val isAvailable: Boolean =
-    runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext) }.getOrDefault(false)
+  override val isAvailable: Boolean = isOnDeviceDictationAvailable(appContext)
   private var generation = 0L
   private var recognizer: SpeechRecognizer? = null
 

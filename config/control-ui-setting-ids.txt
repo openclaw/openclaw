@@ -133,6 +133,7 @@ local.chatFollowUpMode
 local.chatMessageMaxWidth
 local.chatSendShortcut
 local.chatShowTaskProgress
+local.compactSessionOpening
 local.composerHoldToRecord
 local.customTheme
 local.fontChat

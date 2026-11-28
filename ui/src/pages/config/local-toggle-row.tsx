@@ -10,6 +10,7 @@ export function LocalToggleRow(props: {
   config: ConfigProps;
   /** The browser preference the row edits; its setting ID is `local.<preference>`. */
   preference:
+    | "compactSessionOpening"
     | "chatShowTaskProgress"
     | "chatCollapseTaskProgress"
     | "composerHoldToRecord"

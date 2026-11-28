@@ -23,6 +23,7 @@ export const APPEARANCE_SETTINGS = defineSettingsPage({
     "local.chatSendShortcut": { label: "Send shortcut" },
     "local.chatFollowUpMode": { label: "Follow-ups while the agent is working" },
     "local.chatMessageMaxWidth": { label: "Message width" },
+    "local.compactSessionOpening": { label: "Open with 24 messages" },
     "local.chatShowTaskProgress": { label: "Show task progress cards" },
     "local.chatCollapseTaskProgress": { label: "Collapse task progress by default on desktop" },
     "local.catalogOpenTarget": { label: "Open external sessions in" },

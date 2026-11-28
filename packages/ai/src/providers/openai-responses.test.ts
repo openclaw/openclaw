@@ -283,6 +283,8 @@ describe("OpenAI Responses provider", () => {
   it.each([
     { id: "gpt-6.1-sol", reasoningEffort: undefined, expectedEffort: undefined },
     { id: "gpt-6.1-sol", reasoningEffort: "minimal", expectedEffort: "low" },
+    { id: "gpt-6.1-terra", reasoningEffort: "medium", expectedEffort: "medium" },
+    { id: "gpt-6.1-terra", reasoningEffort: "none", expectedEffort: "none" },
     { id: "gpt-6-luna", reasoningEffort: "max", expectedEffort: "max" },
   ] as const)(
     "honors $id reasoning and sampling without catalog metadata for $reasoningEffort",

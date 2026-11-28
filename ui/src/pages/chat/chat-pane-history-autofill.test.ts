@@ -2,6 +2,7 @@
 
 import { afterEach, expect, it, vi } from "vitest";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import {
   createNativeShowEarlierPane,
   nativeHistoryMessage,
@@ -95,8 +96,9 @@ it.each(["failure", "exhaustion"] as const)("stops automatic fills after %s", as
   }
 });
 
-it("reopens a trimmed cache boundary before its single automatic fill", async () => {
+it("reopens a trimmed cache boundary in compact mode before its single automatic fill", async () => {
   const { pane, state, request, evaluate } = setup();
+  Object.assign(state.settings, { compactSessionOpening: true });
   state.currentSessionId = "current";
   state.chatMessages[0] = { ...nativeHistoryMessage(3), __openclaw: { id: "source-3", seq: 3 } };
   state.chatHistoryPagination = { hasMore: true, needsBoundary: true, totalMessages: 4 };
@@ -118,13 +120,34 @@ it("reopens a trimmed cache boundary before its single automatic fill", async ()
   expect(pane.stagedOlder).toMatchObject({ page: null, load: null });
 });
 
-it("reserves an overflowing first page for reader intent", async () => {
-  vi.useFakeTimers();
+it.each([
+  { compact: false, height: 501 },
+  { compact: true, height: 400 },
+])("keeps earlier messages for reader intent (compact $compact)", async ({ compact, height }) => {
   const { pane, state, thread, request, setHeight, evaluate } = setup();
   const pagination = { hasMore: true as const, olderCursor: "older-2", totalMessages: 4 };
-  state.chatHistoryPagination = { ...pagination };
-  request.mockResolvedValue(page(1, 3, false));
-  setHeight(501);
+  Object.assign(state.settings, { compactSessionOpening: compact });
+  if (compact) {
+    state.currentSessionId = null;
+    state.chatMessages = [];
+    request.mockResolvedValueOnce({
+      ...pagination,
+      messages: [nativeHistoryMessage(3), nativeHistoryMessage(4)],
+      sessionId: "current",
+    });
+    await loadChatHistory(state, { startup: true, deferBranches: true });
+    expect(request.mock.calls[0]?.[1]).toMatchObject({ limit: 24 });
+    vi.spyOn(pane.transcript, "hasMessageRows", "get").mockReturnValue(true);
+    request.mockClear();
+  } else {
+    state.chatHistoryPagination = { ...pagination };
+  }
+  request.mockResolvedValue({
+    ...page(1, 3, false),
+    sessionId: state.currentSessionId ?? undefined,
+  });
+  setHeight(height);
+  vi.useFakeTimers();
   try {
     await evaluate();
     expect(request).not.toHaveBeenCalled();
