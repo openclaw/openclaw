@@ -115,7 +115,9 @@ it.each(["sendMessage", "sendRichMessage"] as const)(
         socket.resetAndDestroy();
       });
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     try {
       const address = server.address();
       assert(address && typeof address !== "string");
@@ -129,7 +131,9 @@ it.each(["sendMessage", "sendRichMessage"] as const)(
         expect(handshakes).toBe(1);
       });
     } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   },
 );

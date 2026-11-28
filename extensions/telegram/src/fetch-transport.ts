@@ -655,8 +655,8 @@ export function createTelegramTransport(
         const requestDispatcher =
           freshConnection && attempt.exportAttempt.dispatcherPolicy?.mode === "direct"
             ? dispatcher.compose(
-                (dispatch) => (options, handler) =>
-                  dispatch(options, {
+                (dispatch) => (dispatchOptions, handler) =>
+                  dispatch(dispatchOptions, {
                     ...handler,
                     onRequestStart(controller, context) {
                       requestStarted = true;
