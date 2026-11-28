@@ -26,6 +26,11 @@ function isPrimaryTrackedBrowserSessionKey(sessionKey: string): boolean {
   );
 }
 
+/** Subagent tabs only close at session end otherwise; cap them so long-running helpers cannot pile up tabs. */
+function isCapTrackedBrowserSessionKey(sessionKey: string): boolean {
+  return isPrimaryTrackedBrowserSessionKey(sessionKey) || isSubagentSessionKey(sessionKey);
+}
+
 function resolveBrowserTabCleanupRuntimeConfig(): ResolvedBrowserTabCleanupConfig {
   const cfg = getRuntimeConfig();
   return resolveBrowserConfig(cfg.browser, cfg).tabCleanup;
@@ -67,6 +72,7 @@ export function startTrackedBrowserTabCleanupTimer(params: {
         maxTabsPerSession: cleanup.enabled ? cleanup.maxTabsPerSession : undefined,
         ordinaryCleanup: cleanup.enabled,
         sessionFilter: isPrimaryTrackedBrowserSessionKey,
+        capSessionFilter: isCapTrackedBrowserSessionKey,
         ...params,
       });
     })()

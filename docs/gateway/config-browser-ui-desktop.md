@@ -60,8 +60,10 @@ For the full key index and the other top-level config domains, see [Configuratio
   Authentication migration window. It permits old extension and external CDP
   Bearer, Basic, and token-subprotocol clients. Set it to `false`
   after all relay clients use auth v2; v2 clients never downgrade.
-- `tabCleanup` controls best-effort periodic cleanup for tracked primary-agent
-  tabs after idle time or when a session exceeds its cap. Tracking applies only
+- `tabCleanup` controls best-effort periodic cleanup for tracked tabs: primary
+  sessions after idle time or when they exceed their cap, running subagent
+  sessions only when they exceed their cap (never for idleness), and never for
+  cron or ACP sessions. Tracking applies only
   to tabs created by browser tool `action: "open"`; tabs opened by the user or
   with unknown ownership are never adopted. Disabling `tabCleanup` does not disable explicit session lifecycle cleanup.
 - Host-local opens with a stable native CDP target and browser identity are
