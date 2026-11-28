@@ -333,6 +333,37 @@ export async function drainCurrentBrokerProcessGroup(): Promise<void> {
   }
 }
 
+/**
+ * Zombies still answer kill(-pgid, 0). After the broker exits, a subreaper ancestor
+ * that reaps only its own children may never reap the members it adopted. Their
+ * reaping is not ours, and they pin the PGID so it cannot be reused meanwhile.
+ */
+async function isBrokerProcessGroupExtinct(pgid: number): Promise<boolean> {
+  if (await isProcessGroupGoneAsync(pgid)) {
+    return true;
+  }
+  if (process.platform !== "linux" || !(await isOwnProcfsAsync())) {
+    return false;
+  }
+  let observedMember = false;
+  try {
+    for await (const member of readLinuxProcessGroupMembersAsync(1000)) {
+      if (member.pgid !== pgid) {
+        continue;
+      }
+      if (!member.state.startsWith("Z") || !(await isPidDefinitelyDeadAsync(member.pid))) {
+        return false;
+      }
+      observedMember = true;
+    }
+  } catch {
+    // An unreadable census must not cancel the kernel-visible TERM/KILL backstop.
+    return false;
+  }
+  // An empty census is not proof of death while the kernel still sees the group.
+  return observedMember;
+}
+
 /** A broker's private group retains non-detached children before PID publication. */
 export function terminateBrokerProcessGroup(pgid: number) {
   let retired = false;
@@ -423,7 +454,7 @@ export function terminateBrokerProcessGroup(pgid: number) {
   };
   const settled = (async () => {
     try {
-      if (await isProcessGroupGoneAsync(pgid)) {
+      if (await isBrokerProcessGroupExtinct(pgid)) {
         return;
       }
       await signal(phase);
@@ -433,7 +464,7 @@ export function terminateBrokerProcessGroup(pgid: number) {
       const deadline = performance.now() + GRACEFUL_CANCEL_TIMEOUT_MS + 2000;
       for (;;) {
         await forcing;
-        if (retired || (await isProcessGroupGoneAsync(pgid))) {
+        if (retired || (await isBrokerProcessGroupExtinct(pgid))) {
           break;
         }
         if (performance.now() >= deadline) {
