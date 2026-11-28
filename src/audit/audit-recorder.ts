@@ -12,11 +12,15 @@ import {
   isExecutionIdentityCollectionEnabled,
   resolveAuditMessageMode,
 } from "./audit-config.js";
-import { createAuditEventWriter, type AuditEventWriter } from "./audit-event-writer.js";
+import {
+  createAuditEventWriter,
+  type AuditEventWriter,
+  type AuditWriterWarningKind,
+} from "./audit-event-writer.js";
 import type { TrustedMessageAuditEvent } from "./message-audit-events.js";
 
 const log = createSubsystemLogger("audit/events");
-let persistenceFailureWarned = false;
+const warnedFailureKinds = new Set<AuditWriterWarningKind>();
 
 type AuditEventRecorder = AgentEventAuditRecorder & {
   recordMessage: (event: TrustedMessageAuditEvent) => void;
@@ -39,9 +43,9 @@ export function createAuditEventRecorder(options: {
       scheduler: options.scheduler,
       ...(options.stateDir ? { stateDir: options.stateDir } : {}),
       onContention: (message) => log.warn(message),
-      onError: (error) => {
-        if (!persistenceFailureWarned) {
-          persistenceFailureWarned = true;
+      onError: (error, kind) => {
+        if (!warnedFailureKinds.has(kind)) {
+          warnedFailureKinds.add(kind);
           log.warn(`audit event persistence failed: ${error}`);
         }
       },
