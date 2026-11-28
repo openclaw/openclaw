@@ -3,13 +3,20 @@
 import { emptyReply, mock, queueTask, source } from "./openclaw-state-read-worker.test-harness.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it, vi } from "vitest";
+import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import * as processRole from "../infra/database-engine/admission-scope.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { withRuntimeWorkerGeneration } from "../infra/runtime-worker-generation.js";
 import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
+import { getSessionStateVersions } from "../sessions/session-state-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runOpenClawAgentWriteAdmission } from "./openclaw-agent-write-admission.js";
-import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "./openclaw-state-db-readonly.js";
+import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
+import * as snapshotSource from "./openclaw-state-read-snapshot-source.js";
 import {
   captureOpenClawStateReadSource,
   retireIdleOpenClawStateReadWorkers,
@@ -17,6 +24,50 @@ import {
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
 const backupRead = { type: "backup.runs" } as const;
+
+it("captures borrowed session selectors before snapshot preparation and queued dispatch", async () => {
+  const { options } = source();
+  const preparation = createDeferredCore();
+  const dispatch = createDeferredCore();
+  const prepare = snapshotSource.prepareOpenClawStateReadSnapshotSource;
+  vi.spyOn(snapshotSource, "prepareOpenClawStateReadSnapshotSource").mockImplementation(
+    async (params) => ({
+      ...(await prepare(params)),
+      prepareSource: () => preparation.promise,
+      readSource: () => ({ location: params.pathname }),
+    }),
+  );
+  const task = queueTask(dispatch.promise);
+  const refs = [{ sessionKey: "agent:synthetic:original", agentId: "synthetic" }];
+  const versions = { synthetic: { "agent:synthetic:original": 7 } };
+  await withOpenClawStateDatabaseReadSnapshot(
+    async () => {
+      const reading = getSessionStateVersions(refs, options);
+      refs[0]!.sessionKey = "changed during preparation";
+      refs.push({ sessionKey: "added", agentId: "synthetic" });
+      preparation.resolve();
+      await task.submitted;
+      refs[0]!.agentId = "changed while queued";
+      dispatch.resolve();
+      try {
+        expect((await task.captured).command).toEqual({
+          type: "sessionState.versions",
+          input: [{ sessionKey: "agent:synthetic:original", agentId: "synthetic" }],
+        });
+      } finally {
+        task.result.resolve({
+          ok: true,
+          type: "sessionState.versions",
+          sourceAdmitted: true,
+          versions,
+        });
+        await expect(reading).resolves.toEqual(versions);
+      }
+    },
+    { ...options, lazy: true },
+  );
+});
+
 function readyTask() {
   const task = queueTask();
   task.result.resolve(emptyReply);
@@ -72,15 +123,73 @@ it.each(["gateway", "cli-oneshot", undefined] as const)(
         });
         await transport.startClose();
         expect(task.close).toHaveBeenCalledExactlyOnceWith(
-          awaitedOnly && role !== "gateway" ? { retire: true } : undefined,
+          role === undefined && awaitedOnly ? { retire: true } : undefined,
         );
       }
-      expect(mock.create).toHaveBeenCalledTimes(role === "gateway" ? 1 : 2);
+      expect(mock.create).toHaveBeenCalledTimes(role === undefined ? 2 : 1);
     } finally {
       roleSpy.mockRestore();
     }
   },
 );
+
+it("releases CLI reader handles before a successful read returns and keeps the reader", async () => {
+  const roleSpy = vi.spyOn(processRole, "getDatabaseProcessRole").mockReturnValue("cli-oneshot");
+  const { location, authority } = readFixture();
+  try {
+    for (const awaitedOnly of [false, true, false, true]) {
+      const transport = captureOpenClawStateReadSource().createTransport(
+        backupRead,
+        undefined,
+        undefined,
+        awaitedOnly,
+      );
+      // Admission must finish without releasing the reader needed by the actual query.
+      const admission = readyTask();
+      await transport.startValidateFresh(location.context, authority);
+      expect(admission.close).toHaveBeenCalledExactlyOnceWith(undefined);
+      const task = queueTask();
+      const releasing = createDeferredCore<"releasing">();
+      const released = createDeferredCore();
+      // Node releases handles in place; runtimes without explicit native close rotate the reader.
+      const release = () => {
+        releasing.resolve("releasing");
+        return released.promise;
+      };
+      (getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources
+        ? mock.closeResources
+        : mock.rotate
+      ).mockImplementationOnce(release);
+      mock.closeResources.mockClear();
+      mock.rotate.mockClear();
+      const result = transport.startRead(location, authority);
+      let settled = false;
+      void result.then(() => {
+        settled = true;
+      });
+      try {
+        await task.captured;
+        task.result.resolve(emptyReply);
+        const first = await Promise.race([releasing.promise, result.then(() => "returned")]);
+        expect(first).toBe("releasing");
+        expect(task.close).toHaveBeenCalledExactlyOnceWith(undefined);
+        expect(mock.closeResources.mock.calls.length + mock.rotate.mock.calls.length).toBe(1);
+        expect(settled).toBe(false);
+      } finally {
+        released.resolve();
+        await expect(result).resolves.toEqual({ value: emptyReply });
+        await transport.startClose();
+      }
+    }
+    expect(mock.create).toHaveBeenCalledOnce();
+    // The kept reader exits when the command closes shared state at CLI cleanup.
+    expect(mock.closePool).not.toHaveBeenCalled();
+    await closeOpenClawStateDatabaseAsync();
+    expect(mock.closePool).toHaveBeenCalledOnce();
+  } finally {
+    roleSpy.mockRestore();
+  }
+});
 
 it("shares read setup methods while each read retains independent task custody", async () => {
   const { location, authority } = readFixture();

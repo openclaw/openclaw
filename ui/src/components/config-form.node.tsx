@@ -32,7 +32,8 @@ import {
 } from "./config-form.search.ts";
 import { hintForPath, pathKey, schemaType, type JsonSchema } from "./config-form.shared.ts";
 import { Checkbox } from "./solid/checkbox.tsx";
-import { SettingsToggle, SettingsToggleRow } from "./solid/settings-ui.tsx";
+import { SettingsToggleRow } from "./solid/settings-ui.tsx";
+import { Switch as ToggleSwitch } from "./solid/switch.tsx";
 
 // Past this a segmented control stops fitting the control column at a readable size.
 const SEGMENTED_MAX_OPTIONS = 3;
@@ -385,7 +386,7 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
           {...field()}
           showLabel={false}
           control={
-            <SettingsToggle
+            <ToggleSwitch
               checked={checked()}
               disabled={props.params.disabled}
               ariaLabel={meta().label}

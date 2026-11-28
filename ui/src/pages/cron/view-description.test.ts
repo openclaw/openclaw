@@ -21,13 +21,16 @@ it.each([
     startCronEdit(state, job);
     expect(state.cronEditingJob).toEqual(job);
     expect(state.cronForm.name).toBe("cron:ops:weekday-health");
-    const detail = await renderCronView({
+    const props = {
       editingJob: state.cronEditingJob,
       form: { ...state.cronForm, name: "Unsaved stable name" },
       onRun,
-    });
+    };
+    const editor = await renderCronView(props);
+    expect(text(editor, ".cron-detail-title")).toBe(expected);
+    expect(inputValue(editor, "#cron-name")).toBe("Unsaved stable name");
+    const detail = await renderCronView({ ...props, detailTab: "history" });
     expect(text(detail, ".cron-detail-title")).toBe(expected);
-    expect(inputValue(detail, "#cron-name")).toBe("Unsaved stable name");
     getElement(detail, '[data-test-id="cron-run-now"]', HTMLButtonElement).click();
     expect(onRun).toHaveBeenCalledExactlyOnceWith(job);
 
@@ -42,6 +45,7 @@ it("uses the saved description for the detail instead of unsaved edits", async (
   });
   const detail = await renderCronView({
     editingJob: job,
+    detailTab: "history",
     form: { ...DEFAULT_CRON_FORM, description: "Unsaved description edit" },
   });
   const saved = getElement(detail, '[data-test-id="cron-detail-description"]', HTMLDivElement);
@@ -54,7 +58,7 @@ it("uses the saved description for the detail instead of unsaved edits", async (
 it("renders saved descriptions as escaped text", async () => {
   const description = '<img src="x" onerror="alert(1)"> & <script>alert(1)</script>';
   const job = createCronViewJob("escaped-description", { description, displayName: description });
-  const container = await renderCronView({ editingJob: job });
+  const container = await renderCronView({ editingJob: job, detailTab: "history" });
 
   expect(text(container, ".cron-detail-title")).toBe(description);
   expect(text(container, '[data-test-id="cron-detail-description"]')).toContain(description);

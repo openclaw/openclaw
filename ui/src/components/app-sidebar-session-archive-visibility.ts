@@ -1,8 +1,14 @@
-import { isSystemCreatedSessionRow } from "../../../src/shared/session-list-visibility.ts";
+import {
+  isReservedGitHubPublicationSessionKey,
+  isSystemCreatedSessionRow,
+} from "../../../src/shared/session-list-visibility.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
-import type { SidebarSessionStatusFilter } from "./app-sidebar-session-types.ts";
+import type {
+  SidebarSavedPinTime,
+  SidebarSessionStatusFilter,
+} from "./app-sidebar-session-types.ts";
 import type { SessionDataOwner } from "./session-data.ts";
 
 export function projectSidebarArchiveVisibility(input: {
@@ -18,6 +24,7 @@ export function projectSidebarArchiveVisibility(input: {
   statusFilter: SidebarSessionStatusFilter;
   showSystem?: boolean;
   now: number;
+  gatewayTimeForSavedPin?: SidebarSavedPinTime;
   deletionState: SessionCapability["deletionState"];
   archiveVisibility: SessionCapability["archiveVisibility"];
 }) {
@@ -30,6 +37,8 @@ export function projectSidebarArchiveVisibility(input: {
         visibility === "archived")
     );
   };
+  const snoozed = (row: Pick<GatewaySessionRow, "key" | "snoozedUntil">) =>
+    isSessionSnoozed(row, input.gatewayTimeForSavedPin?.(row) ?? input.now);
   const isSessionHidden = (
     row: Parameters<typeof isSystemCreatedSessionRow>[0] &
       Pick<GatewaySessionRow, "archived" | "snoozedUntil">,
@@ -37,9 +46,8 @@ export function projectSidebarArchiveVisibility(input: {
     isLifecycleHidden(row.key) ||
     (!input.showSystem && isSystemCreatedSessionRow(row)) ||
     (input.statusFilter === "archived" && row.archived !== true) ||
-    (input.statusFilter === "active" && isSessionSnoozed(row, input.now)) ||
-    (input.statusFilter === "snoozed" &&
-      (row.archived === true || !isSessionSnoozed(row, input.now)));
+    (input.statusFilter === "active" && snoozed(row)) ||
+    (input.statusFilter === "snoozed" && (row.archived === true || !snoozed(row)));
   const sourceRows = input.sourceRows;
   const knownRows = new Map(
     [...Object.values(input.sessionData.childSessionRowsByParent).flat(), ...sourceRows].map(
@@ -58,16 +66,19 @@ export function projectSidebarArchiveVisibility(input: {
     if (
       known
         ? isSessionHidden(known)
-        : input.statusFilter === "snoozed" || isLifecycleHidden(childKey)
+        : input.statusFilter === "snoozed" ||
+          isLifecycleHidden(childKey) ||
+          // Child windows omit publication custody rows, so their reserved key is the only evidence.
+          (!input.showSystem && isReservedGitHubPublicationSessionKey(childKey))
     ) {
       return false;
     }
     // Raw lineage includes archives. Only a complete active child window can
-    // establish absence; pending/failed reads must retain discovery links.
+    // establish absence; unread and failed windows retain discovery links. A
+    // refresh keeps the settled window's answer until its replacement lands.
     return (
       (input.statusFilter !== "active" && input.statusFilter !== "snoozed") ||
       !input.sessionData.loadedChildSessionKeys.has(parentKey) ||
-      input.sessionData.loadingChildSessionKeys.has(parentKey) ||
       input.sessionData.childSessionErrorsByParent.has(parentKey) ||
       input.sessionData.childSessionRowsByParent[parentKey]?.some(
         (child) => child.key === childKey,

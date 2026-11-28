@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -31,9 +32,12 @@ describe("model stream transport context", () => {
   it.each(["return", "throw"] as const)(
     "keeps interleaved iterator context across awaits and %s without changing the caller",
     async (close) => {
+      const callerContext = new AsyncLocalStorage<{ requestId: string }>();
       const seen: string[] = [];
       const record = (phase: string) =>
-        seen.push(`${phase}:${getModelTransportContext()?.requestId}`);
+        seen.push(
+          `${phase}:${getModelTransportContext()?.requestId}:${callerContext.getStore()?.requestId}`,
+        );
       const sourceReturn = vi.fn(async () => {
         record("return");
         await nextTurn();
@@ -77,36 +81,47 @@ describe("model stream transport context", () => {
       for (let chunk = 0; chunk < 3; chunk++) {
         for (const [index, iterator] of iterators.entries()) {
           const caller = { requestId: `caller-${chunk}-${index}` };
-          await withModelTransportContext(caller, async () => {
-            const reading = iterator.next();
-            expect(getModelTransportContext()).toBe(caller);
-            await reading;
-            expect(getModelTransportContext()).toBe(caller);
-          });
+          await callerContext.run(caller, () =>
+            withModelTransportContext(caller, async () => {
+              const reading = iterator.next();
+              expect(getModelTransportContext()).toBe(caller);
+              await reading;
+              expect(getModelTransportContext()).toBe(caller);
+            }),
+          );
           const callId = index === 0 ? "first" : "second";
-          expected.push(`next:${callId}`, `awaited:${callId}`);
+          expected.push(
+            `next:${callId}:${caller.requestId}`,
+            `awaited:${callId}:${caller.requestId}`,
+          );
         }
       }
       for (const [index, iterator] of iterators.entries()) {
         const caller = { requestId: "closing-caller" };
         const callId = index === 0 ? "first" : "second";
-        await withModelTransportContext(caller, async () => {
-          if (close === "return") {
-            await iterator.return!();
-            expected.push(`return:${callId}`, `returned:${callId}`);
-          } else {
-            const error = new Error("consumer stopped");
-            await expect(iterator.throw!(error)).rejects.toBe(error);
-          }
-          expect(getModelTransportContext()).toBe(caller);
-        });
-        expected.push(`finished:${callId}`);
+        await callerContext.run(caller, () =>
+          withModelTransportContext(caller, async () => {
+            if (close === "return") {
+              await iterator.return!();
+              expected.push(
+                `return:${callId}:${caller.requestId}`,
+                `returned:${callId}:${caller.requestId}`,
+              );
+            } else {
+              const error = new Error("consumer stopped");
+              await expect(iterator.throw!(error)).rejects.toBe(error);
+            }
+            expect(getModelTransportContext()).toBe(caller);
+          }),
+        );
+        expected.push(`finished:${callId}:${caller.requestId}`);
       }
       expect(seen).toEqual(expected);
       expect(sourceReturn).toHaveBeenCalledTimes(close === "return" ? 2 : 0);
       // Diagnostic throws deliberately leave cleanup with the provider.
       expect(sourceThrow).not.toHaveBeenCalled();
       expect(getModelTransportContext()).toBeUndefined();
+      expect(callerContext.getStore()).toBeUndefined();
     },
   );
 });

@@ -4,6 +4,7 @@ import type OpenAI from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import { codeModeToolSurfaceObserver } from "../provider-options.js";
+import { PROVIDER_STATE_SCOPE } from "../provider-types.js";
 import { resolveAzureDeploymentNameFromMap } from "../providers/azure-deployment-map.js";
 import { applyResponsesServiceTierPricing } from "../providers/openai-responses-shared.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
@@ -25,7 +26,6 @@ import {
   type OpenAIResponsesReplayMode,
 } from "./openai-responses-compaction-replay.js";
 import { createResponsesV2CompactionCollector } from "./openai-responses-compaction-v2.js";
-import { recordResponsesContextUsage } from "./openai-responses-context-usage.js";
 import {
   claimOpenAIResponsesHttpContinuation,
   type ResponsesContinuationRequest,
@@ -68,10 +68,7 @@ import {
   withResponsesRequestAcceptance,
 } from "./openai-responses-request-lifecycle.js";
 import { projectResponsesSteeringInput } from "./openai-responses-steering.js";
-import {
-  DegenerateToolCallArgumentsError,
-  hasOnlyResponsesFunctionTools,
-} from "./openai-responses-stream-errors.js";
+import { hasOnlyResponsesFunctionTools } from "./openai-responses-stream-errors.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import { observeResponsesStream } from "./openai-responses-stream-observer-internal.js";
 import { RESPONSES_BOOKKEEPING_TIMEOUT_MS } from "./openai-responses-stream-slots-internal.js";
@@ -236,9 +233,7 @@ function createResponsesTransportExecutor(config: {
             model,
             params as Record<string, unknown>,
           ) as typeof params;
-          params = v2Compaction
-            ? v2Compaction.sanitizeImages(params)
-            : sanitizeResponsesImagePayload(params);
+          params = sanitizeResponsesImagePayload(params);
           if (responsesOptions?.openclawCodeModeToolSurface === true) {
             const visibleToolNames = resolveCodeModeResponsesVisibleToolNames(context);
             const allowedHostedToolTypes = responsesOptions?.openclawCodeModeAllowedHostedToolTypes;
@@ -282,6 +277,7 @@ function createResponsesTransportExecutor(config: {
               replayMode,
               Boolean(v2Compaction),
               itemRecovery.applied,
+              compactRequest?.mode === "endpoint" && supportsNativeOpenAIResponsesEndpoint(model),
             ),
           );
         const buildItemConflictRequest = () => itemRecovery.retry(buildRequest);
@@ -303,7 +299,7 @@ function createResponsesTransportExecutor(config: {
           finalizeTransportStream({ stream, output, signal: options?.signal });
           return;
         }
-        const sessionId = options?.sessionId;
+        const providerState = responsesOptions?.[PROVIDER_STATE_SCOPE];
         // Custom routes require an explicit capability; native routes retain
         // their existing eligibility and final request storage checks below.
         const httpContinuationEligible =
@@ -315,14 +311,14 @@ function createResponsesTransportExecutor(config: {
             resolveOpenAIResponsesPayloadPolicy(model).explicitContinuationOptIn);
         if (
           httpContinuationEligible &&
-          sessionId &&
+          providerState &&
           (params.store === true || supportsResponsesReasoningUpdate(params)) &&
           !params.previous_response_id
         ) {
           const restoreRequest = () =>
             restoreResponsesReasoningState(context, model, responsesOptions, params);
           continuationClaim = claimOpenAIResponsesHttpContinuation({
-            sessionId,
+            scope: providerState,
             apiKey,
             baseUrl: model.baseUrl,
             headers: httpHeaders,
@@ -363,7 +359,6 @@ function createResponsesTransportExecutor(config: {
         const responseModelTracker = createResponseModelTracker(isOpenAICodexResponsesModel(model));
         let continuationBaseline: ResponsesContinuationRequest | undefined;
         let dispatchedPreviousResponseId: string | undefined;
-        let contextUsageEligible = true;
         let requestedTier: unknown;
         const createSseStream = async (
           initialRequest = (continuationClaim?.request ?? params) as typeof params,
@@ -388,7 +383,6 @@ function createResponsesTransportExecutor(config: {
             onServiceTierRejected: (tier) => responsesServiceTierObserver.reject(options, tier),
             wrapStream: ({ stream: rawResponseStream, response, attempt }) => {
               requestedTier = attempt.request.service_tier;
-              contextUsageEligible &&= attempt.kind === "initial";
               dispatchedPreviousResponseId = attempt.request.previous_response_id;
               continuationBaseline = attempt.request.previous_response_id
                 ? (params as ResponsesContinuationRequest)
@@ -452,7 +446,7 @@ function createResponsesTransportExecutor(config: {
               restoreRequest: (request) =>
                 restoreResponsesReasoningState(context, model, responsesOptions, request),
               mode: websocketMode,
-              sessionId: options?.sessionId,
+              providerState: responsesOptions?.[PROVIDER_STATE_SCOPE],
               headers: websocketHeaders,
               signal: websocketSignal,
               callerSignal: options?.signal,
@@ -461,21 +455,18 @@ function createResponsesTransportExecutor(config: {
                 !compactRequest && nativeAstra && params.model === "gpt-6-astra"
                   ? options?.onActiveResponse
                   : undefined,
-              steeringInput: (messages) => {
-                contextUsageEligible = false;
-                return projectResponsesSteeringInput(params, () =>
+              steeringInput: (messages) =>
+                projectResponsesSteeringInput(params, () =>
                   buildRequest("checkpoint", {
                     ...context,
                     messages: [...context.messages, ...messages],
                   }),
-                );
-              },
+                ),
             });
             finishWebSocket = websocket.finish;
             requestedTier = websocket.request.service_tier;
             websocketBaseline = websocket.fullRequest;
             recordResponsesInputReplay(output, websocket.inputReplay);
-            contextUsageEligible &&= websocket.inputReplay === undefined;
             observePrompt?.(websocket.request, {
               egress: "responses-websocket",
               payloadVariant: "initial",
@@ -593,16 +584,6 @@ function createResponsesTransportExecutor(config: {
           if (continuationClaim && continuationBaseline && terminal) {
             continuationClaim.commit(continuationBaseline, terminal, dispatchedPreviousResponseId);
           }
-          if (terminal && admitted && contextUsageEligible) {
-            recordResponsesContextUsage(
-              output,
-              model,
-              responsesOptions,
-              admitted,
-              terminal.output,
-              "transport",
-            );
-          }
         } catch (error) {
           finishWebSocket?.({ keep: false });
           throw error;
@@ -616,9 +597,6 @@ function createResponsesTransportExecutor(config: {
         finalizeTransportStream({ stream, output, signal: options?.signal });
       } catch (error) {
         itemRecovery.reject(error);
-        if (error instanceof DegenerateToolCallArgumentsError) {
-          firstEventAbort?.abort(error);
-        }
         if (requestLifecycle) {
           await requestLifecycle.settle().catch(() => undefined);
         }

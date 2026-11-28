@@ -116,7 +116,10 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       path.join(home, ".openclaw", "agents", "{agentId}", "sessions", "sessions.json"),
       {
         agents: {
-          defaults: { workspace: path.join(home, "default-workspace") },
+          defaults: {
+            model: "anthropic/claude-opus-4-6",
+            workspace: path.join(home, "default-workspace"),
+          },
           entries: { main: {}, [agentId]: { workspace: workspaceDir } },
         },
       },

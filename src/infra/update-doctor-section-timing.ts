@@ -12,6 +12,9 @@ const TRACE_MARKER = "[gateway] startup trace: ";
 // measureGatewayBootstrapStep: `<name> <ms>ms total=…`; JSON console style embeds the same text.
 const DOCTOR_TRACE = /\[gateway\] startup trace: doctor\.([^\s"]+) (\d+(?:\.\d+)?)ms(?=[\s"]|$)/u;
 const CONTRIBUTION_PREFIX = "contribution.";
+// `doctor.pending.<step>` records a step's work decision, not its duration. The trace keeps it;
+// counting it here would spend the bounded sections line and phase slots on zero-length entries.
+const PENDING_PREFIX = "pending.";
 const MAX_PENDING_CHARS = 16 * 1024;
 const MAX_PHASES = 256;
 const SLOWEST_CONTRIBUTIONS = 5;
@@ -56,7 +59,7 @@ export function createUpdateDoctorSectionTiming(
     }
     const [, name, value] = match;
     const milliseconds = Number(value);
-    if (!name || !Number.isFinite(milliseconds)) {
+    if (!name || name.startsWith(PENDING_PREFIX) || !Number.isFinite(milliseconds)) {
       return;
     }
     const previous = phases.get(name);

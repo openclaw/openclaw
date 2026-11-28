@@ -9,5 +9,6 @@ export async function writeSiblingTempFile<T>(options: WriteSiblingTempFileOptio
   return await writeSiblingTempFileBase({
     ...options,
     producerIsolation: "private-directory",
+    allowDrvfsRenameRecovery: options.allowDrvfsRenameRecovery ?? true,
   });
 }

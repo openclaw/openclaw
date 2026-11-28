@@ -147,5 +147,5 @@ export function attachGatewayWsForTest(params: {
 
   listeners.get("connection")!(socket, upgradeReq);
 
-  return { clients, listeners, socket, upgradeReq, wss };
+  return { clients, listeners, socket, upgradeReq };
 }

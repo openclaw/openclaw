@@ -22,6 +22,7 @@ const aiPackageConsumer = {
 const doctorUiConsumers = [
   "extensions/qa-lab/src/gateway-child-initializer.e2e.test.ts",
   "src/commands/doctor.auth-profile-consumers.e2e.test.ts",
+  "test/doctor-guest-session-upgrade.e2e.test.ts",
   "test/e2e/line-doctor-group-allowlist.built-cli.e2e.test.ts",
   "test/e2e/qa-lab/runtime/codex-auth-doctor-migration-product-proof.e2e.test.ts",
   "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
@@ -139,12 +140,6 @@ const runtimeConsumers = [
     dir: "",
   })),
   {
-    file: "src/channels/plugins/contracts/plugin-shape.contract.test.ts",
-    configs: ["test/vitest/vitest.contracts-channel-registry.config.ts"],
-    mode: "private-qa",
-    dir: "",
-  },
-  {
     file: "src/plugin-sdk/channel-entry-contract.lifecycle.test.ts",
     configs: ["test/vitest/vitest.plugin-sdk.config.ts"],
     mode: "runtime",
@@ -164,7 +159,6 @@ const runtimeConsumers = [
     // Compiled catalog workers load the fixture's public SDK through built host artifacts.
     "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
     "src/agents/prepared-model-catalog-worker.integration.test.ts",
-    "src/agents/prepared-model-catalog-worker.native-renewal.integration.test.ts",
     "src/agents/prepared-model-catalog-worker.oauth-peers.integration.test.ts",
   ].map((file) => ({
     file,
@@ -221,7 +215,10 @@ const runtimeConsumers = [
     mode: "runtime",
     dir: "",
   },
-  ...startupCorpusTestFiles.map((file) => ({
+  ...[
+    ...startupCorpusTestFiles,
+    "src/config/sessions/session-transcript-reconcile.lifecycle-phases.test.ts",
+  ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.runtime-config.config.ts"],
     mode: "runtime" as const,

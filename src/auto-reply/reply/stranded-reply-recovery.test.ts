@@ -29,7 +29,7 @@ function retry(base: Parameters<typeof resolveStrandedReplyRecovery>[0]["base"])
 }
 
 it("does not share the client turn's turnAdoptionLifecycle with the system retry", () => {
-  const receipts: ReplyOperationRunState[] = [{ agentTurn: "ok" }];
+  const receipts: ReplyOperationRunState[] = [{}];
   const onComplete = vi.fn();
   const onEnqueued = vi.fn(() => true);
   const parent = createMockFollowupRun({

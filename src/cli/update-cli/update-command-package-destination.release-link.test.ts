@@ -2,6 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  GIT_RELEASE_LAUNCHER,
+  gitReleaseForwardingEntry,
+  gitReleaseSlot,
+} from "../../infra/git-release-paths.js";
 import { createPackageReleasePrefixFixture } from "../../infra/package-release-slot.test-support.js";
 import { createNpmTarget } from "../../infra/package-update-steps.test-support.js";
 import { inspectNpmGlobalDestination } from "./update-command-package-destination.js";
@@ -13,6 +18,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -64,5 +70,33 @@ describe.skipIf(process.platform === "win32")("npm destination on a release link
     );
 
     expect(destination).toEqual({ kind: "owned" });
+  });
+
+  it.each([
+    ["this install's launcher", true],
+    ["another install's launcher", false],
+  ] as const)("switches back to npm when the package forwards to %s", async (_case, ours) => {
+    // npm -> Git left the global package forwarding to the release launcher; the service and
+    // the running updater both start the Git release, so neither names the npm path.
+    const stateDir = path.join(dir, "state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const globalRoot = path.join(dir, "prefix", "lib", "node_modules");
+    const packageRoot = path.join(globalRoot, "openclaw");
+    fs.mkdirSync(packageRoot, { recursive: true });
+    fs.writeFileSync(path.join(packageRoot, "package.json"), '{"name":"openclaw"}');
+    const launcher = path.join(
+      ours ? stateDir : path.join(dir, "other"),
+      "git-install",
+      GIT_RELEASE_LAUNCHER,
+    );
+    fs.writeFileSync(path.join(packageRoot, "openclaw.mjs"), gitReleaseForwardingEntry(launcher));
+    serviceStarting(path.join(stateDir, "git-install", GIT_RELEASE_LAUNCHER));
+
+    const destination = await inspectNpmGlobalDestination(
+      gitReleaseSlot(path.join(stateDir, "git-install")),
+      createNpmTarget(globalRoot),
+    );
+
+    expect(destination.kind === "owned").toBe(ours);
   });
 });

@@ -55,19 +55,29 @@ extension OpenClawChatViewModel {
     }
 
     var composerModelMutationAvailable: Bool {
-        !self.supportsComposerCapabilities || self.composerCapabilityCatalog.modelMutationAvailable
+        guard !self.isSubmittingDraft || self.newChatDraft?.key != self.sessionKey else { return false }
+        return !self.supportsComposerCapabilities || self.composerCapabilityCatalog.modelMutationAvailable
     }
 
     var composerEffortMutationAvailable: Bool {
-        !self.supportsComposerCapabilities || self.composerCapabilityCatalog.effortMutationAvailable
+        guard !self.isSubmittingDraft || self.newChatDraft?.key != self.sessionKey else { return false }
+        return !self.supportsComposerCapabilities || self.composerCapabilityCatalog.effortMutationAvailable
     }
 
     public var composerVerboseMutationAvailable: Bool {
-        !self.supportsComposerCapabilities || self.composerCapabilityCatalog.verboseMutationAvailable
+        guard !self.isSubmittingDraft || self.newChatDraft?.key != self.sessionKey else { return false }
+        return !self.supportsComposerCapabilities || self.composerCapabilityCatalog.verboseMutationAvailable
     }
 
     var composerCapabilitiesLoading: Bool {
         self.composerCapabilityOwnerMatches && self.composerCapabilityState.phase == .loading
+    }
+
+    /// A patch or reload is in flight. The catalog is empty while it reloads, so a view that stays
+    /// open across a change keeps its last state until this clears.
+    var composerCapabilitiesBusy: Bool {
+        self.composerCapabilityOwnerMatches &&
+            (self.composerCapabilityState.phase == .loading || self.composerCapabilityState.isMutating)
     }
 
     var composerCapabilityMutationDisabled: Bool {
@@ -129,13 +139,13 @@ extension OpenClawChatViewModel {
             return String(localized: "Session capability controls require a newer Gateway.")
         }
         if !self.composerCapabilityCatalog.sessionSettingsCASAvailable {
-            return String(localized: "Session permission controls require a newer Gateway.")
+            return String(localized: "Update the Gateway to change permissions.")
         }
-        if self.composerCapabilityMutationDisabled {
+        if self.composerCapabilityState.isMutating || self.isUpdatingSessionSettings {
             return String(localized: "Saving session settings.")
         }
         if !self.composerCapabilityCatalog.permissionMutationAvailable {
-            return String(localized: "Changing permissions requires operator.write or operator.admin access.")
+            return String(localized: "You need write access to change permissions.")
         }
         return nil
     }
@@ -150,11 +160,11 @@ extension OpenClawChatViewModel {
         if self.composerCapabilityCatalog.toolOverrideMutationRequiresGatewayUpgrade {
             return String(localized: "Session tool controls require a newer Gateway.")
         }
-        if self.composerCapabilityMutationDisabled {
+        if self.composerCapabilityState.isMutating || self.isUpdatingSessionSettings {
             return String(localized: "Saving session settings.")
         }
         if !self.composerCapabilityCatalog.toolOverrideMutationAvailable {
-            return String(localized: "Session tool controls require operator.admin access.")
+            return String(localized: "You need admin access to change tools.")
         }
         return nil
     }
@@ -165,19 +175,12 @@ extension OpenClawChatViewModel {
         }
         if !self.composerCapabilityCatalog.webSearchAvailable {
             return self
-                .composerCapabilityErrorMessage ?? String(localized: "Web Search is unavailable on this Gateway.")
+                .composerCapabilityErrorMessage ?? String(localized: "Web search is unavailable on this Gateway.")
         }
         if !self.composerCapabilityCatalog.webSearchBaseEnabled {
-            return String(localized: "Web Search is disabled in the Gateway configuration.")
+            return String(localized: "Web search is off in the Gateway configuration.")
         }
         return self.composerToolOverrideMutationDisabledReason
-    }
-
-    func composerPermissionDisabledReason(_ mode: OpenClawChatPermissionMode?) -> String? {
-        if mode == .full, !self.composerCapabilityCatalog.canSelectFullPermission {
-            return String(localized: "Full permission requires operator.admin access.")
-        }
-        return self.composerPermissionMutationDisabledReason
     }
 
     func composerSkillDisabledReason(_ skill: OpenClawChatComposerSkill) -> String? {
@@ -319,7 +322,7 @@ extension OpenClawChatViewModel {
         guard mode != self.composerPermissionMode else { return }
         self.performComposerCapabilityPatch(
             OpenClawChatSessionSettingsPatch(permissionMode: .some(mode)),
-            notice: String(localized: "New permissions apply to the next run."))
+            notice: Self.permissionsNextRunNotice)
     }
 
     func toggleComposerWebSearch() {
@@ -384,14 +387,26 @@ extension OpenClawChatViewModel {
         guard !self.composerClearToolOverridesDisabled else { return }
         self.performComposerCapabilityPatch(
             OpenClawChatSessionSettingsPatch(toolOverrides: .some(nil)),
-            notice: String(localized: "Tool overrides will be cleared for the next run."))
+            notice: Self.toolOverridesClearedNextRunNotice)
+    }
+
+    static var toolOverridesClearedNextRunNotice: String {
+        String(localized: "Tool overrides will be cleared for the next reply.")
+    }
+
+    static var permissionsNextRunNotice: String {
+        String(localized: "New permissions apply to the next reply.")
+    }
+
+    static var toolChangesNextRunNotice: String {
+        String(localized: "Tool changes apply to the next reply.")
     }
 
     private func patchComposerToolOverrides(_ overrides: OpenClawChatSessionToolOverrides) {
         let normalized = overrides.isEmpty ? nil : overrides
         self.performComposerCapabilityPatch(
             OpenClawChatSessionSettingsPatch(toolOverrides: .some(normalized)),
-            notice: String(localized: "Tool changes apply to the next run."))
+            notice: Self.toolChangesNextRunNotice)
     }
 
     private func performComposerCapabilityPatch(
@@ -403,6 +418,12 @@ extension OpenClawChatViewModel {
               self.composerCapabilityState.phase == .loaded,
               !self.composerCapabilityState.isMutating
         else { return }
+        if self.isNewChatDraft {
+            guard !self.isSubmittingDraft else { return }
+            _ = self.stageNewChatDraftSettings(patch)
+            self.composerCapabilityState.notice = notice
+            return
+        }
         guard let expectedSessionID = self.composerCapabilitySessionID else {
             self.composerCapabilityState.errorMessage = String(
                 localized: "Refresh this thread before changing its capabilities.")

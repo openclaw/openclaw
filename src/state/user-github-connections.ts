@@ -143,7 +143,11 @@ export async function prepareUserGitHubConnection(
   };
   connectionReads.set(key, entry);
   entry.prepared = (async () => {
-    const authority = await captureUserProfileAuthorityRead(context.admission);
+    const authority = await captureUserProfileAuthorityRead(
+      context.admission,
+      undefined,
+      "identity",
+    );
     const result = await executeExistingOpenClawStateRead(
       { path: context.admission.databasePath, env: context.environment },
       { type: "userGitHubConnections.read", input: { owner } },

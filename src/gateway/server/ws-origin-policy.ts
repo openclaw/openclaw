@@ -1,7 +1,6 @@
-import { isDeepStrictEqual } from "node:util";
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
+import { intersectOperatorScopes, roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import {
   isBrowserCopilotClient,
   isBrowserOperatorUiClient,
@@ -78,28 +77,48 @@ export function disconnectDisallowedGatewayPolicyClients(
     if (client.connect?.role === "operator") {
       try {
         const principal = client.internal?.openclawIdPrincipal;
-        const member = principal?.kind === "member";
         if (principal?.kind === "owner" && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
-          throw new Error("OpenClaw ID owner authority changed");
+          throw new Error("OpenClaw ID owner connection changed. Reconnect and try again.");
         }
         // A linked owner device keeps the owner's grants under its person's profile.
         currentRole = openclawIdSubjectRolePolicy(principal, () =>
           resolveOperatorRolePolicyForProfile(client.authenticatedUserProfile?.profileId, cfg),
         );
         roleAuthorityRevoked =
-          (member && !isDeepStrictEqual(currentRole, client.internal?.openclawIdRolePolicy)) ||
-          (currentRole !== undefined &&
-            (!roleScopesAllow({
-              role: "operator",
-              requestedScopes: client.connect.scopes ?? [],
-              allowedScopes: currentRole.scopes,
-            }) ||
-              currentRole.accessPolicyPlugin !==
-                client.internal?.operatorAccessAuthority?.requiredPolicyPlugin));
+          currentRole !== undefined &&
+          (!roleScopesAllow({
+            role: "operator",
+            requestedScopes: client.connect.scopes ?? [],
+            allowedScopes: currentRole.scopes,
+          }) ||
+            currentRole.accessPolicyPlugin !==
+              client.internal?.operatorAccessAuthority?.requiredPolicyPlugin);
       } catch {
         // A retired profile cannot retain its connection's grants.
         roleAuthorityRevoked = true;
       }
+    }
+    // A role that now allows a scope this connection lost to its role at connect reconnects it,
+    // so widening applies right away instead of waiting for the person to reconnect.
+    const capped = client.internal?.roleCappedScopes;
+    const roleAccessWidened =
+      capped !== undefined &&
+      (currentRole ? intersectOperatorScopes(capped, currentRole.scopes) : capped).some(
+        (scope) =>
+          !roleScopesAllow({
+            role: "operator",
+            requestedScopes: [scope],
+            allowedScopes: client.connect?.scopes ?? [],
+          }),
+      );
+    if (!roleAuthorityRevoked && roleAccessWidened) {
+      invalidateGatewayPolicyClient(client, {
+        reason: "operator-role-widened",
+        code: 4001,
+        message: "gateway policy changed",
+        revokeSource: false,
+      });
+      continue;
     }
     if (roleAuthorityRevoked || !isGatewayAuthPolicyCurrent(client.authPolicy, cfg)) {
       invalidateGatewayPolicyClient(client, {

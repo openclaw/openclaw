@@ -1,12 +1,24 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { readPreparedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  createOperatorRecoveryFixture,
+  pairedOperator,
+} from "../../gateway/operator-run-recovery.test-support.js";
+import { createContext } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
+import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 import { enqueueFollowupRun, type FollowupRun } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import type { FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
-import { createMockTypingController as createTypingController } from "./test-helpers.js";
 
 const state = vi.hoisted(() => ({
   account: vi.fn<typeof import("./agent-runner-result-accounting.js").accountFollowupTurn>(),
@@ -85,7 +97,6 @@ async function drain(queued: FollowupRun, overrides: Partial<FollowupRunnerParam
   activeKeys.add(sessionKey);
   const completed = createDeferred();
   const runner = createFollowupRunner({
-    typing: createTypingController(),
     typingMode: "never",
     defaultModel: "anthropic/claude",
     ...overrides,
@@ -169,3 +180,85 @@ it("suppresses a deferred compaction notice after preflight refreshes policy to 
   expect(state.deliver.mock.calls.filter(([params]) => params.kind === "block")).toHaveLength(0);
   expect(state.execute).toHaveBeenCalledOnce();
 });
+
+it.each([false, true])(
+  "prepares queued execution with current requester scopes (narrowed=%s)",
+  async (narrowed) => {
+    await withOpenClawTestState(
+      { scenario: "minimal", prepareProfileCatalog: true },
+      async ({ stateDir }) => {
+        const profile = ensureProfileForEmail("followup-scope@example.test");
+        const config: OpenClawConfig = {
+          gateway: {
+            roles: {
+              default: "writer",
+              definitions: {
+                writer: { agents: "*", scopes: ["operator.write"], sessions: { others: "write" } },
+                restricted: {
+                  agents: "*",
+                  scopes: ["operator.sessions.write"],
+                  sessions: { others: "write" },
+                },
+              },
+            },
+          },
+        };
+        setRuntimeConfigSnapshot(config);
+        const fixture = await createOperatorRecoveryFixture({
+          stateDir,
+          context: createContext(),
+          profileId: profile.id,
+          config,
+          sessionKey: "agent:main:followup-current-scopes",
+          scopes: ["operator.write"],
+          device: pairedOperator(),
+        });
+        const source = await fixture.restore();
+        const write = vi.fn();
+        const queued = createQueuedRun(fixture.target.sessionKey);
+        queued.operatorAuthority = source.authority;
+        queued.run.config = config;
+        queued.run.sessionId = fixture.target.sessionId;
+        if (narrowed) {
+          setUserProfileRole(profile.id, "restricted");
+        }
+        state.execute.mockImplementation(async ({ turn }) => {
+          const prepared = prepareChannelRunAdmission({
+            cfg: turn.config,
+            runId: turn.runId,
+            agentId: turn.queued.run.agentId,
+            ingressKind: "channel",
+            boundary: "auto-reply.agent-runner",
+            operatorAuthority: turn.queued.operatorAuthority,
+          });
+          try {
+            const authority = readPreparedRunOperatorAuthority(prepared);
+            if (
+              roleScopesAllow({
+                role: "operator",
+                requestedScopes: ["operator.write"],
+                allowedScopes: authority?.scopes ?? [],
+              })
+            ) {
+              write();
+            }
+          } finally {
+            prepared.close();
+          }
+          return createSettledExecution();
+        });
+        try {
+          await drain(queued, {
+            resolveGatewayContext: () => fixture.context,
+            sessionEntry: fixture.entry,
+            sessionStore: { [fixture.target.sessionKey]: fixture.entry },
+          });
+          expect(state.execute).toHaveBeenCalledOnce();
+          expect(write).toHaveBeenCalledTimes(narrowed ? 0 : 1);
+        } finally {
+          source.release();
+        }
+      },
+    );
+  },
+);

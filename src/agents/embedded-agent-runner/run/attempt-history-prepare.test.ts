@@ -21,6 +21,7 @@ import {
 } from "../../../shared/immutable-data.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { createCompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
 import { convertToLlm } from "../../sessions/messages.js";
 import { buildInitialContext } from "../../sessions/session-manager-codec.js";
 import { sessionManagerReadInitialContext } from "../../sessions/session-manager-current-turn.js";
@@ -31,6 +32,7 @@ import { createPromptCacheRequestObserver } from "../prompt-cache-request-observ
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
+import { boundForkWorkingContext } from "./fork-working-context.js";
 
 // mock-isolation: Count repeated history hashing while preserving native digests.
 vi.mock("node:crypto", { spy: true });
@@ -147,6 +149,76 @@ beforeEach(() => {
   vi.resetAllMocks();
 });
 
+it.each(["operator", "channel", "spawn", "reset", "rewind"] as const)(
+  "budgets only a copied prefix in a %s child without rewriting its transcript",
+  async (via) => {
+    const fixture = createFixture();
+    fixture.input.attempt.sessionKey =
+      via === "channel" ? "agent:main:fork:channel" : "agent:main:dashboard:child";
+    const reply = createAssistantOutput(model);
+    reply.content = [{ type: "text", text: "Blue was chosen." }];
+    const original = [
+      { role: "user" as const, content: "Archived ledger. ".repeat(2_000), timestamp: 1 },
+      { role: "user" as const, content: "Choose blue.", timestamp: 2 },
+      reply,
+      { role: "user" as const, content: "Child-only follow-up", timestamp: 2 },
+    ];
+    const id = fixture.entry.sessionId;
+    const manager = SessionManager.fromEntries([
+      {
+        type: "session",
+        version: 3,
+        id,
+        parentSession: "parent",
+        inheritedThrough: ["r2"],
+        cwd: "/synthetic",
+      },
+      ...original.map((message, index) => ({
+        type: "message",
+        id: "r" + index,
+        parentId: index ? "r" + (index - 1) : null,
+        message,
+      })),
+    ]);
+    if (via === "reset") {
+      await manager.appendResetBoundaryAsync("reset", "r3");
+    }
+    const before = JSON.stringify(manager.getPersistedEntries());
+    fixture.agent.state.messages = (await manager[sessionManagerReadInitialContext]()).messages;
+    Object.assign(fixture.input.prepared.sessionRuntime, { sessionManager: manager });
+    mocks.readEntry.mockResolvedValue({
+      sessionId: id,
+      updatedAt: 1,
+      forkSource: {
+        sessionId: "p",
+        sessionKey: "parent",
+        ...(via === "rewind" ? { entryId: "cut" } : {}),
+      },
+      createdVia: via === "reset" || via === "rewind" ? "operator" : via,
+    });
+    const prepared = await prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);
+    const budget = createCompactionRequestBudget({
+      contextWindow: 2_048,
+      reserveTokens: 0,
+      systemPrompt: "Instructions",
+      pendingPrompt: "Continue",
+      tools: [{ name: "read", description: "Read", parameters: {} }],
+    });
+    const history = prepared.explicitChatFork
+      ? boundForkWorkingContext(fixture.agent.state.messages, budget, 512)
+      : fixture.agent.state.messages;
+    if (via === "spawn" || via === "rewind") {
+      expect(history).toHaveLength(4);
+    } else if (via === "reset") {
+      expect(prepared.explicitChatFork).toBeUndefined();
+      expect(history).toMatchObject([original[3]]);
+    } else {
+      expect(history).toMatchObject(original.slice(1));
+    }
+    expect(JSON.stringify(manager.getPersistedEntries())).toBe(before);
+  },
+);
+
 it("publishes restored assistant history without rehashing it on later model requests", async () => {
   const fixture = createFixture();
   mocks.readEntry.mockResolvedValue(undefined);
@@ -160,7 +232,7 @@ it("publishes restored assistant history without rehashing it on later model req
     },
   ];
   fixture.messages.push(restored);
-  const wire = (message: typeof restored) =>
+  const wire = (message: Extract<AgentMessage, { role: "assistant" }>) =>
     JSON.stringify(convertResponsesMessages(model, { messages: [message] }, new Set()));
   const before = wire(restored);
   await prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);
@@ -436,5 +508,49 @@ it.each([
     if (stage !== "settlement") {
       expect(mocks.updateEntry).not.toHaveBeenCalled();
     }
+  },
+);
+
+it.each([
+  { budget: undefined, omitted: false },
+  { budget: 128, omitted: true },
+])(
+  "bounds settled finalization context without message timestamps (budget $budget)",
+  async ({ budget, omitted }) => {
+    const fixture = createFixture();
+    const call = createAssistantOutput(model);
+    call.content = [{ type: "toolCall", id: "call_1", name: "exec", arguments: { cmd: "ls" } }];
+    call.stopReason = "toolUse";
+    // Context engines may assemble summary rows without timestamps.
+    const settled = [
+      { role: "user", content: "Summary of earlier turns" } as AgentMessage,
+      { role: "user", content: "Recalled focus", timestamp: Number.NaN },
+      call,
+      {
+        role: "toolResult" as const,
+        toolCallId: "call_1",
+        toolName: "exec",
+        content: [{ type: "text" as const, text: "x".repeat(2048) }],
+        isError: false,
+        timestamp: 3,
+      },
+    ];
+    Object.assign(fixture.input.attempt, {
+      operation: "settled-tool-finalization",
+      sessionPersistence: "detached",
+      settledTurnFinalizationMessages: settled,
+      contextTokenBudget: budget,
+    });
+    await prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);
+    const published = fixture.agent.state.messages;
+    expect(published.slice(0, 3)).toEqual(settled.slice(0, 3));
+    expect(published[3]).toMatchObject(
+      omitted
+        ? {
+            role: "toolResult",
+            content: [{ type: "text", text: expect.stringContaining("Tool result body omitted") }],
+          }
+        : settled[3]!,
+    );
   },
 );

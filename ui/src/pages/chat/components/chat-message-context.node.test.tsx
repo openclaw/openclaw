@@ -50,13 +50,14 @@ it.each([
     contextUsage: { state: "available", promptTokens: 0, totalTokens: 0 },
     expected: null,
   },
-  { name: "legacy usage", contextUsage: undefined, expected: "75% ctx" },
+  { name: "legacy usage", contextUsage: undefined, expected: "88% ctx" },
 ])("renders sanitized $name independently from billing", ({ contextUsage, expected }) => {
   const container = renderHistory([
     historyMessage({
       input: 75_000,
       output: 100,
       cacheRead: 75_000,
+      cacheWrite: 25_000,
       cost: { total: 0.25 },
       contextUsage,
     }),

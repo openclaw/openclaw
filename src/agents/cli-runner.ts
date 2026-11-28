@@ -1,4 +1,3 @@
-import { runWithCliHistoryWriter } from "../config/sessions/cli-history-boundary.js";
 import { acquireCronRootTranscriptLease } from "../config/sessions/transcript-lease.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -51,9 +50,14 @@ import {
   attachCliMessagingDeliveryEvidence,
   getCliMessagingDeliveryEvidence,
 } from "./cli-runner/delivery-evidence.js";
-import { createCliFailoverError, readCliStreamRefusalOutput } from "./cli-runner/exit-error.js";
+import {
+  createCliFailoverError,
+  readCliStreamRefusalOutput,
+  resolveCliRunError,
+} from "./cli-runner/exit-error.js";
 import { loadCliPromptImages } from "./cli-runner/helpers.js";
 import { cliBackendLog } from "./cli-runner/log.js";
+import { createCliRunModelRequestGate } from "./cli-runner/model-request-hook.js";
 import type { ClaudeCliRunDiagnosticLifecycle } from "./cli-runner/run-diagnostics.js";
 import { loadCliSessionHistoryMessages } from "./cli-runner/session-history.js";
 import { prepareCliRunTerminalReply } from "./cli-runner/terminal-reply.js";
@@ -63,7 +67,7 @@ import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/type
 import { claudeCliSessionTranscriptHasContent } from "./command/attempt-execution.helpers.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
 import { resolveSourceReplyDelivery } from "./embedded-agent-runner/delivery-evidence.js";
-import { coerceToFailoverError, recordModelFallbackStop } from "./failover-error.js";
+import { recordModelFallbackStop } from "./failover-error.js";
 import { runBeforeAgentRunGate } from "./harness/before-agent-run.js";
 import { buildAgentHookContext } from "./harness/hook-context.js";
 import { buildAgentHookConversationMessages } from "./harness/hook-history.js";
@@ -71,6 +75,7 @@ import {
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "./harness/lifecycle-hook-helpers.js";
+import { assertParticipationRuntime } from "./participation-ceiling.js";
 import { isRequiredReplyExpectation, resolveReplyExpectation } from "./reply-completion.js";
 import { isAgentRunDirectAbortReason } from "./run-termination.js";
 import {
@@ -137,6 +142,7 @@ async function runCliAgentInternal(
   let modelExecution: ReturnType<typeof bindOperatorModelExecution>;
   const generationAbortController = new AbortController();
   let generation: Awaited<ReturnType<typeof acquireCronRootTranscriptLease>>;
+  assertParticipationRuntime(readRunOperatorAuthority(params)?.participationCeiling, "cli");
   const assertCurrent = () => {
     params.abortSignal?.throwIfAborted();
     params.assertCurrent?.();
@@ -223,9 +229,7 @@ export async function runPreparedCliAgent(
     },
     () =>
       settlePreparedCliRunWithTrajectory(context, diagnosticLifecycle, (complete) =>
-        runWithCliHistoryWriter(context.cliHistoryWriter, () =>
-          runPreparedCliAgentOwned(context, complete, diagnosticLifecycle),
-        ),
+        runPreparedCliAgentOwned(context, complete, diagnosticLifecycle),
       ),
   );
 }
@@ -236,13 +240,9 @@ async function runPreparedCliAgentOwned(
   diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
 ): Promise<EmbeddedAgentRunResult> {
   let executePreparedCliRun: typeof import("./cli-runner/execute.runtime.js").executePreparedCliRun;
-  const { params } = context;
-  const cliFailoverContext = {
-    provider: params.provider,
-    model: context.modelId,
-    sessionId: params.sessionId,
-    lane: params.lane,
-  };
+  const { params, modelId } = context;
+  const { provider, sessionId: runSessionId, lane } = params;
+  const cliFailoverContext = { provider, model: modelId, sessionId: runSessionId, lane };
   const sessionBindingDisabled = context.preparedBackend.backend.sessionMode === "none";
   const preparedContextAgentMeta =
     isClaudeCliBackend(params.provider) && context.contextWindowInfo
@@ -289,6 +289,15 @@ async function runPreparedCliAgentOwned(
     ...buildAgentHookContextChannelFields(params),
     ...buildAgentHookContextIdentityFields(params),
   } as const;
+
+  context.beforeModelRequest = createCliRunModelRequestGate({
+    hookRunner,
+    hookContext: buildAgentHookContext(hookContext),
+    run: params,
+    model: context.modelId,
+    prompt: promptForHooks,
+    history: () => historyMessages,
+  });
 
   const buildAgentEndMessages = (lastAssistant?: unknown): unknown[] =>
     buildAgentHookConversationMessages({
@@ -521,7 +530,9 @@ async function runPreparedCliAgentOwned(
 
   const executeRun = async (): Promise<EmbeddedAgentRunResult> => {
     ({ executePreparedCliRun } = await import("./cli-runner/execute.runtime.js"));
-    historyMessages = needsHookHistory ? await loadCliSessionHistoryMessages(params) : [];
+    if (needsHookHistory || context.beforeModelRequest) {
+      historyMessages = await loadCliSessionHistoryMessages(params);
+    }
     if (turnSideEffectsDisabled) {
       const reusableCliSessionId = isolatedCompletion
         ? undefined
@@ -672,6 +683,7 @@ async function runPreparedCliAgentOwned(
         imagePrompt: params.imagePrompt,
         workspaceDir: context.workspaceDir,
         localRoots: getAgentScopedMediaLocalRoots(params.config ?? {}, params.agentId),
+        config: params.config,
         images: params.images,
         imageOrder: params.imageOrder,
         mediaImageLayout: params.mediaImageLayout,
@@ -728,6 +740,6 @@ async function runPreparedCliAgentOwned(
     diagnosticLifecycle?.publishResultContent(result);
     return result;
   } catch (error) {
-    throw coerceToFailoverError(error, cliFailoverContext) ?? error;
+    throw resolveCliRunError(error, context);
   }
 }

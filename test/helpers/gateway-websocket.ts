@@ -108,13 +108,20 @@ export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
   // Full-suite runs can saturate the event loop (581+ files). Keep this high
   // enough to avoid flaky RPC timeouts, but still fail fast when a response
   // never arrives.
-  timeoutMs = 10_000,
+  timeout: number | AbortSignal = 10_000,
 ): Promise<T> {
   // Keep the wait's caller in the stack when a timer eventually rejects it.
   const timeoutError = new Error("timeout");
   return new Promise<T>((resolve, reject) => {
+    const signal = typeof timeout === "number" ? undefined : timeout;
+    signal?.throwIfAborted();
+    function onTimeout() {
+      cleanup();
+      reject(signal?.reason instanceof Error ? signal.reason : timeoutError);
+    }
     function cleanup() {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onTimeout);
       ws.off("message", handler);
       ws.off("close", closeHandler);
     }
@@ -129,11 +136,8 @@ export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
         resolve(obj);
       }
     }
-    const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
-      cleanup();
-      reject(timeoutError);
-    }, timeoutMs);
-    timer.unref?.();
+    const timer = typeof timeout === "number" ? setTimeout(onTimeout, timeout).unref() : undefined;
+    signal?.addEventListener("abort", onTimeout, { once: true });
     ws.on("message", handler);
     ws.once("close", closeHandler);
   });

@@ -3,7 +3,9 @@ import { createHash } from "node:crypto";
 import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { splitNullBuffer } from "../../agents/worktrees/git-path-inventory.js";
 import { requireGitBuffer } from "../../agents/worktrees/git.js";
+import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
+import type { LocalWorkspaceSyncTarget } from "./local-workspace-checkpoint.js";
 import type {
   LocalWorkspaceManifestRecord,
   LocalWorkspaceManifestNode,
@@ -15,32 +17,84 @@ import type {
   LocalWorkspaceManifestValue,
   LocalWorkspaceProjection,
 } from "./local-workspace-store.types.js";
+import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import {
   serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
   type WorkspaceManifestPathPolicy,
 } from "./workspace-manifest.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
-import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
+import {
+  buildCacheInputPaths,
+  IGNORED_WORKSPACE_BUILD_OUTPUT_ROOTS,
+} from "./workspace-path-exclusions.js";
 
 export function createLocalWorkspaceManifestReader(params: {
   store: LocalWorkspaceStore;
   current: () => LocalWorkspaceProjection;
-  canonicalRoot: string;
-  accept: (update: LocalWorkspacePreparedUpdate) => Promise<void>;
+  owner: LocalWorkspaceOwner;
+  accept: (update: LocalWorkspacePreparedUpdate) => Promise<LocalWorkspaceProjection>;
 }) {
   const repair = async () => {
     const replacement = await params.store.manifest(params.current(), {
       kind: "repair",
-      canonicalRoot: params.canonicalRoot,
+      canonicalRoot: params.owner.worktree.path,
     });
     if (replacement.kind !== "replace") {
       throw new Error("Local workspace baseline repair is missing");
     }
     await params.accept(replacement.update);
   };
+  const probeUnchanged = async (
+    targets: readonly LocalWorkspaceSyncTarget[],
+    markProbe?: (target: LocalWorkspaceSyncTarget) => void,
+  ) => {
+    let row = params.store.get();
+    if (
+      !row?.baseline_ref ||
+      !row.tree_root_digest ||
+      row.pending_ref ||
+      row.journal_json ||
+      row.paused_runtimes_json
+    ) {
+      return undefined;
+    }
+    // Bind the row before observation; acceptance retains the same lease and live authority.
+    params.current();
+    for (const target of targets) {
+      markProbe?.(target);
+      const selected = row;
+      const snapshot = await timeWorktreePreparationPhase(
+        target === "canonical" ? "synchronizeCanonical" : "synchronizeProjection",
+        async () => {
+          try {
+            return await params.store.manifest(selected, {
+              kind: "probe",
+              target,
+              canonicalRoot: params.owner.worktree.path,
+            });
+          } catch {
+            // Live writers can interrupt discovery; retry under the existing pause owner.
+            params.store.signal.throwIfAborted();
+            params.store.assertCurrent();
+            return undefined;
+          }
+        },
+      );
+      params.store.assertCurrent();
+      if (snapshot?.kind !== "scan" || snapshot.resultingRoot !== snapshot.previousRoot) {
+        return undefined;
+      }
+      // Acceptance failures must propagate, never retry an uncertain write.
+      if (snapshot.observation) {
+        row = await params.accept(snapshot.observation);
+      }
+    }
+    return row.projection_path;
+  };
   return {
     repair,
+    probeUnchanged,
     read: async (action: LocalWorkspaceManifestAction) => {
       try {
         return await params.store.manifest(params.current(), action);
@@ -77,7 +131,10 @@ export function parseLocalWorkspaceSourcePaths(value: string): string[] {
   return paths;
 }
 
-/** Read guest ignore files with the host's index/config, never guest Git metadata. */
+/**
+ * Read guest ignore files with the host's index/config, never guest Git metadata.
+ * Lists only build-output roots: `isIgnoredWorkspaceBuildOutput` is the sole consumer of `paths`.
+ */
 export async function readLocalWorkspaceGitExclusions(
   root: string,
   projection: string,
@@ -92,6 +149,8 @@ export async function readLocalWorkspaceGitExclusions(
     "--exclude-standard",
     "--directory",
     "-z",
+    "--",
+    ...IGNORED_WORKSPACE_BUILD_OUTPUT_ROOTS,
   ]);
   return { paths: new Set(decodeLocalWorkspaceGitPaths(listed)), retainedPaths };
 }

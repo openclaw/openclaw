@@ -68,13 +68,10 @@ struct RootSidebar: View {
         }
         .sheet(isPresented: self.$showsPagesEditor) {
             RootSidebarPagesEditor(
-                destinations: RootTabs.pinnableSidebarPages.filter(self.isDestinationAvailable),
-                pinnedPages: self.storedPinnedPages,
                 onSelect: { destination in
                     self.showsPagesEditor = false
                     self.selectSidebarDestination(destination)
-                },
-                onTogglePin: self.togglePinnedPage)
+                })
         }
     }
 
@@ -88,16 +85,6 @@ struct RootSidebar: View {
 
     private func isDestinationAvailable(_ destination: RootTabs.SidebarDestination) -> Bool {
         destination != .desktop || self.appModel.isDesktopObserveAvailable
-    }
-
-    private func togglePinnedPage(_ destination: RootTabs.SidebarDestination) {
-        var pages = self.storedPinnedPages
-        if let index = pages.firstIndex(of: destination) {
-            pages.remove(at: index)
-        } else {
-            pages.append(destination)
-        }
-        self.pinnedPagesStorage = RootTabs.pinnedSidebarPagesStorage(pages)
     }
 
     /// Brand header with compact global actions. Connection and Settings live
@@ -167,7 +154,7 @@ struct RootSidebar: View {
                         {
                             ForEach(self.selectableAgents, id: \.id) { agent in
                                 Label {
-                                    Text(verbatim: Self.agentDisplayName(agent))
+                                    Text(verbatim: AgentIdentityPresentation.displayName(for: agent))
                                         .font(OpenClawType.subheadSemiBold)
                                 } icon: {
                                     self.agentMenuAvatarImage(agent)
@@ -186,7 +173,7 @@ struct RootSidebar: View {
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("RootTabs.Sidebar.AgentSelector")
                     .accessibilityLabel(String(localized: "Agent"))
-                    .accessibilityValue(Self.agentDisplayName(selectedAgent))
+                    .accessibilityValue(AgentIdentityPresentation.displayName(for: selectedAgent))
                     self.attentionBadges(for: self.model.sessions, targetID: "agent:\(selectedAgent.id)")
                 }
             }
@@ -215,11 +202,11 @@ struct RootSidebar: View {
             .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(verbatim: Self.agentDisplayName(agent))
+                Text(verbatim: AgentIdentityPresentation.displayName(for: agent))
                     .font(OpenClawType.subheadSemiBold)
                     .foregroundStyle(OpenClawSidebarPalette.textStrong)
                     .lineLimit(1)
-                if let model = Self.agentModelLabel(agent) {
+                if let model = AgentIdentityPresentation.modelLabel(for: agent) {
                     Text(verbatim: model)
                         .font(OpenClawType.caption2Medium)
                         .foregroundStyle(OpenClawSidebarPalette.muted)
@@ -259,19 +246,6 @@ struct RootSidebar: View {
         .accessibilityLabel(String(localized: "New Chat"))
     }
 
-    /// Same key order the Agents roster uses for its model subtitles.
-    static func agentModelLabel(_ agent: AgentSummary) -> String? {
-        guard let model = agent.model else { return nil }
-        for key in ["primary", "name", "id", "model"] {
-            if let value = (model[key]?.value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !value.isEmpty
-            {
-                return value
-            }
-        }
-        return nil
-    }
-
     private func headerIconButton(
         systemName: String,
         label: String,
@@ -294,17 +268,6 @@ struct RootSidebar: View {
         return self.appModel.gatewayDefaultAgentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
-    static func agentDisplayName(_ agent: AgentSummary) -> String {
-        let name = agent.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return name.isEmpty ? agent.id : name
-    }
-
-    static func agentBadge(name: String, identity: [String: AnyCodable]?) -> String {
-        AgentIdentityPresentation.badge(
-            avatarText: identity?["emoji"]?.value as? String,
-            displayName: name)
-    }
-
     private func agentAvatarBadge(_ agent: AgentSummary, size: CGFloat) -> some View {
         ZStack {
             Circle()
@@ -314,7 +277,9 @@ struct RootSidebar: View {
                     .resizable()
                     .scaledToFill()
             } else {
-                Text(verbatim: Self.agentBadge(name: Self.agentDisplayName(agent), identity: agent.identity))
+                Text(verbatim: AgentIdentityPresentation.badge(
+                    avatarText: agent.identity?["emoji"]?.value as? String,
+                    displayName: AgentIdentityPresentation.displayName(for: agent)))
                     .font(OpenClawType.caption2Bold)
                     .foregroundStyle(OpenClawSidebarPalette.textStrong)
                     .minimumScaleFactor(0.65)
@@ -880,39 +845,62 @@ struct RootSidebar: View {
 /// Web-parity Pages editor (the pen menu): navigate to any page, pin/unpin
 /// which ones stay in the sidebar. Home is fixed and not listed.
 struct RootSidebarPagesEditor: View {
-    let destinations: [RootTabs.SidebarDestination]
-    let pinnedPages: [RootTabs.SidebarDestination]
-    let onSelect: (RootTabs.SidebarDestination) -> Void
-    let onTogglePin: (RootTabs.SidebarDestination) -> Void
-
+    @Environment(NodeAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
+    @AppStorage(RootTabs.pinnedSidebarPagesStorageKey) private var pinnedPagesStorage: String = ""
+
+    let onSelect: (RootTabs.SidebarDestination) -> Void
+    var presentedAsSheet = true
+
+    private var pinnedPages: [RootTabs.SidebarDestination] {
+        RootTabs.pinnedSidebarPages(from: self.pinnedPagesStorage)
+    }
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    ForEach(self.destinations) { destination in
-                        self.pageRow(destination)
+        if self.presentedAsSheet {
+            NavigationStack {
+                self.pageList
+                    .toolbar {
+                        OpenClawSheetCloseItem { self.dismiss() }
                     }
-                } footer: {
-                    Text("Pinned pages stay in the sidebar. Home is always shown.")
-                        .font(OpenClawType.caption)
-                }
             }
-            .navigationTitle(String(localized: "Pages"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button {
-                        self.dismiss()
-                    } label: {
-                        Text(String(localized: "Done"))
-                            .font(OpenClawType.subheadSemiBold)
-                    }
-                }
+            .tint(.primary)
+            .openClawSheetHeaderEdge()
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            // Below full height iOS draws the sheet as glass and the grouped rows turn a
+            // translucent gray; at full height it switches to the opaque grouped background with
+            // white rows. One opaque grouped background keeps the rows the same at every height.
+            .presentationBackground(Color(uiColor: .systemGroupedBackground))
+        } else {
+            self.pageList
+                .tint(.primary)
+        }
+    }
+
+    private var pageList: some View {
+        List {
+            ForEach(RootTabs.pinnableSidebarPages
+                .filter { $0 != .desktop || self.appModel.isDesktopObserveAvailable })
+            { destination in
+                self.pageRow(destination)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 8))
             }
         }
-        .openClawSheetChrome()
+        .listStyle(.insetGrouped)
+        .contentMargins(.top, 4, for: .scrollContent)
+        .navigationTitle(String(localized: "Pages"))
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func togglePinnedPage(_ destination: RootTabs.SidebarDestination) {
+        var pages = self.pinnedPages
+        if let index = pages.firstIndex(of: destination) {
+            pages.remove(at: index)
+        } else {
+            pages.append(destination)
+        }
+        self.pinnedPagesStorage = RootTabs.pinnedSidebarPagesStorage(pages)
     }
 
     private func pageRow(_ destination: RootTabs.SidebarDestination) -> some View {
@@ -923,21 +911,21 @@ struct RootSidebarPagesEditor: View {
             } label: {
                 Label {
                     Text(destination.sidebarTitle)
-                        .font(OpenClawType.subheadSemiBold)
+                        .font(SettingsType.label)
                 } icon: {
-                    Image(systemName: destination.systemImage)
+                    NativeSettingsRowIcon(systemName: RootSidebarIcon.symbolName(for: destination))
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
             Button {
-                self.onTogglePin(destination)
+                self.togglePinnedPage(destination)
             } label: {
                 Image(systemName: isPinned ? "pin.fill" : "pin")
-                    .font(OpenClawType.subheadSemiBold)
-                    .foregroundStyle(isPinned ? OpenClawBrand.accent : Color.secondary)
+                    .font(SettingsType.label)
+                    .foregroundStyle(isPinned ? OpenClawSidebarPalette.text : OpenClawSidebarPalette.muted)
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
@@ -947,6 +935,27 @@ struct RootSidebarPagesEditor: View {
                 isPinned
                     ? String(localized: "Pinned")
                     : String(localized: "Not pinned"))
+        }
+    }
+}
+
+/// One optical size for navigation and session glyphs in the sidebar.
+struct RootSidebarIcon: View {
+    let systemName: String
+    var pointSize: CGFloat = 18
+
+    var body: some View {
+        Image(systemName: self.systemName)
+            .font(.system(size: self.pointSize, weight: .medium))
+            .symbolRenderingMode(.monochrome)
+            .frame(width: 22, height: 22)
+            .accessibilityHidden(true)
+    }
+
+    static func symbolName(for destination: RootTabs.SidebarDestination) -> String {
+        switch destination {
+        case .files: "folder"
+        default: destination.systemImage
         }
     }
 }

@@ -34,6 +34,7 @@ import { parseArgs } from "node:util";
 import { GCProfiler, serialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -525,12 +526,7 @@ async function measureReplay(arm: string): Promise<Record<string, unknown>> {
     globalThis.gc?.();
     await setImmediate();
     if (values.mode === "allocation") {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 32768,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 32768);
     }
     const memoryBefore = process.memoryUsage(),
       hostLoadBefore = loadavg();

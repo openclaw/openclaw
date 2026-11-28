@@ -169,7 +169,7 @@ describe("installSessionToolResultGuard", () => {
     expect(resultText(sm)).toMatch(
       /^\[earlier output was discarded at the retention cap and cannot be recovered\]/,
     );
-    expect(resultText(sm)).toMatch(/\[\.\.\. \d+ more characters truncated/);
+    expect(resultText(sm)).toMatch(/\[\.\.\. \d+ chars omitted\]/);
     // Completion facts are recorded before the capped result drops the child output.
     const collector = setup({ maxToolResultChars: 4_000 }).sm;
     const facts = { runId: "done-run", sessionKey: "agent:main:subagent:w", label: "W" };
@@ -209,8 +209,7 @@ describe("installSessionToolResultGuard", () => {
       session: { totalOutputChars: 128, output: { length: 1 }, outputFile },
     });
     expect(output.details).toMatchObject({
-      fullOutputPath: outputFile.path,
-      spillTruncated: true,
+      spill: { path: outputFile.path, truncated: true },
     });
     expect(output.content[0]).toMatchObject({
       text: expect.stringContaining("file limit was discarded"),

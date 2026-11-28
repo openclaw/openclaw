@@ -218,6 +218,7 @@ export function buildReplyRunStateParams(run: FollowupRun["run"]) {
     inputProvenance: run.inputProvenance,
     senderIsOwner: run.senderIsOwner,
     gitContributorProfileId: run.gitContributorProfileId,
+    mcpRequesterProfileId: run.mcpRequesterProfileId,
     conversationToolPolicy: run.conversationToolPolicy,
     requesterOrigin: run.requesterOrigin,
     operatorProfileId: run.operatorProfileId,

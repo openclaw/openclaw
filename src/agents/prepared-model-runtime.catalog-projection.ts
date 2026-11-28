@@ -4,6 +4,7 @@ import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { collectConfiguredCatalogModels } from "./configured-model-entries.js";
 import { projectClaudeCliNativeCatalog } from "./model-catalog-cli-wildcard.js";
+import { loadManifestModelCatalog } from "./model-catalog.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import { getPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import type {
@@ -71,6 +72,11 @@ export function createPreparedModelCatalogProjection(params: {
       sourceCatalog,
       !(getPreparedModelFullCatalogAuth(catalog)?.credentials ?? params.agentFacts.credentials)
         .anthropic,
+      () =>
+        loadManifestModelCatalog({
+          config: params.agentFacts.input.config,
+          metadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
+        }),
     );
     const projected = materializePreparedModelCatalog(
       nativeCatalog,

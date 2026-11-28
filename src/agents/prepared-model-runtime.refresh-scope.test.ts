@@ -1,5 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareModelRuntimeOwner } from "./prepared-model-runtime.owner.js";
@@ -105,4 +106,13 @@ describe("configured model runtime refresh inputs", () => {
       expect(refreshed[0]?.workspaceDir).toBe(entries[0]?.workspace);
     });
   });
+});
+
+it("reads restart recovery without loading the Gateway restart controller", () => {
+  expect(
+    findSourceImportBackedges("src/agents/prepared-model-runtime.refresh-scope.ts", [
+      "src/infra/restart.ts",
+      "src/infra/restart-supervisor.ts",
+    ]),
+  ).toEqual([]);
 });

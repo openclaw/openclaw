@@ -151,6 +151,13 @@ export const ModelChoiceSchema = closedObject({
   agentRuntime: Type.Optional(GatewayAgentRuntimeSchema),
   apiKeySupported: Type.Optional(Type.Boolean()),
   runtimeChoices: Type.Optional(Type.Array(ModelRuntimeChoiceSchema, { maxItems: 8 })),
+  /** Global defaults harnesses, evaluated using the requesting agent's credentials. */
+  defaultModelRuntimes: Type.Optional(
+    closedObject({
+      base: ModelRuntimeChoiceSchema,
+      alternatives: Type.Array(ModelRuntimeChoiceSchema, { maxItems: 8 }),
+    }),
+  ),
   /** Hosted-catalog recommendation; picker rows arrive recommended-first within each provider. */
   recommended: Type.Optional(Type.Boolean()),
 });

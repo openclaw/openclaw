@@ -14,6 +14,11 @@ import { applyPrivateModeSync } from "./private-mode.js";
 
 export type StateOwnerDirectoryIdentity = { path: string; dev: bigint; ino: bigint };
 
+// Shared mounts such as VirtioFS, SMB or NFS can present files as root-owned or
+// ignore chmod; Doctor cannot repair that, so name the storage requirement.
+const LOCAL_STATE_FILESYSTEM_GUIDANCE =
+  "Run OpenClaw as the user that owns its state directory, and keep that directory on a local filesystem that supports file ownership and permissions";
+
 export function ensureOwnerDirectory(
   directory: string,
   created?: StateOwnerDirectoryIdentity[],
@@ -46,13 +51,20 @@ export function ensureOwnerDirectory(
   }
   const observed = fs.lstatSync(directory);
   const uid = process.getuid?.();
-  if (!observed.isDirectory() || (uid !== undefined && observed.uid !== uid)) {
+  if (!observed.isDirectory()) {
     throw new Error("State ownership directory must be a user-owned real directory");
+  }
+  if (uid !== undefined && observed.uid !== uid) {
+    throw new Error(
+      `State ownership directory ${directory} is owned by uid ${observed.uid}, not this user (uid ${uid}). ${LOCAL_STATE_FILESYSTEM_GUIDANCE}`,
+    );
   }
   if (process.platform !== "win32" && (observed.mode & 0o7777) !== 0o700) {
     applyPrivateModeSync(directory, 0o700);
     if ((fs.lstatSync(directory).mode & 0o077) !== 0) {
-      throw new Error("State ownership directory permissions are not private");
+      throw new Error(
+        `State ownership directory ${directory} permissions could not be set to 0700. ${LOCAL_STATE_FILESYSTEM_GUIDANCE}`,
+      );
     }
   }
 }

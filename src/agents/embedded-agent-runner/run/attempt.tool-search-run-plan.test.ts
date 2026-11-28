@@ -119,6 +119,7 @@ async function plan(
       codeModeControlsEnabledForRun: surface.codeModeControlsEnabled,
       codeModeSkills: [],
       computerContextEpoch: { value: 0 },
+      spillOwner: { agentId: "main", sessionKey: attempt.sessionKey },
       skillInstructionDeliveryCache: new Map<string, Promise<boolean>>(),
       cronCreatorToolAllowlist: [],
       cronCreatorToolAllowlistCaptureRef: {},
@@ -157,6 +158,8 @@ async function plan(
       toolSearchRuntimeConfig: surface.plan.toolSearchRuntimeConfig,
       nestedToolActivityState: createAttemptNestedToolActivityState(),
       toolsEnabled: options.toolsEnabled ?? true,
+      messageToolAvailable: true,
+      fixedListing: false,
       toolsRaw: uncompactedTools,
     } satisfies Parameters<typeof prepareEmbeddedAttemptToolCatalog>[0]["preparedToolBase"];
     const result = await prepareEmbeddedAttemptToolCatalog({

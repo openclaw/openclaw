@@ -98,12 +98,6 @@ describe("OpenRouter provider catalog", () => {
             overrides: [{ min_prompt_tokens: 272_000, prompt: "0.000004" }],
           },
         },
-        textRow("google/gemini-3.5-flash-lite", "text+image->text", {
-          supported_parameters: ["include_reasoning"],
-          context_length: 1_048_576,
-          max_completion_tokens: 65_536,
-          pricing: { prompt: "0.0000003", completion: "0.0000025" },
-        }),
         textRow("google/gemini-3.1-flash-image", "text+image->image", { context_length: 65_536 }),
         textRow("typesafe/jev-1.13", "text->decisions", { context_length: 32000 }),
         textRow("acme/no-tools", "text->text", { supported_parameters: [] }),
@@ -119,13 +113,7 @@ describe("OpenRouter provider catalog", () => {
 
     const ids = provider.models.map((model) => model.id);
     expect(provider.apiKey).toBe("OPENROUTER_API_KEY");
-    expect(ids).toEqual(
-      expect.arrayContaining([
-        "openrouter/auto",
-        "google/gemini-3.5-flash-lite",
-        "acme/partial-pricing",
-      ]),
-    );
+    expect(ids).toEqual(expect.arrayContaining(["openrouter/auto", "acme/partial-pricing"]));
     expect(ids).not.toContain("google/gemini-3.1-flash-image");
     expect(ids).not.toContain("typesafe/jev-1.13");
     expect(provider.models.find((model) => model.id === "acme/partial-pricing")).toMatchObject({
@@ -146,9 +134,6 @@ describe("OpenRouter provider catalog", () => {
         ],
       },
     });
-    expect(
-      provider.models.find((model) => model.id === "google/gemini-3.5-flash-lite")?.compat,
-    ).toEqual({ supportsTools: false });
     expect(provider.models.find((model) => model.id === "acme/no-tools")?.compat).toEqual({
       supportsTools: false,
     });
@@ -158,7 +143,6 @@ describe("OpenRouter provider catalog", () => {
     expect(provider.models.find((model) => model.id === "openrouter/auto")?.compat).toBeUndefined();
     for (const [id, supportsTools] of [
       ["acme/partial-pricing", true],
-      ["google/gemini-3.5-flash-lite", false],
       ["acme/no-tools", false],
       ["custom/legacy-model", true],
       ["openrouter/auto", true],

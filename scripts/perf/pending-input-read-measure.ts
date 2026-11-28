@@ -74,7 +74,7 @@ const receipt = await stageSessionPendingInput(scope, {
   assertCurrent() {},
 });
 assert(receipt);
-receipt.finish("interrupted");
+receipt.finish("interrupted", "failed");
 await receipt.settled?.();
 await closeOpenClawAgentDatabasesAsync();
 clearRuntimeConfigSnapshot();

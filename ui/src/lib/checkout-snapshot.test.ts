@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { nextEventLoopTurn } from "../../../test/helpers/promise.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
 import {
@@ -53,6 +54,7 @@ it("retains a cached picker snapshot until its own invalidation, including one a
   await published.promise;
   expect(onSnapshot).toHaveBeenCalledWith(stale);
   listener({ type: "event", event: "worktrees.branches.changed", payload: { repoRoot: "/other" } });
+  await nextEventLoopTurn();
   expect(request).toHaveBeenCalledTimes(1);
   request
     .mockImplementationOnce(async () => {

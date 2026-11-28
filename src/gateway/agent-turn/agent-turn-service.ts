@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { ErrorCodes, type AgentWaitParams } from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
 import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import { runWithSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
@@ -44,7 +44,6 @@ import {
   registerAgentTurnSourceAdmission,
 } from "./agent-turn-source-admission.js";
 import type { AgentTurnStartRequest } from "./agent-turn-start-request.types.js";
-import { prepareAgentWaitForTurn } from "./agent-wait.js";
 
 export function createAgentTurnService(
   { context, isWebchatConnect }: Pick<GatewayRequestHandlerOptions, "context" | "isWebchatConnect">,
@@ -361,8 +360,9 @@ export function createAgentTurnService(
             maintenanceConfig: sessionMaintenanceConfig,
             canonicalSessionAgentId: sessionAgentId,
             mainSessionKey,
-            touchInteraction,
           } = preparedSession;
+          const touchInteraction =
+            preparedSession.touchInteraction && !preflight.preserveUserFacingSessionModelState;
           const { entry } = preparedSession;
           cfgForAgent = cfgLocal;
           freshChild = preparedSession.freshChild;
@@ -375,6 +375,7 @@ export function createAgentTurnService(
             principal,
             sessionKey: canonicalSessionKey,
             agentId: sessionAgentId,
+            entry,
           });
           if (sessionAuthorizationError) {
             io.emitAcceptance([false, undefined, sessionAuthorizationError]);
@@ -398,6 +399,7 @@ export function createAgentTurnService(
           ) =>
             buildAgentSessionPatch({
               ...preparedSession,
+              touchInteraction,
               freshEntry,
               initialEntry: entry,
               sessionAgentId,
@@ -665,9 +667,5 @@ export function createAgentTurnService(
     }
   };
 
-  const prepareWaitForTurn = (params: AgentWaitParams) =>
-    prepareAgentWaitForTurn(context, params, { exactTurnSource: true });
-  const waitForTurn = async (params: AgentWaitParams) => await prepareWaitForTurn(params).wait();
-
-  return { startTurn, prepareWaitForTurn, waitForTurn };
+  return { startTurn };
 }

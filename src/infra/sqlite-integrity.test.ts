@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { resolveSchemaMigrationIntegrityCheck } from "../state/schema-migration-backup-scope.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { readSqliteDatabaseIntegrityVerification } from "./sqlite-database-admission.js";
 import {
@@ -204,6 +205,47 @@ describe("assertSqliteIntegrity", () => {
       }
     },
   );
+
+  it.each([
+    { damaged: "session_nodes", refuses: true },
+    { damaged: "cache_entries", refuses: false },
+  ])("scopes an agent version step's corruption refusal ($damaged)", ({ damaged, refuses }) => {
+    const filename = path.join(tempDirs.make("sqlite-agent-step-"), "agent.sqlite");
+    let offset: number;
+    {
+      using database = openNodeSqliteDatabase(filename);
+      database.exec(`
+        CREATE TABLE session_nodes(id INTEGER PRIMARY KEY, value TEXT);
+        CREATE TABLE cache_entries(id INTEGER PRIMARY KEY, value TEXT);
+        INSERT INTO session_nodes VALUES (1, 'node');
+        INSERT INTO cache_entries VALUES (1, 'cache');
+      `);
+      const root = database
+        .prepare("SELECT rootpage FROM sqlite_schema WHERE name = ?")
+        .get(damaged);
+      const page = database.prepare("PRAGMA page_size").get();
+      offset = (Number(root?.rootpage) - 1) * Number(page?.page_size);
+    }
+    const bytes = fs.readFileSync(filename);
+    bytes[offset] = 0xff;
+    fs.writeFileSync(filename, bytes);
+    using database = openNodeSqliteDatabase(filename);
+    const step = resolveSchemaMigrationIntegrityCheck({
+      kind: "agent",
+      foundVersion: 43,
+      supportedVersion: 45,
+    });
+    const migrate = () => assertSqliteIntegrity(database, "agent step", step);
+    if (refuses) {
+      expect(migrate).toThrow(expect.objectContaining({ name: "SqliteIntegrityError" }));
+    } else {
+      expect(migrate).not.toThrow();
+    }
+    // The next Gateway start owes this whole-file check.
+    expect(() => assertSqliteIntegrity(database, "owed", { check: "full" })).toThrow(
+      expect.objectContaining({ name: "SqliteIntegrityError" }),
+    );
+  });
 
   it("classifies cascade-owned task delivery orphans without admitting writes", () => {
     using database = memoryDatabase(taskOrphans());

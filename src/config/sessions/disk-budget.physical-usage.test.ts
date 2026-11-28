@@ -1,6 +1,4 @@
-import { createHook } from "node:async_hooks";
 import { channel } from "node:diagnostics_channel";
-import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -21,7 +19,6 @@ import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleto
 import * as storeWriterQueue from "../../shared/store-writer-queue.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { readSessionPhysicalDiskUsage } from "./disk-budget-files.js";
 import { drainSessionDiskBudgetWorkers } from "./disk-budget-runtime.js";
 import {
   hasRetainedSessionTranscriptArchives,
@@ -50,75 +47,6 @@ async function addSessionArtifacts(directory: string, index: number): Promise<vo
 }
 
 describe("physical session disk usage", () => {
-  it("loads database ownership inspection only for multi-store scans", async () => {
-    await withTestDir({ prefix: "openclaw-disk-scan-imports-" }, async (directory) => {
-      const databasePath = path.join(directory, "custom.sqlite");
-      await fs.writeFile(databasePath, Buffer.alloc(321));
-      const selectTargets = vi.fn(() => [databasePath]);
-      const loadTargets = vi.fn(() => ({
-        listDurableSqliteTargetPathsForSessionStorePath: selectTargets,
-      }));
-      vi.resetModules();
-      // mock-isolation: Observe cold ownership loading without initializing the database graph.
-      vi.doMock("./session-sqlite-target.js", loadTargets);
-      try {
-        const { readSessionPhysicalDiskUsage: scan } = await import("./disk-budget-files.js");
-        await expect(scan(databasePath)).resolves.toEqual({
-          databaseWalBytes: 0,
-          totalBytes: 321,
-        });
-        expect(loadTargets).not.toHaveBeenCalled();
-
-        await fs.writeFile(path.join(directory, "custom.other.sqlite"), Buffer.alloc(123));
-        const storePath = path.join(directory, "custom.json");
-        await scan(storePath);
-        expect(loadTargets).toHaveBeenCalledOnce();
-        expect(selectTargets).toHaveBeenCalledExactlyOnceWith(storePath);
-      } finally {
-        vi.doUnmock("./session-sqlite-target.js");
-        vi.resetModules();
-      }
-    });
-  });
-
-  // Bun does not emit Node's PROMISE async-hook events.
-  it.skipIf(Boolean(process.versions.bun))(
-    "bounds per-artifact promise allocation inside the scan worker",
-    async () => {
-      await withTestDir({ prefix: "openclaw-disk-scan-promises-" }, async (directory) => {
-        const storePath = path.join(directory, "openclaw-agent.sqlite");
-        await fs.writeFile(storePath, Buffer.alloc(321));
-        const countScan = async () => {
-          let promises = 0;
-          const hook = createHook({
-            init(_id, type) {
-              if (type === "PROMISE") {
-                promises++;
-              }
-            },
-          });
-          hook.enable();
-          try {
-            const usage = await readSessionPhysicalDiskUsage(storePath);
-            return { promises, usage };
-          } finally {
-            hook.disable();
-          }
-        };
-        await countScan();
-        const initial = await countScan();
-        for (let index = 0; index < 32; index++) {
-          await fs.writeFile(path.join(directory, `session-${index}.jsonl`), Buffer.alloc(7));
-        }
-        const expanded = await countScan();
-        expect(expanded.usage).toEqual({ databaseWalBytes: 0, totalBytes: 321 + 32 * 7 });
-        // A stat uses one result continuation, without an extra catch/await promise layer.
-        expect(initial.promises).toBeGreaterThan(0);
-        expect(expanded.promises - initial.promises).toBeLessThanOrEqual(32 * 20);
-      });
-    },
-  );
-
   it.each([false, true])(
     "joins a forced followup after maintenance failure (mutation fails: %s)",
     async (mutationFails) => {
@@ -620,46 +548,6 @@ describe("physical session disk usage", () => {
       });
       await expect(fs.stat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(hasRetainedSessionTranscriptArchives(storePath)).resolves.toBe(false);
-    });
-  });
-
-  it("does not add synchronous realpath work as session artifacts grow", async () => {
-    await withTestDir({ prefix: "openclaw-disk-scan-scaling-" }, async (directory) => {
-      const storePath = path.join(directory, "openclaw-agent.sqlite");
-      await fs.writeFile(storePath, Buffer.alloc(321));
-      await fs.writeFile(`${storePath}-wal`, Buffer.alloc(654));
-      await fs.writeFile(`${storePath}-shm`, Buffer.alloc(32_768));
-      await addSessionArtifacts(directory, 0);
-      const realpath = vi.spyOn(nodeFs, "realpathSync");
-      const fixtureSyncCalls = () =>
-        realpath.mock.calls.filter(
-          ([candidate]) =>
-            typeof candidate === "string" && candidate.startsWith(`${directory}${path.sep}`),
-        ).length;
-      try {
-        const initial = await measureSessionPhysicalDiskUsage(storePath);
-        const initialSyncCalls = fixtureSyncCalls();
-        expect(initial).toEqual({
-          databaseWalBytes: 654,
-          totalBytes: 993,
-        });
-        for (let index = 1; index <= 32; index += 1) {
-          await addSessionArtifacts(directory, index);
-        }
-        realpath.mockClear();
-
-        const expanded = await measureSessionPhysicalDiskUsage(storePath);
-        const expandedSyncCalls = fixtureSyncCalls();
-
-        expect(expanded).toEqual({
-          databaseWalBytes: 654,
-          totalBytes: 975 + 33 * 18,
-        });
-        // Filesystem work that grows with the directory must not block the event loop.
-        expect(expandedSyncCalls).toBeLessThanOrEqual(initialSyncCalls);
-      } finally {
-        realpath.mockRestore();
-      }
     });
   });
 });

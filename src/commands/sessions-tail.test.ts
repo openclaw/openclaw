@@ -180,6 +180,24 @@ describe("sessionsTailCommand", () => {
     );
   });
 
+  it("omits internal snapshot fragments from progress output", async () => {
+    await render(
+      [
+        makeEvent({ type: "session.started" }),
+        toolResult("last-tool"),
+        makeEvent({ type: "model.snapshot.fragment", data: { messagesSnapshot: ["internal"] } }),
+        makeEvent({ type: "model.snapshot.fragment", data: { messagesSnapshot: ["internal"] } }),
+        makeEvent({ type: "model.snapshot.fragment", data: { messagesSnapshot: ["internal"] } }),
+        modelCompleted({ stopReason: "stop" }),
+      ],
+      { tail: "2" },
+    );
+    expectOutput(
+      ["last-tool ok", "model.completed"],
+      ["session.started", "model.snapshot.fragment", "internal"],
+    );
+  });
+
   it.each<[string, TrajectoryEvent["data"], string]>([
     ["provider failure", { stopReason: "error", aborted: false, timedOut: false }, "error"],
     [

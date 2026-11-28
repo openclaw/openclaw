@@ -58,6 +58,8 @@ main.content:where(.content--logs-page) .content-header {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* The stream clips its rows; the frame must not clip the stream's keyboard outline. */
+  overflow: visible;
 }
 
 /* Log stream rules load with the logs page; keep them out of the startup sheet. */
@@ -65,6 +67,7 @@ main.content:where(.content--logs-page) .content-header {
   max-height: calc(100vh - 280px);
   min-height: 200px;
   overflow: auto;
+  border-radius: inherit;
   container-type: inline-size;
 }
 
@@ -277,7 +280,6 @@ main.content:where(.content--logs-page) .content-header {
     display: flex;
     flex: 1 1 auto;
     height: auto;
-    min-height: 0;
   }
 
   .content.content--logs-page openclaw-logs-page {
@@ -288,16 +290,12 @@ main.content:where(.content--logs-page) .content-header {
   .content.content--logs-page .settings-workspace--fill-height > .settings-workspace__body {
     display: flex;
     flex: 1 1 auto;
-    flex-direction: column;
     height: auto;
-    min-height: 0;
   }
 
   .content.content--logs-page .settings-workspace--fill-height .logs-card {
     display: flex;
     flex: 1 1 auto;
-    flex-direction: column;
-    min-height: 0;
   }
 
   .content.content--logs-page .settings-workspace--fill-height .log-stream {
@@ -332,7 +330,6 @@ main.content:where(.content--logs-page) .content-header {
 
   .content.content--logs-page .settings-workspace--fill-height .logs-card {
     padding: 0;
-    overflow: visible;
     border: 0;
     border-radius: 0;
     background: none;

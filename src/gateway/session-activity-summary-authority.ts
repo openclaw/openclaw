@@ -1,3 +1,5 @@
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { resolveUtilityModelSelectionForAgent } from "../agents/utility-model.js";
 import { sessionPersonalProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -5,6 +7,7 @@ import {
   captureResidentUserProfileAccess,
   prepareUserProfileCatalog,
 } from "../state/user-profile-list.js";
+import { operatorRoleSubject } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import { captureChannelOperatorRunAuthority } from "./operator-run-authority.js";
 
@@ -32,14 +35,19 @@ export function createActivitySummaryAuthority({
   };
   return {
     operatorOwned: Boolean(profileId),
-    assertCurrent(this: void) {
-      assertOwnerCurrent();
-      authority?.assertCurrent();
-    },
-    async prepare(this: void) {
+    assertCurrent: assertOwnerCurrent,
+    /**
+     * The owner's run authority, and whether their role refuses every utility
+     * model. A refusal is a state for the caller to publish, never a retry; other
+     * disabled reasons stay with the caller's role-blind selection.
+     */
+    async prepare(this: void): Promise<{
+      operatorAuthority?: AdmittedRunOperatorAuthority;
+      roleRefusesUtility?: true;
+    }> {
       assertOwnerCurrent();
       if (!profileId) {
-        return undefined;
+        return {};
       }
       const prepared = await prepareUserProfileCatalog();
       catalog = prepared;
@@ -54,35 +62,46 @@ export function createActivitySummaryAuthority({
       // Resolve historical aliases once; effect checks retain the same catalog
       // and canonical identity without rebuilding the alias set.
       const source = captureResidentUserProfileAccess(profileId);
+      assertOwnerCurrent();
+      const profile = source.assertCurrent();
+      if (
+        profile.id !== canonicalProfileId ||
+        (profile.role || null) !== assignedRole ||
+        (profile.githubLogin ?? null) !== githubLogin
+      ) {
+        throw new Error("Activity recap operator role changed");
+      }
+      const role = resolveOperatorRolePolicyForAssignment(
+        canonicalProfileId,
+        assignedRole,
+        getConfig(),
+        githubLogin,
+        operatorRoleSubject(profile),
+      );
+      if (role && role.agents !== "*" && !role.agents.includes(agentId)) {
+        throw new Error("Activity recap operator role cannot access this agent");
+      }
       authority = captureChannelOperatorRunAuthority({
         profileId: canonicalProfileId,
+        canonicalIdentity: { profileId: canonicalProfileId },
         assignedRole,
         githubLogin,
+        openclawIdAccountIds: original.openclawIdAccountIds,
         scopes: [],
         gatewayAccessGrant: null,
         getRuntimeConfig: getConfig,
-        assertCurrent: () => {
-          assertOwnerCurrent();
-          const profile = source.assertCurrent();
-          if (
-            profile.id !== canonicalProfileId ||
-            (profile.role || null) !== assignedRole ||
-            (profile.githubLogin ?? null) !== githubLogin
-          ) {
-            throw new Error("Activity recap operator role changed");
-          }
-          const role = resolveOperatorRolePolicyForAssignment(
-            canonicalProfileId,
-            assignedRole,
-            getConfig(),
-            githubLogin,
-          );
-          if (role && role.agents !== "*" && !role.agents.includes(agentId)) {
-            throw new Error("Activity recap operator role cannot access this agent");
-          }
-        },
       });
-      return authority;
+      const utility = resolveUtilityModelSelectionForAgent({
+        cfg: getConfig(),
+        agentId,
+        modelPolicy: authority.modelPolicy,
+      });
+      return {
+        operatorAuthority: authority,
+        ...("disabled" in utility && utility.disabled === "role-policy"
+          ? { roleRefusesUtility: true as const }
+          : {}),
+      };
     },
     // The recap owner joins preparation and completion before releasing this lease.
     release(this: void) {

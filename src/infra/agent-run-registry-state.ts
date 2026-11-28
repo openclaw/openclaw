@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { recordAgentEventRouting } from "./agent-event-execution-context.js";
 import type {
   AgentRunContext,
   AgentRunContextOwnership,
@@ -22,6 +23,23 @@ const registryState = resolveGlobalSingleton<AgentRunRegistryState>(
 
 export function getAgentRunRegistryState(): AgentRunRegistryState {
   return registryState;
+}
+
+export function storeRunContext(
+  runId: string,
+  context: AgentRunContext,
+  predecessor?: AgentRunContext,
+) {
+  // Scheduler leases and observed activity never transfer to a fresh registration.
+  context.capacityWaits = undefined;
+  context.executionActivity = undefined;
+  context.localModelWait = undefined;
+  context.eventState = { seq: 0 };
+  context.modelCallSequence = { value: 0 };
+  context.acceptedUserReply = undefined;
+  context.registeredAt ??= Date.now();
+  registryState.contexts.set(runId, context);
+  recordAgentEventRouting(runId, context, predecessor);
 }
 
 /** Reads the process-local version of the active-run projection inputs. */
@@ -76,14 +94,19 @@ export function bumpAgentRunIndexVersion(
   getAgentRunRegistryState().version += 1;
   for (const target of previous &&
   (previous.sessionKey !== context?.sessionKey ||
-    (!previous.sessionKey && previous.sessionId !== context?.sessionId) ||
+    ((!previous.sessionKey || previous.sessionId) && previous.sessionId !== context?.sessionId) ||
     previous.agentId !== context?.agentId)
     ? [previous, context]
     : [context]) {
     const { sessionKey, sessionId, agentId } = target ?? {};
     sessionChanges.emit(
       sessionKey
-        ? { sessionKey, agentId, scope: "runtime" }
+        ? {
+            sessionKey,
+            agentId,
+            scope: "runtime",
+            ...(sessionId ? { runtimeSession: { sessionId, agentId } } : {}),
+          }
         : {
             all: true,
             scope: "agent-runs",

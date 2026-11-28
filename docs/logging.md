@@ -543,8 +543,14 @@ both sinks.
 The Gateway logs `slow chat send` when acknowledgement or startup takes at least
 one second. `stage=request` ends at acknowledgement; `stage=startup` ends when
 agent execution starts. `replyInitialization` covers inbound dispatch through
-session preparation. Later prompt, skills, tool catalog, model/auth, and runtime
-preparation belong to `preparation`, before the first model request.
+session preparation. `preparation` covers work before the prepared reply starts.
+`run` covers the prepared reply, including its remaining runtime setup, until
+diagnostics finish. Ordinary startup still stops accounting when agent execution
+starts. A `stage=steer` send can await a whole prepared reply, so its `run` includes
+that turn's execution time rather than charging it to `preparation`. A `stage=queued`
+report stops at the existing queue-disposition boundary; later execution is excluded.
+These consecutive phases do not double-count prepared-reply time. Structured phase
+events use the same names, including `chat.send.run`.
 Fast sends retain numeric phase timings without formatting a log message;
 enabled diagnostic phase subscribers still receive their observations.
 
@@ -554,9 +560,9 @@ binding, cold transcript hydration, writer admission, snapshot reads, and commit
 alongside workspace, Git baseline, hooks, and embedded preparation when used.
 `reply.session.writer` includes both queue waiting and `reply.session.initialize`;
 their difference indicates the writer wait. Parent and child spans overlap and
-must not be summed. Unfinished spans stop at the startup boundary; later model
-and tool latency does not extend them. Structured `chat.send.detail.*` phase
-events use the same durations when diagnostics are enabled.
+must not be summed. Unfinished spans stop when that send's diagnostics finish;
+ordinary startup therefore excludes later model and tool latency. Structured
+`chat.send.detail.*` phase events use the same durations when diagnostics are enabled.
 
 Before acknowledgement, `detail.persist.stage.*` separates pending-input resolution,
 storage preparation, reads, authority preparation, message preparation, and durable
@@ -1362,22 +1368,27 @@ start and end times. Unattributed active-loop stalls use the observed gap betwee
 JavaScript callback lifetime. Idle monitoring uses the missed wake deadline and
 the resumed wake instead, without adding idle heartbeats.
 
-On supported Node runtimes, `main-thread stall profile` selects samples only
-inside the longest reported stall's saved interval. `windowStartMs` and
-`windowEndMs` identify that interval; `reportedAtMs` identifies profile emission.
-The recorder keeps its 25 ms sample interval and bounded profile buffers. Later
-work outside the interval is excluded, even when reporting is delayed. Sample
-counts include idle samples whose frames are omitted from `inclusive`, so a
-single listed stack does not mean that stack occupied the whole interval.
+A `main-thread stall profile` describes the longest reported stall in a batch,
+not every stall. To count the stalls the Gateway reported, use `main-thread
+stall` warnings that include `stallStartMs` and `stallEndMs`. `windowStartMs`
+and `windowEndMs` identify the selected profile interval; `reportedAtMs`
+identifies profile emission.
+
+On Node 26, the CPU flight recorder samples every 25 ms and uses only samples
+inside the saved interval. Counts can include idle samples whose frames are
+omitted from `inclusive`, so a single listed stack did not necessarily occupy
+the whole interval. On Node 24, `sampleMode=interrupt` reports up to three
+point-in-time stacks, not CPU-duration samples. `cpuProfile=unavailable`
+means no CPU samples were captured; Linux kernel evidence can still be present.
+See [CPU pressure and event-loop delay](/gateway/health#cpu-pressure-and-event-loop-delay) for runtime limits.
 
 The report also includes `self`, up to ten sampled leaf frames as
-`[frame, samples, sampledMs, nearestAppFrame]`. These identify the work beneath
-shared inclusive callers; `nearestAppFrame` is the nearest OpenClaw frame on
-that sampled stack, or `null` when none is visible. Sampled milliseconds use
-the selected profile time deltas, clipped at the start of the stall; they are
-an attribution estimate, not an exact CPU timer. `deepest` contains up to three
-hot stack tails as `[samples, frames]`, with up to eight frames ordered from
-caller to sampled leaf.
+`[frame, samples, sampledMs, nearestAppFrame]`. The `nearestAppFrame` is the
+nearest OpenClaw frame on that stack, or `null` when none is visible. For CPU
+profiles, `sampledMs` is an estimate from the profile time deltas clipped to
+the start of the stall. For interrupt samples, `sampledMs` is `null`.
+`deepest` contains up to three sampled stack tails as `[samples, frames]`,
+ordered from caller to sampled leaf.
 
 The report payload has a hard 2 KiB limit. `reportTruncated=true` means lower
 priority entries were omitted to fit: inclusive ancestors first, then extra
@@ -1459,10 +1470,10 @@ on an unchanged route.
 Drops classified as `unattributed` use `debug`; attributed drops remain warnings.
 `providerPrefix` compares final encoded request segments against the last request
 with usable cache-read usage: system instructions, tools, history messages, and
-other request parameters. It names the first differing segment or `prefix-match`
-when the previous prefix is unchanged. A match does not prove provider cache
-availability or retention. Unsupported transports and missing baselines report
-`unavailable`.
+other request parameters except output caps. It names the first differing
+segment or `prefix-match` when the previous prefix is unchanged. A match does
+not prove provider cache availability or retention. Unsupported transports and
+missing baselines report `unavailable`.
 
 Prompt content is retained only as hashes, within the existing 512-entry
 diagnostic tracker.

@@ -323,8 +323,10 @@ final class VoiceWakeManager {
         }
 
         guard let transcript else { return }
-        guard let cmd = Self.extractCommand(
-            from: transcript, segments: segments, triggers: self.activeTriggerWords)
+        guard let cmd = WakeWordGate.match(
+            transcript: transcript,
+            segments: segments,
+            config: WakeWordGateConfig(triggers: self.activeTriggerWords, minPostTriggerGap: 0.45))?.command
         else { return }
 
         if self.lastDispatched?.generation == recognitionGeneration,
@@ -380,16 +382,6 @@ final class VoiceWakeManager {
     private func cancelPendingCommand() {
         self.commandTask?.cancel()
         self.commandTask = nil
-    }
-
-    nonisolated static func extractCommand(
-        from transcript: String,
-        segments: [WakeWordSegment],
-        triggers: [String],
-        minPostTriggerGap: TimeInterval = 0.45) -> String?
-    {
-        let config = WakeWordGateConfig(triggers: triggers, minPostTriggerGap: minPostTriggerGap)
-        return WakeWordGate.match(transcript: transcript, segments: segments, config: config)?.command
     }
 
     private func configureOwnedAudioSession() throws {

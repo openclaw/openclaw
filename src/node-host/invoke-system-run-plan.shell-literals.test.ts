@@ -1,10 +1,16 @@
-import { expect, it } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 import * as native from "./system-run-native-binary.test-helpers.js";
 
 const DENIED_RUNTIME_APPROVAL = { ok: false, reason: "unsupported-command-shape" };
 const MUTABLE_SCRIPT = "python ./mutable.py 'x&y'";
 const posix = it.skipIf(process.platform === "win32");
+
+beforeEach(() => {
+  vi.stubEnv("BASH_ENV", undefined);
+  vi.stubEnv("ENV", undefined);
+});
+
 function prepareShell(raw: string) {
   return buildSystemRunApprovalPlan({ command: ["/bin/sh", "-lc", raw], rawCommand: raw });
 }

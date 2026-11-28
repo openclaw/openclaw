@@ -17,7 +17,7 @@ import {
   type TranscriptAnchorPageOptions,
   type TranscriptRecentReadLimits,
 } from "../sessions/transcript-anchor-page.js";
-import { isVisibleTranscriptRecord } from "../sessions/transcript-visible-record.js";
+import { isVisibleTranscriptRecord } from "../sessions/transcript-record-visibility.js";
 import { isPreSessionStartAssistantMessage } from "./chat-display-projection.history.js";
 import { projectTranscriptEntryMessage } from "./session-transcript-entry-message.js";
 import { resolveSessionTranscriptResetArchiveCandidatesAsync } from "./session-transcript-files.fs.js";

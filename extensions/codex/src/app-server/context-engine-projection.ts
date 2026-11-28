@@ -52,6 +52,19 @@ const MIN_PROMPT_BUDGET_RATIO = 0.5;
 const MIN_PROMPT_BUDGET_TOKENS = 8_000;
 const CODEX_CONTEXT_SENDER_FIELD_MAX_CHARS = 256;
 
+/** Delivery must fit encoded image bytes, not only their fixed token estimate. */
+export function measureCodexContextImageChars(images: readonly ImageContent[]): number {
+  return images.reduce(
+    (chars, image) =>
+      chars +
+      Math.max(
+        IMAGE_BLOCK_TOKENS * APPROX_RENDERED_CHARS_PER_TOKEN,
+        Buffer.byteLength(JSON.stringify(image), "utf8"),
+      ),
+    0,
+  );
+}
+
 // Match compaction attribution: stable IDs establish identity; display labels do not.
 export function formatCodexContextSenderSuffix(message: AgentMessage): string {
   if (message.role !== "user") {
@@ -159,9 +172,7 @@ export async function projectContextEngineAssemblyForCodex(params: {
       }
       seenImageTurn = true;
     }
-    // Use the shared image estimate; native image payloads consume context too.
-    const imageChars =
-      (files?.images.length ?? 0) * IMAGE_BLOCK_TOKENS * APPROX_RENDERED_CHARS_PER_TOKEN;
+    const imageChars = measureCodexContextImageChars(files?.images ?? []);
     const imagesFit = imageChars < remaining;
     const acceptedImageChars = imagesFit ? imageChars : 0;
     const text = [

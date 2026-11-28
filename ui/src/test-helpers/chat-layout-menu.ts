@@ -22,7 +22,12 @@ export async function openChatDashboardMenu(scope: Page | Locator): Promise<Loca
   if ((await trigger.getAttribute("aria-expanded")) !== "true") {
     await trigger.click();
   }
-  await menu.getByRole("menu", { name: "Dashboard options", exact: true }).waitFor();
+  // The opening popover can pass DOM hit testing before pointer input stops reaching
+  // the Dashboard widget iframe underneath it.
+  await menu
+    .getByRole("menu", { name: "Dashboard options", exact: true })
+    .and(menu.locator('[data-phase="open"]'))
+    .waitFor();
   return menu;
 }
 
@@ -244,9 +249,7 @@ async function selectNativeLayoutAction(pane: Locator, name: string | RegExp): P
       await action.click();
       return;
     }
-    const dashboard = pane.locator(".chat-dashboard-menu").filter({ visible: true });
-    await button(dashboard, "Dashboard options").click();
-    await selectMenuItem(dashboard, name);
+    await selectMenuItem(await openChatDashboardMenu(pane), name);
     return;
   }
   if (matches("Focus")) {

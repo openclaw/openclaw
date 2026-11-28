@@ -108,7 +108,6 @@ it("badges pinned attention just like ordinary rows", async () => {
   const { sidebar } = await mountZone(keys, (row) => {
     if (row.key !== "agent:main:main") {
       Object.assign(row, {
-        pinned: row.key === "agent:main:page",
         unread: true,
         status: "failed",
         lastRunError: "boom",
@@ -116,9 +115,12 @@ it("badges pinned attention just like ordinary rows", async () => {
       });
     }
   });
+  sidebar.sidebarEntries = ["session:agent:main:page"];
+  await sidebar.updateComplete;
 
   for (const key of ["agent:main:page", "agent:main:plain"]) {
     const row = sidebar.querySelector(`[data-session-key="${key}"]`)!;
+    expect(Boolean(row.closest('[data-session-section="pinned"]'))).toBe(key === "agent:main:page");
     const glyph = domProbe(row.querySelector(".sidebar-session-indicator .session-glyph")!);
     expect(glyph.present(".sidebar-session-attention__icon")).toEqual([true]);
     expect(
@@ -223,6 +225,11 @@ it("keeps Pages flat and rail pins independently ordered", async () => {
   // A child's page shows the parent's sidebar: the parent, then each child, the open one current.
   sidebar.activeRouteId = "plugin";
   sidebar.activePluginTabId = "example/notes";
+  await context.router.navigate("plugin", context, undefined, {
+    pathname: "/plugin",
+    search: "?plugin=example&id=notes",
+    hash: "",
+  });
   await waitForFast(() => expect(dom.query(".sidebar-plugin-section")).not.toBeNull());
   const section = domProbe(dom.query(".sidebar-plugin-section")!);
   const listed = [...section.all<HTMLElement>('[data-sidebar-entry^="plugin:example/"]')];

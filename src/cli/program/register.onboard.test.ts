@@ -7,6 +7,7 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { resolveCliNetworkProxyPolicy } from "../command-path-policy.js";
+import { isOfflineSetupExplanation } from "../run-main-options.js";
 import { withCliTty } from "../run-main.bare-root.test-support.js";
 import { registerCoreCliCommands } from "./command-registry-core.js";
 import { createProgramContext } from "./context.js";
@@ -205,6 +206,26 @@ describe("setup routing", () => {
   }
   beforeEach(() => configSnapshot({}, false));
 
+  it("explains only the explicit offline request without reading setup config", async () => {
+    const args = ["--json", "--explain-error", "OpenClaw config is invalid"];
+    await runSetup(args);
+    const call = expectDefined(runtime.log.mock.calls[0], "offline JSON reply");
+    expect(JSON.parse(call[0])).toEqual({
+      reply: expect.stringContaining("openclaw config validate"),
+    });
+    expectNoCalls(config, setup, wizard, systemAgent);
+    const argv = ["node", "openclaw", "setup"];
+    expect(
+      await isOfflineSetupExplanation({
+        primary: "setup",
+        argv: [...argv, "-m", "--explain-error"],
+      }),
+    ).toBe(false);
+    expect(
+      await isOfflineSetupExplanation({ primary: "setup", argv: [...argv, "--wizard", ...args] }),
+    ).toBe(true);
+  });
+
   it.skipIf(process.platform === "win32").each(["default", "configured", "missing"])(
     "exposes the verified desktop CLI without reading config or running setup (home=%s)",
     async (homeKind) => {
@@ -270,10 +291,15 @@ describe("setup routing", () => {
             }
           }
         });
-        const output = execFileSync("/bin/bash", ["-ic", "openclaw qr 'literal argument'"], {
-          env: { ...env, OPENCLAW_PROFILE: "operator" },
-          encoding: "utf8",
-        });
+        // Source the installed PATH without loading host-wide shell startup files.
+        const output = execFileSync(
+          "/bin/bash",
+          ["--noprofile", "--norc", "-c", ". \"$HOME/.bashrc\"; openclaw qr 'literal argument'"],
+          {
+            env: { ...env, OPENCLAW_PROFILE: "operator" },
+            encoding: "utf8",
+          },
+        );
         expect(output.trimEnd().split("\n")).toEqual([
           home,
           env.OPENCLAW_HOME ?? "",

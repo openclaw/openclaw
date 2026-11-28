@@ -6,7 +6,6 @@ import { describe, expect, it, vi } from "vitest";
 import { doctorDatabasePort } from "../../commands/doctor-database-port.js";
 import * as configIo from "../../config/io.js";
 import { readBackupEngine } from "../../snapshot/database-backup.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -92,15 +91,16 @@ describe.skipIf(!fixtures.connection)("database port command PostgreSQL conforma
 
   it("keeps a resumed port refused when its verified copy fails owner admission", async () => {
     await fixtures.fixture(
-      async ({ state, source }) => {
+      async ({ state, source, client }) => {
+        assert(client);
         openOpenClawStateDatabase({ env: state.env });
         await closeOpenClawStateDatabaseAsync();
         {
           using db = openNodeSqliteDatabase(source);
-          // SQLite admits an older content marker beneath the current header; PostgreSQL does not.
+          // SQLite maintenance accepts this owner row; PostgreSQL owner admission rejects it.
           db.prepare(
-            "INSERT OR REPLACE INTO config_machine_state VALUES ('state.schema.contentVersion', ?, 1)",
-          ).run(String(OPENCLAW_STATE_SCHEMA_VERSION - 1));
+            "UPDATE schema_meta SET agent_id = 'synthetic-agent' WHERE meta_key = 'primary'",
+          ).run();
         }
         const before = fs.readFileSync(source);
         const originalConfig = fs.readFileSync(state.configPath, "utf8");
@@ -116,6 +116,8 @@ describe.skipIf(!fixtures.connection)("database port command PostgreSQL conforma
           await fixtures.files(state.statePath("recovery", "database-port"))
         ).find((file) => path.basename(file) === "target.sqlite");
         assert(anchorPath, "Owner admission runs after the verified anchor is written");
+        const target = readBackupEngine(anchorPath);
+        assert(target.engine === "postgres");
         const { admit } = await statePortProvider.loadDescriptor();
         assert(admit);
         const admitAnchor = () =>

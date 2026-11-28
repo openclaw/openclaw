@@ -7,6 +7,9 @@
   "name": "Knowledge",
   "description": "Evidence-backed knowledge, inspectable in OpenClaw.",
   "version": "0.1.0",
+  "catalog": {
+    "sidebar": true
+  },
   "reload": {
     "turnHandover": true
   },
@@ -198,6 +201,7 @@
       "knowledge_grep",
       "knowledge_history",
       "knowledge_lookup",
+      "knowledge_memory_import_progress",
       "knowledge_merge",
       "knowledge_mutation",
       "knowledge_ontology",
@@ -239,6 +243,7 @@
     "knowledge_grep": { "profiles": ["coding"] },
     "knowledge_history": { "profiles": ["coding"] },
     "knowledge_lookup": { "profiles": ["coding"] },
+    "knowledge_memory_import_progress": { "profiles": ["coding"] },
     "knowledge_merge": { "profiles": ["coding"] },
     "knowledge_mutation": { "profiles": ["coding"] },
     "knowledge_ontology": { "profiles": ["coding"] },

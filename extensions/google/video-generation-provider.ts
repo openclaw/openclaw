@@ -42,6 +42,26 @@ const GOOGLE_VIDEO_OPERATION_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const GOOGLE_VIDEO_EMPTY_RESULT_MESSAGE =
   "Google video generation response missing generated videos";
 
+function exceedsGoogleVideoByteLimit(base64: string, maxBytes: number): boolean {
+  if (estimateBase64DecodedBytes(base64) <= maxBytes) {
+    return false;
+  }
+  // ProtoJSON permits whitespace and omitted padding. Count without allocating
+  // before canonicalization; the existing validator still rejects malformed data.
+  let dataLength = 0;
+  for (let index = 0; index < base64.length; index += 1) {
+    const code = base64.charCodeAt(index);
+    if (code <= 0x20 || code === 0x3d) {
+      continue;
+    }
+    dataLength += 1;
+    if (Math.floor((dataLength * 3) / 4) > maxBytes) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function resolveGoogleVideoRestBaseUrl(configuredBaseUrl?: string): string {
   const { baseUrl, apiVersion } = resolveGoogleGenerativeAiSdkHttpOptions(configuredBaseUrl);
   return `${baseUrl ?? "https://generativelanguage.googleapis.com"}${apiVersion ? `/${apiVersion}` : ""}`;
@@ -370,7 +390,7 @@ export const googleVideoGenerationProvider: VideoGenerationProvider = {
           | { videoBytes?: string; uri?: string; mimeType?: string }
           | undefined;
         if (inline?.videoBytes) {
-          if (estimateBase64DecodedBytes(inline.videoBytes) > maxVideoBytes) {
+          if (exceedsGoogleVideoByteLimit(inline.videoBytes, maxVideoBytes)) {
             throw new Error(`Google generated video download exceeds ${maxVideoBytes} bytes`);
           }
           const canonicalVideo = canonicalizeGoogleProviderBase64(inline.videoBytes);

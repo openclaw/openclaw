@@ -816,6 +816,9 @@ final class NodeAppModel {
     let chatPresentation = IOSChatViewModelOwner()
     var agentAvatarImages: [String: UIImage] = [:]
     var loadedAgentAvatarRequest: IOSAgentAvatarRequest?
+    /// `agent.identity.get` results by agent id for `agentIdentitiesOwnerID`'s Gateway.
+    var agentIdentities: [String: IOSResolvedAgentIdentity] = [:]
+    var agentIdentitiesOwnerID: String?
     /// Request admission only; the connection controller owns the later handoff.
     var isGatewayPickerRequestInFlight = false
 
@@ -924,6 +927,22 @@ final class NodeAppModel {
               GatewayStableIdentifier.matches(cache.gatewayID, gatewayID)
         else { return }
         await cache.storeSessions(sessions, agentID: agentID)
+    }
+
+    func localChatCacheUsage() async throws -> OpenClawClientDatabases.GatewayCacheUsage {
+        try await self.requireChatCacheDatabases().gatewayCacheUsage()
+    }
+
+    func clearLocalChatCache() async throws -> OpenClawClientDatabases.GatewayCacheUsage {
+        try await self.requireChatCacheDatabases().clearGatewayCache()
+    }
+
+    private func requireChatCacheDatabases() throws -> OpenClawClientDatabases {
+        if self.clientDatabases == nil {
+            self.clientDatabases = Self.makeClientDatabases()
+        }
+        guard let clientDatabases else { throw CocoaError(.fileReadUnknown) }
+        return clientDatabases
     }
 
     /// Delete one forgotten gateway's cache and durable state, or both
@@ -2505,7 +2524,7 @@ final class NodeAppModel {
         case OpenClawCameraCommand.list.rawValue:
             let devices = await camera.listDevices()
             struct Payload: Codable {
-                var devices: [CameraController.CameraDeviceInfo]
+                var devices: [OpenClawCameraDeviceInfo]
             }
             return try Self.successfulInvokeResponse(req, payload: Payload(devices: devices))
         case OpenClawCameraCommand.snap.rawValue:
@@ -3422,8 +3441,15 @@ extension NodeAppModel {
             defaultAgentID: self.gatewayDefaultAgentId)
     }
 
+    /// Chat speaks as the agent's resolved identity (`agent.identity.get`), like web
+    /// `assistantIdentity.name` (ui/src/app/assistant-identity.ts:41-58); the roster name
+    /// or id labels it until that identity arrives.
     var chatAgentName: String {
-        self.agentDisplayName(for: self.chatAgentId)
+        self.chatAgentDisplayName(for: self.chatAgentId)
+    }
+
+    func chatAgentDisplayName(for agentID: String) -> String {
+        self.agentIdentityName(for: agentID) ?? self.agentDisplayName(for: agentID)
     }
 
     var chatAgentAvatarURL: String? {

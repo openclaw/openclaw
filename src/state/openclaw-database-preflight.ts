@@ -80,6 +80,12 @@ export { OpenClawDatabaseSchemaPreflightError } from "./openclaw-database-prefli
 // Public readiness rows stay serializable; their original failures belong to this inspection.
 const indeterminateCauses = new WeakMap<IndeterminateOpenClawDatabase, unknown>();
 
+export function getOpenClawDatabaseReadinessFailure(
+  database: IndeterminateOpenClawDatabase,
+): unknown {
+  return indeterminateCauses.get(database);
+}
+
 /** Verify persisted runtime schemas before certifying repair or accepting restart. */
 export async function assertOpenClawDatabasesReady(
   options: OpenClawDatabaseReadinessOptions,
@@ -88,6 +94,7 @@ export async function assertOpenClawDatabasesReady(
     {
       env: options.env,
       onAgentInspection: options.onAgentInspection,
+      takeStateSchemaReader: options.takeStateSchemaReader,
       onRegisteredAgentDatabases: options.onRegisteredAgentDatabases,
       verifyCurrentSchemaShape: true,
       ...(options.config
@@ -308,7 +315,7 @@ export async function preflightOpenClawDatabaseSchemas(
           (purpose === "runtime" || inspectSource) &&
           (!options.requireStartupMigrationReadiness || liveState) &&
           !options.openStateSchemaReadAdmission
-            ? createAgentSchemaInspectionWorker()
+            ? (options.takeStateSchemaReader?.() ?? createAgentSchemaInspectionWorker())
             : undefined;
         // Online inspection needs one native read transaction, not a payload-sized copy.
         // Keep it in the child: closing a source here could release this process's writer locks.
@@ -357,6 +364,15 @@ export async function preflightOpenClawDatabaseSchemas(
         Object.assign(result, inspection.schemas);
         Object.assign(stateMetrics, inspection.startupMetrics);
         stateInspectionErrors.push(...inspection.inspectionErrors);
+        inspection.schemas.indeterminate.forEach((row, index) => {
+          const error = inspection.inspectionErrors[index];
+          indeterminateCauses.set(
+            row,
+            options.requireStartupMigrationReadiness
+              ? schemaRead.annotateStartupStateInspectionFailure(error, statePath, options.signal)
+              : error,
+          );
+        });
         if (
           startup &&
           inspection.inspectionErrors.length === 0 &&
@@ -515,13 +531,18 @@ export async function preflightOpenClawDatabaseSchemas(
             options.preserveSourceArtifacts !== true &&
             scheduling?.canDefer(row),
         };
-        // Native read-only opens can change source SHM read marks. Explicit
-        // artifact preservation must use the WAL-aware private snapshot below.
-        if (
-          !schemaInspection &&
-          (getDatabaseEngineInput("agent") || options.preserveSourceArtifacts !== true)
-        ) {
-          schemaInspection = await inspectSchema(schemaInput, options.signal);
+        // Explicit artifact preservation reads a live WAL family through a read-only index
+        // and leaves every other family to the private snapshot below. A full copy of a
+        // store the serving Gateway keeps writing never stabilizes.
+        if (!schemaInspection) {
+          schemaInspection = await inspectSchema(
+            {
+              ...schemaInput,
+              preserveSourceArtifacts:
+                options.preserveSourceArtifacts === true && !getDatabaseEngineInput("agent"),
+            },
+            options.signal,
+          );
         }
         if (!schemaInspection) {
           // The parent retains cleanup ownership for the isolated snapshot worker.
@@ -543,6 +564,11 @@ export async function preflightOpenClawDatabaseSchemas(
         }
         readSucceeded = !schemaInspection.failure && !schemaInspection.reason;
         const { version: agentVersion, writerAppVersion, agentSchemaMeta } = schemaInspection;
+        // Runtime readers use the published floor; explicit target/maintenance checks stay strict.
+        const agentAdmissionVersion =
+          purpose === "runtime" && options.supportedVersions === undefined
+            ? (schemaInspection.minReader ?? agentVersion)
+            : agentVersion;
         if (row.holdForDeletionRecovery) {
           recordAgentDatabaseRecoveryInspection(
             preparedDiscovery,
@@ -552,7 +578,7 @@ export async function preflightOpenClawDatabaseSchemas(
           );
           return undefined;
         }
-        if (agentVersion <= supportedVersions.agent && inspectOwnership && row.agentId) {
+        if (agentAdmissionVersion <= supportedVersions.agent && inspectOwnership && row.agentId) {
           const refusal = inspectAgentDatabaseAdmission({
             agentId: row.agentId,
             path: agentPath,
@@ -591,7 +617,7 @@ export async function preflightOpenClawDatabaseSchemas(
           inspection.indeterminate.push(failure);
           return undefined;
         }
-        if (agentVersion > supportedVersions.agent) {
+        if (agentAdmissionVersion > supportedVersions.agent) {
           const incompatible = {
             kind: "agent",
             path: agentPath,

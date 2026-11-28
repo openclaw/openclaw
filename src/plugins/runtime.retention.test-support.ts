@@ -23,6 +23,7 @@ import {
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
+import { PluginInvocationScope } from "./plugin-invocation-scope.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { PluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import { PluginRuntimeCloseRetainedError } from "./runtime-close-error.js";
@@ -307,7 +308,9 @@ async function recoverOwner(root: string, kind: "source" | "bundled-cjs" | "bund
     rootDir: root,
   });
   assert.equal((instance.loadModule(source) as { read(): string }).read(), "recovered source");
-  const recovery = await instance.captureModuleLoaderRecovery();
+  const scope = new PluginInvocationScope(previous, [instance]);
+  const recovery = await scope.run(() => instance.captureModuleLoaderRecovery());
+  scope.release();
   await instance.dispose();
   const current = new PluginInstance(record.id);
   recovery.bind(current);

@@ -1,13 +1,16 @@
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { createCronExecutionId } from "../../../../src/cron/run-id.js";
 import type { CronJob } from "../../api/types.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import type { CronState } from "../../lib/cron/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 
 export function resolveCronRouteData(search: string): {
   jobId: string | null;
   runId: string | null;
+  settings?: true;
   /** `?new` opens the create panel, as the sidebar's New automation does. */
   create?: true;
   /** `?activity` opens every automation's run history, as the sidebar's Activity does. */
@@ -18,6 +21,9 @@ export function resolveCronRouteData(search: string): {
   return {
     jobId,
     runId: jobId ? params.get("run")?.trim() || null : null,
+    ...(jobId && !params.has("run") && params.get("tab") === "settings"
+      ? { settings: true as const }
+      : {}),
     ...(!jobId && params.has("new") ? { create: true as const } : {}),
     ...(!jobId && params.has("activity") ? { activity: true as const } : {}),
   };
@@ -59,13 +65,16 @@ export function createCronRouteSelection() {
     } catch (error) {
       if (ownsSelection()) {
         selection.target = null;
-        state.cronError = formatUiError(error);
+        state.cronError =
+          error instanceof GatewayProtocolRequestError && error.gatewayCode === "UNAVAILABLE"
+            ? t("cron.linkUnavailable")
+            : formatUiError(error);
       }
     }
   }
 
-  function select(jobId: string, runId: string | null) {
-    selection.target = { jobId, runId };
+  function select(jobId: string, runId: string | null, settings?: true) {
+    selection.target = { jobId, runId, settings };
     selection.requested = true;
   }
   return Object.assign(selection, { bind, resolve, select });
@@ -78,10 +87,10 @@ export function failedRunId(job: CronJob): string | null {
     : null;
 }
 
-/** An automation opens on its settings; only a link to one of its runs opens its history. */
+/** Ordinary job links keep the prompt and history; an explicit settings link opens the editor. */
 export function resolveCronDetailTab(
   job: CronJob | null,
-  runId: string | null | undefined,
+  target: ReturnType<typeof resolveCronRouteData> | null,
 ): "history" | "settings" {
-  return job && runId ? "history" : "settings";
+  return !job || (target?.jobId === job.id && target.settings) ? "settings" : "history";
 }

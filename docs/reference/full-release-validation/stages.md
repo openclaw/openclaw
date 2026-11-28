@@ -11,13 +11,13 @@ read_when:
 
 Q (default C) tests C. Admitted P supplies `full-release-validation-state.mjs`
 for Release Decision, Diagnostic Drain, manifests, and final validation, applying
-[P-owned waivers](/reference/full-release-validation/evidence#release-tooling-waivers).
+[Q-owned grants](/reference/full-release-validation/evidence#release-tooling-waivers).
 Publication requires successful FRV, including package qualification and Docker
 preparation—not just a passing product decision.
 
 **Whole-parent reuse.** For `rerun_group=all`, `Check for reusable validation evidence`
 selects the newest green full validation matching profile, coverage policy, effective
-soak, inputs, and exact Q/P identities; child closure equivalence does not apply.
+soak, inputs, and exact Q/P identities; the cross-Q child reuse rule below does not apply.
 
 | Policy                            | Eligible target delta                                                                                                                                                                                                                                                            |
 | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -36,21 +36,17 @@ and attempt checks. At most seven independent children are read concurrently;
 per-child attempts/pagination remain sequential, job data is retained, and all reads
 finish before a verdict. Resolution/reuse checkouts need only tooling and release metadata.
 
-**Child reuse.** A green sealed child can outlive a failed, cancelled, or active parent:
+**Child reuse.** A sealed raw successful child, or a failed child accepted under the
+current Q grants, can outlive a failed, cancelled, or active parent:
 
 - Search bounds: 100 recent dispatch runs, 40 target receipt inventories, five matching
   receipts per role, two minutes. Nonmatching receipts do not consume the five.
 - Match target, role, nonempty inputs/defaults, and candidate descriptor bytes. Empty
   inputs equal absent inputs (`github.event.inputs` omits them).
-- Require equal Q or authenticated identical workload closure: owning/reusable workflows,
-  local actions, complete scripts tree, root configuration/dependencies. Different Q
-  requires verified main ancestry; missing, unsupported, or changed closure blocks reuse.
-  Control-only intent is insufficient.
-- Normal CI additionally retains complete `config`, `packages`, `src`, and `test` trees
-  imported by its Q harness; even unrelated changes there invalidate reuse. Other product
-  directories come from C and are excluded. Unrelated parent workflow changes alone do
-  not invalidate normal CI. Other roles retain all workflows and the full root tree;
-  shared-script changes invalidate every child.
+- Across Q, authenticate the original producer Q and its tooling lineage (or its
+  binding to C). Child workflows, scripts, and harnesses may change without
+  invalidating a sealed execution. Current Q grants are reevaluated, not inherited
+  from the original verdict. Set `reuse_evidence=false` when the new harness must run.
 - Dispatch logs explain evaluated rejections, reused children, skipped runs, and fresh
   dispatches. Sealing, collectors, and final verification repeat tooling/receipt checks.
 

@@ -13,7 +13,7 @@ import { waitForChatAbortTerminalPersistence } from "./chat-abort-lifecycle-inte
 import { createChatAbortOps } from "./chat-abort-ops.js";
 import { abortChatRunById } from "./chat-abort.js";
 import { retainGatewayDeviceRevocation } from "./device-revocation.js";
-import type { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import type { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { captureGatewayOperatorContinuation } from "./operator-run-recovery.js";
 import {
   captureAbortedPartial,
@@ -24,7 +24,7 @@ import {
 } from "./server-methods/chat-aborted-partial.js";
 import { resolveAuthenticatedPersonalGatewayProfileId } from "./server-methods/gateway-personal-caller.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
+import { prepareSessionSystemTurnAuthority } from "./session-sharing-authorization-async.js";
 import { formatForLog } from "./ws-log.js";
 
 type OperatorRunCancellationContext = Pick<
@@ -34,7 +34,7 @@ type OperatorRunCancellationContext = Pick<
 
 /** Retain authority before its execution or queue owner can arm cancellation. */
 export async function retainGatewayOperatorRun(
-  params: Parameters<typeof captureGatewayOperatorRunAuthority>[0] & {
+  params: Parameters<typeof prepareGatewayOperatorRunAuthority>[0] & {
     context: OperatorRunCancellationContext;
     runId: string;
     entry?: RpcSourceRef;
@@ -45,23 +45,24 @@ export async function retainGatewayOperatorRun(
 ) {
   const captured = params.systemTurn
     ? await prepareSessionSystemTurnAuthority(params.systemTurn)
-    : // The requester's turn ending or chat edit does not revoke accepted work; policy does.
+    : // The requester's turn ending or chat edit does not revoke accepted work.
       await captureGatewayOperatorContinuation(params);
   const releaseSource =
     captured?.release ?? retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
-  const signal = captured?.authority.signal;
+  const authority = captured?.authority;
+  const signal = authority?.signal;
   let partialSession: ReturnType<typeof retainChatAbortSessionSnapshot> | undefined;
   try {
     if (
       !params.systemTurn &&
-      captured &&
+      authority &&
       params.entry &&
       isRpcSourceRegistered(params.entry) &&
-      resolveAuthenticatedPersonalGatewayProfileId(params.client) === captured.authority.profileId
+      resolveAuthenticatedPersonalGatewayProfileId(params.client) === authority.profileId
     ) {
       // Retain human initiation across live queue handoffs. System-turn authority
       // can come from the current session owner and must not mint this fact.
-      params.entry.adapter.initiatingPersonalOperator = captured.authority;
+      params.entry.adapter.initiatingPersonalOperator = authority;
     }
     partialSession =
       signal && params.entry
@@ -86,7 +87,7 @@ export async function retainGatewayOperatorRun(
           })
         : undefined;
     return {
-      authority: captured?.authority,
+      authority,
       armCancellation: () => cancellation?.arm(),
       retireCancellation: () => {
         cancellation?.release();

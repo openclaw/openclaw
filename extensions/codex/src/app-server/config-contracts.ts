@@ -77,6 +77,7 @@ export type CodexAppServerStartOptions = {
   cwd?: string;
   url?: string;
   authToken?: string;
+  tlsPeerCertificate?: string;
   headers: Record<string, string>;
   env?: Record<string, string>;
   clearEnv?: string[];

@@ -428,6 +428,10 @@ export async function renderSessionEntry(
     if (
       insideHeartbeatTurn ||
       insideRecalledMemoryTurn ||
+      // Exec wake tails may contain secrets; assistant-authored replies remain eligible.
+      (message.role === "user" &&
+        inputProvenance?.kind === "internal_system" &&
+        inputProvenance.sourceTool === "exec") ||
       generatedByDreamingNarrative ||
       generatedByCronRun ||
       ("display" in message && message.display === false)

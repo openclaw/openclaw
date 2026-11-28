@@ -49,6 +49,8 @@ export async function createCodexProductInstance({
     },
     config: {
       ...(logging ? { logging } : {}),
+      // The route proof owns the catalog responses; do not fetch an unrelated hosted revision.
+      ...(openaiCatalog ? { models: { catalogRefresh: { enabled: false } } } : {}),
       plugins: {
         enabled: true,
         allow: openaiCatalog ? ["codex", "openai"] : ["codex"],

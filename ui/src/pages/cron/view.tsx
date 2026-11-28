@@ -129,7 +129,7 @@ function ActivityView(props: CronProps) {
         <OverviewNotices {...props} />
         <SettingsSection title={t("cron.list.runHistory")}>
           <div class="cron-activity">
-            <RunsSection {...props} />
+            <RunsSection {...props} showJobName />
           </div>
         </SettingsSection>
       </SettingsPage>

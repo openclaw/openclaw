@@ -42,6 +42,7 @@ export function recordCompletedLegacyAgentDirMigration(sourceRoot: string, targe
   };
   requireMissingReceipt();
   replaceFileAtomicSync({
+    allowDrvfsRenameRecovery: true,
     filePath,
     content,
     mode: 0o600,

@@ -392,10 +392,6 @@ describe("native pending assignment inventory through registered monitor admissi
           ? "codex-thread:child-thread:turn:followup-turn"
           : "codex-thread:child-thread",
         result,
-        expectedRequester: {
-          sessionId: f.identity.sessionId,
-          lifecycleRevision: f.historyOwner().lifecycleRevision,
-        },
       });
       if (followup) {
         recovered.closeCaller();

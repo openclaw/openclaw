@@ -9,6 +9,7 @@ import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import type { PreparedQuestionCallerRead } from "../agents/harness/host-private-capabilities.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { registerDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
+import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
@@ -19,6 +20,7 @@ import type { GatewayRequestOptions } from "./server-methods/types.js";
 export type { GatewayMethodDispatchResponse } from "./server-in-process-dispatch.types.js";
 
 type InProcessGatewayDispatchOptions = {
+  parentHttpRequestAuthority?: PluginRuntimeGatewayRequestScope["parentHttpRequestAuthority"];
   client: GatewayRequestOptions["client"];
   context: GatewayRequestOptions["context"];
   expectFinal?: boolean;
@@ -205,6 +207,7 @@ export async function dispatchGatewayRequestInProcessRaw(
               req,
               requestEntry: entry,
               client: options.client,
+              parentHttpRequestAuthority: options.parentHttpRequestAuthority,
               isWebchatConnect: options.isWebchatConnect ?? (() => false),
               respond: (ok, payload, error, meta) => {
                 const response = { ok, payload, error, ...(meta ? { meta } : {}) };

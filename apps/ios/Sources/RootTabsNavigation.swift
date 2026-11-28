@@ -22,7 +22,6 @@ extension RootTabs {
         case overview
         case activity
         case systems
-        case agents
         case workboard
         case skillWorkshop
         case instances
@@ -33,7 +32,6 @@ extension RootTabs {
         case cron
         case desktop
         case terminal
-        case docs
         case settings
         case gateway
 
@@ -47,7 +45,6 @@ extension RootTabs {
             case .overview: String(localized: "Overview")
             case .activity: String(localized: "Activity")
             case .systems: String(localized: "Systems")
-            case .agents: String(localized: "Agents")
             case .workboard: String(localized: "Workboard")
             case .skillWorkshop: String(localized: "Skill Workshop")
             case .instances: String(localized: "Instances")
@@ -58,7 +55,6 @@ extension RootTabs {
             case .cron: String(localized: "Automations")
             case .desktop: String(localized: "Desktop")
             case .terminal: String(localized: "Terminal")
-            case .docs: String(localized: "Docs")
             case .settings: String(localized: "Settings")
             case .gateway: String(localized: "Settings / Gateway")
             }
@@ -77,7 +73,6 @@ extension RootTabs {
             case .overview: "chart.bar"
             case .activity: "waveform.path.ecg"
             case .systems: "server.rack"
-            case .agents: "person.2"
             case .workboard: "folder"
             case .skillWorkshop: "hammer"
             case .instances: "dot.radiowaves.left.and.right"
@@ -88,7 +83,6 @@ extension RootTabs {
             case .cron: "timer"
             case .desktop: "display"
             case .terminal: "terminal"
-            case .docs: "book"
             case .settings: "gearshape"
             case .gateway: "gearshape"
             }
@@ -106,12 +100,10 @@ extension RootTabs {
             case .cron: .dashboard(DashboardRouteMap.cronJobsPagePath)
             case .chat: .chat
             case .overview: .overview
-            case .agents: .agents
             case .sessions: .sessions
             case .files: .files
             case .desktop: .desktop
             case .terminal: .terminal
-            case .docs: .docs
             case .settings: .settings
             case .gateway: .gateway
             }
@@ -124,7 +116,7 @@ extension RootTabs {
 
     enum SidebarScreen: Equatable {
         case dashboard(String)
-        case chat, overview, agents, sessions, files, desktop, terminal, docs, settings, gateway
+        case chat, overview, sessions, files, desktop, terminal, settings, gateway
     }
 
     static func notificationSettingsPath(servingEnabled: Bool, disclosureAccepted: Bool) -> String {
@@ -196,6 +188,15 @@ extension RootTabs {
         navigationPath.last ?? baseRoute
     }
 
+    /// The destination header's sidebar control hides the sidebar only beside a visible
+    /// split sidebar; a drawer is dismissed from its own header, scrim, or swipe.
+    static func sidebarHeaderControlHidesSidebar(
+        isSidebarVisible: Bool,
+        layoutMode: SidebarLayoutMode) -> Bool
+    {
+        layoutMode == .split && isSidebarVisible
+    }
+
     static func requestedInitialSidebarVisibility(arguments: [String]) -> Bool? {
         guard let value = arguments.drop(while: { $0 != "--openclaw-sidebar-visibility" }).dropFirst().first
         else { return nil }
@@ -236,6 +237,15 @@ extension RootTabs {
         return .settings
     }
 
+    /// A pending registry read is not evidence of a fresh install.
+    static func shouldOfferFirstGatewaySetup(
+        hasConnectedOnce: Bool,
+        hasSavedGateway: Bool?,
+        hasRuntimeOrLegacyGatewayConfig: Bool) -> Bool
+    {
+        !hasConnectedOnce && hasSavedGateway == false && !hasRuntimeOrLegacyGatewayConfig
+    }
+
     static func shouldPresentQuickSetup(
         quickSetupDismissed: Bool,
         showOnboarding: Bool,
@@ -262,13 +272,11 @@ extension RootTabs {
         .activity,
         .systems,
         .skillWorkshop,
-        .agents,
         .instances,
         .files,
         .dreaming,
         .desktop,
         .terminal,
-        .docs,
     ]
 
     /// Home (chat) is a fixed first row like the web sidebar; only these can be
@@ -279,6 +287,7 @@ extension RootTabs {
     /// compact by default so sessions stay above the fold. The Sessions page is
     /// intentionally unpinned — the sessions section + "All Sessions…" own it.
     static let defaultPinnedSidebarPages: [SidebarDestination] = [.overview, .usage, .cron]
+    static let pinnedSidebarPagesStorageKey = "sidebar.pinnedPages"
 
     /// "" = never customized (defaults); "none" = user unpinned everything.
     /// Storage order is the user's pin order (web parity); unknown or

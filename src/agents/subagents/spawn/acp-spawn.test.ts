@@ -482,6 +482,8 @@ describe("spawnAcpDirect", () => {
     initializeSessionMock: hoisted.initializeSessionMock,
     upsertSessionEntryMock: hoisted.upsertSessionEntryMock,
     callGatewayMock: hoisted.callGatewayMock,
+    readAcpResumeSessionOwnerMock: hoisted.readAcpResumeSessionOwnerMock,
+    countActiveRunsForSessionMock: hoisted.countActiveRunsForSessionMock,
   });
 
   beforeEach(() => {

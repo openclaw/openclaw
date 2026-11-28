@@ -16,9 +16,13 @@ export type SystemAgentPluginCapabilityReview = {
 };
 
 export type SystemAgentTemplateOperation =
-  | ({ kind: "template-review" } & TemplatesAddPlanParams)
+  | ({
+      kind: "template-review";
+      source: { packageName: string; version: string };
+    } & TemplatesAddPlanParams)
   | ({
       kind: "template-install";
+      source: { packageName: string; version: string };
       agentId: string;
       planIntegrity: string;
     } & TemplatesAddReviewedApplyParams);
