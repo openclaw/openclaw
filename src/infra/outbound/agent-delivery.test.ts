@@ -338,50 +338,34 @@ describe("agent delivery helpers", () => {
           },
         ],
       },
-      accepted: false,
     },
     {
       name: "rejects aliases outside the configured main session key",
       cfg: { session: { mainKey: "work" } },
-      accepted: false,
     },
-  ] satisfies Array<{ name: string; cfg: OpenClawConfig; accepted: boolean }>)(
-    "$name",
-    async ({ cfg, accepted }) => {
-      mocks.resolveOutboundChannelPlugin.mockReturnValue({
-        config: { listAccountIds: () => [] },
-        messaging: { resolveOutboundSessionRoute: vi.fn() },
-      });
-      mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
-        sessionKey: "agent:ops:main",
-        baseSessionKey: "agent:ops:main",
-        recipientSessionExact: "direct-alias",
-        peer: { kind: "direct", id: "username:alice.01" },
-        chatType: "direct",
-        from: "signal:username:alice.01",
-        to: "username:alice.01",
-      });
-      const result = await resolveAgentExplicitRecipientSession({
-        cfg,
-        agentId: "ops",
-        channel: "signal",
-        to: "username:alice.01",
-      });
-      if (accepted) {
-        expect(result).toMatchObject({
-          sessionKey: "agent:ops:main",
-          channel: "signal",
-          to: "username:alice.01",
-        });
-        expect(result.error).toBeUndefined();
-      } else {
-        expect(result.sessionKey).toBeUndefined();
-        expect(result.error?.message).toBe(
-          'Unable to resolve a session route for channel "signal"',
-        );
-      }
-    },
-  );
+  ] satisfies Array<{ name: string; cfg: OpenClawConfig }>)("$name", async ({ cfg }) => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      config: { listAccountIds: () => [] },
+      messaging: { resolveOutboundSessionRoute: vi.fn() },
+    });
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
+      sessionKey: "agent:ops:main",
+      baseSessionKey: "agent:ops:main",
+      recipientSessionExact: "direct-alias",
+      peer: { kind: "direct", id: "username:alice.01" },
+      chatType: "direct",
+      from: "signal:username:alice.01",
+      to: "username:alice.01",
+    });
+    const result = await resolveAgentExplicitRecipientSession({
+      cfg,
+      agentId: "ops",
+      channel: "signal",
+      to: "username:alice.01",
+    });
+    expect(result.sessionKey).toBeUndefined();
+    expect(result.error?.message).toBe('Unable to resolve a session route for channel "signal"');
+  });
 
   it("accepts stable outbound-only identities that stay isolated from main", async () => {
     const plugin = {
