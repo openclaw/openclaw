@@ -91,11 +91,16 @@ describe("provider login choices", () => {
   });
 
   it("keeps methods without group labels together and uses their declared priority", () => {
-    const method = (providerId: string, choiceLabel: string, assistantPriority: number) =>
+    const method = (
+      providerId: string,
+      choiceLabel: string,
+      assistantPriority: number,
+      groupId?: string,
+    ) =>
       choice({
         pluginId: providerId,
         providerId,
-        groupId: undefined,
+        groupId,
         groupLabel: undefined,
         methodId: choiceLabel,
         choiceId: choiceLabel,
@@ -103,15 +108,11 @@ describe("provider login choices", () => {
         assistantPriority,
       });
     const options = listProviderLoginOptions([
-      method("alpha", "Apple", 5),
-      method("beta", "Middle", 0),
-      method("alpha", "Zulu", -5),
+      method("cafe", "Apple", 5),
+      method("beta", "Middle", 0, "café"),
+      method("cafe", "Zulu", -5),
     ]);
-    expect(options.map((option) => option.id)).toEqual([
-      "alpha/Zulu",
-      "alpha/Apple",
-      "beta/Middle",
-    ]);
+    expect(options.map((option) => option.id)).toEqual(["cafe/Zulu", "cafe/Apple", "beta/Middle"]);
   });
 
   it("lists provider families once even when login requires setup", () => {
