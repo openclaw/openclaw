@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { findSessionTranscriptReadFenceError } from "openclaw/plugin-sdk/context-engine-transcript-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/routing";
-import { listWorkshopChanges } from "openclaw/plugin-sdk/skill-workshop-host-runtime";
+import {
+  isExpectedRunCancellation,
+  listWorkshopChanges,
+} from "openclaw/plugin-sdk/skill-workshop-host-runtime";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { buildSkillExperienceReviewPrompt } from "./experience-review-prompt.js";
 import type { ExperienceReviewCandidate } from "./experience-review-scheduler.js";
@@ -109,6 +113,14 @@ export async function runSkillExperienceReview(
         if (!outcome.ok) {
           if (learningOff.signal.aborted) {
             throw learningOff.signal.reason;
+          }
+          // Keep the host's bounded mismatch diagnostic through its authority wrapper and the
+          // plugin's settlement, without discarding an independent failure from a mixed graph.
+          const transcriptFence = isExpectedRunCancellation(outcome.error)
+            ? findSessionTranscriptReadFenceError(outcome.error)
+            : undefined;
+          if (transcriptFence) {
+            throw transcriptFence;
           }
           if (outcome.cancelled || options.abortSignal?.aborted) {
             // The model aborts with a plain error; normalize the outcome so the scheduler reports

@@ -366,7 +366,6 @@ export async function runSessionFork<T>(
       let outcome: SessionForkOutcome;
       try {
         const result = await runSessionForkInner(params, abortSignal);
-        assertSessionForkRunSucceeded(result);
         outcome = { ok: true, result };
       } catch (error) {
         outcome = {
@@ -676,6 +675,11 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
       provider: params.model.provider,
       model: params.model.model,
     });
+    assertSessionForkRunSucceeded(
+      result,
+      preparedRunAdmission.assertSourceCurrent,
+      preparedRunAdmission.readSourceFailure,
+    );
     return result;
   } finally {
     preparedRunAdmission.close();

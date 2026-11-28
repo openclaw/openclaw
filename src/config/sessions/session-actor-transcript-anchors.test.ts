@@ -116,17 +116,29 @@ it("refuses replay when the writer or selected session has changed", () => {
 
 it("rejects a rewritten completed-turn anchor and changed exact replay context", () => {
   const { hot, user, read } = fixture();
-  for (const selection of [
-    { contextValidation: { through: { ...user, generation: "old-generation" } } },
-    {
-      replayValidation: { allowInitial: false },
-      contextValidation: { version: { generation: "generation", rawSeq: 3, updatedAt: 1 } },
-    },
-  ]) {
-    expect(() => read({ entryIds: [], ...selection }, hot, null)).toThrow(
-      SessionTranscriptReadFenceError,
-    );
-  }
+  expect(() =>
+    read(
+      { entryIds: [], contextValidation: { through: { ...user, generation: "old-generation" } } },
+      hot,
+      null,
+    ),
+  ).toThrow(
+    expect.objectContaining({
+      name: "SessionTranscriptReadFenceError",
+      message: "Completed-turn transcript anchor changed (generation)",
+    }),
+  );
+  expect(() =>
+    read(
+      {
+        entryIds: [],
+        replayValidation: { allowInitial: false },
+        contextValidation: { version: { generation: "generation", rawSeq: 3, updatedAt: 1 } },
+      },
+      hot,
+      null,
+    ),
+  ).toThrow(SessionTranscriptReadFenceError);
 });
 
 it("leaves incomplete suffixes, reset visibility, and invalidated anchors to the reader", () => {
