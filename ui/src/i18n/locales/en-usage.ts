@@ -44,7 +44,6 @@ const enUsage = {
     },
     filters: {
       rangeTitle: "Reporting range",
-      rangeHint: "Choose the dates to include in every chart and total.",
       title: "Filters",
       to: "to",
       startDate: "Start date",
@@ -52,8 +51,6 @@ const enUsage = {
       timeZone: "Time zone",
       timeZoneLocal: "Local",
       timeZoneUtc: "UTC",
-      pin: "Pin",
-      pinned: "Pinned",
       selectAll: "Select all",
       clear: "Clear",
       clearAll: "Clear all",
@@ -63,7 +60,6 @@ const enUsage = {
       all: "All",
       days: "Days",
       session: "Session",
-      agent: "Agent",
       channel: "Channel",
       provider: "Provider",
       model: "Model",
@@ -97,11 +93,9 @@ const enUsage = {
       inRange: "{total} sessions in range",
       ofTotal: "{shown} of {total}",
       short: "Filter sessions…",
-      tip: "Tip: use filters or click bars to refine days.",
     },
     export: {
       label: "Export",
-      changed: "Session context changed while preparing the export. Refresh usage and try again.",
       incomplete:
         "Usage data is incomplete. Refresh usage and try again, or narrow the date range.",
       sessionsCsv: "Sessions CSV",
@@ -109,8 +103,6 @@ const enUsage = {
       json: "JSON",
     },
     cacheStatus: {
-      checking: "Updating",
-      warning: "Usage data may be incomplete. Checking for updated totals automatically.",
       paused:
         "Usage data may be incomplete. Automatic checks paused; select Refresh to check again.",
     },
@@ -134,11 +126,9 @@ const enUsage = {
     empty: {
       title: "No usage in this date range.",
       subtitle: "Try a wider date range or another identity to explore more history.",
-      hint: "Choose a wider date range or another identity.",
       noData: "No data",
     },
     daily: {
-      title: "Daily usage",
       total: "Total",
       byType: "By type",
       byProvider: "By provider",
@@ -146,7 +136,6 @@ const enUsage = {
       pending: "not loaded yet",
       tokensTitle: "Daily token usage",
       costTitle: "Daily cost",
-      compressedScaleHint: "Square-root scale keeps low-usage days visible.",
     },
     costWindows: {
       title: "Cost windows",
@@ -188,7 +177,6 @@ const enUsage = {
       cached: "cached",
       prompt: "prompt",
       calls: "calls",
-      costShare: "{percent}% of cost",
       topModels: "Top models",
       topProviders: "Top providers",
       topTools: "Top tools",
@@ -211,7 +199,6 @@ const enUsage = {
       showTop: "Show top {count}",
       total: "{count} total",
       avg: "avg",
-      all: "All",
       recentShort: "Recent",
       sort: "Sort",
       ascending: "Ascending",
@@ -221,7 +208,6 @@ const enUsage = {
       more: "+{count} more",
       selected: "Selected ({count})",
       copy: "Copy",
-      limitReached: "Showing first 1,000 sessions. Narrow date range for complete results.",
     },
     details: {
       noUsageData: "No usage data for this session.",
@@ -246,7 +232,6 @@ const enUsage = {
       noContextData: "No context data yet.",
       contextOutOfDate: "These context details are out of date. Refresh usage and try again.",
       systemPromptBreakdown: "System prompt breakdown",
-      collapseAll: "Collapse all",
       expandAll: "Expand all",
       baseContextPerMessage: "Base context per message",
       system: "System",
@@ -255,7 +240,6 @@ const enUsage = {
       tools: "Tools",
       files: "Files",
       ofInput: "of input",
-      of: "of",
       loadedIntervalMessages: "Loaded messages · selected interval",
       intervalCounts: "interval message and tool counts",
       openConversation: "Open conversation",

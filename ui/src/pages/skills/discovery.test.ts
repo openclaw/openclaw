@@ -240,6 +240,9 @@ describe("unified skill discovery", () => {
     const onCategoryChange = vi.fn();
     const props = { clawhubResults: [...tagged, ...uncategorized], onCategoryChange };
     const container = renderDiscovery({ ...props, readCategories: () => null });
+    expect(
+      container.querySelector('[role="status"][aria-busy="true"]')?.getAttribute("aria-label"),
+    ).toBe("Searching…");
     expect(shelfText(container)).toBe("");
     expect(container.querySelector("[data-skill-id]")).toBeNull();
     showInstalled(container);

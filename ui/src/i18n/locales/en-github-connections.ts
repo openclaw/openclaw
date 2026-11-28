@@ -109,7 +109,6 @@ const enGitHubConnections = {
     githubExpired: "The one-time code expired. Connect again to request a new code.",
     githubDenied: "GitHub sign-in was denied. Connect again when you’re ready.",
     githubIncorrectCode: "GitHub rejected this device code. Connect again to request a new code.",
-    githubConnect: "Connect GitHub",
     githubConnectHint: "Authorize GitHub without pasting a long-lived credential into the browser.",
     githubPatFallback: "Personal access token",
     githubPatFallbackHint: "Use a fine-grained PAT only when browser authorization is unsuitable.",

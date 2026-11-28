@@ -58,7 +58,6 @@ const enSkillLibrary = {
     search: "Search names, descriptions, and owners",
     empty: "No skills yet. Create or import one.",
     noMatches: "No skills match your search.",
-    you: "You",
     shared: "Shared with team",
     private: "Private",
     share: "Share with team",
