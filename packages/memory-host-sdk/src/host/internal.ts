@@ -365,11 +365,13 @@ export async function listMemoryFiles(
   if (result.length <= 1) {
     return result;
   }
-  // Bound filesystem pressure; deduplicate in discovery order, not completion order.
-  const canonicalPaths = await runWithConcurrency(
-    result.map((entry) => () => fs.realpath(entry).catch(() => entry)),
-    4,
-  );
+  // Create each lookup as a slot opens. A large directory can have thousands waiting.
+  function* canonicalPathTasks() {
+    for (const entry of result) {
+      yield () => fs.realpath(entry).catch(() => entry);
+    }
+  }
+  const canonicalPaths = await runWithConcurrency(canonicalPathTasks(), 4);
   const seen = new Set<string>();
   const deduped: string[] = [];
   for (const [index, entry] of result.entries()) {

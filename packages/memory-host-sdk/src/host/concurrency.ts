@@ -3,7 +3,7 @@ import pMap from "p-map";
 
 /** Run tasks with bounded concurrency, stopping admission and draining active work on failure. */
 export async function runWithConcurrency<T>(
-  tasks: Array<() => Promise<T>>,
+  tasks: Iterable<() => Promise<T>>,
   limit: number,
 ): Promise<T[]> {
   const inFlight = new Set<Promise<T>>();
