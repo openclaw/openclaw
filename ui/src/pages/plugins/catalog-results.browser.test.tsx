@@ -217,9 +217,12 @@ it("windows large catalogs without losing keyboard traversal, reordered cards, o
     rootStyle.setProperty("--space-3", "32px");
     await waitForSolid(() => {
       const first = card(0).getBoundingClientRect();
-      const next = card(4).getBoundingClientRect();
+      // Interactive cards can lift by 1px on hover; measure the untransformed row tracks.
+      const firstTrack = card(0).closest('[role="listitem"]')!.getBoundingClientRect();
+      const nextTrack = card(4).closest('[role="listitem"]')!.getBoundingClientRect();
       expect(first.height).toBeGreaterThan(compactHeight + 30);
-      expect(Math.abs(next.top - first.bottom - 32)).toBeLessThan(1);
+      expect(Math.abs(firstTrack.height - first.height)).toBeLessThan(1);
+      expect(Math.abs(nextTrack.top - firstTrack.bottom - 32)).toBeLessThan(1);
     });
   } finally {
     if (previousSpacing) {
