@@ -283,7 +283,8 @@ export function doctorConfigRepairsPendingInputs(
           ...resolveSystemAgentWorkspaceRepairOptions(chain.snapshot),
           applyFiles: false,
         });
-        return { pending: decideResult(result) };
+        // A pin carries on to later stages; a pending copy leaves the config unchanged.
+        return { pending: decideResult(result), result };
       }),
     },
     // The repair sequence, in its order.
