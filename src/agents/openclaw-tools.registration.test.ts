@@ -69,7 +69,7 @@ function createFastToolNames(options: CreateOpenClawToolsOptions): string[] {
   );
 }
 
-function createTestOpenClawTools(options: CreateOpenClawToolsOptions = {}) {
+function createTestOpenClawTools(options: CreateOpenClawToolsOptions) {
   return createOpenClawTools({
     ...options,
     config: withDefaultRoster(options.config),
