@@ -407,6 +407,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
       fs.symlinkSync(outsidePackageJsonPath, packageJsonPath);
       const registry = loadRegistry(packageIndex(rootDir));
 
+      expect(registry.plugins.map(({ id }) => id)).toEqual(["installed"]);
       expect(registry.plugins[0]?.channelCatalogMeta?.commands).toBeUndefined();
     },
   );
@@ -430,6 +431,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
       plugins: [persistedRecord],
     } as unknown as InstalledPluginIndex);
 
+    expect(registry.plugins.map(({ id }) => id)).toEqual(["installed"]);
     expect(registry.plugins[0]?.packageManifest).toBeUndefined();
     expect(registry.plugins[0]?.channelCatalogMeta).toBeUndefined();
   });

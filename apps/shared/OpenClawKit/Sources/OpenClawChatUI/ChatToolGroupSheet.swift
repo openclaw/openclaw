@@ -3,14 +3,42 @@ import OpenClawKit
 import SwiftUI
 
 enum ChatToolSheetSelection: Identifiable {
+    case run(String, [ChatToolActivityItem])
     case work(ChatTranscriptRow.CompletedWork)
     case calls([ChatToolActivityItem], source: UUID, runID: String?)
 
     var id: String {
         switch self {
+        case let .run(id, _): id
         case let .work(work): work.id.uuidString
         case let .calls(items, source, _): "\(source):\(items.first?.id ?? "")"
         }
+    }
+}
+
+extension ChatTranscriptPresentation {
+    func toolItems(in messages: some Sequence<OpenClawChatMessage>, live: [OpenClawChatPendingToolCall])
+        -> [ChatToolActivityItem]
+    {
+        var seen = Set<String>()
+        return messages.flatMap { message in
+            ChatToolActivity.items(message: message, liveTools: live.filter { $0.runID == message.workRunID })
+                .flatMap { self.tools.repeats.attempts[$0.id] ?? [$0] }
+        }.filter { $0.isVisible && seen.insert($0.id).inserted }
+    }
+
+    func toolItems(for run: String, live: [OpenClawChatPendingToolCall]) -> [ChatToolActivityItem] {
+        var joined = self.narratedStretch.flatMap { $0.run == run ? $0.messages : nil } ?? []
+        // An open live sheet follows its stretch when history replaces it with a settled disclosure.
+        for row in self.rows {
+            if case let .completedWork(work) = row, work.isActivityRun,
+               work.messages.contains(where: { $0.workRunID == run })
+            { joined.formUnion(work.messages.map(\.id)) }
+        }
+        return self.toolItems(
+            in: self.inspectionRows.lazy.compactMap(\.workMessage)
+                .filter { $0.workRunID == run || joined.contains($0.id) },
+            live: live)
     }
 }
 
@@ -46,6 +74,9 @@ struct ChatToolGroupPresentation: View {
         let run: String?
         let anchorCall: String?
         switch self.selection {
+        case let .run(id, previous):
+            let items = self.transcript.toolItems(for: id, live: self.viewModel.toolActivities)
+            return .run(id, items.isEmpty ? previous : items)
         case let .work(work):
             // Usually the transcript already has the exact updated stretch. Reproject only across a history handoff.
             for row in self.transcript.rows {
@@ -75,6 +106,7 @@ struct ChatToolGroupPresentation: View {
         let lower = rows[start...index].lastIndex(where: \.isToolHistoryBoundary) ?? start
         let turn = rows[lower..<end]
         switch self.selection {
+        case .run: return self.selection // Resolved by run identity above.
         case let .work(selected):
             let parts = turn.flatMap { row -> [ChatTranscriptRow] in
                 row.workMessage?.workPresentationParts.map(ChatTranscriptRow.message) ?? [row]
@@ -94,13 +126,10 @@ struct ChatToolGroupPresentation: View {
         case let .calls(selected, _, _):
             let selectedIDs = Set(selected.map(\.id))
             let live = self.viewModel.toolActivities
-            var seen = Set<String>()
             let peers = turn.compactMap(\.workMessage)
                 .filter { run == nil || $0.workRunID == nil || $0.workRunID == run }
-            let calls = peers.flatMap { message in
-                ChatToolActivity.items(message: message, liveTools: live.filter { $0.runID == message.workRunID })
-                    .flatMap { self.transcript.tools.repeats.attempts[$0.id] ?? [$0] }
-            }.filter { (selected.count == 1 || selectedIDs.contains($0.id)) && seen.insert($0.id).inserted }
+            let calls = self.transcript.toolItems(in: peers, live: live)
+                .filter { selected.count == 1 || selectedIDs.contains($0.id) }
             return calls
                 .contains(where: { $0.id == selected.first?.id }) ? .calls(calls, source: source, runID: run) : self
                 .selection
@@ -125,6 +154,8 @@ struct ChatToolGroupRow: View {
                 Text(verbatim: ChatCompletedWorkSummary.label(work: self.work, liveTools: self.liveTools))
                     .lineLimit(1)
             }
+            // Keep the settled label on the working line’s baseline without moving the answer below it.
+            .padding(.bottom, ChatTypingIndicatorBubble.inspectionPadding)
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .contentShape(Rectangle())
         }
@@ -144,6 +175,7 @@ struct ChatToolGroupSheet: View {
     @State private var detent: PresentationDetent = .medium
     let focusedCallID: String?
     @State private var path: [String]
+    @State private var followsLiveTail = true
 
     init(
         selection: ChatToolSheetSelection,
@@ -177,8 +209,11 @@ struct ChatToolGroupSheet: View {
             return .tool(id, ToolSheetStep(item: item, chatName: chat))
         }
         guard case let .work(work) = self.selection else {
-            if case let .calls(items, _, _) = self.selection { return items.map { tool($0, id: $0.id) } }
-            return []
+            let items: [ChatToolActivityItem] = switch self.selection {
+            case let .run(_, items), let .calls(items, _, _): items
+            case .work: []
+            }
+            return items.map { tool($0, id: $0.id) }
         }
         var result: [Step] = []
         var seen = Set<String>()
@@ -226,7 +261,27 @@ struct ChatToolGroupSheet: View {
                             .padding(.horizontal, 20)
                             .padding(.vertical, 8)
                         }
+                        .onScrollPhaseChange { previous, current, context in
+                            if current == .interacting { self.followsLiveTail = false }
+                            if current == .idle, previous == .interacting || previous == .decelerating {
+                                self.followsLiveTail = context.geometry.visibleRect.maxY >= context.geometry.contentSize
+                                    .height - 12
+                            }
+                        }
+                        .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                            // A short timeline starts under the toolbar; only follow once its end overflows.
+                            let viewport = geometry.containerSize.height - geometry.contentInsets.top - geometry
+                                .contentInsets.bottom
+                            return geometry.contentSize.height > viewport ? geometry.contentSize.height : 0
+                        } action: { _, overflowingHeight in
+                            if overflowingHeight > 0, case .run = self.selection,
+                               self.path.isEmpty, self.followsLiveTail, let tail = steps.last?.id
+                            {
+                                proxy.scrollTo(tail, anchor: .bottom)
+                            }
+                        }
                         .onChange(of: self.path, initial: true) { previous, current in
+                            if !current.isEmpty { self.followsLiveTail = false }
                             if current.isEmpty, let focus = previous.last ?? self.focusedCallID {
                                 proxy.scrollTo(focus, anchor: .center)
                             }
@@ -254,7 +309,7 @@ struct ChatToolGroupSheet: View {
     private var title: String {
         switch self.selection {
         case let .work(work): ChatCompletedWorkSummary.label(work: work, liveTools: self.liveTools)
-        case .calls: String(localized: "Tool details")
+        case .run, .calls: String(localized: "Tool details")
         }
     }
 

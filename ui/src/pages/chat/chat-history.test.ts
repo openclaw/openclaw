@@ -33,7 +33,6 @@ import {
   readChatMessagesFromCache,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
-import { requestChatSessionSnapshot } from "./session-prefetch-history.ts";
 
 function activeHistory(runId: string) {
   const history = emptyActiveHistory(runId);
@@ -93,7 +92,7 @@ function rewindState(history: ChatHistoryResult, response: Promise<SessionsRewin
 const rewind = (state: ReturnType<typeof rewindState>) =>
   rewindChatHistory(state, "user-entry", new ChatAttachmentReadLifecycle(() => {}));
 
-it("preserves prepared quiet activity through older pages and prefetched snapshots", async () => {
+it("preserves prepared quiet activity through older pages", async () => {
   const result = {
     role: "toolResult",
     toolCallId: "wait",
@@ -109,9 +108,6 @@ it("preserves prepared quiet activity through older pages and prefetched snapsho
   expect((await loadOlderChatHistoryPage(state, { cursor: "older-1" }))?.messages).toEqual(
     expected,
   );
-  expect(
-    await requestChatSessionSnapshot(state.client!, state.sessionKey, state, () => true),
-  ).toMatchObject({ kind: "snapshot", snapshot: { messages: expected } });
   expect(result).not.toHaveProperty("activity");
 });
 

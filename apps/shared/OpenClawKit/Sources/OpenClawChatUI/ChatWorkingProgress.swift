@@ -158,6 +158,12 @@ enum ChatWorkingIdentity {
     }
 }
 
+struct ChatTurnRecapObservation: Equatable {
+    let sessionKey: String
+    let indicatorVisible: Bool
+    let row: ChatTurnRecapSessionRow?
+}
+
 struct ChatTurnRecap: Equatable, Sendable {
     let runtimeMs: Double
     let outputTokens: Int?

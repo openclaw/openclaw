@@ -486,7 +486,6 @@ src/agents/subagents/registry/subagent-session-read-scope.ts	8
 src/agents/subagents/requester-cron-authority-admission.ts	4
 src/agents/subagents/requester-cron-authority.ts	18
 src/agents/subagents/requester-final-attachment.ts	5
-src/agents/subagents/spawn/acp-spawn-parent-stream.ts	2
 src/agents/subagents/spawn/acp-spawn.ts	1
 src/agents/subagents/spawn/spawn-parent-lineage.ts	3
 src/agents/subagents/spawn/subagent-session-store.ts	2
