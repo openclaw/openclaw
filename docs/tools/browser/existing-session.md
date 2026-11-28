@@ -164,6 +164,10 @@ document-bound element identity.
 `mcpArgs` extends the selected server's arguments. Existing configurations that set
 `mcpCommand: "npx"` continue to select the built-in pinned server.
 The default launcher enables `--experimentalVision` for native coordinate clicks.
+It also grants the packaged server access to OpenClaw's uploads directory and
+inbound media directory. Uploads still pass OpenClaw's path validation, including
+the direct-child restriction for inbound media and rejection of escaping symlinks.
+Custom executables must configure their own filesystem roots to allow these sources.
 A custom `mcpCommand` must expose the `click_at` tool to support `click-coords`;
 pass the server's corresponding feature flag in `mcpArgs` when required.
 
