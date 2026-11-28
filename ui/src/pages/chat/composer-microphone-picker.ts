@@ -3,6 +3,7 @@ import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.js
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import {
   discoverRealtimeTalkInputs,
   observeRealtimeTalkDevices,
@@ -84,6 +85,10 @@ export class ComposerMicrophoneOwner extends EventTarget {
 
   syncCatalog(client: GatewayBrowserClient | null, connected: boolean, sessionKey?: string): void {
     const canRead = hasOperatorReadAccess(client?.auth ?? null);
+    // A catalog entry is an external identity, not a Gateway chat session: Talk
+    // cannot resolve its key, so discovery stays off until adoption supplies the
+    // adopted chat's own key.
+    const externalCatalog = parseCatalogSessionKey(sessionKey) !== null;
     const canDictate =
       Boolean(sessionKey) &&
       roleScopesAllow({
@@ -91,7 +96,7 @@ export class ComposerMicrophoneOwner extends EventTarget {
         requestedScopes: ["operator.sessions.write"],
         allowedScopes: client?.auth?.scopes ?? [],
       });
-    const catalogConnected = connected && (canRead || canDictate);
+    const catalogConnected = connected && !externalCatalog && (canRead || canDictate);
     if (
       client === this.catalogClient &&
       catalogConnected === this.catalogConnected &&
@@ -107,8 +112,8 @@ export class ComposerMicrophoneOwner extends EventTarget {
     this.catalogConnected = catalogConnected;
     this.catalogSessionKey = sessionKey;
     this.catalogRequest++;
-    this.realtimeStatus = canRead ? "unknown" : "unavailable";
-    this.dictationStatus = canRead || canDictate ? "unknown" : "unavailable";
+    this.realtimeStatus = canRead && !externalCatalog ? "unknown" : "unavailable";
+    this.dictationStatus = !externalCatalog && (canRead || canDictate) ? "unknown" : "unavailable";
     this.apiKeyProviders = {};
     this.talkApiKeyNotice = false;
     if (!client || !catalogConnected) {
