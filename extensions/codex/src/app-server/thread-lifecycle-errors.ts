@@ -34,3 +34,18 @@ export class CodexAdoptedThreadActiveError extends AgentHarnessPreflightError {
     this.name = "CodexAdoptedThreadActiveError";
   }
 }
+
+// Converts an aborted lifecycle signal into the error its caller observes.
+export function codexThreadLifecycleAbortError(signal: AbortSignal): Error {
+  const reason = signal.reason;
+  if (reason instanceof Error) {
+    return reason;
+  }
+  const error = new Error(
+    typeof reason === "string" && reason.length > 0
+      ? reason
+      : "codex app-server thread lifecycle aborted",
+  );
+  error.name = "AbortError";
+  return error;
+}

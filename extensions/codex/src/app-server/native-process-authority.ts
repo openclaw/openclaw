@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS } from "./attempt-client-cleanup.js";
 import { protectCodexAppServerLiveThread } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { NativeModelSource } from "./native-subagent-monitor-types.js";
@@ -13,10 +14,14 @@ import { retainSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
 type NativeTurn = { threadId: string; turnId: string };
 type NativeCommand = NativeTurn & { itemId: string };
 type ProcessCustody = { terminate: () => Promise<void> };
+type RequestCustody = ReturnType<
+  NonNullable<EmbeddedRunAttemptParamsV2["hostCapabilities"]["captureRequestCustody"]>
+>;
 type CommandAdmission = NativeCommand & {
   owner: CodexNativeProcessAuthority;
   client: CodexNativeProcessClient;
   parentTurn: NativeTurn;
+  admittedAt: number;
   accepting: boolean;
   background?: { processId: string | null; confirmed: boolean };
   processes: Set<ProcessCustody>;
@@ -26,6 +31,95 @@ type CommandAdmission = NativeCommand & {
 };
 
 const clients = new WeakMap<CodexAppServerClient, CodexNativeProcessClient>();
+
+/** Content-free view of one native command that still pins its thread subscription. */
+export type CodexNativeThreadHolder = {
+  itemId: string;
+  turnId: string;
+  admittedAt: number;
+  /** False once the admitting foreground turn ended; the command outlived it. */
+  foreground: boolean;
+  background: boolean;
+  processes: number;
+};
+
+/** Read-only: never creates a process owner for a client that has none. */
+export function listCodexNativeThreadHolders(
+  client: CodexAppServerClient,
+  threadId: string,
+): CodexNativeThreadHolder[] {
+  return clients.get(client)?.listThreadHolders(threadId) ?? [];
+}
+
+const MAX_LISTED_HOLDERS = 3;
+
+/**
+ * Compact holder identities for status lines. Command text and output are tool
+ * content, so only native identities, age and lifetime appear.
+ */
+export function formatCodexNativeThreadHolderList(
+  holders: readonly CodexNativeThreadHolder[],
+  now = Date.now(),
+): string {
+  const listed = holders.slice(0, MAX_LISTED_HOLDERS).map((holder) => {
+    const state = [
+      `turn ${holder.turnId}`,
+      `running ${formatHolderAge(now - holder.admittedAt)}`,
+      holder.background ? "background" : undefined,
+      holder.foreground ? undefined : "its turn ended",
+      holder.processes > 0
+        ? `${holder.processes} process${holder.processes === 1 ? "" : "es"}`
+        : undefined,
+    ].filter(Boolean);
+    return `${holder.itemId} (${state.join(", ")})`;
+  });
+  const more = holders.length - listed.length;
+  return listed.length === 0
+    ? ""
+    : [listed.join("; "), ...(more > 0 ? [`+${more} more`] : [])].join("; ");
+}
+
+/** Names retained native commands in thread-protection refusals. */
+export function formatCodexNativeThreadHolders(
+  holders: readonly CodexNativeThreadHolder[],
+  now = Date.now(),
+): string {
+  if (holders.length === 0) {
+    return "";
+  }
+  return ` Native command${holders.length === 1 ? "" : "s"} holding it: ${formatCodexNativeThreadHolderList(
+    holders,
+    now,
+  )}. Stop this session to end ${holders.length === 1 ? "it" : "them"}, or wait for ${
+    holders.length === 1 ? "it" : "them"
+  } to exit.`;
+}
+
+function formatHolderAge(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 90) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.round(seconds / 60);
+  return minutes < 90 ? `${minutes}m` : `${Math.round(minutes / 60)}h`;
+}
+
+/**
+ * Session Stop owns commands a finished foreground turn left running. They keep
+ * the bound thread protected while no host run exists, so ordinary Stop would
+ * otherwise report nothing to stop and every follow-up stays refused.
+ */
+export function cancelRetainedCodexNativeThreadCommands(
+  client: CodexAppServerClient,
+  threadId: string,
+  acceptsRequest: (custody: RequestCustody) => boolean,
+  assertCurrent: () => void,
+): Promise<{ killed: number; errors: unknown[] }> {
+  return (
+    clients.get(client)?.cancelRetainedThreadCommands(threadId, acceptsRequest, assertCurrent) ??
+    Promise.resolve({ killed: 0, errors: [] })
+  );
+}
 
 /** A physical client joins native call receipts to its concrete sandbox processes. */
 export function getCodexNativeProcessClient(
@@ -188,6 +282,7 @@ export class CodexNativeProcessClient {
       owner,
       client: this,
       parentTurn,
+      admittedAt: Date.now(),
       accepting: true,
       processes: new Set(),
       assertActive,
@@ -258,6 +353,58 @@ export class CodexNativeProcessClient {
     );
   }
 
+  listThreadHolders(threadId: string): CodexNativeThreadHolder[] {
+    return [...(this.threads.get(threadId)?.values() ?? [])].map((command) => ({
+      itemId: command.itemId,
+      turnId: command.turnId,
+      admittedAt: command.admittedAt,
+      foreground: command.accepting,
+      background: command.background !== undefined,
+      processes: command.processes.size,
+    }));
+  }
+
+  async cancelRetainedThreadCommands(
+    threadId: string,
+    acceptsRequest: (custody: RequestCustody) => boolean,
+    assertCurrent: () => void,
+  ): Promise<{ killed: number; errors: unknown[] }> {
+    // Active turns cancel their own commands; only accepted requesters' leftovers qualify.
+    const select = () =>
+      [...(this.threads.get(threadId)?.values() ?? [])].filter(
+        (command) => !command.accepting && acceptsRequest(command.owner.requestCustody),
+      );
+    let killed = 0;
+    const errors: unknown[] = [];
+    for (const command of select()) {
+      try {
+        assertCurrent();
+        if (command.background) {
+          const processId = command.background.processId;
+          if (!processId) {
+            throw new Error(`Codex native command ${command.itemId} has no termination handle`);
+          }
+          // A negative acknowledgment is ambiguous, not a native completion receipt.
+          const result = await this.client.request(
+            "thread/backgroundTerminals/terminate",
+            { threadId, processId },
+            { timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS, assertCurrent },
+          );
+          if (!result.terminated) {
+            throw new Error(`Codex native command ${command.itemId} termination was not confirmed`);
+          }
+        }
+        assertCurrent();
+        // A completion notification may already have settled this admission.
+        await terminateCommands([command]);
+        killed += 1;
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    return { killed, errors };
+  }
+
   private forgetSettled(command: CommandAdmission): void {
     if (command.accepting || command.background || command.processes.size > 0) {
       return;
@@ -279,6 +426,8 @@ export class CodexNativeProcessClient {
 /** Original-source custody outlives foreground authority, never permitting new admission after release. */
 export class CodexNativeProcessAuthority {
   readonly commands = new Set<CommandAdmission>();
+  /** The admitting request's actor; session Stop authorizes against it after the turn ends. */
+  readonly requestCustody: RequestCustody;
   private holds = 1;
   private cancelled = false;
   private released = false;
@@ -296,6 +445,7 @@ export class CodexNativeProcessAuthority {
     private readonly onCleanupFailure: (error: unknown) => void,
     readonly requiresProcessAdmission = true,
   ) {
+    this.requestCustody = host.captureRequestCustody?.();
     this.source = host.retainSourceAuthority?.();
     this.source?.signal?.addEventListener("abort", this.onAbort, { once: true });
     if (this.source?.signal?.aborted) {

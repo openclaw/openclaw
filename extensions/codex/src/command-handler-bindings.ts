@@ -18,6 +18,10 @@ import type { CodexAppServerLiveThreadOwnership } from "./app-server/client-thre
 import type { CodexAppServerClient } from "./app-server/client.js";
 import { isCodexFastServiceTier, type CodexPluginConfig } from "./app-server/config.js";
 import {
+  formatCodexNativeThreadHolderList,
+  listCodexNativeThreadHolders,
+} from "./app-server/native-process-authority.js";
+import {
   assertCodexThreadAcceptsDirectInput,
   assertCodexThreadResumeResponse,
 } from "./app-server/protocol-validators.js";
@@ -28,6 +32,7 @@ import {
   resolveCodexSessionBinding,
   sessionBindingIdentity,
 } from "./app-server/session-binding.js";
+import { retainSharedCodexAppServerClientByInstanceId } from "./app-server/shared-client.js";
 import {
   isSameCodexAppServerThreadOwner,
   releaseCodexAppServerBindingSubscription,
@@ -50,6 +55,7 @@ import {
   conversationBindingIdentity,
   resolveCodexConversationControlScope,
   resolveCommandAppServerScope,
+  resolveControlTarget,
 } from "./command-handler-scope.js";
 import { codexControlRequest, type CodexControlRequestOptions } from "./command-rpc.js";
 import {
@@ -238,16 +244,37 @@ export async function detachConversation(
   return await detachPublicConversation();
 }
 
+/** Read-only holder enumeration; retaining never starts an app-server client. */
+async function readRetainedNativeCommandSummary(
+  clientId: string | undefined,
+  threadId: string | undefined,
+): Promise<string> {
+  if (!threadId) {
+    return "none";
+  }
+  const lease = await retainSharedCodexAppServerClientByInstanceId(clientId, {
+    waitForExit: false,
+  });
+  if (!lease) {
+    return "none";
+  }
+  try {
+    return (
+      formatCodexNativeThreadHolderList(listCodexNativeThreadHolders(lease.client, threadId)) ||
+      "none"
+    );
+  } finally {
+    await lease.release();
+  }
+}
+
 export async function describeConversationBinding(
   deps: CodexCommandDeps,
   ctx: CodexCommandContext,
 ): Promise<string> {
   const current = await ctx.getCurrentConversationBinding();
   const data = readCodexConversationBindingData(current);
-  if (!current || !data) {
-    return "No Codex conversation binding is attached.";
-  }
-  if (data.kind === "codex-cli-node-session") {
+  if (data?.kind === "codex-cli-node-session") {
     return [
       "Codex conversation binding:",
       "- Mode: Codex CLI node session",
@@ -257,9 +284,12 @@ export async function describeConversationBinding(
       "- Active run: not tracked",
     ].join("\n");
   }
-  const identity = conversationBindingIdentity(data.bindingId);
-  const threadBinding = await deps.bindingStore.readAsync(identity);
-  const active = readCodexConversationActiveTurn(identity);
+  const target = await resolveControlTarget(ctx);
+  const threadBinding = target ? await deps.bindingStore.readAsync(target.identity) : undefined;
+  if (!data && !threadBinding) {
+    return "No Codex conversation binding is attached.";
+  }
+  const active = target ? readCodexConversationActiveTurn(target.identity) : undefined;
   const sessionKey = ctx.sessionKey?.trim();
   const { agentId } = resolveCodexConversationControlScope(ctx);
   const sessionEntry = sessionKey
@@ -279,12 +309,15 @@ export async function describeConversationBinding(
   return [
     "Codex conversation binding:",
     `- Thread: ${formatCodexDisplayText(threadBinding?.threadId ?? "unknown")}`,
-    `- Workspace: ${formatCodexDisplayText(data.workspaceDir)}`,
+    `- Workspace: ${formatCodexDisplayText(data?.workspaceDir ?? threadBinding?.cwd ?? "unknown")}`,
     `- Model: ${formatCodexDisplayText(threadBinding?.model ?? "default")}`,
     `- Fast: ${isCodexFastServiceTier(threadBinding?.serviceTier) ? "on" : "off"}`,
     `- Permissions: ${formatPermissionsMode(permissionMode)}`,
     `- Active run: ${formatCodexDisplayText(active ? active.turnId : "none")}`,
-    `- Binding: ${formatCodexDisplayText(data.bindingId)}`,
+    `- Retained native commands: ${formatCodexDisplayText(
+      await readRetainedNativeCommandSummary(threadBinding?.clientId, threadBinding?.threadId),
+    )}`,
+    `- Binding: ${formatCodexDisplayText(data?.bindingId ?? "managed session")}`,
   ].join("\n");
 }
 

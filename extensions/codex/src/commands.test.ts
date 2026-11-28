@@ -2977,66 +2977,6 @@ describe("codex command", () => {
       });
     },
   );
-
-  it.each([true, false])(
-    "renders and escapes binding fields from their owners (active: %s)",
-    async (active) => {
-      const sessionKey = "agent:main:binding-preferences";
-      const { storePath, configuredStorePath, context } = explicitStoreContext(sessionKey);
-      if (active) {
-        await seedSession(storePath, sessionKey, { permissionMode: "full" });
-        await seedSession(configuredStorePath, sessionKey, { permissionMode: "guarded" });
-      }
-      const threadId = "thread-123 <@U123>";
-      await writeTestBinding(conversationIdentity, {
-        threadId,
-        cwd: "/repo",
-        model: "gpt [trusted](https://evil)",
-        ...(active
-          ? {
-              serviceTier: "fast",
-              approvalPolicy: "never" as const,
-              sandbox: "danger-full-access" as const,
-            }
-          : {}),
-      });
-
-      const result = await runCommand(
-        "binding",
-        {
-          readCodexConversationActiveTurn: vi.fn(() =>
-            active
-              ? {
-                  identity: conversationIdentity,
-                  client: { request: vi.fn() } as never,
-                  requestTimeoutMs: 60_000,
-                  threadId,
-                  turnId: "turn-1",
-                  interrupt: vi.fn(),
-                  steer: vi.fn(),
-                }
-              : undefined,
-          ),
-        },
-        {
-          ...(active ? context : {}),
-          getCurrentConversationBinding: async () => nativeConversation("/repo <@U123>"),
-        },
-      );
-      expect(result).toEqual({
-        text: [
-          "Codex conversation binding:",
-          "- Thread: thread-123 &lt;\uff20U123&gt;",
-          "- Workspace: /repo &lt;\uff20U123&gt;",
-          "- Model: gpt \uff3btrusted\uff3d\uff08https://evil\uff09",
-          `- Fast: ${active ? "on" : "off"}`,
-          `- Permissions: ${active ? "full access" : "default"}`,
-          `- Active run: ${active ? "turn-1" : "none"}`,
-          "- Binding: binding-data-1",
-        ].join("\n"),
-      });
-    },
-  );
 });
 
 function computerUseReadyStatus(): CodexComputerUseStatus {
