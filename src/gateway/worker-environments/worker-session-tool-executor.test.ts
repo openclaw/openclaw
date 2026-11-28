@@ -466,8 +466,10 @@ describe("worker session tool topology", () => {
         }),
       );
       expect(spawnArgs).toHaveBeenCalledWith(
-        expect.objectContaining({ expectsCompletionMessage: false, visible: true, worktree: true }),
+        expect.objectContaining({ visible: true, worktree: true }),
       );
+      // The worker parent owns its children's completions, like a Gateway parent.
+      expect(spawnArgs.mock.calls[0]?.[0]?.expectsCompletionMessage).not.toBe(false);
       expect(placements.get(CHILD.sessionId)?.state).toBe("active");
       expect(sessionEntries.get(spawnState.childSessionKey!)).toMatchObject({
         sessionId: CHILD.sessionId,
