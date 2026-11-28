@@ -246,7 +246,10 @@ sessions that get the standing index):
    that read like instructions or contain markup are skipped.
    - `keyword` (default): BM25 keyword search over each page's title and body,
      with a boost for title matches, keeps the top `maxCandidates` pages that
-     share at least one word (any script) with the message. For each page it
+     share at least one word (any script) with the message. English
+     inflections share a word through light suffix folding (`deploying` and
+     `deployed`, `changes` and `changed`); other scripts fold only a trailing
+     `s`. For each page it
      quotes the best-matching passages (blank-line separated): at most
      `excerpts` passages of `excerptChars` characters, `pageChars` per page. A
      longer passage is clipped to the window around its matching words. Pages

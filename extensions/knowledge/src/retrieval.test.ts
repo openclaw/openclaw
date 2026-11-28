@@ -8,6 +8,7 @@ import { stringify } from "yaml";
 import { contract } from "./contract.js";
 import { SqliteIdentityStore } from "./identity-store.js";
 import { keywordExpression, keywordSearch, verifyKeywordIndex } from "./retrieval.js";
+import { digest } from "./scan-primitives.js";
 import { createKnowledgeService } from "./service.js";
 import { KnowledgeStorage } from "./storage.js";
 import {
@@ -535,7 +536,7 @@ it("ranking preserves pagination and scope without rereading the filtered corpus
     expect(keywordSearch(db, data, { query: "needle" }, "test", "1").total).toBe(3);
     let corpusReads = 0;
     db.setAuthorizer((action, table) => {
-      if (action === constants.SQLITE_READ && table?.startsWith("keyword_fts_v1_")) {
+      if (action === constants.SQLITE_READ && table?.startsWith("keyword_fts_v2_")) {
         corpusReads++;
       }
       return constants.SQLITE_OK;
@@ -638,6 +639,111 @@ it("editing a legacy page removes approval metadata through journaled publicatio
   }
 });
 
+it("a default search with no all-word match retries any-word; explicit all stays strict", async () => {
+  const f = await fixture();
+  await f.put("orchid_care", "Orchid care", "Water weekly.");
+  const relaxed = await f.service.grep({ query: "orchid fertilizer" }, f.owner);
+  expect(relaxed.queryMode).toBe("any");
+  expect(relaxed.hits.map((h) => h.record.id)).toStrictEqual(["orchid_care"]);
+  const compact = await f.agent.grep({ query: "orchid fertilizer" }, f.owner);
+  expect(Check(contract.operations.grep.output, compact)).toBeTruthy();
+  expect(compact.queryMode).toBe("any");
+  const strict = await f.service.grep({ query: "orchid fertilizer", mode: "all" }, f.owner);
+  expect([strict.queryMode, strict.total]).toStrictEqual(["all", 0]);
+  const both = await f.service.grep({ query: "orchid water" }, f.owner);
+  expect([both.queryMode, both.total]).toStrictEqual(["all", 1]);
+  expect((await f.agent.grep({ query: "orchid water" }, f.owner)).queryMode).toBeUndefined();
+});
+
+it("a default keyword search cannot match on English stopwords alone", async () => {
+  const f = await fixture();
+  await f.put("dispatch_log", "Dispatch log", "Tamarind Finch deployed the orchid crate.");
+  await f.put("garden_ledger", "Garden ledger", "The tulips need gravel.");
+  expect(await f.total({ query: "where is THE zephyrium" })).toBe(0);
+  expect(await f.total({ query: "the" })).toBe(0);
+  expect(ids(await f.service.grep({ query: "where is the orchid" }, f.owner))).toEqual([
+    "dispatch_log",
+  ]);
+  expect(await f.total({ query: "the", mode: "any" })).toBe(2);
+});
+
+it("English inflections match, and a store indexed with the old tokenizer rebuilds", async () => {
+  const f = await fixture();
+  await f.put(
+    "deploy_note",
+    "Deployment runbook",
+    "The service was deployed after migrations ran.",
+  );
+  for (const query of ["deploying", "deploys runbooks", "migration"]) {
+    expect([query, await f.total({ query, mode: "all" })]).toStrictEqual([query, 1]);
+  }
+  const storage = new KnowledgeStorage(f.config, f.store);
+  const data = await storage.run(plainAccess(), (vault) => vault.scan());
+  const suffix = digest("test");
+  f.store.withDatabase((db) => {
+    // Unstemmed tables under the earlier names are dropped, not mixed in.
+    db.exec(
+      `CREATE VIRTUAL TABLE keyword_fts_v1_${suffix} USING fts5(id UNINDEXED, title, aliases, body, tokenize='unicode61 remove_diacritics 2')`,
+    );
+    db.exec(`CREATE TABLE keyword_rows_v1_${suffix} (id TEXT PRIMARY KEY) STRICT`);
+    expect(keywordSearch(db, data, { query: "deploying" }, "test", "1").total).toBe(1);
+    expect(
+      db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'keyword_%_v1_%'").all(),
+    ).toStrictEqual([]);
+  });
+});
+
+it("re-upgrade reconciles both retained indexes after a v1 search advances their shared state", async () => {
+  const f = await fixture();
+  const storage = new KnowledgeStorage(f.config, f.store);
+  const scan = () => storage.run(plainAccess(), (vault) => vault.scan());
+  const binding = "rollback",
+    generation = "1",
+    suffix = digest(binding);
+  await f.put("removed_note", "Retiring", "lilac");
+  await f.put("kept_note", "Runbook", "Servers deployed to Athens.");
+  const before = await scan();
+  const original = f.store.withDatabase((db) =>
+    keywordSearch(db, before, { query: "deploying" }, binding, generation),
+  );
+  expect(ids(original)).toEqual(["kept_note"]);
+
+  await f.put("removed_note", "Retiring", "lilac", { lifecycle: "withdrawn" });
+  await f.put("added_note", "Current", "daffodil");
+  await f.put("earlier_note", "Superseded", "saffron", superseded("added_note"));
+  const after = await scan();
+  // Persist the checkpoint a v1 writer leaves on rollback. Its fingerprint covers
+  // the new records but not the tokenizer, and its writes never touch v2 rows.
+  const stamp = (r: (typeof after.records)[number]) => [r.id, r.path, r.hash, r.revision];
+  const v1Snapshot = digest(
+    JSON.stringify([
+      generation,
+      after.ontology?.fingerprint,
+      after.records.filter((r) => r.lifecycle === "active").map(stamp),
+      after.records.filter((r) => r.lifecycle === "superseded").map(stamp),
+    ]),
+  );
+  f.store.withDatabase((db) => {
+    db.exec(
+      `CREATE VIRTUAL TABLE keyword_fts_v1_${suffix} USING fts5(id UNINDEXED, title, aliases, body, tokenize='unicode61 remove_diacritics 2')`,
+    );
+    db.prepare("UPDATE keyword_state_v1 SET snapshot=? WHERE binding=?").run(v1Snapshot, binding);
+  });
+  f.store.withDatabase((db) => {
+    const search = (query: string) => keywordSearch(db, after, { query }, binding, generation);
+    expect(ids(search("daffodil"))).toEqual(["added_note"]);
+    expect(search("lilac")).toMatchObject({ total: 0, index: { state: "ready" } });
+    expect(search("saffron").hits[0]).toMatchObject({
+      citation: { id: "added_note" },
+      via: { id: "earlier_note" },
+    });
+    expect(search("deploying").hits[0]?.citation).toEqual(original.hits[0]!.citation);
+    expect(
+      db.prepare("SELECT 1 FROM sqlite_schema WHERE name=?").get(`keyword_fts_v1_${suffix}`),
+    ).toBeUndefined();
+  });
+});
+
 it("an index built before row tracking is repopulated, never left empty and ready", async () => {
   const f = await fixture();
   await f.put("upgrade_note_1", "Upgrade sentinel", "lanternword body");
@@ -645,7 +751,7 @@ it("an index built before row tracking is repopulated, never left empty and read
   // Simulate the previous version: FTS rows and a matching state row, no tracking table.
   f.store.withDatabase((db) => {
     for (const { name } of db
-      .prepare("SELECT name FROM sqlite_master WHERE name LIKE 'keyword_rows_v1_%'")
+      .prepare("SELECT name FROM sqlite_master WHERE name LIKE 'keyword_rows_v2_%'")
       .all()) {
       db.exec(`DROP TABLE ${String(name)}`);
     }
@@ -696,7 +802,7 @@ it("an active search follows superseded wording to the current replacement after
   // Filters apply to the current record; explicit history returns the earlier
   // records themselves, including the eligible dead-end chains above.
   const kept = await f.service.grep({ query: "harbor plot", tag: "kept" }, f.owner);
-  expect(ids(kept)).toStrictEqual(["pilot_v3"]);
+  expect([kept.queryMode, ids(kept)]).toStrictEqual(["all", ["pilot_v3"]]);
   const history = await f.service.grep({ query: "harbor plot", lifecycle: "superseded" }, f.owner);
   expect(ids(history).toSorted()).toStrictEqual(["gone_old", "loop_one", "pilot_v1", "venue_v1"]);
   expect(history.hits.some((hit) => hit.via)).toBe(false);
@@ -738,7 +844,7 @@ it("superseded-record edits update the persistent history index and the search s
   f.store.withDatabase((db) => {
     const fts = db
       .prepare(
-        "SELECT name FROM sqlite_master WHERE name LIKE 'keyword_history_fts_v1_%' AND sql LIKE 'CREATE VIRTUAL%'",
+        "SELECT name FROM sqlite_master WHERE name LIKE 'keyword_history_fts_v2_%' AND sql LIKE 'CREATE VIRTUAL%'",
       )
       .get()!;
     db.exec(`DROP TABLE ${String(fts.name)}`);

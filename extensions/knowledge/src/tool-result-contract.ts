@@ -172,6 +172,7 @@ export const LeanHit = Type.Object(
 export type LeanHit = Static<typeof LeanHit>;
 export const LeanSearchOutput = Type.Object(
   {
+    queryMode: Type.Optional(Type.Literal("any")),
     hits: Type.Array(LeanHit, { maxItems: 50 }),
     resultCount: Type.Integer(),
     total: Type.Union([Type.Integer(), Type.Null()]),

@@ -15,6 +15,7 @@ import { effectiveRecord, mergeRedirects, referenceIds } from "./merge.js";
 import type { LoadedRecord } from "./model.js";
 import { expandTypes } from "./ontology.js";
 import { queryFreshness } from "./query-freshness.js";
+import { KEYWORD_STOPWORDS } from "./recall-keyword.js";
 import {
   SearchInput,
   LookupInput,
@@ -238,18 +239,23 @@ export function exactLookup(
 }
 
 /** Deliberately literal modes, never raw FTS syntax/SQL/regex. Punctuation is token separation. */
-export function keywordExpression(input: SearchInput): string {
+export function keywordExpression(input: SearchInput, mode = input.mode): string {
   if (!Check(SearchInput, input)) {
     throw new Error("Invalid keyword search input.");
   }
-  const tokens = input.query.match(/[\p{L}\p{N}\p{M}]+/gu) ?? [];
+  let tokens: string[] = input.query.match(/[\p{L}\p{N}\p{M}]+/gu) ?? [];
   if (!tokens.length || tokens.length > 64) {
     throw new Error("Keyword search requires 1–64 word tokens. Use exact lookup for a name or ID.");
   }
-  const build = (words: readonly string[]) =>
-    input.mode === "phrase"
-      ? `"${words.join(" ")}"`
-      : words.map((t) => `"${t}"`).join(input.mode === "any" ? " OR " : " AND ");
+  if (input.mode === undefined) {
+    const content = tokens.filter((word) => !KEYWORD_STOPWORDS.has(word.toLowerCase()));
+    if (!content.length) {
+      return '""'; // An empty FTS5 phrase matches no records.
+    }
+    if (mode === "any") {
+      tokens = content;
+    }
+  }
   // FTS5's unicode61 tokenizer does no canonical normalization, so composed (NFC)
   // and decomposed (NFD) spellings of a word index as distinct terms. The index and
   // snippet offsets keep stored text verbatim, so in all/any modes each word matches
@@ -263,11 +269,11 @@ export function keywordExpression(input: SearchInput): string {
   // need the cross product of per-word spellings; a uniformly spelled phrase query
   // can miss a record that mixes NFC and NFD across its words — a rare accepted gap.
   const spellingsOf = (t: string) => [...new Set([t, t.normalize("NFC"), t.normalize("NFD")])];
-  if (input.mode === "phrase") {
+  if (mode === "phrase") {
     const alternatives = [
       ...new Set(
         [tokens, tokens.map((t) => t.normalize("NFC")), tokens.map((t) => t.normalize("NFD"))].map(
-          build,
+          (words) => `"${words.join(" ")}"`,
         ),
       ),
     ];
@@ -278,10 +284,23 @@ export function keywordExpression(input: SearchInput): string {
       const forms = spellingsOf(t);
       return forms.length === 1 ? `"${forms[0]!}"` : `(${forms.map((f) => `"${f}"`).join(" OR ")})`;
     })
-    .join(input.mode === "any" ? " OR " : " AND ");
+    .join(mode === "any" ? " OR " : " AND ");
 }
 
-const FTS_COLUMNS = "id UNINDEXED, title, aliases, body, tokenize='unicode61 remove_diacritics 2'";
+// Porter folds English inflections (deployed, deploying, deploys -> deploy) on both
+// the index and the query. It runs on every word, so it can also conflate unrelated
+// words in other languages that happen to end in English suffixes: accepted for
+// better recall. Changing the tokenizer needs new table names (see LEGACY_TABLES).
+const FTS_COLUMNS =
+  "id UNINDEXED, title, aliases, body, tokenize='porter unicode61 remove_diacritics 2'";
+/** Prefixes of earlier projections built with another tokenizer, dropped when their
+ * successors are built so one store never mixes tokenizations. */
+const LEGACY_TABLES = [
+  "keyword_fts_v1_",
+  "keyword_rows_v1_",
+  "keyword_history_fts_v1_",
+  "keyword_history_rows_v1_",
+];
 
 /** The scope's keyword corpora: eligible current records, and the eligible
  * superseded records whose `superseded_by` chain reaches one of them, each mapped to
@@ -352,15 +371,18 @@ function reconcileKeywordIndex(
 ) {
   const suffix = digest(binding);
   const tables = [
-    { table: `keyword_fts_v1_${suffix}`, rows: `keyword_rows_v1_${suffix}`, records },
+    { table: `keyword_fts_v2_${suffix}`, rows: `keyword_rows_v2_${suffix}`, records },
     {
-      table: `keyword_history_fts_v1_${suffix}`,
-      rows: `keyword_history_rows_v1_${suffix}`,
+      table: `keyword_history_fts_v2_${suffix}`,
+      rows: `keyword_history_rows_v2_${suffix}`,
       records: history,
     },
   ] as const;
+  // Older builds write the same state row but refresh only their own FTS tables.
+  // A checkpoint from another tokenizer cannot certify either of these corpora.
   const snapshot = digest(
     JSON.stringify([
+      FTS_COLUMNS,
       generation,
       data.ontology?.fingerprint,
       records.map((r) => [r.id, r.path, r.hash, r.revision]),
@@ -378,6 +400,9 @@ function reconcileKeywordIndex(
     indexedAt = runSqliteImmediateTransactionSync(
       db,
       () => {
+        for (const prefix of LEGACY_TABLES) {
+          db.exec(`DROP TABLE IF EXISTS ${prefix}${suffix}`);
+        }
         for (const entry of tables) {
           const { table, rows, records: wanted } = entry;
           db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS ${table} USING fts5(${FTS_COLUMNS})`);
@@ -470,7 +495,9 @@ function temporaryCorpus(db: DatabaseSync, name: string, records: LoadedRecord[]
   }
 }
 
-/** Called only inside the storage authority/identity fence, using the latest validated snapshot. */
+/** Called only inside the storage authority/identity fence, using the latest validated snapshot.
+ * A search without an explicit mode that no record matches on every word retries once
+ * with any non-stopword and reports `queryMode: "any"`; explicit `mode: "all"` stays strict. */
 export function keywordSearch(
   db: DatabaseSync,
   data: Snapshot,
@@ -479,7 +506,7 @@ export function keywordSearch(
   generation: string,
   withdrawn = new Set<string>(),
 ): SearchOutput {
-  const expression = keywordExpression(input),
+  const strictExpression = keywordExpression(input),
     offset = input.offset ?? 0,
     limit = input.limit ?? 20;
   const base = {
@@ -533,10 +560,29 @@ export function keywordSearch(
             [r.title, r.body, ...(r.metadata.aliases ?? [])].some((v) => v.includes(marker)),
           )
         );
-        const total = Number(
-          db.prepare(`SELECT count(*) AS n FROM ${corpus} WHERE ${corpus} MATCH ?`).get(expression)!
-            .n,
+        const fieldExpression = keywordExpression(
+          input,
+          input.mode === "phrase" ? "phrase" : "any",
         );
+        const count = db.prepare(`SELECT count(*) AS n FROM ${corpus} WHERE ${corpus} MATCH ?`);
+        let expression = strictExpression;
+        let total = Number(count.get(expression)!.n);
+        // Strict matches in either corpus take precedence, even on an empty later page.
+        if (
+          input.mode === undefined &&
+          total === 0 &&
+          fieldExpression !== expression &&
+          !(
+            ranked.length &&
+            db
+              .prepare(`SELECT 1 FROM ${historyCorpus} WHERE ${historyCorpus} MATCH ? LIMIT 1`)
+              .get(expression)
+          )
+        ) {
+          expression = fieldExpression;
+          base.queryMode = "any";
+          total = Number(count.get(expression)!.n);
+        }
         const rows = db
           .prepare(`SELECT id,bm25(${corpus},0,8,6,1) AS score,
       CASE WHEN length(CAST(body AS BLOB))<=${SEARCH_HIGHLIGHT_MAX_BYTES} THEN highlight(${corpus},1,?,'') END AS title,
@@ -548,10 +594,6 @@ export function keywordSearch(
         // FTS5 highlight/snippet enumeration becomes quadratic with many repeated
         // instances. Full-record matching and BM25 stay authoritative; large bodies
         // use an explicitly labelled opening excerpt, not an approximate token match.
-        const fieldExpression = keywordExpression({
-          ...input,
-          mode: input.mode === "phrase" ? "phrase" : "any",
-        });
         const columnMatch = db.prepare(
           `SELECT 1 FROM ${corpus} WHERE id=? AND ${corpus} MATCH ? LIMIT 1`,
         );
