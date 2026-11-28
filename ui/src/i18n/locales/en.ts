@@ -1585,10 +1585,11 @@ const startupEnglish = {
     sessionsPausedNote: "{count} sessions are paused",
     handoffResumed: "Resumed · {duration} later",
     continuationSource: {
-      exec: "Background command finished",
-      restart: "Gateway restarted",
-      subagent: "Agent finished",
+      exec: "A background command finished",
+      restart: "The Gateway restarted",
+      subagent: "Picked up after an agent finished",
     },
+    continuationDelay: "{duration} later",
     handoffSessionsOne: "1 session",
     handoffSessions: "{count} sessions",
     handoffSessionStatus: {
