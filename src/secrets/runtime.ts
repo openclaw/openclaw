@@ -31,6 +31,7 @@ import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 import { secretRefKey } from "./ref-contract.js";
+import type { SecretRefResolveCache } from "./resolve-types.js";
 import { listAuthProfileSecretOwnerIds } from "./runtime-auth-profile-owner.js";
 import { loadAdmittedAuthStores } from "./runtime-auth-store-admission.js";
 import type { DegradedSecretOwner } from "./runtime-degraded-state.js";
@@ -134,6 +135,8 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   allowUnavailableSecretOwners?: boolean;
   /** Ref keys whose owners must become cold rather than retain last-known-good values. */
   forceColdRefKeys?: ReadonlySet<string>;
+  /** Reuse resolved refs across retries belonging to one runtime refresh. */
+  resolveCache?: SecretRefResolveCache;
   /** Test override for discovered loadable plugins and their origins. */
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): Promise<PreparedSecretsRuntimeSnapshot> {
@@ -252,6 +255,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     env: runtimeEnv,
     ...(manifestRegistry ? { manifestRegistry } : {}),
   });
+  context.cache = params.resolveCache ?? context.cache;
 
   if (includeConfigRefs) {
     await collectConfigAssignments({
@@ -397,7 +401,16 @@ export function prepareSecretsRuntimeSnapshotRestore(
 type PreparedSecretsRuntimeRefresh = {
   snapshot: PreparedSecretsRuntimeSnapshot;
   expectedRevision: number;
+  resolveCache: SecretRefResolveCache;
 };
+
+const MAX_SECRET_RUNTIME_REFRESH_ATTEMPTS = 4;
+
+function createSecretRuntimeRefreshConflictError(refresh: "config" | "provider auth"): Error {
+  return new Error(
+    `Secrets ${refresh} refresh could not activate after ${MAX_SECRET_RUNTIME_REFRESH_ATTEMPTS} attempts because runtime state kept changing during preparation.`,
+  );
+}
 
 function coercePreflightRefresh(
   value: unknown,
@@ -410,7 +423,11 @@ function coercePreflightRefresh(
   return candidate.snapshot &&
     typeof candidate.expectedRevision === "number" &&
     isDeepStrictEqual(candidate.snapshot.sourceConfig, sourceConfig)
-    ? (candidate as PreparedSecretsRuntimeRefresh)
+    ? {
+        snapshot: candidate.snapshot,
+        expectedRevision: candidate.expectedRevision,
+        resolveCache: candidate.resolveCache ?? {},
+      }
     : null;
 }
 
@@ -418,6 +435,7 @@ async function prepareActiveSecretsRuntimeRefresh(
   sourceConfig: OpenClawConfig,
   includeAuthStoreRefs?: boolean,
   snapshotConfig: OpenClawConfig = sourceConfig,
+  resolveCache: SecretRefResolveCache = {},
 ): Promise<PreparedSecretsRuntimeRefresh | null> {
   const expectedRevision = getActiveSecretsRuntimeSnapshotRevisionState();
   const displaySnapshot =
@@ -425,7 +443,7 @@ async function prepareActiveSecretsRuntimeRefresh(
       ? prepareSecretsRuntimeDisplaySnapshot({ config: sourceConfig, includeAuthStoreRefs })
       : null;
   if (displaySnapshot) {
-    return { snapshot: displaySnapshot, expectedRevision };
+    return { snapshot: displaySnapshot, expectedRevision, resolveCache };
   }
   const activeRefreshContext = getActiveSecretsRuntimeRefreshContext();
   const activeSnapshot = getActiveSecretsRuntimeSnapshotState();
@@ -448,9 +466,11 @@ async function prepareActiveSecretsRuntimeRefresh(
       ...(activeRefreshContext.loadAuthStore
         ? { loadAuthStore: activeRefreshContext.loadAuthStore }
         : {}),
+      resolveCache,
       allowUnavailableSecretOwners: true,
     }),
     expectedRevision,
+    resolveCache,
   };
 }
 
@@ -466,11 +486,23 @@ export async function refreshActiveSecretsRuntimeSnapshotForConfig(
   params: RuntimeConfigSnapshotRefreshParams & { runtimeSourceConfig?: OpenClawConfig },
 ): Promise<boolean> {
   let candidate = coercePreflightRefresh(params.preflightResult, params.sourceConfig);
+  let cachedSecretsRevision =
+    candidate?.expectedRevision ?? getActiveSecretsRuntimeSnapshotRevisionState();
+  let resolveCache = candidate?.resolveCache ?? {};
+  let failedActivations = 0;
   for (;;) {
     params.assertCurrent?.();
+    const activeSecretsRevision = getActiveSecretsRuntimeSnapshotRevisionState();
+    if (activeSecretsRevision !== cachedSecretsRevision) {
+      cachedSecretsRevision = activeSecretsRevision;
+      resolveCache = {};
+      candidate = null;
+    }
     candidate ??= await prepareActiveSecretsRuntimeRefresh(
       params.sourceConfig,
       params.includeAuthStoreRefs,
+      params.sourceConfig,
+      resolveCache,
     );
     if (!candidate) {
       return false;
@@ -494,6 +526,10 @@ export async function refreshActiveSecretsRuntimeSnapshotForConfig(
       return true;
     }
     candidate = null;
+    failedActivations += 1;
+    if (failedActivations >= MAX_SECRET_RUNTIME_REFRESH_ATTEMPTS) {
+      throw createSecretRuntimeRefreshConflictError("config");
+    }
   }
 }
 
@@ -608,16 +644,31 @@ function createSecretsRuntimeSnapshotActivation(snapshot: PreparedSecretsRuntime
 
 /** Refresh provider credentials without republishing transport-owned config. */
 export async function refreshActiveProviderAuthRuntimeSnapshot(): Promise<boolean> {
+  let cachedSourceConfig: OpenClawConfig | null = null;
+  let cachedSecretsRevision: number | null = null;
+  let resolveCache: SecretRefResolveCache = {};
+  let failedActivations = 0;
   for (;;) {
     const activeSnapshot = getActiveSecretsRuntimeSnapshotState();
     if (!activeSnapshot) {
       return false;
+    }
+    const activeSecretsRevision = getActiveSecretsRuntimeSnapshotRevisionState();
+    if (
+      cachedSecretsRevision !== activeSecretsRevision ||
+      !cachedSourceConfig ||
+      !isDeepStrictEqual(cachedSourceConfig, activeSnapshot.sourceConfig)
+    ) {
+      cachedSourceConfig = activeSnapshot.sourceConfig;
+      cachedSecretsRevision = activeSecretsRevision;
+      resolveCache = {};
     }
     const providerAuthConfig = selectProviderAuthConfig(activeSnapshot.sourceConfig);
     const candidate = await prepareActiveSecretsRuntimeRefresh(
       activeSnapshot.sourceConfig,
       undefined,
       providerAuthConfig,
+      resolveCache,
     );
     if (!candidate) {
       return false;
@@ -671,6 +722,10 @@ export async function refreshActiveProviderAuthRuntimeSnapshot(): Promise<boolea
     });
     if (activated) {
       return true;
+    }
+    failedActivations += 1;
+    if (failedActivations >= MAX_SECRET_RUNTIME_REFRESH_ATTEMPTS) {
+      throw createSecretRuntimeRefreshConflictError("provider auth");
     }
   }
 }
