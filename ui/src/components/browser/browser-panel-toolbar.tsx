@@ -394,6 +394,7 @@ export function BrowserToolbar(
             <button
               type="button"
               class="bp-toolbar-go"
+              title={url}
               // Keep focus in the field so the option stays open while it is clicked.
               onMouseDown={(event) => event.preventDefault()}
               onClick={(event) => {

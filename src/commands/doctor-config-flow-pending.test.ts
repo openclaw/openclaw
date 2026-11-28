@@ -1,11 +1,22 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
+import { migrateLegacyAcpSessionMetadata } from "../infra/state-migrations.acp-session-metadata.js";
+import { migrateDaemonRuntimePins } from "../infra/state-migrations.daemon-runtime-pins.js";
 import { prepareDoctorAgentDatabaseDiscovery } from "../infra/state-migrations.doctor-discovery.js";
-import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
+import { detectLegacyStateMigrations } from "../infra/state-migrations.doctor.js";
+import { migrateOrphanedSessionKeys } from "../infra/state-migrations.session-store.js";
+import { migrateSharedAuthStore } from "../infra/state-migrations.shared-auth-store.js";
+import { migrateHistoricalTranscriptDirectives } from "../infra/state-migrations.transcript-directives.js";
+import { interruptedRunFixture } from "../infra/update-run-fixture.test-support.js";
+import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -19,6 +30,19 @@ import type {
   DoctorMaintenancePending,
   DoctorMaintenancePendingCheck,
 } from "./doctor-maintenance-pending.js";
+import { retireSkillWorkshopProposals } from "./doctor-skill-workshop-retire-proposals.js";
+
+// The migration graph steps that run on every Doctor pass, in graph order.
+const LEGACY_STATE_STEPS = [
+  "config-machine-state",
+  "transcript-directives",
+  "orphan-session-keys",
+  "shared-auth-store",
+  "delivery-queues",
+  "workspace-aliases",
+  "skill-workshop",
+  "acp-session-metadata",
+] as const;
 
 const handles: DatabaseSync[] = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -104,7 +128,7 @@ describe("doctor config-flow pending", () => {
         "cron",
         "legacy-state-detection",
         "agent-databases",
-        "legacy-state-steps",
+        ...LEGACY_STATE_STEPS.map((step) => `legacy-state-steps.${step}`),
         "a2ui-widgets",
         "relative-session-stores",
         "update-history",
@@ -113,10 +137,9 @@ describe("doctor config-flow pending", () => {
       "config-flow",
     ]);
     // An input without a read-only predicate is work, so the step cannot answer none.
-    for (const step of ["legacy-state-steps", "update-history", "config-repairs"]) {
-      expect([step, traced.get(`config-flow.${step}`)]).toEqual([step, "work"]);
-    }
+    expect(traced.get("config-flow.config-repairs")).toBe("work");
     expect(traced.get("config-flow.agent-databases")).toBe("none");
+    expect(traced.get("config-flow.update-history")).toBe("none");
     expect(traced.get("config-flow")).toBe("work");
     expect(storeFiles.changedStoreFiles(before, storeFiles.snapshotStoreFiles(stateDir))).toEqual(
       [],
@@ -245,7 +268,9 @@ describe("doctor config-flow pending", () => {
       "cron",
       "legacy-state-detection",
       "agent-databases",
+      ...LEGACY_STATE_STEPS.map((step) => `legacy-state-steps.${step}`),
       "relative-session-stores",
+      "update-history",
     ]) {
       expect([id, await decide(id, params)]).toEqual([id, "undecidable"]);
     }
@@ -253,6 +278,215 @@ describe("doctor config-flow pending", () => {
     expect(storeFiles.changedStoreFiles(before, storeFiles.snapshotStoreFiles(stateDir))).toEqual(
       [],
     );
+  });
+
+  describe("legacy state steps", () => {
+    /** Holds the state database and every discovered agent database, as a serving Gateway does. */
+    async function heldParams(env: NodeJS.ProcessEnv): Promise<DoctorConfigFlowPendingParams> {
+      await releaseStores(env);
+      holdOpen(path.join(env.OPENCLAW_STATE_DIR!, "state", "openclaw.sqlite"));
+      const agentDatabaseMigrationDiscovery = await prepareDoctorAgentDatabaseDiscovery({}, env);
+      for (const target of agentDatabaseMigrationDiscovery.discovery.targets) {
+        holdOpen(target.path);
+      }
+      return { env, integrityCheck: "quick", agentDatabaseMigrationDiscovery };
+    }
+
+    /** Closes every connection, as a stopped Gateway leaves the stores. */
+    async function releaseStores(env: NodeJS.ProcessEnv) {
+      for (const handle of handles.splice(0)) {
+        handle.close();
+      }
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
+      storeFiles.removeEmptySqliteSidecars(env.OPENCLAW_STATE_DIR!);
+    }
+
+    /** Decides one step and proves the check changed no store file. */
+    async function decideStep(step: (typeof LEGACY_STATE_STEPS)[number], env: NodeJS.ProcessEnv) {
+      const params = await heldParams(env);
+      const before = storeFiles.snapshotStoreFiles(env.OPENCLAW_STATE_DIR!, {
+        ignoreReadSidecars: true,
+      });
+      const answer = await decide(`legacy-state-steps.${step}`, params);
+      expect(
+        storeFiles.changedStoreFiles(
+          before,
+          storeFiles.snapshotStoreFiles(env.OPENCLAW_STATE_DIR!, { ignoreReadSidecars: true }),
+        ),
+      ).toEqual([]);
+      return answer;
+    }
+
+    it("decides runtime pins and machine-owned config fields from their own receipts", async () => {
+      const { stateDir, env } = makeInstall();
+      await createStateDatabase(env);
+      // No completed runtime pin receipt yet: the handoff still runs.
+      expect(await decideStep("config-machine-state", env)).toBe("work");
+      await closeOpenClawStateDatabaseAsync();
+      expect(await migrateDaemonRuntimePins(env)).toEqual({ changes: [], warnings: [] });
+      expect(await decideStep("config-machine-state", env)).toBe("none");
+      fs.writeFileSync(
+        path.join(stateDir, "openclaw.json"),
+        JSON.stringify({ gateway: { mode: "local" }, cron: { store: "~/cron.json" } }),
+      );
+      expect(await decideStep("config-machine-state", env)).toBe("work");
+    });
+
+    it("decides transcript directives per agent database without inspecting leases", async () => {
+      const { env } = makeInstall();
+      await createStateDatabase(env);
+      openOpenClawAgentDatabase({ agentId: "main", env });
+      // A database whose migration cursor was never written still needs the pass.
+      expect(await decideStep("transcript-directives", env)).toBe("work");
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
+      expect((await migrateHistoricalTranscriptDirectives({ env })).warnings).toEqual([]);
+      expect(await decideStep("transcript-directives", env)).toBe("none");
+    });
+
+    it("decides orphaned session keys from the migration's own pass", async () => {
+      const { stateDir, env } = makeInstall({ agents: { entries: { ops: {} } } });
+      await createStateDatabase(env);
+      expect(await decideStep("orphan-session-keys", env)).toBe("none");
+      const storePath = path.join(stateDir, "agents", "ops", "sessions", "sessions.json");
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      fs.writeFileSync(storePath, JSON.stringify({ main: { sessionId: "s", updatedAt: 1 } }));
+      expect(await decideStep("orphan-session-keys", env)).toBe("work");
+      const migrated = await migrateOrphanedSessionKeys({
+        cfg: { agents: { entries: { ops: {} } } },
+        env,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      });
+      expect(migrated.changes).toEqual([`Canonicalized 1 orphaned session key(s) in ${storePath}`]);
+      expect(await decideStep("orphan-session-keys", env)).toBe("none");
+    });
+
+    it("decides the shared auth store from the detection the writer acts on", async () => {
+      const { stateDir, env } = makeInstall();
+      await createStateDatabase(env);
+      // Without an ownership record the main agent's store still owns shared credentials.
+      expect(await decideStep("shared-auth-store", env)).toBe("work");
+      await closeOpenClawStateDatabaseAsync();
+      const detected = await detectLegacyStateMigrations({
+        cfg: { gateway: { mode: "local" } },
+        env,
+        doctorOnlyStateMigrations: true,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      });
+      await migrateSharedAuthStore({ detected: detected.sharedAuthStore, stateDir, env });
+      await closeOpenClawStateDatabaseAsync();
+      expect(await decideStep("shared-auth-store", env)).toBe("none");
+    });
+
+    it("decides delivery queues from retired files and pending legacy entries", async () => {
+      const { stateDir, env } = makeInstall();
+      await createStateDatabase(env);
+      expect(await decideStep("delivery-queues", env)).toBe("none");
+      fs.mkdirSync(path.join(stateDir, "delivery-queue"), { recursive: true });
+      fs.writeFileSync(path.join(stateDir, "delivery-queue", "entry.json"), "{}");
+      expect(await decideStep("delivery-queues", env)).toBe("work");
+    });
+
+    it("decides workspace aliases only for the process's own state root", async () => {
+      const { home, stateDir, env } = makeInstall();
+      await createStateDatabase(env);
+      // The alias inspection resolves workspaces from the process environment.
+      expect(await decideStep("workspace-aliases", env)).toBe("undecidable");
+      vi.stubEnv("HOME", home);
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      try {
+        expect(await decideStep("workspace-aliases", env)).toBe("none");
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it("retires nothing beside a held healthy store without opening it for writing", async () => {
+      const { stateDir, env } = makeInstall({ agents: { entries: { main: {} } } });
+      await createStateDatabase(env);
+      await heldParams(env);
+      const before = storeFiles.snapshotStoreFiles(stateDir, { ignoreReadSidecars: true });
+      expect(
+        await retireSkillWorkshopProposals({ config: { agents: { entries: { main: {} } } }, env }),
+      ).toEqual({ changes: [], warnings: [] });
+      // A writable open re-admits the store and removes its clean-close seal.
+      expect(
+        storeFiles.changedStoreFiles(
+          before,
+          storeFiles.snapshotStoreFiles(stateDir, { ignoreReadSidecars: true }),
+        ),
+      ).toEqual([]);
+    });
+
+    it("decides Skill Workshop retirement from the retired tables, files and exports", async () => {
+      const { stateDir, env } = makeInstall({ agents: { entries: { main: {} } } });
+      await createStateDatabase(env);
+      const config = { agents: { entries: { main: {} } } };
+      expect(await decideStep("skill-workshop", env)).toBe("none");
+      // An older release's retired table.
+      openOpenClawStateDatabase({ env }).db.exec(
+        "CREATE TABLE skill_workshop_collection_reviews (review_id TEXT NOT NULL PRIMARY KEY) STRICT",
+      );
+      expect(await decideStep("skill-workshop", env)).toBe("work");
+      await closeOpenClawStateDatabaseAsync();
+      expect((await retireSkillWorkshopProposals({ config, env })).changes).toEqual([
+        "Retired the Skill Workshop proposal tables.",
+      ]);
+      expect(await decideStep("skill-workshop", env)).toBe("none");
+      fs.mkdirSync(path.join(stateDir, "skill-workshop", "proposals"), { recursive: true });
+      expect(await decideStep("skill-workshop", env)).toBe("work");
+    });
+
+    it("decides ACP session metadata from the migration's own pass", async () => {
+      const cfg = { agents: { entries: { ops: {} } }, plugins: { enabled: false } };
+      const { stateDir, env } = makeInstall(cfg);
+      await createStateDatabase(env);
+      expect(await decideStep("acp-session-metadata", env)).toBe("none");
+      const storePath = path.join(stateDir, "agents", "ops", "sessions", "sessions.json");
+      const sessionKey = "agent:ops:acp:binding:discord:default:af00112233445566";
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "session",
+            updatedAt: 100,
+            acp: {
+              backend: "acpx",
+              agent: "fixture",
+              mode: "persistent",
+              state: "idle",
+              lastActivityAt: 100,
+              runtimeSessionName: "legacy-runtime",
+            },
+          },
+        }),
+      );
+      expect(await decideStep("acp-session-metadata", env)).toBe("work");
+      await closeOpenClawStateDatabaseAsync();
+      const migrated = await migrateLegacyAcpSessionMetadata({
+        cfg,
+        env,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      });
+      expect(migrated).toMatchObject({ warnings: [] });
+      expect(migrated.changes).toHaveLength(1);
+      expect(await decideStep("acp-session-metadata", env)).toBe("none");
+    });
+  });
+
+  it("answers work for an interrupted update the reconciliation would settle", async () => {
+    const { env } = makeInstall();
+    holdOpen(await createStateDatabase(env));
+    expect(await decide("update-history", { env, integrityCheck: "quick" })).toBe("none");
+    const run = interruptedRunFixture(
+      { env },
+      { version: "2026.9.4", buildId: "interrupted-candidate" },
+    );
+    expect(await decide("update-history", { env, integrityCheck: "quick" })).toBe("work");
+    run.finish({ status: "succeeded" });
+    expect(await decide("update-history", { env, integrityCheck: "quick" })).toBe("none");
   });
 
   it("leaves the agent database plan undecidable without the preflight's discovery", async () => {

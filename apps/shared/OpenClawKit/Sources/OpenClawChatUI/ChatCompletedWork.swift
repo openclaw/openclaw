@@ -34,7 +34,8 @@ extension ChatTranscriptRow {
         searchActive: Bool = false,
         liveToolRunIDs: Set<String> = [],
         narratedRunID: String? = nil,
-        runDurations: [String: Double]? = nil) -> [Self]
+        runDurations: [String: Double]? = nil,
+        onNarratedStretch: ((String, [OpenClawChatMessage]) -> Void)? = nil) -> [Self]
     {
         guard !searchActive else { return rows }
         let runDurations = runDurations ?? Self.runDurations(in: rows, activeRunIDs: activeRunIDs)
@@ -100,7 +101,15 @@ extension ChatTranscriptRow {
                         finished: false,
                         liveToolRunIDs: liveToolRunIDs,
                         narratedRunID: narratedRunID,
-                        untaggedRunID: untaggedRunID)
+                        untaggedRunID: untaggedRunID,
+                        onNarratedStretch: onNarratedStretch)
+                }
+                if isFenced, !liveTurns.contains(index), turn.last?.workMessage?.isFinalReply == true,
+                   terminalReplies[index] != nil || turn
+                       .contains(where: { $0.workMessage?.resumesProjectedTurn == true })
+                {
+                    // A nested turn outside an OpenAI work fold may still have consecutive, linked operations.
+                    return Self.coalescingActivityRuns(turn)
                 }
                 #endif
                 return isFenced ? turn : Self.coalescingActivityRuns(turn, finished: !liveTurns.contains(index))
@@ -130,21 +139,42 @@ extension ChatTranscriptRow {
         finished: Bool = true,
         liveToolRunIDs: Set<String> = [],
         narratedRunID: String? = nil,
-        untaggedRunID: String? = nil) -> [Self]
+        untaggedRunID: String? = nil,
+        onNarratedStretch: ((String, [OpenClawChatMessage]) -> Void)? = nil) -> [Self]
     {
         var result: [Self] = []
         var run: [OpenClawChatMessage] = []
         func runID(_ message: OpenClawChatMessage) -> String? {
             message.workRunID ?? untaggedRunID
         }
+        #if os(iOS)
+        var parentCalls = Set<String>()
+        func isActivity(_ message: OpenClawChatMessage) -> Bool {
+            message.isActivityRow || (message.isNestedToolActivity &&
+                (runID(message).map(liveToolRunIDs.contains) == true ||
+                    (message.workRunID != nil && message.content
+                        .contains { $0.parentToolCallId.map(parentCalls.contains) == true })))
+        }
+        #else
+        func isActivity(_ message: OpenClawChatMessage) -> Bool {
+            message
+                .isActivityRow || (message.isNestedToolActivity && runID(message).map(liveToolRunIDs.contains) == true)
+        }
+        #endif
         func flush(atTail: Bool = false) {
-            defer { run = [] }
+            defer {
+                run.removeAll(keepingCapacity: true)
+                #if os(iOS)
+                parentCalls.removeAll(keepingCapacity: true)
+                #endif
+            }
             // Hidden yield context rides along without counting as an operation.
             let operations = run.reduce(0) { $0 + ChatToolActivity.items(message: $1).count }
             // The working claw owns the unfinished stretch; inspection still uses the complete transcript.
             if atTail, let narratedRunID, liveToolRunIDs.contains(narratedRunID),
                run.last.flatMap(runID) == narratedRunID
             {
+                onNarratedStretch?(narratedRunID, run)
                 return
             }
             guard operations > 1, let first = run.first else {
@@ -165,16 +195,18 @@ extension ChatTranscriptRow {
                finished || runID(message).map(liveToolRunIDs.contains) == true,
                !message.endsRunInFailure, !message.content.isEmpty,
                message.content.allSatisfy({ $0.type?.lowercased() == "thinking" && ($0.thinking ?? "").isEmpty })
-            { continue }
+            {
+                continue
+            }
             #endif
             // A row that starts a turn keeps its own place so turn ownership stays visible; a
             // launch stays its own row and bounds the logs around it, live or finished, as on the web.
-            if case let .message(message) = row, message.isActivityRow || (message.isNestedToolActivity &&
-                runID(message).map(liveToolRunIDs.contains) == true),
-                !row.startsTurn, !message.recordsSessionLaunch
-            {
+            if case let .message(message) = row, isActivity(message), !row.startsTurn, !message.recordsSessionLaunch {
                 #if os(iOS)
-                if let previous = run.last, runID(previous) != runID(message) { flush() }
+                if let previous = run.last, runID(previous) != runID(message), !message.resumesProjectedTurn {
+                    flush()
+                }
+                parentCalls.formUnion(message.content.filter(\.isToolCall).compactMap(\.id))
                 #endif
                 run.append(message)
                 continue

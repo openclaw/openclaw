@@ -64,7 +64,7 @@ describe("pending delivery notice end to end", () => {
   const settle = (state: "queued" | "unknown") =>
     settlePendingFinalDelivery(completion, state, ["prepared"]);
   const visible = async () => ({ visibleReplySent: true });
-  const finalPayload = (bindCustody = true, custody = completion) => {
+  const finalPayload = (bindCustody: boolean, custody = completion) => {
     const payload = { text: "the final answer" };
     return bindCustody
       ? setReplyPayloadMetadata(payload, { pendingFinalDeliveryCompletion: custody })
@@ -144,7 +144,7 @@ describe("pending delivery notice end to end", () => {
     expect(entry()?.pendingDeliveryNotice?.state).toBe("owed");
   });
   const freshTurn = () => runTurn(visible, false);
-  function queueFinal(prepared = false, custody = completion, beforeIdle = Promise.resolve()) {
+  function queueFinal(prepared: boolean, custody = completion, beforeIdle = Promise.resolve()) {
     dispatchCore.mockImplementationOnce(async (params) => {
       const dispatcher = createReplyDispatcher(params.dispatcherOptions);
       const payload = finalPayload(true, custody);
