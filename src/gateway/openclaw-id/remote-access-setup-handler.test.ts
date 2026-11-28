@@ -13,12 +13,19 @@ const OPENCLAW_ID = {
   loaderDomain: "claws.example.test",
 };
 
-// mock-isolation: profile storage has its own tests; this file proves which profile and
-// account the ceremony links, and that a refused caller never reaches it.
+// mock-isolation: profile storage has its own tests; this file proves which binding the
+// ceremony checks and that it cannot create a new one.
 const store = vi.hoisted(() => ({
   link: vi.fn(async (_input: unknown, _options: { assertCurrent: () => void }) => ({
     ok: true as const,
   })),
+  linkedProfile: vi.fn(
+    async (_accountId: string): Promise<{ profileId: string; updatedAt: number } | null> => ({
+      profileId: "profile-josh",
+      updatedAt: 0,
+    }),
+  ),
+  linksOf: vi.fn(async (_profileId: string) => [] as Array<{ accountId: string; email: null }>),
 }));
 // The personal-profile authority owner has its own tests; here it grants what the socket
 // holds unless the person's current role was lowered (`roleLowered`).
@@ -52,6 +59,8 @@ vi.mock("../server-methods/personal-profile-authorization.js", async (importOrig
 vi.mock("../../state/user-profile-openclaw-id.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-profile-openclaw-id.js")>()),
   linkCanonicalOpenClawIdUserProfile: store.link,
+  readOpenClawIdLinkedProfile: store.linkedProfile,
+  readOpenClawIdLinksOfProfile: store.linksOf,
 }));
 const security = vi.hoisted(() => vi.fn());
 vi.mock("../../infra/diagnostic-events.js", async (importOriginal) => ({
@@ -95,6 +104,8 @@ const loopback = (): Client => ({
 });
 
 let handlers: typeof import("../server-methods/openclaw-id.js").openclawIdHandlers;
+// Extra ID token claims for the next device sign-in (email, email_verified).
+let tokenClaims: Record<string, unknown> = {};
 
 beforeAll(async () => {
   vi.stubGlobal(
@@ -128,6 +139,7 @@ beforeAll(async () => {
           sub: "acct-josh",
           exp: Math.floor(Date.now() / 1000) + 3600,
           email: "josh@id.test",
+          ...tokenClaims,
         }),
       });
     }),
@@ -233,7 +245,7 @@ beforeEach(() => {
 });
 
 describe("Turn on remote access over a personal sign-in", () => {
-  it("runs the ceremony for an admin and links their OpenClaw ID to their profile", async () => {
+  it("runs the ceremony for an admin and recognizes their approved profile link", async () => {
     const josh = admin();
     const token = await deviceSignIn(josh);
     expect(
@@ -259,10 +271,8 @@ describe("Turn on remote access over a personal sign-in", () => {
     expect(service.recordVerifiedAccount).toHaveBeenCalledWith(
       expect.objectContaining({ sub: "acct-josh", email: "josh@id.test" }),
     );
-    expect(store.link).toHaveBeenCalledExactlyOnceWith(
-      { profileId: "profile-josh", accountId: "acct-josh", email: "josh@id.test" },
-      { assertCurrent: expect.any(Function) },
-    );
+    expect(store.linkedProfile).toHaveBeenCalledExactlyOnceWith("acct-josh");
+    expect(store.link).not.toHaveBeenCalled();
     // Who ran it and over which identity.
     expect(logGateway.info).toHaveBeenCalledWith(
       "openclaw-id: remote access commit success route=personal_admin via=tailscale profile=profile-josh user=josh@tailnet.example",
@@ -322,13 +332,34 @@ describe("Turn on remote access over a personal sign-in", () => {
     expect(await authority(josh, { ...commitParams, idToken: grahamToken })).toMatchObject({
       payload: { profileLink: "sign_in_not_held" },
     });
-    store.link.mockResolvedValueOnce({ ok: false, code: "already_linked" } as never);
+    store.linkedProfile.mockResolvedValueOnce(null);
     const token = await deviceSignIn(josh);
     expect(await authority(josh, { ...commitParams, idToken: token })).toMatchObject({
-      payload: { linked: true, profileLink: "already_linked" },
+      payload: { linked: true, profileLink: "link_approval_required" },
     });
     expect(logGateway.warn).toHaveBeenCalledWith(
-      expect.stringContaining("remote access link_profile failure code=already_linked"),
+      expect.stringContaining("remote access link_profile failure code=link_approval_required"),
+    );
+    expect(store.link).not.toHaveBeenCalled();
+  });
+
+  it("links the admin's first account at commit only for their own verified email", async () => {
+    const josh = admin();
+    for (const email_verified of [false, true]) {
+      tokenClaims = { email: "JOSH@tailnet.example", email_verified };
+      store.linkedProfile.mockResolvedValueOnce(null);
+      const token = await deviceSignIn(josh);
+      expect(await authority(josh, { ...commitParams, idToken: token })).toMatchObject({
+        payload: {
+          linked: true,
+          profileLink: email_verified ? "linked" : "link_approval_required",
+        },
+      });
+    }
+    tokenClaims = {};
+    expect(store.link).toHaveBeenCalledExactlyOnceWith(
+      { profileId: "profile-josh", accountId: "acct-josh", email: "JOSH@tailnet.example" },
+      { assertCurrent: expect.any(Function) },
     );
   });
 

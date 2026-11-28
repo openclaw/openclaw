@@ -537,6 +537,11 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
   approve or deny their request, change a member's role, and remove members. Use an approved owner
   browser to change access. Devices paired with this Gateway are in
   **Settings → Devices**.
+  To attach an OpenClaw ID to an existing personal Gateway profile, select that profile
+  when inviting the member and approve the request in **People**. Signing in with OpenClaw ID
+  attaches it to your own profile only when its verified email is your sign-in's email (see
+  **Link OpenClaw ID to your profile**). Turning on remote access does not require a personal
+  profile link.
 
 - **Member names**: an approved member is named from their OpenClaw ID account,
   or from the part of their email before the `@` when the account reports no
@@ -609,10 +614,17 @@ the authorization code.
 ### Link OpenClaw ID to your profile
 
 Through a personal sign-in, **Settings → Profile → Identity → OpenClaw ID → Link**
-runs the same device sign-in and records the account on your profile. Both sides are
-proven on one connection, so there is no "who are you?" picker. Owner devices of the
-claw's OpenClaw ID owner account then arrive as you (your name, sessions, personal
-instructions and My GitHub) instead of the shared owner. Their owner authority still
+runs the same device sign-in. Anyone who has the device code can approve a device
+sign-in, so the Gateway links a first account only when OpenClaw ID marked its email
+verified and that email is the email of the sign-in you connected with (your Tailscale
+login or trusted-proxy identity, compared case-insensitively after trimming). Email
+aliases stored on your profile do not count. A connection whose sign-in is not an
+email address cannot link this way. When the account is already linked to your profile,
+the row shows it with **Unlink**. Otherwise an owner invites it as **Existing person on
+this claw** and approves the request (see below).
+When the claw's OpenClaw ID owner account is linked to your profile, owner devices
+arrive as you (your name, sessions, personal instructions and My GitHub) instead of
+the shared owner. Their owner authority still
 comes from each device's certificate, and linking grants or removes nothing.
 
 If this browser already signed in with OpenClaw ID through the same personal sign-in,
@@ -705,10 +717,16 @@ administrator, and anything over the OpenClaw ID tunnel. If setup asks for a
    the claw is linked locally and can be published later.
 
 Through a personal sign-in, setup also links the OpenClaw ID you signed in with to
-your profile, as **Link OpenClaw ID to your profile** does, so your owner devices
-arrive as you. If that link is refused (for example, the account is already linked
-to another profile), remote access stays on and you can link from
-**Settings → Profile**. The Gateway log records who ran each step and over which
+your profile under the same rule as **Link**. When it is not linked, remote access stays
+on and the note under the steps says how to link it. People and the invite form need an
+approved owner browser, so: open **Remote access** in an approved owner browser, choose
+**Invite someone**, enter this OpenClaw ID's email, pick your profile under **Existing
+person on this claw**, set **Role** to the role you have now and choose **Create invite
+link**. Open that invite link and sign in
+with this OpenClaw ID. Then choose **Approve** on the request in People in the owner
+browser. **Link your profile** there signs in again when the Gateway no longer holds this
+browser's sign-in.
+The Gateway log records who ran each step and over which
 identity (`openclaw-id: remote access …` with the route, auth method, profile and
 verified user), and emits a matching `security.event`.
 

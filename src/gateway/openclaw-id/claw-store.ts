@@ -17,6 +17,8 @@ export type OpenClawIdAccount = {
   name: string | null;
   /** ID token expiry, seconds since the epoch. */
   exp: number;
+  /** Whether the issuer marked `email` verified (`email_verified: true`). */
+  emailVerified?: boolean;
 };
 
 /** Everything the Gateway keeps about its claw. */

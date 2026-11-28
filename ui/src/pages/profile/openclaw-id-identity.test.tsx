@@ -119,7 +119,8 @@ it("holds the row's place while loading and retries a failed load", async () => 
   expect(view.getByText("Link")).toBeDefined();
 });
 
-it("offers supported conflict recovery without merging profiles and clears the error after a later link", async () => {
+// This browser holds an OpenClaw ID sign-in, so Link uses link_held first.
+function holdSignIn() {
   const storageKey = "openclaw.openclawId.account";
   const account = JSON.stringify({
     idToken: "fixture-only-token",
@@ -131,6 +132,10 @@ it("offers supported conflict recovery without merging profiles and clears the e
     localStorage.removeItem(storageKey);
     window.dispatchEvent(new StorageEvent("storage", { key: storageKey, newValue: null }));
   });
+}
+
+it("offers supported conflict recovery without merging profiles and clears the error after a later link", async () => {
+  holdSignIn();
   const request = vi
     .fn<GatewayBrowserClient["request"]>()
     .mockResolvedValueOnce(status("device"))
@@ -159,4 +164,26 @@ it("offers supported conflict recovery without merging profiles and clears the e
   });
   expect(request).not.toHaveBeenCalledWith("users.merge", expect.anything());
   expect(request).not.toHaveBeenCalledWith("openclawId.account", { action: "unlink" });
+});
+
+it("says an admin links an unlinked account, and confirms an existing link", async () => {
+  holdSignIn();
+  const request = vi
+    .fn<GatewayBrowserClient["request"]>()
+    .mockResolvedValueOnce(status("device"))
+    .mockResolvedValueOnce({ linked: [] })
+    .mockResolvedValueOnce({ link: "link_approval_required" })
+    .mockResolvedValueOnce(status("device"))
+    .mockResolvedValueOnce({ linked: [] });
+  const client = createTestGatewayClient(request);
+  const view = mount(client.request.bind(client));
+  await waitForSolid(() => expect(view.container.textContent).toContain("Not linked"));
+  // The row says when Link links and how a first link is made otherwise.
+  expect(view.getByRole("button", { name: "Link OpenClaw ID" })).toBeDefined();
+  expect(view.container.textContent).toContain("same verified email as this sign-in");
+  view.getByText("Link").click();
+  await waitForSolid(() => expect(view.container.querySelector('[role="alert"]')).not.toBeNull());
+  expect(view.container.querySelector('[role="alert"]')?.textContent).toMatch(
+    /Link works only when OpenClaw ID has verified its email.*An owner links it by inviting/,
+  );
 });

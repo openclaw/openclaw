@@ -12,6 +12,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
 import {
   readOpenClawIdLinkedProfile,
+  readOpenClawIdLinksOfProfile,
   linkCanonicalOpenClawIdUserProfile,
 } from "../../state/user-profile-openclaw-id.js";
 import {
@@ -405,6 +406,50 @@ for (const change of ["merged", "deleted", "taken", "account-linked", "same-acco
     );
   });
 }
+
+// A personal profile without an OpenClaw ID subject row is never linked by a matching email:
+// not by member sign-in, another profile's link, invite approval or tunnel admission.
+it("never binds an unlinked profile to an account that reports its email", async ({ state }) => {
+  state.applyEnv();
+  const email = "person@example.test";
+  const profile = await ensureCanonicalUserProfileForEmail(email);
+  const staysUnlinked = async (accountId: string) => {
+    expect(await readOpenClawIdLinksOfProfile(profile.id)).toEqual([]);
+    expect((await readOpenClawIdLinkedProfile(accountId))?.profileId).not.toBe(profile.id);
+    expect((await ensureCanonicalUserProfileForEmail(email)).id).toBe(profile.id);
+  };
+  await ensureCanonicalUserProfileForOpenClawIdIdentity({
+    accountId: "acct-direct",
+    email: "PERSON@example.test",
+  });
+  await staysUnlinked("acct-direct");
+  const caller = await ensureCanonicalUserProfileForEmail("caller@example.test");
+  await linkCanonicalOpenClawIdUserProfile({
+    profileId: caller.id,
+    accountId: "acct-linked",
+    email,
+  });
+  await staysUnlinked("acct-linked");
+  // The invite audience is the profile's address, and the redeemer reports exactly that.
+  const claw = await linkedClaw({ read: readStoredClaw, write: writeStoredClaw });
+  const invite = await ownerInvite(claw, { email });
+  await claw.authority.registerInvite({ cap: invite.cap, proofKey: invite.proofKey }, "tunnel");
+  const { clawId } = claw;
+  const mail = await redemptionMail({ clawId, ...invite, accountId: "ocid-other", email });
+  await claw.authority.redeem(mail.message.payload.redemption, mail.message.from);
+  const add = {
+    op: "add" as const,
+    account_id: "ocid-other",
+    role: "operator",
+    peer_keys: [mail.peerKey],
+    invite_id: invite.inviteId,
+  };
+  expect(await claw.authority.submit(await claw.sign(add), "tunnel")).toMatchObject({ ok: true });
+  expect(await claw.authority.resolvePeer(mail.peerKey)).toMatchObject({ kind: "member" });
+  await ensureCanonicalUserProfileForOpenClawIdIdentity({ accountId: "ocid-other" });
+  await closeOpenClawStateDatabaseAsync();
+  await staysUnlinked("ocid-other");
+});
 
 it("imports legacy member roles once, preserves assignments, and does not undo suspension", async ({
   state,

@@ -26,6 +26,7 @@ import { decodeInviteProfile, decodeInviteProofKey } from "../openclaw-id/invite
 import { resolveOpenClawIdOwnerAccount } from "../openclaw-id/owner-account.js";
 import type { OpenClawIdService } from "../openclaw-id/service.js";
 import { hasCurrentPersonalGatewaySource } from "./gateway-personal-caller.js";
+import { resolveVerifiedProfileLink } from "./openclaw-id-profile-link.js";
 import {
   auditRemoteAccessSetup,
   prepareRemoteAccessSetup,
@@ -182,11 +183,8 @@ async function handleLinkCode(
   }
 }
 
-// After a personal admin's commit: links the OpenClaw ID this browser signed in with (a
-// sign-in this Gateway redeemed for the same profile, verifyHeldOpenClawIdSignIn from OCF-530)
-// to the admin's profile, so their owner devices arrive as them, and keeps its display claims
-// for the claw. Both sides are proven on this one connection, so there is no picker. The claw
-// stays linked whatever this returns: "linked", or why the profile was not linked.
+// After a personal admin's commit, keep the verified owner's display claims and resolve the
+// profile link under the same rule as Link. The claw stays linked even without a profile link.
 async function linkRunnerProfile(
   opts: GatewayRequestHandlerOptions,
   service: OpenClawIdService,
@@ -203,13 +201,7 @@ async function linkRunnerProfile(
   try {
     setup.assertCurrent();
     await service.recordVerifiedAccount(held.account);
-    const { linkCanonicalOpenClawIdUserProfile } =
-      await import("../../state/user-profile-openclaw-id.js");
-    const linked = await linkCanonicalOpenClawIdUserProfile(
-      { profileId: held.owner, accountId: held.account.sub, email: held.account.email },
-      { assertCurrent: setup.assertCurrent },
-    );
-    return linked.ok ? "linked" : linked.code;
+    return await resolveVerifiedProfileLink(opts, held.owner, held.account, setup.assertCurrent);
   } catch {
     return "not_admin";
   }
@@ -357,10 +349,7 @@ export function verifyHeldOpenClawIdSignIn(
   return "account" in held ? { owner, account: held.account } : held;
 }
 
-// Links a verified `account` to `owner`'s profile on this connection, keeping the live
-// personal source, profile and Labs switch current through the write's commit. Returns the
-// write's outcome, or undefined after refusing because the connection changed.
-async function linkVerifiedAccount(
+async function confirmVerifiedAccountLink(
   opts: GatewayRequestHandlerOptions,
   owner: string,
   account: OpenClawIdAccount,
@@ -369,18 +358,14 @@ async function linkVerifiedAccount(
   if (!assertCurrent) {
     return undefined;
   }
-  const { linkCanonicalOpenClawIdUserProfile } =
-    await import("../../state/user-profile-openclaw-id.js");
-  const linked = await linkCanonicalOpenClawIdUserProfile(
-    { profileId: owner, accountId: account.sub, email: account.email },
-    { assertCurrent },
-  );
-  // The write awaited the state worker; its result leaves only to the same connection.
+  const link = await resolveVerifiedProfileLink(opts, owner, account, assertCurrent);
+  // The lookup awaited the state worker; release its result only to the live connection.
   if (!isCurrentDeviceSignIn(opts, owner)) {
     refuse(opts, { code: "not_personal_connection", detail: "this connection changed" });
     return undefined;
   }
-  return linked.ok ? "linked" : linked.code;
+  // A sign-in that asked to link still succeeds; it reports the link or why there is none.
+  return link;
 }
 
 // Sign in with OpenClaw ID on a connection with a verified personal profile (see
@@ -389,12 +374,9 @@ async function linkVerifiedAccount(
 // nothing.
 // - device_begin: a device sign-in's user code and verification page;
 // - device_poll: polls it once; returns pending, or the account and ID token. With
-//   `link: true`, the verified account is also linked to this connection's profile
-//   (OCF-510): both sides are proven on this one connection, so there is no picker.
-//   Owner devices of a linked account then arrive as this profile;
-// - link_held: links the same way with the ID token this browser still holds from such a
-//   sign-in (OCF-530), so Link after sign-in needs no second code. `sign_in_not_held` tells
-//   the browser to fall back to device_begin with `link`;
+//   `link: true`, also reports the profile link, creating a first one only for a verified
+//   email that matches this connection's own (resolveVerifiedProfileLink);
+// - link_held: the same, using a held ID token;
 // - link_status: the OpenClaw ID accounts linked to this connection's profile;
 // - unlink: removes them; owner devices return to the shared owner.
 async function handleDeviceAccount(opts: GatewayRequestHandlerOptions) {
@@ -440,7 +422,7 @@ async function handleDeviceAccount(opts: GatewayRequestHandlerOptions) {
         respondSignIn(opts, result);
         return;
       }
-      const link = await linkVerifiedAccount(opts, owner, result.account);
+      const link = await confirmVerifiedAccountLink(opts, owner, result.account);
       if (link) {
         opts.respond(true, { ...result, link });
       }
@@ -452,7 +434,7 @@ async function handleDeviceAccount(opts: GatewayRequestHandlerOptions) {
         refuse(opts, held);
         return;
       }
-      const link = await linkVerifiedAccount(opts, owner, held.account);
+      const link = await confirmVerifiedAccountLink(opts, owner, held.account);
       if (link) {
         opts.respond(true, { account: held.account, link });
       }
