@@ -34,6 +34,7 @@ import type {
   TextContent,
   ThinkingContent,
   ToolCall,
+  Usage,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
@@ -500,7 +501,11 @@ export const streamGoogleInteractions: StreamFunction<
           // `total_input_tokens` is the measured prompt, cached tokens included; tool-use
           // prompt tokens are prompt too.
           const contextPromptTokens = promptTokens + toolUseTokens;
-          output.usage = {
+          // Thinking stays in output for billing and is reported as reasoning, like Responses.
+          const interactionUsageOutput: Usage & { reasoningTokens?: number } = {
+            ...(typeof usage.total_thought_tokens === "number"
+              ? { reasoningTokens: thoughtTokens }
+              : {}),
             usageReport: { state: measured ? "available" : "unavailable" },
             input: Math.max(0, promptTokens - cacheRead) + toolUseTokens,
             output: outputTokens,
@@ -520,6 +525,7 @@ export const streamGoogleInteractions: StreamFunction<
             totalTokens,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
           };
+          output.usage = interactionUsageOutput;
           if (model.cost) {
             calculateCost(model, output.usage);
             applyGoogleServiceTierPricing(
