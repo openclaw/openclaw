@@ -1,5 +1,6 @@
 import type { Browser } from "playwright-core";
 import { connectOverCdpTransport } from "../pw-session-cdp-transport.js";
+import { markRelayBrowser } from "../pw-session-http-auth.js";
 import type { RelayOperationReference } from "./owner-client.js";
 import { getBorrowedRelayCdpAccess, type BorrowedRelayAccess } from "./relay-access.js";
 
@@ -42,6 +43,7 @@ export async function connectRelayBrowser(
       preparedTransport: transport,
       noDefaults: true,
     });
+    markRelayBrowser(browser);
     try {
       if (
         getBorrowedRelayCdpAccess(cdpUrl) !== relay ||

@@ -4,11 +4,12 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { CDPSession, Page } from "playwright-core";
 import { resolveBrowserNavigationTimeoutMs } from "./act-policy.js";
-import { isRetiredFetchInterceptionError } from "./cdp-fetch-interception.js";
+import { settleInterception } from "./cdp-fetch-interception.js";
 import {
   assertBrowserNavigationAllowed,
   type BrowserNavigationPolicyOptions,
 } from "./navigation-guard.js";
+import * as httpAuth from "./pw-session-http-auth.js";
 import { createStandingNavigationPolicy } from "./pw-session-navigation-standing.js";
 
 type Command = Parameters<CDPSession["send"]>[0];
@@ -67,24 +68,6 @@ export type NavigationAuthorityFenceDisposeOptions = {
   stopLoading?: boolean;
 };
 
-/**
- * Resolve or fail one paused request. A request the page already cancelled has
- * nothing left to admit or deny, so its retired id is not a navigation failure.
- */
-async function settleInterception(
-  target: NavigationTargetSession,
-  method: "Fetch.continueRequest" | "Fetch.failRequest",
-  params: { requestId: string; errorReason?: "Failed" | "Aborted" | "BlockedByClient" },
-): Promise<void> {
-  try {
-    await target.send(method, params);
-  } catch (error) {
-    if (!isRetiredFetchInterceptionError(error)) {
-      throw error;
-    }
-  }
-}
-
 type NavigationDocumentHandler = (
   route: NavigationDocumentRoute,
   request: NavigationDocumentRequest,
@@ -139,6 +122,8 @@ function createTabFence(page: Page, session: CDPSession) {
   const interceptDocuments = (target: NavigationTargetSession) =>
     target.send("Fetch.enable", {
       patterns: [{ urlPattern: "*", resourceType: "Document", requestStage: "Request" }],
+      // The session holding document interception answers its auth challenges too.
+      ...httpAuth.interception(page.context()),
     });
   // What the current claimed period started on each target, once, for every claim to await.
   let claimStarts = new Map<NavigationTargetSession, Promise<unknown>>();
@@ -303,12 +288,14 @@ function createTabFence(page: Page, session: CDPSession) {
         notify();
       });
     };
+    const stopAuth = httpAuth.answer(page.context(), target);
     const state: TargetState = {
       documents,
       finishedDocuments,
       transferredFrames,
       removeListeners: () => {
         target.events.off("Fetch.requestPaused", listener);
+        stopAuth();
         target.events.off("Network.requestWillBeSent", started);
         target.events.off("Network.loadingFinished", finished);
         target.events.off("Network.loadingFailed", finished);
@@ -371,6 +358,7 @@ function createTabFence(page: Page, session: CDPSession) {
     "Network.loadingFinished",
     "Network.loadingFailed",
     "Fetch.requestPaused",
+    "Fetch.authRequired",
     "Page.frameNavigated",
     "Page.frameRequestedNavigation",
     "Page.frameDetached",
@@ -388,6 +376,7 @@ function createTabFence(page: Page, session: CDPSession) {
   };
   session.on("close", rootClosed);
   removers.add(() => session.off("close", rootClosed));
+  removers.add(httpAuth.onChange(page.context(), () => states.keys(), interceptDocuments));
 
   const prepare = async (target: NavigationTargetSession, child = false) => {
     const children = new Map<
