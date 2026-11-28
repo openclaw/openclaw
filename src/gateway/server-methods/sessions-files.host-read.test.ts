@@ -175,6 +175,62 @@ it("rejects workspace escapes and links before granting downloads", async () => 
   }
 });
 
+it("retires sibling download grants with a recorded warning when one release owner throws on disconnect", async () => {
+  using connection = createSessionFileDownloadClient();
+  const fixture = prepareHostFileRead({ permissionMode: "full" });
+  const dir = outsideDirs.make("session-download-release-throw-");
+  const firstPath = path.join(dir, "first.bin");
+  const secondPath = path.join(dir, "second.bin");
+  fs.writeFileSync(firstPath, Buffer.alloc(64, 0x41));
+  fs.writeFileSync(secondPath, Buffer.alloc(64, 0x42));
+  const warnings: string[] = [];
+  const logWarn = vi
+    .spyOn(await import("../../logger.js"), "logWarn")
+    .mockImplementation((message: string) => {
+      warnings.push(message);
+    });
+  // Each download grant owns its placement; the first one's release throws while
+  // the composite owner disposes session resources during disconnect.
+  const releases: number[] = [];
+  let grants = 0;
+  const placementContext = {
+    ...fixture.context,
+    workerSessionPlacementService: {
+      getMany: () => new Map(),
+      prepareRuntimeRefresh: async () => {
+        const owner = ++grants;
+        return {
+          placement: undefined,
+          move: undefined,
+          pendingResult: undefined,
+          assertCurrent: () => {},
+          release: () => {
+            releases.push(owner);
+            if (owner === 1) {
+              throw new Error("placement release boom");
+            }
+          },
+        };
+      },
+    },
+  };
+  const options = { ...fixture.options, ...connection };
+  const first = await fixture.files.ok("download", firstPath, placementContext, options);
+  const second = await fixture.files.ok("download", secondPath, placementContext, options);
+  const fetched = await connection.fetch(first.url);
+  expect(fetched.response.statusCode).toBe(200);
+
+  connection[Symbol.dispose]();
+
+  expect(releases).toEqual([1, 2]);
+  expect(warnings).toHaveLength(1);
+  expect(warnings[0]).toContain("gateway: artifact download grant release failed during cleanup");
+  expect(warnings[0]).toContain("placement release boom");
+  expect((await connection.fetch(first.url)).response.statusCode).toBe(404);
+  expect((await connection.fetch(second.url)).response.statusCode).toBe(404);
+  logWarn.mockRestore();
+});
+
 it("downloads Full Access host bytes without assistant-media policy", async () => {
   using connection = createSessionFileDownloadClient();
   const filename = "original.zip";
