@@ -65,6 +65,19 @@ it.each([
   expect(fetch).not.toHaveBeenCalled();
 });
 
+it.each([
+  [{ country: "DE" }, "unsupported_country"],
+  [{ freshness: "week" }, "unsupported_freshness"],
+  [{ date_after: "2026-01-01" }, "unsupported_date_filter"],
+] as const)(
+  "reports unsupported filter %j instead of searching unfiltered",
+  async (filter, error) => {
+    const fetch = mockFetch([]);
+    await expect(search({ ...filter })).resolves.toMatchObject({ error });
+    expect(fetch).not.toHaveBeenCalled();
+  },
+);
+
 it("builds the configured request and normalizes, filters, and caps its results", async () => {
   const fetch = mockFetch([
     row("cat", {
