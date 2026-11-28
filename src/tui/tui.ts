@@ -1311,6 +1311,7 @@ async function runTuiUnlocked(
     localCli,
     reopenQuestion: () => questions.reopen().catch(reportQuestionRefreshError),
     requestExit,
+    resolveSessionSelection,
   });
 
   updateAutocompleteProvider();
