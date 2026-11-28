@@ -4,6 +4,7 @@ import type { ProviderAuthChoiceMetadata } from "./provider-auth-choices.js";
 import {
   listProviderLoginOptions,
   resolveProviderChannelLoginChoice,
+  sortProvidersForLogin,
 } from "./provider-login-options.js";
 
 const declarations = vi.hoisted(() => ({ read: vi.fn() }));
@@ -75,6 +76,42 @@ describe("provider login choices", () => {
       "demo/codex-device",
     ]);
     expect(choices.map((entry) => entry.choiceId)).toEqual(["codex-device", "chatgpt"]);
+  });
+
+  it("ranks offline providers by their declared group and preserves the runtime selection", () => {
+    const copilot = { id: "github-copilot", label: "GitHub Copilot" };
+    const alpha = { id: "alpha", label: "Alpha" };
+    const openai = { id: "openai", label: "OpenAI" };
+    declarations.read.mockReturnValue([
+      choice({ providerId: copilot.id, groupId: "copilot", groupLabel: "Copilot" }),
+    ]);
+    const ordered = sortProvidersForLogin([alpha, copilot, openai], {});
+    expect(ordered).toEqual([openai, copilot, alpha]);
+    expect(ordered[1]).toBe(copilot);
+  });
+
+  it("keeps methods without group labels together and uses their declared priority", () => {
+    const method = (providerId: string, choiceLabel: string, assistantPriority: number) =>
+      choice({
+        pluginId: providerId,
+        providerId,
+        groupId: undefined,
+        groupLabel: undefined,
+        methodId: choiceLabel,
+        choiceId: choiceLabel,
+        choiceLabel,
+        assistantPriority,
+      });
+    const options = listProviderLoginOptions([
+      method("alpha", "Apple", 5),
+      method("beta", "Middle", 0),
+      method("alpha", "Zulu", -5),
+    ]);
+    expect(options.map((option) => option.id)).toEqual([
+      "alpha/Zulu",
+      "alpha/Apple",
+      "beta/Middle",
+    ]);
   });
 
   it("lists provider families once even when login requires setup", () => {

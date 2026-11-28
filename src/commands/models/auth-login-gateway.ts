@@ -19,7 +19,7 @@ import {
   type ProviderAuthFailureReason,
 } from "../../plugins/provider-auth-failure.js";
 import {
-  compareProviderLoginChoices,
+  sortProviderLoginChoices,
   formatProviderLoginChoiceRef,
   isProviderCliLoginChoiceStartable,
   matchesProviderLoginMethod,
@@ -71,7 +71,7 @@ export async function readGatewayLoginParams(
         .select({
           message: "Choose a provider sign-in method",
           searchable: true,
-          options: choices.toSorted(compareProviderLoginChoices).map((entry) => {
+          options: sortProviderLoginChoices(choices).map((entry) => {
             const group = entry.groupLabel;
             return {
               value: formatProviderLoginChoiceRef(entry),

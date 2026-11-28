@@ -19,7 +19,6 @@ import {
   restorePriorAgentsDefaultsModelUnlessOptIn,
   resolveProviderMatch,
 } from "../../plugins/provider-auth-choice-helpers.js";
-import { compareProviderAuthChoiceGroups } from "../../plugins/provider-auth-choice-order.js";
 import {
   createProviderAuthConfigPatch,
   writeProviderAuthConfig,
@@ -28,6 +27,7 @@ import { readProviderAuthFailure } from "../../plugins/provider-auth-failure.js"
 import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
 import { runProviderPluginAuthMethodUnpersisted } from "../../plugins/provider-auth-method.js";
 import { persistProviderAuthProfilesAfterLogin } from "../../plugins/provider-auth-persistence.js";
+import { sortProvidersForLogin } from "../../plugins/provider-login-options.js";
 import { applyPrimaryModel } from "../../plugins/provider-model-primary.js";
 import { resolvePluginProvidersCore } from "../../plugins/providers.runtime.js";
 import {
@@ -707,7 +707,7 @@ async function runModelsAuthLoginFlow(
       .select({
         message: "Select a provider",
         searchable: true,
-        options: authProviders.toSorted(compareProviderAuthChoiceGroups).map((provider) => ({
+        options: sortProvidersForLogin(authProviders, context).map((provider) => ({
           value: provider.id,
           label: provider.label,
           hint: provider.docsPath ? `Docs: ${provider.docsPath}` : undefined,

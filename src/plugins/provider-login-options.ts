@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { compareProviderAuthChoiceGroups } from "./provider-auth-choice-order.js";
 import {
@@ -95,53 +96,88 @@ export function isProviderCliLoginChoiceStartable(choice: ProviderAuthChoiceMeta
   );
 }
 
-/** Keep sign-in menus on the same provider and method order as onboarding. */
-export function compareProviderLoginChoices(
-  a: ProviderAuthChoiceMetadata,
-  b: ProviderAuthChoiceMetadata,
-): number {
-  return (
-    compareProviderAuthChoiceGroups(
-      { id: a.groupId ?? a.providerId, label: a.groupLabel ?? a.choiceLabel },
-      { id: b.groupId ?? b.providerId, label: b.groupLabel ?? b.choiceLabel },
-    ) ||
-    (a.assistantPriority ?? 0) - (b.assistantPriority ?? 0) ||
-    Number(b.onboardingFeatured === true) - Number(a.onboardingFeatured === true) ||
-    a.choiceLabel.localeCompare(b.choiceLabel, "en") ||
-    a.choiceId.localeCompare(b.choiceId)
+type LoginGroup = { id: string; label: string };
+
+export function sortProvidersForLogin<T extends LoginGroup>(
+  providers: readonly T[],
+  { config, workspaceDir }: { config?: OpenClawConfig; workspaceDir?: string },
+): T[] {
+  const groups = new Map<string, LoginGroup>();
+  for (const choice of resolveManifestDeclaredProviderAuthChoices({
+    config,
+    workspaceDir,
+    includeUntrustedWorkspacePlugins: false,
+  })) {
+    if (choice.groupId) {
+      const group = { id: choice.groupId, label: choice.groupLabel ?? choice.groupId };
+      const existing = groups.get(choice.providerId);
+      if (!existing || compareProviderAuthChoiceGroups(group, existing) < 0) {
+        groups.set(choice.providerId, group);
+      }
+    }
+  }
+  return providers.toSorted(
+    (a, b) =>
+      compareProviderAuthChoiceGroups(groups.get(a.id) ?? a, groups.get(b.id) ?? b) ||
+      a.label.localeCompare(b.label) ||
+      a.id.localeCompare(b.id),
+  );
+}
+
+/** Order the provider groups first, then their methods, even for unlabelled declarations. */
+export function sortProviderLoginChoices(
+  choices: readonly ProviderAuthChoiceMetadata[],
+): ProviderAuthChoiceMetadata[] {
+  const labels = new Map<string, string>();
+  for (const choice of choices) {
+    if (choice.groupLabel) {
+      const id = choice.groupId ?? choice.providerId;
+      const existing = labels.get(id);
+      if (!existing || choice.groupLabel.localeCompare(existing) < 0) {
+        labels.set(id, choice.groupLabel);
+      }
+    }
+  }
+  const group = (choice: ProviderAuthChoiceMetadata): LoginGroup => {
+    const id = choice.groupId ?? choice.providerId;
+    return { id, label: labels.get(id) ?? id };
+  };
+  return choices.toSorted(
+    (a, b) =>
+      compareProviderAuthChoiceGroups(group(a), group(b)) ||
+      (a.assistantPriority ?? 0) - (b.assistantPriority ?? 0) ||
+      Number(b.onboardingFeatured === true) - Number(a.onboardingFeatured === true) ||
+      a.choiceLabel.localeCompare(b.choiceLabel, "en") ||
+      a.choiceId.localeCompare(b.choiceId),
   );
 }
 
 export function listProviderLoginOptions(
   choices: readonly ProviderAuthChoiceMetadata[],
 ): ProviderLoginOption[] {
-  return (
-    choices
-      .filter(isEligible)
-      // oxlint-disable-next-line unicorn/no-array-sort -- filter creates a private array.
-      .sort(compareProviderLoginChoices)
-      .flatMap((choice): ProviderLoginOption[] => {
-        const kind = loginKind(choice);
-        if (!kind) {
-          return [];
-        }
-        return [
-          {
-            id: formatProviderLoginChoiceRef(choice),
-            pluginId: choice.pluginId,
-            brandId: choice.providerId,
-            label: choice.choiceLabel,
-            hint: choice.choiceHint,
-            groupLabel: choice.groupLabel,
-            icon: choice.icon,
-            website: choice.website,
-            docsUrl: choice.docsUrl,
-            kind,
-            featured: choice.onboardingFeatured === true,
-            ...(choice.credentialOnly !== true ? { requiresSetup: true as const } : {}),
-          },
-        ];
-      })
+  return sortProviderLoginChoices(choices.filter(isEligible)).flatMap(
+    (choice): ProviderLoginOption[] => {
+      const kind = loginKind(choice);
+      if (!kind) {
+        return [];
+      }
+      return [
+        {
+          id: formatProviderLoginChoiceRef(choice),
+          pluginId: choice.pluginId,
+          brandId: choice.providerId,
+          label: choice.choiceLabel,
+          hint: choice.choiceHint,
+          groupLabel: choice.groupLabel,
+          icon: choice.icon,
+          website: choice.website,
+          docsUrl: choice.docsUrl,
+          kind,
+          featured: choice.onboardingFeatured === true,
+          ...(choice.credentialOnly !== true ? { requiresSetup: true as const } : {}),
+        },
+      ];
+    },
   );
 }
 
