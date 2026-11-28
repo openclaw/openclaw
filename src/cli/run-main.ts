@@ -36,7 +36,7 @@ import { resolveCliStartupPolicy as resolveCliStartupPolicyForArgv } from "./com
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
 import { tryRunGatewayServiceUpdateCapabilityProbe } from "./daemon-cli/update-capability.js";
 import { withCliFailureContext } from "./failure-context.js";
-import { shouldStartLocalOnboarding } from "./fresh-install-config.js";
+import { resolveBareRootLaunchTarget } from "./fresh-install-config.js";
 import { tryRunWindowsGatewayTaskSupervisor } from "./gateway-cli/task-supervisor.js";
 import {
   isGatewayRunInvocationArgv,
@@ -181,23 +181,6 @@ async function tryRunGatewayRunFastPath(
     process.exitCode = error.exitCode;
   }
   return true;
-}
-
-async function resolveBareRootLaunchTarget(): Promise<BareRootLaunchTarget> {
-  const { readConfigSnapshotForEngineSelection } =
-    await import("../commands/config-preflight-snapshot.js");
-  await readConfigSnapshotForEngineSelection();
-  const { readConfigFileSnapshot } = await import("../config/config.js");
-  const snapshot = await readConfigFileSnapshot();
-  if (await shouldStartLocalOnboarding(snapshot)) {
-    return { kind: "onboarding" };
-  }
-  if (!snapshot.valid) {
-    return { kind: "onboarding", classic: true };
-  }
-  return resolveConfiguredTuiLaunchTarget(snapshot.config ?? snapshot.sourceConfig, {
-    hasConfiguredGateway: snapshot.sourceConfig.gateway !== undefined,
-  });
 }
 
 async function resolveConfiguredTuiLaunchTarget(
@@ -1105,10 +1088,15 @@ async function runCliWithPreparedOutputMode(
       await ensureCliEnvProxyDispatcher();
     }
     const bareRootLaunchTarget = shouldRunBareRootCommand
-      ? await resolveBareRootLaunchTarget()
+      ? await resolveBareRootLaunchTarget(resolveConfiguredTuiLaunchTarget)
       : null;
 
     if (bareRootLaunchTarget) {
+      if (bareRootLaunchTarget.kind === "config-read-failure") {
+        console.error(bareRootLaunchTarget.diagnostic);
+        process.exitCode = 1;
+        return;
+      }
       const launchPolicy = resolveBareRootLaunchPolicy(bareRootLaunchTarget);
       if (!requireInteractiveTty(launchPolicy.ttyMessage)) {
         return;

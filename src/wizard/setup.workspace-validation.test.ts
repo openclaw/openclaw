@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
+import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 import { runSetupWizard } from "./setup.js";
@@ -14,7 +15,18 @@ const writeConfig = vi.hoisted(() => vi.fn());
 vi.mock("./setup.shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./setup.shared.js")>()),
   readSetupConfigAuthority: async () => ({
-    snapshot: { exists: false, valid: true, config: {} },
+    snapshot: createConfigFileSnapshot({
+      path: "/tmp/openclaw.json",
+      exists: false,
+      raw: null,
+      parsed: {},
+      sourceConfig: {},
+      runtimeConfig: {},
+      valid: true,
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    }),
     assertCurrent: () => {},
   }),
   requireRiskAcknowledgement: async ({ config }: { config: OpenClawConfig }) => config,

@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { gatewayCredentialScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { formatConfigReadFailureForCli } from "../cli/config-validation-output.js";
 import { ConfigMutationConflictError, replaceConfigFile } from "../config/config.js";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { logConfigUpdated } from "../config/logging.js";
@@ -30,13 +31,14 @@ function isMigrationImport(opts: OnboardOptions): boolean {
 
 async function runNonInteractiveSetupExclusive(opts: OnboardOptions, runtime: RuntimeEnv) {
   const snapshot = await readConfigFileSnapshot();
-  if (snapshot.exists && !snapshot.valid) {
+  if (!snapshot.valid) {
     // Avoid rewriting an invalid config snapshot; doctor owns recovery so setup
     // does not erase malformed user state.
     rejectOnboardingOption(
       opts,
       runtime,
-      `Config invalid. Run \`${formatCliCommand("openclaw doctor --fix")}\` to apply supported repairs, then re-run setup.`,
+      formatConfigReadFailureForCli(snapshot) ??
+        `Config invalid. Run \`${formatCliCommand("openclaw doctor --fix")}\` to apply supported repairs, then re-run setup.`,
     );
     return;
   }
@@ -67,7 +69,8 @@ async function runNonInteractiveSetupExclusive(opts: OnboardOptions, runtime: Ru
       const currentSnapshot = await readConfigFileSnapshot();
       if (!currentSnapshot.valid) {
         throw new Error(
-          "Migration target config became invalid. Run `openclaw doctor --fix` to apply supported repairs.",
+          formatConfigReadFailureForCli(currentSnapshot) ??
+            "Migration target config became invalid. Run `openclaw doctor --fix` to apply supported repairs.",
         );
       }
       return currentSnapshot;

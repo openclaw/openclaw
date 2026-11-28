@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
+import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
+import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { requireValidConfigFileSnapshot } from "../commands/config-validation.js";
 import { readConfigFileSnapshot } from "../config/io.js";
-import { ExitError, type RuntimeEnv } from "../runtime.js";
+import { defaultRuntime, ExitError, type RuntimeEnv } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { ensureValidConfigSnapshotForCli } from "./config-cli-validation.js";
 import { ensureConfigReady, testApi } from "./program/config-guard.js";
@@ -35,7 +37,47 @@ function withConfig(raw: string, run: (host: ReturnType<typeof runtime>) => Prom
   });
 }
 
+async function validateConfig(host: RuntimeEnv, json: boolean) {
+  const { registerConfigCli } = await import("./config-cli.js");
+  const program = new Command();
+  registerConfigCli(program);
+  const spies = [
+    vi.spyOn(defaultRuntime, "log").mockImplementation(host.log),
+    vi.spyOn(defaultRuntime, "error").mockImplementation(host.error),
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value, space = 2) => {
+      host.log(JSON.stringify(value, undefined, space));
+    }),
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(host.exit),
+  ];
+  try {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "config",
+      "validate",
+      ...(json ? ["--json"] : []),
+    ]);
+  } finally {
+    for (const spy of spies) {
+      spy.mockRestore();
+    }
+  }
+}
+
 it.each([
+  ["config validate", (host) => validateConfig(host, false)],
+  [
+    "JSON config validate",
+    (host) => validateConfig(host, true),
+    true,
+    ["config", "validate", "--json"],
+  ],
+  [
+    "baseline setup",
+    async (host) => (await import("../commands/setup.js")).setupCommand({ json: true }, host),
+    true,
+    ["setup", "--baseline", "--json"],
+  ],
   ["gateway restart readiness", ready(["gateway", "restart"])],
   ["command readiness", ready()],
   ["JSON command readiness", ready(), true],
@@ -45,19 +87,27 @@ it.each([
     async (host) =>
       ensureValidConfigSnapshotForCli(await readConfigFileSnapshot({ observe: false }), host),
   ],
-] satisfies [string, (host: RuntimeEnv) => unknown, boolean?][])(
+] satisfies [string, (host: RuntimeEnv) => unknown, boolean?, string[]?][])(
   "%s reports unavailable metadata without suggesting config repair",
-  async (_name, run, json?: boolean) =>
+  async (_name, run, json?: boolean, argv?: string[]) =>
     withConfig(unreadableConfig, async (host) => {
       if (json) {
-        process.argv = [process.execPath, "openclaw", "config", "get", "gateway", "--json"];
+        process.argv = [
+          process.execPath,
+          "openclaw",
+          ...(argv ?? ["config", "get", "gateway", "--json"]),
+        ];
       }
       await expect(run(host)).rejects.toMatchObject({ name: "ExitError", code: 1 });
-      const diagnostic = host.error.mock.calls.flat().join("\n");
+      const diagnostic = [
+        ...host.error.mock.calls.flat(),
+        ...(json ? host.log.mock.calls.flat() : []),
+      ].join("\n");
       expect(diagnostic).toContain(unreadable);
       expect(diagnostic).toContain(missingInclude);
       expect(diagnostic).not.toContain("config is invalid");
       expect(diagnostic).not.toContain("doctor --fix");
+      expect(diagnostic).not.toContain("config schema");
       if (json) {
         expect(host.log).toHaveBeenCalledTimes(1);
         expect(JSON.parse(String(host.log.mock.calls[0]?.[0]))).toMatchObject({
@@ -91,3 +141,19 @@ it.each([
     expect(diagnostic).not.toContain("config could not be read");
   }),
 );
+
+it("stops classic setup on a read failure before consent or mutation", async () =>
+  withConfig(unreadableConfig, async (host) => {
+    const { runSetupWizard } = await import("../wizard/setup.js");
+    const prompter = createWizardPrompter();
+    await expect(runSetupWizard({ acceptRisk: true }, host, prompter)).rejects.toMatchObject({
+      name: "ExitError",
+      code: 1,
+    });
+    expect(prompter.outro).toHaveBeenCalledWith(expect.stringContaining(missingInclude));
+    expect(prompter.outro).toHaveBeenCalledWith(expect.stringContaining(unreadable));
+    expect(vi.mocked(prompter.outro).mock.calls.flat().join("\n")).not.toContain("doctor --fix");
+    expect(prompter.select).not.toHaveBeenCalled();
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(prompter.note).not.toHaveBeenCalled();
+  }));

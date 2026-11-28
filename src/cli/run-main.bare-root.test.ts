@@ -26,6 +26,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { describe, expect, it, vi } from "vitest";
+import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -93,6 +94,52 @@ async function expectNonInteractiveBareCliError(
 
 describe("runCli exit behavior", () => {
   installRunMainTestHooks();
+
+  it.each([
+    { stage: "engine selection", tty: false },
+    { stage: "engine selection", tty: true },
+    { stage: "ordinary read", tty: false },
+    { stage: "ordinary read", tty: true },
+  ])("reports unreadable bare-root config at $stage with TTY=$tty", async ({ stage, tty }) => {
+    const snapshot = createConfigFileSnapshot({
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      runtimeConfig: {},
+      warnings: [],
+      legacyIssues: [],
+      valid: false,
+      sourceConfig: {},
+      path: "/tmp/openclaw.json",
+      issues: [{ path: "", errorCode: "CONFIG_READ_FAILED", message: "Missing include file" }],
+    });
+    if (stage === "engine selection") {
+      const startupConfig = await import("../commands/config-preflight-snapshot.js");
+      vi.mocked(startupConfig.readConfigSnapshotForEngineSelection).mockResolvedValueOnce(snapshot);
+    } else {
+      readConfigFileSnapshotMock.mockResolvedValueOnce(snapshot);
+    }
+    const previousExitCode = process.exitCode;
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    process.exitCode = undefined;
+    try {
+      await withCliTty(tty, () => runCli(cliArgs()));
+      expect(process.exitCode).toBe(1);
+      const diagnostic = errorSpy.mock.calls.flat().join("\n");
+      expect(diagnostic).toContain("OpenClaw config could not be read");
+      expect(diagnostic).toContain("Missing include file");
+      expect(diagnostic).toContain("Resolve the read error shown above, then retry.");
+      expect(diagnostic).not.toContain("doctor --fix");
+      expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(stage === "ordinary read" ? 1 : 0);
+      expect(readLocalOnboardingStateMock).not.toHaveBeenCalled();
+      expect(setupWizardCommandMock).not.toHaveBeenCalled();
+      expect(runTuiMock).not.toHaveBeenCalled();
+      expect(startProxyMock).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+      process.exitCode = previousExitCode;
+    }
+  });
 
   it.each([
     {
@@ -448,6 +495,7 @@ describe("runCli exit behavior", () => {
     readConfigFileSnapshotMock.mockResolvedValueOnce({
       exists: true,
       valid: false,
+      issues: [],
       sourceConfig: { gateway: { mode: "local" } },
     });
 

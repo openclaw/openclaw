@@ -94,7 +94,7 @@ describe("setupCommand", () => {
         const snapshot = await readConfigFileSnapshot();
         expect(snapshot.valid).toBe(true);
         expect(snapshot.sourceConfig.messages?.queue).toBeUndefined();
-        expect(snapshot.runtimeConfig.messages?.queue).toMatchObject({
+        expect(snapshot.runtimeConfig.messages?.queue).toEqual({
           allowCollaborativeSteering: true,
         });
         if (json) {
@@ -319,6 +319,7 @@ describe("setupCommand", () => {
           issues: expect.arrayContaining([
             expect.objectContaining({ path: "<root>", message: expect.any(String) }),
           ]),
+          repairHint: "Run `openclaw doctor --fix` to repair, then retry.",
         });
       }
       expect(await fs.readFile(configPath)).toStrictEqual(original);
