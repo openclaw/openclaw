@@ -19,7 +19,7 @@ struct RootTabsPresentationTests {
             .notificationSettingsPath(servingEnabled: true, disclosureAccepted: true) == "/settings/device/permissions")
     }
 
-    @Test func `every sidebar destination resolves to a native screen or a valid Dashboard route`() {
+    @Test func sidebarDestinationsResolveToNativeScreensOrDashboardRoutes() {
         let expected: [RootTabs.SidebarDestination: RootTabs.SidebarScreen] = [
             .chat: .chat, .sessions: .sessions,
             .files: .files, .desktop: .desktop, .terminal: .terminal,
@@ -27,7 +27,7 @@ struct RootTabsPresentationTests {
             .activity: .dashboard("/activity"), .workboard: .dashboard("/workboard"),
             .systems: .dashboard("/systems"),
             .skillWorkshop: .dashboard("/skills/workshop"), .instances: .dashboard("/settings/devices"),
-            .dreaming: .dashboard("/settings/memory/dreams"), .usage: .dashboard("/usage"),
+            .dreaming: .dashboard("/settings/memory/dreams"), .usage: .usage,
             .cron: .dashboard("/automations"),
         ]
         #expect(Set(expected.keys) == Set(RootTabs.SidebarDestination.allCases))
