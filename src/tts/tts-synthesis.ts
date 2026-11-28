@@ -29,6 +29,9 @@ export async function textToSpeechCore(
     return {
       success: false,
       error: synthesis.error ?? "TTS conversion failed",
+      ...(synthesis.exceededTextLengthLimit !== undefined
+        ? { exceededTextLengthLimit: synthesis.exceededTextLengthLimit }
+        : {}),
       persona: synthesis.persona,
       attemptedProviders: synthesis.attemptedProviders,
       attempts: synthesis.attempts,
@@ -148,7 +151,7 @@ async function synthesizeSpeechInternal(
     },
     async (setup) => {
       if ("error" in setup) {
-        return { success: false, error: setup.error };
+        return { success: false, ...setup };
       }
 
       const target = resolveTtsSynthesisTarget(params.channel);
