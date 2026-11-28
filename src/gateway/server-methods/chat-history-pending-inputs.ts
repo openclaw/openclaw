@@ -74,7 +74,7 @@ export async function readChatHistoryPendingInputs(
     pendingInputs,
     inputReceipts,
     inputConsumptions,
-    hasCompatibleQueue(sessionInfo: GatewaySessionRow | undefined) {
+    hasCompatibleQueue: (sessionInfo: GatewaySessionRow | undefined) => {
       if (
         current &&
         sessionInfo?.hasActiveRun === false &&
