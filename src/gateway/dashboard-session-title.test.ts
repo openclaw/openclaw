@@ -306,9 +306,11 @@ describe("maybeGenerateDashboardSessionTitle", () => {
         reply.resolve();
         await pending;
       }
-      await expect(pending).resolves.toBe(outcome !== "renamed");
+      await expect(pending).resolves.toBe(false);
       if (outcome === "unavailable") {
-        expect(mocks.load().displayName).toMatch(/^[a-z]+-[a-z]+$/);
+        // A later send can retry without hiding the already released fallback.
+        expect(mocks.load().titleFallbackReady).toBe(true);
+        expect(mocks.load().displayName).toBeUndefined();
         expect(onFallback).toHaveBeenCalledOnce();
       } else {
         expect(mocks.load()).toMatchObject({ label: "My custom name" });
@@ -356,12 +358,13 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       await expect(background).resolves.toBe(backgroundFirst);
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(mocks.load()).toMatchObject({
-        displayName:
-          outcome !== "fallback" ? "Release Planning" : expect.stringMatching(/^[a-z]+-[a-z]+$/),
-      });
+      expect(mocks.load().displayName).toBe(
+        outcome !== "fallback" ? "Release Planning" : undefined,
+      );
       expect(onTitleStateChanged).toHaveBeenCalledTimes(backgroundFirst ? 0 : 2);
-      expectCalls(1, mocks.patch, mocks.generate);
+      expectCalls(1, mocks.patch);
+      // A dashboard request that joined a failed title retries it once.
+      expectCalls(outcome !== "fallback" ? 1 : 2, mocks.generate);
     },
   );
 
