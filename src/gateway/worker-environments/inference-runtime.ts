@@ -278,6 +278,7 @@ export const executePreparedWorkerInference = async (
           {
             runId: request.runId,
             sessionId: request.sessionId,
+            authScope: agentDir,
             accountRoute: prepared.auth.profileId
               ? `profile:${prepared.auth.profileId}`
               : "direct:openai",

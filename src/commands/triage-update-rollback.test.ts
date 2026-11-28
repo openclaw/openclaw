@@ -3,12 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { writeTriageUpdateFailure } from "../infra/update-failure-report-artifact.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import {
   readTriageUpdateFailure,
   sanitizeTriageUpdateFailure,
   updateFailureSchema,
+  writeTriageUpdateFailure,
 } from "./triage-update.js";
 import { readReleasedTriageUpdateFailure } from "./triage-update.released-reader.test-support.js";
 

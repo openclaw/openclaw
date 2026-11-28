@@ -3,7 +3,7 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { loadGlobalRuntimeDotEnvFiles, loadWorkspaceDotEnvFile } from "../infra/dotenv.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
-import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { isRemoteAgentDispatchInvocation, resolveCliArgvInvocation } from "./argv-invocation.js";
 import { resolveCliContainerTarget } from "./container-target.js";
 import { isGatewayRunInvocationArgv } from "./gateway-run-argv.js";
 
@@ -37,7 +37,7 @@ export async function loadCliDotEnvForEarlyDiagnostic(
   if (invocation.commandPath[0] === "agent" && invocation.commandPath[1] === "exec") {
     return;
   }
-  if (invocation.primary === "agent" && !argv.includes("--local")) {
+  if (isRemoteAgentDispatchInvocation(invocation)) {
     const { loadGatewayDispatchCliDotEnv } = await import("./gateway-dispatch-dotenv.js");
     await loadGatewayDispatchCliDotEnv();
     return;

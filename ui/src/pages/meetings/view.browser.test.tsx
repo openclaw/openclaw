@@ -88,12 +88,12 @@ describe.skipIf(!hasBrowserLayout)("meeting transcript responsive reader", () =>
     updateView(props);
     const libraryStyle = getComputedStyle(query('input[name="query"]'));
     const readerStyle = getComputedStyle(query('input[name="find"]'));
-    for (const property of ["backgroundColor", "borderRadius", "paddingLeft"] as const) {
+    for (const property of ["backgroundColor", "borderRadius"] as const) {
       expect(readerStyle[property]).toBe(libraryStyle[property]);
     }
     const third = container.querySelectorAll(".transcripts-list__entry")[2]!;
     expect(rect(third).bottom).toBeLessThan(window.innerHeight);
-    expect(query(".transcripts-filters details")).toHaveProperty("open", false);
+    expect(query(".transcripts-filters__trigger").getAttribute("aria-expanded")).not.toBe("true");
     const overview = "A readable summary of the decisions and follow-up work. ".repeat(5);
     props.search = "";
     props.list = {

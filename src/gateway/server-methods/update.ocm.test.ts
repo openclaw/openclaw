@@ -8,7 +8,6 @@ import { resolveConfigPath, resolveStateDir } from "../../config/paths.js";
 import { resolveOcmUpdateManager } from "../../infra/ocm-update-client.js";
 import { createUpdateRun, finishUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import {
   invokeUpdateRun,
@@ -352,7 +351,7 @@ it.each([true, false])(
   },
 );
 
-it.each(["authority", "stop", "scope", "git-target"])(
+it.each(["authority", "stop", "scope", "git-target", "consent"])(
   "refuses an invalid %s before submitting to OCM",
   async (refusal) => {
     await withManager(async ({ capability, job }) => {
@@ -377,7 +376,9 @@ it.each(["authority", "stop", "scope", "git-target"])(
         invokeUpdateRun(
           refusal === "git-target"
             ? { target: { kind: "git", upstreamRef: "origin/main", upstreamSha: "a".repeat(40) } }
-            : {},
+            : refusal === "consent"
+              ? { acceptCapabilities: true }
+              : {},
           respond,
           undefined,
           {},
@@ -391,14 +392,17 @@ it.each(["authority", "stop", "scope", "git-target"])(
                 : undefined,
           },
         );
-      if (refusal === "git-target") {
+      if (refusal === "git-target" || refusal === "consent") {
         await start();
         expect(respond).toHaveBeenCalledWith(
           false,
           undefined,
           expect.objectContaining({
             code: "INVALID_REQUEST",
-            message: "This OCM version does not support an explicit Git update target.",
+            message:
+              refusal === "consent"
+                ? "OCM owns this update and cannot apply capability consent. Run the update without --accept-capabilities."
+                : "This OCM version does not support an explicit Git update target.",
           }),
         );
       } else {
@@ -602,8 +606,7 @@ it("redacts manager diagnostics before RPC/UI projection and probe errors", asyn
     )({ params: { runId: `ocm:${job.id}` }, respond } as never);
     const response = expectDefined(respond.mock.calls[0]?.[1], "managed update response");
     expect(JSON.stringify(response)).not.toContain(secret);
-    expect(renderUpdateRunReport(response.run).markdown).toContain("Package fetch failed");
-    expect(renderUpdateRunReport(response.run).markdown).not.toContain(secret);
+    expect(JSON.stringify(response.run.steps)).toContain("Package fetch failed");
     exec.mockRejectedValue(new Error(diagnostic));
     const error = await invokeUpdateRun({}).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(Error);

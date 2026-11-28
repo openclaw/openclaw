@@ -2,14 +2,15 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
 import { jsonNativeFieldsValid } from "../../infra/database-engine/json-values.js";
 import {
-  prepareSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
+  prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-state.js";
+import { isDegradedCompactionEvent } from "./session-message-cut-plan.js";
 import { projectTranscriptPayloadNavigationSql } from "./session-model-context-projection.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
@@ -68,7 +69,12 @@ export function readSessionMessageCut(
         );
       }
       let event: TranscriptEvent = JSON.parse(row.event_json);
-      // The header's lineage and the selected user's editor content are part of the result.
+      // The header's lineage and the selected user's editor content are part of
+      // the result. Compaction payloads are not: fork planning copies only the
+      // selected prefix, so hydrating every compaction in the transcript would
+      // charge unrelated summaries to the navigation budget and retain them in
+      // the worker heap. The prefix's degradation is checked separately, one
+      // compaction at a time, through hasDegradedCompaction below.
       if (isRecord(event) && (event.type === "session" || event.id === entryId)) {
         bytes += row.payload_bytes;
         if (bytes > SESSION_MESSAGE_CUT_MAX_BYTES) {
@@ -86,6 +92,20 @@ export function readSessionMessageCut(
     }
     return {
       events,
+      // Only inspect compactions in the selected prefix using the budgeted payload reader.
+      hasDegradedCompaction(prefix: readonly TranscriptEvent[]): boolean {
+        for (const event of prefix) {
+          if (isRecord(event) && event.type === "compaction") {
+            const seq =
+              sequences.get(event) ??
+              (typeof event.id === "string" ? identities.get(event.id) : undefined);
+            if (seq !== undefined && isDegradedCompactionEvent(read(seq))) {
+              return true;
+            }
+          }
+        }
+        return false;
+      },
       *hydrate(selected: readonly TranscriptEvent[]) {
         for (const event of selected) {
           const originalSeq = sequences.get(event);

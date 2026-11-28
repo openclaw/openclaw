@@ -20,13 +20,11 @@ import {
 } from "./cli-export.js";
 import {
   parseGoogleMeetBrowserTransport,
-  parseGoogleMeetMode,
-  parseGoogleMeetTransport,
   parseOptionalNumber,
   parsePositiveIntegerOption,
   parsePositiveNumber,
   promptInput,
-  resolveCliJoinRequest,
+  readCliJoinOptions,
   resolveGoogleMeetOAuthCallbackTimeoutMs,
   type DoctorOptions,
   type JoinOptions,
@@ -47,6 +45,7 @@ import {
   registerGoogleMeetCreateCommands,
 } from "./cli-space-commands.js";
 import { resolveGoogleMeetGatewayOperationTimeoutMs, type GoogleMeetConfig } from "./config.js";
+import { parseGoogleMeetMode, parseGoogleMeetTransport } from "./join-options.js";
 import { createGoogleMeetSpace, fetchGoogleMeetSpace } from "./meet-api.js";
 import type { GoogleMeetOAuthRuntime } from "./oauth-owner.js";
 import {
@@ -325,7 +324,10 @@ export function registerGoogleMeetCli(params: {
     .option("--pin <pin>", "Meet phone PIN; # is appended if omitted")
     .option("--dtmf-sequence <sequence>", "Explicit Twilio DTMF sequence")
     .action(async (url: string | undefined, options: JoinOptions) => {
-      const payload = resolveCliJoinRequest(resolveMeetingInput(context.config, url), options);
+      const payload = {
+        url: resolveMeetingInput(context.config, url),
+        ...readCliJoinOptions(options),
+      };
       const result = await callGoogleMeetRuntime(
         context,
         "googlemeet.join",

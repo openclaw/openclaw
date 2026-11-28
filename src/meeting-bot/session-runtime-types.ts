@@ -72,6 +72,7 @@ export type MeetingSessionRuntimeOptions<
   joinTimeoutMs: number;
   transientSpeechBlockedReasons: ReadonlySet<TSpeechBlockedReason>;
   resolveJoin(request: TRequest): MeetingResolvedJoin<TTransport, TMode>;
+  getRequesterSessionKey?(request: TRequest): string | undefined;
   createSession(params: {
     request: TRequest;
     resolved: MeetingResolvedJoin<TTransport, TMode>;
@@ -104,6 +105,7 @@ export type MeetingSessionRuntimeOptions<
   ): Promise<{ keepBrowserTab: boolean } | void>;
   ensureRealtimeBridge(
     session: TSession,
+    requesterSessionKey?: string,
   ): Promise<MeetingSessionRuntimeHandles<THealth> | undefined>;
   captureTranscript(
     session: TSession,

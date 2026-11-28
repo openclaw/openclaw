@@ -3,9 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withTriageTerminal } from "../../commands/triage.test-support.js";
 import { prepareGithubIssue } from "../../infra/github-issue.js";
+import type * as FailureReport from "../../infra/update-failure-report.js";
 import * as ledger from "../../infra/update-run-ledger.js";
+import { createUpdateRunRecordFixture } from "../../infra/update-run-record.test-support.js";
 import { defaultRuntime } from "../../runtime.js";
-import { formatUpdateReportReadHint } from "./report-path.js";
 import { stepFixture } from "./update-command-fixtures.test-support.js";
 import {
   UpdateCommandFailure,
@@ -18,9 +19,8 @@ const mocks = vi.hoisted(() => ({
   select:
     vi.fn<(options: { options: { value: string; label: string }[] }) => Promise<string | symbol>>(),
   confirm: vi.fn<() => Promise<boolean | symbol>>(),
-  prepare:
-    vi.fn<typeof import("../../infra/update-failure-report.js").prepareUpdateFailureReport>(),
-  submit: vi.fn<typeof import("../../infra/update-failure-report.js").submitUpdateFailureReport>(),
+  prepare: vi.fn<typeof FailureReport.prepareUpdateFailureReport>(),
+  submit: vi.fn<typeof FailureReport.submitUpdateFailureReport>(),
   triage: vi.fn(),
 }));
 
@@ -64,21 +64,24 @@ function setup() {
     }),
     attemptId: runId,
     previewDigest: "a".repeat(64),
-    savedReportPath: `${stateDir}/report.md`,
   };
   mocks.prepare.mockResolvedValue(prepared);
   mocks.submit.mockResolvedValue({
-    savedReportPath: prepared.savedReportPath,
     status: "created",
     url: "https://github.com/openclaw/openclaw/issues/123",
   });
+  const recorded = createUpdateRunRecordFixture(runId, {
+    reason: "restart-unhealthy",
+    target: { kind: "package" },
+  });
+  vi.spyOn(ledger, "getUpdateRun").mockReturnValue(recorded);
   const opts = { run: { runId, env } };
   const target = { env };
   const invoke = (run: () => Promise<void>) =>
     withTriageTerminal(true, () => withUpdateFailureTriage(opts, target, run));
   const run = (error = failure) =>
     expect(invoke(() => Promise.reject(error))).rejects.toMatchObject({ code: 1 });
-  return { env, prepared, result, run, invoke };
+  return { env, prepared, recorded, result, run, invoke };
 }
 
 function expectUnused(...actions: (keyof typeof mocks)[]) {
@@ -125,14 +128,12 @@ it("offers an optional report, previews it, and submits once only after confirma
       { value: "dismiss", label: "Exit" },
     ],
   });
-  expect(mocks.prepare).toHaveBeenCalledExactlyOnceWith(
-    { attemptId: runId, action: "cli", result: f.result, recordedRun: undefined },
-    { env: f.env, stateDir: f.env.OPENCLAW_STATE_DIR },
-  );
-  expectOnceContaining("confirm", { initialValue: false });
-  expect(mocks.submit).toHaveBeenCalledExactlyOnceWith(f.prepared, f.prepared.previewDigest, {
+  expect(mocks.prepare).toHaveBeenCalledExactlyOnceWith(f.recorded, {
     env: f.env,
     stateDir: f.env.OPENCLAW_STATE_DIR,
+  });
+  expectOnceContaining("confirm", { initialValue: false });
+  expect(mocks.submit).toHaveBeenCalledExactlyOnceWith(f.prepared, f.prepared.previewDigest, {
     allowBrowserFallback: false,
   });
   expect(mocks.triage).not.toHaveBeenCalled();
@@ -190,7 +191,6 @@ it("does not prompt after a successful update", async () => {
 
 describe("interactive report actions", () => {
   function action(actions = ["report"], confirmed = true) {
-    vi.spyOn(ledger, "getUpdateRun").mockReturnValue(undefined);
     Object.assign(f.prepared, {
       browserFallback: {
         status: "available",
@@ -210,9 +210,7 @@ describe("interactive report actions", () => {
     expect(defaultRuntime.log).toHaveBeenCalledWith("Update failure report cancelled.");
     expect(mocks.submit).not.toHaveBeenCalled();
   });
-
   it.each([
-    { status: "duplicate", url: "https://github.com/openclaw/openclaw/issues/123" },
     { status: "pending" },
     { status: "fallback", fallbackUrl: "https://github.com/openclaw/openclaw/issues/new" },
   ] as const)("renders $status guidance without unsolicited browser navigation", async (result) => {
@@ -221,29 +219,11 @@ describe("interactive report actions", () => {
     mocks.submit.mockResolvedValue({
       ...result,
       message,
-      savedReportPath: f.prepared.savedReportPath,
     });
     await run();
-    if (result.status !== "fallback") {
-      expect(defaultRuntime.log).toHaveBeenCalledWith(message);
-    }
-    if (result.status === "duplicate") {
-      expect(defaultRuntime.log).toHaveBeenCalledWith(`Existing issue: ${result.url}`);
-    }
-    if (result.status === "fallback") {
-      expect(mocks.select).toHaveBeenCalledTimes(2);
-      expect(defaultRuntime.log).not.toHaveBeenCalledWith(`Prefilled issue: ${result.fallbackUrl}`);
-      expect(defaultRuntime.log).toHaveBeenCalledWith(
-        `Saved sanitized report: ${f.prepared.savedReportPath}`,
-      );
-      expect(defaultRuntime.log).toHaveBeenCalledWith(
-        formatUpdateReportReadHint(f.prepared.savedReportPath),
-      );
-    } else {
-      expect(defaultRuntime.log).not.toHaveBeenCalledWith(
-        expect.stringContaining("Saved sanitized report:"),
-      );
-    }
+    expect(defaultRuntime.log).toHaveBeenCalledWith(
+      result.status === "fallback" ? `GitHub issue creation was unavailable: ${message}` : message,
+    );
   });
 
   it("retires a browser retry choice after submission errors while retaining the report", async () => {
@@ -252,7 +232,6 @@ describe("interactive report actions", () => {
       .mockResolvedValueOnce({
         status: "retryable",
         message: "GitHub authentication is unavailable.",
-        savedReportPath: f.prepared.savedReportPath,
       })
       .mockRejectedValueOnce(new Error("transport failed"))
       .mockRejectedValueOnce(new Error("still unavailable"));

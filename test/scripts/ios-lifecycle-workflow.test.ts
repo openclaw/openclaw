@@ -28,8 +28,6 @@ function isTestCommand(command: Command) {
 const argsFor = (commands: Command[], tool: string) =>
   commands.filter((command) => command.tool === tool).map((command) => command.args);
 const selectedTests = (args: string[]) => args.filter((arg) => arg.startsWith("-only-testing:"));
-const xcodeActions = (commands: Command[], actions: string[]) =>
-  argsFor(commands, "xcodebuild").map((args) => args.find((arg) => actions.includes(arg)));
 const selectors = (target: string, names: string[]) =>
   names.map((name) => `-only-testing:${target}/${name}`);
 const resultBundle = (name: string) => `apps/ios/build/LifecycleTestResults/${name}.xcresult`;
@@ -49,7 +47,6 @@ const workflow: { jobs: Record<string, { steps?: Step[] }> } = parse(
 );
 const findStep = (name: string) =>
   workflow.jobs["ios-build"]?.steps?.find((step) => step.name === name);
-const watchStep = findStep("Run focused Apple Watch operation simulator tests");
 const voiceStep = findStep("Run focused iOS voice cleanup simulator tests");
 const iosStep = findStep("Run focused iOS lifecycle simulator tests");
 const prepareStep = findStep("Prepare iOS simulator");
@@ -59,11 +56,14 @@ const configuredSteps = [configureStep, prepareStep, buildStep];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let pythonExecutable: string | undefined;
 
-function runSimulatorStep(mode = "ready", steps = [watchStep], env: Record<string, string> = {}) {
+function runSimulatorStep(
+  mode: string,
+  steps: (Step | undefined)[],
+  env: Record<string, string> = {},
+) {
   const root = tempDirs.make("openclaw-watch-workflow-");
   const bin = path.join(root, "bin");
   const harnessLib = path.join(root, ".ci-harness", "scripts", "lib");
-  const product = path.join(root, "project derived data", "Watch Product.app");
   mkdirSync(bin, { recursive: true });
   mkdirSync(harnessLib, { recursive: true });
   for (const file of [
@@ -75,12 +75,11 @@ function runSimulatorStep(mode = "ready", steps = [watchStep], env: Record<strin
   ]) {
     copyFileSync(path.join("scripts", file), path.join(harnessLib, "..", file));
   }
-  mkdirSync(product, { recursive: true });
   const runner = path.join(root, "tools.mjs");
   writeFileSync(
     runner,
     String.raw`
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 const [tool, ...args] = process.argv.slice(2);
 const root = process.env.WATCH_FIXTURE_ROOT;
@@ -96,35 +95,14 @@ if (tool === "installer") {
 } else if (tool === "uname") {
   console.log("arm64");
 } else if (tool === "xcrun") {
-  if (args[1] === "list" && args[2] === "pairs") {
-    console.log(JSON.stringify({ pairs: mode === "unpaired" ? {} : {
-      unrelated: { watch: { udid: "other-watch" }, phone: { udid: "other-phone" } },
-      selected: { watch: { udid: "watch-fixture" }, phone: { udid: "companion-fixture" } }
-    } }));
-  } else if (args[1] === "list") {
+  if (args[1] === "list") {
     console.log(JSON.stringify({ devices: { watch: [
-      { name: mode.startsWith("voice") ? "iPhone fixture" : "Apple Watch fixture", isAvailable: true,
+      { name: "iPhone fixture", isAvailable: true,
         udid: mode.includes("slim") ? "11111111-2222-3333-4444-555555555555" : "watch-fixture" }
     ] } }));
-  } else if (args[1] === "bootstatus" && mode.endsWith("boot-failed")) {
-    console.error("Intentional simulator boot failure");
-    process.exit(23);
-  } else if (args[1] === "install" && !existsSync(args[3])) {
-    process.exit(24);
   }
 } else if (args.includes("build-for-testing") && mode === "voice-build-failed-" + args[args.indexOf("-scheme") + 1]) {
   process.exit(26);
-} else if (args.includes("-showBuildSettings")) {
-  const product = {
-    target: "OpenClawWatchApp",
-    buildSettings: {
-      TARGET_BUILD_DIR: mode === "relative-product" ? "relative" : path.join(root, "project derived data"),
-      FULL_PRODUCT_NAME: "Watch Product.app"
-    }
-  };
-  const other = { target: "OtherTarget", buildSettings: { TARGET_BUILD_DIR: "/wrong", FULL_PRODUCT_NAME: "Wrong.app" } };
-  console.log(JSON.stringify(mode === "missing-product" ? [other] :
-    mode === "ambiguous-product" ? [product, product] : [other, product]));
 } else if (args.some((arg) => arg === "test" || arg === "test-without-building") && mode === "voice-tests-failed") {
   process.exit(25);
 }
@@ -211,71 +189,10 @@ exec '${pythonExecutable}' "$@"
   return {
     result,
     commands,
-    product,
     summary: readFileSync(summaryFile, "utf8"),
     environment: readFileSync(environmentFile, "utf8"),
   };
 }
-
-describe.skipIf(process.platform === "win32")("Watch simulator workflow", () => {
-  it.each(["ready", "unpaired"])("prepares the %s destination before XCTest", (mode) => {
-    const { result, commands, product } = runSimulatorStep(mode, [watchStep], {
-      OPENCLAW_CI_SIMSLIM_BINARY: "/must-not-run-simslim",
-    });
-    expect(result.status, result.stderr).toBe(0);
-    const xcodeCommands = commands.filter((command) => command.tool === "xcodebuild");
-    for (const command of xcodeCommands) {
-      expect(command.args).not.toContain("-derivedDataPath");
-    }
-    expect(argsFor(commands, "xcrun")).toEqual([
-      ["simctl", "list", "devices", "available", "--json"],
-      ["simctl", "list", "pairs", "--json"],
-      ...(mode === "unpaired" ? [] : [["simctl", "bootstatus", "companion-fixture", "-b"]]),
-      ["simctl", "boot", "watch-fixture"],
-      ["simctl", "bootstatus", "watch-fixture", "-b"],
-      ["simctl", "install", "watch-fixture", product],
-    ]);
-    const actions = ["build-for-testing", "-showBuildSettings", "test-without-building"];
-    expect(xcodeActions(commands, actions)).toEqual(actions);
-    for (const command of xcodeCommands.filter(
-      (entry) =>
-        entry.args.includes("build-for-testing") || entry.args.includes("test-without-building"),
-    )) {
-      const selected = selectedTests(command.args);
-      expect(selected.length).toBeGreaterThan(0);
-      expect(
-        selected.every((selector) => selector.startsWith("-only-testing:OpenClawWatchTests/")),
-      ).toBe(true);
-      expectArgs(command.args, [
-        "OpenClawWatchApp",
-        "Debug",
-        "platform=watchOS Simulator,id=watch-fixture",
-        "-parallel-testing-enabled",
-        "NO",
-        "CODE_SIGNING_ALLOWED=NO",
-      ]);
-    }
-    expect(
-      xcodeCommands.find((command) => command.args.includes("test-without-building"))?.args,
-    ).toContain(resultBundle("OpenClawWatchOperationTests"));
-  });
-
-  it.each(["missing-product", "ambiguous-product", "relative-product", "boot-failed"])(
-    "rejects %s before install or XCTest",
-    (mode) => {
-      const { result, commands } = runSimulatorStep(mode);
-      if (mode === "boot-failed") {
-        expect(result.status).toBe(23);
-      } else {
-        expect(result.status).not.toBe(0);
-      }
-      expect(commands.some((command) => command.args.includes("install"))).toBe(false);
-      expect(commands.some((command) => command.args.includes("test-without-building"))).toBe(
-        false,
-      );
-    },
-  );
-});
 
 describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", () => {
   it.each([
@@ -292,7 +209,7 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
       expect(result.stdout).toContain("[apple-command] Exit 25");
     }
     const tests = commands.filter(isTestCommand);
-    expect(tests).toHaveLength(phase === "smoke" ? 1 : 2);
+    expect(tests).toHaveLength(1);
     expect(tests[0]?.args).toContain("platform=iOS Simulator,id=watch-fixture");
     expectArgs(tests[0]?.args, [
       "-collect-test-diagnostics",
@@ -330,19 +247,14 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
       "-only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests",
       "-only-testing:OpenClawTests/NodeAppModelInvokeTests",
     ]);
-    expect(selectedTests(tests[1]!.args)).toEqual([
-      "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings",
-      "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/testNestedCustomToolsExposeResultsQuietDetailsAndPendingAuthority",
-      "-only-testing:OpenClawUITests/BootstrapSetupFailureUITests",
-    ]);
     const restart = commands.findIndex((command) => command.tool === "python3");
     expect(restart).toBeGreaterThan(commands.indexOf(tests[0]!));
-    expect(restart).toBeLessThan(commands.indexOf(tests[1]!));
+    expect(commands.at(-1)).toBe(commands[restart]);
   });
 });
 
 it.skipIf(process.platform === "win32")(
-  "reuses universal full-validation test products across focused suites",
+  "reuses app test products across focused voice and lifecycle suites",
   () => {
     const { result, commands } = runSimulatorStep(
       "voice",
@@ -355,16 +267,13 @@ it.skipIf(process.platform === "win32")(
     const builds = argsFor(commands, "xcodebuild").filter((args) =>
       args.includes("build-for-testing"),
     );
-    expect(builds.map((args) => args[args.indexOf("-scheme") + 1])).toEqual([
-      "OpenClaw",
-      "OpenClawUITests",
-    ]);
+    expect(builds.map((args) => args[args.indexOf("-scheme") + 1])).toEqual(["OpenClaw"]);
     for (const args of builds) {
       expect(args).toContain("generic/platform=iOS Simulator");
     }
     expect(commands.every((command) => command.settings === undefined)).toBe(true);
     const tests = commands.filter(isTestCommand);
-    expect(tests).toHaveLength(3);
+    expect(tests).toHaveLength(2);
     for (const test of tests) {
       expect(test.args).toContain("test-without-building");
       expect(test.args).not.toContain("test");
@@ -386,14 +295,11 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
-it.skipIf(process.platform === "win32").each([
-  { scheme: "OpenClaw", attempted: ["OpenClaw"] },
-  { scheme: "OpenClawUITests", attempted: ["OpenClaw", "OpenClawUITests"] },
-])(
-  "does not publish prepared products after $scheme preparation fails",
-  ({ scheme, attempted }) => {
+it.skipIf(process.platform === "win32")(
+  "does not publish prepared products after app preparation fails",
+  () => {
     const { result, commands, environment } = runSimulatorStep(
-      `voice-build-failed-${scheme}`,
+      "voice-build-failed-OpenClaw",
       [...configuredSteps, voiceStep, iosStep],
       { IOS_CI_PHASE: "tests" },
     );
@@ -402,7 +308,7 @@ it.skipIf(process.platform === "win32").each([
       argsFor(commands, "xcodebuild")
         .filter((args) => args.includes("build-for-testing"))
         .map((args) => args[args.indexOf("-scheme") + 1]),
-    ).toEqual(attempted);
+    ).toEqual(["OpenClaw"]);
     expect(environment).not.toContain("IOS_TEST_BUILD_PREPARED=true");
     expect(commands.filter(isTestCommand)).toHaveLength(0);
   },

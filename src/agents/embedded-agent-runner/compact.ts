@@ -147,6 +147,9 @@ export async function compactNativeCliSession(params: {
       forwardedAuthProfileId = params.compactParams.authProfileId;
     }
   }
+  // Native compaction is session maintenance: any member who may send can trigger it, and the
+  // triggering turn may already have ended. Its control operation refuses OpenClaw tool calls,
+  // so it runs as System work and lends no authority to whoever triggered it.
   const preparedRunAdmission = prepareSystemAgentRunAdmission(
     params.compactParams.config ?? {},
     runId,
@@ -287,8 +290,10 @@ export async function compactEmbeddedAgentSessionDirect(
     ));
   assertReadCurrent();
   const lockedHarnessRuntime = resolveSessionPinnedHarnessId(entry);
-  const requestedParams: CompactEmbeddedAgentSessionParams = {
+  const requestedParams: CompactEmbeddedAgentSessionRuntimeParams & { sessionFile: string } = {
     ...paramsBase,
+    pluginExecutionAuthority:
+      accountingRecorder?.operatorAuthority ?? paramsBase.pluginExecutionAuthority,
     sessionEntry: entry ? projectExecutionSessionEntry(entry) : undefined,
     agentHarnessId: lockedHarnessRuntime ?? paramsBase.agentHarnessId,
     modelSelectionLocked: entry?.modelSelectionLocked ?? paramsBase.modelSelectionLocked,

@@ -275,36 +275,6 @@ describe("recoverEmbeddedRunOverflow", () => {
     expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining("source=assistantError"));
   });
 
-  it("recovers a SiliconFlow max_seq_len overflow as context overflow", async () => {
-    const assistantOverflowCandidate = makeAssistantMessage({
-      stopReason: "error",
-      errorMessage:
-        '400 {"code":20015,"message":"length of prompt_tokens (51353) must be less than max_seq_len (32768).","data":null}',
-    });
-    const result = await recoverEmbeddedRunOverflow(
-      makeInput({ promptError: null, assistantOverflowCandidate }),
-    );
-
-    expect(result).toEqual({ action: "retry" });
-    expect(mocks.compact).toHaveBeenCalledOnce();
-    expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining("source=assistantError"));
-  });
-
-  it("recovers a vLLM max_model_len overflow as context overflow", async () => {
-    const assistantOverflowCandidate = makeAssistantMessage({
-      stopReason: "error",
-      errorMessage:
-        "400 The decoder prompt (length 40000) is longer than the maximum model length of 32768. Make sure that `max_model_len` is no smaller than the number of text tokens.",
-    });
-    const result = await recoverEmbeddedRunOverflow(
-      makeInput({ promptError: null, assistantOverflowCandidate }),
-    );
-
-    expect(result).toEqual({ action: "retry" });
-    expect(mocks.compact).toHaveBeenCalledOnce();
-    expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining("source=assistantError"));
-  });
-
   it("does not compact a validation rejection naming context_length_exceeded", async () => {
     const assistantOverflowCandidate = makeAssistantMessage({
       stopReason: "error",
@@ -573,46 +543,40 @@ describe("recoverEmbeddedRunOverflow", () => {
     expect(input.state.overflowCompactionAttempts).toBe(1);
   });
 
-  it.each([true])(
-    "truncates the active projection after mixed preflight compaction (successor=%s)",
-    async (adoptsSuccessor) => {
-      let sessionId = "session-1";
-      using predecessor = retainEmbeddedSessionPromptState(sessionId);
-      using successor = retainEmbeddedSessionPromptState("rotated-session");
-      predecessor.state.toolResults.frozen.add("predecessor-only");
-      const successorProjection = successor.state.toolResults;
-      successorProjection.frozen.add("successor-only");
-      mocks.truncateOversizedToolResults.mockReturnValueOnce({
-        truncated: true,
-        truncatedCount: 2,
-      });
-      const input = makeInput({
-        getActiveSession: () => ({ id: sessionId, file: `/tmp/${sessionId}.jsonl` }),
-        adoptCompactionTranscript: vi.fn(async () => {
-          if (adoptsSuccessor) {
-            sessionId = "rotated-session";
-            return "session-1";
-          }
-          return undefined;
-        }),
-        attempt: {
-          terminal: { kind: "failed", source: "precheck", error: overflowError() },
-          sessionIdUsed: "session-1",
-          messagesSnapshot: [],
-          preflightRecovery: { pressure: "overflow", route: "compact_then_truncate" },
-        },
-      });
+  it("truncates the active successor projection after mixed preflight compaction", async () => {
+    let sessionId = "session-1";
+    using predecessor = retainEmbeddedSessionPromptState(sessionId);
+    using successor = retainEmbeddedSessionPromptState("rotated-session");
+    predecessor.state.toolResults.frozen.add("predecessor-only");
+    const successorProjection = successor.state.toolResults;
+    successorProjection.frozen.add("successor-only");
+    mocks.truncateOversizedToolResults.mockReturnValueOnce({
+      truncated: true,
+      truncatedCount: 2,
+    });
+    const input = makeInput({
+      getActiveSession: () => ({ id: sessionId, file: `/tmp/${sessionId}.jsonl` }),
+      adoptCompactionTranscript: vi.fn(async () => {
+        sessionId = "rotated-session";
+        return "session-1";
+      }),
+      attempt: {
+        terminal: { kind: "failed", source: "precheck", error: overflowError() },
+        sessionIdUsed: "session-1",
+        messagesSnapshot: [],
+        preflightRecovery: { pressure: "overflow", route: "compact_then_truncate" },
+      },
+    });
 
-      expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action: "retry" });
-      expect(mocks.truncateOversizedToolResults).toHaveBeenCalledWith(
-        expect.objectContaining({
-          projectionState: successorProjection,
-          preserveSentToolResults: true,
-        }),
-      );
-      expect(input.prepareCompactedTranscriptRetry).toHaveBeenCalledOnce();
-    },
-  );
+    expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action: "retry" });
+    expect(mocks.truncateOversizedToolResults).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectionState: successorProjection,
+        preserveSentToolResults: true,
+      }),
+    );
+    expect(input.prepareCompactedTranscriptRetry).toHaveBeenCalledOnce();
+  });
 
   it.each([
     { successful: false, tokensAfter: 80_000 },

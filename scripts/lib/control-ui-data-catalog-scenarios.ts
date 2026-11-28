@@ -30,6 +30,15 @@ const toolsPerGroup = 25;
 const catalogPageSize = 100;
 const pluginQuery = "Data plugin 09";
 const skillQuery = "Data skill 0999";
+const cardContent =
+  "# Data skill 0999 instructions\n\nCheck the local skill requirements before use.\n";
+export const dataCatalogSkillCard = {
+  schema: "openclaw.skills.skill-card.v1",
+  skillKey: "data-skill-0999",
+  path: "/synthetic/skills/data-skill-0999/skill-card.md",
+  sizeBytes: Buffer.byteLength(cardContent),
+  content: cardContent,
+} as const;
 const skillScrollRowSelector =
   "css:light=.agent-skills-group:last-child .agent-skill-row:last-child";
 
@@ -219,6 +228,15 @@ function createDataCatalogFixture(revision = 1): InteractionFixtureOverrides {
             bundled: index % 4 === 0,
             primaryEnv: undefined,
             description: `Synthetic skill ${index} with availability diagnostics.`,
+            ...(index === 999
+              ? {
+                  skillCard: {
+                    present: true,
+                    path: dataCatalogSkillCard.path,
+                    sizeBytes: dataCatalogSkillCard.sizeBytes,
+                  },
+                }
+              : {}),
             missing: { bins: ["synthetic-tool"], anyBins: [], env: [], config: [], os: [] },
             eligible: false,
           }),

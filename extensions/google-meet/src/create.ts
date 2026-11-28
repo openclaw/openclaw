@@ -1,6 +1,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GoogleMeetConfig } from "./config.js";
+import { readGoogleMeetJoinOptions } from "./join-options.js";
 import {
   createGoogleMeetSpace,
   type GoogleMeetAccessType,
@@ -9,7 +10,6 @@ import {
 } from "./meet-api.js";
 import type { GoogleMeetOAuthRuntime } from "./oauth-owner.js";
 import { resolveGoogleMeetTokenFromParams } from "./plugin-helpers.js";
-import { normalizeMode, normalizeTransport } from "./plugin-registration.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 import { createMeetWithBrowserProxyOnNode } from "./transports/chrome-create.js";
 
@@ -132,22 +132,13 @@ export async function createAndJoinMeetFromParams(params: {
   raw: Record<string, unknown>;
   ensureRuntime: () => Promise<GoogleMeetRuntime>;
 }) {
+  const joinOptions = readGoogleMeetJoinOptions(params.raw);
   const created = await createMeetFromParams({
     ...params,
     createViaBrowser: async () => (await params.ensureRuntime()).createViaBrowser(),
   });
   const rt = await params.ensureRuntime();
-  const join = await rt.join({
-    url: created.meetingUri,
-    transport: normalizeTransport(params.raw.transport),
-    mode: normalizeMode(params.raw.mode),
-    dialInNumber: normalizeOptionalString(params.raw.dialInNumber),
-    pin: normalizeOptionalString(params.raw.pin),
-    dtmfSequence: normalizeOptionalString(params.raw.dtmfSequence),
-    message: normalizeOptionalString(params.raw.message),
-    requesterSessionKey: normalizeOptionalString(params.raw.requesterSessionKey),
-    agentId: normalizeOptionalString(params.raw.agentId),
-  });
+  const join = await rt.join({ url: created.meetingUri, ...joinOptions });
   return {
     ...created,
     joined: true,

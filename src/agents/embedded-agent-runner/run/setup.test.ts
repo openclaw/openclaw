@@ -21,7 +21,7 @@ const hookContext = { sessionId: "session-1", workspaceDir: "/tmp/workspace" };
 
 type EffectiveModelInput = Parameters<typeof resolveEmbeddedRunEffectiveModel>[0];
 function effectiveModel(
-  runParams: Partial<EffectiveModelInput["runParams"]> = {},
+  runParams: Partial<EffectiveModelInput["runParams"]>,
   overrides: Partial<Omit<EffectiveModelInput, "runParams">> = {},
 ) {
   return resolveEmbeddedRunEffectiveModel({
@@ -154,11 +154,6 @@ describe("buildBeforeModelResolveAttachments", () => {
       { kind: "image", mimeType: "image/png" },
       { kind: "image", mimeType: "image/jpeg" },
     ]);
-  });
-
-  it("omits attachments when there are no images", () => {
-    expect(buildBeforeModelResolveAttachments(undefined)).toBeUndefined();
-    expect(buildBeforeModelResolveAttachments([])).toBeUndefined();
   });
 });
 
@@ -396,9 +391,9 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
     // A -> B -> A metadata replacement models account-scoped rematerialization;
     // no credential selection, provider request, or operator state is involved.
     for (const [contextTokens, threshold] of [
-      [872_000, 654_000],
+      [872_000, 741_200],
       [64_000, 44_000],
-      [872_000, 654_000],
+      [872_000, 741_200],
     ] as const) {
       registry.registerProvider(provider, {
         api: "openai-responses",

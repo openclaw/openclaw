@@ -6,6 +6,7 @@ import {
 import type {
   ModelAuthLogoutResult,
   ModelAuthOrderSetResult,
+  ModelAuthProfileRenameResult,
 } from "../../../../src/gateway/server-methods/models-auth-status.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelsProbeResult } from "../../api/types.ts";
@@ -13,6 +14,7 @@ import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-state.ts";
+import { showToast } from "../../lib/toast.ts";
 import {
   mergeProbeResults,
   modelProviderErrorMessage,
@@ -52,7 +54,7 @@ export function createModelProviderProfileActions(options: {
   setProbeResult: (cardId: string, result: ModelsProbeResult | null) => void;
   clearMessage: (cardId: string) => void;
   cancelRefresh: () => void;
-  refresh: () => Promise<void>;
+  refresh: (force?: boolean) => Promise<void>;
   getConfig: () => RuntimeConfigCapability;
   isCurrentClient: (client: GatewayBrowserClient, epoch: number) => boolean;
   onLogoutStarted: (receipt: { cardId: string; completion: Promise<void> }) => void;
@@ -75,10 +77,14 @@ export function createModelProviderProfileActions(options: {
     return isLatest;
   }
 
-  /** Account targets sign out their profiles; removal targets clear a provider or its API key. */
+  /**
+   * Account targets sign out their profiles; removal targets clear a provider or its API key.
+   * `disconnect` revokes the one targeted sign-in at its provider before removing it.
+   */
   async function logout(
     cardId: string,
     targets: Array<ModelProviderLogoutTarget | ModelProviderRemovalTarget>,
+    disconnect?: { account: string },
   ): Promise<void> {
     const client = options.getClient();
     const key = `logout:${cardId}`;
@@ -89,7 +95,20 @@ export function createModelProviderProfileActions(options: {
     clearProbe(cardId);
     options.setBusy(key, true);
     options.clearMessage(cardId);
-    const completion = settleLogout(key, targets, scope);
+    const completion = settleLogout(
+      key,
+      targets,
+      scope,
+      disconnect && {
+        ...disconnect,
+        // The toast outlives the page state; retry only under the Gateway and agent it named.
+        retry: () => {
+          if (scope.isCurrent()) {
+            void logout(cardId, targets, disconnect);
+          }
+        },
+      },
+    );
     options.onLogoutStarted({ cardId, completion });
     return completion;
   }
@@ -98,6 +117,7 @@ export function createModelProviderProfileActions(options: {
     key: string,
     targets: Array<ModelProviderLogoutTarget | ModelProviderRemovalTarget>,
     { agentId, isCurrent }: ReturnType<typeof captureScope>,
+    disconnect: { account: string; retry: () => void } | undefined,
   ): Promise<void> {
     const receipts: ModelAuthLogoutResult[] = [];
     try {
@@ -111,6 +131,7 @@ export function createModelProviderProfileActions(options: {
               receipts.push(
                 await activeClient.request<ModelAuthLogoutResult>("models.authLogout", {
                   ...target,
+                  ...(disconnect ? { revoke: true } : {}),
                   agentId,
                 }),
               );
@@ -134,7 +155,18 @@ export function createModelProviderProfileActions(options: {
         } catch (error) {
           refreshError = modelProviderErrorMessage(error);
         }
-        if (isCurrent()) {
+        if (isCurrent() && disconnect) {
+          // The Gateway keeps the sign-in when the provider did not confirm the revoke.
+          showToast({
+            message: t("modelProviders.disconnect.failed", { account: disconnect.account }),
+            description: [result.error, refreshError].filter(Boolean).join(" "),
+            severity: "error",
+            durationMs: null,
+            actionLabel: t("modelProviders.disconnect.retry"),
+            actionPrimary: true,
+            onAction: disconnect.retry,
+          });
+        } else if (isCurrent()) {
           const completed = new Set(receipts.flatMap((receipt) => receipt.removedProfiles ?? []));
           showProfileActionError(
             [
@@ -272,6 +304,46 @@ export function createModelProviderProfileActions(options: {
     options.setData({ ...data, authStatus: { ...authStatus, providers } });
   }
   return {
+    renameProfile: async (profileId: string, displayName: string): Promise<boolean> => {
+      const client = options.getClient();
+      const key = "rename:" + profileId;
+      if (!client || !options.canMutate() || options.isBusy(key)) {
+        return false;
+      }
+      const { agentId, isCurrent } = captureScope(client);
+      options.setBusy(key, true);
+      try {
+        const result = await client.request<ModelAuthProfileRenameResult>(
+          "models.authProfileRename",
+          {
+            agentId,
+            profileId,
+            displayName,
+          },
+        );
+        invalidateModelAuthStatusRequests(client);
+        if (!isCurrent()) {
+          return false;
+        }
+        if (result.warning) {
+          showProfileActionWarning(result.warning);
+        }
+        await options.refresh(false);
+        return isCurrent();
+      } catch (error) {
+        if (isCurrent()) {
+          showProfileActionError(error);
+          // A transport timeout can follow a commit. Reconcile the same account before retry.
+          invalidateModelAuthStatusRequests(client);
+          void options.refresh(false);
+        }
+        return false;
+      } finally {
+        if (isCurrent()) {
+          options.setBusy(key, false);
+        }
+      }
+    },
     resetProbes(): void {
       probeEpochs = new Map();
     },
@@ -367,12 +439,15 @@ export function createModelProviderProfileActions(options: {
         "defaultModels" in pending && pending.defaultModels
           ? t("modelProviders.remove.defaults", { models: pending.defaultModels })
           : "";
+      const disconnect = "disconnect" in pending ? pending.disconnect : undefined;
       const confirmed = await showConfirmDialog({
         title: removingConfig
           ? t("modelProviders.remove.title", { provider: pending.label })
           : removing
             ? t("modelProviders.remove.accessTitle", { provider: pending.label })
-            : t("modelProviders.logout.title", { account: pending.label }),
+            : disconnect
+              ? t("modelProviders.disconnect.title", { action: disconnect.label })
+              : t("modelProviders.logout.title", { account: pending.label }),
         message: removingConfig
           ? [t("modelProviders.remove.config", { key: pending.removeConfigKey }), defaults]
               .filter(Boolean)
@@ -392,14 +467,18 @@ export function createModelProviderProfileActions(options: {
               ]
                 .filter(Boolean)
                 .join(" ")
-            : t("modelProviders.logout.confirm", { provider: pending.label }),
-        confirmLabel: t(
-          removingConfig
-            ? "modelProviders.remove.action"
-            : removing
-              ? "modelProviders.remove.accessAction"
-              : "modelProviders.logout.action",
-        ),
+            : disconnect
+              ? t("modelProviders.disconnect.confirm", { account: pending.label })
+              : t("modelProviders.logout.confirm", { provider: pending.label }),
+        confirmLabel: disconnect
+          ? disconnect.label
+          : t(
+              removingConfig
+                ? "modelProviders.remove.action"
+                : removing
+                  ? "modelProviders.remove.accessAction"
+                  : "modelProviders.logout.action",
+            ),
         danger: true,
         signal: controller.signal,
       }).finally(() => {
@@ -409,7 +488,11 @@ export function createModelProviderProfileActions(options: {
         return;
       }
       if (!removingConfig) {
-        await logout(pending.cardId, removing ? pending.removeTargets : [pending.target]);
+        await logout(
+          pending.cardId,
+          removing ? pending.removeTargets : [pending.target],
+          disconnect ? { account: pending.label } : undefined,
+        );
         return;
       }
       const provider = pending.removeConfigKey;

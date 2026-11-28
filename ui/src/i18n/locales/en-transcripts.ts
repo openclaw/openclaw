@@ -9,6 +9,7 @@ const enTranscripts = {
     filters: "Filter meeting transcripts",
     advancedFilters: "Filters",
     titleFilter: "Search meetings",
+    queryTooLong: "Use {limit} characters or fewer to search meetings.",
     sourceFilter: "Provider",
     accountFilter: "Account",
     agentFilter: "Agent",

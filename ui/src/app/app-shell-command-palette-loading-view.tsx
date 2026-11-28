@@ -23,6 +23,7 @@ export function CommandPaletteLoading(props: {
     >
       <ModalDialog
         initialFocus={() => initialInput}
+        nativeBrowserBackdrop
         class="cmd-palette-overlay palette"
         label={t("palette.placeholder")}
         style={COMMAND_PALETTE_DIALOG_STYLE}

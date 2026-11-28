@@ -130,18 +130,7 @@ function buildPersistedDetailsFallback(
     copyPersistedSummaryFields({
       target: fallback,
       source: src,
-      keys: [
-        "status",
-        "sessionId",
-        "pid",
-        "exitCode",
-        "exitSignal",
-        "truncated",
-        "spill",
-        "fullOutputPath",
-        "spilledChars",
-        "spillTruncated",
-      ],
+      keys: ["status", "sessionId", "pid", "exitCode", "exitSignal", "truncated", "spill"],
       maxChars: MAX_PERSISTED_DETAIL_FALLBACK_STRING_CHARS,
     });
     copyPersistedResultStateFields(fallback, src, MAX_PERSISTED_DETAIL_FALLBACK_STRING_CHARS);
@@ -224,9 +213,6 @@ function sanitizeToolResultDetailsForPersistence(details: unknown, toolName: str
       "totalChars",
       "truncated",
       "spill",
-      "fullOutputPath",
-      "spilledChars",
-      "spillTruncated",
       "truncation",
     ],
     maxChars: MAX_PERSISTED_DETAIL_STRING_CHARS,

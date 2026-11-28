@@ -1,0 +1,5 @@
+# Gateway and tools: exercise signed requester isolation, scoped admission, legacy interoperability, ordered pin writes and per-subscriber event privacy.
+# Web: cover signed versus device-local windows, inclusive wake boundaries, paginated refresh, saved ordering and transient versus permanent refusal.
+# Native app and Archive Undo regressions belong to their own PRs.
+# Split-review regressions exercise a filtered-out pin at wake and a sibling archived during preference read/write.
+1611

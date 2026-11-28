@@ -65,7 +65,9 @@ it.each(["settled", "failed", "revoked", "unsandboxed"] as const)(
           }
           baseline.resolve();
           if (outcome === "revoked") {
-            await expect(pending).rejects.toThrow("admitted run authority is no longer active");
+            await expect(pending).rejects.toThrow(
+              "This agent run is no longer active. Start a new turn to retry.",
+            );
           } else {
             await pending;
             expect(await fs.readFile(setupFile, "utf8")).toBe("sandbox setup");

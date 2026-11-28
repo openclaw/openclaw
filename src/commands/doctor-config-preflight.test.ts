@@ -24,7 +24,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as sqliteReadWorkers from "../infra/sqlite-readonly-worker.js";
-import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
+import { hasActiveStartupMigrationLeaseForTest } from "../infra/startup-migration-checkpoint.test-support.js";
 import { createUpdateRun, getUpdateRun } from "../infra/update-run-ledger.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../infra/update-run-timeouts.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
@@ -654,7 +654,7 @@ describe("runDoctorConfigPreflight", () => {
       ).toEqual(clobbered);
     });
   });
-  it("repairs session keys with a legacy roster through Doctor and preserves the authored backup", async () => {
+  it("migrates session keys and a legacy roster at startup and preserves the authored backup", async () => {
     await withUnscopedDoctorConfigPreflightHome(async (home) => {
       const configPath = await writeOpenClawConfig(home, {
         gateway: { mode: "local" },
@@ -664,9 +664,14 @@ describe("runDoctorConfigPreflight", () => {
       const original = await fs.readFile(configPath, "utf-8");
 
       const startup = await runStartupConfigPreflight({ gateway: true });
-      expect(startup.snapshot.valid).toBe(false);
-      expect(await fs.readFile(configPath, "utf-8")).toBe(original);
-      await expect(fs.access(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(startup.snapshot.valid).toBe(true);
+      expect(startup.snapshot.sourceConfig.session).toEqual({
+        reset: { mode: "idle", idleMinutes: 45 },
+      });
+      expect(startup.snapshot.sourceConfig.agents?.entries).toHaveProperty("work");
+      expect(await fs.readFile(`${configPath}.bak`, "utf-8")).toBe(original);
+      const migrated = await fs.readFile(configPath, "utf-8");
+      expect(JSON.parse(migrated).agents).not.toHaveProperty("list");
 
       const preflight = await runUnobservedDoctorConfigPreflight(doctorRepairOptions);
 
@@ -676,11 +681,8 @@ describe("runDoctorConfigPreflight", () => {
       });
       expect((await readConfigFileSnapshot()).valid).toBe(true);
       expect(await fs.readFile(`${configPath}.bak`, "utf-8")).toBe(original);
-      expect(hasActiveStartupMigrationLease()).toBe(false);
-      expect(noteMock).toHaveBeenCalledWith(
-        expect.stringContaining("Moved session.idleMinutes"),
-        "Doctor changes",
-      );
+      expect(await fs.readFile(configPath, "utf-8")).toBe(migrated);
+      expect(hasActiveStartupMigrationLeaseForTest()).toBe(false);
     });
   });
 
@@ -787,6 +789,7 @@ describe("runDoctorConfigPreflight", () => {
             });
 
             expect(doctor.prompter.shouldRepair).toBe(false);
+
             expect(JSON.parse(String(readEventJson()))).toEqual({
               ...historicalEvent,
               message: {

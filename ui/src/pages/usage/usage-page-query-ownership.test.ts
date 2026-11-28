@@ -501,10 +501,9 @@ describe("Usage query failure ownership", () => {
       expect(page.textContent).toContain("Original query row");
       // Provider plans load on the page after the route data applies.
       await vi.waitFor(() => expect(page.textContent).toContain("QA Provider Plan"));
-      expect(page.querySelector(".cost-window--range")?.textContent).toContain("$1");
-      const originalRange = page.querySelector(".cost-window-range")?.textContent?.trim();
+      const originalRange = page.querySelector(".daily-chart-range")?.textContent?.trim();
       const originalValue = page
-        .querySelector(".cost-window--range .cost-window__value")
+        .querySelectorAll(".usage-metric-badge strong")[1]
         ?.textContent?.trim();
       expect(originalRange).toBeTruthy();
       expect(originalValue).toMatch(/^\$1(?:\.0+)?$/);
@@ -532,9 +531,9 @@ describe("Usage query failure ownership", () => {
           ? { startDate: "2026-07-01", endDate: "2026-07-01" }
           : { startDate: "2026-07-09", endDate: "2026-08-07" },
       );
-      const failedRange = page.querySelector(".cost-window-range")?.textContent?.trim();
+      const failedRange = page.querySelector(".daily-chart-range")?.textContent?.trim();
       const failedValue = page
-        .querySelector(".cost-window--range .cost-window__value")
+        .querySelectorAll(".usage-metric-badge strong")[1]
         ?.textContent?.trim();
       if (change === "same query") {
         expect(page.textContent).toContain("Original query row");
@@ -552,10 +551,12 @@ describe("Usage query failure ownership", () => {
       await page.updateComplete;
       expect(page.querySelector(".usage-callout.danger")).toBeNull();
       expect(page.textContent).toContain("Recovered query row");
-      expect(page.querySelector(".cost-window--range")?.textContent).toContain("$1");
+      expect(page.querySelectorAll(".usage-metric-badge strong")[1]?.textContent?.trim()).toMatch(
+        /^\$1(?:\.0+)?$/,
+      );
       expect(page.textContent).toContain("QA Provider Plan");
       if (change === "dates") {
-        const recoveredRange = page.querySelector(".cost-window-range")?.textContent?.trim();
+        const recoveredRange = page.querySelector(".daily-chart-range")?.textContent?.trim();
         expect(recoveredRange).toBeTruthy();
         expect(recoveredRange).not.toBe(originalRange);
       }

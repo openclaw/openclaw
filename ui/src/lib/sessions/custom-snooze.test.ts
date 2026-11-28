@@ -9,6 +9,7 @@ import {
 
 const now = new Date(2026, 9, 13, 12).getTime();
 const future = now + 86_400_000;
+let selectedAccount: string;
 let key: string;
 let storage: Map<string, string>;
 const scope = (account: string, url = "wss://gateway.example") =>
@@ -17,7 +18,8 @@ const denied = () => {
   throw new Error("denied");
 };
 beforeEach(() => {
-  key = scope("account-" + Math.random())!;
+  selectedAccount = "account-" + Math.random();
+  key = scope(selectedAccount)!;
   storage = new Map();
   vi.stubGlobal("localStorage", {
     getItem: (storageKey: string) => storage.get(storageKey) ?? null,
@@ -75,7 +77,7 @@ it.each([false, true])(
 it("isolates accounts and gateways without persisting unresolved identities", () => {
   rememberCustomSnooze(key, future, now);
   expect(readCustomSnooze(scope("other-account"), now)).toBeNull();
-  expect(readCustomSnooze(scope("account", "wss://other.example"), now)).toBeNull();
+  expect(readCustomSnooze(scope(selectedAccount, "wss://other.example"), now)).toBeNull();
   expect(scope("")).toBeNull();
   rememberCustomSnooze(null, future, now);
   expect(storage.size).toBe(1);

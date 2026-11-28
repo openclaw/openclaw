@@ -29,7 +29,47 @@ const preferredModels = [
 describe("OpenAI dynamic model capabilities", () => {
   afterEach(() => vi.unstubAllEnvs());
 
+  it("resolves GPT-6.1 Terra for the OpenClaw runtime without prior discovery", () => {
+    const model = buildOpenAIProvider().resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-6.1-terra",
+      agentRuntimeId: "openclaw",
+      modelRegistry: modelRegistry(),
+    });
+
+    expect(model).toMatchObject({
+      id: "gpt-6.1-terra",
+      api: "openai-responses",
+      input: ["text", "image"],
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { off: "none", minimal: "low" },
+      compat: {
+        defaultThinkingLevel: "medium",
+        supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+        supportsTemperature: false,
+      },
+    });
+  });
+
   it.each([
+    {
+      id: "gpt-6.1-terra",
+      promptTokens: 272_000,
+      inputRate: 1,
+      output: 0.005,
+      cacheRead: 0.000025,
+      cacheWrite: 0.000625,
+    },
+    {
+      id: "gpt-6.1-terra",
+      promptTokens: 272_001,
+      inputRate: 2,
+      output: 0.0075,
+      cacheRead: 0.00005,
+      cacheWrite: 0.00125,
+    },
     {
       id: "gpt-6-astra",
       promptTokens: 272_000,

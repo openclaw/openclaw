@@ -350,6 +350,8 @@ export async function preparePublishedModelRuntimeChoice(params: {
   model: string;
   runtimeId?: string;
   preferredRuntimeId?: string;
+  /** Preflight the turn's own runtime, not an available alternative offered by the picker. */
+  useConfiguredRuntime?: true;
   /** Session creation supplies its bounded wait; config mutations remain passive. */
   prepareNativeCatalog?: <T>(operation: () => Promise<T>) => Promise<T>;
   sessionEntry?: Pick<
@@ -394,7 +396,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
       params.provider,
       params.model,
     );
-    const selectedRuntimeId =
+    let selectedRuntimeId =
       params.runtimeId ??
       params.preferredRuntimeId ??
       resolveAgentHarnessPolicy({
@@ -405,6 +407,14 @@ export async function preparePublishedModelRuntimeChoice(params: {
         modelApi: configuredEntry?.api,
         modelBaseUrl: configuredEntry?.baseUrl,
       }).runtime;
+    if (params.useConfiguredRuntime && selectedRuntimeId === "auto" && configuredEntry) {
+      const { createModelCatalogSnapshotView } = await import("./model-catalog-view.js");
+      selectedRuntimeId =
+        createModelCatalogSnapshotView(
+          published.config,
+          published.modelCatalog,
+        ).implicitNativeRuntime(configuredEntry) ?? selectedRuntimeId;
+    }
     const nativeRuntime = published.pluginRegistry?.agentHarnesses.some(
       (registration) =>
         registration.harness.id === selectedRuntimeId &&
@@ -446,6 +456,16 @@ export async function preparePublishedModelRuntimeChoice(params: {
         : undefined,
     profileProvider: params.sessionEntry?.providerOverride ?? params.sessionEntry?.modelProvider,
   });
+  const { resolveCatalogDecisionRuntime } = await loadCatalogDecisionRuntime();
+  const configuredRuntime = (entry: ModelCatalogEntry, variants?: readonly ModelCatalogEntry[]) =>
+    resolveCatalogDecisionRuntime({
+      cfg: owner.config,
+      agentId: owner.agentId ?? params.agentId,
+      entry,
+      evaluation: decisions.evaluateNative(entry, decisions.evaluateEntry(entry, variants)),
+      pluginRegistry: owner.pluginRegistry,
+      resolveOpenAIProviderRoutes: decisions.resolveOpenAIProviderRoutes,
+    })?.id ?? "openclaw";
   // Recovery belongs to the failed account, which may differ from the runtime's native login.
   const describeUnavailable = async (
     row: ModelCatalogEntry,
@@ -467,7 +487,6 @@ export async function preparePublishedModelRuntimeChoice(params: {
         : `account "${evaluation.selectedProfileId}"`;
       return `${unavailableSubject}: selected ${account} is unavailable. Restore that account, or change the explicit or default account selection.`;
     }
-    const { resolveCatalogDecisionRuntime } = await loadCatalogDecisionRuntime();
     const routeRuntimeId =
       runtimeId ??
       resolveCatalogDecisionRuntime({
@@ -503,6 +522,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
     const requestedEntry = { provider: params.provider, id: params.model, name: params.model };
     const materializationRuntime =
       params.runtimeId ??
+      (params.useConfiguredRuntime ? configuredRuntime(requestedEntry) : undefined) ??
       (params.preferredRuntimeId &&
       decisions
         .runtimeChoices(requestedEntry, [requestedEntry])
@@ -552,6 +572,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
   const choices = decisions.runtimeChoices(entry, entryVariants);
   const runtimeId =
     params.runtimeId ??
+    (params.useConfiguredRuntime ? configuredRuntime(entry, entryVariants) : undefined) ??
     (params.preferredRuntimeId && choices?.includes(params.preferredRuntimeId)
       ? params.preferredRuntimeId
       : choices?.[0]);

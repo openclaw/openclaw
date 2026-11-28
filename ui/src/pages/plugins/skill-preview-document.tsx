@@ -1,4 +1,4 @@
-import { stripFrontmatterBlock } from "../../../../packages/markdown-core/src/frontmatter.js";
+import { extractMarkdownBody } from "../../../../packages/markdown-core/src/frontmatter.js";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import "../../styles/sidebar-markdown.css";
@@ -8,7 +8,7 @@ export function PluginSkillDocument(props: { content: string }) {
     <SanitizedHtml
       tag="article"
       class="sidebar-markdown"
-      html={toSanitizedMarkdownHtml(stripFrontmatterBlock(props.content), {
+      html={toSanitizedMarkdownHtml(extractMarkdownBody(props.content), {
         mode: "document",
         remoteImages: false,
         codeBlockChrome: "none",

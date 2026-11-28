@@ -605,7 +605,7 @@ describe("agent harness host capability", () => {
   it("rejects a deferred policy result after exact authority release", async () => {
     const { attempt } = await admittedAttempt("run-policy-race");
     const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
-    const hookStarted = createDeferred<(() => boolean | void) | undefined>();
+    const hookStarted = createDeferred<(() => void) | undefined>();
     const hookResult = createDeferred<{ blocked: false; params: { command: string } }>();
     mockRunBefore.mockImplementationOnce(async () => {
       hookStarted.resolve(getGatewayToolCallerIdentity()?.receiptAuthority);
@@ -619,7 +619,7 @@ describe("agent harness host capability", () => {
     const receiptAuthority = await hookStarted.promise;
     expect(receiptAuthority).toEqual(expect.any(Function));
     closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext);
-    expect(receiptAuthority?.()).toBe(false);
+    expect(receiptAuthority).toThrow("no longer active");
     hookResult.resolve({ blocked: false, params: { command: "true" } });
     await expect(pending).rejects.toThrow("no longer active");
   });
@@ -934,7 +934,9 @@ describe("agent harness host capability", () => {
         return [];
       }
       assertCurrent() {
-        return current;
+        if (!current) {
+          throw new Error("agent tool caller authority is no longer active");
+        }
       }
       release() {
         this.releases += 1;
@@ -942,7 +944,11 @@ describe("agent harness host capability", () => {
     }
     const source = new PreparedReceipt();
     const receipt = Object.assign(
-      vi.fn(() => current),
+      vi.fn(() => {
+        if (!current) {
+          throw new Error("agent tool caller authority is no longer active");
+        }
+      }),
       {
         prepareSessionSource: async () => source,
       },

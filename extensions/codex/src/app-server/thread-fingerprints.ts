@@ -71,7 +71,7 @@ export function fingerprintCodexThreadConfig(
     modelProvider?: string | null;
     preserveNativeModel?: boolean;
   },
-  inference?: CodexThreadFingerprintInference,
+  inference?: CodexThreadFingerprintInference & { refreshableInstructions?: string },
 ): string {
   let { model, requestedModel, modelProvider, requestedModelProvider } = initialRequest;
   if (selection) {
@@ -108,13 +108,35 @@ export function fingerprintCodexThreadConfig(
       // so changing one still requires recreating the native thread.
       permissions: initialRequest.permissions ?? null,
       baseInstructions: initialRequest.baseInstructions ?? null,
-      developerInstructions: initialRequest.developerInstructions ?? null,
+      developerInstructions:
+        withoutRefreshableSection(
+          initialRequest.developerInstructions,
+          inference?.refreshableInstructions,
+        ) ?? null,
       config: resolveCodexThreadFingerprintConfig(
         isJsonObject(initialRequest.config) ? initialRequest.config : {},
         inference,
       ),
     }),
   );
+}
+
+/**
+ * The refreshable section is not creation identity: `tryReuseCodexLiveThread` compares it
+ * with the section the thread was natively given and cold-resumes, or, under protected
+ * work, appends a developer handoff. The section is the last one joined into the
+ * `<thread_policy>` carrier (thread-requests.ts).
+ */
+function withoutRefreshableSection(
+  developerInstructions: JsonValue | undefined,
+  refreshableInstructions: string | undefined,
+): JsonValue | undefined {
+  const section = `\n\n${refreshableInstructions}\n</thread_policy>`;
+  return typeof developerInstructions === "string" &&
+    refreshableInstructions?.trim() &&
+    developerInstructions.endsWith(section)
+    ? `${developerInstructions.slice(0, -section.length)}\n</thread_policy>`
+    : developerInstructions;
 }
 
 /** Exact creation-time identity for a restricted native thread. Persist only its hash. */
@@ -133,7 +155,7 @@ export function fingerprintRestrictedThreadConfig(
   },
   hostSystemAgentActive: boolean,
   selection?: Parameters<typeof fingerprintCodexThreadConfig>[3],
-  inference?: CodexThreadFingerprintInference,
+  inference?: Parameters<typeof fingerprintCodexThreadConfig>[4],
 ): string {
   return hashCodexAppServerBindingFingerprint(
     fingerprintJsonObject({

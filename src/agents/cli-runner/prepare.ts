@@ -14,7 +14,6 @@ import {
   revokeMcpLoopbackClientGrant,
   transferMcpLoopbackClientGrant,
 } from "../../gateway/mcp-grant-store.js";
-import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
@@ -84,7 +83,10 @@ import {
 import { remapSkillReferencePaths } from "../embedded-agent-runner/sandbox-skills.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import { recordAdmittedModelRoutingDecision } from "../model-routing-decision.js";
-import { resolveRuntimeChannelPromptContext } from "../runtime-capabilities.js";
+import {
+  resolveRuntimeChannelPromptContext,
+  resolveSessionPromptRoute,
+} from "../runtime-capabilities.js";
 import { createUnrecordedScheduledAccountRefusal } from "../scheduled-unrecorded-account.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { resolveStableCliSkillAuthoring } from "../stable-skill-authoring.js";
@@ -646,23 +648,9 @@ async function prepareCliRunContextWithinReadFence(
   const canUseGatewayTools = !nodeClaudePlacement && !skipsTurnPrefix && !systemAgentMcpConfig;
   const bundleMcpEnabled =
     canUseGatewayTools && backendResolved.bundleMcp && params.disableTools !== true;
-  let mcpLoopbackRuntime = bundleMcpEnabled ? getActiveMcpLoopbackRuntime() : undefined;
-  if (bundleMcpEnabled && !mcpLoopbackRuntime) {
-    try {
-      await ensureMcpLoopbackServer();
-    } catch (error) {
-      throw new Error(
-        `Bundled MCP is enabled, but the OpenClaw MCP loopback server failed to start: ${String(error)}`,
-        { cause: error },
-      );
-    }
-    mcpLoopbackRuntime = getActiveMcpLoopbackRuntime();
-  }
-  if (bundleMcpEnabled && !mcpLoopbackRuntime) {
-    throw new Error(
-      "Bundled MCP is enabled, but the OpenClaw MCP loopback server did not publish a runtime after startup.",
-    );
-  }
+  const mcpLoopbackRuntime = bundleMcpEnabled
+    ? (getActiveMcpLoopbackRuntime() ?? (await mcp.startCliMcpLoopbackRuntime()))
+    : undefined;
   const { nodeWorkshopEnabled, hostOwnedTools, bridgeConfiguredMcp } =
     mcp.resolveCliMcpToolOwnership(params, {
       backend: backendResolved,
@@ -714,6 +702,9 @@ async function prepareCliRunContextWithinReadFence(
     });
   // Keep configured MCP on the bridge even when local Claude retains native
   // tools for node exec. Exact tool selection remains a separate policy.
+  const storeAdmission = params.sessionManager
+    ? undefined
+    : (params.admittedRunContext ?? params.preparedRunAdmission)?.operationalRunInstance;
   await using loopbackBundleMcp =
     mcpLoopbackRuntime &&
     mcpContextBase &&
@@ -723,6 +714,7 @@ async function prepareCliRunContextWithinReadFence(
       promptBuildRestrictsTools)
       ? await prepareCliLoopbackBundleMcp({
           run: params,
+          storeAdmission,
           config: runConfig,
           workspaceDir,
           agentId: sessionAgentId,
@@ -1038,6 +1030,7 @@ async function prepareCliRunContextWithinReadFence(
       nativeMcpPolicy:
         !systemAgentMcpConfig && !exclusiveMcp
           ? {
+              storeAdmission,
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,
               capabilityProfile: nativeMcpCapabilityProfile,
@@ -1317,14 +1310,19 @@ async function prepareCliRunContextWithinReadFence(
       skipSkills: nodeClaudePlacement || claudeSkillsPlugin.args.length > 0,
       moduleUrl: import.meta.url,
     });
+    const promptRoute = resolveSessionPromptRoute(params.sessionEntry?.delivery, {
+      channel: params.messageChannel ?? params.messageProvider,
+      accountId: params.agentAccountId,
+      requester: params,
+      chatType: runtimeChatType,
+    });
     const { runtimeChannel, runtimeCapabilities, customInlineButtonHint, messageToolHints } =
       resolveRuntimeChannelPromptContext({
+        ...promptRoute,
         cfg: params.config,
-        channel: skipsTurnPrefix ? undefined : (params.messageChannel ?? params.messageProvider),
-        accountId: params.agentAccountId,
-        requester: params,
+        channel: skipsTurnPrefix ? undefined : promptRoute.channel,
       });
-    const requesterProfileId = readRunOperatorAuthority(params)?.profileId;
+    const operatorAuthority = readRunOperatorAuthority(params);
     const builtSystemPrompt = isSideQuestion
       ? extraSystemPrompt
       : skipsTurnPrefix
@@ -1332,7 +1330,7 @@ async function prepareCliRunContextWithinReadFence(
         : await prepareCliSystemPrompt({
             preparedTtsPreferences: params.preparedTtsPreferences,
             preparedSessionEntry: params.sessionEntry,
-            requesterProfileId,
+            requester: { operatorAuthority, senderIsOwner: params.senderIsOwner },
             workspaceDir,
             cwd,
             config: params.config,
@@ -1341,7 +1339,7 @@ async function prepareCliRunContextWithinReadFence(
             requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
             silentReplyPromptMode: params.silentReplyPromptMode,
             runtimeChannel,
-            runtimeChatType,
+            runtimeChatType: promptRoute.chatType,
             runtimeCapabilities,
             customInlineButtonHint,
             messageToolHints,
@@ -1475,7 +1473,7 @@ async function prepareCliRunContextWithinReadFence(
           promptBuildHookResult?.prependContext,
           authorizedPromptBuildResult?.prependContext,
         ],
-        requesterProfileId,
+        requesterProfileId: operatorAuthority?.profileId,
         capabilityToolNames: new Set(promptTools.map((tool) => tool.name)),
         sessionKey: params.sessionKey,
         agentId: sessionAgentId,

@@ -103,6 +103,20 @@ openclaw-chat-clawhub-card {
   }
 }
 
+/* The Template sign-in handoff changes two labels without moving the card. */
+.template-creator__sign-in {
+  & .chat-clawhub-card__identity {
+    flex: 1;
+    min-width: 0;
+  }
+
+  & [data-approval-code] {
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.04em;
+    user-select: all;
+  }
+}
+
 .chat-clawhub-card__details {
   border-color: transparent;
   background: none;

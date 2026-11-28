@@ -88,7 +88,11 @@ function createOriginatingRun(
         agentId: "main",
         sessionKey,
         operationalRunInstance,
-        receiptAuthority: () => validateAgentRunDelegatedAuthority(delegatedAuthority),
+        receiptAuthority: () => {
+          if (!validateAgentRunDelegatedAuthority(delegatedAuthority)) {
+            throw new Error("agent tool caller authority is no longer active");
+          }
+        },
       }),
     toolOptions: {
       agentId: "main",
@@ -357,7 +361,13 @@ describe.each(["discord", "slack"] as const)("official %s provider read boundary
         expect(await invocation).not.toBeNull();
       } else {
         await expect(invocation).rejects.toThrow(
-          mode === "denied" ? "not allowed" : "no longer active",
+          mode === "denied"
+            ? "not allowed"
+            : runRevocation
+              ? usesMessageTool
+                ? "message action turn capability is no longer active"
+                : "Message-read turn authority is no longer active"
+              : `Plugin ${channel} was reloaded during the read. Retry the action.`,
         );
       }
       expect(requests.filter(isContent)).toHaveLength(content);
@@ -655,7 +665,9 @@ describe("official Slack metadata read boundary", () => {
     await withSlackMetadataHarness(async (harness) => {
       const invocation = dispatchChannelMessageAction(harness.context);
       harness.record.enabled = false;
-      await expect(invocation).rejects.toThrow("read authority is no longer active");
+      await expect(invocation).rejects.toThrow(
+        "Plugin slack was reloaded during the read. Retry the action.",
+      );
       expect(harness.requests).toEqual([]);
     });
   });
@@ -673,7 +685,9 @@ describe("official Slack metadata read boundary", () => {
         if (error) {
           harness.response.error = "sensitive_stale_provider_error";
         }
-        await expect(invokeSlackMetadata(harness, action)).rejects.toThrow("no longer active");
+        await expect(invokeSlackMetadata(harness, action)).rejects.toThrow(
+          "Plugin slack was reloaded during the read. Retry the action.",
+        );
         expect(harness.requests).toHaveLength(1);
       });
     },

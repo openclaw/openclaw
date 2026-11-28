@@ -109,3 +109,55 @@ it("keeps its rows while the tab is hidden and reads again when it returns", asy
   await waitForSolid(() => expect(rows()).toHaveLength(250));
   expect(sidebar.textContent).not.toContain("no longer presented");
 });
+
+it("keeps failing automations in Active and Paused with collapsed group indicators", async () => {
+  const pages = inventory.read.getMockImplementation()!;
+  inventory.read.mockImplementation(async () => ({
+    jobs: [
+      { id: "ok", name: "Healthy", enabled: true, updatedAtMs: 0, lastRunStatus: "ok" },
+      { id: "error", name: "Broken", enabled: true, updatedAtMs: 0, lastRunStatus: "error" },
+      { id: "stopped", name: "Stopped", enabled: false, updatedAtMs: 0, autoDisabled: true },
+      { id: "paused", name: "Resting", enabled: false, updatedAtMs: 0 },
+    ],
+    total: 4,
+    offset: 0,
+    hasMore: false,
+    nextOffset: null,
+  }));
+  try {
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
+    gateway.publish({ hello: gatewayHelloForMethods(["cron.list"]) });
+    const context = createContext(gateway.gateway, createSessionsHarness("main", []).sessions);
+    const { sidebar } = await mountSidebarContext(context);
+    Object.assign(sidebar, { connected: true, navigationView: "automations" });
+    await sidebar.updateComplete;
+    const group = (label: string) => sidebar.querySelector(`[role='group'][aria-label='${label}']`);
+    const groupNames = (label: string) =>
+      [...(group(label)?.querySelectorAll(".sidebar-automations__name") ?? [])].map(
+        (name) => name.textContent,
+      );
+    const groupFailureIndicator = (label: string) =>
+      group(label)?.querySelector(".sidebar-session-group-attention[aria-label='Failed']");
+    await waitForSolid(() => expect(group("Needs attention")).toBeNull());
+    expect(groupNames("Active")).toEqual(["Broken", "Healthy"]);
+    expect(groupFailureIndicator("Active")).not.toBeNull();
+    const activeToggle = sidebar.querySelector<HTMLButtonElement>(
+      "[role='group'][aria-label='Active'] button",
+    );
+    expect(activeToggle).not.toBeNull();
+    activeToggle!.click();
+    await waitForSolid(() => expect(groupNames("Active")).toEqual([]));
+    expect(groupFailureIndicator("Active")).not.toBeNull();
+    const pausedToggle = sidebar.querySelector<HTMLButtonElement>(
+      "[role='group'][aria-label='Paused'] button",
+    );
+    expect(pausedToggle).not.toBeNull();
+    expect(pausedToggle?.getAttribute("aria-expanded")).toBe("false");
+    expect(groupFailureIndicator("Paused")).not.toBeNull();
+    pausedToggle!.click();
+    await waitForSolid(() => expect(groupNames("Paused")).toEqual(["Resting", "Stopped"]));
+    expect(group("Paused")?.querySelector(".sidebar-automations__failed")).not.toBeNull();
+  } finally {
+    inventory.read.mockImplementation(pages);
+  }
+});

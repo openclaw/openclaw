@@ -17,6 +17,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { cancelUnreadResponseBody } from "../../infra/http-body.js";
 import { sqlitePrimaryResultCode } from "../../infra/sqlite-error-diagnostics.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveProviderManagesOwnAvailability } from "../../plugins/provider-availability-policy.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { resolveProviderModelAuthPolicy } from "../model-auth-policy.js";
 import { readProviderJsonResponse } from "../provider-http-errors.js";
@@ -575,6 +576,7 @@ export async function markAuthProfileFailure(params: {
   if (reason === "no_error_details" && !shouldProbeWham) {
     return;
   }
+  const providerManagesAvailability = resolveProviderManagesOwnAvailability(profile.provider);
 
   const result = await runAuthProfileUsage(async () => {
     const personal = isUserModelAuthProfileId(profileId)
@@ -596,6 +598,7 @@ export async function markAuthProfileFailure(params: {
         retryAfterMs: params.retryAfterMs,
         whamResult,
         probeEligible: shouldProbeWham,
+        providerManagesAvailability,
       });
     };
     if (personal) {

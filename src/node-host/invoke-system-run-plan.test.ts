@@ -4,7 +4,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMutableFileOperandSnapshot } from "../infra/system-run-approval-binding.js";
 import { formatExecCommand } from "../infra/system-run-command.js";
 import { revalidateApprovedMutableFileOperand } from "../infra/system-run-file-snapshot.js";
@@ -86,6 +86,11 @@ let sharedFixtureRoot = "";
 let sharedRuntimeBinDir = "";
 let sharedFixtureId = 0;
 const sharedRuntimeBins = new Set<string>();
+
+beforeEach(() => {
+  vi.stubEnv("BASH_ENV", undefined);
+  vi.stubEnv("ENV", undefined);
+});
 
 beforeAll(() => {
   sharedFixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-run-plan-fixtures-"));
@@ -690,6 +695,12 @@ describe("hardenApprovedExecutionPaths", () => {
         name: "yash plus interactive option",
         argv: ["yash", "+i", "./run.sh"],
         decoyName: "+i",
+        expectedArgvIndex: 2,
+      },
+      {
+        name: "zsh value-free shopt toggle",
+        argv: ["zsh", "-O", "./run.sh", "allowed.sh"],
+        decoyName: "allowed.sh",
         expectedArgvIndex: 2,
       },
     ];

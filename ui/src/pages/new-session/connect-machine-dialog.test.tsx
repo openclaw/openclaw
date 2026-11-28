@@ -62,7 +62,7 @@ function mountSetup() {
   onTestFinished(() => setup.close());
   flush();
   // The modal moves its contents to the document's overlay surface.
-  return { gateway, setup, view: { ...view, ...getQueriesForElement(document.body) } };
+  return { gateway, view: { ...view, ...getQueriesForElement(document.body) } };
 }
 
 describe("machine connection presentation", () => {

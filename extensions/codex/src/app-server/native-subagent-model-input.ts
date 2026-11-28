@@ -1,4 +1,5 @@
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { defineCodexBuildState } from "../build-state.js";
 import { readThreadParentThreadId, readThreadSpawnSource } from "./native-subagent-assignment.js";
 import { buildCodexNativeSubagentAgentPathKey } from "./native-subagent-delivery-receipts.js";
 import { resolveNativeModelParentOwner } from "./native-subagent-model-lookup.js";
@@ -228,6 +229,12 @@ function resolveInputTarget(
   return retired;
 }
 
+// The monitor and relay can come from different copies of this plugin build.
+export const NativeModelInputReceiverLineageError = defineCodexBuildState(
+  "openclaw.codexNativeInputLineageError",
+  () => class extends Error {},
+)();
+
 /** Qualification is read before the native handler; source custody remains with its existing call. */
 export async function prepareNativeModelToolInput(
   request: NativeModelToolInputRequest,
@@ -416,7 +423,9 @@ export async function prepareNativeModelToolInput(
     }
     assertCurrent();
     if (targetChild && nativeParentThreadId !== targetChild.nativeParentThreadId) {
-      throw new Error("Codex native input receiver lineage changed during preparation");
+      throw new NativeModelInputReceiverLineageError(
+        "Codex native input receiver lineage changed during preparation",
+      );
     }
     if (!dependencies.prepareReceiver(state, thread.id, nativeParentThreadId)) {
       throw new Error("Codex native input receiver cannot retain this sender's admitted source");

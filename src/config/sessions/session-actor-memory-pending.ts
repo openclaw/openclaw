@@ -25,6 +25,7 @@ import {
   resolvePendingInputHistoryLimit,
   selectPendingInputHistoryPage,
   parseSessionPendingInputMessage,
+  restagePendingInputMessageJson,
 } from "./session-pending-input-value.js";
 import type {
   SessionInputCompletion,
@@ -162,8 +163,13 @@ export function createSessionActorMemoryPending(
       );
       const total =
         query.id === undefined && query.includeTotal !== false ? rows.length : undefined;
+      const entry = state.hot.entry;
+      const runState =
+        query.includeQueueObservation && entry?.sessionId === query.sessionId
+          ? { status: entry.status, lastRunId: entry.lastRunId }
+          : undefined;
       if (total === 0) {
-        return { rows: [], total };
+        return { rows: [], total, ...(runState && { runState }) };
       }
       const limit = resolvePendingInputHistoryLimit(query.limit);
       const page = rows
@@ -184,6 +190,10 @@ export function createSessionActorMemoryPending(
       return {
         rows: structuredClone(page.slice(0, selected.length)),
         total,
+        ...(query.includeQueueObservation && {
+          hasQueuedInput: rows.some((row) => row.state === "queued"),
+          runState,
+        }),
         currentSessionId:
           page.length && query.sessionKey === state.hot.target.sessionKey
             ? state.hot.entry?.sessionId
@@ -260,6 +270,8 @@ export function createSessionActorMemoryPending(
           ? {
               ...row,
               state: "queued",
+              // Like the SQL kernel: an adopted owed row takes the new bytes.
+              message_json: restagePendingInputMessageJson(row.message_json, input.messageJson),
               run_id: input.runId,
               lifecycle_generation: input.lifecycleGeneration,
               end_cause: null,
@@ -287,6 +299,12 @@ export function createSessionActorMemoryPending(
             };
         state.pendingInputs.set(input.idempotencyKey, staged);
         receipt.stagedInput = structuredClone(staged);
+        for (const key of input.absorbedIdempotencyKeys ?? []) {
+          const absorbed = state.pendingInputs.get(key);
+          if (absorbed?.state === "queued" && absorbed.consumed_event_id === null) {
+            state.pendingInputs.delete(key);
+          }
+        }
       } else if (input.kind === "complete") {
         const retained = completion(input);
         if (

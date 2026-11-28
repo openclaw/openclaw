@@ -87,6 +87,117 @@ const shelf = (page: Page, title: string) =>
   page.locator("[data-catalog-section]").filter({ has: row(page, title) });
 
 suite.define(() => {
+  it("updates retained category strip edges after taxonomy retry without a resize", () =>
+    suite.withPage({ viewport: { width: 390, height: 844 }, locale: "en-US" }, async ({ page }) => {
+      const gateway = await openCatalog(page);
+      await page.goto(suite.server.baseUrl + "plugins");
+      await gateway.deferNext("skills.categories");
+      await button(page, "Expand sidebar").click();
+      await page.getByRole("link", { name: "Skills", exact: true }).click();
+      await gateway.waitForRequest("skills.categories");
+      await expectSearch(gateway, { limit: 20 });
+      const failure = { code: "UNAVAILABLE", message: "Synthetic taxonomy unavailable" };
+      await gateway.rejectDeferred("skills.categories", failure);
+      const error = page.getByRole("alert").filter({ hasText: failure.message });
+      await error.waitFor();
+      await row(page, notebook.displayName).waitFor();
+      const filters = page.locator(".plugin-catalog-chips");
+      await filters.getByRole("button", { name: "Installed", exact: true }).waitFor();
+      await page.evaluate(() => document.fonts.ready.then(() => undefined));
+      await frames(page);
+      const strip = await filters.evaluateHandle((element) => element);
+      try {
+        const state = () =>
+          strip.evaluate((element) => {
+            const rect = element.getBoundingClientRect();
+            return {
+              connected: element.isConnected,
+              same: element === document.querySelector(".plugin-catalog-chips"),
+              geometry: {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
+                clientWidth: element.clientWidth,
+                clientHeight: element.clientHeight,
+              },
+              flags: [element.dataset.scrollable, element.dataset.atStart, element.dataset.atEnd],
+              scrollWidth: element.scrollWidth,
+              scrollLeft: element.scrollLeft,
+            };
+          });
+        const initial = await state();
+        expect(initial).toMatchObject({
+          connected: true,
+          same: true,
+          flags: ["false", "true", "true"],
+          scrollLeft: 0,
+        });
+        expect(initial.scrollWidth).toBeLessThanOrEqual(initial.geometry.clientWidth);
+        const searches = (await gateway.getRequests("skills.search")).length;
+        await gateway.deferNext("skills.categories");
+        await error.getByRole("button", { name: "Retry", exact: true }).click();
+        await gateway.waitForRequest("skills.categories", { after: 1 });
+        expect(await state()).toEqual(initial);
+        await gateway.resolveDeferred("skills.categories");
+        await button(page, "Research").waitFor();
+        await expect.poll(async () => (await state()).flags).toEqual(["true", "true", "false"]);
+        const updated = await state();
+        expect(updated).toMatchObject({
+          connected: true,
+          same: true,
+          geometry: initial.geometry,
+          scrollLeft: 0,
+        });
+        expect(updated.scrollWidth).toBeGreaterThan(initial.scrollWidth);
+        expect(updated.scrollWidth).toBeGreaterThan(updated.geometry.clientWidth);
+        expect(await gateway.getRequests("skills.categories")).toHaveLength(2);
+        expect(await gateway.getRequests("skills.search")).toHaveLength(searches);
+      } finally {
+        await strip.dispose();
+      }
+    }));
+
+  it.each([
+    [390, 844],
+    [820, 1180],
+    [1180, 820],
+    [1440, 900],
+  ])(
+    "keeps the registry identity inspectable beside the import action at %i × %i",
+    async (width, height) => {
+      await suite.withPage({ viewport: { width, height } }, async ({ page }) => {
+        const gateway = await openCatalog(page);
+        const name = "regional-accessibility-and-interpretation-service-field-notebook";
+        const owner = {
+          displayName: "International Research Operations and Regulatory Reporting",
+          handle: "international-research-operations-team",
+        };
+        await page.goto(suite.server.baseUrl + "skills");
+        await gateway.waitForRequest("skills.status");
+        await gateway.setMethodResponse("skills.detail", {
+          skill: { ...notebook, displayName: name, createdAt: 1, updatedAt: 2 },
+          owner,
+        });
+        await button(page, "Open Field Notebook details").click();
+        const hero = page.locator(".skill-page .plugin-catalog-detail__hero"),
+          title = hero.locator("h1");
+        await title.waitFor();
+        expect(await title.textContent()).toBe(name);
+        await page.evaluate(() => document.fonts.ready);
+        expect(await title.evaluate((el) => el.getBoundingClientRect().height)).toBeLessThan(40);
+        const publisher = hero.locator(".skill-page__publisher");
+        await publisher.locator("summary").press("Enter");
+        // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText proves the rendered visible text.
+        expect(await publisher.innerText()).toContain(name);
+        // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText proves the rendered visible text.
+        expect(await publisher.innerText()).toContain(owner.displayName);
+        await publisher.locator("summary").press("Enter");
+        expect(await gateway.getRequests("skills.install")).toHaveLength(0);
+      });
+    },
+  );
+
   for (const [size, dimensions] of [
     ["desktop", viewport],
     ["narrow", { width: 390, height: 844 }],

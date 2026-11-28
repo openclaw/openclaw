@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { privatePackageActivationIdentity } from "./package-update-activation-paths.js";
+import {
+  privatePackageActivationIdentity,
+  repairPackagePermissions,
+} from "./package-update-activation-paths.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -34,6 +37,39 @@ describe.skipIf(process.platform === "win32")("private package recovery permissi
         );
         privatePackageActivationIdentity(file, role);
         expect(warn).toHaveBeenCalledTimes(1);
+      });
+    },
+  );
+
+  it.each([
+    { change: "same-mode chmod", refused: false },
+    { change: "extra hard link", refused: false },
+    { change: "appended bytes", refused: true },
+  ])(
+    "repairs package content after $change since observation unless it changed (refused=$refused)",
+    async ({ change, refused }) => {
+      await withTestDir({ prefix: "package-permission-drift-" }, async (root) => {
+        const file = path.join(root, "index.js");
+        fs.writeFileSync(file, "export {};\n");
+        fs.chmodSync(file, 0o664);
+        const observed = fs.lstatSync(file, { bigint: true });
+        if (change === "same-mode chmod") {
+          fs.chmodSync(file, 0o664);
+        } else if (change === "extra hard link") {
+          fs.linkSync(file, path.join(root, "alias.js"));
+        } else {
+          fs.appendFileSync(file, "more");
+        }
+        expect(fs.lstatSync(file, { bigint: true }).ctimeNs).not.toBe(observed.ctimeNs);
+        const repair = () => repairPackagePermissions(file, observed, 0o644);
+        if (refused) {
+          expect(repair).toThrow("object changed before permission repair");
+          expect(fs.lstatSync(file).mode & 0o777).toBe(0o664);
+          return;
+        }
+        repair();
+        expect(fs.lstatSync(file).mode & 0o777).toBe(0o644);
+        expect(fs.readFileSync(file, "utf8")).toBe("export {};\n");
       });
     },
   );

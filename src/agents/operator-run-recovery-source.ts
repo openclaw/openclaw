@@ -32,10 +32,9 @@ export function captureScheduledOperatorSource(
     return undefined;
   }
   assertAdmittedRunOperatorAuthority(authority);
-  authority.assertCurrent();
   const independent = Boolean(authority.openclawIdPrincipal || params.independent);
   const unavailable = () => {
-    if (independent) {
+    if (independent || authority.participationCeiling) {
       throw new Error(
         "The original authenticated authority could not be retained for this automation.",
       );
@@ -69,7 +68,7 @@ export function captureScheduledOperatorSource(
       isAcpSessionKey(sessionKey) ||
       isAgentHarnessSessionKey(sessionKey)
     ) {
-      return undefined;
+      return unavailable();
     }
     source = {
       version: 1,

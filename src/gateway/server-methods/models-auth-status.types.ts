@@ -21,6 +21,12 @@ export type ModelAuthStatusProfile = Pick<
   /** Where the effective credential came from. */
   source?: "config" | "external" | "inherited" | "saved";
   displayName?: string;
+  /** Admin-only presentation label for a known stored subscription tier. */
+  planLabel?: string;
+  /** Only emitted for an account the selected agent and caller can rename. */
+  renameSupported?: true;
+  /** The name is controlled by configuration, not the saved account. */
+  nameManagedByConfig?: true;
   email?: string;
   lastUsedAt?: number;
 };
@@ -45,6 +51,15 @@ export type ModelAuthStatusProvider = {
     source: "config" | "env";
     envVar?: string;
   };
+  /** Provider-plugin actions for its saved OAuth sign-ins. */
+  oauthAccountActions?: {
+    /** The provider can revoke a sign-in's grant; `label` is the plugin's text. */
+    disconnect?: { label?: string };
+    /** HTTPS page where the person manages apps connected to their account. */
+    manage?: { url: string; label?: string };
+  };
+  /** The saved sign-in doesn't cover voice and no API key is set; adding one would. */
+  voiceApiKeyRequired?: true;
   usage?: Pick<
     ProviderUsageSnapshot,
     "windows" | "summary" | "plan" | "billing" | "accountEmail" | "authProfileId"
@@ -90,5 +105,11 @@ export type ModelAuthOrderSetResult = {
   provider: string;
   profileIds: string[] | null;
   /** The order was saved, but its runtime publication could not complete. */
+  warning?: string;
+};
+
+export type ModelAuthProfileRenameResult = {
+  profileId: string;
+  displayName: string | null;
   warning?: string;
 };

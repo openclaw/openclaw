@@ -7,6 +7,7 @@ import { isCronSessionDisplayKey } from "../../../src/shared/session-list-visibi
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { pathDisplayName } from "./path-display.ts";
+import { isDashboardSessionKey } from "./sessions/session-key.ts";
 
 const CHANNEL_LABELS = new Map<string, string>([
   ["imessage", "iMessage"],
@@ -158,21 +159,33 @@ type SessionDisplayRow = {
   label?: string;
   displayName?: string;
   derivedTitle?: string;
+  titlePending?: boolean;
   /** Canonical account projected from the delivery route by the Gateway. */
   accountId?: string;
 } & SessionWorktreeDisplayRow;
 
+function usableTitle(value: string | undefined, key: string): string | undefined {
+  const title = normalizeOptionalString(value);
+  return title === key ? undefined : title;
+}
+
+function explicitTitle(key: string, row: SessionDisplayRow) {
+  return usableTitle(row.label, key) ?? usableTitle(row.displayName, key);
+}
+
 /** Naming has a separate lifetime from the first reply; a usable name always wins. */
-export function isSessionTitlePending(
-  key: string,
-  row?: SessionDisplayRow & { titlePending?: boolean },
-): boolean {
+export function isSessionTitlePending(key: string, row?: SessionDisplayRow): boolean {
+  return Boolean(row?.titlePending && isDashboardSessionKey(key) && !explicitTitle(key, row));
+}
+
+/** Title text without worktree, account, or channel decoration. */
+export function resolveSessionTitleText(key: string, row?: SessionDisplayRow): string | undefined {
   return (
-    /^agent:[^:]+:dashboard:/.test(key) &&
-    row?.titlePending === true &&
-    ![row.label, row.displayName, row.derivedTitle].some(
-      (name) => name?.trim() && name.trim() !== key,
-    )
+    row &&
+    (explicitTitle(key, row) ??
+      (row.titlePending && isDashboardSessionKey(key)
+        ? undefined
+        : usableTitle(row.derivedTitle, key)))
   );
 }
 
@@ -252,7 +265,7 @@ function parseSessionKey(key: string): {
 
   // Dashboard sessions get generated titles asynchronously; the opaque uuid key
   // must not flash in the sidebar while that title is pending.
-  if (/^agent:[^:]+:dashboard:/.test(key)) {
+  if (isDashboardSessionKey(key)) {
     return { prefix: "", fallbackName: "New session" };
   }
 
@@ -269,44 +282,22 @@ function parseSessionKey(key: string): {
 }
 
 export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow): string {
-  const label = normalizeOptionalString(row?.label);
-  const displayName = normalizeOptionalString(row?.displayName);
-  const derivedTitle = normalizeOptionalString(row?.derivedTitle);
   const { kind, prefix, fallbackName, accountId: keyAccountId } = parseSessionKey(key);
   // The Gateway records the account on the row (src/gateway/session-classification.ts);
   // the key is parsed only for panes rendered before their row arrives.
   const accountId = normalizeOptionalString(row?.accountId) ?? keyAccountId;
 
-  const applyTypedPrefix = (rawName: string): string => {
-    if (!kind || !prefix) {
-      return rawName;
-    }
-    // Persisted automation sessions carry pre-rename "Cron:"/"Cron Job:"
-    // labels; strip them so the renamed prefix does not double up as
-    // "Automation: Cron: …".
-    const name =
-      kind === "automation"
-        ? rawName.replace(/^cron(\s+job)?:\s*/i, "").trim() || rawName
-        : rawName;
-    const prefixPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*`, "i");
+  const title =
+    resolveSessionTitleText(key, row) ?? (row?.worktree && resolveSessionWorkSubtitle(row));
+  let name = title || fallbackName;
+  if (title && kind && prefix) {
+    // Accept persisted automation titles from before the rename.
+    const pattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*`, "i");
     if (kind === "subagent") {
-      return name.replace(prefixPattern, "").trim() || fallbackName;
-    }
-    return prefixPattern.test(name) ? name : `${prefix} ${name}`;
-  };
-
-  let name = fallbackName;
-  if (label && label !== key) {
-    name = applyTypedPrefix(label);
-  } else if (displayName && displayName !== key) {
-    name = applyTypedPrefix(displayName);
-  } else {
-    // Unnamed work sessions read as their checkout instead of an opaque key.
-    const workSubtitle = row ? resolveSessionWorkSubtitle(row) : undefined;
-    if (workSubtitle && row?.worktree) {
-      name = applyTypedPrefix(workSubtitle);
-    } else if (derivedTitle && derivedTitle !== key) {
-      name = applyTypedPrefix(derivedTitle);
+      name = title.replace(pattern, "").trim() || fallbackName;
+    } else {
+      const automation = title.replace(/^cron(\s+job)?:\s*/i, "").trim() || title;
+      name = pattern.test(automation) ? automation : `${prefix} ${automation}`;
     }
   }
   if (!accountId || accountId === "default") {

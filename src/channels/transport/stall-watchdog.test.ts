@@ -72,5 +72,7 @@ describe("createArmableStallWatchdog", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(onTimeout).not.toHaveBeenCalled();
     expect(intervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS - 1);
+    expect(onTimeout).toHaveBeenCalledTimes(1);
   });
 });

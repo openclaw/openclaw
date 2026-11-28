@@ -155,8 +155,6 @@ export interface PrepareNextTurnContext extends ShouldStopAfterTurnContext {}
 export interface AgentLoopConfig extends SimpleStreamOptions {
   /** @internal Call-scoped cancellation owned by the active Agent. */
   toolInterruptions?: ToolInterruptions;
-  /** @internal Host-resolved small-model repetition policy. */
-  repetitionGuard?: (model: Model) => boolean;
   model: Model;
   /** Logical thinking level retained across model changes before provider mapping. */
   thinkingLevel?: ThinkingLevel;
@@ -491,13 +489,25 @@ export interface AgentTool<
   interruptible?: true | ((args: unknown) => boolean);
   /**
    * Identical consecutive calls are expected (polling, waiting); skip the repeat guard.
-   * `actions` limits the exemption to calls whose `action` argument is listed. Plain
-   * data, so the declaration crosses the worker wire unchanged.
+   * `actions` limits the exemption to calls whose `action` argument is listed. `dispatch`
+   * declares a dispatcher (see `readDispatchCall`): the guard applies the declaration of the
+   * target its call names, by target id or by a unique alias. Plain data, so the declaration
+   * crosses the worker wire unchanged.
    */
   repeatable?: ToolRepeatable;
 }
 
-export type ToolRepeatable = true | { readonly actions: readonly string[] };
+export type ToolRepeatableTarget = true | { readonly actions: readonly string[] };
+
+export type ToolRepeatable =
+  | ToolRepeatableTarget
+  | {
+      readonly dispatch: {
+        readonly targets: Readonly<Record<string, ToolRepeatableTarget>>;
+        /** Unique alternate selector (a tool name) -> target id. */
+        readonly aliases: Readonly<Record<string, string>>;
+      };
+    };
 
 /** Context snapshot passed into the low-level agent loop. */
 export interface AgentContext {
@@ -522,11 +532,15 @@ export type AgentEvent =
   | { type: "agent_end"; messages: AgentMessage[] }
   // Turn lifecycle - a turn is one assistant response + any tool calls/results
   | { type: "turn_start" }
-  | { type: "turn_end"; message: AgentMessage; toolResults: ToolResultMessage[] }
+  | { type: "turn_end"; message: AssistantMessage; toolResults: ToolResultMessage[] }
   // Message lifecycle - emitted for user, assistant, and toolResult messages
   | { type: "message_start"; message: AgentMessage }
   // Only emitted for assistant messages during streaming
-  | { type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent }
+  | {
+      type: "message_update";
+      message: AssistantMessage;
+      assistantMessageEvent: AssistantMessageEvent;
+    }
   | { type: "message_end"; message: AgentMessage }
   | {
       type: "tool_execution_start";

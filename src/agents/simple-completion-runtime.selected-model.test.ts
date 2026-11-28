@@ -14,6 +14,7 @@ import { runIsolatedCompletion } from "./isolated-completion.js";
 import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import type { BoundAgentRunSessionTarget } from "./run-session-target.types.js";
+import { ModelRegistry } from "./sessions/model-registry.js";
 import {
   acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel,
@@ -231,6 +232,7 @@ module.exports = {
             },
           });
         } else {
+          const fork = vi.spyOn(ModelRegistry.prototype, "fork").mockClear();
           const acquired = await acquireSimpleCompletionModelForAgent({
             cfg,
             agentId: "main",
@@ -240,6 +242,7 @@ module.exports = {
           assertPrepared(acquired);
           await using prepared = acquired;
           expect(prepared.model.id).toBe(expected);
+          expect(fork.mock.lastCall?.[2]).toEqual({ provider, modelId: expected });
           const result = await completeWithPreparedSimpleCompletionModel({
             cfg,
             model: prepared.model,

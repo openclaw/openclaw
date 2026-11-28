@@ -47,15 +47,7 @@ describe("AppSidebar outbox attention badges", () => {
     const incognitoRow = sidebar.querySelector(`[data-session-key="${incognitoKey}"]`);
     expect(incognitoRow).not.toBeNull();
     expect(incognitoRow?.querySelector(".session-row-badge--draft")).toBeNull();
-    const homeDraft = () =>
-      sidebar.querySelector(".sidebar-footer-bar__home .session-row-badge--draft");
-    expect(homeDraft()).not.toBeNull();
-    sidebar.sessionKey = "agent:main:main";
-    await sidebar.updateComplete;
-    expect(homeDraft()).toBeNull();
-    sidebar.sessionKey = activeDraftKey;
-    await sidebar.updateComplete;
-    expect(homeDraft()).not.toBeNull();
+    expect(sidebar.querySelector(".sidebar-footer-bar__home .session-row-badge--draft")).toBeNull();
   });
 
   it("keeps agent-main aliases in one agent-only roster row", async () => {

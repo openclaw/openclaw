@@ -658,16 +658,24 @@ else
 fi
 `,
     );
-    f.executable(
-      "scripts/create-dmg.sh",
-      `stage="$(mktemp -d)"
-trap 'rm -rf "$stage"' EXIT
-ditto "$1" "$stage/OpenClaw.app"
-rm -f "$2"
-hdiutil create -fs HFS+ -format UDZO -srcfolder "$stage" "$2" >/dev/null
-/usr/bin/codesign --force --sign - "$2"
-`,
-    );
+    if (artifact === "dmg") {
+      // Exercise a real image mount on resume without asking the recovery test's
+      // build stub to author another image after the mount/detach cycle.
+      const stage = f.file("dmg-source");
+      mkdirSync(stage);
+      f.tool("ditto", [app, path.join(stage, "OpenClaw.app")]);
+      f.tool("hdiutil", [
+        "create",
+        "-fs",
+        "HFS+",
+        "-format",
+        "UDZO",
+        "-srcfolder",
+        stage,
+        f.file("fixture.dmg"),
+      ]);
+      f.executable("scripts/create-dmg.sh", 'rm -f "$2"\ncp "$(dirname "$0")/../fixture.dmg" "$2"');
+    }
     const options = { notarize: true, dmg: artifact === "dmg" };
     expectFailure(f.run(options), "stapling interrupted");
     f.expectFiles(

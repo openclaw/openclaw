@@ -32,6 +32,7 @@ const enCommandPalette = {
     attachmentPrompt: en.palette.attachmentPrompt,
     searchingSessions: "Searching sessions…",
     searchingCommands: "Searching commands…",
+    archived: "Archived",
     filterLabel: "Filter search results",
     filters: { all: "All", sessions: "Sessions", messages: "Messages" },
     searchFailed: "Couldn’t search sessions. Try again.",
@@ -44,6 +45,7 @@ const enCommandPalette = {
       navigation: en.palette.categories.navigation,
       skills: "Skills",
       messages: "In messages",
+      more: "More results",
     },
     items: {
       apps: "Apps",

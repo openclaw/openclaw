@@ -17,10 +17,13 @@ import {
   startCompletionServer,
 } from "../../agents/simple-completion.test-support.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import * as configIO from "../../config/config.js";
 import {
   getRuntimeConfigSourceSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import * as gateway from "../../gateway/call.js";
+import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { resetPluginLoaderTestStateForTest } from "../../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { createColdPluginFixture } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
@@ -33,6 +36,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import * as cliUtils from "../cli-utils.js";
+import * as commandConfig from "../command-config-resolution.js";
 import { registerModelCapabilityCommands } from "./model.js";
 import * as shared from "./shared.js";
 
@@ -55,6 +59,8 @@ beforeEach(async () => {
       [ACCOUNT_ENV]: ACCOUNT_KEY,
       [MISSING_ENV]: undefined,
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_GATEWAY_URL: undefined,
+      OPENCLAW_GATEWAY_PORT: undefined,
       OPENCLAW_VERSION: "2026.4.25",
     },
   });
@@ -77,6 +83,7 @@ afterEach(async () => {
   clearSecretsRuntimeSnapshotState();
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();
+  vi.unstubAllEnvs();
   await state.cleanup();
 });
 
@@ -96,76 +103,147 @@ function accountProfile(provider = "customacct", id = ACCOUNT_ENV) {
   };
 }
 
-it.each(["config", "account", "unavailable sibling", "unavailable selected"] as const)(
-  "preserves local model credential provenance: %s",
-  async (scenario) => {
-    const agentDir = state.agentDir("ops");
-    const provider = {
-      api: "openai-completions" as const,
-      baseUrl: "http://127.0.0.1:1/v1",
-      models: [completionModelDefinition({ id: "test-model", name: "Test model", maxTokens: 128 })],
-    };
-    const cfg = completionConfig(
-      "customcfg",
-      {
-        ...structuredClone(provider),
-        auth: "api-key",
-        apiKey: configRef,
+it.each([
+  "config",
+  "cold account",
+  "implicit local",
+  "account",
+  "unavailable sibling",
+  "unavailable selected",
+  "remote Gateway",
+  "Gateway URL override",
+  "Gateway port override",
+  "borrowed owner",
+] as const)("preserves local model credential provenance: %s", async (scenario) => {
+  const agentDir = state.agentDir("ops");
+  const provider = {
+    api: "openai-completions" as const,
+    baseUrl: "http://127.0.0.1:1/v1",
+    models: [completionModelDefinition({ id: "test-model", name: "Test model", maxTokens: 128 })],
+  };
+  const cfg = completionConfig(
+    "customcfg",
+    {
+      ...structuredClone(provider),
+      auth: "api-key",
+      apiKey: configRef,
+    },
+    {
+      agents: {
+        defaults: { workspace: path.join(agentDir, "workspace") },
+        entries: { ops: { agentDir, model: "customcfg/test-model" } },
       },
-      {
-        agents: {
-          defaults: { workspace: path.join(agentDir, "workspace") },
-          entries: { ops: { agentDir, model: "customcfg/test-model" } },
+    },
+  );
+  cfg.models!.providers!.customacct = structuredClone(provider);
+  const delegated = scenario.includes("Gateway") || scenario === "borrowed owner";
+  if (scenario === "remote Gateway") {
+    cfg.gateway = { mode: "remote", remote: { url: "wss://gateway.example.test" } };
+  } else if (scenario === "Gateway URL override") {
+    vi.stubEnv("OPENCLAW_GATEWAY_URL", "wss://gateway.example.test");
+  } else if (scenario === "Gateway port override") {
+    vi.stubEnv("OPENCLAW_GATEWAY_PORT", "18790");
+  }
+  const gatewayResolve = vi
+    .spyOn(gateway, "callGateway")
+    .mockRejectedValue(new Error("synthetic local Gateway unavailable"));
+  if (delegated) {
+    vi.stubEnv(CONFIG_ENV, undefined);
+    gatewayResolve.mockResolvedValue({
+      assignments: [
+        {
+          path: "models.providers.customcfg.apiKey",
+          pathSegments: ["models", "providers", "customcfg", "apiKey"],
+          value: CONFIG_KEY,
         },
-      },
+      ],
+    });
+  }
+  const runtimeConfig = structuredClone(cfg);
+  if (scenario === "cold account") {
+    await state.writeConfig(cfg);
+  } else {
+    setRuntimeConfigSnapshot(runtimeConfig, structuredClone(cfg));
+  }
+  const sourceBeforeRun = getRuntimeConfigSourceSnapshot();
+  const capture = vi.spyOn(configIO, "captureRuntimeConfigAsyncReader");
+  const resolution = vi.spyOn(commandConfig, "resolveCommandConfigWithSecrets");
+  const publish = vi.spyOn(configIO, "setRuntimeConfigSnapshot");
+  vi.spyOn(cliUtils, "runCommandWithRuntime").mockImplementation(async (_runtime, run) => run());
+  const complete = vi
+    .spyOn(completion, "completeWithPreparedSimpleCompletionModel")
+    .mockResolvedValue(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "synthetic-ok" }],
+      }),
     );
-    cfg.models!.providers!.customacct = structuredClone(provider);
-    setRuntimeConfigSnapshot(structuredClone(cfg), structuredClone(cfg));
-    vi.spyOn(cliUtils, "runCommandWithRuntime").mockImplementation(async (_runtime, run) => run());
-    const complete = vi
-      .spyOn(completion, "completeWithPreparedSimpleCompletionModel")
-      .mockResolvedValue(
-        makeAgentAssistantMessage({
-          content: [{ type: "text", text: "synthetic-ok" }],
-        }),
-      );
-    const unavailable = scenario === "unavailable selected";
-    const profiles: AuthProfileStore["profiles"] = {
-      "customacct:healthy": accountProfile("customacct", unavailable ? MISSING_ENV : ACCOUNT_ENV),
+  const unavailable = scenario === "unavailable selected";
+  const profiles: AuthProfileStore["profiles"] = {
+    "customacct:healthy": accountProfile("customacct", unavailable ? MISSING_ENV : ACCOUNT_ENV),
+  };
+  if (scenario === "unavailable sibling") {
+    profiles["otherprovider:cold"] = accountProfile("otherprovider", MISSING_ENV);
+  } else if (!unavailable) {
+    profiles["customcfg:decoy"] = {
+      type: "api_key",
+      provider: "customcfg",
+      key: "synthetic-decoy-key", // pragma: allowlist secret
     };
-    if (scenario === "unavailable sibling") {
-      profiles["otherprovider:cold"] = accountProfile("otherprovider", MISSING_ENV);
-    } else if (!unavailable) {
-      profiles["customcfg:decoy"] = {
-        type: "api_key",
-        provider: "customcfg",
-        key: "synthetic-decoy-key", // pragma: allowlist secret
-      };
-    }
-    await state.writeAuthProfiles({ version: 1, profiles }, "ops");
-    const fromConfig = scenario === "config";
-    const modelRef = `${fromConfig ? "customcfg" : "customacct"}/test-model`;
-    const run = parent.track(() => runModel("--agent", "ops", "--model", modelRef, "--local"));
-    if (unavailable) {
-      await expect(run).rejects.toThrow(
-        /Auth lookup failed for provider "customacct": .*customacct:healthy.*is configured but unavailable \(secret reference was not found\)/,
+  }
+  await state.writeAuthProfiles({ version: 1, profiles }, "ops");
+  const fromConfig = scenario === "config" || scenario === "implicit local" || delegated;
+  const modelRef = `${fromConfig ? "customcfg" : "customacct"}/test-model`;
+  const run = parent.track(async () => {
+    const invoke = () =>
+      runModel(
+        "--agent",
+        "ops",
+        "--model",
+        modelRef,
+        ...(scenario === "implicit local" ? [] : ["--local"]),
       );
-      expect(complete).not.toHaveBeenCalled();
-      return;
+    if (scenario !== "borrowed owner") {
+      return invoke();
     }
-    await run;
-    const auth = complete.mock.calls[0]![0].auth;
-    expect(auth.source).toBe(
-      fromConfig ? "models.providers.customcfg" : "profile:customacct:healthy",
+    const owner = await acquireGatewayLock({ env: process.env, allowInTests: true, timeoutMs: 0 });
+    expect(owner).not.toBeNull();
+    try {
+      return await owner!.run(invoke);
+    } finally {
+      await owner!.release();
+    }
+  });
+  if (unavailable) {
+    await expect(run).rejects.toThrow(
+      /Auth lookup failed for provider "customacct": .*customacct:healthy.*is configured but unavailable \(secret reference was not found\)/,
     );
-    expect(looksLikeSecretSentinel(auth.apiKey ?? "")).toBe(true);
-    expect(resolveSecretSentinel(auth.apiKey ?? "")).toBe(fromConfig ? CONFIG_KEY : ACCOUNT_KEY);
-    if (fromConfig) {
-      const source = getRuntimeConfigSourceSnapshot() ?? undefined;
-      expect(resolveProviderConfigSecretInput(source, "customcfg").ref).toMatchObject(configRef);
-    }
-  },
-);
+    expect(complete).not.toHaveBeenCalled();
+    return;
+  }
+  await run;
+  if (scenario === "cold account") {
+    expect(capture).toHaveBeenCalledOnce();
+  }
+  if (scenario === "config") {
+    expect(capture).not.toHaveBeenCalled();
+    expect(resolution.mock.calls[0]?.[0].config).toBe(runtimeConfig);
+    const { effectiveConfig } = await resolution.mock.results[0]!.value;
+    expect(publish.mock.calls[0]?.[0]).toBe(effectiveConfig);
+    expect(publish.mock.calls[0]?.[1]).toBe(sourceBeforeRun);
+  }
+  expect(gatewayResolve).toHaveBeenCalledTimes(delegated ? 1 : 0);
+  expect(complete).toHaveBeenCalledOnce();
+  const auth = complete.mock.calls[0]![0].auth;
+  expect(auth.source).toBe(
+    fromConfig ? "models.providers.customcfg" : "profile:customacct:healthy",
+  );
+  expect(looksLikeSecretSentinel(auth.apiKey ?? "")).toBe(true);
+  expect(resolveSecretSentinel(auth.apiKey ?? "")).toBe(fromConfig ? CONFIG_KEY : ACCOUNT_KEY);
+  if (fromConfig) {
+    const source = getRuntimeConfigSourceSnapshot() ?? undefined;
+    expect(resolveProviderConfigSecretInput(source, "customcfg").ref).toMatchObject(configRef);
+  }
+});
 
 it.each(["overlap", "provider-error", "callback-drain", "cancel-drain"] as const)(
   "retains local CLI completion resources through %s",

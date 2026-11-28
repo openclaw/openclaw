@@ -19,6 +19,10 @@ import type { PublishedModelCatalogOwnerCandidate } from "./prepared-model-catal
 import type { AuthStorage, AuthStorageData } from "./sessions/auth-storage.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
+export const PREPARED_MODEL_RUNTIME_LIFETIMES_KEY = Symbol.for(
+  "openclaw.preparedModelRuntimeLifetimes",
+);
+
 export type PreparedConfiguredRuntimeModel = Readonly<{
   provider: string;
   modelId: string;
@@ -145,6 +149,7 @@ export type PreparedReplyDispatchRuntime = Readonly<{
   agentDir: string;
   workspaceDir: string;
   config: OpenClawConfig;
+  readPolicyConfig?: () => OpenClawConfig;
   modelCatalog: ModelCatalogSnapshot;
   readFullModelCatalog?: () => ModelCatalogSnapshot | undefined;
   inboundPluginRegistry: PluginRegistry;
@@ -171,6 +176,8 @@ export type PreparedModelRuntimeInput = {
   env?: NodeJS.ProcessEnv;
   allowGatewaySubagentBinding?: boolean;
   runtimePluginSelections?: readonly AgentHarnessPluginSelection[];
+  /** Admission binding independent of the shared model/discovery cache identity. */
+  readPolicyConfig?: () => OpenClawConfig;
   config: OpenClawConfig;
 };
 

@@ -22,7 +22,7 @@ const HOMESERVER = "http://127.0.0.1:8008";
 const READ_PATH = "/_matrix/client/v3/rooms/%21room%3Amatrix.test/messages";
 const PAYLOAD = JSON.stringify({ chunk: [{ event_id: "$fixture", content: { body: "context" } }] });
 const DNS_ANSWER: LookupAddress[] = [{ address: "127.0.0.1", family: 4 }];
-const CLOSED_AUTHORITY = "Channel read authority is no longer active.";
+const CLOSED_AUTHORITY = "Channel read ended. Retry the action.";
 const TRANSPORTS = ["performMatrixRequest JSON", "SDK fetch"] as const;
 
 const withRead = <T>(run: () => Promise<T>) => withChannelReadAuthority(() => undefined, run);

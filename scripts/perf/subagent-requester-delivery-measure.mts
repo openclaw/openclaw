@@ -94,10 +94,7 @@ const batches: import("../../src/agents/subagents/registry/subagent-registry.typ
       completionTarget: "parent",
       execution: { status: "terminal", endedAt: 2, outcome: { status: "ok" } },
       completion: { required: true, capturedAt: 2, resultText: "Synthetic child result" },
-      delivery: {
-        status: "pending",
-        ...(replacement ? { disposition: "intentional_non_delivery" as const } : {}),
-      },
+      delivery: { status: "pending" },
       requesterSettleWake: {
         status: "pending",
         attemptCount: 0,

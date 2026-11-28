@@ -329,7 +329,9 @@ describe.each(mcpQuestionCases)("%s MCP questions (%s)", (route, scenario) => {
       });
     } else {
       const reason =
-        scenario === "pairing replaced" ? "MCP elicitation authority changed" : "AbortError";
+        scenario === "pairing replaced"
+          ? "MCP elicitation connection or request changed"
+          : "AbortError";
       await expect(receivedByServer.promise).resolves.toMatchObject({
         message: expect.stringContaining(reason),
       });

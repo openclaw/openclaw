@@ -1040,36 +1040,27 @@ describe("runGatewayLoop", () => {
     },
   );
 
-  it("recovers a dead update child when readiness reports it stopped", async () => {
+  it("exits visibly when the detached launcher dies instead of reopening the migrated runtime", async () => {
     mocks.peekGatewayRestartReason.mockReturnValue("update.run");
-    const kill = vi.fn();
+    const child = Object.assign(testLoop.createUpdateRespawnChild(8888), { exitCode: 1 });
     mocks.respawnGatewayProcessForUpdate.mockReturnValueOnce({
       mode: "spawned",
       pid: 8888,
-      child: Object.assign(testLoop.createUpdateRespawnChild(8888), { kill, exitCode: 1 }),
+      child,
     });
-
-    mocks.waitForGatewayHealthyRestart.mockResolvedValueOnce(
-      mocks.respawnHealth({
-        healthy: false,
-        waitOutcome: "stopped-free",
-        runtime: { status: "stopped" },
-      }),
-    );
     await mocks.withRunningGateway(
       async ({ captureSignal, start, exited }) => {
         captureSignal("SIGUSR2")();
-        await waitForCalls(start, 2);
-
-        expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledWith(
-          expect.objectContaining({ port: 18789, probeHosts: ["10.0.0.25"] }),
+        await expect(exited).resolves.toBe(1);
+        expect(start).toHaveBeenCalledOnce();
+        testLoop.expectUncalled(
+          child.kill,
+          mocks.markUpdateRestartSentinelFailure,
+          mocks.waitForGatewayHttpReadiness,
         );
-        expect(kill).toHaveBeenCalledTimes(1);
-        expect(mocks.markUpdateRestartSentinelFailure).toHaveBeenCalledWith("restart-unhealthy");
-        expect(start).toHaveBeenCalledTimes(2);
-
-        captureSignal("SIGTERM")();
-        await expect(exited).resolves.toBe(0);
+        expect(mocks.gatewayLog.error).toHaveBeenCalledWith(
+          "Gateway launcher exited before readiness. Restart it with: openclaw gateway",
+        );
       },
       false,
       { lockPort: 18789, healthHost: "10.0.0.25" },

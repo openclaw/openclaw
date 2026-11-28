@@ -3,7 +3,6 @@ import type { ChannelsPairingListResult, ChannelsPairingRequest } from "../../ap
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import { showConfirmChoiceDialog } from "../../components/confirm-dialog.ts";
 import { LearnMoreLink, SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
@@ -36,6 +35,7 @@ import {
   keptChannelEdits,
   rebaseChannelConfigEdits,
 } from "./channel-config-draft.ts";
+import { createChannelConfigNavigation } from "./channel-config-navigation.ts";
 import { createChannelPluginPresentation } from "./plugin-presentation-loader.ts";
 import { ChannelsView, resolveChannelLabel, resolveChannelOrder } from "./view.tsx";
 import type { ChannelPairingPrompt, ChannelSaveFeedback, ChannelsProps } from "./view.types.ts";
@@ -285,9 +285,14 @@ export function ChannelsPage() {
   }
 
   /** The one place these edits reach the config. Returns whether nothing is left unsaved. */
-  async function saveChannelConfig(channelId: string, retry = true): Promise<boolean> {
+  async function saveChannelConfig(
+    channelId: string,
+    onSaved?: () => void,
+    retry = true,
+  ): Promise<boolean> {
     const edits = channelCapability.state.configEdits[channelId];
     if (!edits) {
+      onSaved?.();
       return true;
     }
     const bases = channelCapability.state.configEditBases[channelId] ?? [];
@@ -328,7 +333,7 @@ export function ChannelsPage() {
       })
       .finally(() => setSavingChannel(null));
     if (patched) {
-      await finishChannelSave(channelId, edits);
+      await finishChannelSave(channelId, edits, onSaved);
       return true;
     }
     if (conflicts.length > 0) {
@@ -351,7 +356,7 @@ export function ChannelsPage() {
       // The file moved on before this page heard of it. Re-read it; Save goes ahead only if
       // none of the edited fields changed.
       await context.runtimeConfig.discardDraft({ reloadOnly: true });
-      return saveChannelConfig(channelId, false);
+      return saveChannelConfig(channelId, onSaved, false);
     }
     if (sent && config.lastError) {
       setSaveFeedback({ channelId, kind: "error", message: config.lastError });
@@ -359,10 +364,15 @@ export function ChannelsPage() {
     return false;
   }
 
-  async function finishChannelSave(channelId: string, edits: readonly ChannelConfigEdit[]) {
+  async function finishChannelSave(
+    channelId: string,
+    edits: readonly ChannelConfigEdit[],
+    onSaved?: () => void,
+  ) {
     if (channelCapability.state.configEdits[channelId] === edits) {
       channelCapability.discardConfigEdits(channelId);
       setSavedChannel(channelId);
+      onSaved?.();
     }
     await channelCapability.refresh(true);
   }
@@ -429,13 +439,14 @@ export function ChannelsPage() {
     }
   }
 
-  async function discardChannelConfig(channelId: string) {
+  async function discardChannelConfig(channelId: string, onDiscarded?: () => void) {
     channelCapability.discardConfigEdits(channelId);
     if (interruptedSave?.channelId === channelId) {
       interruptedSave = null;
     }
     setSavedChannel(null);
     setSaveFeedback(null);
+    onDiscarded?.();
     // Config changes elsewhere already refresh the form; a re-read is only left to clear what a
     // rejected Save reported. Other pages' unsaved edits in the shared draft would not survive it.
     const config = context.runtimeConfig.state;
@@ -444,22 +455,14 @@ export function ChannelsPage() {
     }
   }
 
-  /** Resolves true once the channel has nothing unsaved; false keeps the user editing. */
-  async function resolveUnsavedConfig(channelId: string) {
-    const channel = resolveChannelLabel(viewProps(), channelId);
-    const choice = await showConfirmChoiceDialog({
-      title: t("channels.config.unsavedTitle", { channel }),
-      message: t("channels.config.unsavedMessage", { channel }),
-      confirmLabel: t("common.save"),
-      alternativeLabel: t("channels.config.discard"),
-      cancelLabel: t("channels.config.keepEditing"),
-    });
-    if (choice === "alternative") {
-      await discardChannelConfig(channelId);
-      return true;
-    }
-    return choice === "confirm" ? saveChannelConfig(channelId) : false;
-  }
+  const { closeChannelDetail, resolveUnsavedConfig } = createChannelConfigNavigation({
+    selectedChannel,
+    hasUnsavedConfig,
+    saveChannelConfig,
+    discardChannelConfig,
+    clearChannelDetail,
+    label: (id) => resolveChannelLabel(viewProps(), id),
+  });
 
   function clearChannelDetail() {
     retireMutation("config");
@@ -467,14 +470,6 @@ export function ChannelsPage() {
     setSavedChannel(null);
     setSaveFeedback(null);
     setSelectedChannel(null);
-  }
-
-  async function closeChannelDetail() {
-    const channelId = selectedChannel();
-    if (channelId && hasUnsavedConfig(channelId) && !(await resolveUnsavedConfig(channelId))) {
-      return;
-    }
-    clearChannelDetail();
   }
 
   /** Setup reloads the config when it finishes, so unsaved edits get the same choice as closing. */
@@ -668,7 +663,7 @@ export function ChannelsPage() {
         retireMutation("whatsapp");
         setSelectedChannel(channel);
       },
-      onCloseDetail: () => void closeChannelDetail(),
+      onCloseDetail: closeChannelDetail,
       onStartSetup: (channelId) => void startChannelSetup(channelId),
       onRefresh: (probe) => void channelCapability.refresh(probe),
       onPairingRefresh: () => void channelCapability.refreshPairing(),

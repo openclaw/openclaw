@@ -370,7 +370,6 @@ export function registerAbortAcknowledgmentCases({
         scopes: ["operator.read", "operator.write"],
         source: {},
         signal: authorityController.signal,
-        assertCurrent: () => authorityController.signal.throwIfAborted(),
         retain: () => releaseAuthority,
       });
       queued.turnAdoptionLifecycle = { onAdopted: () => {}, onAbandoned, onSettled };

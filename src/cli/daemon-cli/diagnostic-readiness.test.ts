@@ -8,7 +8,6 @@ import { expectNoCalls, expectPartialCall } from "./lifecycle-assertions.test-su
 import {
   callGateway,
   classifyPortListener,
-  hasActiveStartupMigrationLease,
   inspectPortUsage,
   monotonicClock,
   ownerLease,
@@ -176,9 +175,8 @@ it.each([
     const publishOwner = () => {
       if (ownerKind === "lease") {
         readGatewayOwnerLease.mockReturnValue(owner);
-      } else {
-        readActiveGatewayLockIdentity.mockResolvedValue(legacyOwner(owner.pid, owner.port));
       }
+      readActiveGatewayLockIdentity.mockResolvedValue(legacyOwner(owner.pid, owner.port));
     };
     if (ownerAppearsDuringProbe) {
       readCommand.mockResolvedValue(null);
@@ -245,6 +243,7 @@ it("waits for a legacy replacement after an observed owner lease dies", async ()
   inspectPortUsage.mockImplementation(async (port) => {
     if (monotonicClock.nowMs === 0) {
       leasePublished = true;
+      readActiveGatewayLockIdentity.mockResolvedValue(legacyOwner(8000, port));
     } else {
       readActiveGatewayLockIdentity.mockResolvedValue(legacyOwner(9000, port));
     }
@@ -271,9 +270,7 @@ it.each([
     const error = new Error("owner lookup unavailable");
     if (platformAbsent !== undefined) {
       missingService(platformAbsent);
-      hasActiveStartupMigrationLease.mockImplementation(() => {
-        throw new Error("startup migration owner unavailable");
-      });
+      readActiveGatewayLockIdentity.mockRejectedValue(error);
     } else if (source === "service-command") {
       readCommand.mockRejectedValue(error);
     } else if (source === "absence") {
@@ -353,7 +350,7 @@ it.each(missingServiceCases)(
   "waits for startup migration to hand off to a foreground Gateway with %s",
   async (_name, platformAbsent, serviceMode, readyAtMs, timeoutMs) => {
     missingService(platformAbsent);
-    hasActiveStartupMigrationLease.mockImplementation(() => monotonicClock.nowMs < readyAtMs - 500);
+    readActiveGatewayLockIdentity.mockImplementation(async () => legacyOwner(8000));
     readGatewayOwnerLease.mockImplementation(() =>
       monotonicClock.nowMs < readyAtMs ? undefined : foregroundOwner("migrated-owner"),
     );
@@ -388,9 +385,9 @@ it.each([
     } else {
       isAbsent.mockResolvedValue(true);
       if (phase === "final owner") {
-        readGatewayOwnerLease
-          .mockReturnValueOnce(undefined)
-          .mockImplementationOnce(() => advanceClock(ownerElapsedMs, undefined));
+        readActiveGatewayLockIdentity
+          .mockResolvedValueOnce(undefined)
+          .mockImplementationOnce(async () => advanceClock(ownerElapsedMs, undefined));
       } else {
         if (phase === "initial lock") {
           isAbsent.mockImplementation(async () => advanceClock(1_125, true));
@@ -553,13 +550,10 @@ it.each(
     "runtime PPID": () => nativePid(1),
     "live owner": () => readGatewayOwnerLease.mockReturnValue(foregroundOwner()),
     "unknown owner": () =>
-      readGatewayOwnerLease.mockReturnValue({ ...foregroundOwner(), state: "unknown" }),
+      readActiveGatewayLockIdentity.mockRejectedValue(new Error("owner identity unavailable")),
     "legacy owner": () => readActiveGatewayLockIdentity.mockResolvedValue(legacyOwner()),
-    "startup migration": () => hasActiveStartupMigrationLease.mockReturnValue(true),
     "migration inspection failure": () =>
-      hasActiveStartupMigrationLease.mockImplementation(() => {
-        throw new Error("unavailable");
-      }),
+      readActiveGatewayLockIdentity.mockRejectedValue(new Error("unavailable")),
   }),
 )("preserves startup grace for %s on a busy port", async (_reason, setup) => {
   readCommand.mockResolvedValue(null);

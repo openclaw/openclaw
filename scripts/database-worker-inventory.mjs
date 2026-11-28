@@ -471,7 +471,8 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: [
           "readAgentToolUsageStateInDatabase",
-          "writeState",
+          "writeEntry",
+          "readAgentToolFirstSeenInDatabase",
           "readAgentToolUsageLiveRunsInDatabase",
           "retainLiveRun",
           "pruneAgentToolUsageInDatabase",
@@ -480,7 +481,7 @@ const reviewedOperations = new Map([
           "resetAgentToolUsageInDatabase",
         ],
         evidence:
-          "Begin/flush run in session-actor-append.worker.ts inside the transcript actor transaction; prune/flush/reset/import run only in the toolUsage.* handlers that openclaw-agent-execution-operations.ts loads from openclaw-agent-execution-tool-usage.worker.ts in the agent execution worker; status and live-run reads run in tool-usage-read.worker.ts under session-history-read-operation.worker.ts. Host imports are types.",
+          "Begin/flush run in session-actor-append.worker.ts inside the transcript actor transaction; prune/flush/firstSeen/reset/import run only in the toolUsage.* handlers that openclaw-agent-execution-operations.ts loads from openclaw-agent-execution-tool-usage.worker.ts in the agent execution worker; status and live-run reads run in tool-usage-read.worker.ts under session-history-read-operation.worker.ts. Host imports are types.",
       },
       {
         tier: "T3",
@@ -634,6 +635,17 @@ const reviewedOperations = new Map([
         guard: "params.context.maintenanceScope?.ownsSchemaMaintenance",
         evidence:
           "Only the synchronous exclusive-Doctor branch opens the native agent transaction, with captured live admission, credential-preserving CAS and commit settlement. Ordinary shared/agent enrollment still dispatches through the existing worker/executor; nested callbacks and unguarded calls retain runtime classification.",
+      },
+    ],
+  ],
+  [
+    "src/state/openclaw-state-db-delivery-queue-backfill.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["hasLegacyDeliveryQueueFailureCompactionWork"],
+        evidence:
+          "Read-only Doctor plan only: hasDeliveryQueueBackfillWork, called from planOpenClawStateDatabaseDoctorRepair (Doctor schema preparation and its config-flow pending check) on a read-only connection; no Gateway runtime caller.",
       },
     ],
   ],
@@ -1073,7 +1085,7 @@ const reviewedOperations = new Map([
         tier: "T3",
         operations: ["clearPersistedCurrentConversationBindingsForTests"],
         evidence:
-          "Explicit testing SDK namespace only: session-binding-service.ts testing.resetSessionBindingAdaptersForTests calls this reset; its callers are tests and contracts/test-helpers/session-binding-registry-backed-contract.ts beforeEach. No production binding cleanup calls it.",
+          "Explicit testing SDK namespace only: session-binding-service.ts testing.resetSessionBindingAdaptersForTests calls this reset; its callers are tests and contracts/test-helpers/registry-session-binding.ts inside the contract test body. No production binding cleanup calls it.",
       },
     ],
   ],
@@ -1401,9 +1413,22 @@ const reviewedOperations = new Map([
         operations: [
           "readGatewayLastShutdownInDatabase",
           "inspectGatewayCrashLoopBreakerInDatabase",
+          "countRepairableMaintenanceStartupFailuresInDatabase",
         ],
         evidence:
           "SQL readers execute only through gatewayBootReadOperations in the shared-state read worker or gatewayBootOperations begin/recover in the shared-state writer. Host lifecycle APIs dispatch these operations; remaining host imports from this kernel are pure helpers and constants.",
+      },
+    ],
+  ],
+  [
+    "src/infra/gateway-lock-recovery-namespace.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["classifyGatewayLockProcessNamespace"],
+        guard: "holder && databasePath && isLegacyGatewayLeaseLock(holder)",
+        evidence:
+          "Physical Gateway lock admission reads only the selected SQLite gateway-owner lease before reclaiming a namespace-less, explicit Gateway-role owner older than five minutes. Native callers are gateway-state-owner-record.ts stale-lock/access admission and gateway-lock.ts historical-lock admission/discovery. Modern owners never enter this branch; runtime lease renewals remain worker-owned.",
       },
     ],
   ],
@@ -2139,13 +2164,14 @@ const reviewedOperations = new Map([
         operations: [
           "readUserPreferences",
           "writeUserPreferences",
+          "upsertUserPreferenceValues",
           "deleteUserPreference",
           "selectUserPreferenceValues",
           "readPreferenceKeys",
           "mergeUserPreferences",
         ],
         evidence:
-          "Preference read/write dispatch at user-preferences.worker.ts:52,74; merge/GitHub helpers only in user-profile-writes.worker.ts:375,425,482 and openclaw-state-read.worker.ts:616; private key scans serve these worker writers",
+          "Preference read/write dispatch at user-preferences.worker.ts:52,74; merge/GitHub helpers only in user-profile-writes.worker.ts:375,425,482 and openclaw-state-read.worker.ts:616; acknowledgements and profile merges share the same worker-owned preference upsert",
       },
     ],
   ],
@@ -2185,6 +2211,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/config/sessions/session-accessor.sqlite-archive-metadata.ts",
+    [
+      {
+        tier: "T1",
+        operations: ["readTranscriptArchiveRows"],
+        evidence:
+          "Usage workers read archive identities. Transcript workers and synchronous history readers use the same query for ordered archive listings.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-archive-read.ts",
     [
       {
@@ -2195,13 +2232,7 @@ const reviewedOperations = new Map([
           "readTranscriptArchivePageInWorker",
         ],
         evidence:
-          "Only session-transcript.worker.ts:230 (presence) and session-accessor.sqlite-archive.worker.ts:483,491 (page/final) call these readers; shared archive listing remains T1.",
-      },
-      {
-        tier: "T1",
-        operations: ["listTranscriptArchivesFromDatabase"],
-        evidence:
-          "Durable archive enumeration reaches this query through transcript, Memory corpus, and usage-cost workers. session-transcript-inventory-runtime.ts returns an empty archive inventory for memory actors. Synchronous history/SDK readers retain the shared durable kernel. The shared list kernel remains mixed.",
+          "The transcript worker reads archive presence; the archive worker reads final messages and pages.",
       },
     ],
   ],
@@ -3048,21 +3079,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/infra/update-failure-report-receipt-store.ts",
-    [
-      {
-        tier: "W",
-        operations: [
-          "replaceReceiptAtRevision",
-          "reserveUpdateFailureReportReceiptRowSync",
-          "completeUpdateFailureReportReceiptCleanupRowSync",
-        ],
-        evidence:
-          "Receipt mutations and authoritative revision rereads are called only by restart-sentinel.worker.ts; report submission and artifact sweep await that physical shared-state owner.",
-      },
-    ],
-  ],
-  [
     "src/infra/session-sqlite-transcript-verification.ts",
     [
       {
@@ -3179,13 +3195,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
-        operations: [
-          "readRecoveryRows",
-          "readPluginCohortPairRows",
-          "inspectPluginCohortRecoveryRows",
-        ],
+        operations: ["readRecoveryRows", "readPluginCohortPairRows"],
         evidence:
-          "Runtime mutation/reconciliation/interruption readers execute in existing workers. Native load/inspect recovery callers are update CLI repair, result, rollback and terminal owners plus CLI managed-handoff cleanup; no Gateway reader uses the synchronous recovery facade. Recovery exclusion is retained as activation/rollback custody, not removed as bookkeeping. Cohort runtime inspection uses inspectPluginCohortRecoveriesAsync through openclaw-state-read-handlers; metadata mutations read the pair inside their worker. Native pair reads serve admitted update/repair/config-capture owners; the synchronous mutation continuation is supplied only by CLI execution-guards with its actual executor fence.",
+          "Runtime mutation/reconciliation/interruption readers execute in existing workers. Native load/inspect recovery callers are CLI repair, result, rollback and terminal owners plus Doctor diagnostics. Gateway cohort completion uses loadPluginCohortRecoveryAsync to read only its named pair; metadata mutations recheck that exact transaction in their worker. Current source/executor/finalizer checks remain; foreign saved rows are not update admission authority.",
       },
     ],
   ],
@@ -3261,28 +3273,18 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/state/agent-provenance.ts",
-    [
-      {
-        tier: "W",
-        operations: ["deleteAgentProvenanceForAgent"],
-        evidence:
-          "Only completeAgentDeletionJournalInDatabase, reached from agent-deletion.worker.ts, deletes provenance; lifecycle incarnation readers retain synchronous live-authority checks",
-      },
-    ],
-  ],
-  [
     "src/state/agent-provenance.kernel.ts",
     [
       {
         tier: "W",
         operations: [
+          "deleteAgentProvenanceForAgent",
           "listAgentProvenanceInDatabase",
           "recordAgentProvenanceInDatabase",
           "readAgentProvenanceBatchInDatabase",
         ],
         evidence:
-          "agentProvenance.list/readBatch execute through agentProvenanceReadOperations in the read-only registry; record executes through agentProvenanceOperations in agent-provenance.worker.ts; native synchronous lifecycle guards use the joined projection in agent-lifecycle-read.kernel.ts",
+          "agentProvenance.list/readBatch execute through agentProvenanceReadOperations in the read-only registry; record executes through agentProvenanceOperations in agent-provenance.worker.ts; journal completion deletes provenance on its existing worker transaction; native synchronous lifecycle guards use the joined projection in agent-lifecycle-read.kernel.ts",
       },
     ],
   ],
@@ -3611,6 +3613,7 @@ const workerModules = new Set([
   "src/trajectory/runtime-retention.sqlite.ts", // SQL runs only through agent execution, session-history read, and entry-patch workers; runtime-retention.ts uses only the pure due/state helpers.
   "src/config/sessions/session-reaction-store.read.ts", // Only the history worker reader calls reaction SQL; synchronous test inspection lives in test support.
   "src/config/sessions/session-sharing-store.native.ts", // Membership mutations run only in session-sharing-store.worker.ts; host imports are type-only.
+  "src/config/sessions/session-participation-queue.kernel.ts", // Only session-sharing-store.native.ts revokes queued input inside the sharing worker's membership transaction; the host facade imports its mutation signatures by type.
   "src/config/sessions/session-accessor.sqlite-participants.native.ts", // Participant mutation SQL runs only through the sharing worker; host imports are type-only.
   "src/config/sessions/session-group-categories.read.ts", // Category enumeration runs only in session-sharing-store.worker.ts.
   "src/config/sessions/session-pending-input-history.kernel.ts", // History-read worker owns all remaining callers.
@@ -3776,6 +3779,7 @@ const exceptionModules = new Set([
   "src/state/openclaw-state-db-transaction.ts",
   "src/state/openclaw-state-lease-store.ts",
   "src/state/openclaw-state-lease-storage.ts",
+  "src/state/openclaw-agent-db-lease-rows.ts",
   "src/state/openclaw-agent-db-lease.ts",
   "src/infra/gateway-boot-lifecycle.ts",
   "src/infra/sqlite-staging-token.ts", // acquireSqliteStagingToken holds the private snapshot admission/retirement lock through native transactions.
@@ -4059,8 +4063,13 @@ export function loadInventorySources(root = defaultRoot, ref = "", staged = fals
       : [
           "--files",
           "--null",
-          "-g",
-          "*.{ts,tsx,js,mjs,mts,cts,cjs}",
+          // Match Git membership: type filters keep ignore rules (a positive -g glob would list
+          // ignored build outputs), and tracked hidden stubs stay in the source set.
+          "--hidden",
+          "--type-add",
+          "inventory:*.{ts,tsx,js,mjs,mts,cts,cjs}",
+          "--type",
+          "inventory",
           ...roots.filter((dir) => fs.existsSync(path.join(root, dir))),
         ],
     { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },

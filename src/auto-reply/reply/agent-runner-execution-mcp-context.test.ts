@@ -30,7 +30,6 @@ const authority = (profileId: string) =>
   createTestOperatorAuthority({
     profileId,
     scopes: ["operator.read", "operator.write"],
-    assertCurrent() {},
   });
 async function pendingView(text: string, requesterId?: string, agentId = "main", images = false) {
   const runtime = { sessionId: "session" } as SessionMcpRuntime;

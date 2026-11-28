@@ -1,5 +1,5 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
-import { parseGitPluginSpec } from "../plugins/git-install.js";
+import { parseGitPluginSpec } from "../plugins/git-source-spec.js";
 import {
   pluginInstallRequiresLocalHost,
   resolvePluginInstallSourcePlan,

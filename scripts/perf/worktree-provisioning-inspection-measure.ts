@@ -19,6 +19,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { getHeapStatistics } from "node:v8";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import * as fixture from "./worktree-provisioning-dependency-fixture.js";
 const { values } = parseArgs({
   options: {
@@ -72,12 +73,7 @@ if (values.seed) {
       return ((Number(fields[13]) + Number(fields[14])) * 1000) / ticks;
     };
     const exact = Number.isFinite(getHeapStatistics().total_allocated_bytes);
-    profiler.connect();
-    await profiler.post("HeapProfiler.startSampling", {
-      samplingInterval: 65536,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(profiler, 65536);
     if (values.profile) {
       await profiler.post("Profiler.enable");
       await profiler.post("Profiler.start");
