@@ -433,6 +433,63 @@ it("publishes overlapping mutations from two operators", async ({ signal }) => {
   expect(recoveryRestart).not.toHaveBeenCalled();
 });
 
+it("repeats a completed keep-files deletion as a no-op and later deletes its recorded files", async () => {
+  const id = "repeat-keep-files";
+  const peer = `${id}-peer`;
+  const workspace = path.join(state.home, id);
+  for (const name of [id, peer]) {
+    await matches(rpc("agents.create", { name, workspace: path.join(state.home, name) }), {
+      agentId: name,
+    });
+  }
+  const peerKey = `agent:${peer}:chat`;
+  await matches(rpc("sessions.create", { agentId: peer, key: peerKey }), { key: peerKey });
+  const keepFiles = { agentId: id, deleteFiles: false };
+  await matches(rpc("agents.delete", keepFiles), { ok: true, agentId: id });
+  const journal = await readAgentDeletionJournalAsync(id);
+  expect(journal).toMatchObject({
+    deleteFiles: false,
+    cleanupCompleted: true,
+    workspaceDir: workspace,
+  });
+  assert.isDefined(journal);
+  const registered = await readRegisteredAgentDatabasePaths(id);
+  expect(registered).not.toHaveLength(0);
+  // The path a fresh journal would resolve for the id once config no longer names it.
+  const defaultWorkspaceFile = path.join(state.stateDir, `workspace-${id}`, "keep.txt");
+  await fs.mkdir(path.dirname(defaultWorkspaceFile), { recursive: true });
+  await fs.writeFile(defaultWorkspaceFile, "keep");
+
+  for (let repeat = 0; repeat < 2; repeat += 1) {
+    await matches(rpc("agents.delete", keepFiles), {
+      ok: true,
+      agentId: id,
+      removed: [],
+      failed: [],
+    });
+  }
+  await Promise.all([workspace, journal.agentDir].map((kept) => fs.access(kept)));
+  expect(await readAgentDeletionJournalAsync(id)).toEqual(journal);
+  expect(await readRegisteredAgentDatabasePaths(id)).toEqual(registered);
+  expect(getRuntimeConfig().agents?.entries?.[peer]).toBeDefined();
+  await matches(rpc("sessions.list", { agentId: peer }), {
+    sessions: expect.arrayContaining([expect.objectContaining({ key: peerKey })]),
+  });
+
+  // Deleting with files later removes the recorded workspace, not the default path.
+  await matches(rpc("agents.delete", { agentId: id, deleteFiles: true }), {
+    ok: true,
+    agentId: id,
+    failed: [],
+    removed: expect.arrayContaining([{ path: workspace, method: "trash" }]),
+  });
+  await expect(fs.access(workspace)).rejects.toThrow();
+  expect(await readRegisteredAgentDatabasePaths(id)).toEqual([]);
+  expect(await fs.readFile(defaultWorkspaceFile, "utf8")).toBe("keep");
+  await fs.access(path.join(state.home, peer));
+  expect(recoveryRestart).not.toHaveBeenCalled();
+});
+
 it("reports unavailable publication and saved-only mutations", async ({ signal }) => {
   assert.isDefined(reloadScheduler);
   const clock = createGatewaySchedulerClock();
