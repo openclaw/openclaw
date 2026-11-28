@@ -20,6 +20,7 @@ import {
 } from "./plugin-cache.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import { readPluginMetadataStateRow } from "./plugin-metadata-state-worker.js";
+import { isPluginStateEngineUnavailable } from "./plugin-state-database-engine.js";
 
 type BundledDiscoveryMode = "compat" | "allowlist" | undefined;
 
@@ -45,6 +46,9 @@ export function readBundledDiscoveryMode(
   options: OpenClawStateDatabaseOptions = {},
   behavior: { artifactPreservingReadOnly?: boolean } = {},
 ): "compat" | "allowlist" | undefined {
+  if (isPluginStateEngineUnavailable()) {
+    return undefined;
+  }
   const resolvedOptions = resolveBundledDiscoveryOptions(options);
   const value = readConfigMachineState<unknown>(
     "plugins.bundledDiscovery",
@@ -87,6 +91,9 @@ export function readBundledDiscoveryModeMemoized(
   behavior: { artifactPreservingReadOnly?: boolean } = {},
   readPreparedValue?: (databasePath: string) => unknown,
 ): "compat" | "allowlist" | undefined {
+  if (isPluginStateEngineUnavailable()) {
+    return undefined;
+  }
   const options = env === process.env ? {} : { env };
   const snapshot =
     behavior.artifactPreservingReadOnly || isArtifactPreservingStateRead()
@@ -128,6 +135,9 @@ export async function prepareBundledDiscoveryMode(
   env: NodeJS.ProcessEnv = process.env,
   readPreparedRow?: (databasePath: string) => Promise<{ value_json: string } | undefined>,
 ): Promise<() => void> {
+  if (isPluginStateEngineUnavailable()) {
+    return () => {};
+  }
   const owner = getPluginCache();
   const key = resolveBundledDiscoveryMemoKey(env);
   const options = resolveBundledDiscoveryOptions({ env });

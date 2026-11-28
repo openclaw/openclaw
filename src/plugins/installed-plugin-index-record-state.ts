@@ -26,12 +26,13 @@ import {
   readPluginMetadataStateRow,
   readPluginMetadataStateRows,
 } from "./plugin-metadata-state-worker.js";
+import { isPluginStateEngineUnavailable } from "./plugin-state-database-engine.js";
 
 /** Read failures must escape before either projection can authorize recovery or rebuilding. */
 function readPersistedInstalledPluginIndexRowSync(
   options: InstalledPluginIndexStoreOptions,
 ): { value_json: string } | undefined {
-  if (options.filePath?.endsWith(".json")) {
+  if (options.filePath?.endsWith(".json") || isPluginStateEngineUnavailable()) {
     return undefined;
   }
   return readPluginMetadataStateRowSync(
@@ -47,6 +48,9 @@ export function getPersistedInstalledPluginIndexCacheEntry(
   readRow: () => { value_json: string } | undefined = () =>
     readPersistedInstalledPluginIndexRowSync(options),
 ): PersistedInstalledPluginIndexCacheEntry {
+  if (isPluginStateEngineUnavailable()) {
+    return { state: { status: "missing" } };
+  }
   const cache = getPluginCache().persistedInstalledIndex;
   const key = path.resolve(resolveInstalledPluginIndexStorePath(options));
   const current = cache.get(key);
@@ -66,6 +70,9 @@ export function getPersistedInstalledPluginIndexCacheEntry(
 
 /** Prepare missing policy and inventory facts without replacing their lifecycle owners. */
 export function preparePluginMetadataMachineState(options: InstalledPluginIndexStoreOptions): void {
+  if (isPluginStateEngineUnavailable()) {
+    return;
+  }
   const env = options.env ?? process.env;
   readBundledDiscoveryModeMemoized(env, options, (databasePath) => {
     const key = path.resolve(resolveInstalledPluginIndexStorePath(options));
@@ -95,6 +102,9 @@ export function preparePluginMetadataMachineState(options: InstalledPluginIndexS
 export async function preparePluginMetadataMachineStateAsync(
   options: InstalledPluginIndexStoreOptions,
 ): Promise<() => void> {
+  if (isPluginStateEngineUnavailable()) {
+    return () => {};
+  }
   const key = path.resolve(resolveInstalledPluginIndexStorePath(options));
   const databaseOptions = resolveInstalledPluginIndexStateDatabaseOptions(options);
   let rows: Promise<PluginMetadataStateRow[]> | undefined;
@@ -136,6 +146,9 @@ export async function preparePersistedInstalledPluginIndexCacheEntry(
   options: InstalledPluginIndexStoreOptions = {},
   readPreparedRow?: () => Promise<{ value_json: string } | undefined>,
 ): Promise<{ entry: PersistedInstalledPluginIndexCacheEntry; assertCurrent: () => void }> {
+  if (isPluginStateEngineUnavailable()) {
+    return { entry: { state: { status: "missing" } }, assertCurrent: () => {} };
+  }
   const owner = getPluginCache();
   const key = path.resolve(resolveInstalledPluginIndexStorePath(options));
   const databaseOptions = resolveInstalledPluginIndexStateDatabaseOptions(options);

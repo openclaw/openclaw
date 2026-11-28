@@ -13,6 +13,7 @@ import {
   resolveInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store-path.js";
+import { isPluginStateEngineUnavailable } from "./plugin-state-database-engine.js";
 
 const readiness = new WeakMap<
   object,
@@ -60,6 +61,9 @@ function selectReadiness(options: InstalledPluginIndexStoreOptions) {
 export async function readPluginStateMigrationReadinessAsync(
   options: InstalledPluginIndexStoreOptions,
 ): Promise<readonly DeferredPluginMigration[]> {
+  if (isPluginStateEngineUnavailable()) {
+    return [];
+  }
   const selected = selectReadiness(options);
   return (
     selected.pending ?? selected.publish(await readDeferredPluginMigrationsAsync(selected.database))
@@ -70,6 +74,9 @@ export async function readPluginStateMigrationReadinessAsync(
 export function readPluginStateMigrationReadiness(
   options: InstalledPluginIndexStoreOptions,
 ): readonly DeferredPluginMigration[] {
+  if (isPluginStateEngineUnavailable()) {
+    return [];
+  }
   const selected = selectReadiness(options);
   return selected.pending ?? selected.publish(readDeferredPluginMigrations(selected.database));
 }

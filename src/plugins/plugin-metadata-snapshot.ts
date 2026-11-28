@@ -57,6 +57,7 @@ import {
   type preparePluginRegistrySnapshotReader,
 } from "./plugin-registry-snapshot.js";
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
+import { withConfiguredPluginStateEngine } from "./plugin-state-database-engine.js";
 import { buildDeclaredProviderOwnerIndex } from "./provider-owner-index.js";
 import { registerProviderPolicyOwnerIndexes } from "./provider-policy-owners.js";
 
@@ -65,11 +66,13 @@ export const MAX_CACHED_PLUGIN_METADATA_SNAPSHOTS = 64;
 
 /** Keep recently used discovery views; active scopes retain their own snapshot references. */
 export function readPluginMetadataSnapshotCache(key: string): PluginMetadataSnapshot | undefined {
-  const snapshots = getPluginCache().metadata.snapshots;
+  const cache = getPluginCache();
+  const snapshots = cache.metadata.snapshots;
   const snapshot = snapshots.get(key);
   if (snapshot) {
     snapshots.delete(key);
     snapshots.set(key, snapshot);
+    preparePluginNativeAdmissions(snapshot.index, cache);
   }
   return snapshot;
 }
@@ -605,19 +608,27 @@ export async function resolvePluginMetadataSnapshotAsync(
     return withPluginCache(createPluginCache(), () => resolvePluginMetadataSnapshotAsync(captured));
   }
   const cache = getPluginCache();
-  return withPluginCache(cache, async () => {
-    const current = selectPluginMetadataSnapshot(captured, false);
-    if (current.kind === "current") {
-      return current.snapshot;
-    }
-    const activateDiscovery = await (captured.index === undefined &&
-    captured.installRecords === undefined &&
-    captured.preferPersisted !== false
-      ? preparePluginMetadataMachineStateAsync({ env: captured.env, stateDir: captured.stateDir })
-      : prepareBundledDiscoveryMode(captured.env));
-    activateDiscovery();
-    return resolvePluginMetadataSnapshot(captured);
-  });
+  return withPluginCache(cache, () =>
+    withConfiguredPluginStateEngine(
+      { config: captured.config, env: captured.env, stateDir: captured.stateDir },
+      async () => {
+        const current = selectPluginMetadataSnapshot(captured, false);
+        if (current.kind === "current") {
+          return current.snapshot;
+        }
+        const activateDiscovery = await (captured.index === undefined &&
+        captured.installRecords === undefined &&
+        captured.preferPersisted !== false
+          ? preparePluginMetadataMachineStateAsync({
+              env: captured.env,
+              stateDir: captured.stateDir,
+            })
+          : prepareBundledDiscoveryMode(captured.env));
+        activateDiscovery();
+        return resolvePluginMetadataSnapshot(captured);
+      },
+    ),
+  );
 }
 
 /** Reuse prepared workspace facts without materializing an intermediate immutable graph. */
