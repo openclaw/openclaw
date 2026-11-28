@@ -13,6 +13,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import type { Command } from "../internal/discord.js";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { createDiscordLivePolicyReader } from "./live-policy.js";
 import type { DiscordLivePolicy, DiscordLivePolicyReader } from "./live-policy.js";
@@ -52,7 +53,7 @@ let nativeCommandContext: typeof import("./native-command.dispatch.test-support.
 function createNativeCommand(
   spec: string | Parameters<CreateCommand>[0]["command"],
   { cfg = {}, readPolicy }: { readPolicy?: DiscordLivePolicyReader; cfg?: OpenClawConfig } = {},
-): ReturnType<CreateCommand> {
+): Command {
   const command =
     typeof spec === "string"
       ? listNativeCommandSpecs({ provider: "discord" }).find((entry) => entry.name === spec)
@@ -60,15 +61,19 @@ function createNativeCommand(
   if (!command) {
     throw new Error(`missing native command: ${typeof spec === "string" ? spec : spec.name}`);
   }
-  return createDiscordNativeCommand({
+  const result = createDiscordNativeCommand({
     readPolicy,
     command,
     ...nativeCommandContext(cfg),
     ephemeralDefault: true,
   });
+  if (result.commandKind !== "leaf") {
+    throw new Error("Expected a leaf command");
+  }
+  return result;
 }
 
-function autocompleteFor(command: Pick<ReturnType<CreateCommand>, "options">, name = "level") {
+function autocompleteFor(command: Pick<Command, "options">, name = "level") {
   const option = command.options?.find((entry) => entry.name === name);
   const autocomplete = option && "autocomplete" in option ? option.autocomplete : undefined;
   if (typeof autocomplete !== "function") {
@@ -403,3 +408,39 @@ it("serializes localized command descriptions on a UTF-16 boundary", () => {
 installDiscordIngressTestRuntime();
 
 useBundledProviderPolicyArtifactsForTest(["openai", "anthropic"]);
+
+it("registers Goal actions as native subcommands with action-specific fields", () => {
+  const command = createDiscordNativeCommand({
+    command: listNativeCommandSpecs({ provider: "discord" }).find(
+      (entry) => entry.name === "goal",
+    )!,
+    ...nativeCommandContext({}),
+    ephemeralDefault: true,
+  });
+  const options = command.serialize().options;
+  expect(options?.map((option) => option.name)).toEqual([
+    "status",
+    "start",
+    "edit",
+    "pause",
+    "resume",
+    "complete",
+    "block",
+    "clear",
+  ]);
+  for (const option of options ?? []) {
+    expect(option.type).toBe(ApplicationCommandOptionType.Subcommand);
+    if (option.type !== ApplicationCommandOptionType.Subcommand) {
+      throw new Error("Expected subcommand");
+    }
+    expect(
+      option.options?.map(({ name, type, required }) => ({ name, type, required })) ?? [],
+    ).toEqual(
+      ["start", "edit"].includes(option.name)
+        ? [{ name: "objective", type: ApplicationCommandOptionType.String, required: true }]
+        : ["status", "clear"].includes(option.name)
+          ? []
+          : [{ name: "note", type: ApplicationCommandOptionType.String, required: false }],
+    );
+  }
+});
