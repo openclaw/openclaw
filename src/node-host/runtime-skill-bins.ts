@@ -21,6 +21,28 @@ export async function resolveExecutableTrustPathFromEnv(
   }
 }
 
+/**
+ * Resolves the Claude executable the node host spawns. npm installs a bare, non-runnable sh
+ * shim beside its .cmd launcher, so Windows searches PATH for PATHEXT launchers before
+ * retaining a bare-only native host.
+ */
+export async function resolveClaudeLaunchPathFromEnv(pathEnv: string): Promise<string | null> {
+  const resolvedPath =
+    (process.platform === "win32"
+      ? await resolveExecutableFromPathEnvAsync("claude", pathEnv, undefined, {
+          includeExtensionless: false,
+        })
+      : undefined) ?? (await resolveExecutableFromPathEnvAsync("claude", pathEnv));
+  if (!resolvedPath) {
+    return null;
+  }
+  try {
+    return await realpathForExec(resolvedPath);
+  } catch {
+    return resolvedPath;
+  }
+}
+
 async function resolveSkillBinTrustEntries(
   bins: string[],
   pathEnv: string,

@@ -24,6 +24,7 @@ import { runClaudeCliNodeCommand } from "./invoke-agent-cli-claude.js";
 import * as systemRun from "./invoke-system-run.js";
 import type { RunResult } from "./invoke-types.js";
 import { handleInvoke, type NodeInvokeRequestPayload } from "./invoke.js";
+import { resolveClaudeLaunchPathFromEnv } from "./runtime-skill-bins.js";
 
 const tempDirs: string[] = [];
 
@@ -800,5 +801,98 @@ process.stdout.write(Buffer.concat([
       runCommand(executable, request, { signal: controller.signal }),
     ).resolves.toMatchObject({ exitCode: 130, success: false });
     await expect(fs.stat(marker)).rejects.toThrow();
+  });
+
+  describe("npm-installed Claude launcher", () => {
+    async function npmInstall(source: string) {
+      // npm puts a bare sh shim beside the .cmd launcher that can actually run on Windows.
+      const binDir = await fs.realpath(
+        await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-claude-npm-")),
+      );
+      tempDirs.push(binDir);
+      const entrypoint = path.join(
+        binDir,
+        "node_modules",
+        "@anthropic-ai",
+        "claude-code",
+        "cli.js",
+      );
+      await fs.mkdir(path.dirname(entrypoint), { recursive: true });
+      await fs.writeFile(path.join(binDir, "claude"), "#!/bin/sh\nexit 0\n", "utf8");
+      await fs.writeFile(
+        path.join(binDir, "claude.cmd"),
+        [
+          "@ECHO off",
+          "GOTO start",
+          ":find_dp0",
+          "SET dp0=%~dp0",
+          "EXIT /b",
+          ":start",
+          "SETLOCAL",
+          "CALL :find_dp0",
+          '"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js"   %*',
+          "",
+        ].join("\r\n"),
+        "utf8",
+      );
+      await fs.writeFile(entrypoint, `${source}\n`, "utf8");
+      return {
+        barePath: path.join(binDir, "claude"),
+        binDir,
+        commandPath: path.join(binDir, "claude.cmd"),
+      };
+    }
+
+    it.runIf(process.platform === "win32")(
+      "launches the .cmd launcher beside the bare npm shim",
+      async () => {
+        const { binDir, commandPath } = await npmInstall(
+          'process.stdout.write("npm launcher\\n");',
+        );
+        // npm launchers run on the Node found on the child PATH.
+        await withEnvAsync(
+          { PATH: `${path.dirname(process.execPath)};${process.env.PATH ?? ""}` },
+          async () => {
+            const claudePath = await resolveClaudeLaunchPathFromEnv(binDir);
+            expect(claudePath).toBe(await fs.realpath(commandPath));
+
+            setRuntimeConfigSnapshot({ tools: { exec: { security: "full", ask: "off" } } });
+            const calls: Calls = [];
+            await invokeClaude(
+              { argv: ["-p"], idleTimeoutMs: 5_000, timeoutMs: 10_000 },
+              claudePath ?? undefined,
+              calls,
+            );
+
+            expect(progressText(calls)).toBe("npm launcher\n");
+            expect(invocationResult(calls)).toMatchObject({
+              ok: true,
+              payloadJSON: expect.stringContaining('"exitCode":0'),
+            });
+          },
+        );
+      },
+    );
+
+    it.runIf(process.platform === "win32")(
+      "keeps a bare-only native host when no PATHEXT launcher exists",
+      async () => {
+        const { barePath, binDir } = await npmInstall("process.exit(0);");
+        await fs.rm(path.join(binDir, "claude.cmd"));
+        await fs.copyFile(process.execPath, barePath);
+
+        expect(await resolveClaudeLaunchPathFromEnv(binDir)).toBe(await fs.realpath(barePath));
+      },
+    );
+
+    it.runIf(process.platform !== "win32")(
+      "keeps the extensionless npm launcher on POSIX",
+      async () => {
+        const { barePath, binDir } = await npmInstall("process.exit(0);");
+        await fs.chmod(barePath, 0o755);
+
+        expect(await resolveClaudeLaunchPathFromEnv(binDir)).toBe(barePath);
+      },
+    );
   });
 });
