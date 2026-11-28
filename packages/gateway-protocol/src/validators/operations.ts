@@ -363,6 +363,10 @@ export const validateCronHistoryParams = createProtocolValidator(
   S.CronHistoryParamsSchema,
   Checks.isCronHistoryParams,
 );
+export const validateCronLiveOutputParams = createProtocolValidator(
+  S.CronLiveOutputParamsSchema,
+  Checks.isCronLiveOutputParams,
+);
 export const validateCronScratchGetParams = createProtocolValidator(
   S.CronScratchGetParamsSchema,
   Checks.isCronScratchGetParams,

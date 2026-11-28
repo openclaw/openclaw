@@ -1,4 +1,8 @@
-import type { RedactContext, RedactMatch } from "./redact-pattern-runtime.js";
+import type {
+  RedactContext,
+  RedactMatch,
+  ResolvedRedactPattern,
+} from "./redact-pattern-runtime.js";
 
 export const PEM_REDACT_PATTERN_SOURCE = String.raw`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----`;
 
@@ -128,12 +132,12 @@ function consumeDelimiter(
   return block;
 }
 
+function copyState(state: PemState): PemState {
+  return { ...state, scanner: { ...state.scanner }, open: state.open && { ...state.open } };
+}
+
 function* matchPem(text: string, context: PemState, incomplete: boolean): Iterable<RedactMatch> {
-  const state: PemState = {
-    ...context,
-    scanner: { ...context.scanner },
-    open: context.open && { ...context.open },
-  };
+  const state = copyState(context);
   const origin = state.scanner.offset;
   for (const delimiter of readDelimiters(text, state.scanner)) {
     const block = consumeDelimiter(state, delimiter);
@@ -165,6 +169,33 @@ function* matchPem(text: string, context: PemState, incomplete: boolean): Iterab
       };
     }
   }
+}
+
+export type PemBlockTracker = {
+  feed(text: string): void;
+  clone(): PemBlockTracker;
+  /** Masks private keys in text that continues what was fed, including a block still open. */
+  readonly pattern: ResolvedRedactPattern;
+};
+
+function trackPemBlocks(state: PemState): PemBlockTracker {
+  return {
+    feed(text) {
+      for (const delimiter of readDelimiters(text, state.scanner)) {
+        consumeDelimiter(state, delimiter);
+      }
+    },
+    clone: () => trackPemBlocks(copyState(state)),
+    pattern: {
+      source: PEM_REDACT_PATTERN_SOURCE,
+      exec: (text) => matchPem(text, state, true),
+    },
+  };
+}
+
+/** Follows private key blocks across streamed text, however many feeds and delimiters split it. */
+export function createPemBlockTracker(): PemBlockTracker {
+  return trackPemBlocks(createState());
 }
 
 export const PEM_REDACT_MATCHER = {

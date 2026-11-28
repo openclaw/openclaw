@@ -69,6 +69,7 @@ it("keeps read-only methods outside the control-plane write budget", () => {
     "cron.status",
     "cron.runs",
     "cron.history",
+    "cron.liveOutput",
     "environments.session.status",
     "environments.session.exec",
   ]) {

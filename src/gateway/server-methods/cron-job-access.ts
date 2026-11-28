@@ -174,6 +174,7 @@ export function respondCronJobNotFound(
 type ScopedCronMethod =
   | "cron.acknowledgeFailure"
   | "cron.get"
+  | "cron.liveOutput"
   | "cron.scratch.get"
   | "cron.scratch.set"
   | "cron.remove"
