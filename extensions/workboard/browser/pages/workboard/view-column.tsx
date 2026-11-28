@@ -5,7 +5,10 @@ import { icons } from "../../components/icons.tsx";
 import { workboardLocale } from "../../host.ts";
 import { t } from "../../i18n/index.ts";
 import { createElementRefs } from "../../lib/element-refs.ts";
-import { isActiveWorkboardCard } from "../../lib/workboard/card-state.ts";
+import {
+  isActiveWorkboardCard,
+  matchesWorkboardArchiveFilter,
+} from "../../lib/workboard/card-state.ts";
 import { moveWorkboardCard } from "../../lib/workboard/mutations.ts";
 import type { WorkboardCard, WorkboardStatus } from "../../lib/workboard/types.ts";
 import { matchesAgentScope } from "./agent-filter.ts";
@@ -105,7 +108,7 @@ export function WorkboardColumn(input: {
       input.unfilteredCards.some(
         (card) =>
           card.status === input.status &&
-          (state().showArchived || isActiveWorkboardCard(card)) &&
+          matchesWorkboardArchiveFilter(state(), card) &&
           matchesBoardFilter(card, input.options?.boardFilter ?? state().boardFilter) &&
           matchesAgentScope(
             card,

@@ -97,6 +97,11 @@ Choose **New board**, then **Cards** (the default) or **Sessions**. A Sessions
 board starts with the columns described below. A board's kind is permanent;
 create another board to use the other kind. Existing boards remain Cards boards.
 
+On a Cards board, **Archive card** removes the card from the active view immediately.
+To restore it, turn on **Filters → Show archived**, open the card menu, and choose
+**Restore from archive**. If the change fails, the board shows the error and the
+card returns to its prior filter membership.
+
 Use **Edit board** to change a board's name, icon, and color. **Reset to default**
 clears the icon and color when you save; canceling leaves the saved board unchanged.
 For Sessions boards, the same dialog also edits column labels, colors,

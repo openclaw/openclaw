@@ -135,6 +135,7 @@ function createDefaultState(): WorkboardUiState {
     detailTab: "overview",
     detailCommentBody: "",
     detailCommentDrafts: new Map(),
+    pendingArchives: new Map(),
     busyCardIds: new Set(),
     selectedCardIds: new Set(),
     bulkDialog: null,

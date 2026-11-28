@@ -115,6 +115,7 @@ export type WorkboardUiState = {
   detailTab: "overview" | "activity" | "session" | "details";
   detailCommentBody: string;
   detailCommentDrafts: Map<string, string>;
+  pendingArchives: Map<string, boolean>;
   busyCardIds: Set<string>;
   selectedCardIds: Set<string>;
   bulkDialog: WorkboardBulkDialog | null;

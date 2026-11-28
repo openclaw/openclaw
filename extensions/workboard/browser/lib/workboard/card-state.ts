@@ -12,6 +12,13 @@ export function isActiveWorkboardCard(card: WorkboardCard): boolean {
   return !card.metadata?.archivedAt;
 }
 
+export function matchesWorkboardArchiveFilter(state: WorkboardUiState, card: WorkboardCard) {
+  return (
+    state.showArchived ||
+    !(state.pendingArchives.get(card.id) ?? Boolean(card.metadata?.archivedAt))
+  );
+}
+
 // A drop previews placement only. Detail, history and write receipts still read canonical cards.
 export function cardsWithPendingDrops(state: WorkboardUiState): WorkboardCard[] {
   if (!state.pendingDrops.size || state.mutationReadiness !== "ready") {

@@ -382,18 +382,31 @@ export async function deleteWorkboardCard(
 }
 
 export async function archiveWorkboardCard(
-  params: WorkboardCardMutationParams & { archived?: boolean; expectedUpdatedAt?: number },
+  params: WorkboardCardMutationParams & {
+    archived?: boolean;
+    expectedUpdatedAt?: number;
+    previewFilter?: boolean;
+  },
 ) {
   return runWorkboardCardMutation(params, async (state, client) => {
-    const payload = await client.request("workboard.cards.archive", {
-      id: params.cardId,
-      archived: params.archived ?? true,
-      ...(params.expectedUpdatedAt !== undefined
-        ? { expectedUpdatedAt: params.expectedUpdatedAt }
-        : {}),
-    });
-    replaceCard(state, normalizeCardPayload(payload));
-    return true;
+    const archived = params.archived ?? true;
+    if (params.previewFilter) {
+      state.pendingArchives.set(params.cardId, archived);
+      notifyWorkboard(params.host);
+    }
+    try {
+      const payload = await client.request("workboard.cards.archive", {
+        id: params.cardId,
+        archived,
+        ...(params.expectedUpdatedAt !== undefined
+          ? { expectedUpdatedAt: params.expectedUpdatedAt }
+          : {}),
+      });
+      replaceCard(state, normalizeCardPayload(payload));
+      return true;
+    } finally {
+      state.pendingArchives.delete(params.cardId);
+    }
   });
 }
 

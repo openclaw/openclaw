@@ -11,6 +11,7 @@ import {
 } from "solid-js";
 import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
+import { getWorkboardState } from "../../lib/workboard/runtime.ts";
 import type { WorkboardCard } from "../../lib/workboard/types.ts";
 import {
   CardAction,
@@ -72,6 +73,7 @@ export function WorkboardCardMenuTrigger(props: { cardId: string }) {
 export function WorkboardCardMenus(props: {
   workboard: WorkboardProps;
   cards: WorkboardCard[];
+  archiveFocusTarget: (card: WorkboardCard) => HTMLElement | undefined;
   // The caller keeps this stable surface inside its existing inert boundary.
   children: (panel: JSX.Element, selectedCardId: () => string | undefined) => JSX.Element;
 }) {
@@ -122,7 +124,14 @@ export function WorkboardCardMenus(props: {
               panel = element;
             },
           ]}
-          onClick={closeWorkboardPopoverOnAction}
+          onClick={(event) => {
+            const current = card();
+            closeWorkboardPopoverOnAction(event);
+            const state = getWorkboardState(props.workboard.host);
+            if (current && state.pendingArchives.get(current.id) && !state.showArchived) {
+              props.archiveFocusTarget(current)?.focus({ preventScroll: true });
+            }
+          }}
         >
           <Show when={card()}>
             {(current) => <CardMenuContent workboard={props.workboard} card={current()} />}
