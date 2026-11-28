@@ -89,7 +89,7 @@ it("shows providers sharing a manifest group as one card that keeps each auth ow
       id: "google",
       label: "Google",
       authProviders: ["gemini", "google"],
-      apiKeyProvider: "google",
+      apiKeyProviders: ["google"],
       choices: [
         expect.objectContaining({ id: "gemini-oauth/gemini-oauth", authProvider: "gemini" }),
       ],
@@ -100,4 +100,18 @@ it("shows providers sharing a manifest group as one card that keeps each auth ow
 
 it("keeps a lone group member's own name", () => {
   expect(build([geminiApiKey])).toMatchObject([{ id: "google", label: "Gemini API key" }]);
+});
+
+it("keeps a key form for every key owner a combined card holds", () => {
+  const opencode = (provider: string) =>
+    capability(provider, {
+      apiKeySupported: true,
+      quickApiKeySetup: true,
+      quickApiKeyGroupLabel: "OpenCode",
+      groupId: "opencode",
+    });
+
+  expect(build([opencode("opencode"), opencode("opencode-go")])).toMatchObject([
+    { id: "opencode", label: "OpenCode", apiKeyProviders: ["opencode", "opencode-go"] },
+  ]);
 });

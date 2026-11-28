@@ -88,6 +88,39 @@ describe("Models provider login", () => {
     }
   });
 
+  it("sends each key on a combined card to the provider it names", async () => {
+    const opencode = (provider: string) => ({
+      provider,
+      apiKeySupported: true,
+      quickApiKeySetup: true,
+      quickApiKeyGroupLabel: "OpenCode",
+      groupId: "opencode",
+      featured: true as const,
+    });
+    const { context } = loginHarness({
+      capabilities: [opencode("opencode"), opencode("opencode-go")],
+    });
+    const page = appendPage(context);
+    try {
+      await openPicker(page);
+      expect(page.querySelector('[data-models-catalog-provider="opencode-go"]')).toBeNull();
+      await selectProvider(page, "opencode");
+      const keys = () => [
+        ...page.querySelectorAll<HTMLButtonElement>("[data-models-login-api-key]"),
+      ];
+      await waitForSolid(() =>
+        expect(keys().map((button) => button.querySelector("strong")?.textContent)).toEqual([
+          "OpenCode API key",
+          "OpenCode Go API key",
+        ]),
+      );
+      keys()[1]!.click();
+      await waitForSolid(() => expect(page.view.props.addProviderId).toBe("opencode-go"));
+    } finally {
+      unmountPage(page);
+    }
+  });
+
   it("resumes once while admission is pending and can resume a later disconnect", async () => {
     vi.spyOn(window, "open").mockReturnValue(null);
     const { context, request, answer, cancel, publishPhase, notifySelection, snapshot } =

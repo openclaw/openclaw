@@ -27,7 +27,7 @@ function waysIn(provider: LoginProvider, connected: boolean): string {
       ),
     );
   }
-  if (provider.apiKeyProvider) {
+  if (provider.apiKeyProviders.length) {
     ways.add(t("modelProviders.status.apiKey"));
   }
   return [...ways].join(" · ");
