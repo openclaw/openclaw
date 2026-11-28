@@ -6,6 +6,7 @@ import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hasPairedCardRenderer } from "../../../infra/device-pairing.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
+import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
 import {
   readAdmittedRunOperatorAuthority,
@@ -39,8 +40,12 @@ export async function prepareAttemptSystemPromptAdditions(params: {
   storePath?: string;
   toolsAllow?: string[];
   entry?: InternalSessionEntry;
-  senderIsOwner?: boolean;
-  admittedRunContext?: AdmittedRunContext;
+  /** Who started this turn; the project guidance is shown only to requesters who may move it. */
+  requester?: {
+    senderIsOwner?: boolean;
+    inputProvenance?: InputProvenance;
+    admittedRunContext?: AdmittedRunContext;
+  };
 }) {
   let extraSystemPrompt = params.extraSystemPrompt;
   const incognito =
@@ -121,8 +126,11 @@ export async function prepareAttemptSystemPromptAdditions(params: {
             agentId: params.agentId,
             sessionKey: params.sessionKey,
             entry: params.entry,
-            senderIsOwner: params.senderIsOwner,
-            operatorAuthority: readAdmittedRunOperatorAuthority(params.admittedRunContext),
+            senderIsOwner: params.requester?.senderIsOwner,
+            operatorAuthority: readAdmittedRunOperatorAuthority(
+              params.requester?.admittedRunContext,
+            ),
+            inputProvenance: params.requester?.inputProvenance,
           }),
         }
       : {}),

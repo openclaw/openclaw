@@ -592,7 +592,7 @@ describe("gateway client capability tool filtering", () => {
       };
       const capability =
         runtime === "embedded"
-          ? await prepareAttemptSystemPromptAdditions(run)
+          ? await prepareAttemptSystemPromptAdditions({ ...run, requester: run })
           : buildCliMcpGrantContext({
               run,
               config,

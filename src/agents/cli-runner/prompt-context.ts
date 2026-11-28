@@ -13,7 +13,7 @@ import type { CliBackendConfig, CliBackendPromptContext } from "../../plugins/cl
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { settleCurrentReadPreparations } from "../../shared/current-read-authority.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
-import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { readRunOperatorAuthority } from "../admitted-run-context.js";
 import { buildCliSessionDriftNote } from "../cli-session-drift.js";
 import { buildTemporalContextText } from "../date-time.js";
 import type { ResolvedPromptBuildHookResult } from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
@@ -216,10 +216,15 @@ export async function prepareCliSystemPrompt({
   | "requesterProfileId"
   | "prepareSessionProjectGuidance"
 > & {
-  requester?: { operatorAuthority?: AdmittedRunOperatorAuthority; senderIsOwner?: boolean };
+  /** Run admission and turn source: they decide whether this turn sees the project guidance. */
+  requester?: Pick<
+    RunCliAgentParams,
+    "admittedRunContext" | "preparedRunAdmission" | "senderIsOwner" | "inputProvenance"
+  >;
 }): Promise<string> {
   const { buildCliAgentSystemPrompt } = await import("./helpers.js");
-  const requesterProfileId = requester?.operatorAuthority?.profileId;
+  const operatorAuthority = requester && readRunOperatorAuthority(requester);
+  const requesterProfileId = operatorAuthority?.profileId;
   let preparedModelRuntime:
     | import("../prepared-model-runtime.types.js").PreparedModelRuntimeSnapshot
     | undefined;
@@ -265,7 +270,9 @@ export async function prepareCliSystemPrompt({
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       entry: params.preparedSessionEntry,
-      ...requester,
+      senderIsOwner: requester?.senderIsOwner,
+      operatorAuthority,
+      inputProvenance: requester?.inputProvenance,
     }),
     preparedRepoRoot: await prepareAgentPromptRepoRoot({
       sessionId: params.sessionId,

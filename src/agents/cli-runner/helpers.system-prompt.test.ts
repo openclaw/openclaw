@@ -5,6 +5,7 @@ import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
+import * as projects from "../../projects/project-registry.js";
 import { resolveSessionGitCoauthorPrompt } from "../git-coauthor-prompt.js";
 import { prepareAgentPromptRepoRoot, withAgentPromptProjects } from "../prompt-projects.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
@@ -244,5 +245,53 @@ describe("buildCliAgentSystemPrompt", () => {
 
     expect(prompt).toContain("`send`: `target` + `message`; target required this turn");
     expect(prompt).not.toContain("current source is default target");
+  });
+
+  it("keeps the session project section across automation and peer turns of an owner conversation", async () => {
+    const workspaceDir = "/workspace";
+    vi.spyOn(projects, "listProjectRegistry").mockResolvedValue([
+      {
+        id: "workspace:main",
+        displayName: "Workspace",
+        source: "workspace",
+        repoRoot: workspaceDir,
+      },
+      { id: "website", displayName: "Website", source: "registered", repoRoot: "/website" },
+    ]);
+    // One conversation, session_project offered on every turn; only the turn's source changes.
+    const turn = (requester: Parameters<typeof prepareCliSystemPrompt>[0]["requester"]) =>
+      prepareCliSystemPrompt({
+        workspaceDir,
+        config: { agents: { entries: { main: { workspace: workspaceDir } } } },
+        agentId: "main",
+        sessionKey: "agent:main:telegram:direct:1222",
+        sessionId: "chat",
+        preparedSessionEntry: { sessionId: "chat", updatedAt: 1 },
+        tools: [createStubTool("session_project")],
+        modelDisplay: "claude-cli/opus",
+        requester,
+      });
+    const owner = () => turn({ senderIsOwner: true });
+    const automation = { kind: "internal_system", sourceTool: "cron_execution" } as const;
+    const peer = {
+      kind: "inter_session",
+      sourceTool: "sessions_send",
+      sourceSessionKey: "agent:main:other",
+    } as const;
+
+    const first = await owner();
+    expect(first).toContain("## Session project");
+    expect(first).toContain('{"id":"website","name":"Website"}');
+    for (const inputProvenance of [automation, peer]) {
+      // Gateway-started turns carry no sender and no operator authority.
+      expect(await turn({ senderIsOwner: false, inputProvenance })).toBe(first);
+      expect(await owner()).toBe(first);
+    }
+    // A person who may not choose projects never sees the list.
+    for (const inputProvenance of [undefined, { kind: "external_user" } as const]) {
+      const outside = await turn({ senderIsOwner: false, inputProvenance });
+      expect(outside).not.toContain("## Session project");
+      expect(outside).not.toContain("Website");
+    }
   });
 });
