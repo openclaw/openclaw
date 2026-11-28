@@ -476,28 +476,3 @@ export async function updateSystemServiceAsAccount(params: {
     warn: params.warn,
   });
 }
-
-/**
- * Root's own service inspection cannot read a unit that runs as another account. When that
- * unit already serves this release because its account's steps ran earlier in this update,
- * say so instead of claiming its restart was skipped.
- */
-export async function describeServiceUpdatedAsAccount(root: string): Promise<string | undefined> {
-  const version = await readPackageVersion(root, { maxBytes: 1024 * 1024 }).catch(() => null);
-  if (!version || process.geteuid?.() !== 0) {
-    return undefined;
-  }
-  const plan = await inspectSystemServiceAccountForAdmission({
-    env: process.env,
-    root,
-    packageManager: "npm",
-    candidateVersion: version,
-  }).catch(() => undefined);
-  if (plan?.kind !== "switch") {
-    return undefined;
-  }
-  const unit = await readUnit(plan.unitName).catch(() => undefined);
-  return unit?.ok && unit.active === "active" && (await servesCandidate(unit.pid, root, version))
-    ? `Gateway service ${plan.unitName} runs as ${plan.account} and serves ${version}: this update restarted and verified it as ${plan.account}.`
-    : undefined;
-}
