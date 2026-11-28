@@ -464,6 +464,7 @@ struct ChatMessageBubble: View, @MainActor Equatable {
     /// render gate, so a phase left out of it would keep a confirmed message dimmed.
     var userBubbleAccessories: ChatUserBubbleAccessories?
     @Environment(\.chatInlineVideos) private var inlineVideos
+    @Environment(\.openClawReadingPosition) private var readingPosition
     @Environment(\.locale) private var locale
     @Environment(\.timeZone) private var timeZone
 
@@ -809,9 +810,16 @@ extension ChatMessageBubble {
 
         if preview != nil {
             Button {
-                withAnimation(.easeOut(duration: 0.16)) {
-                    self.onToggleUserMessageExpanded()
+                #if os(iOS)
+                // Reveal the rest below the reader instead of following the taller row to its end.
+                let position = self.readingPosition
+                position?.disclosureWillToggle()
+                ChatScrollSignpost.disclosureToggle(.easeOut(duration: 0.16), self.onToggleUserMessageExpanded) {
+                    position?.disclosureDidSettle()
                 }
+                #else
+                withAnimation(.easeOut(duration: 0.16), self.onToggleUserMessageExpanded)
+                #endif
             } label: {
                 // Grow the tap target, not the visible gap or the bubble's bottom inset.
                 HStack(spacing: 2) {
