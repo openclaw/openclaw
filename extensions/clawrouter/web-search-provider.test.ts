@@ -70,7 +70,11 @@ describe("registered ClawRouter web search over HTTP", () => {
       path: "/search",
       method: "GET",
       query: "q=synthetic+query&format=json",
-      row: { content: "Fixture snippet", img_src: "https://example.com/image.png" },
+      row: {
+        content: "Fixture snippet",
+        img_src: "https://example.com/image.png",
+        publishedDate: "2026-01-01",
+      },
       field: "snippet",
     },
   ];
@@ -226,6 +230,13 @@ describe("registered ClawRouter web search over HTTP", () => {
       expect(result.results).toEqual([
         expect.objectContaining({
           excerpts: [expect.stringContaining("Fixture snippet")],
+          published: "2026-01-01",
+        }),
+      ]);
+    }
+    if (entry.id === "searxng") {
+      expect(result.results).toEqual([
+        expect.objectContaining({
           published: "2026-01-01",
         }),
       ]);

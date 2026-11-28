@@ -155,6 +155,7 @@ export const nativeWebSearchCodecs = {
           snippet: wrapped(string(entry.content)),
           siteName: resolveSiteName(entry.url) || undefined,
           img_src: string(entry.img_src) || undefined,
+          published: string(entry.publishedDate) || undefined,
         }));
     },
   },
