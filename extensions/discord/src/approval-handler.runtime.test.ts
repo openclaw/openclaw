@@ -5,7 +5,12 @@ import type { ExecApprovalActionDescriptor } from "openclaw/plugin-sdk/approval-
 import { describe, expect, it, vi } from "vitest";
 import { parseExecApprovalData } from "./approval-custom-id.js";
 import { discordApprovalNativeRuntime } from "./approval-handler.runtime.js";
+import { createUserDmChannel } from "./internal/api.users.js";
 import { parseCustomId } from "./internal/components.base.js";
+
+vi.mock("./internal/api.users.js", () => ({
+  createUserDmChannel: vi.fn(async () => ({ id: "dm-channel-1" })),
+}));
 
 const handlerContext = {
   cfg: {},
@@ -292,6 +297,27 @@ describe("discordApprovalNativeRuntime", () => {
       target: {
         discordChannelId: "777888999",
       },
+    });
+  });
+
+  it("opens the approver DM channel from a user direct target", async () => {
+    const prepared = await discordApprovalNativeRuntime.transport.prepareTarget({
+      ...handlerContext,
+      plannedTarget: {
+        surface: "approver-dm",
+        reason: "preferred",
+        target: { to: "user:555555555" },
+      },
+      request: request("req-1", { command: "hostname" }),
+      approvalKind: "exec",
+      view: {} as never,
+      pendingPayload: {} as never,
+    });
+
+    expect(vi.mocked(createUserDmChannel)).toHaveBeenCalledWith(expect.anything(), "555555555");
+    expect(prepared).toEqual({
+      dedupeKey: "dm-channel-1",
+      target: { discordChannelId: "dm-channel-1", recipientUserId: "555555555" },
     });
   });
 });

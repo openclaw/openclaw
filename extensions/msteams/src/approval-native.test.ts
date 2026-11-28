@@ -5,6 +5,7 @@ import type { ChannelOutboundPayloadHint } from "openclaw/plugin-sdk/channel-con
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { expect, it } from "vitest";
+import { resolveMSTeamsDirectTarget } from "./approval-auth.js";
 import {
   isMSTeamsNativeApprovalClientEnabled,
   msTeamsApprovalCapability,
@@ -194,4 +195,17 @@ it("describes the existing Teams allowlist and default destination setup", () =>
   expect(guidance).toContain("Approve it from the Web UI for now.");
   expect(guidance).not.toMatch(/terminal UI|\bTUI\b/i);
   expect(guidance).toContain("`channels.msteams.defaultTo`");
+});
+
+it("maps Teams user ids to user direct targets", () => {
+  expect(
+    resolveMSTeamsDirectTarget({ senderId: "msteams:00000000-0000-0000-0000-0000000000AB" }),
+  ).toEqual({ kind: "direct", to: "user:00000000-0000-0000-0000-0000000000ab" });
+  expect(resolveMSTeamsDirectTarget({ senderId: "29:1AbC-def" })).toEqual({
+    kind: "direct",
+    to: "user:29:1AbC-def",
+  });
+  expect(
+    resolveMSTeamsDirectTarget({ senderId: "conversation:19:abc@thread.tacv2" }),
+  ).toBeUndefined();
 });

@@ -18,6 +18,7 @@ import {
   isDiscordExecApprovalApprover,
   isDiscordExecApprovalClientEnabled,
 } from "./exec-approvals.js";
+import { resolveDiscordDirectTarget } from "./target-parsing.js";
 
 function extractDiscordSessionKind(sessionKey?: string | null): "channel" | "group" | "dm" | null {
   if (!sessionKey) {
@@ -139,7 +140,10 @@ export function getDiscordApprovalCapability() {
     resolveApproverDmTargets: createChannelApproverDmTargetResolverAsync({
       shouldHandleRequest: shouldHandleDiscordApprovalRequest,
       resolveApprovers: ({ cfg, accountId }) => getDiscordExecApprovalApprovers({ cfg, accountId }),
-      mapApprover: (approver) => ({ to: approver }),
+      mapApprover: (approver) => {
+        const target = resolveDiscordDirectTarget({ senderId: approver });
+        return target?.kind === "direct" ? { to: target.to } : null;
+      },
     }),
     notifyOriginWhenDmOnly: true,
     nativeRuntimeAsync: createLazyChannelApprovalNativeRuntimeAdapterAsync({

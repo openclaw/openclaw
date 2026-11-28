@@ -59,7 +59,7 @@ import {
   type ResolvedMatrixAccount,
 } from "./matrix/accounts.js";
 import { prepareMatrixConversationRouteOwnersAsync } from "./matrix/conversation-route-owner.js";
-import { normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
+import { normalizeMatrixUserId, resolveMatrixDirectTarget } from "./matrix/monitor/allowlist.js";
 import { buildMatrixRoomScopeTree, resolveMatrixRoomScopePath } from "./matrix/monitor/rooms.js";
 import type { MatrixProbe } from "./matrix/probe.js";
 import {
@@ -440,6 +440,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
         targetPrefixes: ["matrix"],
         targetIdComparison: "case-sensitive",
         normalizeTarget: normalizeMatrixMessagingTarget,
+        resolveDirectTarget: resolveMatrixDirectTarget,
         inferTargetChatType: ({ to }) => {
           const target = resolveMatrixTargetIdentity(to);
           return target ? (target.kind === "user" ? "direct" : "channel") : undefined;

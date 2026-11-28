@@ -431,8 +431,36 @@ export type ChannelThreadingToolContext = {
   skipCrossContextDecoration?: boolean;
 };
 
+/** Outbound target that opens a direct message with one channel user. */
+export type ChannelDirectTarget = {
+  kind: "direct";
+  /** Channel-native `to` accepted by this channel's outbound send. */
+  to: string;
+  threadId?: string | number;
+};
+
+/** Result of mapping a channel user id to a direct-message target. */
+export type ChannelDirectTargetResolution =
+  | ChannelDirectTarget
+  | {
+      /** The id names a user this channel knows it cannot message directly. */
+      kind: "unreachable";
+      reason: string;
+    };
+
 /** Channel-owned messaging helpers for target parsing, routing, and payload shaping. */
 export type ChannelMessagingAdapter = {
+  /**
+   * Map a channel user id, in the form inbound messages report as the sender,
+   * to the outbound target for a direct message with that user. Config-only:
+   * the channel's outbound send opens or creates the DM conversation. Return
+   * `undefined` when the id is not a user this channel can address.
+   */
+  resolveDirectTarget?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    senderId: string;
+  }) => ChannelDirectTargetResolution | undefined;
   /**
    * Provider prefixes accepted in explicit targets, including aliases not used
    * as channel-selection aliases. Core uses these to reject cross-channel

@@ -101,7 +101,11 @@ import { createTelegramSetupPluginBase } from "./setup-plugin.js";
 import { telegramSetupWizard } from "./setup-surface.js";
 import { withTelegramStartupProbeSlot } from "./startup-probe-limiter.js";
 import { collectTelegramStatusIssues } from "./status-issues.js";
-import { normalizeTelegramChatId, parseTelegramTarget } from "./targets.js";
+import {
+  normalizeTelegramChatId,
+  parseTelegramTarget,
+  resolveTelegramDirectTarget,
+} from "./targets.js";
 import { telegramThreadBindingSupport } from "./thread-bindings-channel.js";
 import {
   buildTelegramThreadingToolContext,
@@ -112,6 +116,7 @@ import {
   parseTelegramTopicConversation,
   buildTelegramConversationId,
   resolveTelegramConversationRef,
+  resolveTelegramDeliveryTarget,
   resolveTelegramTargetThread,
 } from "./topic-conversation.js";
 
@@ -371,21 +376,10 @@ export const telegramPlugin = createChatChannelPlugin({
       targetPrefixes: ["telegram", "tg"],
       prepareConversationRouteOwnersAsync: prepareTelegramConversationRouteOwnersAsync,
       normalizeTarget: normalizeTelegramMessagingTarget,
+      resolveDirectTarget: resolveTelegramDirectTarget,
       resolveInboundConversation: ({ to, conversationId, threadId }) =>
         resolveTelegramInboundConversation({ to, conversationId, threadId }),
-      resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
-        const ref = resolveTelegramConversationRef({
-          to: conversationId.trim() || undefined,
-          conversationId,
-          parentConversationId,
-        });
-        if (!ref) {
-          return null;
-        }
-        return ref.thread.id == null
-          ? { to: ref.chatId }
-          : { to: ref.conversationId, threadId: String(ref.thread.id) };
-      },
+      resolveDeliveryTarget: resolveTelegramDeliveryTarget,
       // Same function as the public session-key artifact so the pre-registry
       // fast path cannot drift from plugin behavior (pinned by contract test).
       resolveSessionConversation: resolveTelegramSessionConversation,

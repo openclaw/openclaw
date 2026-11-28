@@ -1,3 +1,4 @@
+import type { ChannelDirectTargetResolution } from "openclaw/plugin-sdk/channel-contract";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 
 export type TelegramTarget = {
@@ -28,6 +29,26 @@ export function normalizeTelegramChatId(raw: string): string | undefined {
 
 export function isNumericTelegramChatId(raw: string): boolean {
   return TELEGRAM_NUMERIC_CHAT_ID_REGEX.test(raw.trim());
+}
+
+/**
+ * A Telegram user's DM chat id is the user id. Bots cannot open a DM by
+ * username, and Telegram rejects the send until the user has started the bot.
+ */
+export function resolveTelegramDirectTarget(params: {
+  senderId: string;
+}): ChannelDirectTargetResolution | undefined {
+  const chatId = normalizeTelegramChatId(params.senderId);
+  if (chatId) {
+    return chatId.startsWith("-") ? undefined : { kind: "direct", to: chatId };
+  }
+  const handle = normalizeTelegramLookupTarget(params.senderId);
+  return handle
+    ? {
+        kind: "unreachable",
+        reason: `Telegram bots cannot open a DM with ${handle} by username; use the numeric user id.`,
+      }
+    : undefined;
 }
 
 export function normalizeTelegramOutboundTarget(raw: string): string {

@@ -168,6 +168,18 @@ export function normalizeSlackMessagingTarget(raw: string): string | undefined {
   return parseSlackTarget(raw, { defaultKind: "channel" })?.normalized;
 }
 
+/** Session and delivery identities stay folded; Slack API boundaries restore ID casing. */
+export function resolveSlackDeliveryTarget(params: {
+  conversationId: string;
+  parentConversationId?: string;
+}): { to?: string; threadId?: string } {
+  const parent = params.parentConversationId?.trim();
+  const child = params.conversationId.trim();
+  return parent && parent !== child
+    ? { to: normalizeSlackMessagingTarget(parent), threadId: child }
+    : { to: normalizeSlackMessagingTarget(child) };
+}
+
 export function slackTargetsMatch(left: string, right: string): boolean {
   const leftTarget = normalizeSlackMessagingTarget(left);
   const rightTarget = normalizeSlackMessagingTarget(right);

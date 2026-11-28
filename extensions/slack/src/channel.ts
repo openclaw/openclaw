@@ -56,6 +56,7 @@ import { getSlackWriteClient } from "./client.js";
 import { slackConversationBindings } from "./conversation-binding-route.js";
 import { slackConversationRouteOwners } from "./conversation-route-owner.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
+import { resolveSlackAccountDirectTarget } from "./direct-target.js";
 import { resolveSlackEnterpriseUserTeamId } from "./enterprise-user-route.js";
 import { formatSlackError } from "./errors.js";
 import { shouldSuppressLocalSlackExecApprovalPrompt } from "./exec-approvals.js";
@@ -80,6 +81,7 @@ import {
   looksLikeSlackTargetId,
   normalizeSlackMessagingTarget,
   parseSlackTarget,
+  resolveSlackDeliveryTarget,
 } from "./target-parsing.js";
 import { slackContextTargetsMatch } from "./targets.js";
 import {
@@ -337,14 +339,8 @@ export const slackPlugin = createChatChannelPlugin<ResolvedSlackAccount, SlackPr
       directTargetStyle: "user-prefixed",
       targetIdComparison: "lowercase",
       normalizeTarget: normalizeSlackMessagingTarget,
-      // Session and delivery identities stay folded; Slack API boundaries restore ID casing.
-      resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
-        const parent = parentConversationId?.trim();
-        const child = conversationId.trim();
-        return parent && parent !== child
-          ? { to: normalizeSlackMessagingTarget(parent), threadId: child }
-          : { to: normalizeSlackMessagingTarget(child) };
-      },
+      resolveDirectTarget: resolveSlackAccountDirectTarget,
+      resolveDeliveryTarget: resolveSlackDeliveryTarget,
       resolveSessionTarget: ({ id }) => {
         // Session identities stay folded; send.ts restores unambiguous IDs at the API boundary.
         return normalizeSlackMessagingTarget(`channel:${id}`);

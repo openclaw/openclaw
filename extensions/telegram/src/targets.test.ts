@@ -6,6 +6,7 @@ import {
   hasRejectedTelegramTopic,
   normalizeTelegramOutboundTarget,
   parseTelegramTarget,
+  resolveTelegramDirectTarget,
 } from "./targets.js";
 
 describe("parseTelegramTarget", () => {
@@ -68,3 +69,17 @@ describe("telegram target normalization", () => {
 });
 
 installMaybePersistResolvedTelegramTargetTests();
+
+describe("resolveTelegramDirectTarget", () => {
+  it("maps user ids to DM chats and rejects groups and usernames", () => {
+    expect(resolveTelegramDirectTarget({ senderId: "telegram:849985193" })).toEqual({
+      kind: "direct",
+      to: "849985193",
+    });
+    expect(resolveTelegramDirectTarget({ senderId: "-1001234567890" })).toBeUndefined();
+    expect(resolveTelegramDirectTarget({ senderId: "@someone_here" })).toEqual({
+      kind: "unreachable",
+      reason: expect.stringContaining("@someone_here"),
+    });
+  });
+});

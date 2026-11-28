@@ -55,6 +55,7 @@ import {
 } from "./approval-native.js";
 import { collectMSTeamsSecurityWarnings, type ResolvedMSTeamsAccount } from "./channel-config.js";
 import { describeMSTeamsMessageTool } from "./channel-message-tool.js";
+import { msteamsMessagingAdapter } from "./channel-messaging.js";
 import { msteamsSetupPlugin } from "./channel.setup.js";
 import { msteamsDoctor } from "./doctor.js";
 import {
@@ -73,13 +74,11 @@ import {
 import {
   normalizeMSTeamsMessagingTarget,
   normalizeMSTeamsUserInput,
-  looksLikeMSTeamsTargetId,
   parseMSTeamsConversationId,
   parseMSTeamsTeamChannelInput,
   resolveMSTeamsChannelAllowlist,
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
-import { inferMSTeamsTargetChatType, resolveMSTeamsOutboundSessionRoute } from "./session-route.js";
 const TEAMS_GRAPH_PERMISSION_HINTS: Record<string, string> = {
   "ChannelMessage.Read.All": "channel history",
   "Chat.Read.All": "chat history",
@@ -242,17 +241,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       },
       approvalCapability: msTeamsApprovalCapability,
       doctor: msteamsDoctor,
-      messaging: {
-        targetPrefixes: ["msteams", "teams"],
-        directTargetStyle: "user-prefixed",
-        normalizeTarget: normalizeMSTeamsMessagingTarget,
-        inferTargetChatType: ({ to }) => inferMSTeamsTargetChatType(to),
-        resolveOutboundSessionRoute: resolveMSTeamsOutboundSessionRoute,
-        targetResolver: {
-          looksLikeId: looksLikeMSTeamsTargetId,
-          hint: "<conversationId|user:ID|conversation:ID>",
-        },
-      },
+      messaging: msteamsMessagingAdapter,
       message: msteamsMessageAdapter,
       directory: createChannelDirectoryAdapter({
         ...msteamsDirectoryContractPlugin.directory,

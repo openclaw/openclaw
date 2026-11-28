@@ -273,6 +273,56 @@ subpath:
   `verifyChannelMessageLiveFinalizerProofs(...)`
 - receive ack: `verifyChannelMessageReceiveAckPolicyAdapterProofs(...)`
 
+## Direct-message targets
+
+Implement `messaging.resolveDirectTarget` when the channel can send a direct
+message to a user it knows only by id. Bundled channels use the same mapping
+for approver DMs. Core cannot build these targets itself because every channel
+spells them differently.
+
+```ts
+import type { ChannelDirectTargetResolution } from "openclaw/plugin-sdk/channel-contract";
+
+function resolveDemoDirectTarget(params: {
+  senderId: string;
+}): ChannelDirectTargetResolution | undefined {
+  const id = params.senderId.trim();
+  return /^U\d+$/.test(id) ? { kind: "direct", to: `user:${id}` } : undefined;
+}
+
+export const demoPlugin = {
+  // ...
+  messaging: {
+    resolveDirectTarget: resolveDemoDirectTarget,
+  },
+};
+```
+
+The hook receives `{ cfg, accountId, senderId }`, where `senderId` uses the
+same form inbound messages report for the sender. It runs synchronously
+against config, so do not call the network here:
+
+- Return `{ kind: "direct", to, threadId? }` with a `to` that this channel's
+  outbound send accepts. The send opens or creates the DM conversation.
+- Return `{ kind: "unreachable", reason }` when the id names a user the channel
+  knows it cannot message directly, for example a Telegram username.
+- Return `undefined` when the id is not a user this channel can address.
+
+Approval code that maps configured approvers to DMs should call the same
+function from `createChannelApproverDmTargetResolverAsync`'s `mapApprover`
+rather than building a second mapping.
+
+Bundled channels use these targets:
+
+| Channel         | Direct target                       | Notes                                                         |
+| --------------- | ----------------------------------- | ------------------------------------------------------------- |
+| Discord         | `user:<id>`                         | The send opens the DM channel.                                |
+| Slack           | `user:<id>` or `team:<T>:user:<id>` | Qualified with the account's workspace when known.            |
+| Telegram        | `<user id>`                         | Telegram rejects the send until the user has started the bot. |
+| Microsoft Teams | `user:<Entra object id or 29: id>`  | The send reuses or opens the bot's 1:1 chat.                  |
+| Google Chat     | `users/<numeric id>`                | Email-form user names are not mapped.                         |
+| Matrix          | `user:<mxid>`                       | The send reuses or creates the DM room.                       |
+
 ## Progress and preview delivery ownership
 
 Create one `createLivePreviewLifecycle<TPayload, TId>(options)` from

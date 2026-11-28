@@ -153,7 +153,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
         approvalKind: "exec",
         request,
       }),
-    ).toEqual([{ to: "555555555" }]);
+    ).toEqual([{ to: "user:555555555" }]);
     expect(await authorize("555555555")).toBe(true);
     expect(await authorize("666666666")).toBe(false);
     // Explicit account approvers still replace the global owner fallback.

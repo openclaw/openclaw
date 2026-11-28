@@ -113,3 +113,21 @@ export function resolveTelegramConversationRef(params: {
   const thread = resolveTelegramTargetThread(target, params.threadId);
   return { chatId, thread, conversationId: buildTelegramConversationId({ chatId, thread }) };
 }
+
+/** Delivery target for a bound conversation: the chat, plus its topic when present. */
+export function resolveTelegramDeliveryTarget(params: {
+  conversationId: string;
+  parentConversationId?: string;
+}): { to: string; threadId?: string } | null {
+  const ref = resolveTelegramConversationRef({
+    to: params.conversationId.trim() || undefined,
+    conversationId: params.conversationId,
+    parentConversationId: params.parentConversationId,
+  });
+  if (!ref) {
+    return null;
+  }
+  return ref.thread.id == null
+    ? { to: ref.chatId }
+    : { to: ref.conversationId, threadId: String(ref.thread.id) };
+}

@@ -1,7 +1,8 @@
 import { createChannelApprovalAuth } from "openclaw/plugin-sdk/approval-auth-runtime";
+import type { ChannelDirectTargetResolution } from "openclaw/plugin-sdk/channel-contract";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMSTeamsAccountConfig } from "./accounts.js";
-import { normalizeMSTeamsMessagingTarget } from "./resolve-allowlist.js";
+import { normalizeMSTeamsMessagingTarget, normalizeMSTeamsUserInput } from "./resolve-allowlist.js";
 
 const MSTEAMS_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -11,6 +12,21 @@ function normalizeMSTeamsApproverId(value: string | number): string | undefined 
     normalized?.startsWith("user:") ? normalized.slice("user:".length) : normalized,
   );
   return id && MSTEAMS_ID_RE.test(id) ? id : undefined;
+}
+
+/**
+ * Teams sends to `user:<id>` reuse or open the bot's 1:1 chat. Ids are Entra
+ * object ids or Bot Framework `29:` user ids.
+ */
+export function resolveMSTeamsDirectTarget(params: {
+  senderId: string;
+}): ChannelDirectTargetResolution | undefined {
+  const objectId = normalizeMSTeamsApproverId(params.senderId);
+  if (objectId) {
+    return { kind: "direct", to: `user:${objectId}` };
+  }
+  const userId = normalizeMSTeamsUserInput(params.senderId);
+  return /^29:\S+$/.test(userId) ? { kind: "direct", to: `user:${userId}` } : undefined;
 }
 
 const msTeamsApproval = createChannelApprovalAuth({
