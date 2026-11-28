@@ -100,28 +100,23 @@ describe("outbound channel resolution", () => {
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
   });
 
-  it.each(["loaded"] as const)(
-    "does not borrow a %s message adapter from a scoped outbound-only registration",
-    async (fallback) => {
-      const sibling = { id: "alpha", message: { send: { text: vi.fn() } } };
-      (fallback === "loaded" ? getLoadedChannelPluginMock : getChannelPluginMock).mockReturnValue(
-        sibling,
-      );
-      const scoped = {
-        ...createChannelTestPluginBase({ id: "alpha" }),
-        outbound: { deliveryMode: "direct" as const, sendText: vi.fn() },
-      };
-      const registry = createTestRegistry([{ pluginId: "scoped", plugin: scoped, source: "test" }]);
+  it("does not borrow a loaded message adapter from a scoped outbound-only registration", async () => {
+    const sibling = { id: "alpha", message: { send: { text: vi.fn() } } };
+    getLoadedChannelPluginMock.mockReturnValue(sibling);
+    const scoped = {
+      ...createChannelTestPluginBase({ id: "alpha" }),
+      outbound: { deliveryMode: "direct" as const, sendText: vi.fn() },
+    };
+    const registry = createTestRegistry([{ pluginId: "scoped", plugin: scoped, source: "test" }]);
 
-      await withPluginRuntimeRegistryScope(registry, async () => {
-        expect(channelResolution.resolveOutboundChannelPlugin({ channel: "alpha" })).toBe(scoped);
-        expect(
-          await channelResolution.resolveOutboundChannelMessageAdapter({ channel: "alpha" }),
-        ).toBeUndefined();
-      });
-      expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
-    },
-  );
+    await withPluginRuntimeRegistryScope(registry, async () => {
+      expect(channelResolution.resolveOutboundChannelPlugin({ channel: "alpha" })).toBe(scoped);
+      expect(
+        await channelResolution.resolveOutboundChannelMessageAdapter({ channel: "alpha" }),
+      ).toBeUndefined();
+    });
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+  });
 
   it("keeps a bootstrapped external alias available to normal runtime lookups", async () => {
     const message = { send: { text: vi.fn() } };
