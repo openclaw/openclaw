@@ -570,9 +570,17 @@ export function prepareChatHistoryRecoveryMessages(
     const entry = asOptionalRecord(message);
     const failureRunId = readSessionTranscriptFailureRunId(entry);
     if (failureRunId) {
-      // Retain failure correlation before sanitation removes private report details.
+      // Older individually tracked delivery reports already carry the delivery owner's key.
+      // A yielded request instead shares its requester's terminal identity: keep its recovery.
+      const details = asOptionalRecord(entry?.details);
+      const backgroundDelivery =
+        typeof details?.childRunId === "string" &&
+        (details.backgroundDelivery === true ||
+          failureRunId.startsWith("subagent-delivery-failure:"));
+      // Keep the identity for coordination filtering even when this is not a terminal.
       return {
         ...entry,
+        ...(backgroundDelivery ? { customType: "subagent-delivery-failed" } : {}),
         __openclaw: { ...asOptionalRecord(entry?.["__openclaw"]), runId: failureRunId },
       };
     }

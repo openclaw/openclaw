@@ -63,6 +63,17 @@ export function describeToolGroup(
         .map((item) => [item.toolCallId ?? item.itemId, item]),
     ).values(),
   ];
+  if (all.length && all.every((item) => item.kind === "subagent-delivery")) {
+    return {
+      total: all.length,
+      label: t(
+        all.length === 1
+          ? "chat.toolCards.savedSubagentResult"
+          : "chat.toolCards.savedSubagentResults",
+      ),
+      outcomes: [],
+    };
+  }
   const summary = summarizeAgentActivity(all, options);
   const groups = new Map<string, AgentActivityItem[]>(
     [

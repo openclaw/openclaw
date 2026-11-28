@@ -188,4 +188,17 @@ describe("summarizeToolGroup", () => {
       );
     },
   );
+
+  it("labels saved subagent delivery reports in singular and plural", () => {
+    const first = prepared("delivery:1", "Saved subagent result", {
+      kind: "subagent-delivery",
+      status: "failed",
+    });
+    const second = prepared("delivery:2", "Saved subagent result", {
+      kind: "subagent-delivery",
+      status: "failed",
+    });
+    expect(summarizeToolGroup([first])).toBe("Saved subagent result");
+    expect(summarizeToolGroup([first, second])).toBe("Saved subagent results");
+  });
 });

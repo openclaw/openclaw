@@ -356,7 +356,7 @@ export function buildChatItems(
       continue;
     }
 
-    items.push(...projectChatSystemNotice(item, normalized));
+    items.push(...projectChatSystemNotice(item, normalized, undefined, props.showToolCalls));
   }
   let streamOnset: Extract<ChatItem, { kind: "stream" }> | undefined;
   // History probes must not adopt inputs, resolve timing, or retire live progress.

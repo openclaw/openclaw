@@ -426,7 +426,7 @@ function groupChatItemSegment(
     // Classify after content projection; prepared outcomes may outlive their blocks.
     const visibleContent = resolveMessageVisibleContent(item.message, normalized);
     const hasPreparedActivity =
-      normalizedRole === "assistant" &&
+      (normalizedRole === "assistant" || record?.customType === "subagent-delivery-failed") &&
       visibleContent === "none" &&
       preparation.hasVisiblePreparedActivity(item.message);
     const role =

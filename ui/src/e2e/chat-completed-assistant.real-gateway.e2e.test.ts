@@ -4,6 +4,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished } from "vitest";
 import { persistColdLoadWarmState } from "../../../scripts/lib/control-ui-bench-warm-state.ts";
 import {
+  appendSessionTranscriptReport,
   appendTranscriptMessages,
   patchSessionEntryCore,
 } from "../../../src/config/sessions/session-accessor.ts";
@@ -167,6 +168,105 @@ suite.define(() => {
         .getByText(reply, { exact: true })
         .waitFor({ timeout: 5_000 });
     });
+  });
+
+  it("keeps background delivery in work details without hiding a blocked reply", async () => {
+    const key = "agent:main:dashboard:delivery-history";
+    const { sessionId } = await client.request<{ sessionId: string }>("sessions.create", {
+      key,
+      agentId: "main",
+      label: "Release notes review",
+    });
+    const scope = { agentId: "main", sessionKey: key, sessionId, env: instance.env };
+    const append = (id: string, role: string, content: string) =>
+      appendTranscriptMessages(scope, {
+        messages: [
+          { eventId: id, message: { role, content: [text(content)], __openclaw: { runId: id } } },
+        ],
+      });
+    const report = (runId: string, content: string, childRunId?: string) =>
+      appendSessionTranscriptReport(scope, {
+        kind: "custom",
+        customTypes: ["run-failed-before-reply"],
+        selectReport: () => ({
+          customType: "run-failed-before-reply",
+          display: true,
+          content,
+          details: { runId, ...(childRunId ? { childRunId } : {}) },
+        }),
+      });
+    await append("review", "user", "Which changes are in the release notes?");
+    const findings = ["Composer layout is documented.", "Sidebar navigation is documented."];
+    for (const [i, finding] of findings.entries()) {
+      const child = "review-" + i;
+      expect(
+        (
+          await report(
+            "subagent-delivery-failure:" + child + ":1",
+            "The child result couldn't be delivered to this conversation.\n\n" + finding,
+            child,
+          )
+        ).ok,
+      ).toBe(true);
+    }
+    const releaseSummary = "The release notes cover the composer layout and sidebar navigation.";
+    await append("review-answer", "assistant", releaseSummary);
+    await append("follow-up", "user", "Can you check the mobile changes too?");
+    expect((await report("follow-up", "The AI service is temporarily unavailable.")).ok).toBe(true);
+    await suite.withPage(
+      { viewport, colorScheme: "dark", permissions: ["local-network-access"] },
+      async ({ page }) => {
+        await pairFixture(page, instance);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+        await waitForControlUiGatewayReady(page);
+        const { pane, composer } = chatControls(page);
+        const reply = pane.getByText(releaseSummary, { exact: true });
+        await reply.waitFor();
+        const errors = pane.locator(".chat-run-failure__toggle");
+        const blocked = pane.locator('[data-run-failure="follow-up"] .chat-run-failure__toggle');
+        await blocked.waitFor();
+        const capture = async (stage: string, selector: string) => {
+          if (!captureMedia) {
+            return;
+          }
+          const target = pane.locator(selector).first();
+          const frame = await takeControlUiScreenshotFrame(page, pane, [target], {
+            elements: [pane, target],
+            animations: "disabled",
+          });
+          await writeFile(path.join(suite.artifactDir, stage + ".png"), frame.png);
+          await writeFile(
+            path.join(suite.artifactDir, stage + ".json"),
+            JSON.stringify(frame.elements.map((e) => e.bounds)),
+          );
+        };
+        await capture(
+          "conversation",
+          (await errors.count()) > 1
+            ? ".chat-run-failure__toggle"
+            : ".chat-activity-group__summary",
+        );
+        expect(await errors.count()).toBe(1);
+        await composer.fill("Keep my follow-up draft");
+        const work = pane.locator(".chat-activity-group__summary").first();
+        await work.click();
+        for (const finding of findings) {
+          await pane.getByText(finding, { exact: false }).last().waitFor();
+        }
+        await capture("work-details", ".chat-tool-card__block-content");
+        await work.click();
+        await blocked.click();
+        await pane
+          .getByText("The AI service is temporarily unavailable.", { exact: true })
+          .waitFor();
+        await capture("blocked-reply", ".chat-run-failure__log");
+        expect(await composer.inputValue()).toBe("Keep my follow-up draft");
+        await page.reload();
+        await blocked.waitFor();
+        expect(await errors.count()).toBe(1);
+        await reply.waitFor();
+      },
+    );
   });
 
   it("restores completed history on reload without empty replies or lost drafts", async () => {

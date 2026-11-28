@@ -193,8 +193,8 @@ export async function parseSnapshotRecord(
   return { ...parsed, snapshot: { ...parsed.snapshot, historyState } };
 }
 
-// Older caches retained reduced-width image previews as row display thumbnails.
-export const CHAT_SNAPSHOT_PROJECTION_VERSION = 18;
+// Refill history that represented old subagent delivery reports as terminal reply failures.
+export const CHAT_SNAPSHOT_PROJECTION_VERSION = 19;
 const CHAT_SNAPSHOT_MESSAGE_LIMIT = 80;
 
 export async function createSnapshotRecord(
