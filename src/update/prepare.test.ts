@@ -969,11 +969,8 @@ describe("update preflight", () => {
       username: "update-user",
       homedir: system ? path.join(root, "home") : root,
     });
-    const stat = fs.stat.bind(fs);
-    vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
-      const result = await stat(...args);
-      return args[0] === prefix ? Object.assign(result, { uid: 0 }) : result;
-    });
+    const stat = await fs.stat(prefix);
+    vi.spyOn(fs, "stat").mockResolvedValue(Object.assign(stat, { uid: 0 }));
     expect(
       await preflight({
         kind: "git",
