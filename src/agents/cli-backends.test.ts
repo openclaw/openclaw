@@ -42,7 +42,7 @@ const runtimeArtifact: CliBackendRuntimeArtifactPolicy = {
   packageName: "@fixture/acme-cli",
   entrypoint: "command",
 };
-function createBackend(overrides: CliBackendOverrides = {}): CliBackendPlugin {
+function createBackend(overrides: CliBackendOverrides): CliBackendPlugin {
   const base = {
     id: "acme-cli",
     modelProvider: "acme",
