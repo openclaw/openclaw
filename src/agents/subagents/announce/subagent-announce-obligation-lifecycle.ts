@@ -28,6 +28,8 @@ type DetachedCompletionLifecycle<Completion> = {
     outcome: "consumed" | "undelivered" | "unavailable",
     assertCurrent: () => void,
   ): Promise<void>;
+  /** Releases in-memory custody after the bounded retirement write budget is exhausted. */
+  retireExhausted?(assertCurrent: () => void): void | Promise<void>;
   settleExecution(): void;
   onError(error: unknown): void;
 };
@@ -115,6 +117,7 @@ function registerDetachedCompletion<Completion>(
   let retiring = false;
   let released = false;
   let attemptCount = 0;
+  let retirementAttemptCount = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let inFlight: Promise<void> | undefined;
   const isConsumed = () => shared.obligation.outcome === "delivered";
@@ -160,11 +163,14 @@ function registerDetachedCompletion<Completion>(
     if (released || timer || !lifecycle.isCurrent()) {
       return;
     }
+    const retryCount = retiring ? retirementAttemptCount : attemptCount;
     const delay =
       DETACHED_COMPLETION_RETRY_DELAYS_MS[
-        Math.min(attemptCount, DETACHED_COMPLETION_RETRY_DELAYS_MS.length - 1)
+        Math.min(retryCount, DETACHED_COMPLETION_RETRY_DELAYS_MS.length - 1)
       ]!;
-    if (!retiring && !isConsumed()) {
+    if (retiring) {
+      retirementAttemptCount += 1;
+    } else if (!isConsumed()) {
       attemptCount += 1;
     }
     timer = setTimeout(() => {
@@ -197,6 +203,14 @@ function registerDetachedCompletion<Completion>(
         return;
       }
       lifecycle.onError(error);
+      if (retirementAttemptCount >= DETACHED_COMPLETION_RETRY_DELAYS_MS.length) {
+        try {
+          await lifecycle.retireExhausted?.(assertCurrent);
+        } finally {
+          release();
+        }
+        return;
+      }
       schedule();
     }
   };

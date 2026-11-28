@@ -301,6 +301,45 @@ it("retries consumed retirement without redelivering after repeated persistence 
   }
 });
 
+it("releases native custody after the bounded retirement persistence budget", async () => {
+  vi.useFakeTimers();
+  const send = vi.fn(async () => ({
+    delivered: false,
+    path: "none" as const,
+    recoveryBlocked: true as const,
+  }));
+  const retire = vi.fn(async () => {
+    throw new Error("write unavailable");
+  });
+  const retireExhausted = vi.fn();
+  const owner = registerAgentHarnessCompletion({
+    scope: createAgentHarnessCompletionScope(source),
+    assignmentId: "retirement-write-budget",
+    isCurrent: () => true,
+    readiness: () => "ready",
+    observeConsumption: async () => false,
+    deliver: send,
+    retire,
+    retireExhausted,
+    settleExecution() {},
+    onError() {},
+  });
+  try {
+    await owner.complete("native result");
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      await vi.runOnlyPendingTimersAsync();
+    }
+    expect(retire).toHaveBeenCalledTimes(7);
+    expect(retireExhausted).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledOnce();
+    await vi.runOnlyPendingTimersAsync();
+    expect(retire).toHaveBeenCalledTimes(7);
+  } finally {
+    owner.release();
+    vi.useRealTimers();
+  }
+});
+
 const source = {
   requesterSessionKey: "main",
   requesterAgentId: "alternate",

@@ -218,6 +218,10 @@ export class CodexNativeSubagentCompletionDelivery {
         }
         this.dependencies.unregisterChild(child);
       },
+      retireExhausted: (assertCurrent: () => void) => {
+        assertCurrent();
+        this.dependencies.unregisterChild(child);
+      },
       settleExecution: () => completionCustody?.settleExecution(),
       onError: (error: unknown) =>
         embeddedAgentLog.warn("Native completion remains pending", {

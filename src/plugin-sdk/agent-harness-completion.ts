@@ -70,6 +70,8 @@ export function registerAgentHarnessCompletion<Completion>(params: {
     outcome: "consumed" | "undelivered" | "unavailable",
     assertCurrent: () => void,
   ): Promise<void>;
+  /** Releases plugin-owned in-memory state when retirement persistence keeps failing. */
+  retireExhausted?(assertCurrent: () => void): void | Promise<void>;
   settleExecution(): void;
   onError(error: unknown): void;
 }) {
