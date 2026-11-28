@@ -93,10 +93,12 @@ const HEARTBEAT_SOURCE_CHECK_IDS = new Set([
   "core/doctor/heartbeat-scratch-migration",
 ]);
 // Auth profiles and client credentials are secret stores bound to the source state file's
-// identity: a private copy can never prove their migration, so they read the source state.
+// identity: a private copy can never prove their migration, so checks that read them (device
+// pairing, and gateway health through its device-identity handshake) read the source state.
 const SOURCE_STATE_CHECK_IDS = new Set([
   "core/doctor/auth-profiles",
   "core/doctor/device-pairing",
+  "core/doctor/gateway-health",
   ...HEARTBEAT_SOURCE_CHECK_IDS,
 ]);
 
