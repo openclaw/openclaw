@@ -130,7 +130,7 @@ async function readPersistedJobs(): Promise<StoredJob[]> {
   return (await loadCronStore(storePath)).jobs as unknown as StoredJob[];
 }
 
-it.each([true, false])("persists legacy owners (enabled: %s)", async (enabled) => {
+it("persists legacy owners without changing enabled state or transferred ownership", async () => {
   const createdActor = { type: "human", source: "profile", id: "profile-creator" };
   const payload = { kind: "agentTurn", message: "Morning brief", toolsAllow: ["message"] };
   const runtimeAuthority = {
@@ -139,9 +139,10 @@ it.each([true, false])("persists legacy owners (enabled: %s)", async (enabled) =
     namespace: "codex.apps",
     payload: { apps: [{ id: "calendar" }] },
   };
-  const retained = { createdActor, payload, enabled, runtimeAuthority };
+  const retained = { createdActor, payload, runtimeAuthority };
   await writeCurrentCronStore([
     createCurrentCronJob({ ...retained, id: "legacy-owner" }),
+    createCurrentCronJob({ ...retained, id: "paused", enabled: false }),
     createCurrentCronJob({ ...retained, id: "transferred", ownerProfileId: "profile-recipient" }),
     createCurrentCronJob({
       id: "incomplete-attribution",
@@ -158,12 +159,13 @@ it.each([true, false])("persists legacy owners (enabled: %s)", async (enabled) =
   );
   for (const [id, ownerProfileId] of [
     ["legacy-owner", "profile-creator"],
+    ["paused", "profile-creator"],
     ["transferred", "profile-recipient"],
   ]) {
     expect(configJobs.find((job) => job.id === id)).toMatchObject({
       ownerProfileId,
       payload,
-      enabled,
+      enabled: id !== "paused",
     });
     expect(store.jobs.find((job) => job.id === id)).toMatchObject({ runtimeAuthority });
   }

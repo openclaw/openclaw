@@ -488,23 +488,19 @@ export function createSandboxPersistentExecOwner(params: { scheduler: GatewaySch
             input.source,
           ),
         );
-        const assertLaunch = () => {
-          assertCurrent();
-          input.assertLaunch?.();
-        };
         await preparation.start(async () => {
-          assertLaunch();
+          assertCurrent();
           if (!record) {
             throw new Error("Persistent sandbox START lost its prepared custody.");
           }
           record = requireRecord(
             await store.transition(
               { ...expected(record), phase: "running" },
-              assertLaunch,
+              assertCurrent,
               input.source,
             ),
           );
-          assertLaunch();
+          assertCurrent();
         }, input.assertLaunch);
         assertCurrent();
         input.signal.addEventListener("abort", onAbort, { once: true });

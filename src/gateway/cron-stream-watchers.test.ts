@@ -98,10 +98,20 @@ describe("cron stream watchers", () => {
 
   it("withholds a stream source until its human owner is reassigned", async () => {
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-      const { fake, updateState, watchers } = createCronStreamWatcherFixture();
       const missing = job({ ownerProfileId: "removed-profile" });
+      const owner = ensureProfileForEmail("stream-owner@example.test");
+      const assigned = { ...missing, ownerProfileId: owner.id };
+      let current = assigned;
+      const { fake, updateState, watchers } = createCronStreamWatcherFixture({
+        getJob: () => current,
+      });
+      const spawn = fake.spawn.getMockImplementation()!;
+      fake.spawn.mockImplementationOnce((input) => {
+        current = missing;
+        return spawn(input);
+      });
       try {
-        await watchers.start(missing);
+        await watchers.start(assigned);
         expect(fake.runs).toHaveLength(0);
         expect(updateState).toHaveBeenLastCalledWith(
           missing.id,
@@ -113,9 +123,11 @@ describe("cron stream watchers", () => {
           expect.any(String),
         );
 
-        const owner = ensureProfileForEmail("stream-owner@example.test");
-        await watchers.start({ ...missing, ownerProfileId: owner.id });
+        current = assigned;
+        await watchers.start(current);
         expect(watchers.inspect(missing.id)?.processAlive).toBe(true);
+        current = missing;
+        fake.inputs.at(-1)?.assertCurrent?.();
       } finally {
         await watchers.stopAll("shutdown");
       }

@@ -268,7 +268,7 @@ export function createCronExitWatchers(
         let run: ManagedRun;
         try {
           run = await supervisor.spawn({
-            assertCurrent: () => {
+            initiateSpawn: (launch) => {
               const owner = handlers;
               const current = owner.getJob ? owner.getJob(job.id) : slot.job;
               if (
@@ -282,6 +282,7 @@ export function createCronExitWatchers(
                 throw new Error("cron on-exit watcher no longer owns this launch");
               }
               assertCronHumanOwner(current);
+              return launch();
             },
             scopeKey: scopeKey(job.id),
             replaceExistingScope: true,

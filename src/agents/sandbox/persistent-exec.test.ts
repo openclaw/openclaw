@@ -134,7 +134,10 @@ async function fixture() {
   const exited = createDeferredCore<SandboxPersistentExecStopped>();
   const preparation = {
     receipt,
-    start: vi.fn<SandboxPersistentExecPreparation["start"]>(async (admit) => await admit()),
+    start: vi.fn<SandboxPersistentExecPreparation["start"]>(async (admit, assertLaunch) => {
+      await admit();
+      assertLaunch?.();
+    }),
     checkCurrent: vi.fn<SandboxPersistentExecPreparation["checkCurrent"]>(async () => {}),
     stopped: exited.promise,
     stop: vi.fn<SandboxPersistentExecPreparation["stop"]>(async () => stopped(receipt)),
@@ -611,6 +614,7 @@ it("checks launch admission at START without retaining it for running custody", 
     if (!admitted) {
       throw new Error("launch refused");
     }
+    admitted = false;
   };
   await expect(f.start({ assertLaunch, releaseAuthority: () => {} })).rejects.toThrow(
     "launch refused",
@@ -620,7 +624,6 @@ it("checks launch admission at START without retaining it for running custody", 
   admitted = true;
   const run = await f.start({ assertLaunch });
   try {
-    admitted = false;
     await f.clock.advanceBy(20_000);
     expect(f.preparation.checkCurrent).toHaveBeenCalledOnce();
     expect(run.activity?.resultSettled).toBe(false);

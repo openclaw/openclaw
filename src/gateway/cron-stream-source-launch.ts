@@ -30,7 +30,6 @@ export function spawnCronStreamSource(params: {
     return current;
   };
   const assertLaunch = () => assertCronHumanOwner(assertCurrent());
-  assertLaunch();
   if (job.streamSandbox) {
     if (!owner.spawnSandboxSource) {
       throw new Error("Sandbox stream execution is unavailable; no host process was started.");
@@ -44,7 +43,11 @@ export function spawnCronStreamSource(params: {
     });
   }
   return params.acquireHostSupervisor().spawn({
-    assertCurrent: assertLaunch,
+    assertCurrent,
+    initiateSpawn: (launch) => {
+      assertLaunch();
+      return launch();
+    },
     scopeKey: jobScopeKey(job.id),
     replaceExistingScope: true,
     mode: "child",
