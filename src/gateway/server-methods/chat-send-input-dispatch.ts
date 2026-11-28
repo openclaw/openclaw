@@ -95,7 +95,7 @@ export async function handleChatSendWithStorage(
   const setup = await prepareAndAdmitChatSend(
     handlerOptions,
     onAdmissionOwned,
-    options,
+    { ...options, sessionCreate: req.method === "sessions.create" },
     diagnostics,
     storage ? () => storage.release() : undefined,
   ).catch((error: unknown) => {
@@ -182,7 +182,7 @@ export async function handleChatSendWithStorage(
   const cronCreatorAuthority = externalAuthorityAdmission?.resolve(externalAdmissionParams);
 
   const admissionStartedAt = Date.now();
-  const commitInitialInput = req.method === "sessions.create";
+  const { commitInitialInput } = admission;
   let commitFreshInput = admission.localInputAdmission || commitInitialInput;
   let inputAdmissionAttempted = false;
   let committedInput: { sessionId: string; lifecycleRevision?: string } | undefined;
