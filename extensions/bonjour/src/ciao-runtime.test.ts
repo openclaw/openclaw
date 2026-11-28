@@ -60,7 +60,7 @@ assert.equal(console.warn, before.warn);
 assert.equal(console.error, before.error);
 console.log("ciao import, logger isolation, and service lifecycle passed");`,
     ],
-    { encoding: "utf8", timeout: 10_000 },
+    { cwd: new URL("../", import.meta.url), encoding: "utf8", timeout: 10_000 },
   );
   expect(output.trim()).toBe("ciao import, logger isolation, and service lifecycle passed");
 });

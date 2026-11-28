@@ -15,6 +15,10 @@ type PackageManifestContractParams = Parameters<typeof describePackageManifestCo
 
 const packageManifestContractTests: PackageManifestContractParams[] = [
   {
+    pluginId: "bonjour",
+    pluginLocalRuntimeDeps: ["@homebridge/ciao"],
+  },
+  {
     pluginId: "buzz",
     pluginLocalRuntimeDeps: ["nostr-tools"],
     minHostVersionBaseline: "2026.7.2",

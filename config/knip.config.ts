@@ -981,7 +981,6 @@ const rootBundledPluginRuntimeDependencies = [
   "@anthropic-ai/sdk",
   "@google/genai",
   "@grammyjs/transformer-throttler",
-  "@homebridge/ciao",
   "@mozilla/readability",
   "@silvia-odwyer/photon-node",
   "@trycua/cua-driver",
