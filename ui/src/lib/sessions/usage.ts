@@ -53,6 +53,7 @@ export function requestSessionUsage(
     limit?: number;
     includeContextWeight?: boolean;
     signal?: AbortSignal;
+    dateParams?: ReturnType<typeof buildSessionUsageDateParams>;
   },
 ): Promise<SessionsUsageResult> {
   const key = options?.key;
@@ -61,7 +62,7 @@ export function requestSessionUsage(
       ? { range: query.range }
       : { startDate: query.startDate, endDate: query.endDate }),
     ...(query.agentId ? { agentId: query.agentId } : key ? {} : { agentScope: "all" }),
-    ...buildSessionUsageDateParams(query.timeZone),
+    ...(options?.dateParams ?? buildSessionUsageDateParams(query.timeZone)),
     ...(query.creatorKey ? { creatorKey: query.creatorKey } : {}),
     groupBy: query.scope,
     ...(key

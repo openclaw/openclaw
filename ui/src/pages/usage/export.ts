@@ -13,7 +13,11 @@ import { downloadTextFile } from "../../lib/download.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
-import { requestSessionUsage, type SessionUsageQuery } from "../../lib/sessions/usage.ts";
+import {
+  buildSessionUsageDateParams,
+  requestSessionUsage,
+  type SessionUsageQuery,
+} from "../../lib/sessions/usage.ts";
 import { showToast } from "../../lib/toast.ts";
 import { isUsageCacheIncomplete } from "./cache-status.ts";
 import type { SessionsUsageResult } from "./data-types.ts";
@@ -151,7 +155,13 @@ export function createUsageExportRequest(
       if (!connection) {
         throw new Error(t("common.offline"));
       }
-      const selectedQuery = query();
+      const currentQuery = query();
+      const selectedQuery = {
+        ...currentQuery,
+        selectedDays: [...(currentQuery.selectedDays ?? [])],
+        selectedSessions: [...(currentQuery.selectedSessions ?? [])],
+      };
+      const dateParams = buildSessionUsageDateParams(selectedQuery.timeZone);
       const displayed = format === "json" ? displayedSnapshot?.() : undefined;
       const result = await requestSessionUsage(
         connection.client,
@@ -162,6 +172,7 @@ export function createUsageExportRequest(
             ? { projection: "overview" as const, limit: 50 }
             : { limit: Number.MAX_SAFE_INTEGER }),
           signal,
+          dateParams,
         },
       );
       if (
@@ -172,6 +183,19 @@ export function createUsageExportRequest(
       }
       const selectedKeys = new Set(selectedQuery.selectedSessions);
       const data: UsageJsonExport = {
+        context: {
+          version: 1,
+          generatedAt: new Date().toISOString(),
+          startDate: selectedQuery.startDate,
+          endDate: selectedQuery.endDate,
+          timeZone: { selection: selectedQuery.timeZone, ...dateParams },
+          agentId: selectedQuery.agentId || null,
+          groupBy: selectedQuery.scope,
+          creatorKey: selectedQuery.creatorKey || null,
+          query: selectedQuery.query || null,
+          selectedDays: selectedQuery.selectedDays,
+          selectedSessions: selectedQuery.selectedSessions,
+        },
         sessions: selectedKeys.size
           ? result.sessions.filter((session) => selectedKeys.has(session.key))
           : result.sessions,

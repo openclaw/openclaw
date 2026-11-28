@@ -20,6 +20,24 @@ export type UsageContextDetail = {
 };
 
 export type UsageJsonExport = {
+  context: {
+    version: 1;
+    generatedAt: string;
+    startDate: string;
+    endDate: string;
+    timeZone: {
+      selection: "local" | "utc";
+      mode: string;
+      timeZone?: string;
+      utcOffset?: string;
+    };
+    agentId: string | null;
+    groupBy: "instance" | "family";
+    creatorKey: string | null;
+    query: string | null;
+    selectedDays: string[];
+    selectedSessions: string[];
+  };
   totals: UsageTotals | null;
   sessions: UsageSessionEntry[];
   daily: CostDailyEntry[];
