@@ -49,11 +49,11 @@ function toBooleanColumn(value: boolean | undefined): number | null {
   return value === undefined ? null : value ? 1 : 0;
 }
 
-// Column null means the optional record key was absent; keep it absent on read
-// so records round-trip byte-identical to the retired JSON store.
-function optional<K extends string, V>(key: K, value: V | null): { [P in K]?: V } {
-  // SAFETY: The computed property uses the supplied K key and its V value; null produces no key.
-  return value === null ? {} : ({ [key]: value } as { [P in K]: V });
+// Column null or an omitted lazy column means the optional record key was absent;
+// keep it absent on read so records round-trip byte-identical to the retired JSON store.
+function optional<K extends string, V>(key: K, value: V | null | undefined): { [P in K]?: V } {
+  // SAFETY: The computed property uses the supplied K key and its V value; nullish produces no key.
+  return value == null ? {} : ({ [key]: value } as { [P in K]: V });
 }
 
 export function toPendingRow(record: DevicePairingPendingRecord): DevicePairingPending {

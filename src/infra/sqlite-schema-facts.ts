@@ -111,6 +111,20 @@ export function invalidateSqliteSchemaFacts(database: DatabaseSync): void {
   invalidateSchemaFacts(database, true);
 }
 
+/** Reconcile admitted SQLite schema facts after an out-of-band DDL conflict is confirmed. */
+export function refreshAdmittedSqliteSchemaFacts(
+  database: DatabaseSync,
+): SqliteSchemaFacts | undefined {
+  const owner = owners.get(database);
+  if (!owner?.admitted || owner.authorizerActive) {
+    return undefined;
+  }
+  publishSqliteDatabaseSchemaChange(database);
+  owner.transactionBaseFacts = undefined;
+  invalidate(owner);
+  return getAdmittedSqliteSchemaFacts(database);
+}
+
 function invalidateSchemaFacts(
   database: DatabaseSync,
   publish: boolean,
