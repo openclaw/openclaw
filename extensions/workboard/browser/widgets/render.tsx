@@ -62,6 +62,31 @@ function WidgetPagination(props: WidgetProps) {
   );
 }
 
+function OpenBoardLink(props: { model: WorkboardWidgetModel; boardId: string | undefined }) {
+  const target = () => workboardPageTarget(props.boardId);
+  return (
+    <a
+      href={props.model.host.navigation.pageHref(target())}
+      onClick={(event: MouseEvent) => {
+        // Modified and middle clicks keep the native link so new tabs and windows still work.
+        if (
+          event.button !== 0 ||
+          event.metaKey ||
+          event.ctrlKey ||
+          event.shiftKey ||
+          event.altKey
+        ) {
+          return;
+        }
+        event.preventDefault();
+        props.model.host.navigation.openPage(target());
+      }}
+    >
+      {t("workboard.widget.openBoard")}
+    </a>
+  );
+}
+
 function isAvailable(model: WorkboardWidgetModel) {
   return model.connected && model.loaded && !model.error;
 }
@@ -90,9 +115,7 @@ export function WorkboardMiniWidget(props: WidgetProps) {
       <section class="workboard-widget-mini" data-test-id="workboard-mini-widget">
         <header>
           <strong>{boardId() ?? t("workboard.allBoards")}</strong>
-          <a href={props.model.host.navigation.pageHref(workboardPageTarget(boardId()))}>
-            {t("workboard.widget.openBoard")}
-          </a>
+          <OpenBoardLink model={props.model} boardId={boardId()} />
         </header>
         <WidgetPagination {...props} />
         <div class="workboard-widget-mini__counts" aria-label={t("workboard.widget.statusCounts")}>
@@ -256,9 +279,7 @@ export function WorkboardBoardWidget(props: WidgetProps) {
         <header class="workboard-widget-board__header">
           <strong>{boardId() ?? t("workboard.allBoards")}</strong>
           <span>{t("workboard.widget.cardCount", { count: String(cards().length) })}</span>
-          <a href={props.model.host.navigation.pageHref(workboardPageTarget(boardId()))}>
-            {t("workboard.widget.openBoard")}
-          </a>
+          <OpenBoardLink model={props.model} boardId={boardId()} />
         </header>
         <WidgetPagination {...props} />
         <div class="workboard-board workboard-board--compact workboard-widget-board__columns">

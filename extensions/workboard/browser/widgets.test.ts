@@ -1,14 +1,16 @@
 import { flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createWorkboardCard } from "./lib/workboard/test/index-helpers.ts";
+import { installDomComponents } from "./test/dom-host.ts";
 import { workboardTestHost } from "./test/host.setup.ts";
 import { createViewContext } from "./test/host.ts";
 import { createWorkboardWidget } from "./widgets.tsx";
 import { WorkboardWidgetModel } from "./widgets/runtime.ts";
 
-function mountWidget(canMutate = true, presented = true) {
+function mountWidget(canMutate = true, presented = true, kind: "mini" | "card" | "board" = "card") {
   const fixture = workboardTestHost();
   fixture.connection.connected = true;
+  installDomComponents(fixture.host);
   const initialListeners = new Set(fixture.listeners);
   const card = createWorkboardCard();
   const request = vi.fn(async () => ({ cards: [card] }));
@@ -17,7 +19,7 @@ function mountWidget(canMutate = true, presented = true) {
   const widget = { name: "Card", props: { cardId: card.id } };
   const props = { sessionKey: "main", widget, canMutate, canGrant: true };
   const context = createViewContext(fixture.host, props, presented);
-  const mounted = createWorkboardWidget(fixture.host, "card")(container, context);
+  const mounted = createWorkboardWidget(fixture.host, kind)(container, context);
   onTestFinished(() => container.remove());
   onTestFinished(() => mounted?.dispose?.());
   onTestFinished(() => {
@@ -97,3 +99,26 @@ it("offers retry after an owner request fails, then replaces the error with card
   await title();
   expect(container.querySelector('[role="alert"]')).toBeNull();
 });
+
+it.each(["mini", "board"] as const)(
+  "opens the board in app from the %s widget and leaves modified clicks to the browser",
+  async (kind) => {
+    const w = mountWidget(true, true, kind);
+    await w.title("Open board");
+    const link = w.container.querySelector<HTMLAnchorElement>("header a")!;
+    expect(link.getAttribute("href")).toBe("/workboard");
+    const click = (init: MouseEventInit = {}) => {
+      const event = new MouseEvent("click", { bubbles: true, cancelable: true, ...init });
+      link.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    expect(click({ metaKey: true })).toBe(false);
+    expect(click({ button: 1 })).toBe(false);
+    expect(w.host.navigation.openPage).not.toHaveBeenCalled();
+    expect(click()).toBe(true);
+    expect(w.host.navigation.openPage).toHaveBeenCalledExactlyOnceWith({
+      id: "workboard",
+      path: [],
+    });
+  },
+);
