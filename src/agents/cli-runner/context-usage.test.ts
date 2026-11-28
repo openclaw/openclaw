@@ -11,6 +11,7 @@ it("coalesces to the latest observation, even when it returns to the last writte
   const write = vi.fn(async (_tokens: number) => {}).mockImplementationOnce(() => first.promise);
   await using publisher = createCliContextPublisher(write);
   publisher.observe(200);
+  expect(write.mock.calls).toEqual([[200]]);
   for (const n of [201, 202, 200]) publisher.observe(n);
   first.resolve();
   await vi.advanceTimersByTimeAsync(1_000);
