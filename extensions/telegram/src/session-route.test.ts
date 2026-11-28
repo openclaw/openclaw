@@ -434,6 +434,19 @@ describe("telegramPlugin reply threading", () => {
   });
 
   it.each([
+    ["4321", "4321"],
+    ["10000000-0000-4000-8000-000000000001", undefined],
+  ])("offers message id %s to the message tool as reply target %s", (id, expected) => {
+    const toolContext = telegramPlugin.threading?.buildToolContext?.({
+      cfg: {},
+      accountId: "default",
+      context: { To: "telegram:1234", CurrentMessageId: id },
+    });
+    // The key must be set: core keeps the turn's own message id when it is absent.
+    expect(toolContext).toHaveProperty("currentMessageId", expected);
+  });
+
+  it.each([
     ["telegram:1234", "telegram:1234", "533274", "533274"],
     ["telegram:-1001:topic:99", "telegram:-1001:topic:77", "77", undefined],
   ] as const)(

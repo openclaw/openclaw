@@ -5,6 +5,7 @@ import { planCronOneShotTurn } from "./mock-openai-cron-one-shot.js";
 import { planCronParentBoardTurn } from "./mock-openai-cron-parent-board.js";
 import { planCronSelfScratchTurn } from "./mock-openai-cron-self-scratch.js";
 import { planCronSendContinueTurn } from "./mock-openai-cron-send-continue.js";
+import { planCronSessionReplyTargetTurn } from "./mock-openai-cron-session-reply-target.js";
 import { planCronTrustedOwnerTurn } from "./mock-openai-cron-trusted-owner.js";
 import { planHookAutomationsScopeTurn } from "./mock-openai-hook-automations-scope.js";
 import { planOwnerCompletionTurn } from "./mock-openai-owner-completion.js";
@@ -21,6 +22,7 @@ export function planAutomationScenarioTurn(params: {
     planCronOneShotTurn(params) ??
     planCronParentBoardTurn(params.prompt, params.input) ??
     planCronSendContinueTurn(params) ??
+    planCronSessionReplyTargetTurn(params) ??
     planCronBlockedOutcomeTurn(params.prompt) ??
     planCronTrustedOwnerTurn(params) ??
     planCronSelfScratchTurn(params) ??
