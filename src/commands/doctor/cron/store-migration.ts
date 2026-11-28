@@ -534,8 +534,14 @@ export function normalizeStoredCronJobs(
     } else if (loweredSessionTarget === "current") {
       setField(raw, "sessionTarget", "isolated");
       const sessionKey = normalizeOptionalString(raw.sessionKey);
-      if (sessionKey && !sessionKey.includes("\0") && payloadKind === "agentTurn") {
-        setField(raw, "includeRecentChat", true);
+      if (
+        sessionKey &&
+        !sessionKey.includes("\0") &&
+        (payloadKind === "agentTurn" || payloadKind === "command")
+      ) {
+        if (payloadKind === "agentTurn") {
+          setField(raw, "includeRecentChat", true);
+        }
       } else {
         pause(
           "The former current-conversation target has no usable creating conversation for an agent turn. Review where it should run before re-enabling.",

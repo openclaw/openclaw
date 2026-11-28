@@ -492,6 +492,24 @@ it("recovers only currently valid schedule rows and preserves recovery state", (
 });
 
 const sourceSessionKey = "agent:main:dashboard:source";
+
+it("keeps a linked command scheduled when converting its current target", () => {
+  const job = makeLegacyJob({
+    sessionTarget: "current",
+    sessionKey: sourceSessionKey,
+    payload: { kind: "command", argv: ["echo", "tick"] },
+    delivery: { mode: "none" },
+  });
+  const { jobs, pausedSessionTargetJobs } = normalizeStoredCronJobs([job]);
+  expect(jobs[0]).toMatchObject({
+    enabled: true,
+    sessionTarget: "isolated",
+    sessionKey: sourceSessionKey,
+  });
+  expect(jobs[0]).not.toHaveProperty("includeRecentChat");
+  expect(pausedSessionTargetJobs).toEqual([]);
+});
+
 it.each([
   ["current", undefined, "isolated", undefined],
   ["current", " \t ", "isolated", undefined],

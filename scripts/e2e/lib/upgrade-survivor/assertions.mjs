@@ -271,6 +271,14 @@ async function seedLegacyCronScheduledAuthority(stateDir, packageRoot) {
       },
       payload: { kind: "agentTurn", message: "mismatch", toolsAllow: ["write"] },
     },
+    {
+      ...base,
+      id: "cron-linked-command",
+      name: "Linked scheduled command",
+      sessionTarget: "current",
+      sessionKey: "agent:main:main",
+      payload: { kind: "command", argv: ["echo", "tick"] },
+    },
   ];
   if (!usesCronOwnerAtBaseline(requireEnv("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION"))) {
     for (const job of jobs) {
@@ -964,7 +972,7 @@ function assertCronScheduledAuthorityMigrated(stateDir, stage) {
     assert(fs.existsSync(databasePath), "legacy cron authority fixture missing before update");
     readDatabase(databasePath, (db) => {
       const rows = db.prepare("SELECT job_json FROM cron_jobs WHERE job_id LIKE 'cron-%'").all();
-      assert(rows.length === 5, "baseline cron authority fixture row count changed");
+      assert(rows.length === 6, "baseline cron authority fixture row count changed");
       assert(
         rows.every((row) => JSON.parse(row.job_json).scheduledToolPolicy === undefined),
         "baseline unexpectedly authored current scheduled authority provenance",
@@ -982,7 +990,8 @@ function assertCronScheduledAuthorityMigrated(stateDir, stage) {
         return [row.job_id, JSON.parse(row.job_json)];
       }),
     );
-    assert(jobs.size === 5, `cron authority fixture row count changed: ${jobs.size}`);
+    assert(jobs.size === 6, `cron authority fixture row count changed: ${jobs.size}`);
+    assert(jobs.get("cron-linked-command")?.enabled === true, "updater paused the linked command");
     const persistedOwner = usesCronOwnerAtBaseline(
       requireEnv("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION"),
     );

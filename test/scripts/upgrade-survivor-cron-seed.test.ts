@@ -203,7 +203,7 @@ if (args[0] === "config") {
     let jobs;
     try { jobs = db.prepare("SELECT job_json FROM cron_jobs ORDER BY rowid").all().map(row => JSON.parse(row.job_json)); }
     finally { db.close(); }
-    assert.deepEqual(jobs.map((job) => job.id), ["cron-pre-cap", "cron-ownerless-cap", "cron-owner-session", "cron-encoded-account", "cron-agent-mismatch"]);
+    assert.deepEqual(jobs.map((job) => job.id), ["cron-pre-cap", "cron-ownerless-cap", "cron-owner-session", "cron-encoded-account", "cron-agent-mismatch", "cron-linked-command"]);
     assert.equal(jobs.every((job) => job.scheduledToolPolicy === undefined), true);
     assert.equal(fs.existsSync(path.join(state, "cron", "jobs.json")), false);
     if (process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION === "2026.6.34") {

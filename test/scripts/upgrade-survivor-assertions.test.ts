@@ -1763,7 +1763,7 @@ process.stdout.write(sessionDir + "\\n");
       mkdirSync(join(stateDir, "state"), { recursive: true });
       const db = new DatabaseSync(join(stateDir, "state", "openclaw.sqlite"));
       db.exec("CREATE TABLE cron_jobs(job_id TEXT PRIMARY KEY, job_json TEXT NOT NULL)");
-      for (let index = 0; index < 5; index++) {
+      for (let index = 0; index < 6; index++) {
         db.prepare("INSERT INTO cron_jobs VALUES (?, ?)").run(`cron-${index}`, "{}");
       }
       const baseline = run("assert-state");

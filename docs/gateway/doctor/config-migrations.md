@@ -662,7 +662,7 @@ installation. This also protects updates started by supported older releases.
 
 ## Automation execution targets
 
-Run `openclaw doctor --fix` after a direct upgrade. Doctor backs up cron state before converting saved jobs. It converts `current` to **New session each time** with **Include recent chat** and keeps the creating conversation link, workspace, sandbox, and delivery settings. It converts `main` to **Continue a conversation**, targeting the original agent’s main conversation. If Doctor cannot recover the creating conversation or resolve the original owner, it retains and pauses the job with a reason. Review the target before re-enabling it. Existing isolated and explicitly targeted jobs keep their targets.
+Run `openclaw doctor --fix` after a direct upgrade. Doctor backs up cron state before converting saved jobs. It converts `current` jobs with a creating conversation to **New session each time** and keeps their conversation link, workspace, sandbox, and delivery settings. Agent turns get **Include recent chat**; commands keep their schedule without reading chat. It converts `main` to **Continue a conversation**, targeting the original agent’s main conversation. If Doctor cannot recover the creating conversation or resolve the original owner, it retains and pauses the job with a reason. Review the target before re-enabling it. Existing isolated and explicitly targeted jobs keep their targets.
 
 ## Legacy cron delivery settings
 
