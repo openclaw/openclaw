@@ -263,6 +263,10 @@ describe("system service update as the unit's account", () => {
     ]);
     // The transient unit's argv carries no environment values, only the handoff path.
     expect(JSON.stringify(native.scheduled)).not.toContain("unit-only-value");
+    // Node refuses to spawn an argument that contains a NUL byte.
+    for (const argv of native.scheduled) {
+      expect(argv.filter((argument) => argument.includes("\0"))).toEqual([]);
+    }
     for (const script of scheduledScripts()) {
       expect(() => new vm.Script(script)).not.toThrow();
     }

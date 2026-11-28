@@ -82,7 +82,7 @@ const accountWorkRunning = () => {
   if (startedAt(p.doctorPid) === p.doctorStartedAt) return true;
   let pids = [];
   try { pids = fs.readdirSync("/proc").filter((name) => /^[0-9]+$/.test(name) && Number(name) !== process.pid); } catch { return true; }
-  return pids.some((pid) => { try { return fs.readFileSync("/proc/" + pid + "/cmdline", "utf8").split("\0").includes(p.envFile); } catch { return false; } });
+  return pids.some((pid) => { try { return fs.readFileSync("/proc/" + pid + "/cmdline", "utf8").split("\\0").includes(p.envFile); } catch { return false; } });
 };
 const systemctl = (...args) => spawnSync("/usr/bin/systemctl", args, { stdio: "inherit" }).status === 0;
 const show = (property) => String(spawnSync("/usr/bin/systemctl", ["show", "-p", property, "--value", p.unit], { encoding: "utf8" }).stdout || "").trim();
