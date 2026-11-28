@@ -228,12 +228,7 @@ function payloadOf(respond: ReturnType<typeof vi.fn>) {
 const makeMcpCatalog = () => ({ version: 1, generatedAt: 1, servers: {}, tools: [] });
 
 function mockMcpConfigSummary(
-  params: {
-    fingerprint?: string;
-    serverNames?: string[];
-    policyBlockedServerNames?: string[];
-    pluginIdsByServer?: Map<string, string>;
-  } = {},
+  params: Partial<ReturnType<typeof runtimeMocks.resolveSessionMcpConfigSummary>> = {},
 ): void {
   runtimeMocks.resolveSessionMcpConfigSummary.mockReturnValueOnce({
     fingerprint: params.fingerprint ?? "mcp:1:test",
@@ -302,12 +297,6 @@ describe("tools.effective handler", () => {
     }
     testing.resetToolsEffectiveCacheForTest();
     runtimeMocks.resolveEffectiveToolInventory.mockResolvedValue(makeCoreInventory());
-    runtimeMocks.resolveSessionMcpConfigSummary.mockImplementation(() => ({
-      fingerprint: "mcp:1:test",
-      serverNames: [],
-      pluginIdsByServer: new Map<string, string>(),
-      policyBlockedServerNames: [],
-    }));
   });
 
   it("rejects caller-supplied auth context params", async () => {
