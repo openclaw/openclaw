@@ -7,6 +7,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { readDatabase } from "./observations.mjs";
 
 // Disposable published-driver prefix, fresh state root, packed candidate, full expected commit.
 const [prefix, root, tarball, commit, version, mode, rawPort] = process.argv.slice(2);
@@ -41,7 +42,7 @@ const env = {
 const config = {
   gateway: { mode: "local", bind: "loopback", port, auth: { mode: "token", token } },
   agents: {
-    entries: { main: { workspace: path.join(root, "workspace"), heartbeat: { every: "0m" } } },
+    entries: { main: { workspace: path.join(root, "workspace") } },
     defaults: { systemAgent: { agentId: "main" } },
   },
   cron: { enabled: true },
@@ -80,15 +81,17 @@ async function gateway(name) {
     name,
   );
   for (let i = 0; i < 180; i++) {
-    if (proc.exitCode !== null || proc.signalCode !== null)
+    if (proc.exitCode !== null || proc.signalCode !== null) {
       throw new Error(name + " exited before readiness");
+    }
     if (
       await fetch("http://127.0.0.1:" + port + "/readyz").then(
         (r) => r.ok,
         () => false,
       )
-    )
+    ) {
       return proc;
+    }
     await delay(500);
   }
   throw new Error(name + " not ready");
@@ -96,11 +99,25 @@ async function gateway(name) {
 async function call(args, extra = {}) {
   return (await run(cli, args, { cwd: root, env, maxBuffer: 16 * 1024 * 1024, ...extra })).stdout;
 }
+function storedJob(id) {
+  return readDatabase(path.join(state, "state/openclaw.sqlite"), (db) => {
+    const row = db.prepare("SELECT job_json FROM cron_jobs WHERE job_id = ?").get(id);
+    assert(row, "expected the original job row");
+    const { inferenceBinding, name, enabled, schedule, payload, agentId, sessionTarget, delivery } =
+      JSON.parse(row.job_json);
+    return {
+      settings: { name, enabled, schedule, payload, agentId, sessionTarget, delivery },
+      profile: inferenceBinding?.profileId ?? null,
+    };
+  });
+}
 async function occurrence(id) {
   try {
     await call(["cron", "run", id, "--wait", "--wait-timeout", "120s", "--json"]);
   } catch (error) {
-    if (!error.stdout) throw error;
+    if (!error.stdout) {
+      throw error;
+    }
   }
   const history = JSON.parse(await call(["cron", "runs", "--id", id, "--limit", "1", "--json"]));
   assert.equal(history.entries[0]?.jobId, id);
@@ -133,7 +150,7 @@ try {
     );
   }
   await fs.writeFile(env.OPENCLAW_CONFIG_PATH, JSON.stringify(config), { mode: 0o600 });
-  if (mode === "stored") {
+  async function saveAccount() {
     const child = spawn(
       cli,
       [
@@ -152,6 +169,10 @@ try {
     const done = once(child, "close");
     child.stdin.end(fixtureKey + "\n");
     assert.equal((await done)[0], 0);
+  }
+  const latestStable = version === "2026.11.10";
+  if (mode === "stored" && !latestStable) {
+    await saveAccount();
   }
   const old = await gateway("old-gateway");
   const job = JSON.parse(
@@ -176,6 +197,12 @@ try {
   const before = await occurrence(job.id);
   assert.equal(before.status, "ok");
   await stop(old);
+  const original = storedJob(job.id);
+  assert.equal(original.profile, null);
+  if (latestStable && mode === "stored") {
+    // Retain a successful key-only run before introducing an eligible stored account.
+    await saveAccount();
+  }
   const updateEnv = { ...env };
   delete updateEnv.OPENCLAW_GATEWAY_TOKEN;
   const update = JSON.parse(
@@ -196,8 +223,18 @@ try {
   assert.equal(update.status, "ok");
   const installed = (await readJson(path.join(pkg, "dist/build-info.json"))).commit;
   assert.equal(installed, commit);
+  const upgraded = storedJob(job.id);
+  assert.deepEqual(upgraded.settings, original.settings);
+  assert.equal(upgraded.profile, mode === "stored" ? "proof:fixture" : null);
   await fs.writeFile(requestLog, "");
   await gateway("new-gateway");
+  const retained = JSON.parse(
+    await call(["cron", "runs", "--id", job.id, "--limit", "5", "--json"]),
+  ).entries.find((row) => row.runAtMs === before.runAtMs && row.jobId === job.id);
+  assert(retained);
+  for (const key of ["runId", "status", "summary"]) {
+    assert.deepEqual(retained[key], before[key]);
+  }
   const after = await occurrence(job.id);
   assert(after.runAtMs > before.runAtMs);
   const requests = (await fs.readFile(requestLog, "utf8"))
@@ -209,6 +246,10 @@ try {
       mode,
       installed,
       jobId: job.id,
+      settings: upgraded.settings,
+      profileBefore: original.profile,
+      profileAfter: upgraded.profile,
+      retainedRun: { runId: retained.runId, runAtMs: retained.runAtMs, status: retained.status },
       before: before.status,
       after: after.status,
       error: after.error,
@@ -226,5 +267,7 @@ try {
     assert(requests > 0, "saved event did not reach the model");
   }
 } finally {
-  for (const child of [...children].reverse()) await stop(child);
+  for (const child of [...children].toReversed()) {
+    await stop(child);
+  }
 }

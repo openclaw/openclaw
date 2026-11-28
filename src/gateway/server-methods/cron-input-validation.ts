@@ -401,13 +401,20 @@ export async function captureCronCreatorSession(
       )
     : legacyActor;
   const inferencePayload = hasRuntimeAuthority ? undefined : cronInferencePayload(job);
+  const inferenceAgentId = inferencePayload
+    ? resolveCronJobEffectiveAgentId({ ...job, agentId }, tryResolveAmbientOwnerAgentId(cfg))
+    : undefined;
   const executionSessionKey =
     job.payload.kind === "systemEvent"
       ? "main"
       : (resolveCronSessionTargetSessionKey(job.sessionTarget) ?? "");
   const executionSession =
-    inferencePayload && executionSessionKey
-      ? await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionSessionKey, agentId })
+    inferenceAgentId && executionSessionKey
+      ? await loadGatewaySessionEntryReadOnlyInWorker({
+          cfg,
+          key: executionSessionKey,
+          agentId: inferenceAgentId,
+        })
       : undefined;
   const runtimeSessionEntry = inferencePayload
     ? await loadCronRuntimeSessionEntry({
@@ -420,14 +427,11 @@ export async function captureCronCreatorSession(
     : undefined;
   const inference =
     // A creator runtime grant owns its own inference identity. Never bind an ambient host profile.
-    inferencePayload
+    inferencePayload && inferenceAgentId
       ? await captureCronInferenceForCaller(
           {
             cfg,
-            agentId: resolveCronJobEffectiveAgentId(
-              { ...job, agentId },
-              tryResolveAmbientOwnerAgentId(cfg),
-            ),
+            agentId: inferenceAgentId,
             payloadKind: inferencePayload.kind,
             model: inferencePayload.kind === "agentTurn" ? inferencePayload.model : undefined,
             isGmailHook:
