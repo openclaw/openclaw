@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { resolveLegacyCronDefaultStoreKey } from "../state/openclaw-state-db-cron-identity-migration.js";
 import {
@@ -52,7 +53,11 @@ export function createStateSchemaMigrationStep(params: {
         return { ...result, notices: [SCHEMA_RECOVERY] };
       }
       const maintenance = getOpenClawDatabaseMaintenanceScope();
-      if (maintenance?.ownsSchemaMaintenance && hasUpdateDoctorMigrationCapture()) {
+      if (
+        maintenance?.ownsSchemaMaintenance &&
+        hasUpdateDoctorMigrationCapture() &&
+        existsSync(database.path)
+      ) {
         // Schema maintenance retired the captured Doctor writer that prepareDoctorRuntimeChecks
         // opened. Later steps write through the shared-state worker, whose connection stays open
         // for the maintenance scope, and a later synchronous writer could then not take the
