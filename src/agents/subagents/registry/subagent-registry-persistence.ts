@@ -472,21 +472,34 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
       void Promise.resolve(planned).catch(() => {});
       throw new Error("Subagent mutation plans must remain synchronous");
     }
-    for (const [id, row] of planned.postimages ?? []) {
-      if (options.deleteOnly && row !== null) {
-        throw new SubagentRegistryMutationRejectedError(
-          "Deletion-only subagent mutations cannot write retained payloads",
-        );
+    const bindPostimages = (
+      postimages: SubagentRunMutation<unknown>["postimages"],
+      receipt = false,
+    ) => {
+      for (const [id, row] of postimages ?? []) {
+        if (!receipt && options.deleteOnly && row !== null) {
+          throw new SubagentRegistryMutationRejectedError(
+            "Deletion-only subagent mutations cannot write retained payloads",
+          );
+        }
+        if (!pending.runIds.has(id) || (row && row.runId !== id)) {
+          const InvalidRow = receipt
+            ? SubagentRegistryCommitReceiptError
+            : SubagentRegistryMutationRejectedError;
+          throw new InvalidRow(
+            `${receipt ? "Registry receipt" : "Subagent mutation"} writes an unadmitted row`,
+          );
+        }
+        if (row) {
+          const plannedRow = receipt ? planned.postimages?.get(id) : undefined;
+          bindSubagentRunRuntimeKey(
+            row,
+            plannedRow ? getSubagentRunRuntimeKey(plannedRow) : runtimeKeyFor(rows.get(id), row),
+          );
+        }
       }
-      if (!pending.runIds.has(id) || (row && row.runId !== id)) {
-        throw new SubagentRegistryMutationRejectedError(
-          "Subagent mutation writes an unadmitted row",
-        );
-      }
-      if (row) {
-        bindSubagentRunRuntimeKey(row, runtimeKeyFor(rows.get(id), row));
-      }
-    }
+    };
+    bindPostimages(planned.postimages);
     pending.rekeys = [...(planned.rekeys ?? [])].map(([from, to]) => {
       const source = rows.get(from);
       const destination = planned.postimages?.get(to);
@@ -522,19 +535,7 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
     try {
       authority.assertDatabase();
       const postimages = committed.postimages ?? new Map<string, SubagentRunRecord | null>();
-      for (const [id, row] of postimages) {
-        if (!pending.runIds.has(id) || (row && row.runId !== id)) {
-          throw new SubagentRegistryCommitReceiptError("Registry receipt writes an unadmitted row");
-        }
-        if (row) {
-          // Planned rows were bound before commit; receipt-only rows bind here.
-          const plannedRow = planned.postimages?.get(id);
-          const key = plannedRow
-            ? getSubagentRunRuntimeKey(plannedRow)
-            : runtimeKeyFor(rows.get(id), row);
-          bindSubagentRunRuntimeKey(row, key);
-        }
-      }
+      bindPostimages(postimages, true);
       publishRows(runs, postimages, context, () => {
         published = true;
         for (const notice of committed.notices ?? []) {

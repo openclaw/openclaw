@@ -28,6 +28,8 @@ export type MemoryMultimodalSettings = {
   enabled: boolean;
   modalities: MemoryMultimodalModality[];
   maxFileBytes: number;
+  /** Configured modalities the embedding model cannot embed; their files are not indexed. */
+  skippedModalities?: MemoryMultimodalModality[];
 };
 
 /** Default max bytes for one multimodal memory file. */

@@ -2,15 +2,12 @@ import OpenClawChatUI
 import OpenClawProtocol
 import SwiftUI
 
-/// A tap anywhere on the header folds or unfolds the group, as in the web sidebar. Only the title region
-/// owns the system long-press menu.
+/// A user-made group's header: the same fold control as Needs you, Working, Pinned and Recent, with the group's
+/// actions (new session, defaults, rename, reorder, delete) on a long press.
 struct CommandSessionGroupHeader<Accessory: View>: View {
     @Environment(NodeAppModel.self) private var appModel
     let name: String
     let sessions: [OpenClawChatSessionEntry]
-    /// When set, the caret sits at the trailing edge with this count beside it, as on a parent session's
-    /// row, and the name starts at the leading edge. Otherwise the caret leads the name.
-    var trailingCount: Int?
     let refresh: () async -> Void
     let openSession: (String) -> Void
     @ViewBuilder let accessory: () -> Accessory
@@ -34,91 +31,57 @@ struct CommandSessionGroupHeader<Accessory: View>: View {
         self.groups.names(for: self.sessions)
     }
 
-    private var collapsed: Bool {
-        self.groups.collapsed.contains(self.name)
-    }
-
-    private func toggle() {
-        if self.collapsed {
-            self.groups.collapsed.remove(self.name)
-        } else {
-            self.groups.collapsed.insert(self.name)
-        }
-    }
-
-    private var caret: some View {
-        Button { self.toggle() } label: {
-            HStack(spacing: 3) {
-                if self.busy {
-                    ProgressView().controlSize(.mini)
-                        .accessibilityIdentifier("SessionGroup.Pending.\(self.name)")
-                } else {
-                    Image(systemName: self.collapsed ? "chevron.right" : "chevron.down")
-                }
-                if let count = self.trailingCount, count > 0 {
-                    // The open group shows its rows; the number is kept in the layout so the caret stays put.
-                    Text(verbatim: "\(count)")
-                        .opacity(self.collapsed ? 1 : 0)
-                        .accessibilityHidden(!self.collapsed)
-                }
-            }
-            .font(self.trailingCount == nil ? OpenClawType.caption2Bold : OpenClawType.caption2Medium)
-            .frame(minWidth: 44, minHeight: 44)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(self
-            .collapsed ? String(localized: "Expand Group") : String(localized: "Collapse Group"))
-        .accessibilityIdentifier("SessionGroup.Caret.\(self.name)")
-        .accessibilityValue(self.trailingCount.map { self.collapsed ? String($0) : "" } ?? "")
-    }
-
     var body: some View {
-        HStack(spacing: 0) {
-            if self.trailingCount == nil { self.caret }
-            HStack(spacing: 0) {
-                Text(verbatim: self.name.uppercased())
-                    .font(OpenClawType.caption2Bold)
-                    .tracking(0.5)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                if self.trailingCount == nil { self.accessory() }
-            }
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .contentShape(Rectangle())
-            .accessibilityIdentifier("SessionGroup.Header.\(self.name)")
-            .onTapGesture { self.toggle() }
-            .contextMenu { self.menu }
-            if self.trailingCount != nil {
-                self.caret
-                self.accessory()
-            }
-        }
-        .alert(
-            self.editor == .create ? String(localized: "New Group") : String(localized: "Rename Group"),
-            isPresented: Binding(get: { self.editor != nil }, set: { if !$0 { self.editor = nil } }))
-        {
-            TextField("Group name", text: self.$draft).font(OpenClawType.body)
-            Button { self.commitEditor() } label: {
-                Text(self.editor == .create ? LocalizedStringKey("Create") : LocalizedStringKey("Save"))
-                    .font(OpenClawType.subheadSemiBold)
-            }
-            Button(role: .cancel) { self.editor = nil } label: {
-                Text("Cancel").font(OpenClawType.subheadSemiBold)
-            }
-        }
-        .alert("Delete Group?", isPresented: self.$confirmsDelete) {
-                Button(role: .destructive) { self.deleteGroup() } label: {
-                    Text("Delete Group").font(OpenClawType.subheadSemiBold)
+        SessionSectionHeader(
+            title: self.name,
+            isCollapsed: Binding(
+                get: { self.groups.collapsed.contains(self.name) },
+                set: { collapsed in
+                    if collapsed {
+                        self.groups.collapsed.insert(self.name)
+                    } else {
+                        self.groups.collapsed.remove(self.name)
+                    }
+                }),
+            id: "SessionGroup.Header.\(self.name)")
+            .overlay(alignment: .trailing) {
+                HStack(spacing: 8) {
+                    if self.busy {
+                        ProgressView().controlSize(.mini)
+                            .accessibilityIdentifier("SessionGroup.Pending.\(self.name)")
+                    }
+                    self.accessory()
                 }
-                Button(role: .cancel) {} label: { Text("Cancel").font(OpenClawType.subheadSemiBold) }
-            } message: {
-                Text(verbatim: String(format: String(localized: "Sessions in “%@” move back to Ungrouped."), self.name))
-                    .font(OpenClawType.caption)
+                .padding(.trailing, 10)
             }
-            .sheet(item: self.$defaultsModel) { model in
-                ChatSessionGroupDefaultsSheet(model: model)
+            .contextMenu { self.menu }
+            .alert(
+                self.editor == .create ? String(localized: "New Group") : String(localized: "Rename Group"),
+                isPresented: Binding(get: { self.editor != nil }, set: { if !$0 { self.editor = nil } }))
+            {
+                TextField("Group name", text: self.$draft).font(OpenClawType.body)
+                Button { self.commitEditor() } label: {
+                    Text(self.editor == .create ? LocalizedStringKey("Create") : LocalizedStringKey("Save"))
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                Button(role: .cancel) { self.editor = nil } label: {
+                    Text("Cancel").font(OpenClawType.subheadSemiBold)
+                }
             }
+            .alert("Delete Group?", isPresented: self.$confirmsDelete) {
+                    Button(role: .destructive) { self.deleteGroup() } label: {
+                        Text("Delete Group").font(OpenClawType.subheadSemiBold)
+                    }
+                    Button(role: .cancel) {} label: { Text("Cancel").font(OpenClawType.subheadSemiBold) }
+                } message: {
+                    Text(verbatim: String(
+                        format: String(localized: "Sessions in “%@” move back to Ungrouped."),
+                        self.name))
+                        .font(OpenClawType.caption)
+                }
+                .sheet(item: self.$defaultsModel) { model in
+                    ChatSessionGroupDefaultsSheet(model: model)
+                }
     }
 
     @ViewBuilder

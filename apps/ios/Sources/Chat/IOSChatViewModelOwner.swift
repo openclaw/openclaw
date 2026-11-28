@@ -165,7 +165,7 @@ final class IOSChatViewModelOwner {
     /// A pinned presentation keeps its agent and route, but its name follows that agent's identity
     /// as it resolves, so the header, composer and Live Activity never keep a stale name.
     private func refreshPresentationName(appModel: NodeAppModel) {
-        let agent = appModel.gatewayAgents.first { $0.id == self.presentationAgentID }
+        let agent = appModel.displayAgents.first { $0.id == self.presentationAgentID }
         self.presentationAgentName = appModel.chatAgentDisplayName(for: self.presentationAgentID)
         self.presentationAgentBadge = AgentIdentityPresentation.badge(
             avatarText: agent?.identity?["emoji"]?.value as? String,

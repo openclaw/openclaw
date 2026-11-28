@@ -666,6 +666,9 @@ extension OpenClawChatViewModel {
         let capturedAttachmentIDs = Set(draftAttachments.map(\.id))
         self.attachments.removeAll { capturedAttachmentIDs.contains($0.id) }
         self.errorText = nil
+        #if os(iOS)
+        self.inlineVideos.remember(draftAttachments, messageKey: Self.outboxUserIdempotencyKey(command.id))
+        #endif
         self.presentOutboxCommands([command])
         self.localSendRevision &+= 1
         // Health can recover between the send-gate check and the enqueue;

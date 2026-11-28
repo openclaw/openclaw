@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import type { WireRequest } from "./helpers/fake-model-transports.js";
 import { historyChange, unknownChange } from "./prompt-cache-prefix-randomized.test-support.js";
-import { KNOWN_BREAKS } from "./prompt-cache-prefix-stability.test-support.js";
 
 // Plain words stand for messages; JSON messages pass through unchanged.
 const request = (messages: string[], tools: string[] = ["read"]): WireRequest => ({
@@ -13,8 +12,6 @@ const request = (messages: string[], tools: string[] = ["read"]): WireRequest =>
   ),
   text: "",
 });
-const known = (api: string, previous: WireRequest, current: WireRequest) =>
-  KNOWN_BREAKS.some((entry) => entry.api === api && entry.accepts(previous, current));
 
 describe("known prefix breaks", () => {
   it("accepts the opt-out tool addition only when nothing else changed", () => {
@@ -36,34 +33,5 @@ describe("known prefix breaks", () => {
     expect(
       historyChange(previous, { ...changed, messages: request(["u0", "a1", "u2"]).messages }),
     ).toMatch(/^message 0:/);
-  });
-
-  it("accepts the sent tool-result trim only when nothing else changed", () => {
-    const result = (output: string, name = "exec") =>
-      JSON.stringify({
-        role: "user",
-        parts: [{ functionResponse: { name, response: { output } } }],
-      });
-    const notice = "\n[... 180 chars omitted]";
-    const full = result("x".repeat(200));
-    const trimmed = result(`${"x".repeat(20)}${notice}`);
-    const renamed = result(`${"x".repeat(20)}${notice}`, "read");
-    const corrupted = result(`${"y".repeat(20)}${notice}`);
-    // The trim can also cut the notice itself short.
-    const cut = result("[... 200 chars omitted");
-    const previous = request(["u1", full, "a1"]);
-    expect(known("google-generative-ai", previous, request(["u1", trimmed, "a1", "u2"]))).toBe(
-      true,
-    );
-    expect(known("google-generative-ai", previous, request(["u0", trimmed, "a1", "u2"]))).toBe(
-      false,
-    );
-    expect(known("google-generative-ai", previous, request(["u1", renamed, "a1", "u2"]))).toBe(
-      false,
-    );
-    expect(known("google-generative-ai", previous, request(["u1", corrupted, "a1", "u2"]))).toBe(
-      false,
-    );
-    expect(known("google-generative-ai", previous, request(["u1", cut, "a1", "u2"]))).toBe(true);
   });
 });

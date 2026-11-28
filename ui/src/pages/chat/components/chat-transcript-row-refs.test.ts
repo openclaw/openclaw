@@ -85,6 +85,74 @@ it("retains row measurements across hidden and detached observer receipts", asyn
   expect(observedElements.has(row)).toBe(false);
 });
 
+it.each([true, false])(
+  "retains pre-attachment rows without layout reads (ResizeObserver: %s)",
+  async (hasResizeObserver) => {
+    if (!hasResizeObserver) {
+      vi.stubGlobal("ResizeObserver", undefined);
+    }
+    const viewport = document.body.appendChild(document.createElement("div"));
+    const row = viewport.appendChild(document.createElement("div"));
+    row.dataset.index = "0";
+    row.dataset.virtualRowKey = "initial";
+    const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+      count: 1,
+      getScrollElement: () => viewport,
+      getItemKey: () => "initial",
+      estimateSize: () => 100,
+      observeElementRect: (_, callback) => callback({ width: 800, height: 300 }),
+      observeElementOffset: (_, callback) => callback(0, false),
+      scrollToFn: vi.fn(),
+      measureElement: measureTranscriptRow,
+    });
+    const { _didMount: mountVirtualizer, _willUpdate: updateVirtualizer } = virtualizer;
+    onTestFinished(mountVirtualizer());
+    virtualizer.getVirtualItems();
+    const readHeight = vi.fn(() => 160);
+    const readViewport = vi.fn(() => 300);
+    const readOffset = vi.fn(() => 0);
+    Object.defineProperty(row, "offsetHeight", { configurable: true, get: readHeight });
+    Object.defineProperty(viewport, "clientHeight", { configurable: true, get: readViewport });
+    Object.defineProperty(viewport, "scrollTop", { configurable: true, get: readOffset });
+    const refs = new TranscriptRowRefs(virtualizer, {
+      isCurrentRow: (element) => viewport.contains(element),
+      beforeMeasure: () => void viewport.scrollTop,
+      onMount: () => {},
+    });
+
+    // Solid binds rows before the host attaches the native scroll element.
+    expect(virtualizer.targetWindow).toBeNull();
+    refs.forKey("initial")(row);
+    await Promise.resolve();
+    const beforeAttachment = [
+      readHeight.mock.calls.length,
+      readViewport.mock.calls.length,
+      readOffset.mock.calls.length,
+    ];
+    expect([...refs.elements]).toEqual([row]);
+
+    // The host replays retained refs after _willUpdate establishes the window.
+    updateVirtualizer();
+    refs.observeConnected();
+    expect(virtualizer.targetWindow).toBe(window);
+    expect(virtualizer.elementsCache.get("initial")).toBe(row);
+    if (hasResizeObserver) {
+      expect(observedElements.has(row)).toBe(true);
+      for (const observer of resizeObservers) {
+        observer.emitTarget(row, 800, 160.5);
+      }
+      expect(virtualizer.itemSizeCache.get("initial")).toBe(160.5);
+    } else {
+      expect(virtualizer.targetWindow?.ResizeObserver).toBeUndefined();
+      expect(virtualizer.itemSizeCache.get("initial")).toBe(160);
+      expect(readHeight).toHaveBeenCalled();
+      expect(readOffset).toHaveBeenCalled();
+    }
+    expect([...refs.elements]).toEqual([row]);
+    expect(beforeAttachment).toEqual([0, 0, 0]);
+  },
+);
+
 it.each([
   { kind: "cached", scrolling: true, indexes: [0, 1, 2] },
   { kind: "overscan", scrolling: true, indexes: [6, 7, 8] },
