@@ -100,5 +100,20 @@ plan rates. This adapter omits grounding, declares token billing without fixed
 rates, and does not invent a dollar cost or report missing cost as zero.
 Plan-dependent context limits are not inferred from the catalog.
 
+## Extraction through the Levanto MCP server
+
+The plugin connects Sage only as a decision model. For Sage extraction, which
+reads typed fields from a document with the text each value came from, add
+Levanto's [MCP server](/cli/mcp). It gives agents `decide` and `extract` tools:
+
+```bash
+openclaw mcp set levanto '{"command":"npx","args":["-y","levanto@latest","mcp"],"env":{"LEVANTO_API_KEY":"${LEVANTO_API_KEY}"}}'
+```
+
+`${LEVANTO_API_KEY}` is read from the environment OpenClaw runs in, so the key
+isn't stored in config. The server needs Node.js 18 or later. Run
+`openclaw mcp probe levanto` to check that it lists its tools. These calls are
+agent tool calls billed by Levanto; they don't use the decision model role.
+
 See the vendor [decision documentation](https://docs.levanto.ai/llms.txt),
 [pricing](https://docs.levanto.ai/pricing.md) and [OpenAPI](https://sage.levanto.ai/openapi.json).
