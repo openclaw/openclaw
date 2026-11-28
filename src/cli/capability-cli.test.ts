@@ -1681,7 +1681,7 @@ describe("capability cli", () => {
       expect(firstGatewayCall()?.params?.voiceId).toBe("alloy");
       if (mode === "normal") {
         expect(firstJsonOutput()).toMatchObject({
-          outputs: [{ path: fixture.outputPath, format: "wav" }],
+          outputs: [{ path: fixture.outputPath, mimeType: "audio/wav", size: 64, format: "wav" }],
         });
         expect(await fs.readFile(fixture.outputPath)).toEqual(wav);
       } else {
