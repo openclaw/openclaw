@@ -2301,6 +2301,7 @@
                       "providers/together",
                       "providers/venice",
                       "providers/volcengine",
+                      "providers/wally",
                       "providers/xai",
                       "providers/xiaomi",
                       "providers/zai"
