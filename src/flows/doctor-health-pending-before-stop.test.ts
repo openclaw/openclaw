@@ -225,5 +225,8 @@ describe("Doctor pending decisions before the stop", () => {
       gateway.stdin.end();
       await once(gateway, "exit");
     }
+    // Once the Gateway closes the stores, nothing of this process holds them either: their
+    // WAL sidecars go with the last connection, as they do when Doctor decides nothing early.
+    expect(listSqliteSidecars(state.root)).toEqual([]);
   });
 });

@@ -173,6 +173,30 @@ async function decideReadinessSteps(params: {
   await decide("service-definition");
 }
 
+async function closeReadersBeforeStop(agentDatabasePaths: readonly string[]): Promise<void> {
+  const [
+    { captureRetainedNativeWorkerSource },
+    { retireIdleOpenClawStateReadWorkers },
+    { closeRetainedOpenClawStateReadConnections },
+    { closeAgentDatabaseReaders },
+  ] = await Promise.all([
+    import("../infra/worker-native-lifecycle.js"),
+    import("../state/openclaw-state-read-worker.js"),
+    import("../state/openclaw-state-db-read-connection.js"),
+    import("../state/openclaw-agent-db-readers.js"),
+  ]);
+  const outcomes = await Promise.allSettled([
+    retireIdleSqliteReadOnlyWorkers(),
+    retireIdleOpenClawStateReadWorkers(captureRetainedNativeWorkerSource()),
+    Promise.resolve().then(() => closeRetainedOpenClawStateReadConnections()),
+    closeAgentDatabaseReaders(agentDatabasePaths),
+  ]);
+  const failed = outcomes.find((outcome) => outcome.status === "rejected");
+  if (failed) {
+    throw failed.reason;
+  }
+}
+
 function summarize(decisions: DoctorPendingDecisions) {
   const counts: Record<DoctorMaintenancePending, number> = { none: 0, work: 0, undecidable: 0 };
   const notNone: string[] = [];
@@ -204,6 +228,7 @@ export async function decideDoctorPendingBeforeStop(params: {
     traceDoctorMaintenancePending(step, check, decisions);
   const signal = resolveCommandProcessSignal(getAsyncWorkSignal());
   let failure: string | undefined;
+  let agentDatabasePaths: string[] = [];
   await measureGatewayBootstrapStep(
     "doctor.pending-before-stop",
     async () => {
@@ -217,6 +242,10 @@ export async function decideDoctorPendingBeforeStop(params: {
                   (await (
                     await import("../commands/doctor-database-preflight.js")
                   ).prepareDoctorDatabasePreflight());
+                agentDatabasePaths =
+                  preflight.agentDatabaseMigrationDiscovery?.discovery.targets.map(
+                    (target) => target.path,
+                  ) ?? [];
                 const { createDoctorPrompter } = await import("../commands/doctor-prompter.js");
                 const prompter = createDoctorPrompter({
                   runtime: params.runtime,
@@ -236,9 +265,11 @@ export async function decideDoctorPendingBeforeStop(params: {
         signal?.throwIfAborted();
         failure = formatErrorMessage(error).replace(/\s+/gu, "_").slice(0, 200);
       } finally {
-        // Pooled readers outlive their scope with the stores open; none may hold one into
-        // the stop.
-        await retireIdleSqliteReadOnlyWorkers().catch((error: unknown) => {
+        // Readers the checks open outlive them: pooled reader processes, and this process's
+        // retained shared-state and agent-database readers (idle TTL 30 minutes). Holding a
+        // store's WAL sidecars across the stop would change how the stop reads it, so none
+        // may stay open; a later read reopens what it needs.
+        await closeReadersBeforeStop(agentDatabasePaths).catch((error: unknown) => {
           failure ??= `reader-retirement:${formatErrorMessage(error).replace(/\s+/gu, "_").slice(0, 160)}`;
         });
       }
