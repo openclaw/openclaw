@@ -13,6 +13,7 @@ import {
   setActiveDegradedSecretOwners,
 } from "../secrets/runtime-degraded-state.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
+import { createSideEffectBudgetState } from "../../packages/agent-core/src/tool-repeat-guard.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
@@ -626,6 +627,93 @@ describe("Tool Search catalog indexing", () => {
       expect.objectContaining({ name: "meteor_beta" }),
     ]);
     await expect(runtime.search("orchard_alpha")).resolves.toEqual([]);
+  });
+});
+
+describe("Tool Search catalog side-effect budget", () => {
+  it("charges the resolved target tool and blocks a second dispatch against shared state", async () => {
+    let executed = 0;
+    const deliver: AnyAgentTool = {
+      name: "deliver_mail",
+      label: "deliver_mail",
+      description: "Send a message",
+      parameters: Type.Object({ dest: Type.String() }),
+      sideEffect: true,
+      execute: vi.fn(async () => {
+        executed += 1;
+        return { content: [{ type: "text", text: `sent ${executed}` }], details: { ok: true } };
+      }),
+    };
+    const budgetState = createSideEffectBudgetState();
+    const catalogRef = createToolSearchCatalogRef();
+    registerHeadlessToolSearchCatalog({ catalogRef, tools: [deliver] });
+    const config = { tools: { toolSearch: { enabled: true, mode: "tools" } } } as never;
+    const runtime = new ToolSearchRuntime(
+      { catalogRef, sideEffectBudgetState: budgetState },
+      resolveToolSearchConfig(config),
+      { validateInput: true },
+    );
+
+    // First dispatch succeeds and spends the one-unit shared budget.
+    await expect(
+      runtime.call("deliver_mail", { dest: "a" }),
+    ).resolves.toMatchObject({ result: { details: { ok: true } } });
+    expect(executed).toBe(1);
+
+    // Second dispatch is refused before execution; indirection via a fresh
+    // call shape must not evade the budget.
+    await expect(runtime.call("deliver_mail", { dest: "b" })).resolves.toMatchObject({
+      result: {
+        details: { status: "blocked", deniedReason: "side_effect_budget" },
+        terminate: true,
+      },
+    });
+    expect(executed).toBe(1);
+
+    // Without shared state (undefined budget) dispatch stays unrestricted.
+    const unmanaged = createRuntime([deliver]);
+    await expect(unmanaged.runtime.call("deliver_mail", { dest: "c" })).resolves.toBeDefined();
+  });
+
+  it("does not spend the budget when the dispatched tool reports failure", async () => {
+    let executed = 0;
+    const flaky: AnyAgentTool = {
+      name: "flaky_send",
+      label: "flaky_send",
+      description: "Send with a first-attempt failure",
+      parameters: Type.Object({}),
+      sideEffect: true,
+      execute: vi.fn(async () => {
+        executed += 1;
+        if (executed === 1) {
+          return { content: [{ type: "text", text: "boom" }], details: { ok: false } };
+        }
+        return { content: [{ type: "text", text: "sent" }], details: { ok: true } };
+      }),
+    };
+    const budgetState = createSideEffectBudgetState();
+    const catalogRef = createToolSearchCatalogRef();
+    registerHeadlessToolSearchCatalog({ catalogRef, tools: [flaky] });
+    const config = { tools: { toolSearch: { enabled: true, mode: "tools" } } } as never;
+    const runtime = new ToolSearchRuntime(
+      { catalogRef, sideEffectBudgetState: budgetState },
+      resolveToolSearchConfig(config),
+      { validateInput: true },
+    );
+
+    // Declared failure keeps the retry free, mirroring tool-call-outcome.ts.
+    await expect(runtime.call("flaky_send", {})).resolves.toMatchObject({
+      result: { details: { ok: false } },
+    });
+    await expect(runtime.call("flaky_send", {})).resolves.toMatchObject({
+      result: { details: { ok: true } },
+    });
+    expect(executed).toBe(2);
+
+    await expect(runtime.call("flaky_send", {})).resolves.toMatchObject({
+      result: { details: { status: "blocked", deniedReason: "side_effect_budget" } },
+    });
+    expect(executed).toBe(2);
   });
 });
 

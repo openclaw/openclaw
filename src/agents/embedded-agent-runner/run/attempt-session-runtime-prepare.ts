@@ -419,6 +419,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
         () =>
           prepareEmbeddedAttemptAgentSession({
             ...sessionPreparation,
+            sideEffectBudgetState: toolBase.sideEffectBudgetState,
             ...(input.activeContextEngine
               ? { activeContextEngineInfo: input.activeContextEngine.info }
               : {}),

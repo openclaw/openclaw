@@ -1,6 +1,11 @@
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import {
+  createSideEffectBudgetStopResult,
+  observeSideEffectBudget,
+  observeSideEffectCompletion,
+} from "../../packages/agent-core/src/tool-repeat-guard.js";
+import {
   attachInternalToolResultContentSource,
   copyInternalToolResultState,
 } from "../../packages/agent-core/src/internal-hooks.js";
@@ -386,6 +391,30 @@ export class ToolSearchRuntime {
     return isAgentToolReplaySafe(entry.tool);
   };
 
+  /**
+   * The catalog-side stand-in for the agent loop's `AgentTool`. Plugin tools opt
+   * in through manifest metadata (`sideEffecting` ⇒ budget 1); core catalog
+   * tools carry their numeric or boolean declaration directly.
+   */
+  private readonly resolveBudgetedTool = (
+    entry: ToolSearchCatalogEntry,
+  ): { sideEffect: true | number } | undefined => {
+    if (entry.source === "openclaw") {
+      const pluginMeta = getPluginToolMeta(entry.tool as Parameters<typeof getPluginToolMeta>[0]);
+      if (pluginMeta?.sideEffecting) {
+        return { sideEffect: true };
+      }
+    }
+    if (
+      isRecord(entry.tool) &&
+      ((entry.tool as { sideEffect?: unknown }).sideEffect === true ||
+        typeof (entry.tool as { sideEffect?: unknown }).sideEffect === "number")
+    ) {
+      return entry.tool as { sideEffect: true | number };
+    }
+    return undefined;
+  };
+
   private readonly callEntry = (
     id: string,
     input?: unknown,
@@ -441,6 +470,24 @@ export class ToolSearchRuntime {
       ? `${sanitizeToolCallIdPart(this.options.callIdScope)}:`
       : "";
     const toolCallId = `tool_call:${parentId}:${scope}${entry.name}:${++this.callSequence}`;
+    // Completed-effect budget admission for catalog dispatches. Charged to the
+    // resolved target tool (never `dispatch_action`) against the state shared
+    // with the agent loop, so dispatcher indirection cannot evade the budget.
+    const budgetState = this.ctx.sideEffectBudgetState;
+    const budgetTool = budgetState ? this.resolveBudgetedTool(entry) : undefined;
+    if (budgetState && budgetTool) {
+      const verdict = observeSideEffectBudget(
+        budgetState,
+        { id: toolCallId, name: entry.name } as never,
+        budgetTool as never,
+      );
+      if (verdict) {
+        return {
+          tool: compactToolSearchCatalogEntry(entry),
+          result: createSideEffectBudgetStopResult(verdict),
+        };
+      }
+    }
     bindJoinedCollectorInvocation(entry.tool, toolCallId);
     await assertCatalogOutputSchemaIsValid(entry);
     const outputVariants =
@@ -550,6 +597,17 @@ export class ToolSearchRuntime {
         });
         if (networkInvocation && !preExecutionRefused) {
           networkInvocation.observed = true;
+        }
+        // Spend the shared budget only on accepted success, mirroring
+        // tool-call-outcome.ts: declared failures keep legitimate retries free.
+        if (budgetState && budgetTool) {
+          observeSideEffectCompletion(
+            budgetState,
+            entry.name,
+            budgetTool as never,
+            result,
+            isToolResultError(result),
+          );
         }
         return result;
       } catch (error) {

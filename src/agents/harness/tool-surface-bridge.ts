@@ -63,6 +63,8 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
     sessionId?: string;
     scheduledToolPolicy?: ScheduledToolPolicyContext;
     sourceReplyDeliveryMode?: string;
+    /** Shared completed-effect budget map, adopted by the Agent for this session. */
+    sideEffectBudgetState?: import("../../../packages/agent-core/src/tool-repeat-guard.js").SideEffectBudgetState;
   },
   pluginExecutionAuthority?: AdmittedRunOperatorAuthority,
 ) {
@@ -177,6 +179,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
           catalogRef: toolSearchCatalogRef,
           abortSignal: prepared?.abortSignal ?? params.abortSignal,
           executeTool: prepared?.executeTool ?? params.executeTool,
+          sideEffectBudgetState: params.sideEffectBudgetState,
           toolExecutionAllow: prepared?.toolExecutionAllow,
           codeModeSkills,
         })

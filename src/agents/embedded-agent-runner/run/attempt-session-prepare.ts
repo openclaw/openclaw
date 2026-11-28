@@ -84,6 +84,12 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export async function prepareEmbeddedAttemptAgentSession(input: {
   attempt: EmbeddedRunAttemptParams;
+  /**
+   * Shared completed-effect budget map adopted by the Agent and handed to the
+   * Tool Search catalog dispatch context so dispatcher indirection cannot
+   * evade side-effect budgets.
+   */
+  sideEffectBudgetState?: import("../../tool-search-types.js").SideEffectBudgetState;
   activeContextEngineInfo?: ContextEngine["info"];
   agentCoreThinkingLevel: CreateAgentSessionOptions["thinkingLevel"];
   agentDir: string;
@@ -187,6 +193,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
       enabled: isAgentToolRepeatGuardEnabled(attempt.config, input.sessionAgentId),
       onVerdict: toolRepeatDiagnostics({ ...attempt, agentId: input.sessionAgentId }),
     },
+    ...(input.sideEffectBudgetState ? { sideEffectBudgetState: input.sideEffectBudgetState } : {}),
   });
   // Publish ownership before post-construction hooks. Outer cleanup must dispose
   // the session if prompt or terminal-hook installation fails.

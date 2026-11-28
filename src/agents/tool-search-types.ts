@@ -1,4 +1,7 @@
 import type { TSchema } from "typebox";
+import type { SideEffectBudgetState } from "../../packages/agent-core/src/tool-repeat-guard.js";
+
+export type { SideEffectBudgetState };
 import type { AgentToolSurfacePresentation } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginToolMcpMeta } from "../plugins/tool-metadata.js";
@@ -61,6 +64,13 @@ export type ToolSearchToolContext = {
   executeTool?: ToolSearchCatalogToolExecutor;
   /** Set when the run executes only these tools; swarm globals gate on `sessions_spawn`. */
   toolExecutionAllow?: readonly string[];
+  /**
+   * Shared completed-effect budget state for catalog dispatches. When present,
+   * Tool Search charges the resolved target tool (not `dispatch_action`) against
+   * this map so dispatcher indirection cannot evade the side-effect budget.
+   * Hosts pass the same object they hand to the agent loop.
+   */
+  sideEffectBudgetState?: SideEffectBudgetState;
   codeModeSkills?: Readonly<AgentToolSurfacePresentation["skills"]>;
 };
 

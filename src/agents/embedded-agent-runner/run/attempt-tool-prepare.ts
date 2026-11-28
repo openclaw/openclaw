@@ -88,6 +88,8 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   installedSkills?: OpenClawCodingToolsOptions["installedSkills"];
   reviewTranscript?: NonNullable<OpenClawCodingToolsOptions["exec"]>["reviewTranscript"];
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor;
+  /** Shared completed-effect budget map adopted by the Agent and shared with catalog dispatch. */
+  sideEffectBudgetState?: import("../../tool-search-types.js").SideEffectBudgetState;
 }) {
   const { attempt } = params;
   let getRunAbortDeadlineAtMs: (() => number | undefined) | undefined;
@@ -160,6 +162,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       runId: attempt.runId,
       contextTokenBudget: attempt.contextTokenBudget,
       executeTool: params.toolSearchCatalogExecutor,
+      sideEffectBudgetState: params.sideEffectBudgetState,
     },
     pluginExecutionAuthority,
   );
@@ -509,6 +512,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       bindRunAbortDeadline: (source: () => number | undefined) => {
         getRunAbortDeadlineAtMs = source;
       },
+      sideEffectBudgetState: params.sideEffectBudgetState,
       toolHookContext: {
         getRunAbortDeadlineAtMs: () => getRunAbortDeadlineAtMs?.(),
         awaitSessionDiffBaseline,

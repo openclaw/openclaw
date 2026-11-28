@@ -34,6 +34,11 @@ export interface CreateAgentSessionOptions extends Omit<
 > {
   /** Host repeat-guard policy from `tools.loopDetection`; omitted means enabled. */
   toolRepeatPolicy?: Parameters<typeof setInternalToolRepeatPolicy>[1];
+  /**
+   * Completed-effect budget map adopted by the Agent and shared with catalog
+   * dispatch paths so dispatcher indirection cannot evade side-effect budgets.
+   */
+  sideEffectBudgetState?: import("../../../packages/agent-core/src/tool-repeat-guard.js").SideEffectBudgetState;
   /** Execution directory; defaults to the prepared session's directory. */
   cwd?: string;
 
@@ -144,6 +149,7 @@ export async function createAgentSession(
       : await run();
 
   const agent: Agent = new Agent({
+    sideEffectBudgetState: options.sideEffectBudgetState,
     initialState: {
       systemPrompt: options.systemPrompt,
       model,

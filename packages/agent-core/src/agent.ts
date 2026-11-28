@@ -26,6 +26,7 @@ import { ToolInterruptions } from "./tool-interruption.js";
 import {
   createSideEffectBudgetState,
   createToolRepeatState,
+  resetSideEffectBudgetState,
   type SideEffectBudgetState,
   type ToolRepeatState,
 } from "./tool-repeat-guard.js";
@@ -130,6 +131,13 @@ export interface AgentOptions {
   maxRetryDelayMs?: number;
   /** Default strategy for executing multiple tool calls in one assistant message. */
   toolExecution?: ToolExecutionMode;
+  /**
+   * Shared completed-effect budget state. When supplied, the Agent adopts this
+   * object and resets it in place per user input, so hosts can hand the same
+   * map to catalog dispatch paths (e.g. Tool Search) and side-effect budgets
+   * cannot be evaded through dispatcher indirection.
+   */
+  sideEffectBudgetState?: SideEffectBudgetState;
 }
 
 /**
@@ -147,7 +155,12 @@ export class Agent {
   private readonly steeringQueue: PendingMessageQueue;
   private readonly followUpQueue: PendingMessageQueue;
   private toolRepeatState: ToolRepeatState = createToolRepeatState();
-  private sideEffectBudgetState: SideEffectBudgetState = createSideEffectBudgetState();
+  /** Shared completed-effect budget state; reset mutates in place so hosts can share this object with Tool Search dispatches. */
+  private readonly sideEffectBudgetState: SideEffectBudgetState;
+  /** The Agent's live completed-effect budget map. Hosts may share it with catalog dispatch paths. */
+  public getSideEffectBudgetState(): SideEffectBudgetState {
+    return this.sideEffectBudgetState;
+  }
   private readonly toolInterruptions = new ToolInterruptions();
 
   public convertToLlm: NonNullable<AgentOptions["convertToLlm"]>;
@@ -181,6 +194,7 @@ export class Agent {
 
   constructor(options: AgentOptions = {}) {
     const initialState = options.initialState;
+    this.sideEffectBudgetState = options.sideEffectBudgetState ?? createSideEffectBudgetState();
     let tools = initialState?.tools?.slice() ?? [];
     let messages = initialState?.messages?.slice() ?? [];
 
@@ -359,7 +373,7 @@ export class Agent {
     this.mutableState.pendingToolCalls = new Set<string>();
     this.mutableState.errorMessage = undefined;
     this.toolRepeatState = createToolRepeatState();
-    this.sideEffectBudgetState = createSideEffectBudgetState();
+    resetSideEffectBudgetState(this.sideEffectBudgetState);
     this.clearAllQueues();
   }
 
