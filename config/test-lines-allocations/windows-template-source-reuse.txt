@@ -1,0 +1,2 @@
+# Windows Template source-cache reuse and refusal regressions through the production resolver.
+42
