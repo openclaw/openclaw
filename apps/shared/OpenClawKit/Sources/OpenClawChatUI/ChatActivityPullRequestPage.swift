@@ -50,7 +50,7 @@ struct ChatActivityPullRequestPage: View {
                                 LocalizedStringKey(
                                     "GitHub limited updates for now. These are the last details received.")
                                 : LocalizedStringKey("Couldn’t reach GitHub. These are the last details received."))
-                                .font(.footnote).foregroundStyle(.secondary)
+                                .font(OpenClawChatTypography.footnote).foregroundStyle(.secondary)
                             Button { self.viewModel.retrySessionPullRequests() } label: { Text("Try again") }
                                 .accessibilityIdentifier("chat-activity-try-again")
                         }

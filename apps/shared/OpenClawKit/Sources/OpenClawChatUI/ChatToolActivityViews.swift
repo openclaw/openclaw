@@ -1004,7 +1004,7 @@ struct ChatToolActivityRowContent: View {
             }
             .frame(width: Self.disclosureWidth, height: 12)
 
-            ChatToolIcon.glyph(for: self.display.name, icon: self.display.icon, args: self.displayCall.args)
+            Image(systemName: ChatToolIcon.symbol(for: self.display.name, icon: self.display.icon))
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(self.item.isError ? self.failureTint : Color.secondary)
 
@@ -1361,7 +1361,7 @@ private struct ChatSessionLaunchGroupRow: View {
         HStack(alignment: .firstTextBaseline, spacing: 7) {
             Color.clear
                 .frame(width: 12, height: 12)
-            ChatToolIcon.glyph(for: "sessions_spawn", icon: "bot")
+            Image(systemName: ChatToolIcon.symbol(for: "sessions_spawn", icon: "bot"))
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Color.secondary)
             self.title(linksChildren: linksChildren)
