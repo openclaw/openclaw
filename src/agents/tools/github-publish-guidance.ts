@@ -38,8 +38,7 @@ export function describeGitHubPublishTool(options: {
     );
   }
   lines.push(
-    "- inspect, merge, close: full operator write access; merge only on an explicit landing request after review and required checks.",
-    "- add_assignee: add one GitHub login to an open PR without replacing anyone; requires full operator write and the observed expectedHeadCommit.",
+    "- inspect, add_assignee, merge, close: full operator write. Merge only on request after review and checks.",
   );
   return lines.join("\n");
 }
@@ -65,7 +64,7 @@ export const githubActionGuidance = {
   upload_evidence:
     "Associate the uploaded URL in the PR body with edit, then verify reviewer access; uploaded does not prove public access. Never repeat an unconfirmed upload blindly.",
   inspect:
-    "Land only on an explicit request from a person with full operator write access, after review and required checks pass: ready, then merge with this expectedHeadCommit, any publication requestId and mergeMethod. Actions never enable auto-merge. Inspect again after an uncertain response before retrying.",
+    "Add one GitHub login with add_assignee, assignee, this expectedHeadCommit and the same PR selector. Land only on an explicit request from a person with full operator write access, after review and required checks pass: ready, then merge with this expectedHeadCommit, any publication requestId and mergeMethod. Actions never enable auto-merge. Inspect again after an uncertain response before retrying.",
   merge: "Inspect again after an uncertain response before retrying.",
   close:
     "Closing keeps saved work and does not merge. Inspect again after an uncertain response before retrying.",
