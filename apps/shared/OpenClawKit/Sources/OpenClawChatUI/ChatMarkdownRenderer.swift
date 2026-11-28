@@ -52,6 +52,10 @@ struct ChatMarkdownRenderer: View {
             return self == .thinking ? OpenClawChatTypography.callout.italic() : OpenClawChatTypography.body
         }
 
+        func tableCellFont(isHeader: Bool) -> Font {
+            isHeader ? self.proseFont.weight(.semibold) : self.proseFont
+        }
+
         var inlineMath: InlineMathTypography {
             if self.usesTranscriptSize {
                 return .init(size: OpenClawChatTypography.transcriptBodySize, relativeTo: .body)

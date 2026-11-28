@@ -99,7 +99,7 @@ suite.define(() => {
         const saved = {
           ...snapshot,
           revision: 2,
-          widgets: snapshot.widgets.map((w, i) => (i === 0 ? { ...w, sizeW: 9 } : w)),
+          widgets: snapshot.widgets.with(0, { ...snapshot.widgets[0]!, sizeW: 9 }),
         };
         await gateway.resolveDeferred("board.update", saved);
         await expect
