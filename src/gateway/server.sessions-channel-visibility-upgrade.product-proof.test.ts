@@ -21,6 +21,7 @@ import {
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { createTestModelDefinition } from "../commands/test-runtime-config-helpers.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import { updateSessionLastRoute } from "../config/sessions/session-accessor.js";
@@ -239,8 +240,24 @@ describe.skipIf(!stableCli)("published stable to channel-scoped Gateway recall",
           expect(isDefaultInstallIdentity(baseline.env)).toBe(false);
           const cfg: OpenClawConfig = {
             agents: {
-              defaults: { workspace: baseline.state.workspaceDir, skipBootstrap: true },
+              defaults: {
+                workspace: baseline.state.workspaceDir,
+                skipBootstrap: true,
+                model: { primary: "synthetic-proof/default-model" },
+              },
               entries: { main: {}, second: { workspace: baseline.state.path("second-workspace") } },
+            },
+            models: {
+              providers: {
+                "synthetic-proof": {
+                  api: "openai-completions",
+                  baseUrl: "http://127.0.0.1:9/v1",
+                  models: [
+                    createTestModelDefinition("default-model"),
+                    createTestModelDefinition("retained-model-override"),
+                  ],
+                },
+              },
             },
             gateway: {
               mode: "local",
@@ -303,13 +320,14 @@ describe.skipIf(!stableCli)("published stable to channel-scoped Gateway recall",
           const before = await rpc("chat.history", { sessionKey: sibling, limit: 20 });
           expect(before).toMatchObject({ sessionId: "sibling" });
           expect(JSON.stringify(before)).toContain(stableWrite);
+          // The published memory CLI requires exclusive offline ownership of this state.
+          await baseline.stopGateway();
           if (memoryProof) {
             const indexed = await baseline.cli(["memory", "index", "--agent", "main", "--force"], {
               timeoutMs: 60_000,
             });
             expect(indexed.code, indexed.stderr).toBe(0);
           }
-          await baseline.stopGateway();
           // Doctor owns backed-up shared/client credentials as well as agent data.
           // Agent-only migration cannot admit the stopped stable state on its own.
           cliEntrypoint[0] = path.resolve("openclaw.mjs");
@@ -407,7 +425,7 @@ describe.skipIf(!stableCli)("published stable to channel-scoped Gateway recall",
             await candidate.client.request("tools.invoke", {
               name: "session_status",
               sessionKey: requester,
-              args: {},
+              args: { sessionKey: requester },
             }),
           ).toMatchObject({ ok: true });
           // Status uses the existing sanitized RPC error contract. The positive control
