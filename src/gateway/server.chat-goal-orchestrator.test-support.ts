@@ -67,9 +67,13 @@ export function registerOrchestratorGoalResumeCases({
         entered.resolve();
         await release.promise;
         const admission = params.preparedRunAdmission;
-        if (!admission) throw new Error("Missing resumed run admission");
+        if (!admission) {
+          throw new Error("Missing resumed run admission");
+        }
         const assertTool = resolveAdmittedRunActiveAssertion(await admission.admit("embedded"));
-        if (!assertTool) throw new Error("Missing resumed tool authority");
+        if (!assertTool) {
+          throw new Error("Missing resumed tool authority");
+        }
         assertTool();
         await updateSessionGoalStatus({ ...scope(), status: "complete" });
         return goalAgentResult(params.sessionId, "Synthetic artifact verified.");
@@ -103,7 +107,9 @@ export function registerOrchestratorGoalResumeCases({
           sessionMutationCommitGuard: request.sessionMutationCommitGuard,
         });
         const [ok, result, error] = respond.mock.calls[0]!;
-        if (!ok) throw new Error(JSON.stringify(error));
+        if (!ok) {
+          throw new Error(JSON.stringify(error));
+        }
         return result as T;
       };
       const tool = createSessionsTool({
