@@ -149,7 +149,11 @@ suite.define(() => {
       await references.getByRole("option").filter({ hasText: "Alice" }).waitFor();
       await editor.press("Enter");
       await expect.poll(() => composer.inputValue()).toBe(`Use $${alice.entry.name} `);
-      await editor.fill("");
+      // The canonical draft updates before focus transfers from the textarea to CodeMirror.
+      const richEditor = editor.and(page.locator("[data-composer-editor]:focus"));
+      await richEditor.waitFor({ state: "visible" });
+      await page.keyboard.press("ControlOrMeta+A");
+      await page.keyboard.press("Backspace");
       await expect.poll(() => composer.inputValue()).toBe("");
 
       let menu = await openSkills(page);
