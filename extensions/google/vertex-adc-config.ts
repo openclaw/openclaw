@@ -1,5 +1,5 @@
 // Synchronous Vertex discovery facts do not load token exchange or transport helpers.
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { GoogleAuthOptions } from "google-auth-library";
@@ -81,7 +81,33 @@ function readGoogleAdcCredentialsTypeSync(credentialsPath: string): string | und
 }
 
 // File-backed ADC includes authorized users, workload identity, and service accounts.
-// Metadata-server ADC stays with the asynchronous google-auth-library request owner.
+// On GCE VMs without a local ADC file, google-auth-library uses the metadata server.
+function isGceMetadataEnvironmentSync(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (
+    normalizeOptionalString(env.GCE_METADATA_HOST) ||
+    normalizeOptionalString(env.GCE_METADATA_IP)
+  ) {
+    return true;
+  }
+  try {
+    const productName = readFileSync("/sys/class/dmi/id/product_name", "utf8").trim();
+    if (productName === "Google Compute Engine") {
+      return true;
+    }
+  } catch {
+    // Non-Linux or restricted sysfs.
+  }
+  try {
+    const sysVendor = readFileSync("/sys/class/dmi/id/sys_vendor", "utf8").trim();
+    if (sysVendor === "Google") {
+      return true;
+    }
+  } catch {
+    // Non-Linux or restricted sysfs.
+  }
+  return false;
+}
+
 function hasGoogleVertexAdcSync(env: NodeJS.ProcessEnv = process.env): boolean {
   const credentialsPath = resolveGoogleApplicationCredentialsPath(env);
   if (credentialsPath) {
@@ -90,7 +116,10 @@ function hasGoogleVertexAdcSync(env: NodeJS.ProcessEnv = process.env): boolean {
       return true;
     }
   }
-  return false;
+  if (normalizeOptionalString(env.GOOGLE_APPLICATION_CREDENTIALS)) {
+    return false;
+  }
+  return isGceMetadataEnvironmentSync(env);
 }
 
 export function resolveGoogleVertexConfigApiKey(
