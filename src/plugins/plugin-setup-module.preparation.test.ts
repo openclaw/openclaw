@@ -72,8 +72,8 @@ it("preserves a settled source failure for synchronous consumers without retry",
   expect(mocks.bind).not.toHaveBeenCalled();
 });
 
-it.each(["worker", "cleanup", "custody"])("propagates an unmarked %s failure", async (kind) => {
-  const failure = new Error(`${kind} unavailable`);
+it("propagates an unmarked preparation failure", async () => {
+  const failure = new Error("preparation unavailable");
   mocks.prepare.mockRejectedValue(failure);
   await using cache = createPluginCache();
   await expect(
