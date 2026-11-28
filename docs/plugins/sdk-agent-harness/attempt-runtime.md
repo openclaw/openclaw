@@ -264,7 +264,9 @@ Official harnesses use the private JavaScript-only
 `runAgentHarnessToolInvocation` owns argument preparation, validation at the
 existing execution boundary, monotonic execution snapshots, middleware, and
 cleanup. Its result and failure callbacks carry those facts to native adapters
-without taking over their receipt or timeout owner.
+without taking over their receipt or timeout owner. It applies the one fresh
+tool-result bound after middleware (head and tail, full output saved to a file);
+a harness that executes tools itself calls `boundAgentHarnessToolResult`.
 Execution argument snapshots are readonly and shared by progress and terminal
 observers. Tool execution and result middleware receive separate mutable inputs;
 terminal formatters retain their own post-execution capture so they can observe

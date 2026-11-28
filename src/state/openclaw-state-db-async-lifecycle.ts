@@ -45,6 +45,7 @@ export type OpenClawStateDatabaseReadAdmission = {
   readonly coordinationKey: string;
   readonly identity: DatabasePathIdentity;
   captureIntegrity?: () => OpenClawStateIntegrityAdmission;
+  isCurrent: () => boolean;
   assertCurrent: () => void;
 };
 export type OpenClawStateIntegrityAdmission = {
@@ -507,6 +508,10 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
       return previous;
     }
     const generation = record.generation;
+    // Invalidation clears admissions when it replaces the generation.
+    const isRetained = () =>
+      records.get(record.identity.key) === record &&
+      record.admissions.get(databasePath) === admission;
     const admission: OpenClawStateDatabaseReadAdmission = Object.freeze({
       databasePath,
       coordinationKey: record.coordinationKey,
@@ -529,13 +534,10 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         }
         return generation.integrity;
       },
+      isCurrent: () => !isSealed(record) && isRetained(),
       assertCurrent() {
         assertOpen(record);
-        if (
-          records.get(record.identity.key) !== record ||
-          record.generation !== generation ||
-          record.admissions.get(databasePath) !== admission
-        ) {
+        if (!isRetained()) {
           throw new StateDatabaseReadAdmissionInvalidatedError(
             "OpenClaw state database read admission changed",
           );

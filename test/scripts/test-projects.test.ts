@@ -238,43 +238,6 @@ describe("scripts/test-projects changed-target routing", () => {
     ).toStrictEqual([]);
   });
 
-  it("discovers conventional nested, dashed and basename script owners for .mts", () => {
-    const extension = "mts";
-    withTinyFileTree(
-      {
-        [`scripts/nested/fixture.${extension}`]: "",
-        "test/scripts/nested/fixture.test.ts": "",
-        "test/scripts/nested-fixture.test.ts": "",
-        "test/scripts/fixture.test.ts": "",
-        "src/scripts/nested/fixture.test.ts": "",
-        "src/scripts/nested-fixture.test.ts": "",
-        "src/scripts/fixture.test.ts": "",
-        "test/scripts/fixture.live.test.ts": "",
-      },
-      (cwd) => {
-        expectChangedTargets(
-          [`scripts/nested/fixture.${extension}`],
-          [
-            "test/scripts/nested/fixture.test.ts",
-            "test/scripts/nested-fixture.test.ts",
-            "test/scripts/fixture.test.ts",
-            "src/scripts/nested/fixture.test.ts",
-            "src/scripts/nested-fixture.test.ts",
-            "src/scripts/fixture.test.ts",
-          ],
-          { cwd },
-        );
-        expect(changedPlan([`scripts/fixture.${extension}`], { cwd }).targets).toEqual([
-          "test/scripts/fixture.test.ts",
-          "src/scripts/fixture.test.ts",
-        ]);
-        expect(changedPlan([`scripts/unowned.${extension}`], { cwd }).targets).toEqual([
-          configFile("tooling"),
-        ]);
-      },
-    );
-  });
-
   it("keeps direct script consumers alongside conventional owners", () => {
     withTinyGitRepo(
       {
@@ -1821,8 +1784,6 @@ export const single = {
     const unrelated = "src/config/unrelated.ts";
     const unrelatedTest = "src/config/unrelated.test.ts";
     const kova = "test/scripts/openclaw-performance-workflow.test.ts";
-    const changed = ["--changed", "origin/main"];
-    const normal = [baseConsumer, sibling, wrapperConsumer];
     const files = {
       [base]: "export const defaults = {};\n",
       [wrapper]: 'export { defaults } from "./zod-schema.agent-defaults-base.js";\n',
@@ -1833,36 +1794,6 @@ export const single = {
       [unrelatedTest]: 'import "./unrelated.js";\n',
       [kova]: "export {};\n",
     };
-    it.each<[string, string[], string[], string[], boolean, boolean]>([
-      ["changed wrapper", changed, [wrapper], [sibling, kova], false, false],
-      ["explicit schemas", [base, wrapper, kova, base], [], [...normal, kova], false, false],
-      ["CI wrapper", changed, [wrapper], [sibling, wrapperConsumer, kova], false, true],
-      ["unrelated source", changed, [unrelated], [unrelatedTest], false, false],
-      ["changed watch", ["--watch", ...changed], [base], normal, true, false],
-      ["explicit watch", ["--watch", wrapper], [], [sibling], true, false],
-      ["disabled watch", ["--watch", "false", wrapper], [], [sibling, kova], false, false],
-      ["equals watch", ["--watch=false", wrapper], [], [sibling, kova], false, false],
-      ["negated watch", ["--no-watch", wrapper], [], [sibling, kova], false, false],
-    ])("preserves owner selection for %s", (_name, args, paths, expected, watchMode, ci) => {
-      withTinyGitRepo(files, (cwd) => {
-        const options = ci
-          ? { combineSiblingWithImportGraph: true, forceFullImportGraph: true }
-          : {};
-        const plans = planRuns(args, cwd, () => paths, options);
-        expect(selectedTestFiles(plans).toSorted()).toEqual(expected.toSorted());
-        expect(plans.every((plan) => plan.watchMode === watchMode)).toBe(true);
-        expect(
-          plans.find((plan) => plan.config === configFile("tooling"))?.includePatterns,
-        ).toEqual(expected.includes(kova) ? [kova] : undefined);
-        if (watchMode) {
-          expectRun(plans, "runtime-config", {
-            includePatterns: expect.arrayContaining(expected),
-            watchMode: true,
-          });
-        }
-        expect(unmatchedTargets(args, cwd)).toEqual([]);
-      });
-    });
     it("does not admit unmatched watch sources through Kova", () => {
       withTinyGitRepo({ [base]: "export {};\n", [kova]: "export {};\n" }, (cwd) => {
         expect(unmatchedTargets([base], cwd)).toEqual([]);

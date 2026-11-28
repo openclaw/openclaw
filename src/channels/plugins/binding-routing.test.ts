@@ -154,7 +154,7 @@ it("awaits activity persistence and keeps inspection pure", async () => {
   const settled = vi.fn();
   const pending = resolveRuntimeConversationBindingRouteAsync(params);
   void pending.then(settled);
-  await Promise.resolve();
+  await vi.waitFor(() => expect(touchAsync).toHaveBeenCalledOnce());
   expect(settled).not.toHaveBeenCalled();
   gate.resolve();
   expect((await pending).boundSessionKey).toBe(binding.targetSessionKey);

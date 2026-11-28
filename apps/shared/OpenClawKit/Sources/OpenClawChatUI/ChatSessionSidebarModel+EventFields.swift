@@ -102,6 +102,7 @@ extension ChatSessionSidebarModel {
         merge("endedAt", \.endedAt)
         merge("runtimeMs", \.runtimeMs)
         merge("agentRuntime", \.agentRuntime)
+        merge("goal", \.goal)
         merge("systemSent", \.systemSent)
         merge("abortedLastRun", \.abortedLastRun)
         merge("thinkingLevel", \.thinkingLevel)
