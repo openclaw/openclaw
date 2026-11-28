@@ -27,8 +27,8 @@ const FISH_AUDIO_VOICE_PAGE_SIZE = 100;
 const FISH_AUDIO_MAX_OWN_VOICE_PAGES = 20;
 
 const FISH_AUDIO_MODELS = [
+  "s3-pro",
   "drama-3",
-  "drama-3-preview",
   "s2.1-pro-free",
   "s2.1-pro",
   "s2-pro",
@@ -132,7 +132,7 @@ function parseVoiceItem(value: unknown): SpeechVoiceOption | undefined {
   };
 }
 
-const DEFAULT_MODEL: FishAudioModel = "s2.1-pro";
+const DEFAULT_MODEL: FishAudioModel = "s3-pro";
 const DEFAULT_LATENCY: FishAudioLatency = "balanced";
 const DEFAULT_TIMEOUT_MS = 240_000;
 

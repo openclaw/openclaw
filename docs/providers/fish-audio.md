@@ -1,5 +1,5 @@
 ---
-summary: "Use Fish Audio Drama 3 or S2.1 hosted TTS, or local S2 Pro on Apple silicon"
+summary: "Use Fish Audio S3 Pro, Drama 3, or S2.1 hosted TTS, or local S2 Pro on Apple silicon"
 read_when:
   - You want Fish Audio text-to-speech in OpenClaw
   - You want expressive or cloned voices with Fish Audio
@@ -9,7 +9,7 @@ title: "Fish Audio"
 
 OpenClaw supports Fish Audio in two distinct ways:
 
-- **Hosted S2.1 and Drama 3** run through the `fish-audio` speech provider on the Gateway and work across channels, voice notes, Talk, and telephony.
+- **Hosted S3 Pro, Drama 3, and S2.1** run through the `fish-audio` speech provider on the Gateway and work across channels, voice notes, Talk, and telephony.
 - **Local S2 Pro** runs inside the native macOS app through the existing `mlx` Talk provider. It stays on the Mac and does not require a Fish API key.
 
 <Warning>
@@ -18,7 +18,9 @@ research, and non-commercial evaluation are allowed; commercial use requires a
 separate Fish Audio license. Hosted API use follows Fish Audio's service terms.
 </Warning>
 
-## Hosted S2.1
+<a id="hosted-s21" />
+
+## Hosted TTS
 
 Install the `fish-audio-speech` plugin:
 
@@ -45,7 +47,7 @@ Then configure the provider:
     providers: {
       "fish-audio": {
         apiKey: "${FISH_API_KEY}",
-        model: "s2.1-pro",
+        model: "s3-pro",
         // Optional saved or public Fish Audio voice model id:
         speakerVoiceId: "802e3bc2b27e49c2995d23ef70e6ac89",
         latency: "balanced",
@@ -61,14 +63,14 @@ plugins, but `FISH_API_KEY` is the standard Fish SDK environment variable.
 
 ### Hosted models
 
-| Model             | Use                                                                                                           |
-| ----------------- | ------------------------------------------------------------------------------------------------------------- |
-| `drama-3`         | Released Drama 3. Natural-language voice direction and word-level delivery tags.                              |
-| `drama-3-preview` | Preview. Natural-language voice direction and word-level delivery tags; behavior and availability may change. |
-| `s2.1-pro`        | Default. Production S2.1 service with the hosted service guarantees attached to your plan.                    |
-| `s2.1-pro-free`   | Promotional S2.1 access that ended on August 31, 2026; no TTFA or DPA guarantees.                             |
-| `s2-pro`          | Previous S2 generation.                                                                                       |
-| `s1`              | Previous generation with parenthesized emotion controls.                                                      |
+| Model           | Use                                                                               |
+| --------------- | --------------------------------------------------------------------------------- |
+| `s3-pro`        | Default. Hosted S3 Pro TTS model.                                                 |
+| `drama-3`       | Released Drama 3. Natural-language voice direction and word-level delivery tags.  |
+| `s2.1-pro`      | Production S2.1 service with the hosted service guarantees attached to your plan. |
+| `s2.1-pro-free` | Promotional S2.1 access that ended on August 31, 2026; no TTFA or DPA guarantees. |
+| `s2-pro`        | Previous S2 generation.                                                           |
+| `s1`            | Previous generation with parenthesized emotion controls.                          |
 
 The provider requests MP3 for ordinary audio, Opus at 48 kHz for native voice
 notes, and raw PCM at 8 kHz for telephony. For Discord voice, OpenClaw consumes
@@ -89,9 +91,9 @@ and free-form instructions such as `[professional broadcast tone]`.
 ### Drama 3
 
 Set `tts.providers.fish-audio.model` to `"drama-3"` to opt in. The provider
-continues to default to `s2.1-pro`; existing configurations do not
-automatically switch. `"drama-3-preview"` remains accepted. For a Talk-specific
-override, use `talk.providers.fish-audio.modelId: "drama-3"`.
+defaults to `s3-pro`; existing configurations that pin another model do not
+automatically switch. For a Talk-specific override, use
+`talk.providers.fish-audio.modelId: "drama-3"`.
 
 Drama 3 uses the same hosted API, API key, and voice ids. It accepts
 plain-language directions in square brackets, sounds and pauses, and paired
