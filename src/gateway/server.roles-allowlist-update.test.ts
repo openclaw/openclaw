@@ -359,9 +359,10 @@ test("an authorized client starts a package release update and observes its reco
   await withEnvAsync(
     Object.fromEntries(SUPERVISOR_HINT_ENV_VARS.map((key) => [key, undefined])),
     async () => {
-      const [installStatus, releaseUpdate] = await Promise.all([
+      const [installStatus, releaseUpdate, updateStore] = await Promise.all([
         import("../infra/update-install-status.js"),
         import("../update/run.js"),
+        import("../update/store.js"),
       ]);
       const root = updateDirs.make("openclaw-update-role-");
       const installation = vi
@@ -372,12 +373,13 @@ test("an authorized client starts a package release update and observes its reco
           installReceipt: null,
         });
       const prepare = vi.spyOn(releaseUpdate, "prepareUpdate");
-      const link = fs.link;
-      const lockFailure = vi.spyOn(fs, "link").mockImplementation(async (source, destination) => {
-        if (path.basename(destination.toString()) === ".update.lock") {
+      const mkdir = fs.mkdir;
+      const releases = path.join(updateStore.resolvePrefix(), "releases");
+      const lockFailure = vi.spyOn(fs, "mkdir").mockImplementation(async (directory, options) => {
+        if (directory.toString() === releases) {
           throw new Error("synthetic update lock failure");
         }
-        return await link(source, destination);
+        return await mkdir(directory, options);
       });
       try {
         const res = await rpcReq<{ runId: string; ok: boolean }>(ws, "update.run", {
@@ -398,6 +400,22 @@ test("an authorized client starts a package release update and observes its reco
             reason: "update-failed",
           });
         }, FAST_WAIT_OPTS);
+        expect(await rpcReq(ws, "update.runs.get", { runId })).toMatchObject({
+          ok: true,
+          payload: {
+            run: {
+              runId,
+              status: "failed",
+              reason: "update-failed",
+              steps: expect.arrayContaining([
+                expect.objectContaining({
+                  step: "outcome",
+                  detail: expect.stringContaining("synthetic update lock failure"),
+                }),
+              ]),
+            },
+          },
+        });
       } finally {
         lockFailure.mockRestore();
         prepare.mockRestore();

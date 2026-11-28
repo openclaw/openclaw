@@ -18,7 +18,7 @@ import {
   collectReleases,
   readTrial,
   readUpdateLock,
-  releaseUpdateLock,
+  retireDeadUpdateLock,
   resolvePrefix,
   writeTrial,
   type Trial,
@@ -222,7 +222,7 @@ async function settleRunFromTrial(trial: Trial | null, prefix = resolvePrefix())
     // The terminal trial handed ownership to this Gateway, not its expired preparer.
     const preparationLock = await readUpdateLock(prefix);
     if (preparationLock?.dead) {
-      await releaseUpdateLock(prefix);
+      await retireDeadUpdateLock(preparationLock, prefix);
     }
     await recordUpdateRunVerificationAsync(trial.runId, {
       runningVersion: VERSION,
@@ -284,7 +284,7 @@ async function settleRunFromTrial(trial: Trial | null, prefix = resolvePrefix())
     if ((await getUpdateRunAsync(lock.runId))?.status === "running") {
       await finishUpdateRunAsync(lock.runId, { status: "failed", reason: "interrupted" });
     }
-    await releaseUpdateLock(prefix);
+    await retireDeadUpdateLock(lock, prefix);
   }
 }
 

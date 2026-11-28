@@ -2,17 +2,17 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
-import { readUpdateLock } from "../update/store.js";
+import { acquireUpdateLock, readUpdateLock, resolvePrefix } from "../update/store.js";
 import { waitForGatewayReady } from "./update-early-release-recovery-ready.js";
 import type { RecoveryPlan } from "./update-early-release-recovery-record.js";
 import { gatewayServiceControl, type RunCommand } from "./update-early-release-recovery-service.js";
 import { startEarlyGitReleaseRecovery } from "./update-early-release-recovery-start.js";
 import type { StartDeps } from "./update-early-release-recovery-start.js";
 import * as recovery from "./update-early-release-recovery.js";
-import { getUpdateRunStatusAsync } from "./update-run-reader.js";
+import { getUpdateRunAsync, getUpdateRunStatusAsync } from "./update-run-reader.js";
 import { createUpdateRunAsync, finishUpdateRunAsync } from "./update-run-write.async.js";
 
 type RunnerDeps = NonNullable<Parameters<typeof recovery.runEarlyGitReleaseRecovery>[1]>;
@@ -328,7 +328,8 @@ type Opts = {
 function runner(opts: Opts) {
   const { fail = {}, resumed = false, restarts = 0, supervisor = "systemd" } = opts;
   const base = makeTempDir(roots, "openclaw-early-runner-");
-  const [prefix, checkout] = [path.join(base, "git-install"), path.join(base, "co")];
+  const stateDir = path.join(base, "state");
+  const [prefix, checkout] = [path.join(stateDir, "git-install"), path.join(base, "co")];
   const release = path.join(prefix, "recovery", "openclaw");
   const serviceFile = path.join(
     base,
@@ -351,7 +352,6 @@ function runner(opts: Opts) {
   const legacy = path.join(prefix, "lib", "node_modules", "openclaw");
   fs.mkdirSync(path.dirname(legacy), { recursive: true });
   fs.symlinkSync("../../releases/old", legacy);
-  const stateDir = path.join(base, "state");
   // A second artifact of the definition (a LaunchAgent's environment file) no install changes.
   const envFile = path.join(base, "gateway.env");
   fs.writeFileSync(envFile, "A=1\n", { mode: 0o600 });
@@ -501,7 +501,11 @@ function runner(opts: Opts) {
     stateDir: () => opts.stateDir ?? stateDir,
     // The migrating Gateway holds the state's maintenance lock.
     hold: async () =>
-      migrating ? Promise.reject(new Error("maintenance")) : fail.hold ? null : "run-1",
+      migrating
+        ? Promise.reject(new Error("maintenance"))
+        : fail.hold
+          ? null
+          : { runId: "run-1", release: async () => {} },
     ready: async () => {
       const role = serves();
       calls.push(`${role} ready`);
@@ -717,10 +721,10 @@ it.each([
   },
 );
 
-posix("finishes the run the runner holds and removes what the early layout left", async () => {
-  vi.stubEnv("OPENCLAW_STATE_DIR", makeTempDir(roots, "openclaw-early-store-"));
-  vi.stubEnv("OPENCLAW_NO_AUTO_UPDATE", "1");
+posix("finishes the held run before its runner releases custody", async () => {
   const fx = runner({});
+  vi.stubEnv("OPENCLAW_STATE_DIR", fx.plan.stateDir);
+  vi.stubEnv("OPENCLAW_NO_AUTO_UPDATE", "1");
   const copy = `${fx.plan.serviceFile}.before-update-recovery`;
   fs.writeFileSync(copy, fx.original);
   sh(
@@ -733,11 +737,20 @@ posix("finishes the run the runner holds and removes what the early layout left"
   const api = await createUpdateRunAsync({ trigger: "api" });
   await finishUpdateRunAsync(api.runId, { status: "failed", reason: "check-failed" });
   const deps = { ...recovery.defaultRunnerDeps(fx.plan), processes: () => [] };
-  const runId = (await deps.hold({ ...fx.plan, plannedAt: Date.now() })) ?? "";
+  const held = await deps.hold({ ...fx.plan, plannedAt: Date.now() });
+  if (!held) {
+    throw new Error("The recovery did not acquire custody");
+  }
+  const { runId } = held;
   const argv = [JSON.stringify(fx.plan), "finish", JSON.stringify({ runId, downtimeMs: 21_000 })];
   const { plan, finish } = recovery.readEarlyGitReleaseRecoveryArgs(argv);
   vi.spyOn(process.stdout, "write").mockReturnValue(true);
-  await recovery.finishEarlyGitReleaseRecovery(plan, finish!, deps);
+  try {
+    await recovery.finishEarlyGitReleaseRecovery(plan, finish!, deps);
+    expect(await readUpdateLock()).toMatchObject({ runId, dead: false });
+  } finally {
+    await held.release();
+  }
 
   expect(fs.readdirSync(fx.plan.prefix)).toEqual(["releases"]);
   expect(fs.readdirSync(path.join(fx.plan.prefix, "releases"))).toEqual(["now"]);
@@ -747,5 +760,145 @@ posix("finishes the run the runner holds and removes what the early layout left"
   const detail = lastRun?.steps.find((step) => step.step === "early-release-recovery")?.detail;
   expect(detail).toContain("Removed the old-format trial, the old release link, releases/git-old");
   expect(detail).toContain(`kept at ${copy}`);
+  expect(await readUpdateLock()).toBeNull();
+});
+
+for (const stage of ["finish", "build-failed", "throw"] as const) {
+  posix(`retains recovery custody until ${stage} settles`, async ({ signal }) => {
+    const fx = runner(stage === "finish" ? {} : f(stage === "throw" ? "throw" : "pnpm build"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", fx.plan.stateDir);
+    vi.stubEnv("OPENCLAW_NO_AUTO_UPDATE", "1");
+    const defaults = recovery.defaultRunnerDeps(fx.plan);
+    fx.deps.hold = defaults.hold;
+    const entered = createDeferred();
+    const resume = createDeferred();
+    if (stage === "finish") {
+      fx.deps.finish = async (plan, facts) => {
+        await recovery.finishEarlyGitReleaseRecovery(plan, facts, {
+          ...fx.deps,
+          record: defaults.record,
+          processes: () => [],
+        });
+        entered.resolve();
+        await resume.promise;
+        return { code: 0, output: "" };
+      };
+    } else {
+      fx.deps.record = async (outcome) => {
+        entered.resolve();
+        await resume.promise;
+        await defaults.record(outcome);
+      };
+    }
+
+    const running = recovery.runEarlyGitReleaseRecovery(fx.plan, fx.deps);
+    let completed: boolean;
+    try {
+      await withinTest(entered.promise, signal);
+      expect(await readUpdateLock()).toMatchObject({ dead: false });
+      const contender = await acquireUpdateLock({ runId: "contender", deadlineMs: 60_000 });
+      try {
+        expect(contender.acquired).toBe(false);
+      } finally {
+        if (contender.acquired) {
+          await contender.release();
+        }
+      }
+    } finally {
+      resume.resolve();
+      completed = await running;
+    }
+
+    expect(completed).toBe(stage === "finish");
+    expect(await readUpdateLock()).toBeNull();
+    expect((await getUpdateRunStatusAsync()).lastRun?.status).toBe(
+      stage === "finish" ? "succeeded" : "failed",
+    );
+  });
+}
+
+posix.each([false, true])("records an unheld outcome with competing custody=%s", async (busy) => {
+  const fx = runner({});
+  vi.stubEnv("OPENCLAW_STATE_DIR", fx.plan.stateDir);
+  vi.stubEnv("OPENCLAW_NO_AUTO_UPDATE", "1");
+  const incumbent = busy
+    ? await acquireUpdateLock({ runId: "incumbent", deadlineMs: 60_000 })
+    : undefined;
+  if (busy) {
+    expect(incumbent?.acquired).toBe(true);
+  }
+  try {
+    await recovery.defaultRunnerDeps(fx.plan).record({
+      plan: fx.plan,
+      status: "failed",
+      reason: "early-release-recovery-error",
+      detail: "Synthetic recovery failure",
+      nextAction: "Retry the recovery",
+    });
+
+    const { lastRun } = await getUpdateRunStatusAsync();
+    expect(lastRun).toMatchObject({ status: "failed", reason: "early-release-recovery-error" });
+    expect(await readUpdateLock()).toEqual(
+      busy ? expect.objectContaining({ runId: "incumbent", dead: false }) : null,
+    );
+  } finally {
+    if (incumbent?.acquired) {
+      await incumbent.release();
+    }
+  }
+});
+
+async function seedInterruptedRecoveryRun() {
+  const previous = await createUpdateRunAsync({ trigger: "api" });
+  const exited = spawnSync(process.execPath, ["-e", ""], { stdio: "ignore" });
+  expect(exited.status).toBe(0);
+  const file = path.join(resolvePrefix(), "releases", ".update.lock");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      runId: previous.runId,
+      pid: exited.pid,
+      startedAt: Date.now(),
+      deadlineMs: 60_000,
+    }),
+  );
+  return previous.runId;
+}
+
+posix("records the interrupted run reclaimed by its acquired recovery lock", async () => {
+  const fx = runner({});
+  vi.stubEnv("OPENCLAW_STATE_DIR", fx.plan.stateDir);
+  vi.stubEnv("OPENCLAW_NO_AUTO_UPDATE", "1");
+  const previous = await seedInterruptedRecoveryRun();
+  const held = await recovery.defaultRunnerDeps(fx.plan).hold(fx.plan);
+  if (!held) {
+    throw new Error("The recovery did not acquire custody");
+  }
+  try {
+    expect(await getUpdateRunAsync(previous)).toMatchObject({
+      status: "failed",
+      reason: "interrupted",
+    });
+    expect(await readUpdateLock()).toMatchObject({ runId: held.runId, dead: false });
+  } finally {
+    await held.release();
+  }
+});
+
+posix("releases acquired custody when interrupted-run recording fails", async () => {
+  const fx = runner({});
+  vi.stubEnv("OPENCLAW_STATE_DIR", fx.plan.stateDir);
+  vi.stubEnv("OPENCLAW_NO_AUTO_UPDATE", "1");
+  await seedInterruptedRecoveryRun();
+  const write = await import("./update-run-write.async.js");
+  vi.spyOn(write, "finishUpdateRunAsync").mockRejectedValueOnce(
+    new Error("Synthetic interrupted-run failure"),
+  );
+
+  await expect(recovery.defaultRunnerDeps(fx.plan).hold(fx.plan)).rejects.toThrow(
+    "Synthetic interrupted-run failure",
+  );
+
   expect(await readUpdateLock()).toBeNull();
 });

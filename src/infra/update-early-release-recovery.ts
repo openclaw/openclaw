@@ -145,7 +145,7 @@ type RunnerDeps = {
   stateDir: () => string;
   /** Opens this recovery's update run and takes the release updater's lock, so an update the
    * new release's Gateway accepts waits; null while another update holds it. */
-  hold: (plan: RecoveryPlan) => Promise<string | null>;
+  hold: (plan: RecoveryPlan) => ReturnType<typeof holdUpdateLock>;
   /** Waits for the Gateway on this port to answer `/readyz`, without opening state; gives up
    * early when the service keeps failing. */
   ready: (port: number | null) => Promise<boolean>;
@@ -327,7 +327,7 @@ export async function runEarlyGitReleaseRecovery(
     await removeRelease();
     return false;
   };
-  let runId: string | undefined;
+  let heldRun: Awaited<ReturnType<typeof holdUpdateLock>> | undefined;
   const fail = async (reason: string, detail: string, nextAction: string, always = false) => {
     log(`${detail} Next step: ${nextAction}`);
     await keepEnablement();
@@ -339,8 +339,15 @@ export async function runEarlyGitReleaseRecovery(
     // Recording opens state through this release, which migrates it: only once it moved, once
     // this runner holds a run, whose opening already wrote state, or when the service keeps the
     // release, which migrates state anyway when it starts.
-    if (migrated || runId) {
-      await deps.record({ plan, runId, status: "failed", reason, detail, nextAction });
+    if (migrated || heldRun) {
+      await deps.record({
+        plan,
+        runId: heldRun?.runId,
+        status: "failed",
+        reason,
+        detail,
+        nextAction,
+      });
     }
     return false;
   };
@@ -366,10 +373,10 @@ export async function runEarlyGitReleaseRecovery(
           ? `see ${service.describe} and ${plan.follow} for why the new release stopped, fix that, then run \`openclaw update\` again`
           : `see ${service.describe} for why the previous build does not start`;
         const detail = `${why}. Nothing was migrated, so the Gateway service starts the previous build again${back ? " and it serves" : `, which did not report ready either; the new release stays at ${path.dirname(plan.release)}`}.`;
-        if (runId) {
+        if (heldRun) {
           await deps.record({
             plan,
-            runId,
+            runId: heldRun.runId,
             status: "failed",
             reason: "early-release-recovery-put-back",
             detail,
@@ -377,7 +384,7 @@ export async function runEarlyGitReleaseRecovery(
           });
         }
         log(
-          `${detail}${runId ? "" : " This is not recorded for `openclaw update status`, because recording through the new release would migrate the databases the previous build uses."} Next step: ${next}.`,
+          `${detail}${heldRun ? "" : " This is not recorded for `openclaw update status`, because recording through the new release would migrate the databases the previous build uses."} Next step: ${next}.`,
         );
         return false;
       }
@@ -465,9 +472,9 @@ export async function runEarlyGitReleaseRecovery(
       (await deps.ready(unitPort())) &&
       (await service.loaded()).command.includes(path.join(plan.checkout, "dist"))
     ) {
-      runId = (await deps.hold(plan)) ?? undefined;
+      heldRun = await deps.hold(plan);
       await keepEnablement();
-      await deps.finish(plan, runId ? { runId } : {});
+      await deps.finish(plan, heldRun ? { runId: heldRun.runId } : {});
       return !fs.existsSync(plan.release);
     }
     let downtimeMs = 0;
@@ -497,8 +504,8 @@ export async function runEarlyGitReleaseRecovery(
       // Resumed while the release migrates at boot: it holds state until it reports ready.
       return notReady("The new release did not report ready");
     }
-    runId = (await deps.hold(plan)) ?? undefined;
-    if (!runId) {
+    heldRun = await deps.hold(plan);
+    if (!heldRun) {
       return fail(
         "early-release-recovery-update-running",
         "The Gateway serves the new release, but another update is running, so the checkout was not rebuilt.",
@@ -547,7 +554,10 @@ export async function runEarlyGitReleaseRecovery(
     }
     await keepEnablement();
     // A resumed runner lost the first switch's timing; leave it out rather than understate it.
-    const finished = await deps.finish(plan, { ...(restarts > 0 ? {} : { downtimeMs }), runId });
+    const finished = await deps.finish(plan, {
+      ...(restarts > 0 ? {} : { downtimeMs }),
+      runId: heldRun.runId,
+    });
     if (!ok(finished)) {
       log(`the rebuilt checkout serves, but cleanup did not finish (${commandTail(finished)})`);
     }
@@ -559,7 +569,7 @@ export async function runEarlyGitReleaseRecovery(
   } catch (error) {
     const why = `The recovery stopped on an unexpected error (${String(error)})`;
     if (migratedByRelease()) {
-      return fail(
+      return await fail(
         "early-release-recovery-error",
         `${why}; the Gateway service starts ${servesRelease() ? "the new release" : "the checkout"}.`,
         `see ${plan.follow}, then from the checkout run \`${FINISH}\``,
@@ -573,6 +583,9 @@ export async function runEarlyGitReleaseRecovery(
       );
       return false;
     }
+  } finally {
+    // The finishing child may remove this release, but the parent owns custody until it joins.
+    await heldRun?.release();
   }
 }
 

@@ -54,14 +54,13 @@ import {
   hasReleaseUpdateOwner,
   publishStaging,
   readTrial,
-  releaseUpdateLock,
   resolvePrefix,
   switchLink,
   type ReleaseKind,
 } from "./store.js";
 import { gitTargetSupportsReleaseUpdates, resolveTarget } from "./target.js";
 
-/** Covers fetch, dependencies and the release build; a run past it is "interrupted". */
+/** Preparation budget; an overrun keeps custody until its owner releases or exits. */
 export const PREPARE_DEADLINE_MS = 45 * 60_000;
 const CHECK_RELEASE_TIMEOUT_MS = 3 * 60_000;
 
@@ -155,10 +154,7 @@ export async function prepareUpdate(params: {
   let staging: Awaited<ReturnType<typeof allocateStaging>> | undefined;
   let gitCheckout: string | undefined;
   try {
-    const lock = await acquireUpdateLock(
-      { runId: params.runId, pid: process.pid, deadlineMs: timeoutMs },
-      prefix,
-    );
+    const lock = await acquireUpdateLock({ runId: params.runId, deadlineMs: timeoutMs }, prefix);
     if (!lock.acquired) {
       return await fail("update-running", `Update ${lock.lock.runId} is already running.`);
     }
@@ -548,7 +544,7 @@ export async function prepareUpdate(params: {
         }
         await fs.rm(staging.path, { recursive: true, force: true }).catch(() => undefined);
       }
-      await releaseUpdateLock(prefix).catch(() => undefined);
+      await lock.release().catch(() => undefined);
     }
   } catch (error) {
     return await fail(

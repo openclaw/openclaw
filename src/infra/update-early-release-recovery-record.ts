@@ -57,12 +57,13 @@ export type RecoveryOutcome = {
 const LOCK_DEADLINE_MS = 3 * 60 * 60_000;
 
 export async function recordOutcome(outcome: RecoveryOutcome) {
-  const [{ finishUpdateRunAsync, recordUpdateRunStepAsync }, store] = await Promise.all([
-    import("./update-run-write.async.js"),
-    import("../update/store.js"),
-  ]);
+  const { finishUpdateRunAsync, recordUpdateRunStepAsync } =
+    await import("./update-run-write.async.js");
   // Without a held run, take the lock as `hold` does: that settles an interrupted runner's run.
-  const runId = outcome.runId ?? (await openHeldRun(outcome.plan)).runId;
+  const { runId, lock } =
+    outcome.runId === undefined
+      ? await openHeldRun(outcome.plan)
+      : { runId: outcome.runId, lock: undefined };
   try {
     await recordUpdateRunStepAsync(runId, {
       step: "early-release-recovery",
@@ -80,10 +81,9 @@ export async function recordOutcome(outcome: RecoveryOutcome) {
       ...(outcome.downtimeMs === undefined ? {} : { downtimeMs: outcome.downtimeMs }),
     });
   } finally {
-    // Held by this runner, or by the runner that started this finishing step.
-    const holder = (await store.readUpdateLock())?.pid;
-    if (holder === process.pid || holder === process.ppid) {
-      await store.releaseUpdateLock();
+    // A finishing child records its parent's run; only the acquiring process releases custody.
+    if (lock?.acquired) {
+      await lock.release();
     }
   }
 }
@@ -114,23 +114,29 @@ async function openHeldRun(plan: RecoveryPlan) {
   const runId = await openRun(plan);
   const lock = await store.acquireUpdateLock({
     runId,
-    pid: process.pid,
     deadlineMs: LOCK_DEADLINE_MS,
   });
-  if (lock.acquired && lock.previous) {
-    // An interrupted runner's run; the Gateway would otherwise settle it at its next start.
-    await finishUpdateRunAsync(lock.previous.runId, { status: "failed", reason: "interrupted" });
+  try {
+    if (lock.acquired && lock.reclaimedRunId) {
+      // An interrupted runner's run; the Gateway would otherwise settle it at its next start.
+      await finishUpdateRunAsync(lock.reclaimedRunId, { status: "failed", reason: "interrupted" });
+    }
+    return { runId, lock };
+  } catch (error) {
+    if (lock.acquired) {
+      await lock.release();
+    }
+    throw error;
   }
-  return { runId, acquired: lock.acquired };
 }
 
-/** The release updater's lock, held by this runner's update run until its outcome is recorded. */
-export async function holdUpdateLock(plan: RecoveryPlan): Promise<string | null> {
-  const { runId, acquired } = await openHeldRun(plan);
-  if (!acquired) {
+/** The recovery run and its release capability, retained by the runner through finishing. */
+export async function holdUpdateLock(plan: RecoveryPlan) {
+  const { runId, lock } = await openHeldRun(plan);
+  if (!lock.acquired) {
     const { finishUpdateRunAsync } = await import("./update-run-write.async.js");
     await finishUpdateRunAsync(runId, { status: "skipped", reason: "update-running" });
     return null;
   }
-  return runId;
+  return { runId, release: lock.release };
 }

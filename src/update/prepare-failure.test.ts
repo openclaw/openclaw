@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
 import {
@@ -89,7 +90,7 @@ it.each(["normal", "bare"])(
       const token = "sk-abcdefghijklmnopqrstuv";
       const error = new Error(`preparation lock failed; Authorization: Bearer ${token}`);
       error.stack = `${header === "bare" ? "Error" : `Error: ${error.message}`}\n    at acquirePreparationLock\n${"    at prepareCaller\n".repeat(100)}`;
-      vi.spyOn(fs, "link").mockRejectedValue(error);
+      vi.spyOn(fs, "mkdir").mockRejectedValueOnce(error);
       expect(
         await prepareUpdate({
           runId: run.runId,
@@ -154,21 +155,78 @@ it("does not publish a trial when preparation outcome bookkeeping throws", async
   }
 });
 
+it("preserves an over-budget preparer's custody and running record", async ({ signal }) => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+  const { checkout } = await repository(false, ">=1", true);
+  openOpenClawStateDatabase({ env: process.env });
+  const first = await createUpdateRunAsync({ trigger: "cli" });
+  const entered = Promise.withResolvers<void>();
+  const resume = Promise.withResolvers<void>();
+  const recordPhase = updateWrites.recordUpdateRunPhaseAsync;
+  vi.spyOn(updateWrites, "recordUpdateRunPhaseAsync").mockImplementation(
+    async (id, phase, ...rest) => {
+      const result = await recordPhase(id, phase, ...rest);
+      if (id === first.runId && phase === "validating") {
+        entered.resolve();
+        await resume.promise;
+      }
+      return result;
+    },
+  );
+  const preparing = prepareUpdate({
+    runId: first.runId,
+    runningRoot: checkout,
+    runningVersion: VERSION,
+    channel: "dev",
+    node,
+    timeoutMs: 60_000,
+  });
+  try {
+    await withinTest(
+      Promise.race([
+        entered.promise,
+        preparing.then(() => {
+          throw new Error("Preparation ended before candidate validation");
+        }),
+      ]),
+      signal,
+    );
+    // Candidate checking has its own budget and can outlive the preparation deadline.
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_001);
+    const second = await createUpdateRunAsync({ trigger: "cli" });
+    expect(
+      await prepareUpdate({
+        runId: second.runId,
+        runningRoot: checkout,
+        runningVersion: VERSION,
+        channel: "dev",
+        node,
+      }),
+    ).toMatchObject({ status: "failed", reason: "update-running" });
+    expect(await getUpdateRunAsync(first.runId)).toMatchObject({ status: "running" });
+  } finally {
+    resume.resolve();
+    await preparing;
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+  }
+});
+
 it("refuses a trial published before the preparation lock is acquired", async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
   try {
     openOpenClawStateDatabase({ env: process.env });
     const trialRun = await createUpdateRunAsync({ trigger: "cli" });
     const preparingRun = await createUpdateRunAsync({ trigger: "cli" });
-    const link = fs.link;
-    vi.spyOn(fs, "link").mockImplementationOnce(async (source, destination) => {
+    const mkdir = fs.mkdir;
+    vi.spyOn(fs, "mkdir").mockImplementationOnce(async (...args) => {
       await createTrialPending({
         runId: trialRun.runId,
         target: "releases/new/openclaw",
         previous: "releases/old/openclaw",
         version: VERSION,
       });
-      return await link(source, destination);
+      return await mkdir(...args);
     });
     expect(
       await prepareUpdate({
