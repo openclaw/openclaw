@@ -38,6 +38,56 @@ function durationResponses(jobs: CronJob[]) {
 }
 
 suite.define(() => {
+  it.each(["rename", "clone", "reschedule"] as const)(
+    "%s a one-shot after the browser time zone changes with the editor open",
+    async (action) => {
+      const job = cronJob("one-shot", "Museum reminder", {
+        enabled: false,
+        configRevision: "original",
+        schedule: { kind: "at", at: "2030-03-10T02:10:01.001Z" },
+      });
+      await suite.withPage(pageOptions, async ({ page }) => {
+        const cdp = await page.context().newCDPSession(page);
+        await cdp.send("Emulation.setTimezoneOverride", { timezoneId: "UTC" });
+        const method = action === "clone" ? "cron.add" : "cron.update";
+        const gateway = await installMockGateway(page, {
+          featureMethods: cronSidebarFeatureMethods,
+          methodResponses: durationResponses([job]),
+        });
+        await page.goto(`${suite.server.baseUrl}cron`);
+        if (action === "clone") {
+          await openAutomation(page, job.id);
+          const menu = page.locator(".cron-detail-actions .cron-job-menu");
+          await menu.locator(".cron-job-menu__trigger").click();
+          await menu.locator('[data-value="clone"]').click();
+        } else {
+          await editAutomation(page, job.id);
+        }
+        const at = page.locator("#cron-schedule-at");
+        expect(await at.inputValue()).toBe("2030-03-10T02:10");
+        // The original minute falls in New York's spring gap.
+        await cdp.send("Emulation.setTimezoneOverride", {
+          timezoneId: action === "rename" ? "Asia/Kathmandu" : "America/New_York",
+        });
+        if (action === "reschedule") {
+          await at.fill("2030-03-10T03:10");
+        }
+        await page.locator("#cron-name").fill("Updated museum reminder");
+        const submit = page.locator('[data-test-id="cron-submit"]');
+        expect(await submit.isEnabled()).toBe(true);
+        await gateway.deferNext(method);
+        await submit.click();
+        const params = requireDurationRecord((await gateway.waitForRequest(method)).params);
+        const definition = action === "clone" ? params : requireDurationRecord(params.patch);
+        const schedule =
+          action === "reschedule" ? { kind: "at", at: "2030-03-10T07:10:00.000Z" } : job.schedule;
+        expect(definition.name).toBe("Updated museum reminder");
+        expect(definition.schedule).toEqual(action === "rename" ? undefined : schedule);
+        await gateway.resolveDeferred(method, { ...job, name: definition.name, schedule });
+      });
+    },
+  );
+
   it("one-shot local time: rejects DST gaps and preserves real instants", async () => {
     const job = {
       ...cronJob("dst-one-shot", "Synthetic DST reminder"),

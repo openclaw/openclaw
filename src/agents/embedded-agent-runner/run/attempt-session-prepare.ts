@@ -41,7 +41,10 @@ import { recordRuntimeContextProjection } from "../prompt-cache-observability.js
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
 import { createAttemptCompactionThinkingResolver } from "./attempt-compaction-thinking.js";
-import { createAttemptDeferredToolResolver } from "./attempt-deferred-tool-resolver.js";
+import {
+  createAttemptDeferredToolResolver,
+  installAttemptOnDemandToolLoader,
+} from "./attempt-deferred-tool-resolver.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import type { LlmBoundaryOptions } from "./attempt-llm-boundary.types.js";
 import {
@@ -150,6 +153,14 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     ...clientTools,
   });
   const { allCustomTools, sessionToolAllowlist, ...clientToolRuntime } = preparedClientTools;
+  const deferredToolInput = {
+    attempt,
+    clientTools,
+    customTools: allCustomTools,
+    runAbortSignal: input.runAbortSignal,
+    sessionAgentId: input.sessionAgentId,
+  };
+  installAttemptOnDemandToolLoader(deferredToolInput);
 
   const { session: activeSession } = await createAgentSession({
     systemPrompt: input.initialSystemPrompt.trim(),
@@ -163,13 +174,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     sessionManager: input.sessionManager,
     settingsManager,
     resourceLoader,
-    resolveDeferredTool: createAttemptDeferredToolResolver({
-      attempt,
-      clientTools,
-      customTools: allCustomTools,
-      runAbortSignal: input.runAbortSignal,
-      sessionAgentId: input.sessionAgentId,
-    }),
+    resolveDeferredTool: createAttemptDeferredToolResolver(deferredToolInput),
     withSessionWriteSettlement: (operation) =>
       input.transcriptLifecycle.withTranscriptWrite(operation),
     // Without a resolved model budget, the outer loop cannot own bounded recovery.
@@ -590,7 +595,9 @@ export async function prepareEmbeddedAttemptSessionManager(
     runId: attempt.runId,
     sessionKey: attempt.sessionKey,
     config: attempt.config,
-    contextWindowTokens: attempt.contextTokenBudget,
+    // Same window as the context guard, so a bounded result is its fixed point.
+    contextWindowTokens:
+      attempt.contextTokenBudget ?? attempt.model.contextWindow ?? attempt.model.maxTokens,
     inputProvenance: attempt.inputProvenance,
     privateCompletion: attempt.privateCompletion,
     preparedUserTurnMessage,
@@ -600,8 +607,11 @@ export async function prepareEmbeddedAttemptSessionManager(
     allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
     missingToolResultText: responsesApi ? "aborted" : undefined,
     trigger: attempt.trigger,
+    // An in-place replay resends its persisted turn without a write to suppress; arming
+    // the one-shot mode would drop the next real user instead, such as steering.
     suppressNextUserMessagePersistence:
-      prepareInitialUserTurnReplay !== undefined || attempt.suppressNextUserMessagePersistence,
+      !attempt.replayCurrentTranscript &&
+      (prepareInitialUserTurnReplay !== undefined || attempt.suppressNextUserMessagePersistence),
     suppressTranscriptOnlyAssistantPersistence: attempt.suppressTranscriptOnlyAssistantPersistence,
     assistantErrorTranscript: attempt.assistantErrorTranscript,
     skipBeforeMessageWriteHooks: attempt.operation === "settled-tool-finalization",

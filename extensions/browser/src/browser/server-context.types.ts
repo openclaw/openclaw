@@ -38,7 +38,7 @@ export type ProfileRuntimeState = {
   /** Stable, user-facing tab aliases scoped to this profile runtime. */
   tabAliases?: {
     nextTabNumber: number;
-    byTargetId: Record<string, { tabId: string; label?: string; url?: string }>;
+    byTargetId: Record<string, { tabId: string; label?: string; url?: string; crashedAt?: number }>;
   };
 };
 
@@ -60,11 +60,16 @@ export type BrowserOperationOptions = OperatorBrowserPagesOption & {
 export type EnsureTabAvailableOptions = BrowserOperationOptions & {
   /** Allow a target-id-only tab when the caller can continue through Playwright. */
   allowPlaywrightFallback?: boolean;
+  preserveWarmup?: boolean;
 };
 
 export type ProfileContext = {
   profile: ResolvedBrowserProfile;
-  ensureBrowserAvailable: (opts?: { headless?: boolean; signal?: AbortSignal }) => Promise<void>;
+  ensureBrowserAvailable: (opts?: {
+    headless?: boolean;
+    prewarm?: true;
+    signal?: AbortSignal;
+  }) => Promise<void>;
   ensureTabAvailable: (
     targetId?: string,
     options?: EnsureTabAvailableOptions,

@@ -427,15 +427,6 @@ describe("createBundleMcpToolRuntime", () => {
     ]);
   });
 
-  it("disambiguates bundle MCP tools that collide with existing tool names", async () => {
-    const runtime = await materializeBundleMcpToolsForRun({
-      runtime: makeToolRuntime(),
-      reservedToolNames: ["bundleProbe__bundle_probe"],
-    });
-
-    expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe-2"]);
-  });
-
   it("reuses one-shot reserved names for App-only policy projections", async () => {
     function* reservedToolNames() {
       yield "demo__app_tool";

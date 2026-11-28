@@ -50,6 +50,12 @@ const enSessionOrganization = {
     sessionArchived: "Session archived",
     deleteAllArchived: "Delete all archived…",
     deleteAllArchivedTitle: "Delete {count} archived sessions?",
+    deleteArchivedListMissing:
+      "OpenClaw couldn’t load the list of archived sessions, so it didn’t delete any. To try again, choose Delete all archived in Filters.",
+    deleteArchivedListStalled:
+      "OpenClaw couldn’t load the next page of archived sessions, so it didn’t delete any. To try again, choose Delete all archived in Filters.",
+    deleteArchivedListIncomplete:
+      "OpenClaw couldn’t list every archived session, so it didn’t delete any. To try again, choose Delete all archived in Filters.",
     archivedOnlyTooltip: sharedSessions.archivedOnlyTooltip,
     minutesPlaceholder: "min",
     searchPlaceholder: "Search sessions…",
@@ -152,7 +158,6 @@ const enSessionOrganization = {
     space: "Space",
     sessionId: "Session ID",
     activeRun: en.sessionsView.activeRun,
-    backgroundWorkRunning: en.sessionsView.backgroundWorkRunning,
     subagentsWorking: en.sessionsView.subagentsWorking,
     showChildSessions: en.sessionsView.showChildSessions,
     hideChildSessions: en.sessionsView.hideChildSessions,
@@ -322,6 +327,63 @@ const enSessionOrganization = {
     confirmForceDeleteTitle: "Delete without a snapshot?",
     confirmForceDelete: "Snapshot failed: {error}\n\nUncommitted changes are lost.",
   },
+  projectsPage: {
+    search: "Search projects",
+    columnProject: "Project",
+    columnType: "Type",
+    columnLocation: "Location",
+    columnAccess: "Shared with",
+    typeWorkspace: "Agent workspace",
+    typeCheckout: "Git checkout",
+    typeClone: "Git checkout · cloned",
+    empty: "No projects yet.",
+    noMatches: "No projects match your search.",
+    adminRequired: "You can view projects, but only admins can register or change them.",
+    register: "Register project",
+    registerBrowse: "Browse folders on this computer",
+    registerClone: "Clone from GitHub",
+    browseTitle: "Register a folder",
+    browseLabel: "Folder on this computer",
+    cloneTitle: "Clone from GitHub",
+    cloneLabel: "Repository URL",
+    cloneSubmit: "Clone",
+    details: "Project details",
+    sourceHeading: "Source",
+    sourceType: "Type",
+    sourceRepository: "Repository",
+    sourceOrigin: "Origin",
+    sourceLocation: "Location",
+    sourceAgent: "Agent",
+    sourceId: "Project ID",
+    rename: "Rename",
+    renameTitle: "Rename project",
+    renameLabel: "Project name",
+    remove: "Remove",
+    removeTitle: "Remove {name}?",
+    removeBody: "People can no longer start sessions in this project. The checkout on disk stays.",
+    removeClonedBody:
+      "People can no longer start sessions in this project. You can keep the cloned checkout on disk or delete it.",
+    removeDeleteCheckout: "Remove and delete checkout",
+    accessHeading: "Shared with roles",
+    accessEveryone: "Everyone with write access",
+    accessNoRoles:
+      "Named roles aren’t configured. Operators with write access can use every project.",
+    accessAdmin: "Admins can use every project.",
+    accessWrite: "Roles with write access can use every project.",
+    accessAll: "This role can use all projects.",
+    accessNoSessions: "This role can’t start sessions.",
+    accessAgents: "Follows this role’s agent list.",
+    accessAgentsNote:
+      "Agent workspaces follow each role’s agent list in the Gateway configuration.",
+    accessAdminRequired: "Only admins can change who can use a project.",
+    accessPublicNote: "Roles without write access can also use public GitHub repositories.",
+    accessWorktreeNote:
+      "Roles that can use this project only through this share always get a new worktree.",
+    accessUnavailable: "Role access is unavailable until the Gateway configuration loads.",
+    accessSaveFailed: "Couldn’t save access for {role}. Try again.",
+    accessRoleMissing: "The role {role} is no longer configured.",
+    accessAllProjects: "The role {role} already uses all projects.",
+  },
 } satisfies TranslationMap;
 
 export const registerSessionOrganizationEnglish = Object.assign(
@@ -329,6 +391,7 @@ export const registerSessionOrganizationEnglish = Object.assign(
     registerSessionOrganizationSharedEnglish();
     Object.assign(en.sessionsView, enSessionOrganization.sessionsView);
     Object.assign(en.worktrees, enSessionOrganization.worktrees);
+    Object.assign(en, { projectsPage: enSessionOrganization.projectsPage });
   },
   { catalog: enSessionOrganization },
 );

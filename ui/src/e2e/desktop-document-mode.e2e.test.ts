@@ -519,6 +519,34 @@ suite.define(() => {
     });
   });
 
+  it("reserves the full label in the focused Desktop size control", async () => {
+    await suite.withPage(
+      { serviceWorkers: "block", isMobile: true, hasTouch: true },
+      async ({ page }) => {
+        const { panel } = await openDesktopDocument(page, "focus/desktop/source/gateway");
+        const sizing = panel.locator(".desktop-touch-toolbar select");
+        await sizing.waitFor();
+        await page.setViewportSize({ width: 820, height: 1180 });
+        await page.evaluate(() => document.fonts.ready);
+        const fit = await sizing.boundingBox();
+        await sizing.selectOption("actual");
+        const remaining = await sizing.evaluate((el: HTMLSelectElement) => {
+          const style = getComputedStyle(el);
+          const context = document.createElement("canvas").getContext("2d")!;
+          context.font = style.font;
+          return (
+            el.clientWidth -
+            Number.parseFloat(style.paddingLeft) -
+            Number.parseFloat(style.paddingRight) -
+            context.measureText(el.selectedOptions[0]!.label).width
+          );
+        });
+        expect(remaining).toBeGreaterThanOrEqual(-0.5);
+        expect(await sizing.boundingBox()).toEqual(fit);
+      },
+    );
+  });
+
   it("renders a full-bleed shell-free picker", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const { panel } = await openDesktopDocument(page, "focus/desktop");

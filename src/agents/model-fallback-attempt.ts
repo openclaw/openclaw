@@ -34,11 +34,12 @@ import {
   type ModelFallbackChainStopReason,
   type ModelFallbackStepFields,
 } from "./model-fallback-observation.js";
-import type {
-  FallbackAttempt,
-  ModelCandidate,
-  ModelFallbackAttemptProvenance,
-  ModelFallbackResultClassification,
+import {
+  MODEL_FALLBACK_SKIPPED_CODE,
+  type FallbackAttempt,
+  type ModelCandidate,
+  type ModelFallbackAttemptProvenance,
+  type ModelFallbackResultClassification,
 } from "./model-fallback.types.js";
 import { modelKey } from "./model-ref-shared.js";
 import { isCliRuntimeAlias } from "./model-runtime-aliases.js";
@@ -641,6 +642,13 @@ export function throwFallbackFailureSummary(params: {
       rateLimitRetriesExhausted: lastAttempt?.rateLimitRetriesExhausted,
       rateLimitResetAt: lastAttempt?.rateLimitResetAt,
       code: lastAttempt?.code,
+      userMessage:
+        params.lastError instanceof FailoverError &&
+        lastAttempt &&
+        lastAttempt.provider === params.lastError.provider &&
+        lastAttempt.code !== MODEL_FALLBACK_SKIPPED_CODE
+          ? params.lastError.userMessage
+          : undefined,
       cause: params.lastError instanceof Error ? params.lastError : undefined,
       sessionId: params.attribution?.sessionId,
       lane: params.attribution?.lane,

@@ -8,12 +8,16 @@ import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js"
 
 export type AgentRunModel = { provider: string; model: string };
 
+/** Best-effort notice after this run's restart marker commits, before its transport closes. */
+export type RestartResumeNotice = (signal: AbortSignal) => Promise<void>;
+
 export type AgentRunEventState = { seq: number; terminalPublication?: symbol };
 
 export type { AutomationResult } from "../../packages/gateway-protocol/src/schema/cron-automation-result.js";
 
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
 export type AgentRunContext = {
+  onRestartResumeSaved?: RestartResumeNotice;
   /** Trusted refusal fact consumed only by this run's existing terminal mutation. */
   providerReviewTerminal?: import("../sessions/provider-review-terminal.js").ProviderReviewTerminalFact;
   /** Queued reply delivery, rather than runtime execution, owns chat completion. */

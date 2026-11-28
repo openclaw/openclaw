@@ -18,6 +18,10 @@ const refusalCauses = {
     why: "Your role on this Gateway does not allow it.",
     nextStep: "Ask a Gateway admin to do it, or to add the permission to your role.",
   },
+  "owner-only": {
+    why: "It needs the Gateway owner's authority, and this turn does not run with it.",
+    nextStep: "Ask the Gateway owner to do it.",
+  },
   "channel-unverified": {
     why: "This channel cannot confirm who you are.",
     nextStep:
@@ -53,6 +57,15 @@ const refusalCauses = {
     nextStep:
       "Link it once in the Control UI under Settings → Profile → Identity, on the configured GitHub host, then ask again.",
   },
+  "automation-account-unrecorded": {
+    why: "It has no recorded inference account, so OpenClaw refused the selected credentials.",
+    nextStep:
+      "Select an authorized stored account with `openclaw automations edit <jobId> --model <provider/model>@<account>`, or use a configured provider key. For eligible host-managed accounts, `openclaw doctor --fix` can record the account.",
+  },
+  "workspace-not-owned": {
+    why: "Only the person who started this conversation or an administrator can restore its workspace.",
+    nextStep: "Ask an administrator to restore this workspace, or start a new conversation.",
+  },
 } as const satisfies Record<string, { why: string; nextStep: string }>;
 
 export type OperatorRefusalCause = keyof typeof refusalCauses;
@@ -61,6 +74,14 @@ export type OperatorRefusalCause = keyof typeof refusalCauses;
 export function operatorRefusalText(cause: OperatorRefusalCause, action = "start this request") {
   const { why, nextStep } = refusalCauses[cause];
   return `I did not ${action}. ${why} ${nextStep}`;
+}
+
+/**
+ * The session's timeline line for runs stopped because their starter lost access. Every viewer
+ * of the session sees it, so it names the person instead of addressing them.
+ */
+export function accessLossStopText(runs: number, name: string): string {
+  return `Stopped ${runs} ${runs === 1 ? "run" : "runs"} started by ${name}: their access to this session changed.`;
 }
 
 /** A definite refusal of operator work. Its message is the sentence the person sees. */

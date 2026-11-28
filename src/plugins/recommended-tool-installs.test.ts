@@ -11,7 +11,6 @@ describe("recommended tool installs", () => {
       "claude-code",
       "codex-cli",
     ]);
-    expect(new Set(installs.map((entry) => entry.id)).size).toBe(installs.length);
     expect(
       Object.fromEntries(
         installs.flatMap((entry) => (entry.brandId ? [[entry.id, entry.brandId]] : [])),

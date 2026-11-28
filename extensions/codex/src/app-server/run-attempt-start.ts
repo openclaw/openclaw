@@ -111,11 +111,8 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       developerInstructions,
       onDeveloperInstructions: prompt.setThreadDeveloperInstructions,
       systemPromptReplaced: turnState.promptBuild.systemPromptReplaced,
-      refreshableInstructions:
-        joinPresentSections(
-          context.refreshableInstructions,
-          turnState.promptBuild.turnDeveloperInstructions,
-        ) || undefined,
+      refreshableInstructions: context.refreshableInstructions,
+      turnRefreshableInstructions: turnState.promptBuild.turnDeveloperInstructions,
       agentWorkspaceDeveloperInstructions: context.agentWorkspaceDeveloperInstructions,
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
       nativeModelAdmission: resources.nativeModelAdmission,

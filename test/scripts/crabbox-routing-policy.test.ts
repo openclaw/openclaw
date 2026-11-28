@@ -13,69 +13,23 @@ describe("Crabbox routing policy", () => {
     expect(normalizeCrabboxWorkload("unknown")).toBeNull();
   });
 
-  it.each(["ci-fast", "ci-proof", "release-proof"] as const)(
-    "routes %s through Boat, Daytona, Azure, then AWS",
-    (workload) => {
-      expect(
-        crabboxProviderChain({
-          workload,
-          configuredProvider: "blacksmith-testbox",
-          target: "linux",
-          advertisedProviders,
-        }),
-      ).toEqual(["ascii-box", "daytona", "azure", "aws"]);
-    },
-  );
-
-  it("does not let persistent cloud config outrank the CI policy", () => {
+  it.each([
+    ["ci-fast", "blacksmith-testbox", "linux", ["ascii-box", "daytona", "azure", "aws"]],
+    ["ci-proof", "blacksmith-testbox", "linux", ["ascii-box", "daytona", "azure", "aws"]],
+    ["release-proof", "blacksmith-testbox", "linux", ["ascii-box", "daytona", "azure", "aws"]],
+    ["ci-proof", "aws", "linux", ["ascii-box", "daytona", "azure", "aws"]],
+    ["interactive", "blacksmith-testbox", "linux", ["daytona", "azure", "aws"]],
+    ["untrusted", "blacksmith-testbox", "linux", ["azure", "aws"]],
+    ["ci-fast", "blacksmith-testbox", "windows", ["azure", "aws"]],
+    ["ci-fast", "blacksmith-testbox", "macos", ["aws"]],
+  ] as const)("routes %s from %s on %s", (workload, configuredProvider, target, expected) => {
     expect(
       crabboxProviderChain({
-        workload: "ci-proof",
-        configuredProvider: "aws",
-        target: "linux",
+        workload,
+        configuredProvider,
+        target,
         advertisedProviders,
       }),
-    ).toEqual(["ascii-box", "daytona", "azure", "aws"]);
-  });
-
-  it("prefers Daytona for interactive Linux work", () => {
-    expect(
-      crabboxProviderChain({
-        workload: "interactive",
-        configuredProvider: "blacksmith-testbox",
-        target: "linux",
-        advertisedProviders,
-      }),
-    ).toEqual(["daytona", "azure", "aws"]);
-  });
-
-  it("keeps untrusted work off Blacksmith and Daytona pending isolation proof", () => {
-    expect(
-      crabboxProviderChain({
-        workload: "untrusted",
-        configuredProvider: "blacksmith-testbox",
-        target: "linux",
-        advertisedProviders,
-      }),
-    ).toEqual(["azure", "aws"]);
-  });
-
-  it("uses Azure then AWS for Windows and only AWS for macOS", () => {
-    expect(
-      crabboxProviderChain({
-        workload: "ci-fast",
-        configuredProvider: "blacksmith-testbox",
-        target: "windows",
-        advertisedProviders,
-      }),
-    ).toEqual(["azure", "aws"]);
-    expect(
-      crabboxProviderChain({
-        workload: "ci-fast",
-        configuredProvider: "blacksmith-testbox",
-        target: "macos",
-        advertisedProviders,
-      }),
-    ).toEqual(["aws"]);
+    ).toEqual(expected);
   });
 });

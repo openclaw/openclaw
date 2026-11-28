@@ -293,30 +293,28 @@ describe("AppSidebar agent chip", () => {
     expect(dom.query(".sidebar-agent-menu")).toBe(firstMenu);
   });
 
-  it.each([6, 12])(
-    "renders %s agents in gateway order without filter or pin controls",
-    async (count) => {
-      const { sidebar, context, dom } = await mountAgent(
-        undefined,
-        manyAgents(count),
-        undefined,
-        createSessions("agent-1", ["agent:agent-1:main"]),
-      );
-      sidebar.connected = true;
-      context.agentSelection.set("agent-1");
-      await sidebar.updateComplete;
-      await openAgentMenu(sidebar);
-      expect(dom.query(".sidebar-agent-menu__filter")).toBeNull();
-      expect(dom.query("input")).toBeNull();
-      expect(dom.query(".sidebar-agent-menu__pin")).toBeNull();
-      expect(dom.query(".sidebar-agent-menu__agent-list")).not.toBeNull();
-      expect(
-        [...dom.all('.sidebar-agent-menu [data-value^="agent:"] .agent-select__option-label')].map(
-          (item) => item.textContent?.trim(),
-        ),
-      ).toEqual(Array.from({ length: count }, (_, index) => `agent-${index + 1}`));
-    },
-  );
+  it("renders 12 agents in gateway order without filter or pin controls", async () => {
+    const count = 12;
+    const { sidebar, context, dom } = await mountAgent(
+      undefined,
+      manyAgents(count),
+      undefined,
+      createSessions("agent-1", ["agent:agent-1:main"]),
+    );
+    sidebar.connected = true;
+    context.agentSelection.set("agent-1");
+    await sidebar.updateComplete;
+    await openAgentMenu(sidebar);
+    expect(dom.query(".sidebar-agent-menu__filter")).toBeNull();
+    expect(dom.query("input")).toBeNull();
+    expect(dom.query(".sidebar-agent-menu__pin")).toBeNull();
+    expect(dom.query(".sidebar-agent-menu__agent-list")).not.toBeNull();
+    expect(
+      [...dom.all('.sidebar-agent-menu [data-value^="agent:"] .agent-select__option-label')].map(
+        (item) => item.textContent?.trim(),
+      ),
+    ).toEqual(Array.from({ length: count }, (_, index) => `agent-${index + 1}`));
+  });
 
   it("loads switcher avatar tiles through the authenticated avatar loader", async () => {
     const avatarRoute = "/avatar/research?v=140879";

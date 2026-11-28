@@ -11,6 +11,8 @@ Completed work and retained checkouts are separate.
 
 Recent completed work and pending candidates. d / c = declarations / expanded cases.
 
+Audio proxy fixture / [192794](https://github.com/openclaw/openclaw/pull/192794). Each loopback server registers cleanup before the next setup step. Injecting the same filesystem failure left both original sockets listening and both repaired sockets closed. The routing case and its four assertions remain.
+
 Tailscale sudo fixture / `c6f4684384b5`: D2 unused support lines; no test cases or production changes. Its `route-error` mode lost its only caller in [166484](https://github.com/openclaw/openclaw/pull/166484). Password/conflict diagnostics, authenticated recovery and worker cleanup remain. Boat baseline/candidate: 38/38 across three suites; making the retired branch throw leaves all 33 direct-consumer cases passing. Independent preservation review passed; broad scan results belong to the PR. The remaining 22 top-level fixtures and first 24 nested files were inspected or reconciled against unchanged prior proof, non-additively; all files remain, with the historical SOUL preimage retained pending provenance. No runtime savings claimed.
 
 RPC replay fixture / `a81218e17a0b`: D32 unused support lines; no test cases or production changes. The first 36 regular top-level fixtures received a source-only value review: all remain, with this one partial deletion; counts are non-additive. The proxy's Hello-hold controls lost their only callers in [160115](https://github.com/openclaw/openclaw/pull/160115). Keep real forwarding, committed-response loss, exact request/write counts, independent session reads and child cleanup. Boat baseline/candidate: Gateway 1/1 and RPC client 10/10. Replaying a failed dispatched request made the keeper fail with two requests and two committed sessions; production bytes were restored. Independent preservation review and targeted syntax, format and lint passed; broad scan results belong to the PR.
@@ -50,6 +52,8 @@ Fixture reference survey / `c4c10bae3232`: 58 top-level files checked for refere
 OpenClaw ID token startup / `6978b40e9d38`: D1 duplicate startup-wait case, −13 test lines / one case. The retained service case exercises the real saved-binding publisher; exact mismatch/report checks and current-owner lookup preparation remain. The token-startup candidate in the frozen review below is qualified. Boat baseline 16/16 and candidate 15/15; removing only the token check's startup wait makes both original and keeper fail with early acceptance. Production bytes restored before the candidate run. Format, lint, types and independent preservation review passed. Broad scan results are recorded with the PR. No production change or runtime savings claimed.
 
 Scheduled source / `3dbbeef49fa6`: C duplicate `expectCurrent` helper, −4 test-support lines; all 14 cases and seven calls remain. The existing recovery helper preserves assertion order and callback semantics. Boat baseline/candidate passed 14/14; the same policy-recheck fault failed both admitted member/owner cases with either helper. Production bytes restored; targeted format/lint/types and independent preservation review passed. Broad scan results belong to the PR; no production change or runtime savings claimed.
+
+Node Gateway fixture / [192820](https://github.com/openclaw/openclaw/pull/192820). A rejected port claim used to leave the test state active. With the claim inside the fixture's cleanup scope, the rejection control observes one state cleanup and receives the original error before Gateway startup.
 
 ## Frozen source census
 
@@ -130,6 +134,7 @@ Standalone, non-additive counts; source-only unless local qualification is separ
 
 ## Unresolved obligations and limits
 
+- [192862](https://github.com/openclaw/openclaw/pull/192862) closes the native skills fixture when the model catalog write fails. The prior native suite covered three cases. The setup failure check preserved the original error and verified that the listener closed.
 - Qualify C / D at actual owners; preserve independent wire / identity / authority / lifecycle / platform / work-count keepers.
 - Transfer Android loading / blank-auth, persisted outbox keys / epochs, terminal projection and native PCM / decoder / reader rows before consolidation; retain typed host-error precedence / active-run settlement.
 - Keep CodeMode warmed worker-leg deadline / interruption separate from cancellation-table host-error precedence and settlement.

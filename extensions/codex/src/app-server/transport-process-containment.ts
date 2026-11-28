@@ -277,6 +277,20 @@ async function quiesceDescendants(
     if (performance.now() >= deadline) {
       return undefined;
     }
+    if (process.platform === "linux") {
+      // A running root makes the topology unusable for this pass. Inspect only
+      // its PID until it quiesces, then discover any newly forked descendants.
+      const current = await readCodexAppServerProcess(root.pid, deadline).catch(() => undefined);
+      if (!current || !isSameLiveRoot(current, root)) {
+        return undefined;
+      }
+      if (!isQuiescedState(current.state)) {
+        if (!signalProcess(current.pid, "SIGSTOP")) {
+          return undefined;
+        }
+        continue;
+      }
+    }
     const snapshot = await readCodexAppServerProcessSnapshot(deadline, undefined, [
       root.pid,
       ...provenByPid.keys(),

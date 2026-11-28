@@ -26,6 +26,7 @@ export const optimisticSessionRowFields = [
   "pinned",
   "pinnedAt",
   "unread",
+  "snoozedUntil",
   "category",
   "label",
   "icon",
@@ -60,6 +61,7 @@ export type SessionPatchRowFact = {
     | { icon: GatewaySessionRow["icon"] }
     | { color: GatewaySessionRow["color"] }
     | { category: GatewaySessionRow["category"] }
+    | { snoozedUntil: GatewaySessionRow["snoozedUntil"] }
     | SessionPinFields
     | { pinned: true }
     | SessionReadFields
@@ -335,6 +337,7 @@ export function createOptimisticRowField<
     | "color"
     | "category"
     | "unread"
+    | "snoozedUntil"
     | "thinkingLevel"
     | "cyberAccessProgram"
     | "contextWindow",

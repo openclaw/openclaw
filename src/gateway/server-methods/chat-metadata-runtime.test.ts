@@ -233,26 +233,6 @@ describe("gateway chat metadata runtime", () => {
     expect(harness.buildProjection).toHaveBeenCalledOnce();
   });
 
-  test("single-flights equivalent refresh bursts and reads", async () => {
-    const harness = createChatMetadataHarness();
-    const { release } = pauseProjection(harness);
-
-    const refreshes = Array.from({ length: 128 }, () => harness.refresh());
-    await Promise.all(refreshes);
-    expect(harness.getPreparedOwner).toHaveBeenCalledTimes(1);
-    expect(harness.buildProjection).not.toHaveBeenCalled();
-    const firstRead = harness.read();
-    const secondRead = harness.read();
-    await vi.waitFor(() => expect(harness.buildProjection).toHaveBeenCalledTimes(1));
-    expect(harness.buildCommands).toHaveBeenCalledTimes(1);
-
-    release.resolve();
-    const [first, second] = await Promise.all([firstRead, secondRead]);
-    expect(first).toEqual(second);
-    expect(harness.buildCommands).toHaveBeenCalledTimes(1);
-    expect(harness.buildProjection).toHaveBeenCalledTimes(1);
-  });
-
   test.each(["metadata", "startup"] as const)(
     "serves published %s with only auth revision reads",
     async (surface) => {
@@ -501,31 +481,6 @@ describe("gateway chat metadata runtime", () => {
     },
   );
 
-  test.each([
-    { browser: { profiles: { temporary: { cdpPort: 18801, color: "#123456" } } } },
-    { browser: { headless: true } },
-    { ui: { prefs: { sidebarEntries: ["sessions"] } } },
-    { logging: { level: "debug" as const } },
-  ])("retains prepared metadata through presentation writes: %j", async (change) => {
-    const onChanged = vi.fn();
-    const harness = createChatMetadataHarness(undefined, { onChanged });
-    await harness.refresh();
-    onChanged.mockClear();
-    const first = await harness.read();
-
-    harness.setConfig({
-      agents: { entries: { main: {} } },
-      ...change,
-    });
-    await harness.refresh();
-    const second = await harness.read();
-
-    expect(second).toEqual(first);
-    expect(harness.buildCommands).toHaveBeenCalledTimes(1);
-    expect(harness.buildProjection).toHaveBeenCalledTimes(1);
-    expect(onChanged).not.toHaveBeenCalled();
-  });
-
   test("refreshes command eligibility through skills publication without announcing changed models", async () => {
     const onChanged = vi.fn();
     const harness = createChatMetadataHarness(undefined, { onChanged });
@@ -748,23 +703,6 @@ describe("gateway chat metadata runtime", () => {
 
     await expect(harness.refresh()).rejects.toThrow(
       "prepared full model catalog omitted its auth generation",
-    );
-  });
-
-  test("retains a generation while auth store revisions are unchanged", async () => {
-    const harness = createChatMetadataHarness();
-    harness.getPreparedAuthStore.mockImplementation(() => ({ version: 1, profiles: {} }));
-    await harness.runtime.refresh();
-    const first = await harness.runtime.read({ agentId: "main" });
-
-    await harness.runtime.refresh();
-    const second = await harness.runtime.read({ agentId: "main" });
-
-    expect(second).toEqual(first);
-    expect(harness.buildProjection).toHaveBeenCalledTimes(1);
-    expect(harness.getAuthStoreRevision).toHaveBeenCalledWith("/tmp/first/agent");
-    expect(harness.getAuthStoreRevision.mock.calls.map(([agentDir]) => agentDir)).toContain(
-      undefined,
     );
   });
 

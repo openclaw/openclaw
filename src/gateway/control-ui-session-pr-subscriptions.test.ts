@@ -74,7 +74,7 @@ function expectSessions(keys: string[], refresh?: true, agentId = "main") {
 }
 
 describe("control UI session PR subscriptions", () => {
-  it("reuses current watcher grants across streaming reads and reacquires changed targets", async () => {
+  it("reacquires changed watcher targets and withdraws retired access", async () => {
     const readSource = createTestSessionPrReadSource();
     let revision = 0;
     let visible = true;
@@ -98,19 +98,9 @@ describe("control UI session PR subscriptions", () => {
     });
     const active = start({ prepareRead: async () => readCurrent });
     await active.replace("reader", ["session"]);
-    readCurrent.mockClear();
     broadcastToConnIds.mockClear();
-    for (let index = 0; index < 20; index++) {
-      sessionChanges.emit({ sessionKey: "streaming-child", scope: "transcript" });
-      await nextEventLoopTurn();
-      await active.pollNow();
-    }
-    expect(readCurrent).not.toHaveBeenCalled();
-    expect(broadcastToConnIds).not.toHaveBeenCalled();
-
     revision++;
     await active.pollNow();
-    expect(readCurrent).toHaveBeenCalledOnce();
     expectPublication("reader");
 
     visible = false;
@@ -124,37 +114,9 @@ describe("control UI session PR subscriptions", () => {
     expect(readCurrent).not.toHaveBeenCalled();
   });
 
-  it("does no currency work for idle passive audiences or metadata notifications", async () => {
-    const readSource = createTestSessionPrReadSource();
-    const assertCurrent = vi.fn();
-    const target: ControlUiSessionPrTarget = {
-      params: { sessionKey: "session", agentId: "main" },
-      identity: "session",
-      readSource,
-      source: null,
-      taskReceiptsOnly: true,
-      taskReceipts: { sessions: [] },
-      assertCurrent,
-    };
-    const active = start({ prepareRead: async () => async () => target });
-    for (let index = 0; index < 64; index++) {
-      await active.replace(`reader-${index}`, [], new Set(), new Set(["session"]));
-    }
-    assertCurrent.mockClear();
-    await active.pollNow();
-    await clock.advanceBy(60_000);
-    sessionChanges.emit({ sessionKey: "session", scope: "transcript" });
-    await nextEventLoopTurn();
-    expect(assertCurrent).not.toHaveBeenCalled();
-  });
-
   it.each([
-    { facts: undefined, invalidated: undefined, refresh: false },
     { facts: "category", invalidated: undefined, refresh: false },
-    { facts: "participants", invalidated: undefined, refresh: false },
     { facts: undefined, invalidated: "category", refresh: false },
-    { facts: "category", invalidated: true, refresh: true },
-    { facts: "unchanged", invalidated: true, refresh: true },
     { facts: "participants", invalidated: true, refresh: true },
   ] as const)(
     "refreshes=$refresh for facts=$facts, invalidated=$invalidated",

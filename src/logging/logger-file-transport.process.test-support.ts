@@ -122,7 +122,10 @@ async function proveDefaultTargets(): Promise<void> {
   process.env.OPENCLAW_STATE_DIR = path.join(unsafe, "rejected-state");
   applyLoggingConfig(undefined);
   await withoutSyncFs(async () => {
-    await assert.rejects(getResolvedLoggerSettings(), /No safe OpenClaw temp root/);
+    await assert.rejects(
+      getResolvedLoggerSettings(),
+      /is writable by group or others and has no sticky bit/,
+    );
     child.warn("refused default target");
     await fileLogTransport.flush();
   });

@@ -23,6 +23,7 @@ export const browserContract = {
     edit_body: { kind: "action" },
     extract_section: { kind: "action" },
     save_page: { kind: "action" },
+    memory_import_progress: { kind: "action" },
     remember: { kind: "action" },
     relink: { kind: "action" },
     create_claim: { kind: "action" },

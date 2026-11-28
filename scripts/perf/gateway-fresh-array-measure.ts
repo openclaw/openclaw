@@ -16,6 +16,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { SubagentRunReadRecord } from "../../src/agents/subagents/registry/subagent-registry-read.types.js";
+import type * as SwarmSummary from "../../src/agents/subagents/registry/subagent-session-swarm-summary.js";
 import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
@@ -29,10 +30,12 @@ const { values } = parseArgs({
 const iterations = Number(values.iterations);
 assert(Number.isSafeInteger(iterations) && iterations > 0, "iterations must be positive");
 assert(values.mode === "cpu" || values.mode === "allocation", "mode must be cpu or allocation");
-const source = path.join(realpathSync(values.root), "src/gateway/session-swarm-summary.ts");
+const source = path.join(
+  realpathSync(values.root),
+  "src/agents/subagents/registry/subagent-session-swarm-summary.ts",
+);
 const sourceSha256 = createHash("sha256").update(readFileSync(source)).digest("hex");
-const { buildSessionSwarmSummary }: typeof import("../../src/gateway/session-swarm-summary.js") =
-  await import(pathToFileURL(source).href);
+const { buildSessionSwarmSummary }: typeof SwarmSummary = await import(pathToFileURL(source).href);
 const sessionKey = "agent:main:dashboard:synthetic";
 const groupCount = 40;
 const runsPerGroup = 250;

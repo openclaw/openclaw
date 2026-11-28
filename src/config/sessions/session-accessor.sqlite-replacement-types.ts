@@ -20,6 +20,7 @@ import type { SessionEntry } from "./types.js";
 
 export type SqliteSessionEntryReplacement = SessionEntryReplacement & {
   previousSessionKeys?: readonly string[];
+  archiveUndo?: import("./session-archive-undo.js").SessionArchiveUndoIntent;
 };
 
 export type SessionEntryReplacementCommit = {

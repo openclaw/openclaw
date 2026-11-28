@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
+import * as markdownCodeRegions from "../../packages/markdown-core/src/markdown-code-regions.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
@@ -79,6 +80,46 @@ function streamChunks(chunker: EmbeddedBlockChunker, source: string, delta: numb
 }
 
 describe("EmbeddedBlockChunker", () => {
+  it.each([
+    ["prefix words ", "`a b`", "", "a b"],
+    ["abcdefghijk ", "``x! y``", " after", "x! y"],
+    ["x".repeat(15), "`word`", "z", "word"],
+  ])(
+    "keeps fitting inline code intact in streamed blocks for %s%s%s",
+    (prefix, code, tail, body) => {
+      const source = prefix + code + tail;
+      const maxChars = 18;
+      const { chunks, metadata } = streamChunks(
+        paragraphChunker(8, maxChars),
+        source,
+        source.length,
+      );
+      const styledCode = chunks.flatMap((chunk) => {
+        const { styles, text } = markdownToIR(chunk);
+        return styles
+          .filter((span) => span.style === "code")
+          .map((span) => text.slice(span.start, span.end));
+      });
+      expect(styledCode).toEqual([body]);
+      expectChunksWithinLength(chunks, maxChars);
+      expectSourceCoverage(metadata, source);
+    },
+  );
+
+  it("waits for a possible cut before parsing inline code during paragraph streaming", () => {
+    const source = "Read `alpha beta` ".padEnd(1200, "x");
+    const chunker = paragraphChunker(800, 1200, { flushOnParagraph: true });
+    const parse = vi.spyOn(markdownCodeRegions, "findMarkdownCodeRegions");
+    try {
+      const { chunks, metadata } = streamChunks(chunker, source, 1);
+      expect(chunks).toEqual([source]);
+      expectSourceCoverage(metadata, source);
+      expect(parse.mock.calls.length).toBeLessThanOrEqual(1);
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
   it("emits a whole leading grapheme that exactly fills the hard cap", () => {
     const cluster = `e${"\u0301".repeat(1199)}`;
     const chunker = paragraphChunker(800, 1200);

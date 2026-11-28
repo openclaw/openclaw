@@ -1,6 +1,18 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import * as startup from "../channels/plugins/lifecycle-startup.js";
 import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  createDoctorHealthFlowContext,
+  createDoctorPrompterFixture,
+  decideDoctorContributionPending,
+} from "./doctor-health-context.test-support.js";
+import { resolveDoctorHealthContributions } from "./doctor-health-contributions.test-support.js";
+import {
   collectChannelPreviewWarningHealthFindings,
   maybeRunDoctorStartupChannelMaintenance,
 } from "./doctor-startup-channel-maintenance.js";
@@ -68,4 +80,47 @@ it.each([false, true])("runs Matrix startup migration only for repair=%s", async
   call.log.warn?.("needs attention");
   expect(runtime.log).toHaveBeenCalledExactlyOnceWith("migrated");
   expect(runtime.error).toHaveBeenCalledExactlyOnceWith("needs attention");
+});
+
+it("has pending work only when a loaded channel plugin declares startup maintenance", async () => {
+  const contribution = resolveDoctorHealthContributions().find(
+    (entry) => entry.id === "doctor:startup-channel-maintenance",
+  )!;
+  const ctx = (shouldRepair: boolean) =>
+    createDoctorHealthFlowContext({
+      cfg,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter: createDoctorPrompterFixture(shouldRepair),
+    });
+  const previous = captureActivePluginRegistrySnapshot();
+  try {
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "plain", plugin: createChannelTestPluginBase({ id: "plain" }), source: "test" },
+      ]),
+    );
+    await expect(decideDoctorContributionPending(contribution, ctx(true))).resolves.toBe("none");
+
+    const runStartupMaintenance = vi.fn(async () => {});
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "maintained",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "maintained" }),
+            lifecycle: { runStartupMaintenance },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    await expect(decideDoctorContributionPending(contribution, ctx(false))).resolves.toBe("none");
+    const repair = ctx(true);
+    await expect(decideDoctorContributionPending(contribution, repair)).resolves.toBe("work");
+    expect(runStartupMaintenance).not.toHaveBeenCalled();
+    await contribution.run(repair);
+    expect(runStartupMaintenance).toHaveBeenCalledOnce();
+  } finally {
+    restoreActivePluginRegistrySnapshot(previous);
+  }
 });

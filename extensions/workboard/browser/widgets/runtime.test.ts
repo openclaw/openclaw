@@ -318,7 +318,12 @@ it.each([
     startDrag(hidden);
   }
   move();
-  expect(hidden.viewRequest).toHaveBeenCalledExactlyOnceWith("workboard.cards.move", moveParams);
+  expect(hidden.viewRequest).toHaveBeenCalledExactlyOnceWith("workboard.cards.move", {
+    ...moveParams,
+    ...(input === "drop"
+      ? { expectedUpdatedAt: expectDefined(cards[0], "ready card").updatedAt }
+      : {}),
+  });
   await expectStatus(hidden, "running", 'select[aria-label="Status: Ready card"]');
   hidden.dispose();
   expect(fixture.events.get("plugin.workboard.changed")?.size).toBe(1);

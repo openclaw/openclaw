@@ -757,7 +757,6 @@ const startupEnglish = {
     provider: "Provider",
     lastActive: "Last active {time}",
     activeRun: "Active run",
-    backgroundWorkRunning: "Background work running",
     subagentsWorking: "Subagents working",
     showChildSessions: "Show {count} child sessions for {session}",
     hideChildSessions: "Hide {count} child sessions for {session}",
@@ -915,6 +914,7 @@ const startupEnglish = {
   skillsPage: {},
   skillStatus: {},
   nav: {
+    automationFailure: "An automation needs attention",
     gateway: {
       sectionLabel: "Gateway",
       primaryTag: "primary",
@@ -941,6 +941,7 @@ const startupEnglish = {
     settingsGroupThisDevice: "This device",
     settingsGroupConnections: "Connections",
     settingsGroupAgents: "Agents & Tools",
+    settingsGroupTeam: "Team",
     settingsGroupSecurity: "Privacy & security",
     settingsGroupSystem: "System",
     settingsSearchLabel: "Search settings",
@@ -1026,8 +1027,10 @@ const startupEnglish = {
     apps: "Apps",
     portals: "Portals",
     approvals: "Approvals",
+    roles: "Roles",
     workboard: "Workboard",
     worktrees: "Worktrees",
+    projects: "Projects",
     channels: "Channels",
     connection: "Gateway",
     sessions: "Sessions",
@@ -1529,6 +1532,8 @@ const startupEnglish = {
     },
     agentDatabaseWarming: "This agent is still starting. Retry in a moment.",
     historyRequestTimedOut: "Couldn’t load the conversation in time. Try again.",
+    historySessionChanged:
+      "This session changed before OpenClaw could finish checking for updates. Try again.",
     clawhub: {},
     modelAccounts: {
       section: "Account",
@@ -1582,10 +1587,11 @@ const startupEnglish = {
     sessionsPausedNote: "{count} sessions are paused",
     handoffResumed: "Resumed · {duration} later",
     continuationSource: {
-      exec: "Background command finished",
-      restart: "Gateway restarted",
-      subagent: "Agent finished",
+      exec: "A background command finished",
+      restart: "The Gateway restarted",
+      subagent: "Picked up after an agent finished",
     },
+    continuationDelay: "{duration} later",
     handoffSessionsOne: "1 session",
     handoffSessions: "{count} sessions",
     handoffSessionStatus: {

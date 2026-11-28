@@ -52,7 +52,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 .skill-page__publisher summary > .plugin-metadata__middle {
   display: inline-flex;

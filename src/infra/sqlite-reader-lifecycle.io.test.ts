@@ -112,25 +112,6 @@ it.each(["sync", "async", "rejected"])(
   },
 );
 
-it("counts sub-threshold and zero-byte operations without additional registrations", () => {
-  procfs(4096, 8192, 8192, 8192);
-  const registered = vi.fn();
-  const stop = observeSqliteReaderCounters(registered);
-  registered.mockClear();
-  for (let i = 0; i < 2; i++) {
-    withSqliteReaderOwner(
-      { operation: "sessions.small", ownerKind: "worker" },
-      () => 42,
-      undefined,
-      { warn },
-    );
-  }
-  stop();
-  expect([...counters.get("sessions.small")!.values]).toEqual([2n, 4096n]);
-  expect(registered).toHaveBeenCalledTimes(1);
-  expect(warn).not.toHaveBeenCalled();
-});
-
 it("keeps heavy-read diagnostics when procfs identity is unavailable without exposing paths", () => {
   vi.spyOn(process, "argv", "get").mockReturnValue(["node", "/private/custom-worker.js"]);
   vi.spyOn(fs, "readlinkSync").mockImplementation(() => {

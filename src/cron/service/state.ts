@@ -382,6 +382,7 @@ export type CronJobPolicyContext = {
 };
 
 export type CronServiceState = {
+  readAvailableMemoryBytes?: () => number | undefined;
   deps: CronServiceDepsInternal;
   store: CronStoreFile | null;
   /** Revisions of the last published definitions, replaced with each committed snapshot. */

@@ -48,6 +48,26 @@ it("settles a legacy failed result into requester history before session-run ret
   });
 });
 
+it("retains retirement candidates until their requester turn consumes the result", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const entry = createArchivedSubagentSweeperRun({
+      retireAfterSettle: true,
+      requesterTurnRunId: "awaiting-result",
+      expectsCompletionMessage: true,
+      delivery: { status: "delivered" },
+    });
+    const { sweeper, runs, callGateway } = createSubagentSweeperHarness(entry);
+    await sweeper.sweepOnce();
+    expect(runs.has(entry.runId)).toBe(true);
+    expect(callGateway).not.toHaveBeenCalled();
+
+    runs.set(entry.runId, { ...entry, requesterTurnRunId: undefined });
+    await sweeper.sweepOnce();
+    expect(runs.has(entry.runId)).toBe(false);
+    expect(callGateway).toHaveBeenCalledOnce();
+  });
+});
+
 it("lets I/O run during a retained backlog and skips owners replaced between batches", async () => {
   vi.useRealTimers();
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

@@ -2,7 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
 import type { SkillStatusEntry } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import { SettingsToggle } from "../../components/solid/settings-ui.tsx";
+import { Switch } from "../../components/solid/switch.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { MiddleTruncated, splitTail } from "../plugins/middle-truncated.tsx";
 import type { SkillsProps } from "./view-types.ts";
@@ -27,7 +27,7 @@ export function SkillEnabledSwitch(props: { skill: SkillStatusEntry; view: Skill
       <span aria-hidden="true">
         {t(props.skill.disabled ? "skillsPage.disabled" : "skillsPage.enabled")}
       </span>
-      <SettingsToggle
+      <Switch
         checked={!props.skill.disabled}
         saving={saving()}
         disabled={

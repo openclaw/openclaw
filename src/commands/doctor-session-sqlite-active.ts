@@ -1,4 +1,7 @@
-import { importSqliteSessionRowsBatch } from "../config/sessions/session-accessor.sqlite-import.js";
+import {
+  importSqliteSessionRowsBatch,
+  restoreColdSessionTranscriptsForImport,
+} from "../config/sessions/session-accessor.sqlite-import.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
@@ -63,6 +66,14 @@ export async function prepareActiveSqliteTranscriptSettlement(params: {
           env: params.env,
           mode,
         });
+      // Settled history may have been cold-archived; restore before verification reads it
+      // and before the import writer is reserved.
+      await restoreColdSessionTranscriptsForImport({
+        agentId: target.agentId,
+        env: params.env,
+        sessionIds: [source.sessionId],
+        storePath: target.sqlitePath,
+      });
       let verified = verify("appendable");
       if (!verified) {
         throw new Error(

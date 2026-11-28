@@ -7,6 +7,7 @@ import { addSession } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import * as execNotify from "../agents/bash-tools.exec-notify.js";
 import * as sessionEventBatch from "../auto-reply/reply/session-event-batch.js";
+import { buildSessionEventContext } from "../auto-reply/reply/session-event-context.js";
 import { readSessionEventTargetOperatorAuthority } from "../auto-reply/reply/session-event-target.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -16,7 +17,7 @@ import { chatRef } from "../sessions/chat-ref.js";
 import { owe } from "../sessions/owed.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { decideChannelOwnerPrincipal } from "./operator-admission.js";
+import { decideChannelOwnerPrincipal, readCommandSenderAdmission } from "./operator-admission.js";
 import { captureChannelOperatorRunAuthority } from "./operator-run-authority.js";
 import type { QueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
@@ -30,11 +31,37 @@ import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 const owner = { channelId: "discord", accountId: "default", senderId: "111" };
 const ownerConfig = { commands: { ownerAllowFrom: ["discord:111"] } };
 
+// The woken turn's requester and its owner decision, read the way the turn's commands and owner
+// tools read it (`portal`, `gateway`, ...): from the context the session event builds. Every
+// continuation entry kind on the same admitted target gives the same answer.
 const woken = (
   target: Parameters<typeof readSessionEventTargetOperatorAuthority>[0] | undefined,
 ) => {
   const authority = target && readSessionEventTargetOperatorAuthority(target);
-  return authority && { profileId: authority.profileId, owner: authority.grant.owner };
+  if (!target || !authority) {
+    return undefined;
+  }
+  const owners = Object.fromEntries(
+    (["exec", "restart", "tool_handoff"] as const).map((source) => [
+      source,
+      readCommandSenderAdmission(
+        buildSessionEventContext({
+          cfg: {},
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          text: "Exec completed.",
+          options: { source },
+          occurrenceId: `owed-${source}-wake`,
+          target,
+          assertCurrent() {},
+        }),
+        [],
+        [],
+      ).grant.owner,
+    ]),
+  );
+  const answers = new Set(Object.values(owners));
+  return { profileId: authority.profileId, owner: answers.size === 1 ? owners.exec : owners };
 };
 
 // A durable or lost ordinary process restored from its record exits after a Gateway restart.

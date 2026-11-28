@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../styles.css";
 import { cleanupSkillsViews, renderSkills } from "./view.solid.test-support.tsx";
 import { createProps, createReport, createSkill } from "./view.test-support.ts";
@@ -25,6 +25,7 @@ function showInstalled(skill: Parameters<typeof createSkill>[0], messages = {}) 
 }
 
 async function renderedPage() {
+  await vi.dynamicImportSettled();
   await expect
     .poll(() => container!.querySelector(".skill-page h1, .skill-page__absent"))
     .not.toBeNull();

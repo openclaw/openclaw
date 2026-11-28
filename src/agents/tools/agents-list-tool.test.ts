@@ -104,6 +104,22 @@ describe("agents_list tool", () => {
     },
   );
 
+  it("returns all configured agents and advertises a wildcard allowlist", async () => {
+    configureAgents(
+      { subagents: { allowAgents: ["*"] } },
+      { main: {}, research: { name: "Research" }, coder: { name: "Coder" } },
+    );
+    const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
+      "call",
+      {},
+    );
+    expect(result.details).toMatchObject({
+      requester: "main",
+      allowAny: true,
+      agents: [{ id: "main" }, { id: "coder" }, { id: "research" }],
+    });
+  });
+
   it("does not advertise stale allowlist-only targets as spawnable agents", async () => {
     loadConfigMock.mockReturnValue({
       agents: {

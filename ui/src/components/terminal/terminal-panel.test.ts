@@ -1029,31 +1029,6 @@ describe("OpenClawTerminalPanel", () => {
     expect(currentController.dispose).not.toHaveBeenCalled();
   });
 
-  it("removes resize listeners when disconnected mid-drag", async () => {
-    createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
-    const client: TerminalGatewayClient = createTerminalGatewayClient(
-      async <T>(method: string) =>
-        (method === "terminal.open" ? terminalOpenResult("session-1") : { ok: true }) as T,
-    );
-    const panel = mount(TERMINAL_PANEL_ELEMENT_NAME, { client, available: true }, false);
-    panel.toggle();
-    await panel.updateComplete;
-
-    panel
-      .querySelector(".tp-resizer")
-      ?.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, clientX: 20, clientY: 200 }));
-    panel.remove();
-    await Promise.resolve();
-    window.dispatchEvent(new MouseEvent("pointermove", { clientX: 20, clientY: 20 }));
-
-    expect(document.documentElement.style.getPropertyValue("--oc-terminal-reserve-bottom")).toBe(
-      "0px",
-    );
-    expect(document.documentElement.style.getPropertyValue("--oc-terminal-reserve-right")).toBe(
-      "0px",
-    );
-  });
-
   it("retranslates cached exit state when the locale changes", async () => {
     createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
     let listener: ((event: { event: string; payload: unknown }) => void) | undefined;

@@ -46,6 +46,8 @@ export type ScheduledToolTargets = Readonly<{
   placement?: ScheduledExecutionFacts["placement"];
   /** The job's exec target pin, from the context's tool policy. */
   execTarget?: ScheduledExecutionFacts["toolPolicy"]["execTarget"];
+  /** A host-set ceiling on session inventory and history reads. */
+  sessionReadAgentOnly?: true;
   /**
    * The owner bit sessions this run spawns record in their lineage receipt: a
    * child-placement occurrence's admitted owner bit, rechecked through
@@ -69,7 +71,7 @@ export function readScheduledToolTargets(
   // Admission sets the recheck only for a requester-held owner bit; in-session and
   // ingress runs keep their existing owner checks.
   const ownerRecheck = senderBitOf(context) ? context.assertOwnerCurrent : undefined;
-  const { execTarget } = context.toolPolicy;
+  const { execTarget, sessionReadAgentOnly } = context.toolPolicy;
   const { memory } = context.resources;
   return {
     boardSessionKey: context.resources.boardSessionKey,
@@ -77,6 +79,7 @@ export function readScheduledToolTargets(
     ...(ownerRecheck ? { assertOwnerCurrent: ownerRecheck } : {}),
     ...(context.principal.kind === "ingress" ? {} : { placement: context.placement }),
     ...(execTarget ? { execTarget } : {}),
+    ...(sessionReadAgentOnly ? { sessionReadAgentOnly } : {}),
     // Only a child-placement run row carries the receipt its spawned sessions follow.
     ...(context.placement === "child" && memory.source === "parent"
       ? { spawnSenderIsOwner: memory.owner }

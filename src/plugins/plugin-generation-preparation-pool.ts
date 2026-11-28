@@ -40,7 +40,6 @@ export async function createPreparationPool(nativeSource: RetainedNativeWorkerSo
       return client.registerNativeRoot(root);
     },
   });
-  let retired = false;
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.pluginGenerationPreparation);
   const pool = createOwnedWorkerTaskPool<GenerationWorkerInput, GenerationWorkerReply>(
     {
@@ -51,7 +50,6 @@ export async function createPreparationPool(nativeSource: RetainedNativeWorkerSo
       prepareWorker: () => ({
         options: { execArgv: resolvePluginPreparationExecArgv(workerUrl) },
         releaseResources: async () => {
-          retired = true;
           // Captured handles cannot migrate to a replacement isolate. Stop queued
           // captures before releasing roots they might otherwise still use.
           void pool.close(new Error("Plugin preparation worker has closed")).catch(() => {});
@@ -82,7 +80,7 @@ export async function createPreparationPool(nativeSource: RetainedNativeWorkerSo
     captures,
     clients,
     get retired() {
-      return retired;
+      return pool.isClosed;
     },
     startTask(...args: Parameters<typeof pool.startTask>) {
       // A sibling's owner-controlled capture must not consume this call's deadline.

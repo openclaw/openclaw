@@ -59,6 +59,49 @@ afterEach(() => {
 });
 
 describe("before_model_request on CLI runtimes", () => {
+  it.each(["inline", "file", "text-only"])(
+    "validates %s image replacements at the request boundary",
+    async (kind) => {
+      const image = {
+        type: "image" as const,
+        data: "aW1hZ2U=",
+        mimeType: "image/png",
+        displayName: "context-image-1",
+      };
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_model_request",
+            handler: async () => ({
+              payload: {
+                prompt: "safe",
+                images:
+                  kind === "file" ? [{ type: "file", path: "/tmp/unrequested-file" }] : [image],
+              },
+            }),
+          },
+        ]),
+      );
+      const hookRunner = getGlobalHookRunner();
+      if (!hookRunner) {
+        throw new Error("Missing hook runner");
+      }
+      const gate = createCliModelRequestGate({
+        hookRunner,
+        hookContext: {},
+        provider: "github-copilot",
+        model: "fusion",
+        messages: async () => [],
+      });
+      const request = gate({ prompt: "original", ...(kind === "text-only" ? {} : { images: [] }) });
+      if (kind === "inline") {
+        await expect(request).resolves.toEqual({ prompt: "safe", images: [image] });
+      } else {
+        await expect(request).rejects.toThrow("before_model_request");
+      }
+    },
+  );
+
   it("screens the CLI turn once and sends the replacement prompt", async () => {
     const seen: unknown[] = [];
     initializeGlobalHookRunner(

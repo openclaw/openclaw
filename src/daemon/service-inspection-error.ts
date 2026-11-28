@@ -129,6 +129,45 @@ export class ServiceOwnershipRefusalError extends Error {
   }
 }
 
+export const SYSTEMD_STATE_SELECTOR_KEYS = [
+  "HOME",
+  "OPENCLAW_HOME",
+  "OPENCLAW_STATE_DIR",
+  "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_PROFILE",
+] as const;
+
+/** A loaded system unit observed running under an account other than this process. */
+export type SystemdServiceAccountMismatch = {
+  unitName: string;
+  unitPath: string;
+  serviceUser: string;
+  programArguments: string[];
+  workingDirectory: string;
+  /** State selectors from inline Environment= only; other values, such as tokens, are not kept. */
+  selectors: Partial<Record<(typeof SYSTEMD_STATE_SELECTOR_KEYS)[number], string>>;
+  /** EnvironmentFile= or UnsetEnvironment= may change the selectors and were not read. */
+  selectorsIncomplete: boolean;
+};
+
+/** The same refusal, carrying what was observed so callers can name the unit and its account. */
+export class SystemdServiceAccountRefusalError extends ServiceOwnershipRefusalError {
+  constructor(readonly mismatch: SystemdServiceAccountMismatch) {
+    super("systemd-account-refused");
+  }
+}
+
+export function findSystemdServiceAccountMismatch(
+  error: unknown,
+): SystemdServiceAccountMismatch | undefined {
+  for (const candidate of collectNestedErrorCandidates(error)) {
+    if (candidate instanceof SystemdServiceAccountRefusalError) {
+      return candidate.mismatch;
+    }
+  }
+  return undefined;
+}
+
 export function findServiceOwnershipRefusal(
   error: unknown,
 ): ServiceOwnershipRefusalError | undefined {

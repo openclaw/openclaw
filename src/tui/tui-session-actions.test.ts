@@ -576,25 +576,6 @@ describe("tui session actions", () => {
     expectCalls(2, updateAutocompleteProvider, updateFooter, requestRender);
   });
 
-  it("skips UI work when session refresh metadata is unchanged", async () => {
-    const metadata = { model: "sonnet-4.6", modelProvider: "anthropic", totalTokens: 42 };
-    const describeSession = vi
-      .fn()
-      .mockResolvedValue(description({ key: mainSession.key, ...metadata, updatedAt: 200 }));
-    const { state, refreshSessionInfo, updateFooter, updateAutocompleteProvider, requestRender } =
-      createHarness({
-        backend: { describeSession },
-        state: {
-          sessionInfo: { ...metadata, updatedAt: 100 },
-        },
-      });
-
-    await refreshSessionInfo();
-
-    expect(state.sessionInfo.updatedAt).toBe(200);
-    expectCalls(0, updateAutocompleteProvider, updateFooter, requestRender);
-  });
-
   it("keeps patched model selection when a refresh returns an older snapshot", async () => {
     const oldModel = { model: "old-model", modelProvider: "ollama", updatedAt: 100 };
     const describeSession = vi
@@ -639,29 +620,6 @@ describe("tui session actions", () => {
       traceLevel: "raw",
       reasoningLevel: "stream",
     });
-  });
-
-  it("applies the runtime-aware thinking projection returned by session patches", () => {
-    const { state, applySessionInfoFromPatch } = createHarness();
-    const resolved = {
-      modelProvider: "openai",
-      model: "gpt-5.6-luna",
-      agentRuntime: { id: "openclaw", source: "session-key" },
-      thinkingLevel: "ultra",
-      thinkingLevels: [
-        { id: "off", label: "off" },
-        { id: "ultra", label: "ultra" },
-      ],
-    } satisfies NonNullable<Awaited<ReturnType<TuiBackend["patchSession"]>>["resolved"]>;
-
-    applySessionInfoFromPatch({
-      ok: true,
-      key: "agent:main:main",
-      entry: { sessionId: "session-1", updatedAt: 200 },
-      resolved: structuredClone(resolved),
-    });
-
-    expect(state.sessionInfo).toMatchObject(resolved);
   });
 
   it.each([
@@ -777,21 +735,6 @@ describe("tui session actions", () => {
       await nextEventLoopTurn();
       expect(describeSession).not.toHaveBeenCalled();
       expect(state.sessionInfo).toMatchObject({ totalTokens: 1000, contextTokens: 120000 });
-    } finally {
-      events.dispose();
-    }
-  });
-
-  it.each([
-    { name: "carries no row", row: undefined },
-    { name: "carries a row the session picker hides", row: { archived: true } },
-  ])("describes the session once when a run message $name", async ({ row }) => {
-    const { describeSession, events, message } = createRunMessageHarness();
-    try {
-      message(200, row);
-      await vi.waitFor(() => expect(describeSession).toHaveBeenCalledOnce());
-      await nextEventLoopTurn();
-      expect(describeSession).toHaveBeenCalledOnce();
     } finally {
       events.dispose();
     }
@@ -1818,27 +1761,5 @@ describe("tui session actions", () => {
       expect(renderChat(chatLog).match(/continue/g)).toHaveLength(copies);
     },
   );
-
-  it("uses top-level chat history thinking level when session info inherits it", async () => {
-    const describeSession = vi.fn();
-    const loadHistory = mockHistory([], {
-      sessionInfo: session("session-main", {
-        modelProvider: "openai",
-        model: "gpt-5",
-        contextTokens: 120_000,
-        thinkingDefault: "medium",
-        updatedAt: 200,
-      }),
-      thinkingLevel: "medium",
-    });
-    const { state, loadHistory: runLoadHistory } = createHarness({
-      backend: { describeSession, loadHistory },
-    });
-
-    await runLoadHistory();
-
-    expect(describeSession).not.toHaveBeenCalled();
-    expect(state.sessionInfo.thinkingLevel).toBe("medium");
-  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

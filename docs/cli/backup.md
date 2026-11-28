@@ -555,6 +555,12 @@ untracked files and operator-staged changes remain outside the backup commit,
 even inside a backup scope. Already-committed unrelated files remain in Git;
 backup creation does not scrub their history or remove them from later trees.
 
+Repository Git hooks still run. Before reporting success or pushing, OpenClaw checks
+that the committed tree matches the prepared snapshot. If a hook unstages or
+changes an artifact, creation fails and the backup run is recorded as failed.
+The commit remains in the local repository for inspection; OpenClaw does not
+rewrite history. Correct the hook and create a new backup before relying on it.
+
 `--push` pushes the current branch to `origin`. A push failure after a successful local commit is a warning and does not discard or mark the local backup as failed.
 
 <Warning>
@@ -920,6 +926,11 @@ their expected role and agent owner. Unsafe aliasing or an owner mismatch stops 
 also stops the backup rather than falling back to a direct file copy. Restore
 the required SQLite capabilities or use the plugin's own backup procedure before
 retrying. This also applies to newly recognized database filenames.
+
+If a managed SQLite database appears during capture (for example, when the Gateway
+starts), backup discards that attempt and retries with fresh snapshots, up to
+three attempts in total. It publishes no archive if it cannot snapshot every newly
+observed database or if databases are still appearing on the last attempt.
 
 Other SQLite files under state and configured agent roots, including their
 sidecars, are copied as opaque bytes. Creation reports each filename in

@@ -2,6 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  createDoctorHealthFlowContext,
+  createDoctorPrompterFixture,
+  decideDoctorContributionPending,
+} from "../flows/doctor-health-context.test-support.js";
+import { initialDoctorHealthContribution } from "../flows/doctor-health-contributions-selection.test-support.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   legacyPluginManifestContractMigrationToHealthFinding,
@@ -121,6 +127,30 @@ describe("doctor plugin manifest legacy contract repair", () => {
       fs.readFileSync(path.join(root, "openclaw.plugin.json"), "utf-8"),
     );
     expect(next).toEqual({ configSchema: { type: "object" }, ...expected });
+  });
+
+  it("reports pending work through the Doctor contribution until the manifest is rewritten", async () => {
+    const { root, params } = await createManifestFixture("pending", {
+      id: "pending-plugin",
+      tools: ["legacy_tool"],
+    });
+    const manifestPath = path.join(root, "openclaw.plugin.json");
+    const original = fs.readFileSync(manifestPath);
+    const contribution = initialDoctorHealthContribution("doctor:legacy-plugin-manifests");
+    const ctx = createDoctorHealthFlowContext({
+      cfg: params.config,
+      runtime: params.runtime,
+      prompter: createDoctorPrompterFixture(true),
+    });
+
+    await expect(decideDoctorContributionPending(contribution, ctx)).resolves.toBe("work");
+    expect(fs.readFileSync(manifestPath)).toEqual(original);
+
+    await contribution.run(ctx);
+    expect(JSON.parse(fs.readFileSync(manifestPath, "utf-8"))).toMatchObject({
+      contracts: { tools: ["legacy_tool"] },
+    });
+    await expect(decideDoctorContributionPending(contribution, ctx)).resolves.toBe("none");
   });
 
   it("preserves undecodable manifests while migrating valid neighbors", async () => {

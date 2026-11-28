@@ -18,6 +18,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { PluginRegistry } from "../../src/plugins/registry-types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -118,12 +119,7 @@ async function measure(count: number, acquire: () => PluginRegistry) {
   });
   try {
     if (mode === "allocation") {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 4096,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 4096);
     } else {
       observer.observe({ entryTypes: ["gc"] });
     }
@@ -197,7 +193,9 @@ try {
       const input = { config, workspaceDir, allowGatewaySubagentBinding: true };
       await withPluginRuntimeRegistryScope(root, async () => {
         const loadInbound = createPreparedInboundRegistryLoader();
-        const acquire = () => (prepared = loadInbound(input, metadata, []));
+        const getConfiguredHarnessRuntimes = () => [];
+        const acquire = () =>
+          (prepared = loadInbound(input, metadata, getConfiguredHarnessRuntimes));
         global.gc!();
         await nextTurn();
         const initial = await measure(1, acquire);

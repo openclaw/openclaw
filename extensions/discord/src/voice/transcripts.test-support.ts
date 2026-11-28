@@ -19,6 +19,7 @@ export function createDiscordVoiceTranscriptFixture() {
     sessionId = "notes-1",
     channelId = "1001",
     accountId = "default",
+    cfg?: TranscriptStartRequest["cfg"],
   ) => {
     setDiscordTranscriptsVoiceManager({ accountId, manager });
     registeredManagers.set(accountId, manager);
@@ -26,6 +27,7 @@ export function createDiscordVoiceTranscriptFixture() {
     const source = { providerId: "discord-voice", accountId, guildId: "g1", channelId };
     captures.push({ sessionId, source });
     return await discordVoiceTranscriptsSourceProvider.start!({
+      cfg,
       session: { sessionId, source, startedAt: new Date().toISOString() },
       onUtterance,
     });

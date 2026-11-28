@@ -218,24 +218,11 @@ export function SidebarPanel(props: SidebarPanelProps) {
     (props.content?.kind === "image" || props.content?.kind === "attachment");
   const mobileReader = () =>
     mobileMedia() || (props.filePresentation === "mobile" && props.content?.kind === "file");
-  const fillHost = () =>
-    [
-      "file",
-      "markdown",
-      "attachment",
-      "session-diff",
-      "image",
-      "canvas",
-      "mcp-app-preview",
-    ].includes(props.content?.kind ?? "");
   // Text attachments initialize their own asynchronously loaded Markdown.
   const markdownPresented = createMemo(() => props.content?.kind !== "attachment");
   return (
     <div
-      class={{
-        "sidebar-panel-host--fill": fillHost(),
-        "sidebar-panel-host--mobile-reader": mobileReader(),
-      }}
+      class={["sidebar-panel-host--fill", { "sidebar-panel-host--mobile-reader": mobileReader() }]}
       ref={markdownBlocksRef(markdownPresented)}
       onClick={(event) => props.onClick(event)}
       onKeyDown={(event) => props.onKeydown(event)}
@@ -278,7 +265,18 @@ export function SidebarPanel(props: SidebarPanelProps) {
             attachment={props.fileView?.fileAttachment}
           />
         </Show>
-        <div class={["sidebar-content", { "sidebar-file-mobile__body": mobileMedia() }]}>
+        <div
+          class={["sidebar-content", { "sidebar-file-mobile__body": mobileMedia() }]}
+          data-flush={
+            !props.error &&
+            (props.content?.kind === "attachment" ||
+              props.content?.kind === "canvas" ||
+              props.content?.kind === "mcp-app" ||
+              (props.content?.kind === "mcp-app-preview" && Boolean(props.content.view)))
+              ? ""
+              : undefined
+          }
+        >
           <Show
             when={!props.error}
             fallback={
@@ -466,7 +464,7 @@ export function SidebarPanel(props: SidebarPanelProps) {
                       )}
                     </Show>
                     <Show when={props.content?.rawText?.trim()}>
-                      <div style={{ "margin-top": "12px" }}>
+                      <div style={{ margin: kind === "canvas" ? "12px 16px" : "12px 0 0" }}>
                         <RawButton onClick={props.onViewRawText} />
                       </div>
                     </Show>

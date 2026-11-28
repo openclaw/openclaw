@@ -97,7 +97,7 @@ describe("plugin forked turns through the real Gateway", () => {
               args: { note: "fork saw the turn" },
               backgroundRun: { sourceSessionKey: sessionKey, ownerPluginId: "fork-proof" },
               runId,
-              // The authenticated operator's turn keeps its owner authority in the fork.
+              // The admin caller's owner authority reaches the fork's tools.
               senderIsOwner: true,
             },
           ]);
@@ -165,9 +165,10 @@ describe("plugin forked turns through the real Gateway", () => {
             ok: true,
             result: { status: "settled" },
           });
-          // A channel sender's turn does not gain owner authority in the fork.
+          // Owner authority is the caller's, never the turn's: the admin's fork of a channel
+          // sender's turn runs as owner, while sender policy still follows the turn.
           expect(fixture.proof.toolCalls).toEqual([
-            expect.objectContaining({ senderIsOwner: false }),
+            expect.objectContaining({ senderIsOwner: true }),
           ]);
           // The fork runs on the model the anchored turn ran on.
           expect(fixture.forkRequests[0]?.model).toBe(fixture.foregroundRequests.at(-1)?.model);
@@ -229,6 +230,8 @@ describe("plugin forked turns through the real Gateway", () => {
             await expect(
               fixture.fork(allowed, { provider: "mock-openai", model: "fork-proof" }, writer),
             ).resolves.toMatchObject({ ok: true, result: { status: "settled" } });
+            // A caller without owner authority forks as an explicit non-owner.
+            expect(fixture.proof.toolCalls.at(-1)).toMatchObject({ senderIsOwner: false });
           } finally {
             await disconnectGatewayClient(writer);
           }

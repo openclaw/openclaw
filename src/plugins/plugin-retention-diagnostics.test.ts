@@ -62,10 +62,8 @@ describe("plugin retained reference diagnostics", () => {
     expect(instance.retentionSnapshot().references[0]!.reason).toBe("registry-construction");
     expect(instance.retentionSnapshot({ limit: 1 })).toMatchObject({ total: 2, omitted: 1 });
     expect(
-      instance
-        .retentionSnapshot({ includeOwners: false })
-        .references.every((row) => row.owner === "unknown"),
-    ).toBe(true);
+      instance.retentionSnapshot({ includeOwners: false }).references.map((row) => row.owner),
+    ).toEqual(["unknown", "unknown"]);
     first();
     first();
     second();

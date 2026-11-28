@@ -19,7 +19,6 @@ import {
   recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome-classification.js";
 import { writeOpenClawPackageFixture } from "./update-cli-package.test-support.js";
@@ -306,9 +305,6 @@ describe("post-activation failure settlement without inference", () => {
           expect.objectContaining({ step: "warning:gateway verification", detail: observation }),
         );
         expect(recorded?.origin.nextAction).not.toContain("Keep the gateway stopped");
-        if (outcome === "still-starting" && recorded) {
-          expect(renderUpdateRunReport(recorded).markdown).toContain("Gateway still starting");
-        }
       }
     },
   );
@@ -959,7 +955,6 @@ describe("post-activation failure settlement without inference", () => {
       const report = getUpdateRun(run.runId, { env: run.env });
       expect(report?.verification.serviceRunning).toBe(untouched ? undefined : recovered);
       expect(report?.verification.readyz).toBe(untouched ? undefined : recovered);
-      const rendered = renderUpdateRunReport(report!).lines.join("\n");
       if (migration) {
         expect(report?.status).toBe("failed");
         if (receipt === "migration-verified") {
@@ -979,11 +974,11 @@ describe("post-activation failure settlement without inference", () => {
         expect(refusal).toMatchObject({ status: "failed", exitCode: 1 });
       }
       if (migration && !recovered) {
-        expect(rendered).toContain("openclaw --profile work doctor --fix");
-        expect(rendered).toContain("openclaw --profile work gateway start");
+        expect(report?.origin.nextAction).toContain("openclaw --profile work doctor --fix");
+        expect(report?.origin.nextAction).toContain("openclaw --profile work gateway start");
       }
       if (recovered) {
-        expect(rendered).toContain("openclaw --profile work update repair");
+        expect(report?.origin.nextAction).toContain("openclaw --profile work update repair");
         expect(report?.origin.nextAction).toContain("installed Gateway is healthy");
         expect(report?.origin.nextAction).toContain("running on the retained state");
         expect(report?.origin.nextAction).toContain("openclaw --profile work gateway stop");

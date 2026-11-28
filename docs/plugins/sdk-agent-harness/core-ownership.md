@@ -209,7 +209,8 @@ profile handling for harnesses that enforce native availability independently.
 Harnesses with an independently managed native surface can also declare
 `conversationToolPolicySafeDenyTools` using standard OpenClaw tool names. Core
 preserves the native surface only when every expanded deny is a known core tool
-in that audited safe list and passes the matching names in
+or a plugin tool declared in current manifest metadata, and is also in that
+audited safe list. Core passes the matching names in
 `params.pluginHarnessToolPolicySafeDeniedTools`. The harness must disable any
 native equivalents for those names. Finite allowlists, undeclared or unknown
 tool names, wildcards, and groups containing any undeclared name remain
@@ -293,6 +294,14 @@ Include `modelRef: { provider, model }` only when both values are known from tha
 same binding. Do not infer a missing value from outer configuration, credentials,
 or usage. Host-auth ownership requires this tuple before credential preparation;
 native-auth pending branches may omit it until their native owner selects a model.
+
+Declare `promptProjection: "captures"` only when the harness calls
+`userTurnTranscriptRecorder.captureModelPromptProjection(text, assertCurrent)` before
+every provider dispatch of the user turn, then `markSentToProvider()`. After such a
+dispatch, a later capture on the same turn is an error, so a fallback candidate can
+never store different model-facing text. Omit the field (default `"external"`) when the
+native runtime builds its own prompt: a later fallback then keeps the stored transcript
+text for a turn this harness sent without a projection.
 
 Declare `nativeModelPolicySupport: "exact"` only when the harness binds the actual
 native selection before every inference dispatch, including after resume. Use
