@@ -30,8 +30,8 @@ import { readTranscriptEventMessage } from "../../config/sessions/session-access
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-writable.js";
 import { listSessionPendingInputs } from "../../config/sessions/session-pending-input-history.js";
 import { resolveAdmittedCronCompletionStatus } from "../../cron/completion-status.js";
-import { CRON_INFERENCE_ACCOUNT_RETIRED_CODE } from "../../cron/inference-binding.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
+import { CRON_INFERENCE_ACCOUNT_RETIRED_CODE } from "../../cron/inference-binding.js";
 import { memberSourceCase } from "../../cron/isolated-agent/run.invalid-source.test-support.js";
 import { resolveCronRunErrorReason } from "../../cron/run-error-reason.js";
 import {

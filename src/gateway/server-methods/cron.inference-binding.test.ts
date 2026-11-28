@@ -201,6 +201,7 @@ describe("cron handler inference binding persistence", () => {
     ["native", "absent"],
     ["worker", "absent"],
     ["worker", "ambient"],
+    ["direct", "absent"],
     ["direct", "environment"],
     ["direct", "configuration"],
     ["local", "configured"],
@@ -292,7 +293,6 @@ describe("cron handler inference binding persistence", () => {
   );
 
   it.for([
-    [{ runtime: "openclaw" }, undefined, "stored inference account"],
     [{ registered: false }, undefined, "codex"],
     [{ supported: false }, undefined, "does not support"],
     [{}, "codex/openai-compatible/gpt-5.4@missing-account", "missing-account"],
