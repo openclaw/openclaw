@@ -4,7 +4,11 @@ import type { StreamTargetChunk } from "mediabunny";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { VideoCompressionResponse } from "./chat-attachment-video.ts";
 
-const encoder = vi.hoisted(() => ({ attempts: [] as StreamTargetChunk[][], writes: 0 }));
+const encoder = vi.hoisted(() => ({
+  attempts: [] as StreamTargetChunk[][],
+  writes: 0,
+  failure: "",
+}));
 
 vi.mock("mediabunny", () => {
   class StreamTarget {
@@ -29,10 +33,13 @@ vi.mock("mediabunny", () => {
     Mp4OutputFormat: vi.fn(),
     WebMOutputFormat: vi.fn(),
     Quality: vi.fn(),
-    canEncodeVideo: async () => true,
+    canEncodeVideo: async () => encoder.failure !== "codec",
     canEncodeAudio: async () => true,
     Conversion: {
       async init({ output }: { output: Output }) {
+        if (encoder.failure === "conversion") {
+          throw new Error("PRIVATE conversion details");
+        }
         const chunks = encoder.attempts.shift()!;
         let canceled = false;
         return {
@@ -42,6 +49,9 @@ vi.mock("mediabunny", () => {
             canceled = true;
           },
           async execute() {
+            if (encoder.failure === "encoding") {
+              throw new Error("PRIVATE encoding details");
+            }
             const writer = output.options.target.writable.getWriter();
             for (const chunk of chunks) {
               encoder.writes += 1;
@@ -61,6 +71,7 @@ vi.mock("mediabunny", () => {
 beforeEach(() => {
   vi.resetModules();
   encoder.writes = 0;
+  encoder.failure = "";
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -108,5 +119,20 @@ it("stops encoding as soon as output exceeds twice the upload budget", async () 
   const chunks = [writeChunk(200_001), writeChunk(100_000, 200_001)];
   const result = await compress([chunks, chunks]);
   expect(encoder.writes).toBe(1);
-  expect(result).toEqual({ type: "error", reason: "too-large" });
+  expect(result).toEqual({ type: "error", reason: "too-large", stage: "output" });
 });
+
+it.each([
+  ["codec", "unsupported", "codec"],
+  ["conversion", "failed", "conversion"],
+  ["encoding", "failed", "encoding"],
+  ["empty", "failed", "output"],
+])(
+  "reports %s failures with only a normalized stage and reason",
+  async (failure, reason, stage) => {
+    encoder.failure = failure;
+    const result = await compress([[]]);
+    expect(result).toEqual({ type: "error", reason, stage });
+    expect(JSON.stringify(result)).not.toContain("PRIVATE");
+  },
+);
