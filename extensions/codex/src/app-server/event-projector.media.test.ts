@@ -229,6 +229,39 @@ describe("CodexAppServerEventProjector media projection", () => {
     },
   );
 
+  it.each([
+    ["visible", "The receipt total is 42.", 1],
+    ["silent", "NO_REPLY", 0],
+  ] as const)(
+    "attaches a code-mode inspection image only to a %s reply",
+    async (_disposition, finalText, attachedImages) => {
+      const { projector, events } = await createProjection();
+      await events.raw({
+        type: "custom_tool_call_output",
+        call_id: "exec-inspect",
+        output: [
+          { type: "input_text", text: "Script completed" },
+          { type: "input_image", image_url: `data:image/png;base64,${tinyPngBase64}` },
+        ],
+      });
+      await projector.handleNotification(assistantEvent("final", finalText));
+      await events.complete();
+
+      const result = events.result();
+      expect(result.toolMediaUrls ?? []).toHaveLength(attachedImages);
+      expect(result.hostOwnedToolMediaUrls ?? []).toHaveLength(attachedImages);
+    },
+  );
+
+  it("keeps generated images on a silent reply", async () => {
+    const { projector, events } = await createProjection();
+    await events.completed(codexImage("ig_silent"));
+    await projector.handleNotification(assistantEvent("final", "NO_REPLY"));
+    await events.complete();
+
+    await expectImage(events);
+  });
+
   it("does not let delayed raw completion consume a newer assistant echo", async () => {
     const { projector, events } = await createProjection();
     await projector.handleNotification(assistantEvent("answer-a", "rewritten A"));
