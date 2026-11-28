@@ -65,6 +65,7 @@ preserve signed thinking safely.
 The plugin registers `microsoft-foundry` for `image_generate` with the current
 Microsoft AI image models:
 
+- `MAI-Image-2.6`
 - `MAI-Image-2.5-Flash`
 - `MAI-Image-2.5`
 - `MAI-Image-2e`
@@ -91,13 +92,14 @@ name in the request `model` field:
 
 Prompt-only generation calls Microsoft Foundry's MAI generations endpoint:
 `/mai/v1/images/generations`. Reference-image edits call
-`/mai/v1/images/edits` and are limited to `MAI-Image-2.5-Flash` and
-`MAI-Image-2.5` deployments.
+`/mai/v1/images/edits` and are limited to `MAI-Image-2.6`, `MAI-Image-2.5-Flash`,
+and `MAI-Image-2.5` deployments.
 
 Prompt-only generation can use a custom deployment name with just the Foundry
 endpoint configured. For image edits with a custom deployment name, select the
 deployment through onboarding or include model metadata so OpenClaw can verify
-that the deployment is backed by `MAI-Image-2.5-Flash` or `MAI-Image-2.5`.
+that the deployment is backed by `MAI-Image-2.6`, `MAI-Image-2.5-Flash`, or
+`MAI-Image-2.5`.
 
 MAI image constraints:
 

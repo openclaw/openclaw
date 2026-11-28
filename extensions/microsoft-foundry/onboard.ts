@@ -269,14 +269,19 @@ export async function promptEndpointAndModelManually(
         message: "MAI image base model",
         options: [
           {
+            value: "MAI-Image-2.6",
+            label: "MAI-Image-2.6",
+            hint: "Latest MAI image deployment",
+          },
+          {
             value: "MAI-Image-2.5-Flash",
             label: "MAI-Image-2.5-Flash",
-            hint: "Latest fast MAI image deployment",
+            hint: "Fast MAI image deployment",
           },
           {
             value: "MAI-Image-2.5",
             label: "MAI-Image-2.5",
-            hint: "Latest MAI image deployment",
+            hint: "MAI image deployment",
           },
           {
             value: "MAI-Image-2e",
