@@ -253,6 +253,7 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
 }): Promise<{
   binding: CodexAppServerThreadBinding | undefined;
   startupContextTokens?: number;
+  replacementPredecessor?: CodexAppServerThreadBinding;
 }> {
   const binding = params.binding;
   if (!binding?.threadId) {
@@ -263,20 +264,6 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
   if (binding.connectionScope === "supervision") {
     return { binding };
   }
-  const clearBinding = async () => {
-    const cleared = await params.bindingStore.mutate(
-      params.identity,
-      { kind: "clear", threadId: binding.threadId, clientId: binding.clientId },
-      params.assertCurrent,
-      params.authority,
-    );
-    if (!cleared) {
-      throw new Error(
-        "Codex startup binding changed during rotation; retry with its current owner.",
-      );
-    }
-    return { binding: undefined };
-  };
   const rolloutFiles = await listCodexAppServerRolloutFilesForThread(
     params.agentDir,
     binding.threadId,
@@ -319,7 +306,9 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
         projectedTurnTokens: params.projectedTurnTokens,
       },
     );
-    return await clearBinding();
+    // Keep pending child assignments until the lifecycle commits the successor.
+    params.assertCurrent?.();
+    return { binding: undefined, replacementPredecessor: binding };
   }
   return {
     binding,

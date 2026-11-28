@@ -70,9 +70,12 @@ async function rotateBinding(overrides: Parameters<typeof resolveBinding>[0] = {
   return (await resolveBinding(overrides)).binding;
 }
 
-async function expectRotated(overrides: Parameters<typeof resolveBinding>[0] = {}) {
-  expect(await rotateBinding(overrides)).toBeUndefined();
-  await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
+async function expectPredecessorRetained(overrides: Parameters<typeof resolveBinding>[0] = {}) {
+  const resolution = await resolveBinding(overrides);
+  expect(resolution.binding).toBeUndefined();
+  const savedBinding = await readCodexAppServerBinding(sessionFile);
+  expect(savedBinding?.threadId).toBe("thread-existing");
+  expect(resolution.replacementPredecessor).toEqual(savedBinding);
 }
 
 afterEach(async () => {
@@ -123,8 +126,9 @@ it.each(["expected", "ordinary", "revoked"])(
       );
       await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(before);
     } else {
+      // The pressure path hands the saved binding to the replacement owner (#172232).
       await expect(operation).resolves.toBeUndefined();
-      await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
+      await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(before);
     }
   },
 );
@@ -142,7 +146,7 @@ it.each([200_000, 16 * 1024 * 1024 + 1])(
     }
     await writeExistingBinding({ rolloutPath });
     const readDirectories = vi.spyOn(fs, "readdir");
-    await expectRotated();
+    await expectPredecessorRetained();
     expect(readDirectories).not.toHaveBeenCalled();
   },
 );
@@ -291,12 +295,12 @@ it("honors custom Codex home rollout files for native token pressure", async () 
     tokenRecord(120_000, 128_000),
   );
 
-  await expectRotated({ codexHome, config: byteLimitConfig(1_000) });
+  await expectPredecessorRetained({ codexHome, config: byteLimitConfig(1_000) });
 });
 
 it("includes projected turn tokens in the native rollout pressure check", async () => {
   await writeExistingBinding({ dynamicToolsFingerprint: "[]" });
   await writeRollout(`${tokenRecord(220_000, 258_400)}\n`);
 
-  await expectRotated({ projectedTurnTokens: 30_000 });
+  await expectPredecessorRetained({ projectedTurnTokens: 30_000 });
 });

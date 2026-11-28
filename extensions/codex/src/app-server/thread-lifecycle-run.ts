@@ -77,7 +77,6 @@ export async function startOrResumeThread(
     const params: CodexStartOrResumeThreadParams = { ...input, assertCurrent: assert, authority };
     const expectedOwnership = params.params.expectedSessionRuntimeOwnership;
     let binding = saved;
-    let selectionBinding = binding;
     const assertReplacementAllowed = (operation: string) => {
       // Review validation runs after preparation; never replace its native history first.
       if (params.params.providerReviewAcknowledgment) {
@@ -88,6 +87,22 @@ export async function startOrResumeThread(
       }
       assertCodexBindingMayBeReplaced(binding, operation, expectedOwnership);
     };
+    let replacementPredecessor: CodexAppServerThreadBinding | undefined;
+    if (params.replacementPredecessor) {
+      if (
+        binding?.threadId !== params.replacementPredecessor.threadId ||
+        binding?.clientId !== params.replacementPredecessor.clientId
+      ) {
+        throw new Error(
+          "Codex startup binding changed during rotation; retry with its current owner.",
+        );
+      }
+      assertReplacementAllowed("rotating a full native context");
+      replacementPredecessor = binding;
+      // Child work keeps its native subscription; the existing idle owner retires it.
+      binding = undefined;
+    }
+    let selectionBinding = binding;
     if (hasCodexNativeToolCatalog(binding)) {
       // A resumed native catalog is immutable data. Run eligibility only changes
       // the bridge's available executors, never this thread's inherited history.
@@ -129,7 +144,6 @@ export async function startOrResumeThread(
       webSearchThreadConfigFingerprint,
     } = preflight;
     let retainBackgroundPredecessor = false;
-    let replacementPredecessor: CodexAppServerThreadBinding | undefined;
     const initialBoundThreadId = binding?.threadId;
     const initialBoundClientId = binding?.clientId;
     const initialBoundRestrictedThread = Boolean(binding?.restrictedThreadConfigFingerprint);
