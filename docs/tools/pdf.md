@@ -7,7 +7,7 @@ read_when:
   - You are debugging native PDF mode vs extraction fallback
 ---
 
-`pdf` analyzes one or more PDF documents and returns text. It uses native document input on Anthropic and Google models, and falls back to text/image extraction for every other provider.
+`pdf` analyzes one or more PDF documents and returns text. By default, it uses native document input on Anthropic and Google models, and text/image extraction for every other provider. An explicit OpenAI opt-in is described below.
 
 ## Availability
 
@@ -102,6 +102,14 @@ Details:
 - If the target model is text-only and extraction produced images, OpenClaw drops the images and sends text only.
 - If page, text, or image limits make extraction partial, OpenClaw includes a short partial-document notice in the analysis context and tool result.
 
+### Explicit OpenAI native input
+
+The optional `agents.defaults.pdfNativeOpenai: true` setting allows sending the complete PDF to the official OpenAI Responses API when the already-selected OpenAI model supports images. It defaults to off: choosing an OpenAI model alone does not opt in, and enabling it does not change provider ordering.
+
+This sends the original document, including text and page images, to OpenAI. Use it only when that full-document transmission is appropriate. `pages`, `password`, an unverifiable page count, or a document exceeding `pdfMaxPages` retains extraction. Completeness is checked using the configured document extractor before native upload; the extractor must remain enabled. Custom endpoints, Codex/ChatGPT transports and text-only models retain extraction. Native requests also retain the configured per-file limit and OpenAI's under-50-MB per-file / 50-MB combined limits; over-limit requests use extraction.
+
+For example, explicitly select an OpenAI model and set `pdfNativeOpenai: true` beside `pdfModel` in the following configuration. Omit the flag or use `false` to preserve the released extraction behavior. No saved setting is automatically opted in during an upgrade.
+
 ## Config
 
 ```json5
@@ -119,11 +127,12 @@ Details:
 }
 ```
 
-| Key                           | Default | Meaning                                                                                   |
-| ----------------------------- | ------- | ----------------------------------------------------------------------------------------- |
-| `agents.defaults.pdfModel`    | unset   | Explicit primary/fallback PDF models; falls back to `imageModel`, then the session model. |
-| `agents.defaults.pdfMaxMb`    | `10`    | Per-PDF size cap in MB.                                                                   |
-| `agents.defaults.pdfMaxPages` | `20`    | Max pages processed per PDF.                                                              |
+| Key                               | Default | Meaning                                                                                   |
+| --------------------------------- | ------- | ----------------------------------------------------------------------------------------- |
+| `agents.defaults.pdfModel`        | unset   | Explicit primary/fallback PDF models; falls back to `imageModel`, then the session model. |
+| `agents.defaults.pdfNativeOpenai` | `false` | Explicit whole-document upload opt-in for eligible, already-selected OpenAI models.       |
+| `agents.defaults.pdfMaxMb`        | `10`    | Per-PDF size cap in MB.                                                                   |
+| `agents.defaults.pdfMaxPages`     | `20`    | Max pages processed per PDF.                                                              |
 
 See [Configuration Reference](/gateway/config-agents#agent-defaults) for full field details.
 
