@@ -88,10 +88,10 @@ struct OnboardingSurface: View {
 }
 
 struct GatewayAuthCard: Equatable {
-    let title: String
-    let message: String
-    let primaryTitle: String
-    let secondaryTitle: String
+    let title: LocalizedStringResource
+    let message: LocalizedStringResource
+    let primaryTitle: LocalizedStringResource
+    let secondaryTitle: LocalizedStringResource
 }
 
 struct OnboardingAISetupView: View {
@@ -102,10 +102,10 @@ struct OnboardingAISetupView: View {
 
     static func gatewayAuthCard(for issue: RemoteGatewayAuthIssue) -> GatewayAuthCard {
         GatewayAuthCard(
-            title: "Gateway authentication required",
-            message: issue.statusMessage,
-            primaryTitle: "Back to Gateway",
-            secondaryTitle: "Try again")
+            title: LocalizedStringResource("Gateway authentication required"),
+            message: issue.statusResource,
+            primaryTitle: LocalizedStringResource("Back to Gateway"),
+            secondaryTitle: LocalizedStringResource("Try again"))
     }
 
     var body: some View {
@@ -179,7 +179,7 @@ struct OnboardingAISetupView: View {
                 if let failure = self.model.detectError {
                     OnboardingErrorCard(
                         title: "AI setup needs verification",
-                        message: failure.summary,
+                        message: .verbatim(failure.summary),
                         details: failure.detail,
                         docsSlug: "start/onboarding",
                         retryTitle: "Check again",
@@ -220,7 +220,7 @@ struct OnboardingAISetupView: View {
             let card = Self.gatewayAuthCard(for: authIssue)
             OnboardingErrorCard(
                 title: card.title,
-                message: card.message,
+                message: .localized(card.message),
                 docsSlug: "start/onboarding",
                 retryTitle: card.primaryTitle,
                 secondaryTitle: card.secondaryTitle,
@@ -231,7 +231,7 @@ struct OnboardingAISetupView: View {
                 title: self.model.configuredGatewayProbeUnavailable
                     ? "Couldn’t check this Gateway for AI accounts"
                     : "Couldn’t check this Gateway for AI access",
-                message: detectError.summary,
+                message: .verbatim(detectError.summary),
                 details: detectError.detail,
                 docsSlug: "start/onboarding",
                 retryTitle: "Try again")
@@ -247,7 +247,7 @@ struct OnboardingAISetupView: View {
         if let providerCatalogError = model.providerCatalogError {
             OnboardingErrorCard(
                 title: "Couldn’t load the full provider list",
-                message: providerCatalogError,
+                message: .verbatim(providerCatalogError),
                 docsSlug: "start/onboarding",
                 retryTitle: "Try again")
             {
@@ -424,7 +424,8 @@ struct OnboardingAISetupView: View {
             if self.model.authOptions.isEmpty {
                 OnboardingErrorCard(
                     title: "No key-based providers are available",
-                    message: "Enable or install a text-inference provider plugin on this Gateway, then check again.",
+                    message: .localized(
+                        "Enable or install a text-inference provider plugin on this Gateway, then check again."),
                     docsSlug: "concepts/model-providers",
                     retryTitle: "Check again")
                 {
@@ -635,7 +636,7 @@ struct OnboardingAISetupView: View {
             if let manualError = model.manualError {
                 OnboardingErrorCard(
                     title: "That key didn’t work",
-                    message: manualError.summary,
+                    message: .verbatim(manualError.summary),
                     details: manualError.detail,
                     docsSlug: "concepts/model-providers",
                     retryTitle: nil,
@@ -661,24 +662,47 @@ struct OnboardingAISetupView: View {
 /// Every onboarding failure points at a docs.openclaw.ai page so people are
 /// never stuck staring at a raw error string.
 struct OnboardingErrorCard: View {
-    let title: String
-    let message: String
+    enum Message {
+        case localized(LocalizedStringResource)
+        case verbatim(String)
+
+        var text: Text {
+            switch self {
+            case let .localized(resource): Text(resource)
+            case let .verbatim(value): Text(verbatim: value)
+            }
+        }
+
+        func resolved(locale: Locale) -> String {
+            switch self {
+            case var .localized(resource):
+                resource.locale = locale
+                return String(localized: resource)
+            case let .verbatim(value):
+                return value
+            }
+        }
+    }
+
+    @Environment(\.locale) private var locale
+    let title: LocalizedStringResource
+    let message: Message
     var details: String?
     let docsSlug: String
-    var retryTitle: String?
+    var retryTitle: LocalizedStringResource?
     var retry: (() -> Void)?
-    var secondaryTitle: String?
+    var secondaryTitle: LocalizedStringResource?
     var secondary: (() -> Void)?
 
     /// Keep retry required so Swift binds a lone trailing closure to the primary
     /// action instead of the defaulted secondary action.
     init(
-        title: String,
-        message: String,
+        title: LocalizedStringResource,
+        message: Message,
         details: String? = nil,
         docsSlug: String,
-        retryTitle: String? = nil,
-        secondaryTitle: String? = nil,
+        retryTitle: LocalizedStringResource? = nil,
+        secondaryTitle: LocalizedStringResource? = nil,
         secondary: (() -> Void)? = nil,
         retry: (() -> Void)?)
     {
@@ -700,7 +724,7 @@ struct OnboardingErrorCard: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(self.title)
                     .font(.callout.weight(.semibold))
-                Text(self.message)
+                self.message.text
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
@@ -710,12 +734,12 @@ struct OnboardingErrorCard: View {
                 }
                 HStack(spacing: 14) {
                     if let retryTitle, let retry {
-                        Button(retryTitle, action: retry)
+                        Button(action: retry) { Text(retryTitle) }
                             .buttonStyle(.borderedProminent)
                             .controlSize(.small)
                     }
                     if let secondaryTitle, let secondary {
-                        Button(secondaryTitle, action: secondary)
+                        Button(action: secondary) { Text(secondaryTitle) }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
                     }
@@ -728,7 +752,7 @@ struct OnboardingErrorCard: View {
                     .font(.caption)
                     if details == nil {
                         Button("Copy error") {
-                            OnboardingErrorDetails.copy(self.message)
+                            OnboardingErrorDetails.copy(self.message.resolved(locale: self.locale))
                         }
                         .buttonStyle(.link)
                         .font(.caption)

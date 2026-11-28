@@ -66,19 +66,20 @@ struct OnboardingRemoteAuthPromptTests {
     @Test func `pairing required copy points users to pair approve`() {
         let issue = RemoteGatewayAuthIssue.pairingRequired
 
-        #expect(issue.title == "This device needs pairing approval")
-        #expect(issue.body.contains("`/pair approve`"))
+        #expect(String(localized: issue.title) == "This device needs pairing approval")
+        #expect(String(localized: issue.body).contains("`/pair approve`"))
         #expect(issue.statusMessage.contains("/pair approve"))
-        #expect(issue.footnote?.contains("`openclaw devices approve`") == true)
+        #expect(issue.footnote.map { String(localized: $0).contains("`openclaw devices approve`") } == true)
     }
 
     @Test func `gateway token copy points to explicit interactive recovery`() {
         for issue in [RemoteGatewayAuthIssue.tokenRequired, .tokenMismatch] {
-            #expect(issue.body.contains("`openclaw gateway auth-token --show`"))
-            #expect(issue.body.contains("interactive terminal"))
-            #expect(issue.body.contains("Change connection"))
-            #expect(issue.body.contains("Gateway token"))
-            #expect(!issue.body.contains("config get gateway.auth.token"))
+            let body = String(localized: issue.body)
+            #expect(body.contains("`openclaw gateway auth-token --show`"))
+            #expect(body.contains("interactive terminal"))
+            #expect(body.contains("Change connection"))
+            #expect(body.contains("Gateway token"))
+            #expect(!body.contains("config get gateway.auth.token"))
             #expect(issue.statusMessage.contains("openclaw gateway auth-token --show"))
         }
     }
@@ -90,9 +91,10 @@ struct OnboardingRemoteAuthPromptTests {
     func `remote auth recovery names the shared connection editor`(
         issue: RemoteGatewayAuthIssue, field: String)
     {
-        #expect(issue.body.contains("Change connection"))
-        #expect(issue.body.contains(field))
-        #expect(!issue.body.contains("Gateway token"))
+        let body = String(localized: issue.body)
+        #expect(body.contains("Change connection"))
+        #expect(body.contains(field))
+        #expect(!body.contains("Gateway token"))
     }
 
     @Test func `paired device success copy explains auth source`() {
@@ -101,17 +103,57 @@ struct OnboardingRemoteAuthPromptTests {
         let sharedToken = RemoteGatewayProbeSuccess(authSource: .sharedToken)
         let noAuth = RemoteGatewayProbeSuccess(authSource: GatewayAuthSource.none)
 
-        #expect(pairedDevice.title == "Connected via paired device")
-        #expect(pairedDevice
-            .detail == "This app used a stored device token. New or unpaired devices may still need the gateway token.")
-        #expect(bootstrap.title == "Connected with setup code")
-        #expect(bootstrap
-            .detail ==
+        #expect(String(localized: pairedDevice.title) == "Connected via paired device")
+        #expect(pairedDevice.detail.map { String(localized: $0) } ==
+            "This app used a stored device token. New or unpaired devices may still need the gateway token.")
+        #expect(String(localized: bootstrap.title) == "Connected with setup code")
+        #expect(bootstrap.detail.map { String(localized: $0) } ==
             "This app is still using the temporary setup code. Approve pairing to finish provisioning device-scoped auth.")
-        #expect(sharedToken.title == "Connected with gateway token")
+        #expect(String(localized: sharedToken.title) == "Connected with gateway token")
         #expect(sharedToken.detail == nil)
-        #expect(noAuth.title == "Remote gateway ready")
+        #expect(String(localized: noAuth.title) == "Remote gateway ready")
         #expect(noAuth.detail == nil)
+    }
+
+    @Test func `auth copy retains locale lookup and recovery commands`() throws {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bundle = try makeOnboardingLocalizationBundle(at: root)
+        let issue = RemoteGatewayAuthIssue.pairingRequired
+        let footnote = try #require(issue.footnote)
+
+        #expect(String(localized: onboardingResource(issue.title, bundle: bundle)) ==
+            "Dieses Ger\u{00e4}t muss gekoppelt werden")
+        #expect(String(localized: onboardingResource(issue.body, bundle: bundle)) ==
+            "F\u{00fc}hre `/pair approve` aus und klicke auf **Verbindung pr\u{00fc}fen**.")
+        #expect(String(localized: onboardingResource(footnote, bundle: bundle)) ==
+            "Best\u{00e4}tige mit `openclaw devices approve`.")
+        #expect(String(localized: onboardingResource(issue.statusResource, bundle: bundle)) ==
+            "Kopplung erforderlich. F\u{00fc}hre /pair approve aus.")
+        #expect(RemoteGatewayAuthIssue.tokenMismatch.footnote == nil)
+    }
+
+    @Test func `success copy retains locale lookup and optional detail`() throws {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bundle = try makeOnboardingLocalizationBundle(at: root)
+        let pairedDevice = RemoteGatewayProbeSuccess(authSource: .deviceToken)
+        let bootstrap = RemoteGatewayProbeSuccess(authSource: .bootstrapToken)
+        let sharedToken = RemoteGatewayProbeSuccess(authSource: .sharedToken)
+        let pairedDetail = try #require(pairedDevice.detail)
+        let bootstrapDetail = try #require(bootstrap.detail)
+
+        #expect(String(localized: onboardingResource(pairedDevice.title, bundle: bundle)) ==
+            "\u{00dc}ber gekoppeltes Ger\u{00e4}t verbunden")
+        #expect(String(localized: onboardingResource(pairedDetail, bundle: bundle)) ==
+            "Diese App verwendet ein gespeichertes Ger\u{00e4}te-Token.")
+        #expect(String(localized: onboardingResource(bootstrap.title, bundle: bundle)) ==
+            "Mit Einrichtungscode verbunden")
+        #expect(String(localized: onboardingResource(bootstrapDetail, bundle: bundle)) ==
+            "Best\u{00e4}tige die Kopplung, um den Einrichtungscode abzul\u{00f6}sen.")
+        #expect(String(localized: onboardingResource(sharedToken.title, bundle: bundle)) ==
+            "Mit Gateway-Token verbunden")
+        #expect(sharedToken.detail == nil)
     }
 
     @Test func `transient probe mode restore does not clear probe feedback`() {
