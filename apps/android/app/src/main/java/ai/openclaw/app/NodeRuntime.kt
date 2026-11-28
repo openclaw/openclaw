@@ -2266,6 +2266,11 @@ class NodeRuntime internal constructor(
             (appContext as? NodeApp)?.wearRealtimeChannels?.close(owner)
           }
         },
+        captureRequestLease = {
+          connectedEndpoint?.stableId?.let { gatewayId ->
+            operatorSession.captureRequestLease(gatewayId)
+          }
+        },
       )
     }
 

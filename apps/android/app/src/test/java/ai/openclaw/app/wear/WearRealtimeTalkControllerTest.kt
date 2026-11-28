@@ -20,8 +20,11 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -1069,6 +1072,59 @@ class WearRealtimeTalkControllerTest {
       assertTrue("talk.session.close" in gatewayMethods)
       assertEquals(listOf("watch-a"), forcedChannelCloses)
     }
+
+  @Test
+  fun `stop closes through the captured request lease with detach disposition`() =
+    runTest {
+      val cases =
+        listOf(
+          setOf("talk-session-close-disposition") to "detach",
+          emptySet<String>() to null,
+        )
+      for ((capabilities, expectedDisposition) in cases) {
+        val closeParams = mutableListOf<String?>()
+        val lease =
+          GatewaySession.RequestLease(
+            endpointStableId = "wear-test-gateway",
+            advertisedCapabilities = capabilities,
+            requestImpl = { method, paramsJson, _, withEnqueue ->
+              withEnqueue {}
+              if (method == "talk.session.close") closeParams += paramsJson
+              if (method == "talk.session.create") """{"relaySessionId":"relay-1"}""" else """{"ok":true}"""
+            },
+          )
+        val controller = testTalkController(captureRequestLease = { lease })
+
+        assertTrue(controller.start("watch-a", "session-a", "attempt-a", "en"))
+        assertTrue(controller.stop("watch-a", "attempt-a"))
+
+        val payload = Json.parseToJsonElement(closeParams.single()!!).jsonObject
+        assertEquals("relay-1", payload.getValue("sessionId").jsonPrimitive.content)
+        assertEquals(expectedDisposition, payload["disposition"]?.jsonPrimitive?.content)
+      }
+    }
+
+  @Test
+  fun `unconfirmed detach close triggers owning lease reconnect fallback`() =
+    runTest {
+      var reconnects = 0
+      val lease =
+        GatewaySession.RequestLease(
+          endpointStableId = "wear-test-gateway",
+          advertisedCapabilities = setOf("talk-session-close-disposition"),
+          reconnectIfCurrentImpl = { reconnects += 1 },
+          requestImpl = { method, _, _, withEnqueue ->
+            withEnqueue {}
+            if (method == "talk.session.create") """{"relaySessionId":"relay-1"}""" else error("close failed")
+          },
+        )
+      val controller = testTalkController(captureRequestLease = { lease })
+
+      assertTrue(controller.start("watch-a", "session-a", "attempt-a", "en"))
+      assertTrue(controller.stop("watch-a", "attempt-a"))
+
+      assertEquals(1, reconnects)
+    }
 }
 
 private fun CoroutineScope.recordingTalkController(): Pair<WearRealtimeTalkController, List<WearRealtimeTalkSnapshot>> {
@@ -1098,6 +1154,15 @@ private fun CoroutineScope.testTalkController(
   sendWatchFrame: suspend (WearRealtimeAttemptOwner, WearRealtimeAudioFrameType, ByteArray) -> Unit = { _, _, _ -> },
   onSnapshot: (WearRealtimeTalkSnapshot) -> Unit = {},
   onForceCloseWatchChannel: (WearRealtimeAttemptOwner) -> Unit = {},
+  captureRequestLease: () -> GatewaySession.RequestLease? = {
+    GatewaySession.RequestLease(
+      endpointStableId = "wear-test-gateway",
+      requestImpl = { method, paramsJson, timeoutMs, withEnqueue ->
+        withEnqueue {}
+        requestGateway(method, paramsJson, timeoutMs)
+      },
+    )
+  },
 ): WearRealtimeTalkController =
   WearRealtimeTalkController(
     scope = this,
@@ -1107,6 +1172,7 @@ private fun CoroutineScope.testTalkController(
     sendWatchFrame = sendWatchFrame,
     onSnapshot = onSnapshot,
     onForceCloseWatchChannel = onForceCloseWatchChannel,
+    captureRequestLease = captureRequestLease,
   )
 
 private suspend fun WearRealtimeTalkController.start(
