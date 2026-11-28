@@ -20,8 +20,7 @@ import {
   stateDir,
 } from "./server-methods/requester-cron-authority.test-support.js";
 
-// mock-isolation: Run real cron targeting, admission and CLI settlement; replace runner
-// selection and CLI I/O.
+// mock-isolation: Run real admission/reply/CLI settlement; replace runner selection and CLI I/O.
 vi.mock("../agents/embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
 const runEmbeddedAgentMock = vi.mocked(runEmbeddedAgent);
 await Promise.all([
