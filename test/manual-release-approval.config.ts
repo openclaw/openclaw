@@ -15,6 +15,7 @@ export default createScopedVitestConfig(
     "test/manual-build-only-artifacts.checks.ts",
     "test/manual-build-only-evidence.checks.ts",
     "test/manual-build-only-parent.checks.ts",
+    "test/manual-release-verifier.checks.ts",
     "test/manual-fast-track-publication.checks.ts",
     "test/manual-fast-track-receipt.checks.ts",
     "test/manual-fast-track-button.checks.ts",

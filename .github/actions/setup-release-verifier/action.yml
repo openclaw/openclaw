@@ -1,0 +1,25 @@
+name: Setup release verifier runtime
+description: Install only locked release verifier dependencies, without workspace packages or lifecycle scripts.
+inputs:
+  tooling-root:
+    description: Trusted publishing tooling checkout, relative to the workspace.
+    required: false
+    default: .
+runs:
+  using: composite
+  steps:
+    - name: Install trusted verifier dependencies
+      shell: bash
+      env:
+        TOOLING_ROOT: ${{ inputs.tooling-root }}
+      run: |
+        set -euo pipefail
+        verifier_runtime="$(mktemp -d "${RUNNER_TEMP}/openclaw-release-verifier.XXXXXX")"
+        cp "$GITHUB_ACTION_PATH/package.json" "$GITHUB_ACTION_PATH/package-lock.json" "$verifier_runtime/"
+        (
+          cd "$verifier_runtime"
+          npm ci --ignore-scripts --no-audit --no-fund
+        )
+        verifier_modules="$GITHUB_WORKSPACE/$TOOLING_ROOT/scripts/lib/node_modules"
+        mkdir -p "$verifier_modules"
+        ln -s "$verifier_runtime/node_modules/zod" "$verifier_modules/zod"

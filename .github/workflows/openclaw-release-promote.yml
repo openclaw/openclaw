@@ -52,14 +52,7 @@ jobs:
           node-version: "24.22.1"
 
       - name: Setup trusted readiness dependencies
-        uses: ./.github/actions/setup-pnpm-store-cache
-        with:
-          cache-mode: off
-          node-version: "24.22.1"
-      - name: Install trusted readiness dependencies
-        env:
-          CI: "true"
-        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+        uses: ./.github/actions/setup-release-verifier
       - name: Dispatch existing protected publisher
         id: dispatch
         env:
@@ -102,14 +95,7 @@ jobs:
           node-version: "24.22.1"
 
       - name: Setup trusted readiness dependencies
-        uses: ./.github/actions/setup-pnpm-store-cache
-        with:
-          cache-mode: off
-          node-version: "24.22.1"
-      - name: Install trusted readiness dependencies
-        env:
-          CI: "true"
-        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+        uses: ./.github/actions/setup-release-verifier
       - name: Verify the original publication, without redispatching
         env:
           GH_TOKEN: ${{ github.token }}
@@ -184,14 +170,7 @@ jobs:
           node-version: "24.22.1"
 
       - name: Setup trusted readiness dependencies
-        uses: ./.github/actions/setup-pnpm-store-cache
-        with:
-          cache-mode: off
-          node-version: "24.22.1"
-      - name: Install trusted readiness dependencies
-        env:
-          CI: "true"
-        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+        uses: ./.github/actions/setup-release-verifier
       - name: Publish the verified draft
         env:
           GH_TOKEN: ${{ github.token }}
@@ -305,14 +284,7 @@ jobs:
           node-version: "24.22.1"
 
       - name: Setup trusted readiness dependencies
-        uses: ./.github/actions/setup-pnpm-store-cache
-        with:
-          cache-mode: off
-          node-version: "24.22.1"
-      - name: Install trusted readiness dependencies
-        env:
-          CI: "true"
-        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+        uses: ./.github/actions/setup-release-verifier
       - name: Dispatch detached Linux mirror
         timeout-minutes: 3
         env:
@@ -367,14 +339,7 @@ jobs:
           node-version: "24.22.1"
 
       - name: Setup trusted readiness dependencies
-        uses: ./.github/actions/setup-pnpm-store-cache
-        with:
-          cache-mode: off
-          node-version: "24.22.1"
-      - name: Install trusted readiness dependencies
-        env:
-          CI: "true"
-        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+        uses: ./.github/actions/setup-release-verifier
       - name: Create Linux release request token
         id: linux_request_token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
@@ -482,14 +447,7 @@ jobs:
           node-version: "24.22.1"
 
       - name: Setup trusted readiness dependencies
-        uses: ./.github/actions/setup-pnpm-store-cache
-        with:
-          cache-mode: off
-          node-version: "24.22.1"
-      - name: Install trusted readiness dependencies
-        env:
-          CI: "true"
-        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+        uses: ./.github/actions/setup-release-verifier
       - name: Dispatch detached Windows promotion
         env:
           GH_TOKEN: ${{ github.token }}
