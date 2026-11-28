@@ -1834,33 +1834,6 @@ impl DesktopState {
         navigation.map(|_| snapshot)
     }
 
-    fn poll_pending_approvals(&self, app: &AppHandle, cli: &OpenClawCli, generation: u64) {
-        let pending = match pending_approvals::fetch(cli) {
-            Ok(pending) => pending,
-            Err(error) => {
-                eprintln!("Could not poll pending approvals: {error}");
-                return;
-            }
-        };
-        if !self.watchdog_is_current(generation) {
-            return;
-        }
-        let diff = self
-            .inner
-            .pending_approvals
-            .lock()
-            .expect("pending approval mutex poisoned")
-            .update(pending);
-        self.with_tray(|tray| tray.update_pending_count(diff.count));
-        if !main_window(app).is_ok_and(|view| matches!(view.window().is_focused(), Ok(false))) {
-            return;
-        }
-        // Notifications are a doorbell only; approval stays in the dashboard or CLI.
-        for request in diff.new {
-            notify::notify(app, "OpenClaw", &request.notification_body());
-        }
-    }
-
     // Page-load observers defer their navigation-owner reads to avoid reentrancy.
     fn navigate_locked(
         &self,
@@ -2068,9 +2041,16 @@ impl DesktopState {
             if !state.watchdog_is_current(generation) {
                 return;
             }
+            #[cfg(target_os = "linux")]
+            if pending_approvals::poll_native(&state, &app, generation) {
+                continue;
+            }
             let Ok(_operation) = state.inner.operation.try_lock() else {
                 continue;
             };
+            if !state.watchdog_is_current(generation) {
+                return;
+            }
             let snapshot = gateway::status(&cli).unwrap_or_else(GatewaySnapshot::reconnecting);
             if snapshot.reachable {
                 state.update_tray(&snapshot);
@@ -2081,7 +2061,7 @@ impl DesktopState {
                 }
                 drop(_operation);
                 // Pairing polls ride connected watchdog ticks; the reconnect loop never runs them.
-                state.poll_pending_approvals(&app, &cli, generation);
+                pending_approvals::poll_cli(&state, &app, &cli, generation);
                 continue;
             }
 

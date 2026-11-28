@@ -37,6 +37,11 @@ use tokio_tungstenite::tungstenite::Message;
 #[cfg(test)]
 use uuid::Uuid;
 
+#[cfg(any(target_os = "linux", test))]
+mod desktop;
+#[cfg(target_os = "linux")]
+pub(crate) use desktop::DesktopMethod;
+
 const AGENT_KIND_CLIENT_CAPABILITY: &str = "agent-kind";
 const GATEWAY_STATE_EVENT: &str = "quickchat:gateway-state";
 const CHAT_EVENT: &str = "quickchat:chat-event";
@@ -270,26 +275,6 @@ impl GatewayRequest {
     }
 }
 
-#[cfg(target_os = "linux")]
-pub(crate) enum DesktopMethod {
-    Agents,
-    Sessions,
-    Send,
-    Create,
-}
-
-#[cfg(target_os = "linux")]
-impl DesktopMethod {
-    fn name(&self) -> &'static str {
-        match self {
-            Self::Agents => "agents.list",
-            Self::Sessions => "sessions.list",
-            Self::Send => "chat.send",
-            Self::Create => "sessions.create",
-        }
-    }
-}
-
 type RequestCompletion =
     Box<dyn FnOnce(Result<Value, RequestFailure>) -> Option<RequestFailure> + Send>;
 
@@ -490,79 +475,6 @@ impl GatewayClient {
             return Err("Gateway changed during the Quick Chat request.".to_string());
         }
         action(&mut config)
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(crate) fn desktop_state(&self) -> (u64, bool) {
-        let _config = self
-            .inner
-            .config
-            .lock()
-            .expect("gateway config mutex poisoned");
-        (
-            self.inner.config_generation.load(Ordering::SeqCst),
-            self.is_connected(),
-        )
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(crate) fn set_desktop_demand(&self, active: bool) {
-        self.inner.desktop_demand.store(active, Ordering::SeqCst);
-    }
-
-    #[cfg(any(target_os = "linux", test))]
-    pub(crate) fn with_desktop_route<T>(
-        &self,
-        generation: u64,
-        action: impl FnOnce(Option<&str>) -> Result<T, String>,
-    ) -> Result<T, String> {
-        // Keep route replacement fenced without holding the config read across
-        // UI navigation: its callbacks read the live native bootstrap again.
-        let _publication = self
-            .inner
-            .route_publication
-            .lock()
-            .map_err(|_| "Gateway route unavailable")?;
-        let url = {
-            let config = self
-                .inner
-                .config
-                .lock()
-                .map_err(|_| "Gateway route unavailable")?;
-            if self.inner.config_generation.load(Ordering::SeqCst) != generation {
-                return Err("Desktop Gateway changed; refresh before trying again.".into());
-            }
-            config.config.as_ref().map(|config| config.ws_url.clone())
-        };
-        action(url.as_deref())
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(crate) async fn desktop_request(
-        &self,
-        generation: u64,
-        method: DesktopMethod,
-        params: Value,
-    ) -> Result<Value, String> {
-        self.with_desktop_route(generation, |url| {
-            url.map(|_| ())
-                .ok_or_else(|| "Select a Gateway in the desktop app first.".into())
-        })?;
-        let is_send = matches!(method, DesktopMethod::Send);
-        let value: Value = self
-            .request(GatewayRequest::Desktop {
-                generation,
-                method,
-                params,
-            })
-            .await?;
-        self.with_desktop_route(generation, |_| Ok(()))?;
-        if is_send {
-            let ack: ChatSendAck = serde_json::from_value(value.clone())
-                .map_err(|error| format!("Invalid chat.send response: {error}"))?;
-            classify_chat_ack(&ack)?;
-        }
-        Ok(value)
     }
 
     // Call this on the native UI thread, never around work that waits for that thread.
@@ -1136,7 +1048,10 @@ impl GatewayClient {
                     .expect("gateway config mutex poisoned")
                     .config
                     .as_ref()
-                    .is_some_and(|config| config.ownership == GatewayOwnership::Remote),
+                    // The selected Linux route also owns hidden-window pairing.
+                    .is_some_and(|config| {
+                        cfg!(target_os = "linux") || config.ownership == GatewayOwnership::Remote
+                    }),
             self.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0,
         )
     }
