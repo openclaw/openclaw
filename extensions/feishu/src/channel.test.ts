@@ -1291,6 +1291,56 @@ describe("Feishu reactions", () => {
   });
 });
 describe("Feishu topic routing", () => {
+  it.each(["explicit", "omitted"] as const)(
+    "keeps the native topic when the %s reply context leaves a synthetic reply ID",
+    async (replyContext) => {
+      const syntheticId = "855a9b56-ced7-4627-b9ca-454c30a91f9d";
+      textDelivery();
+      await run(
+        "send",
+        { to: "chat:oc_group_1", text: "reply", replyTo: syntheticId },
+        {
+          ...topicContext,
+          toolContext: {
+            ...topicContext.toolContext,
+            currentMessageId: syntheticId,
+            currentThreadTs: "om_inbound",
+          },
+          ...(replyContext === "explicit"
+            ? { reply: { source: "explicit", replyToId: syntheticId } }
+            : {}),
+        },
+      );
+      expect(feishuOutboundSendTextMock).toHaveBeenCalledOnce();
+      expect(args(feishuOutboundSendTextMock)).toMatchObject({
+        to: "chat:oc_group_1",
+        threadId: "om_inbound",
+      });
+      expect(args(feishuOutboundSendTextMock).replyToId).toBeUndefined();
+    },
+  );
+
+  it("rejects a synthetic explicit reply when topic inheritance is unavailable", async () => {
+    const syntheticId = "855a9b56-ced7-4627-b9ca-454c30a91f9d";
+    await expect(
+      run(
+        "send",
+        { to: "chat:oc_other", text: "reply", replyTo: syntheticId },
+        { ...topicContext, reply: { source: "explicit", replyToId: syntheticId } },
+      ),
+    ).rejects.toThrow("Feishu replies require a native om_ message ID or topic root.");
+    expect(feishuOutboundSendTextMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves Feishu document comment reply IDs", async () => {
+    const to = "comment:docx:doc_fixture:comment_fixture";
+    const replyToId = "comment_reply_fixture";
+    textDelivery();
+    await run("send", { to, text: "reply" }, { reply: { source: "explicit", replyToId } });
+    expect(feishuOutboundSendTextMock).toHaveBeenCalledOnce();
+    expect(args(feishuOutboundSendTextMock)).toMatchObject({ to, replyToId });
+  });
+
   it.each(["implicit", "explicit"] as const)("routes %s replies", async (source) => {
     const id = "855a9b56-ced7-4627-b9ca-454c30a91f9d";
     const threading = feishuPlugin.threading!;

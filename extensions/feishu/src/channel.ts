@@ -53,6 +53,7 @@ import { buildFeishuMessageToolHints } from "./agent-prompt.js";
 import { feishuApprovalAuth } from "./approval-auth.js";
 import { FEISHU_CARD_INTERACTION_VERSION } from "./card-interaction.js";
 import { normalizeFeishuChatType, resolveFeishuChatType } from "./chat-type.js";
+import { parseFeishuCommentTarget } from "./comment-target.js";
 import { FeishuChannelConfigSchema } from "./config-schema.js";
 import {
   buildFeishuConversationId,
@@ -108,6 +109,7 @@ import { feishuSetupWizard, runFeishuLogin } from "./setup-surface.js";
 import { resolveFeishuStickerSet, searchFeishuStickerSet } from "./sticker-catalog.js";
 import { looksLikeFeishuId, normalizeFeishuTarget, resolveReceiveIdType } from "./targets.js";
 import { getFeishuThreadBindingManager } from "./thread-bindings.js";
+import { normalizeFeishuNativeMessageId } from "./threading-reply.js";
 import { feishuThreading } from "./threading.js";
 import { resolveFeishuTopicAutoThreadAnchor } from "./topic-anchors.js";
 import type { FeishuConfig, FeishuProbeResult, ResolvedFeishuAccount } from "./types.js";
@@ -384,6 +386,7 @@ type FeishuSendActionContext = Pick<
 function buildFeishuSendReplyAnchor(
   ctx: FeishuSendActionContext,
   accountId: string,
+  target: string,
 ): FeishuActionReplyAnchor {
   if (ctx.action === "thread-reply") {
     return {
@@ -393,7 +396,7 @@ function buildFeishuSendReplyAnchor(
   }
   const threadId =
     readFirstString(ctx.params, ["threadId"]) ??
-    resolveFeishuTopicAutoThreadAnchor(ctx, accountId, resolveFeishuActionTarget(ctx));
+    resolveFeishuTopicAutoThreadAnchor(ctx, accountId, target);
   // Core also writes implicit reply IDs into params; they must not override
   // native topic delivery. Only an explicit reply can choose normal reply mode.
   const replyToId = ctx.reply
@@ -401,7 +404,14 @@ function buildFeishuSendReplyAnchor(
       ? undefined
       : ctx.reply.replyToId
     : readFirstString(ctx.params, ["replyTo", "reply_to"]);
-  return resolveFeishuReplyMode({ replyToId, threadId });
+  if (ctx.action !== "send" || parseFeishuCommentTarget(target)) {
+    return resolveFeishuReplyMode({ replyToId, threadId });
+  }
+  const nativeReplyToId = normalizeFeishuNativeMessageId(replyToId);
+  if (replyToId?.trim() && !nativeReplyToId && !normalizeFeishuNativeMessageId(threadId)) {
+    throw new Error("Feishu replies require a native om_ message ID or topic root.");
+  }
+  return resolveFeishuReplyMode({ replyToId: nativeReplyToId, threadId });
 }
 
 function isSupportedFeishuDirectConversationId(conversationId: string): boolean {
@@ -861,7 +871,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 "Feishu sticker requires fileId (or first stickerId): use the file_key of a sticker this bot previously received.",
               );
             }
-            const anchor = buildFeishuSendReplyAnchor(ctx, account.accountId);
+            const anchor = buildFeishuSendReplyAnchor(ctx, account.accountId, to);
             const runtime = await loadFeishuChannelRuntime();
             const result = await runtime.sendStickerFeishu({
               cfg: ctx.cfg,
@@ -885,6 +895,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const { replyToMessageId, replyInThread } = buildFeishuSendReplyAnchor(
               ctx,
               account.accountId,
+              to,
             );
             if (ctx.action === "thread-reply" && !replyToMessageId) {
               throw new Error("Feishu thread-reply requires messageId.");
