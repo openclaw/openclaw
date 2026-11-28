@@ -16,8 +16,15 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  prepareGatewaySuspend,
+  resumeGatewaySuspend,
+} from "../infra/gateway-suspend-coordinator.js";
 import * as hostIoPressure from "../infra/host-io-pressure.js";
-import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkHolders,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -511,7 +518,10 @@ it.each(["checkout", "template"])(
     await fixture.clock.advanceBy(299_999);
     expect(removed).not.toHaveBeenCalled();
     await fixture.clock.advanceBy(1);
-    await vi.waitFor(() => expect(removed).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(removed.mock.calls.length + fixture.onError.mock.calls.length).toBe(1),
+    );
+    expect(fixture.onError.mock.calls).toEqual([]);
   },
 );
 
@@ -681,6 +691,81 @@ it.each([
     );
   }
   expect(removed).toHaveBeenCalledTimes(outcome === "recover" ? 1 : 0);
+});
+
+const suspend = (requestId: string) =>
+  prepareGatewaySuspend({ requestId, pauseScheduling: () => {}, resumeScheduling: () => {} });
+
+async function expectSuspensionRetryReady() {
+  await vi.waitFor(() => expect(getActiveGatewayRootWorkHolders()).toEqual([]));
+  const retry = suspend("retry");
+  expect(retry.status).toBe("ready");
+  if (retry.status === "ready") {
+    resumeGatewaySuspend(retry.suspensionId);
+  }
+}
+
+it("yields a sweep paused under host pressure so the next suspension attempt succeeds", async () => {
+  const probe = vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true);
+  vi.spyOn(hostIoPressure, "createHostIoPressureProbe").mockReturnValue(probe);
+  await using fixture = maintenanceFixture();
+  const removed = vi.fn();
+  const recordedFailure = vi.fn();
+  const gc = vi.spyOn(managedWorktrees, "gc").mockImplementation(async (params = {}) => {
+    try {
+      await params.beforeRemoval!(cleanupRecord);
+    } catch (error) {
+      // Like gc's per-record error handling: the guard decides whether this is a failed removal.
+      params.commitGuard!();
+      recordedFailure(error);
+      return completedResult();
+    }
+    removed();
+    return completedResult();
+  });
+  const owner = fixture.start();
+  owner.request();
+  void fixture.run();
+  // The removal saw pressure: the sweep sleeps in its five-minute backoff.
+  await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+  owner.notifyArchive();
+
+  // Preparation inspects work synchronously, so the attempt that starts the yield still sees it.
+  expect(suspend("first")).toMatchObject({ status: "busy", reason: "active-work" });
+  await expectSuspensionRetryReady();
+  await fixture.clock.advanceBy(0);
+  expect(gc).toHaveBeenCalledOnce();
+  expect(removed).not.toHaveBeenCalled();
+  expect(recordedFailure).not.toHaveBeenCalled();
+  expect(fixture.onError).not.toHaveBeenCalled();
+});
+
+it("lets a removal already past its wait finish before yielding to suspension", async () => {
+  vi.spyOn(hostIoPressure, "createHostIoPressureProbe").mockReturnValue(async () => false);
+  await using fixture = maintenanceFixture();
+  const removing = createDeferred();
+  const finish = createDeferred();
+  const removed = vi.fn();
+  vi.spyOn(managedWorktrees, "gc").mockImplementation(async (params = {}) => {
+    await params.beforeRemoval!(cleanupRecord);
+    removing.resolve();
+    await finish.promise;
+    // The removal has pinned its recovery ref; its guards must not fail it now.
+    params.commitGuard!();
+    expect(params.signal!.aborted).toBe(false);
+    removed();
+    await params.checkpoint!(completedResult());
+    return completedResult();
+  });
+  fixture.start().request();
+  void fixture.run();
+  await removing.promise;
+
+  expect(suspend("during-removal")).toMatchObject({ status: "busy", reason: "active-work" });
+  finish.resolve();
+  await expectSuspensionRetryReady();
+  expect(removed).toHaveBeenCalledOnce();
+  expect(fixture.onError).not.toHaveBeenCalled();
 });
 
 it("waits for admitted cleanup to settle when stopped and withdraws its authority immediately", async () => {
