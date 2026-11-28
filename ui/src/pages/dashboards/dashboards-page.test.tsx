@@ -336,14 +336,16 @@ it("matches all sigma forms in the gallery and its author picker", async () => {
   }
 });
 
-it("renders the route host and filters by search and author and sorts cards by title", async () => {
+it("filters dashboard cards, sorts them by title, and groups them by last update", async () => {
+  const today = new Date(2025, 1, 8).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(today);
   const authoredRow = (key: string, name: string, updatedAt: number, id: string, label: string) =>
     row(`agent:main:dashboard:${key}`, name, {
       updatedAt,
       createdActor: { type: "human", id, label },
     });
   const data = routeData(
-    authoredRow("zulu", "Zulu monitor", 30, "peter", "Peter"),
+    authoredRow("zulu", "Zulu monitor", today, "peter", "Peter"),
     authoredRow("alpha", "Alpha signals", 10, "mira", "Mira"),
   );
   const { container } = await mountDashboard(undefined, data);
@@ -378,8 +380,21 @@ it("renders the route host and filters by search and author and sorts cards by t
   await waitForSolid(() =>
     expect(document.querySelector("#dashboards-display select")).not.toBeNull(),
   );
-  changeValue(document.querySelector<HTMLSelectElement>("#dashboards-display select")!, "title");
+  const [ordering, grouping] = document.querySelectorAll<HTMLSelectElement>(
+    "#dashboards-display select",
+  );
+  changeValue(ordering!, "title");
   expect(cardTitles(element)).toEqual(["Alpha signals", "Zulu monitor"]);
+  changeValue(grouping!, "updated");
+  expect(
+    Array.from(element.querySelectorAll<HTMLElement>(".dashboards-group"), (section) => [
+      section.querySelector("h3")?.textContent,
+      cardTitles(section),
+    ]),
+  ).toEqual([
+    ["Today", ["Zulu monitor"]],
+    ["Earlier", ["Alpha signals"]],
+  ]);
 });
 
 it("pins a dashboard to the sidebar rail from its card menu and unpins it again", async () => {

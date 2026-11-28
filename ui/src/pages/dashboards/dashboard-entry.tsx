@@ -1,3 +1,5 @@
+/// <reference lib="es2024.object" />
+
 import type { JSX } from "@solidjs/web";
 import { Show, createMemo, createUniqueId } from "solid-js";
 import type { AgentsListResult, SessionsListResult } from "../../api/types.ts";
@@ -64,21 +66,18 @@ export function dashboardGroups(
   if (group === "updated") {
     const today = startOfDay(Date.now());
     const week = today - 6 * 24 * 60 * 60 * 1000;
-    const bucket = (row: DashboardRow) =>
-      (row.updatedAt ?? 0) >= today ? "today" : (row.updatedAt ?? 0) >= week ? "week" : "earlier";
-    return (["today", "week", "earlier"] as const)
-      .map((key) => ({
-        key,
-        label: t(
-          key === "today"
-            ? "dashboardsPage.groupToday"
-            : key === "week"
-              ? "dashboardsPage.groupThisWeek"
-              : "dashboardsPage.groupEarlier",
-        ),
-        rows: rows.filter((row) => bucket(row) === key),
-      }))
-      .filter((entry) => entry.rows.length > 0);
+    const buckets = Object.groupBy(rows, (row) => {
+      const updatedAt = row.updatedAt ?? 0;
+      return updatedAt >= today ? "today" : updatedAt >= week ? "week" : "earlier";
+    });
+    const headings = [
+      ["today", "dashboardsPage.groupToday"],
+      ["week", "dashboardsPage.groupThisWeek"],
+      ["earlier", "dashboardsPage.groupEarlier"],
+    ] as const;
+    return headings.flatMap(([key, label]) =>
+      buckets[key] ? [{ key, label: t(label), rows: buckets[key] }] : [],
+    );
   }
   if (group === "author") {
     const groups = new Map<string, DashboardGroup>();
