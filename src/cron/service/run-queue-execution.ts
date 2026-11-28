@@ -330,7 +330,7 @@ export async function launchCronRun(
         ? "error"
         : result.status !== "ok"
           ? "dropped"
-          : !executionJob.trigger || result.triggerEval?.fired
+          : !executionJob.check || result.triggerEval?.fired
             ? "fired"
             : "dropped",
   );

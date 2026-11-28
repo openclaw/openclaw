@@ -134,12 +134,12 @@ describe("cron model schema regressions", () => {
     const projected = normalizeToolParameterSchema(schema, {
       modelCompat: { toolSchemaProfile: "llamacpp" },
     });
-    expect(propertyAt(schema, "job.trigger.script")).toMatchObject({
+    expect(propertyAt(schema, "job.check.script")).toMatchObject({
       type: "string",
       minLength: 1,
       maxLength: 65_536,
     });
-    expect(propertyAt(projected, "job.trigger.script")).toEqual({ type: "string", minLength: 1 });
+    expect(propertyAt(projected, "job.check.script")).toEqual({ type: "string", minLength: 1 });
     expect(findLlamacppGbnfSchemaViolations(projected, "cron.parameters")).toEqual([]);
   });
 
@@ -219,7 +219,7 @@ describe("cron model schema regressions", () => {
 
   it("omits unavailable trigger capabilities and explains the disabled surface", () => {
     const disabled = createCronTool({ config: { cron: { triggers: { enabled: false } } } });
-    expect(propertyAt(disabled.parameters, "job.trigger")).toBeUndefined();
+    expect(propertyAt(disabled.parameters, "job.check")).toBeUndefined();
     expect(propertyAt(disabled.parameters, "job.schedule.kind")?.enum).toEqual([
       "at",
       "every",
@@ -241,9 +241,9 @@ describe("cron model schema regressions", () => {
 
   it("keeps the full trigger surface and approval guidance when config omits cron.triggers", () => {
     const defaults = createCronTool({ config: { cron: { enabled: true } } });
-    expect(propertyAt(defaults.parameters, "job.trigger.script")).toMatchObject({ type: "string" });
+    expect(propertyAt(defaults.parameters, "job.check.script")).toMatchObject({ type: "string" });
     expect(propertyAt(defaults.parameters, "job.schedule.kind")?.enum).toContain("stream");
-    expect(propertyAt(defaults.parameters, "job.payload.kind")?.enum).toContain("script");
+    expect(propertyAt(defaults.parameters, "job.payload.kind")?.enum).toContain("none");
     expect(defaults.description).toContain(
       "add/update waits for user approval through the native client",
     );
@@ -400,12 +400,12 @@ describe("cron shorthand and schedule recovery", () => {
       expect(present("remove", { ok: true, removed: true })).toBeUndefined();
     });
 
-    const script = { script: "return { notify: 'changed' }", timeoutSeconds: 30, toolBudget: 12 };
+    const check = { script: "return { post: 'changed' }", timeoutSeconds: 30, toolBudget: 12 };
     it.each([
       {
-        name: "script before agent-turn hints",
-        input: { everyMs: 60_000, ...script },
-        expected: { payload: { kind: "script", ...script } },
+        name: "check-only execution budgets",
+        input: { everyMs: 60_000, payload: { kind: "none" }, check },
+        expected: { payload: { kind: "none" }, check },
       },
       {
         name: "out-of-range timestamp for gateway validation",
@@ -438,12 +438,12 @@ describe("cron shorthand and schedule recovery", () => {
       callGatewayMock.mockResolvedValueOnce({
         id: "job",
         configRevision: "sha256:trigger",
-        trigger: null,
+        check: null,
         payload: { kind: "systemEvent", text: "before" },
       });
-      const trigger = { script: "json({ fire: true })", once: false };
-      await execute({ action: "update", jobId: "job", trigger });
-      expectUpdate("job", { trigger }, "sha256:trigger");
+      const trigger = { script: "json({ wake: '' })", once: false };
+      await execute({ action: "update", jobId: "job", check: trigger });
+      expectUpdate("job", { check: trigger }, "sha256:trigger");
     });
 
     it("repairs recognized padded keys (#95407)", async () => {

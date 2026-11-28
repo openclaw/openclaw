@@ -140,7 +140,7 @@ it.each(["aborted", "internal_error"] as const)(
   "a key-linked watcher whose condition ends with %s stays enabled",
   (code) => {
     const { job, apply } = outcomeFixture(startedAt, {
-      trigger: { script: "return { fire: false }" },
+      check: { script: "return { }" },
       operatorSource: { source: operatorSource, executionRevision: "fixture-revision" },
     });
     apply({
@@ -588,7 +588,7 @@ it.each([
 it.each([
   {
     id: "permanent-script-failure",
-    payload: { kind: "script", script: "throw new Error('request timed out')" },
+    payload: { kind: "none" },
     error: "cron script failed after a tool side effect: request timed out",
     errorClassification: { kind: "permanent" },
     expectedReason: undefined,
@@ -596,7 +596,7 @@ it.each([
   },
   {
     id: "transient-script-timeout",
-    payload: { kind: "script", script: "while (true) {}" },
+    payload: { kind: "none" },
     error: "cron script payload failed (timeout): wall-clock timeout exceeded",
     errorClassification: { kind: "reason", reason: "timeout" },
     expectedReason: "timeout",

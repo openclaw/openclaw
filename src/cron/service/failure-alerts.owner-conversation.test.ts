@@ -56,7 +56,7 @@ it("notifies the owning conversation when a conversation-bound job's trigger fai
       enqueueSystemEvent: vi.fn(),
       enqueueSessionEvent: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      evaluateCronTrigger: async () => ({
+      evaluateCronCheck: async () => ({
         kind: "error",
         code: "internal_error",
         error: "Error: GitHub search failed",
@@ -77,7 +77,7 @@ it("notifies the owning conversation when a conversation-bound job's trigger fai
         name: "watcher",
         enabled: true,
         schedule: { kind: "cron", expr: "0 */6 * * *", staggerMs: 0 },
-        trigger: { script: "json({ fire: false })" },
+        check: { script: "json({ fire: false })" },
         sessionTarget: "current",
         sessionKey,
         owner: { agentId: "main", sessionKey },

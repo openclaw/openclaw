@@ -210,6 +210,7 @@ export async function prepareMessageRoute(params: {
   const { channel, plugin: channelPlugin } = await resolveMessageChannelSelection({
     cfg,
     channel: requestedChannel,
+    action,
     // Explicit reads must never fall back to the source conversation's provider.
     fallbackChannel:
       action === "read" && requestedChannel ? undefined : input.toolContext?.currentChannelProvider,

@@ -80,14 +80,15 @@ function ownedDeclaration(
   return declaration({
     declarationKey: params.declarationKey,
     delivery: { mode: "none" },
-    trigger:
-      owner === "condition"
-        ? { script, ...(params.once !== undefined ? { once: params.once } : {}) }
+    check:
+      owner !== "none"
+        ? {
+            script,
+            ...(params.sameOwnerEdit ? { timeoutSeconds: 45 } : {}),
+            ...(params.once !== undefined ? { once: params.once } : {}),
+          }
         : undefined,
-    payload:
-      owner === "script"
-        ? { kind: "script", script, ...(params.sameOwnerEdit ? { timeoutSeconds: 45 } : {}) }
-        : { kind: "agentTurn", message: "report" },
+    payload: owner === "script" ? { kind: "none" } : { kind: "agentTurn", message: "report" },
     ...(params.state ? { state: params.state } : {}),
     ...(params.sameOwnerEdit ? { displayName: "Updated report" } : {}),
   });
@@ -96,16 +97,16 @@ function ownedDeclaration(
 it("rejects malformed declared triggers without changing persisted jobs", async () => {
   const { cron } = await setup();
   const rejectsTrigger = () =>
-    expect(cron.add(declaration({ trigger: { script: "const x = ;" } }))).rejects.toThrow(
-      "cron trigger script has a syntax error: Unexpected token (line 1, column 10)",
+    expect(cron.add(declaration({ check: { script: "const x = ;" } }))).rejects.toThrow(
+      "cron check script has a syntax error: Unexpected token (line 1, column 10)",
     );
   await rejectsTrigger();
   expect(await cron.list()).toEqual([]);
-  const validTrigger = { script: "return { fire: true }" };
-  const created = await add(cron, declaration({ trigger: validTrigger }));
+  const validTrigger = { script: "return { wake: '' }" };
+  const created = await add(cron, declaration({ check: validTrigger }));
   await rejectsTrigger();
-  expect(await cron.readJob(created.id)).toMatchObject({ trigger: validTrigger });
-  expect(await cron.list()).toEqual([expect.objectContaining({ trigger: validTrigger })]);
+  expect(await cron.readJob(created.id)).toMatchObject({ check: validTrigger });
+  expect(await cron.list()).toEqual([expect.objectContaining({ check: validTrigger })]);
 });
 
 it("keeps an existing create-only declaration byte-for-byte without granting visibility", async () => {
@@ -327,7 +328,7 @@ it.each(["ordinary update", "declarative convergence"] as const)(
     const nullState = { triggerState: null, triggerEvalCount: 0 };
     const timestamps = { lastTriggerEvalAtMs: 444, lastTriggerFireAtMs: 555 };
     const cases: Array<[string, TriggerStateOwner, TriggerStateOwner, Transition]> = [
-      ["condition to script", "condition", "script", {}],
+      ["same check without a prompt", "condition", "script", { sameOwnerEdit: true }],
       ["script replacement", "script", "script", { script }],
       ["script removal", "script", "none", {}],
       ["same condition", "condition", "condition", { sameOwnerEdit: true }],
@@ -336,7 +337,7 @@ it.each(["ordinary update", "declarative convergence"] as const)(
       ["once made explicit false", "condition", "condition", { once: false }],
       ["once enabled", "condition", "condition", { once: true }],
       ["explicit null state", "condition", "condition", { script, state: nullState }],
-      ["explicit timestamps", "condition", "script", { state: timestamps }],
+      ["explicit timestamps", "condition", "script", { script, state: timestamps }],
     ];
     const expectedJobs: Array<{ id: string; state: CronJob["state"]; name: string }> = [];
     const stateFields = (state?: CronJob["state"]) => ({
@@ -359,7 +360,7 @@ it.each(["ordinary update", "declarative convergence"] as const)(
       const replacement = ownedDeclaration(next, { declarationKey, ...changes });
       if (mutationPath === "ordinary update") {
         await cron.update(created.id, {
-          trigger: replacement.trigger ?? null,
+          check: replacement.check ?? null,
           payload: replacement.payload,
           displayName: replacement.displayName,
           ...(changes.state ? { state: changes.state } : {}),
@@ -410,14 +411,14 @@ it("rejects concurrent stale-owner updates across service instances sharing SQLi
   expect((await second.readJob(created.id))?.state).toMatchObject(retiredTriggerState);
   const [replacement, stale] = await Promise.allSettled([
     first.update(created.id, {
-      trigger: { script: 'return "replacement"' },
+      check: { script: 'return "replacement"' },
       state: replacementState,
     }),
     second.updateWithPrecondition(
       created.id,
       {
         displayName: "Stale owner",
-        trigger: { script: 'return "obsolete"' },
+        check: { script: 'return "obsolete"' },
         state: { triggerState: { owner: "obsolete" }, triggerEvalCount: 99 },
       },
       guard(staleRevision),
@@ -431,7 +432,7 @@ it("rejects concurrent stale-owner updates across service instances sharing SQLi
     undefined,
     undefined,
   ]);
-  expect(persisted?.trigger).toEqual({ script: 'return "replacement"' });
+  expect(persisted?.check).toEqual({ script: 'return "replacement"' });
   await second.updateWithPrecondition(
     created.id,
     { displayName: "Current owner" },

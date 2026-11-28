@@ -265,7 +265,7 @@ it.each([
       job.delivery = { mode: "none", channel: "discord", to: "channel:original" };
     }
     if (mutation === "native trigger state") {
-      job.trigger = { script: "return { fire: true }" };
+      job.check = { script: "return { wake: '' }" };
       job.state = { triggerState: { phase: "original" } };
     }
     await using run = await messageRun(job, "message-permission-run");
@@ -370,7 +370,7 @@ it.each(["present", "absent"] as const)(
     const editedJob = makeCronReceiptJob(`retirement-${storage}`);
     const untouchedJob = makeCronReceiptJob(`untouched-${storage}`);
     for (const job of [editedJob, untouchedJob]) {
-      job.trigger = { script: "return true", once: true };
+      job.check = { script: "return true", once: true };
       job.state.runningAtMs = startedAtMs;
     }
     await saveCronStore(storePath, { version: 1, jobs: [editedJob, untouchedJob] });

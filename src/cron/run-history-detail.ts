@@ -167,12 +167,8 @@ export function cronRunLogEntryToDetail(
     durationMs: entry.durationMs,
     nextRunAtMs: entry.nextRunAtMs,
     triggerFired: entry.triggerFired,
-    triggerStateChanged:
-      options.triggerEval?.fired === true ? options.triggerEval.stateChanged : undefined,
-    triggerState:
-      options.triggerEval?.fired === true && options.triggerEval.stateChanged
-        ? options.triggerEval.state
-        : undefined,
+    triggerStateChanged: options.triggerEval?.stateChanged,
+    triggerState: options.triggerEval?.stateChanged ? options.triggerEval.state : undefined,
     scriptStateChanged: options.scriptResult?.scriptStateChanged === true ? true : undefined,
     scriptState:
       options.scriptResult?.scriptStateChanged === true

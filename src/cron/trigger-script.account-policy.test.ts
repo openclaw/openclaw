@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import "../agents/openclaw-tools.js";
+import { normalizeTelegramTargetForTest } from "../../test/helpers/infra/telegram-targets.js";
 import type {
   ChannelMessageActionContext,
   ChannelPlugin,
@@ -71,7 +72,7 @@ it.each(["trigger", "payload"] as const)(
         const runtime = createCronScriptRuntime({ config, loadPluginRegistry: () => registry });
         const signal = new AbortController().signal;
         const invoke = async (accountId: string, channel?: string) => {
-          const script = `await message({ action: "send", channel: "telegram", accountId: ${JSON.stringify(accountId)}, target: "123", message: "Scheduled report" }); return { fire: false };`;
+          const script = `await message({ action: "send", channel: "telegram", accountId: ${JSON.stringify(accountId)}, target: "123", message: "Scheduled report" }); return { };`;
           const jobId = `account-${entry}-${accountId}`;
           const marker = markCronJobActive(jobId);
           const ownerSessionKey = `agent:main:telegram:${accountId}:direct:123`;
@@ -81,7 +82,8 @@ it.each(["trigger", "payload"] as const)(
             payload:
               entry === "trigger"
                 ? { kind: "agentTurn", message: "Collect the report", toolsAllow: ["message"] }
-                : { kind: "script", script, toolsAllow: ["message"] },
+                : { kind: "none", toolsAllow: ["message"] },
+            check: { script },
             delivery: { mode: "none", channel: "slack", accountId: "delivery" },
             owner: { agentId: "main", sessionKey: ownerSessionKey, accountId },
             scheduledToolPolicy: {
@@ -109,11 +111,9 @@ it.each(["trigger", "payload"] as const)(
               ingress: { kind: "schedule", boundary: "cron.script", state: "present" } as const,
               onPostAdmission: (admitted) => bindCronJobAdmittedRun(marker, admitted, signal),
             },
-          } satisfies Parameters<typeof runtime.evaluateTrigger>[0];
+          } satisfies Parameters<typeof runtime.evaluateCheck>[0];
           try {
-            return await (entry === "trigger"
-              ? runtime.evaluateTrigger(params)
-              : runtime.executePayload(params));
+            return await runtime.evaluateCheck(params);
           } finally {
             clearCronJobActive(jobId, marker);
           }
@@ -128,8 +128,7 @@ it.each(["trigger", "payload"] as const)(
         });
         expect(sendText).not.toHaveBeenCalled();
         plugins.setActivePluginRegistry(registry);
-        const expected =
-          entry === "trigger" ? { kind: "evaluated", fire: false } : { kind: "completed" };
+        const expected = { kind: "evaluated", action: "quiet" };
         for (const [accountId, channel, error, sends] of [
           ["work", "telegram", undefined, 1],
           ["work", "slack", 'Scheduled account "work" is unavailable', 1],
@@ -169,6 +168,9 @@ it("reuses hydrated creator origin for script admission across warm cache change
         channels: { telegram: { accounts } },
       };
       configSnapshot.setRuntimeConfigSnapshot(config, config);
+      const sendText = vi.fn(async () => {
+        throw new Error("Unexpected text send during Telegram delete");
+      });
       const handleAction = vi.fn(async (_context: ChannelMessageActionContext) => ({
         content: [{ type: "text" as const, text: "deleted" }],
         details: { ok: true },
@@ -182,7 +184,11 @@ it("reuses hydrated creator origin for script admission across warm cache change
               cfg.channels?.telegram?.accounts?.[selectedAccountId ?? "default"] ?? {},
           },
         }),
-        messaging: { targetResolver: { looksLikeId: (value) => value === target } },
+        messaging: {
+          normalizeTarget: normalizeTelegramTargetForTest,
+          targetResolver: { looksLikeId: (value) => value === target },
+        },
+        outbound: { deliveryMode: "direct", sendText },
         actions: {
           describeMessageTool: () => ({ actions: ["delete"] }),
           providerOwnedReadGates: ["delete"],
@@ -235,7 +241,8 @@ it("reuses hydrated creator origin for script admission across warm cache change
         const job: CronStoredJob = makeCronJob({
           id: jobId,
           agentId: "main",
-          payload: { kind: "script", script, toolsAllow: ["message"] },
+          payload: { kind: "none", toolsAllow: ["message"] },
+          check: { script },
           owner: { agentId: "main", sessionKey: ownerSessionKey, accountId },
           scheduledToolPolicy: {
             version: 1,
@@ -252,9 +259,11 @@ it("reuses hydrated creator origin for script admission across warm cache change
           };
         }
         try {
-          return await runtime.executePayload({
+          return await runtime.evaluateCheck({
             occurrence: TEST_SCHEDULED_OCCURRENCE,
             job,
+            script,
+            state: null,
             streamBatch: undefined,
             abortSignal: controller.signal,
             deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
@@ -272,7 +281,7 @@ it("reuses hydrated creator origin for script admission across warm cache change
 
       const validOrigin = { kind: "external", channel: "telegram" } as const;
       const first = await invoke(validOrigin);
-      expect(first, JSON.stringify(first)).toMatchObject({ kind: "completed" });
+      expect(first, JSON.stringify(first)).toMatchObject({ kind: "evaluated" });
       expect(handleAction).toHaveBeenCalledOnce();
       expect(handleAction.mock.calls[0]?.[0]).toMatchObject({
         action: "delete",
@@ -295,8 +304,9 @@ it("reuses hydrated creator origin for script admission across warm cache change
       }
 
       const restored = await invoke(validOrigin);
-      expect(restored, JSON.stringify(restored)).toMatchObject({ kind: "completed" });
+      expect(restored, JSON.stringify(restored)).toMatchObject({ kind: "evaluated" });
       expect(handleAction).toHaveBeenCalledTimes(2);
+      expect(sendText).not.toHaveBeenCalled();
     } finally {
       configSnapshot.clearRuntimeConfigSnapshot();
       plugins.restoreActivePluginRegistrySnapshot(registrySnapshot);
@@ -318,11 +328,11 @@ it("flags reauthorization exactly when script preparation reaches the missing-ch
       const signal = new AbortController().signal;
       const ownerSessionKey = "agent:main:telegram:work:direct:123";
       const cases = [
-        ["payload", [], 'return { notify: "done" };', false],
-        ["trigger", [], "return { fire: false };", false],
-        ["payload", [], "return { notify: typeof MCP };", true],
-        ["trigger", [], 'return { fire: typeof MCP === "object" };', true],
-        ["payload", ["read"], 'return { notify: "done" };', true],
+        ["payload", [], 'return { post: "done" };', false],
+        ["trigger", [], "return { };", false],
+        ["payload", [], "return { post: typeof MCP };", true],
+        ["trigger", [], 'return { state: typeof MCP === "object" };', true],
+        ["payload", ["read"], 'return { post: "done" };', true],
       ] as const;
       for (const [index, [entry, toolsAllow, script, blocked]] of cases.entries()) {
         const jobId = `reauthorization-${index}`;
@@ -332,9 +342,9 @@ it("flags reauthorization exactly when script preparation reaches the missing-ch
           agentId: "main",
           payload:
             entry === "payload"
-              ? { kind: "script", script, toolsAllow: [...toolsAllow] }
-              : { kind: "command", argv: ["true"], toolsAllow: [...toolsAllow] },
-          ...(entry === "trigger" ? { trigger: { script } } : {}),
+              ? { kind: "none", toolsAllow: [...toolsAllow] }
+              : { kind: "none", toolsAllow: [...toolsAllow] },
+          check: { script },
           owner: { agentId: "main", sessionKey: ownerSessionKey, accountId: "work" },
           scheduledToolPolicy: {
             version: 1,
@@ -354,15 +364,13 @@ it("flags reauthorization exactly when script preparation reaches the missing-ch
             ingress: { kind: "schedule", boundary: "cron.script", state: "present" } as const,
             onPostAdmission: (admitted) => bindCronJobAdmittedRun(marker, admitted, signal),
           },
-        } satisfies Parameters<typeof runtime.evaluateTrigger>[0];
+        } satisfies Parameters<typeof runtime.evaluateCheck>[0];
         try {
-          const result = await (entry === "trigger"
-            ? runtime.evaluateTrigger(params)
-            : runtime.executePayload(params));
+          const result = await runtime.evaluateCheck(params);
           expect(result, JSON.stringify(result)).toMatchObject(
             blocked
               ? { kind: "error", error: expect.stringContaining("no recorded creator channel") }
-              : { kind: entry === "trigger" ? "evaluated" : "completed" },
+              : { kind: "evaluated" },
           );
         } finally {
           clearCronJobActive(jobId, marker);

@@ -293,7 +293,7 @@ it.each(["ordinary", "replacement", "cancelled"])(
     await fixture.execution.update(fixture.selected.id, {
       ...(mode === "ordinary"
         ? {
-            trigger: { script: "return { fire: true, state: { obsolete: true } };" },
+            check: { script: "return { wake: '', state: { obsolete: true } };" },
           }
         : {}),
       state: { triggerState: previous },
@@ -302,7 +302,7 @@ it.each(["ordinary", "replacement", "cancelled"])(
     runEmbeddedAgentMock.mockImplementation(async () => {
       if (mode === "replacement") {
         await fixture.execution.update(fixture.selected.id, {
-          trigger: { script: "return { fire: false };" },
+          check: { script: "return { };" },
           state: { triggerState: { replacement: "current owner" } },
         });
       } else if (mode === "cancelled") {

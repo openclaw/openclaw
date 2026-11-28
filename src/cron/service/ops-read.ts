@@ -214,7 +214,7 @@ export async function listPage(
         const enabledFilter = opts?.enabled ?? (opts?.includeDisabled ? "all" : "enabled");
         const scheduleKindFilter = opts?.scheduleKind ?? "all";
         const lastRunStatusFilter = opts?.lastRunStatus ?? "all";
-        const triggerFilter = opts?.trigger ?? "all";
+        const triggerFilter = opts?.check ?? "all";
         const sortBy = opts?.sortBy ?? "nextRunAtMs";
         const sortDir = opts?.sortDir ?? "asc";
         const requestedAgentId = normalizeOptionalAgentId(opts?.agentId);
@@ -243,10 +243,10 @@ export async function listPage(
           ) {
             return false;
           }
-          if (triggerFilter === "conditional" && !job.trigger) {
+          if (triggerFilter === "conditional" && !job.check) {
             return false;
           }
-          if (triggerFilter === "unconditional" && job.trigger) {
+          if (triggerFilter === "unconditional" && job.check) {
             return false;
           }
           if (query) {

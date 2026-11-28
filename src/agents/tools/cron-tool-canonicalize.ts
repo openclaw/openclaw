@@ -5,11 +5,10 @@ import { isRecord } from "../../utils.js";
 import { isStringOption } from "../../utils/string-readers.js";
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit", "stream", "event"] as const;
-const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script", "command"] as const;
+const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "none", "command"] as const;
 const CRON_FLAT_PAYLOAD_KEYS = [
   "message",
   "text",
-  "script",
   "model",
   "fallbacks",
   "toolsAllow",
@@ -53,7 +52,7 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "activeHours",
   "idleOnly",
   "cyberAccessProgram",
-  "trigger",
+  "check",
   "sessionTarget",
   "wakeMode",
   "payload",
@@ -84,7 +83,7 @@ const CRON_NESTABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "cyberAccessProgram",
   "payload",
   "schedule",
-  "trigger",
+  "check",
 ]);
 
 /** Path segments that would reach Object.prototype when assigned while nesting. */
@@ -264,26 +263,22 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
   }
 
   if (!isCronPayloadKind(payload.kind)) {
-    if (isNonEmptyString(payload.script)) {
-      payload.kind = "script";
-    } else {
-      // Timeout alone inherits the stored kind; text+timeout is an agent prompt shorthand.
-      const hasAgentTurnSignal =
-        isNonEmptyString(payload.message) ||
-        isNonEmptyString(payload.model) ||
-        payload.model === null ||
-        isNonEmptyString(payload.thinking) ||
-        (typeof payload.timeoutSeconds === "number" && isNonEmptyString(payload.text)) ||
-        typeof payload.lightContext === "boolean" ||
-        typeof payload.includeReasoning === "boolean" ||
-        typeof payload.skipIfScratchEmpty === "boolean" ||
-        typeof payload.allowUnsafeExternalContent === "boolean" ||
-        (payload.fallbacks !== undefined && isStringArrayOrNull(payload.fallbacks));
-      if (hasAgentTurnSignal) {
-        payload.kind = "agentTurn";
-      } else if (isNonEmptyString(payload.text)) {
-        payload.kind = "systemEvent";
-      }
+    // Timeout alone inherits the stored kind; text+timeout is an agent prompt shorthand.
+    const hasAgentTurnSignal =
+      isNonEmptyString(payload.message) ||
+      isNonEmptyString(payload.model) ||
+      payload.model === null ||
+      isNonEmptyString(payload.thinking) ||
+      (typeof payload.timeoutSeconds === "number" && isNonEmptyString(payload.text)) ||
+      typeof payload.lightContext === "boolean" ||
+      typeof payload.includeReasoning === "boolean" ||
+      typeof payload.skipIfScratchEmpty === "boolean" ||
+      typeof payload.allowUnsafeExternalContent === "boolean" ||
+      (payload.fallbacks !== undefined && isStringArrayOrNull(payload.fallbacks));
+    if (hasAgentTurnSignal) {
+      payload.kind = "agentTurn";
+    } else if (isNonEmptyString(payload.text)) {
+      payload.kind = "systemEvent";
     }
   }
 

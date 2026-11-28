@@ -221,7 +221,7 @@ it("persists and rebinds a finite authenticated requester cap", async () => {
   expect((await readJob())?.toolsAllowProvenance).toBeUndefined();
 });
 
-it.each<[string, CronJobPatch, CronJobCreate["trigger"]?, boolean?]>([
+it.each<[string, CronJobPatch, CronJobCreate["check"]?, boolean?]>([
   ["model selection", { payload: { kind: "agentTurn", model: "openai/test-model" } }],
   ["schedule", { schedule: { kind: "every", everyMs: 120_000 } }],
   ["delivery target", { delivery: { to: "channel:another", accountId: "work" } }],
@@ -241,7 +241,7 @@ it.each<[string, CronJobPatch, CronJobCreate["trigger"]?, boolean?]>([
     true,
   ],
 ])("reconciles requester authority for %s", async (_name, patch, trigger, preserves = false) => {
-  const created = await cron.add(requesterDeclaration({ trigger }), fullAuthority);
+  const created = await cron.add(requesterDeclaration({ check: trigger }), fullAuthority);
   await cron.update(
     created.id,
     patch,

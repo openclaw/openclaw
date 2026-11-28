@@ -1,3 +1,4 @@
+import type { ChannelMessageActionName } from "../plugins/message-action-names.js";
 import type { AnyChannelPlugin } from "../plugins/types.plugin.js";
 import type {
   ChannelMessageAdapter,
@@ -33,5 +34,19 @@ export function hasChannelMessageSender(plugin: AnyChannelPlugin | undefined): b
     plugin?.outbound?.sendText ||
     plugin?.outbound?.deliveryMode === "gateway" ||
     plugin?.message?.send?.text,
+  );
+}
+
+/** A provider-owned action can use its registered handler even on a channel without a text sender. */
+export function hasProviderActionHandler(
+  plugin: AnyChannelPlugin | undefined,
+  action: ChannelMessageActionName | undefined,
+): boolean {
+  return Boolean(
+    action &&
+    action !== "send" &&
+    action !== "poll" &&
+    plugin?.actions?.handleAction &&
+    plugin.actions.supportsAction?.({ action }) !== false,
   );
 }

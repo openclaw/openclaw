@@ -94,7 +94,7 @@ describe("cron job creator reauthorization detection", () => {
     expect(cronJobNeedsCreatorReauthorization({ job: command })).toBe(false);
     expect(
       cronJobNeedsCreatorReauthorization({
-        job: { ...command, trigger: { script: "return { fire: false };" } },
+        job: { ...command, check: { script: "return { };" } },
       }),
     ).toBe(true);
   });

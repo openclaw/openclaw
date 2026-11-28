@@ -15,11 +15,11 @@ export function isCheckingCondition(job: CronStoredJob): boolean {
 
 /**
  * A timed check holds no run slot: it is short and bounded, and run slots are for payloads.
- * A requested check keeps the slot it was activated with. So does a script payload's check,
+ * A requested check keeps the slot it was activated with. So does a check-only job,
  * whose time budget cannot pause while it waits for a slot.
  */
 export function startsWithoutRunSlot(job: CronStoredJob, receiptId: string): boolean {
-  return job.payload.kind !== "script" && parseCronScheduledRunId(receiptId) !== undefined;
+  return job.payload.kind !== "none" && parseCronScheduledRunId(receiptId) !== undefined;
 }
 
 /** A parked occurrence holds neither a condition-check slot nor a run slot. */

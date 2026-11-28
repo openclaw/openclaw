@@ -37,9 +37,7 @@ function makeTool(name: string, execute: AnyAgentTool["execute"]): AnyAgentTool 
 }
 
 function createEvaluator(
-  result: CodeModeHeadlessResult | NonNullable<EvaluatorDeps["runHeadless"]> = completed({
-    fire: false,
-  }),
+  result: CodeModeHeadlessResult | NonNullable<EvaluatorDeps["runHeadless"]> = completed({}),
   deps: Partial<Omit<EvaluatorDeps, "runHeadless">> = {},
 ) {
   const config = deps.config ?? {};
@@ -50,17 +48,15 @@ function createEvaluator(
     deps.prepareRuntime ?? (async () => createPreparedRuntime(config)),
   );
   const runtime = createCronScriptRuntime({ ...deps, config, runHeadless, prepareRuntime });
-  type Input = Partial<Parameters<typeof runtime.evaluateTrigger>[0]>;
+  type Input = Partial<Parameters<typeof runtime.evaluateCheck>[0]>;
   return {
-    evaluate: (input: Input = {}) => runtime.evaluateTrigger({ ...INPUT, ...input }),
-    executePayload: (input: Input = {}) => runtime.executePayload({ ...INPUT, ...input }),
+    evaluate: (input: Input = {}) => runtime.evaluateCheck({ ...INPUT, ...input }),
     prepareRuntime,
     runHeadless,
   };
 }
 
 const INPUT = { jobId: "probe", script: "return result", state: null };
-const INTERNAL_ERROR = expect.objectContaining({ kind: "error", code: "internal_error" });
 
 it("returns a nested cron tool result as trigger state", async () => {
   const details = {
@@ -71,8 +67,8 @@ it("returns a nested cron tool result as trigger state", async () => {
     prepareRuntime: async ({ runtimeConfig }) => createPreparedRuntime(runtimeConfig, [probe]),
   });
   await expect(
-    evaluate({ script: "return { fire: true, state: await snapshot_probe({}) };" }),
-  ).resolves.toMatchObject({ kind: "evaluated", fire: true, state: details });
+    evaluate({ script: "return { wake: '', state: await snapshot_probe({}) };" }),
+  ).resolves.toMatchObject({ kind: "evaluated", action: "wake", state: details });
 });
 
 function execEvaluator(host: "auto" | "node" | "gateway", node?: string) {
@@ -81,14 +77,14 @@ function execEvaluator(host: "auto" | "node" | "gateway", node?: string) {
       agents: { defaults: { workspace: tempDirs.make("openclaw-cron-exec-") } },
       tools: { exec: { host, node, security: "full", ask: "off" } },
     },
-  }).evaluateTrigger;
+  }).evaluateCheck;
 }
 
 function triggerNamespace(entries: Array<[string, unknown]>) {
   return [
     {
       id: "cron:trigger",
-      globalName: "trigger",
+      globalName: "check",
       scope: {
         kind: "object",
         entries: entries.map(([name, value]) => [name, { kind: "value", value }]),
@@ -121,7 +117,7 @@ it("cancels the real headless worker and bridge when its evaluation catalog clos
     { config, prepareRuntime: async () => ({ ...prepared, createTools: async () => [gate] }) },
   );
   const evaluation = evaluate({
-    script: 'await gate({}); text("STALE AFTER CLOSE"); return { fire: true };',
+    script: 'await gate({}); text("STALE AFTER CLOSE"); return { wake: "" };',
   });
   try {
     await entered.promise;
@@ -134,9 +130,9 @@ it("cancels the real headless worker and bridge when its evaluation catalog clos
     await expect(evaluation).resolves.toMatchObject({ kind: "error", code: "aborted" });
     expect(context.catalogRef?.onDispose).toBeUndefined();
     release.resolve();
-    await expect(evaluate({ script: "return { fire: false };" })).resolves.toMatchObject({
+    await expect(evaluate({ script: "return { };" })).resolves.toMatchObject({
       kind: "evaluated",
-      fire: false,
+      action: "quiet",
     });
     expect(context.catalogRef?.onDispose?.size ?? 0).toBe(0);
   } finally {
@@ -158,12 +154,12 @@ it("does not scaffold an implicit ACP workspace during trigger execution (#92015
   };
   const runtime = createCronScriptRuntime({
     config,
-    runHeadless: async () => completed({ fire: false }),
+    runHeadless: async () => completed({}),
   });
-  await runtime.evaluateTrigger({
+  await runtime.evaluateCheck({
     ...INPUT,
     agentId: "codex",
-    script: "return { fire: false }",
+    script: "return { }",
     toolsAllow: [],
   });
   expect(fs.existsSync(path.join(workspaceDir, "AGENTS.md"))).toBe(false);
@@ -172,7 +168,7 @@ it("does not scaffold an implicit ACP workspace during trigger execution (#92015
 });
 
 it.each([
-  { host: "auto", expected: { kind: "evaluated", fire: false } },
+  { host: "auto", expected: { kind: "evaluated", action: "quiet" } },
   {
     host: "node",
     expected: {
@@ -199,7 +195,7 @@ it.each([
       evaluate({
         ...input,
         script:
-          'await exec({ command: "printf openclaw-canonical-ok", host: "node", node: "remote" }); return { fire: false };',
+          'await exec({ command: "printf openclaw-canonical-ok", host: "node", node: "remote" }); return { };',
       }),
     ).resolves.toEqual({
       kind: "error",
@@ -211,7 +207,7 @@ it.each([
     await expect(
       evaluate({
         ...input,
-        script: 'await exec({ command: "printf openclaw-canonical-ok" }); return { fire: false };',
+        script: 'await exec({ command: "printf openclaw-canonical-ok" }); return { };',
       }),
     ).resolves.toEqual(expected);
   },
@@ -222,7 +218,7 @@ it("keeps an uncanonicalized alias-name cap fail-closed for exec", async () => {
 
   const result = await evaluate({
     ...INPUT,
-    script: 'await exec({ command: "printf must-not-run" }); return { fire: false };',
+    script: 'await exec({ command: "printf must-not-run" }); return { };',
     toolsAllow: ["gateway_exec"],
     scheduledToolPolicy: { version: 1, mode: "trusted" },
   });
@@ -241,16 +237,12 @@ it("projects typed exec details into trigger scripts without content wrappers", 
       scheduledToolPolicy: { version: 1, mode: "trusted" },
       script: `
         const result = await exec({ command: "printf watcher-ready" });
-        return {
-          fire:
-            result.status === "completed" &&
-            result.exitCode === 0 &&
-            result.aggregated === "watcher-ready" &&
-            result.content === undefined,
-        };
+        return result.status === "completed" &&
+          result.exitCode === 0 && result.aggregated === "watcher-ready" &&
+          result.content === undefined ? { wake: "ready" } : {};
       `,
     }),
-  ).resolves.toEqual({ kind: "evaluated", fire: true });
+  ).resolves.toEqual({ kind: "evaluated", action: "wake", message: "ready" });
 });
 
 it.skipIf(process.platform === "win32")(
@@ -267,10 +259,10 @@ it.skipIf(process.platform === "win32")(
           if (result.status !== "completed" || result.exitCode !== 0) {
             throw new Error("GitHub search failed: " + JSON.stringify(result).slice(0, 200));
           }
-          return { fire: false, state: JSON.parse(result.aggregated) };
+          return { state: JSON.parse(result.aggregated) };
         `,
       }),
-    ).resolves.toEqual({ kind: "evaluated", fire: false, state: [] });
+    ).resolves.toEqual({ kind: "evaluated", action: "quiet", state: [] });
   },
 );
 
@@ -292,39 +284,47 @@ it.skipIf(process.platform === "win32")(
           if (left) {
             await process({ action: "kill", sessionId: left[1] });
           }
-          return { fire: false, state: JSON.parse(result.aggregated) };
+          return { state: JSON.parse(result.aggregated) };
         `,
       }),
-    ).resolves.toEqual({ kind: "evaluated", fire: false, state: { ok: true } });
+    ).resolves.toEqual({ kind: "evaluated", action: "quiet", state: { ok: true } });
   },
 );
 
 it.each([
   [
     "prefers the return value",
-    completed({ fire: true, message: "changed", state: { revision: 2 } }, [
-      { type: "json", value: { fire: false, state: { revision: 1 } } },
+    completed({ wake: "changed", state: { revision: 2 } }, [
+      { type: "json", value: { state: { revision: 1 } } },
     ]),
-    { kind: "evaluated", fire: true, message: "changed", state: { revision: 2 } },
+    { kind: "evaluated", action: "wake", message: "changed", state: { revision: 2 } },
   ],
   [
     "falls back to the last JSON entry",
-    completed({ ignored: true }, [
-      { type: "json", value: { fire: false, state: { old: true } } },
+    completed(undefined, [
+      { type: "json", value: { state: { old: true } } },
       { type: "text", text: "ignored" },
-      { type: "json", value: { fire: true, state: { current: true } } },
+      { type: "json", value: { wake: "", state: { current: true } } },
     ]),
-    { kind: "evaluated", fire: true, state: { current: true } },
+    { kind: "evaluated", action: "wake", message: "", state: { current: true } },
   ],
-  ["rejects a nonboolean fire", completed({ fire: "yes" }), INTERNAL_ERROR],
-  ["rejects a nonstring message", completed({ fire: true, message: 42 }), INTERNAL_ERROR],
+  [
+    "rejects a retired fire result",
+    completed({ fire: true }),
+    expect.objectContaining({ kind: "error", code: "invalid_input" }),
+  ],
+  [
+    "rejects a nonstring message",
+    completed({ wake: 42 }),
+    expect.objectContaining({ kind: "error", code: "invalid_input" }),
+  ],
   [
     "rejects oversized state",
-    completed({ fire: false, state: { value: "x".repeat(16 * 1024) } }),
+    completed({ state: { value: "x".repeat(16 * 1024) } }),
     {
       kind: "error",
       code: "output_limit_exceeded",
-      error: "cron trigger state exceeds the 16KB limit",
+      error: "cron check state exceeds the 16KB limit",
     },
   ],
 ] as const)("%s and injects trigger state", async (_name, result, expected) => {
@@ -362,7 +362,7 @@ it("starts cold after cancellation without waiting for the old preparation to se
     await expect(cancelled).resolves.toMatchObject({ kind: "error", code: "aborted" });
     next = evaluate();
     release.resolve();
-    await expect(next).resolves.toMatchObject({ kind: "evaluated", fire: false });
+    await expect(next).resolves.toMatchObject({ kind: "evaluated", action: "quiet" });
   } finally {
     controller.abort();
     release.resolve();
@@ -390,7 +390,7 @@ it("reuses a preparation that outlives its first evaluation's deadline", async (
     await expect(timedOut).resolves.toMatchObject({ kind: "error", code: "timeout" });
 
     release.resolve();
-    await expect(evaluate()).resolves.toMatchObject({ kind: "evaluated", fire: false });
+    await expect(evaluate()).resolves.toMatchObject({ kind: "evaluated", action: "quiet" });
     expect(prepareRuntime).toHaveBeenCalledOnce();
   } finally {
     release.resolve();
@@ -424,7 +424,7 @@ it("keeps preparation past the trigger deadline and evicts it at its own limit",
 
     await vi.advanceTimersByTimeAsync(90_000);
     expect(signals[0]?.aborted).toBe(true);
-    await expect(evaluate()).resolves.toMatchObject({ kind: "evaluated", fire: false });
+    await expect(evaluate()).resolves.toMatchObject({ kind: "evaluated", action: "quiet" });
     expect(prepareRuntime).toHaveBeenCalledTimes(2);
     release.resolve();
     await vi.advanceTimersByTimeAsync(0);
@@ -460,7 +460,7 @@ it("keeps shared preparation when a later waiter is cancelled", async () => {
     await expect(cancelled).resolves.toMatchObject({ kind: "error", code: "aborted" });
 
     release.resolve();
-    await expect(evaluate()).resolves.toMatchObject({ kind: "evaluated", fire: false });
+    await expect(evaluate()).resolves.toMatchObject({ kind: "evaluated", action: "quiet" });
     expect(prepareRuntime).toHaveBeenCalledOnce();
   } finally {
     release.resolve();
@@ -468,9 +468,9 @@ it("keeps shared preparation when a later waiter is cancelled", async () => {
   }
 });
 
-it("lets a script payload prepare for its whole budget", async () => {
+it("lets a check prepare for its configured budget", async () => {
   vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
-  const { executePayload } = createEvaluator(completed({}), {
+  const { evaluate } = createEvaluator(completed({}), {
     prepareRuntime: async (params) => {
       await new Promise((resolve) => {
         setTimeout(resolve, 150_000);
@@ -480,9 +480,9 @@ it("lets a script payload prepare for its whole budget", async () => {
     },
   });
   try {
-    const result = executePayload({ timeoutSeconds: 300 });
+    const result = evaluate({ timeoutSeconds: 300 });
     await vi.advanceTimersByTimeAsync(150_000);
-    await expect(result).resolves.toMatchObject({ kind: "completed" });
+    await expect(result).resolves.toMatchObject({ kind: "evaluated" });
   } finally {
     vi.useRealTimers();
   }
@@ -533,7 +533,7 @@ it.each(["policy change", "capacity eviction"] as const)(
           entered.resolve();
           await release.promise;
         }
-        return completed({ fire: false });
+        return completed({});
       },
       { prepareRuntime },
     );
@@ -551,7 +551,7 @@ it.each(["policy change", "capacity eviction"] as const)(
       }
       expect(disposed).toEqual([]);
       release.resolve();
-      await expect(active).resolves.toMatchObject({ kind: "evaluated", fire: false });
+      await expect(active).resolves.toMatchObject({ kind: "evaluated", action: "quiet" });
       expect(disposed).toEqual([1]);
     } finally {
       release.resolve();
@@ -577,8 +577,7 @@ it.each(["preparation", "headless"] as const)("survives a clock jump during %s",
       vi.fn(async () => jsonResult({ observed: true })),
     );
     const { evaluate, runHeadless } = createEvaluator(
-      async (params) =>
-        phase === "headless" ? runCodeModeScriptHeadless(params) : completed({ fire: false }),
+      async (params) => (phase === "headless" ? runCodeModeScriptHeadless(params) : completed({})),
       {
         prepareRuntime: async ({ runtimeConfig }) => {
           if (phase === "preparation") {
@@ -592,9 +591,12 @@ it.each(["preparation", "headless"] as const)("survives a clock jump during %s",
     await expect(
       evaluate({
         script:
-          "await Promise.all([shift_clock({}), observe_clock({})]); await observe_clock({}); return { fire: true };",
+          "await Promise.all([shift_clock({}), observe_clock({})]); await observe_clock({}); return { wake: '' };",
       }),
-    ).resolves.toMatchObject({ kind: "evaluated", fire: phase === "headless" });
+    ).resolves.toMatchObject({
+      kind: "evaluated",
+      action: phase === "headless" ? "wake" : "quiet",
+    });
     expect(runHeadless).toHaveBeenCalledOnce();
     if (phase === "preparation") {
       const delegatedBudgetMs = runHeadless.mock.calls[0]?.[0]?.wallClockMs;
@@ -610,28 +612,26 @@ it.each(["preparation", "headless"] as const)("survives a clock jump during %s",
   }
 });
 
-it("uses payload-grade capped budgets and exposes frozen trigger state", async () => {
-  const { executePayload, runHeadless } = createEvaluator(
+it("uses configured check budgets and exposes frozen state", async () => {
+  const { evaluate, runHeadless } = createEvaluator(
     completed({
-      notify: "queue changed",
-      wake: "now",
+      post: "queue changed",
       state: { revision: 2, dropped: undefined, nonFinite: Number.NaN },
       nextCheck: "5m",
     }),
   );
 
   await expect(
-    executePayload({
+    evaluate({
       state: { revision: 1 },
       streamBatch: "line one\nline two",
-      timeoutSeconds: 10_000,
-      toolBudget: 10_000,
+      timeoutSeconds: 900,
+      toolBudget: 200,
     }),
   ).resolves.toEqual({
-    kind: "completed",
-    notify: "queue changed",
-    wake: "now",
-    stateChanged: true,
+    kind: "evaluated",
+    action: "post",
+    message: "queue changed",
     state: { revision: 2, nonFinite: null },
     nextCheck: { delayMs: 300_000 },
   });
@@ -650,14 +650,14 @@ it("uses payload-grade capped budgets and exposes frozen trigger state", async (
 });
 
 it.each([
-  [{ notify: 42 }, "notify must be a string"],
-  [{ wake: "later" }, 'wake must be "now" or "next-heartbeat"'],
+  [{ post: 42 }, "at most one of post or wake"],
+  [{ post: "report", wake: "investigate" }, "at most one of post or wake"],
   [{ nextCheck: "tomorrowish" }, "nextCheck must be a positive duration"],
   [{ state: "x".repeat(17 * 1024) }, "state exceeds the 16KB limit"],
 ] as const)("rejects an invalid result %#", async (value, error) => {
   const runtime = createEvaluator(completed(value));
 
-  await expect(runtime.executePayload()).resolves.toMatchObject({
+  await expect(runtime.evaluate()).resolves.toMatchObject({
     kind: "error",
     error: expect.stringContaining(error),
   });

@@ -51,7 +51,7 @@ function fixture(
     prepareRuntime: prepare,
     runHeadless: async ({ ctx }) => {
       retained.push(ctx);
-      return completed({ fire: false, state: await toolRuntime(ctx).callValue("probe", {}) });
+      return completed({ state: await toolRuntime(ctx).callValue("probe", {}) });
     },
     ...deps,
   });
@@ -77,8 +77,8 @@ it("gives each warm payload invocation fresh authority and releases it after com
     });
   });
   for (let index = 0; index < 2; index += 1) {
-    await expect(runtime.executePayload(input)).resolves.toMatchObject({
-      kind: "completed",
+    await expect(runtime.evaluateCheck(input)).resolves.toMatchObject({
+      kind: "evaluated",
       state: { owned: true },
     });
     expect(getAdmittedRunDelegatedAuthority(admitted[index]!)).toBeUndefined();
@@ -109,7 +109,7 @@ it.each(["admission", "gateway", "abort"] as const)(
         return args;
       },
     );
-    const result = runtime.executePayload({ ...input, abortSignal: controller.signal });
+    const result = runtime.evaluateCheck({ ...input, abortSignal: controller.signal });
     try {
       await entered.promise;
       expect(admitted[0]).toBeDefined();
@@ -144,8 +144,8 @@ it("keeps concurrent invocations independent while sharing prepared tools", asyn
         before !== undefined && before === getGatewayToolCallerIdentity()?.operationalRunInstance,
     });
   });
-  const first = runtime.evaluateTrigger(input);
-  const second = runtime.evaluateTrigger(input);
+  const first = runtime.evaluateCheck(input);
+  const second = runtime.evaluateCheck(input);
   try {
     await Promise.all(entered.map((entry) => entry.promise));
     release[0]!.resolve();

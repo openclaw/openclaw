@@ -13,9 +13,9 @@ export function registerGatewayCronCompletionTests<
   getCronDeps: (service: T) => Pick<CronServiceState["deps"], "onEvent">;
   loadConfigMock: Mock;
   sendCronAnnouncePayloadStrictMock: Mock<typeof sendCronAnnouncePayloadStrict>;
-  cronScriptExecutorMock: Mock;
+  evaluateCheck: Mock<NonNullable<CronServiceState["deps"]["evaluateCronCheck"]>>;
 }) {
-  it.each(["command", "script"] as const)(
+  it.each(["command", "check"] as const)(
     "preserves %s diagnostics when destination history warns and the one-shot completes",
     async (kind) => {
       const cfg = h.createCronConfig(`server-cron-${kind}-announcement-complete`);
@@ -30,11 +30,11 @@ export function registerGatewayCronCompletionTests<
           payloads: Array.isArray(params.payload) ? params.payload : [params.payload],
         };
       });
-      if (kind === "script") {
-        h.cronScriptExecutorMock.mockResolvedValueOnce({
-          kind: "completed",
-          notify: "scheduled result",
-          stateChanged: false,
+      if (kind === "check") {
+        h.evaluateCheck.mockResolvedValueOnce({
+          kind: "evaluated",
+          action: "post",
+          message: "scheduled result",
         });
       }
       const state = h.createCronService(cfg);
@@ -61,7 +61,10 @@ export function registerGatewayCronCompletionTests<
                   kind: "command",
                   argv: [process.execPath, "-e", "process.stdout.write('scheduled result')"],
                 }
-              : { kind: "script", script: "return { notify: 'scheduled result' };" },
+              : { kind: "none" },
+          ...(kind === "check"
+            ? { check: { script: "return { post: 'scheduled result' };" } }
+            : {}),
           deleteAfterRun: true,
           delivery: { mode: "announce", channel: "telegram", to: "123" },
         });

@@ -529,7 +529,7 @@ export async function executeJobCoreWithTimeout(
 ) {
   let result = await executeJobCoreWithTimeoutUnfinalized(state, job, opts);
   if (
-    job.payload.kind === "script" &&
+    job.payload.kind === "none" &&
     result.interruptedByRestart &&
     resolveCronDeliveryPlan(job).mode === "webhook" &&
     result.deliveryState?.status === "not-delivered"

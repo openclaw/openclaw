@@ -121,6 +121,7 @@ export function recoverCronJobInDatabase(
         resolveCronRunReceiptTerminalStatus(
           task.finalized.entry.status,
           task.finalized.triggerEval?.fired,
+          task.finalized.entry.completionStatus,
         ),
         task.finalized.entry.ts,
         task.finalized.entry.error,
@@ -239,7 +240,11 @@ export function recoverCronJobInDatabase(
   }
   finishReceipt(
     restored && finalized
-      ? resolveCronRunReceiptTerminalStatus(finalized.entry.status, finalized.triggerEval?.fired)
+      ? resolveCronRunReceiptTerminalStatus(
+          finalized.entry.status,
+          finalized.triggerEval?.fired,
+          finalized.entry.completionStatus,
+        )
       : "interrupted",
     restored && finalized ? finalized.entry.ts : nowMs,
     restored && finalized ? finalized.entry.error : STARTUP_INTERRUPTED_ERROR,

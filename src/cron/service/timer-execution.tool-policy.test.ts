@@ -16,12 +16,12 @@ function makeState(overrides: Partial<CronServiceDeps> = {}) {
 function damagedPinnedJob(kind: "trigger" | "script" | "agentTurn"): CronStoredJob {
   const payload: CronStoredJob["payload"] =
     kind === "script"
-      ? { kind: "script", script: "return {}", toolsAllow: ["exec"] }
+      ? { kind: "none", toolsAllow: ["exec"] }
       : { kind: "agentTurn", message: "run", toolsAllow: ["exec"] };
   return {
     ...makeCronJob({
       payload,
-      ...(kind === "trigger" ? { trigger: { script: "return { fire: true }" } } : {}),
+      ...(kind !== "agentTurn" ? { check: { script: "return { wake: '' }" } } : {}),
     }),
     toolsAllowExecTargetRequirement: {
       version: 1,
@@ -36,8 +36,10 @@ describe("scheduled exec target recovery", () => {
     "stops a damaged pinned %s job before executable work",
     async (kind) => {
       const state = makeState({
-        evaluateCronTrigger: vi.fn(async () => ({ kind: "evaluated" as const, fire: true })),
-        runScriptJob: vi.fn(async () => ({ status: "ok" as const })),
+        evaluateCronCheck: vi.fn(async () => ({
+          kind: "evaluated" as const,
+          action: "wake" as const,
+        })),
       });
 
       const result = await executeJobCore(state, damagedPinnedJob(kind));
@@ -46,8 +48,7 @@ describe("scheduled exec target recovery", () => {
         status: "error",
         error: expect.stringContaining("captured exec restriction is missing or invalid"),
       });
-      expect(state.deps.evaluateCronTrigger).not.toHaveBeenCalled();
-      expect(state.deps.runScriptJob).not.toHaveBeenCalled();
+      expect(state.deps.evaluateCronCheck).not.toHaveBeenCalled();
       expect(state.deps.runIsolatedAgentJob).not.toHaveBeenCalled();
     },
   );

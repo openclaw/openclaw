@@ -283,18 +283,18 @@ function runBatch(
 
 describe("cron stream trigger composition", () => {
   it("drops a fire:false batch and persists gate state", async () => {
-    const evaluateCronTrigger = vi.fn(async () => ({
+    const evaluateCronCheck = vi.fn(async () => ({
       kind: "evaluated" as const,
-      fire: false,
+      action: "quiet" as const,
       state: { seen: true },
     }));
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     await withStream(
-      { trigger: { script: "json({ fire: true })" } },
-      { evaluateCronTrigger, runIsolatedAgentJob },
+      { check: { script: "json({ wake: '' })" } },
+      { evaluateCronCheck, runIsolatedAgentJob },
       async (cron, job) => {
         await runBatch(cron, job, "quiet batch");
-        expect(evaluateCronTrigger).toHaveBeenCalledWith(
+        expect(evaluateCronCheck).toHaveBeenCalledWith(
           expect.objectContaining({ streamBatch: "quiet batch" }),
         );
         expect(cron.getJob(job.id)?.state.triggerState).toEqual({ seen: true });
@@ -304,19 +304,19 @@ describe("cron stream trigger composition", () => {
   });
 
   it("composes a final batch and rotates source identity when a once trigger disables the stream", async () => {
-    const evaluateCronTrigger = vi.fn(async () => ({
+    const evaluateCronCheck = vi.fn(async () => ({
       kind: "evaluated" as const,
-      fire: true,
+      action: "wake" as const,
       message: "gate message",
       state: { seen: true },
     }));
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     await withStream(
-      { trigger: { script: "json({ fire: true })" } },
-      { evaluateCronTrigger, runIsolatedAgentJob },
+      { check: { script: "json({ wake: '' })" } },
+      { evaluateCronCheck, runIsolatedAgentJob },
       async (cron, job) => {
         const configured = await cron.update(job.id, {
-          trigger: { script: "json({ fire: true })", once: true },
+          check: { script: "json({ wake: '' })", once: true },
         });
         const identity = configured.state.streamSourceIdentity;
         expect(identity).toEqual(expect.any(String));
@@ -330,21 +330,21 @@ describe("cron stream trigger composition", () => {
     );
   });
 
-  it("passes a batch to a script payload without a gate and persists its state", async () => {
-    const runScriptJob = vi.fn(async () => ({
-      status: "ok" as const,
-      stateChanged: true,
+  it("passes a batch to a check-only job and persists its state", async () => {
+    const evaluateCronCheck = vi.fn(async () => ({
+      kind: "evaluated" as const,
+      action: "quiet" as const,
       state: { revision: 2 },
     }));
     await withStream(
-      { payload: { kind: "script", script: "return {}" } },
-      { runScriptJob },
+      { payload: { kind: "none" }, check: { script: "return {}" } },
+      { evaluateCronCheck },
       async (cron, job, storePath) => {
         await runBatch(cron, job, "script batch");
         expect((await loadCronStore(storePath)).jobs[0]?.state.triggerState).toEqual({
           revision: 2,
         });
-        expect(runScriptJob).toHaveBeenCalledWith(
+        expect(evaluateCronCheck).toHaveBeenCalledWith(
           expect.objectContaining({
             job: expect.objectContaining({ id: job.id }),
             streamBatch: "script batch",

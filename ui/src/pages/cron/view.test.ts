@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { jobToForm } from "../../lib/cron/form.ts";
 import type { CronFormState } from "../../lib/cron/types.ts";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
 import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { text, testId } from "./cron-assertions.test-support.ts";
 import type { CronProps } from "./view-types.ts";
 import {
@@ -70,7 +70,7 @@ describe("cron view editor", () => {
     for (const form of [
       { payloadKind: "agentTurn" as const, payloadText: "  " },
       { payloadKind: "systemEvent" as const, payloadText: "# Event" },
-      { payloadKind: "script" as const, payloadLocked: true, payloadText: "# Source" },
+      { payloadKind: "none" as const },
       { payloadKind: "command" as const, payloadLocked: true, payloadText: "# Source" },
     ]) {
       expect(
@@ -152,10 +152,20 @@ describe("cron view editor", () => {
   });
 
   it("shows announce channel/to rows and webhook URL row per delivery mode", async () => {
-    const announce = await renderEditor({ deliveryMode: "announce" }, { channels: ["telegram"] });
+    const job = createJob("workspace-check", {
+      sessionTarget: "isolated",
+      payload: { kind: "none" },
+      check: { script: "return { post: 'Workspace degraded' }" },
+      delivery: { mode: "announce", channel: "telegram", to: "ops" },
+    });
+    const announce = await renderView({
+      editingJob: job,
+      form: jobToForm(job, DEFAULT_CRON_FORM),
+      channels: ["telegram"],
+    });
     await updatePickers(announce);
     expect(announce.querySelector("#cron-delivery-channel")).not.toBeNull();
-    expect(announce.querySelector("#cron-delivery-to")).not.toBeNull();
+    expect(getElement(announce, "#cron-delivery-to", HTMLInputElement).value).toBe("ops");
     const webhook = await renderEditor(
       { deliveryMode: "webhook" },
       { fieldErrors: { deliveryTo: "cron.errors.webhookUrlRequired" }, canSubmit: false },
@@ -190,7 +200,7 @@ describe("cron view editor", () => {
 
   it("waits for scheduler status before presenting trigger capability", async () => {
     const pending = await renderEditor({}, { status: null });
-    expect(findToggleByLabel(pending, "Check a condition first")).toBeNull();
+    expect(findToggleByLabel(pending, "Run a model-free check")).toBeNull();
     expect(pending.textContent).not.toContain(
       "turned off for this Gateway (cron.triggers.enabled)",
     );
@@ -200,44 +210,27 @@ describe("cron view editor", () => {
     const onFormChange = vi.fn();
     const status = { enabled: true, triggersEnabled: false, jobs: 0 };
     const configured = await renderEditor(
-      { triggerEnabled: true, triggerScript: "json({ fire: true })" },
+      { triggerEnabled: true, triggerScript: "return { wake: 'Review status' }" },
       { status, onFormChange },
     );
     getButtonByText(configured, "Clear check").click();
     expect(onFormChange).toHaveBeenCalledWith({ triggerEnabled: false });
   });
 
-  it("keeps an incompatible existing script condition trigger visible and explicitly clearable", async () => {
+  it("keeps an incompatible check clearable on a read-only command", async () => {
     const onFormChange = vi.fn();
-    const script = "const result = await agent('check status')";
-    const job = createJob("job-script-trigger", {
-      payload: { kind: "script", script },
-      trigger: { script: "json({ fire: true })" },
+    const job = createJob("command-with-check", {
+      sessionTarget: "isolated",
+      payload: { kind: "command", argv: ["printf", "status"] },
+      check: { script: "return {}" },
     });
     const container = await renderView({
-      jobs: [job],
       editingJob: job,
       onFormChange,
-      form: {
-        ...DEFAULT_CRON_FORM,
-        name: job.name,
-        payloadKind: "script",
-        payloadLocked: true,
-        payloadText: script,
-        triggerEnabled: true,
-        triggerScript: "json({ fire: true })",
-      },
-      fieldErrors: { triggerScript: "cron.errors.triggerScriptPayloadUnsupported" },
-      canSubmit: false,
+      form: jobToForm(job, DEFAULT_CRON_FORM),
     });
-    expect(findToggleByLabel(container, "Check a condition first")).toBeNull();
-    expect(container.querySelector("#cron-trigger-script")).toBeNull();
-    expect(container.textContent).toContain("Script payloads cannot use condition triggers");
-    const payload = getElement(container, "#cron-payload-text", HTMLPreElement);
-    expect(payload.textContent).toBe(script);
-    await waitForSolid(() => expect(text(payload, ".hljs-keyword")).toBe("const"));
-    expect(text(payload, ".hljs-string")).toBe("'check status'");
-    expect(container.querySelector("textarea#cron-payload-text")).toBeNull();
+    expect(container.textContent).toContain("Checks can use an agent prompt, but not a command");
+    expect(text(container, "pre#cron-payload-text")).toBe("printf status");
     getButtonByText(container, "Clear check").click();
     expect(onFormChange).toHaveBeenCalledWith({ triggerEnabled: false });
   });

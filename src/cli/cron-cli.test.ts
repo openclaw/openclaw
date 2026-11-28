@@ -812,7 +812,7 @@ it("rejects exact mode for stored non-cron schedules", async () => {
 });
 
 it.each([
-  [[...AGENT_ADD, "--script", "   "], "--script must not be blank"],
+  [[...AGENT_ADD, "--check-script", "   "], "--check-script must not be blank"],
   [[...AGENT_ADD, "--webhook", "not-a-url"], "--webhook must be a valid http(s) URL"],
   [
     ["cron", "create", "0 2 * * *", "    code\n", "--name", "job", "--message", "code"],
@@ -826,10 +826,13 @@ it.each([
     [...AGENT_ADD, "--webhook", "https://example.invalid/cron", "--to", "channel:C123"],
     "--webhook cannot be combined with chat delivery options",
   ],
-  [[...AGENT_ADD, "--command", "echo ok"], "Choose exactly one payload"],
+  [
+    [...AGENT_ADD, "--command", "echo ok"],
+    "choose one of --system-event, --message, and --command",
+  ],
   [
     [...ADD, "--session", "main", "--system-event", "tick", "--thread-id", "42"],
-    "require an agentTurn job or a non-main command or script job with delivery",
+    "require an agentTurn job or a non-main command or check job with delivery",
   ],
   [[...AGENT_ADD, "--thread-id", "topic-42"], "--thread-id must be a positive integer"],
   [["cron", "list", "--agent", "   "], "--agent must not be blank"],

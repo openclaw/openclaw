@@ -7,7 +7,8 @@ export function hasPendingCronTriggerInterval(job: CronJob, nowMs: number): bool
   // Busy evaluations update the job timestamp without changing trigger history.
   const lastActivityAtMs = Math.max(job.updatedAtMs, job.state.lastTriggerEvalAtMs ?? 0);
   return (
-    job.trigger !== undefined &&
+    job.check !== undefined &&
+    job.payload.kind === "agentTurn" &&
     nextRunAtMs !== undefined &&
     nextRunAtMs > 0 &&
     nowMs < nextRunAtMs &&

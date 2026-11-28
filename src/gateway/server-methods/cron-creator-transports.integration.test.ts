@@ -270,9 +270,8 @@ it.each([
               });
               const result = await addJob(tools, "Restricted caller job", {
                 ...(ocid ? { sessionTarget: target } : {}),
-                payload: ocid
-                  ? { kind: "script", script: "return {}", timeoutSeconds: 30 }
-                  : { ...timedPayload },
+                payload: ocid ? { kind: "none" } : { ...timedPayload },
+                ...(ocid ? { check: { script: "return {}", timeoutSeconds: 30 } } : {}),
               });
               expect(result).toHaveProperty("details.id");
               const jobs = await fixture.read();
@@ -281,7 +280,7 @@ it.each([
                   ...ownedJob,
                   payload: {
                     toolsAllow: ocid ? [AUTOMATIONS_TOOL_NAME] : ["*"],
-                    timeoutSeconds: ocid ? 30 : 0,
+                    ...(ocid ? {} : { timeoutSeconds: 0 }),
                   },
                 },
               ]);

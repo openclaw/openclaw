@@ -36,8 +36,8 @@ const invocation = (jobId: string, agentId = "main", toolsAllow = ["*"]) => ({
   script: "return {}",
   state: null,
 });
-const expectPayload = (result: ReturnType<Runtime["executePayload"]>, state: unknown) =>
-  expect(result).resolves.toMatchObject({ kind: "completed", state });
+const expectPayload = (result: ReturnType<Runtime["evaluateCheck"]>, state: unknown) =>
+  expect(result).resolves.toMatchObject({ kind: "evaluated", state });
 
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let config: OpenClawConfig;
@@ -126,7 +126,7 @@ async function executeProbe({ ctx }: HeadlessParams, condition = false) {
   const result = tool ? await runtime.callValue("cold_probe", {}) : null;
   return {
     status: "completed",
-    value: condition ? { fire: true, state: { state: result } } : { state: result },
+    value: condition ? { wake: "", state: { state: result } } : { state: result },
     output: [],
     toolCallCount: tool ? 1 : 0,
   } satisfies CodeModeHeadlessResult;
@@ -163,15 +163,15 @@ it("borrows the current Gateway plugins for detached conditions before and after
     expect(
       runInDetachedAsyncContext(() =>
         runScheduled(() =>
-          runtime.evaluateTrigger({
+          runtime.evaluateCheck({
             ...invocation("detached-condition", "main", ["cold_probe"]),
-            script: "return { fire: true }",
+            script: "return { wake: '' }",
           }),
         ),
       ),
     ).resolves.toMatchObject({
       kind: "evaluated",
-      fire: true,
+      action: "wake",
       state: { state: { artifact: "built", generation, calls: 1 } },
     });
   try {
@@ -213,7 +213,7 @@ it.each(["gateway", "standalone"] as const)(
     });
     const artifact = owner === "gateway" ? "built" : "source";
     const run = (jobId: string, agentId = "main", toolsAllow = ["*"]) =>
-      runtime.executePayload(invocation(jobId, agentId, toolsAllow));
+      runtime.evaluateCheck(invocation(jobId, agentId, toolsAllow));
     for (const [jobId, agentId] of [
       ["first", "main"],
       ["first", "main"],

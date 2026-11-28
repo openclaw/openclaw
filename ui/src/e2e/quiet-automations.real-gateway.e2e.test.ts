@@ -501,11 +501,11 @@ suite.define(() => {
           id,
           patch: {
             schedule: { kind: "every", everyMs: 30_000, anchorMs: triggerAnchorMs },
-            trigger: { script: "return { fire: false };" },
+            check: { script: "return { };" },
           },
         });
         expect(due.state.nextRunAtMs).toEqual(expect.any(Number));
-        // Wait for this real scheduled occurrence; force mode intentionally bypasses triggers.
+        // Wait until the scheduled check is due.
         await delay(Math.max(0, due.state.nextRunAtMs! - Date.now()) + 1, undefined, { signal });
         const triggerRun = await rpc<{ run?: CronRunLogEntry }>("cron.run", {
           id,
@@ -531,7 +531,7 @@ suite.define(() => {
         };
         await rpc("cron.update", {
           id,
-          patch: { trigger: null, schedule: { kind: "every", everyMs: 3_600_000 }, enabled: true },
+          patch: { check: null, schedule: { kind: "every", everyMs: 3_600_000 }, enabled: true },
         });
         proof.quietChecks = {
           count: 2,

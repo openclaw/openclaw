@@ -250,15 +250,16 @@ describe("CronService failure repair", () => {
     (interruption) =>
       withRepair(async (f) => {
         const started = Promise.withResolvers<void>();
-        const result = Promise.withResolvers<{ status: "ok" }>();
-        f.runScriptJob.mockImplementationOnce(async () => {
+        const result = Promise.withResolvers<{ kind: "evaluated"; action: "quiet" }>();
+        f.evaluateCronCheck.mockImplementationOnce(async () => {
           started.resolve();
           return result.promise;
         });
         const job = await f.addJob("cancelled one-shot", {
           ...owned,
           schedule: oneShot(),
-          payload: { kind: "script", script: "json({})" },
+          payload: { kind: "none" },
+          check: { script: "json({})" },
         });
         const run = f.cron.run(job.id, "due");
         try {
@@ -269,7 +270,7 @@ describe("CronService failure repair", () => {
             advanceCronActiveJobGeneration();
           }
         } finally {
-          result.resolve({ status: "ok" });
+          result.resolve({ kind: "evaluated", action: "quiet" });
           await run;
         }
         expect(f.cron.getJob(job.id)?.state.lastStatus).toBe("error");
@@ -335,10 +336,10 @@ describe("CronService failure repair", () => {
             alertSettled.resolve();
           });
         }
-        f.runScriptJob.mockResolvedValue({
-          status: "error",
+        f.evaluateCronCheck.mockResolvedValue({
+          kind: "error",
+          code: "invalid_input",
           error: "automations: wake is invalid_input",
-          ...cronScriptFailureMetadata("payload", "invalid_input"),
         });
         const script = 'await automations({ action: "wake", text: "Resume work" })';
         const job = await f.addJob("continue PR work", {
@@ -346,14 +347,15 @@ describe("CronService failure repair", () => {
           ...jobOptions,
           schedule: oneShot(),
           deleteAfterRun: true,
-          payload: { kind: "script", script, toolsAllow: ["automations"] },
+          payload: { kind: "none", toolsAllow: ["automations"] },
+          check: { script },
         });
         await f.cron.run(job.id, "due");
         const stored = await f.cron.readJob(job.id);
         expect(stored?.state.nextRunAtMs).toBeUndefined();
         expectDisabled(stored, 1);
         const expectTerminalNotifications = () => {
-          expect(f.runScriptJob).toHaveBeenCalledOnce();
+          expect(f.evaluateCronCheck).toHaveBeenCalledOnce();
           expectNotifications(f, repairs, alerts, notices);
         };
         expectTerminalNotifications();
@@ -522,7 +524,7 @@ describe("CronService failure repair", () => {
     payload: CronJob["payload"];
   }>([
     { name: "systemEvent", payload: { kind: "systemEvent", text: "check" } },
-    { name: "script", payload: { kind: "script", script: "json({})" } },
+    { name: "check-only", payload: { kind: "none" } },
   ])("requests repair for a $name job", ({ payload }) => {
     const { deferredNotifications } = applyError({ payload }, { error: "boom" });
     expect(deferredNotifications.map((notification) => notification.kind)).toEqual([

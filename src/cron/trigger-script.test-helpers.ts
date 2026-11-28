@@ -28,6 +28,11 @@ export function createCronScriptRuntimeFixture(deps: RuntimeDeps) {
       id: params.jobId,
       agentId: params.agentId,
       payload: { ...payload, toolsAllow: params.toolsAllow },
+      check: {
+        script: params.script,
+        timeoutSeconds: params.timeoutSeconds,
+        toolBudget: params.toolBudget,
+      },
       state: { triggerState: params.state },
       ...(params.scheduledToolPolicy?.mode === "account"
         ? {
@@ -43,27 +48,13 @@ export function createCronScriptRuntimeFixture(deps: RuntimeDeps) {
     toolsAllowExecTarget: params.execTarget,
   });
   return {
-    evaluateTrigger: (params: ScriptFixture) =>
-      runtime.evaluateTrigger({
+    evaluateCheck: (params: ScriptFixture) =>
+      runtime.evaluateCheck({
         occurrence: TEST_SCHEDULED_OCCURRENCE,
         deliveryAttemptFence: params.deliveryAttemptFence ?? null,
         job: job(params, { kind: "agentTurn", message: "condition payload" }),
         script: params.script,
         state: params.state,
-        streamBatch: params.streamBatch,
-        abortSignal: params.abortSignal,
-        executionIdentity: params.executionIdentity,
-      }),
-    executePayload: (params: ScriptFixture) =>
-      runtime.executePayload({
-        occurrence: TEST_SCHEDULED_OCCURRENCE,
-        deliveryAttemptFence: params.deliveryAttemptFence ?? null,
-        job: job(params, {
-          kind: "script",
-          script: params.script,
-          timeoutSeconds: params.timeoutSeconds,
-          toolBudget: params.toolBudget,
-        }),
         streamBatch: params.streamBatch,
         abortSignal: params.abortSignal,
         executionIdentity: params.executionIdentity,

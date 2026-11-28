@@ -154,7 +154,7 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
     next.message = next.text;
   }
   const kind = next.kind;
-  if (kind === "systemEvent" || kind === "agentTurn" || kind === "command" || kind === "script") {
+  if (kind === "systemEvent" || kind === "agentTurn" || kind === "command" || kind === "none") {
     if (kind !== "systemEvent") {
       delete next.text;
     } else {
@@ -178,10 +178,11 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
       delete next.noOutputTimeoutSeconds;
       delete next.outputMaxBytes;
     }
-    if (kind !== "script") {
-      delete next.script;
-      delete next.toolBudget;
+    if (kind === "none") {
+      delete next.timeoutSeconds;
     }
+    delete next.script;
+    delete next.toolBudget;
   }
   return { ...next };
 }

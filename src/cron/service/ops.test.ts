@@ -231,8 +231,8 @@ describe("cron service operations", () => {
           createdAtMs: now - 86_400_000,
           updatedAtMs: now - 30 * 60_000,
           schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
-          trigger: { script: "json({ fire: true })", once: true },
-          payload: { kind: "script", script: "return { state: { cursor: 'payload' } }" },
+          check: { script: "json({ wake: '' })", once: true },
+          payload: { kind: "none" },
           state: {
             nextRunAtMs: now - 60_000,
             runningAtMs: startedAt,

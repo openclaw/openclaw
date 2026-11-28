@@ -454,14 +454,13 @@ describe("cron store", () => {
     expect((await loadCronStore(store.storePath)).jobs[0]?.payload).toEqual(expected);
   });
 
-  it("round-trips a trigger-script systemEvent tool cap through SQLite", async () => {
+  it("round-trips a check-only tool cap through SQLite", async () => {
     const store = await makeStorePath();
     const payload = makeStore("trigger-system-event-cap", true);
     const job = payload.jobs[0];
-    job.trigger = { script: "return { fire: false }" };
+    job.check = { script: "return {}" };
     job.payload = {
-      kind: "systemEvent",
-      text: "changed",
+      kind: "none",
       toolsAllow: ["read", "cron"],
       toolsAllowIsDefault: true,
     };

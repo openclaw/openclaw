@@ -53,7 +53,7 @@ describe("cron protocol validators", () => {
     ["payload", "systemEvent", "text", "tick", 1, "string"],
     ["payload", "agentTurn", "message", "report", 1, "string"],
     ["payload", "command", "argv", ["true"], [], "items"],
-    ["payload", "script", "script", "return 1", 1, "string"],
+    ["payload", "none", "toolsAllow", ["read"], 1, "array"],
   ] as const)(
     "preserves %s acceptance and diagnoses its selected kind",
     (field, kind, key, value, badValue, message) => {
@@ -278,7 +278,7 @@ describe("cron protocol validators", () => {
         enabled: "all",
         scheduleKind: "cron",
         lastRunStatus: "unknown",
-        trigger: "conditional",
+        check: "conditional",
         sortBy: "nextRunAtMs",
         sortDir: "asc",
         agentId: "ops",
@@ -292,7 +292,7 @@ describe("cron protocol validators", () => {
     { agentId: "" },
     { scheduleKind: "yearly" },
     { lastRunStatus: "pending" },
-    { trigger: "configured" },
+    { check: "configured" },
   ])("rejects invalid list filter %j", (params) => {
     expect(list(params)).toBe(false);
   });

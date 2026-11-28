@@ -47,8 +47,8 @@ async function expectGeneration(
   runtime: ReturnType<typeof createCronScriptRuntime>,
   generation: number,
 ) {
-  await expect(runtime.executePayload(request)).resolves.toMatchObject({
-    kind: "completed",
+  await expect(runtime.evaluateCheck(request)).resolves.toMatchObject({
+    kind: "evaluated",
     state: { generation },
   });
 }
@@ -111,7 +111,7 @@ it("never replays a script that fails after a tool effect and plugin retirement"
   const prepareRuntime = async () => current.prepared;
   const runtime = createCronScriptRuntime({ config: {}, prepareRuntime });
   await expect(
-    runtime.executePayload({
+    runtime.evaluateCheck({
       ...request,
       script: "await probe({}); throw new Error('stopped after effect');",
     }),

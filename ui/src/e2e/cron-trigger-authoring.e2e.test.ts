@@ -22,7 +22,8 @@ const suite = createControlUiE2eSuite({
 
 const scriptJob = cronJob("existing-script-automation", "Script health check", {
   sessionTarget: "isolated",
-  payload: { kind: "script", script: "return { ready: true };" },
+  payload: { kind: "none" },
+  check: { script: "return { post: 'Workspace degraded' };" },
 });
 
 const pageOptions = {
@@ -31,7 +32,7 @@ const pageOptions = {
   viewport: { height: 1_050, width: 1_440 },
 };
 const triggerToggle = (page: Page) =>
-  page.locator(".settings-row--toggle").filter({ hasText: "Check a condition first" });
+  page.locator(".settings-row--toggle").filter({ hasText: "Run a model-free check" });
 const field = (page: Page, name: string) => page.locator(`#cron-${name}`);
 const submit = (page: Page) => page.locator('[data-test-id="cron-submit"]');
 async function newTask(page: Page, message: string) {
@@ -72,7 +73,7 @@ suite.define(() => {
       await field(page, "every-amount").fill("5");
       await advanced(page);
       await triggerToggle(page).click();
-      await field(page, "trigger-script").fill("json({ fire: true })");
+      await field(page, "trigger-script").fill("return { wake: 'ready' };");
 
       const intervalError = field(page, "error-everyAmount");
       await intervalError.waitFor({ state: "visible" });
@@ -90,7 +91,7 @@ suite.define(() => {
       expect(triggeredRequest.params).toMatchObject({
         payload: { message: "Run when the condition matches" },
         schedule: { kind: "every", everyMs: 30_000 },
-        trigger: { script: "json({ fire: true })", once: false },
+        check: { script: "return { wake: 'ready' };", once: false },
       });
       await expect.poll(async () => submit(page).count()).toBe(0);
 
@@ -110,7 +111,7 @@ suite.define(() => {
         payload: { message: "Run every five seconds" },
         schedule: { kind: "every", everyMs: 5_000 },
       });
-      expect(untriggeredRequest.params).not.toHaveProperty("trigger");
+      expect(untriggeredRequest.params).not.toHaveProperty("check");
     });
   });
 
@@ -135,9 +136,9 @@ suite.define(() => {
       const request = await gateway.waitForRequest("cron.add");
       expect(request.params).toMatchObject({
         payload: { message: "Run when the condition matches" },
-        trigger: { script: "const x = ;", once: false },
+        check: { script: "const x = ;", once: false },
       });
-      const message = "Condition script is invalid";
+      const message = "Check script is invalid";
       await gateway.rejectDeferred("cron.add", { code: "INVALID_REQUEST", message });
 
       const errorBanner = page.locator(".callout.danger");

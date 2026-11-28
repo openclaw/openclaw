@@ -29,14 +29,14 @@ describe("toPublicCronJob", () => {
       lastFailureNotificationId: "internal-notification",
       triggerState: { revision: 1 },
     };
-    const payload = {
-      kind: "script",
-      script: "return { notify: 'done' }",
+    const payload = { kind: "none" } as const;
+    const check = {
+      script: "return { post: 'done' }",
       timeoutSeconds: 300,
       toolBudget: 50,
     } as const;
-    const result = publicJob(makeCronJob({ payload, state }));
-    expect(result).toMatchObject({ payload });
+    const result = publicJob(makeCronJob({ payload, check, state }));
+    expect(result).toMatchObject({ payload, check });
     expect(result.state).toStrictEqual({
       nextRunAtMs: 2_000,
       triggerState: { revision: 1 },

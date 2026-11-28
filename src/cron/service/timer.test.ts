@@ -15,7 +15,6 @@ import { status as cronStatus } from "./ops-read.js";
 import { run } from "./ops-run.js";
 import { executeJobCore } from "./timer-execution.js";
 import {
-  createDueCommandJob,
   createDueIsolatedAgentJob,
   createDueMainJob,
   createDueScriptJob,
@@ -70,16 +69,16 @@ const noRun = { ok: true, ran: false, reason: "not-due" };
 const ran = { ok: true, ran: true };
 
 function scriptFixture(
-  outcome: Awaited<ReturnType<NonNullable<StateDeps["runScriptJob"]>>>,
+  outcome: Awaited<ReturnType<NonNullable<StateDeps["evaluateCronCheck"]>>>,
   deps: Parameters<typeof createCronServiceState>[0] = {},
 ) {
-  const runScriptJob = vi.fn(async () => outcome);
+  const evaluateCheck = vi.fn(async () => outcome);
   const state = createCronServiceState({
     cronConfig: { triggers: { enabled: true } },
-    runScriptJob,
+    evaluateCronCheck: evaluateCheck,
     ...deps,
   });
-  return { state, runScriptJob };
+  return { state, evaluateCheck };
 }
 
 describe("cron service timer seam coverage", () => {
@@ -160,27 +159,25 @@ describe("cron service timer seam coverage", () => {
   it("does not dispatch payload work when trigger evaluation resolves after cancellation", async () => {
     const evaluation = createDeferred<{
       kind: "evaluated";
-      fire: true;
+      action: "wake";
       state: { revision: number };
     }>();
     const evaluationEntered = createDeferred();
-    const evaluateCronTrigger = vi.fn(() => {
+    const evaluateCronCheck = vi.fn(() => {
       evaluationEntered.resolve();
       return evaluation.promise;
     });
     const runCommandJob = vi.fn(async () => ok);
-    const runScriptJob = vi.fn(async () => ok);
     const runIsolatedAgentJob = vi.fn(async () => ok);
     const state = createCronServiceState({
       cronConfig: { triggers: { enabled: true } },
-      evaluateCronTrigger,
+      evaluateCronCheck,
       runCommandJob,
-      runScriptJob,
       runIsolatedAgentJob,
     });
     const job: CronJob = {
-      ...createDueCommandJob({ now }),
-      trigger: { script: "json({ fire: true })" },
+      ...createDueIsolatedAgentJob({ now }),
+      check: { script: "json({ wake: '' })" },
     };
     const controller = new AbortController();
 
@@ -191,19 +188,18 @@ describe("cron service timer seam coverage", () => {
         result,
         "Cron did not enter trigger evaluation",
       );
-      expect(evaluateCronTrigger).toHaveBeenCalledOnce();
+      expect(evaluateCronCheck).toHaveBeenCalledOnce();
       controller.abort(new Error("operator cancelled the scheduled run"));
-      evaluation.resolve({ kind: "evaluated", fire: true, state: { revision: 2 } });
+      evaluation.resolve({ kind: "evaluated", action: "wake" as const, state: { revision: 2 } });
 
       await expect(result).resolves.toMatchObject({ status: "error" });
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
       expect(runCommandJob).not.toHaveBeenCalled();
-      expect(runScriptJob).not.toHaveBeenCalled();
       expect(runIsolatedAgentJob).not.toHaveBeenCalled();
     } finally {
       // Abort before releasing evaluation so failed assertions cannot start payload work.
       controller.abort(new Error("operator cancelled the scheduled run"));
-      evaluation.resolve({ kind: "evaluated", fire: true, state: { revision: 2 } });
+      evaluation.resolve({ kind: "evaluated", action: "wake" as const, state: { revision: 2 } });
       await result.catch(() => undefined);
     }
   });
@@ -237,71 +233,26 @@ describe("cron service timer seam coverage", () => {
     expect(runPayload).toHaveBeenCalledOnce();
   });
 
-  it("records an execution error when script payloads are disabled", async () => {
-    const { state, runScriptJob } = scriptFixture(
-      { status: "ok" },
+  it("records an execution error when checks are disabled", async () => {
+    const { state, evaluateCheck } = scriptFixture(
+      { kind: "evaluated", action: "quiet" },
       { cronConfig: { triggers: { enabled: false } } },
     );
 
     await expect(executeJobCore(state, createDueScriptJob({ now }))).resolves.toMatchObject({
       status: "error",
-      error: expect.stringContaining("the operator set cron.triggers.enabled: false"),
+      error: expect.stringContaining("Automation checks are disabled by cron.triggers.enabled"),
     });
-    expect(runScriptJob).not.toHaveBeenCalled();
+    expect(evaluateCheck).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { target: "isolated", notify: "queue changed", wake: "now" },
-    { target: "main", notify: undefined, wake: "now" },
-  ] as const)(
-    "routes $target script side effects (notify=$notify, wake=$wake)",
-    async ({ target, notify, wake }) => {
-      const sessionKey = "agent:ops:telegram:group:42:topic:77";
-      const deliveryContext = {
-        channel: "telegram",
-        to: "telegram:42",
-        accountId: "ops-bot",
-        threadId: 77,
-      };
-      const enqueueSessionEvent = vi.fn();
-      const expectedTarget = {
-        agentId: "ops",
-        sessionKey,
-        sessionId: "ops-telegram-session",
-        generation: "original",
-        deliveryContext,
-      };
-      const { state } = scriptFixture(
-        { status: "ok", notify, wake },
-        {
-          resolveDefaultAgentId: () => "other",
-          captureSessionEventTarget: async () => expectedTarget,
-          enqueueSessionEvent,
-        },
-      );
-      const job = {
-        ...createDueScriptJob({ now, sessionTarget: target }),
-        agentId: undefined,
-        sessionKey,
-      };
-      await expect(executeJobCore(state, job)).resolves.toMatchObject({ status: "ok" });
-      expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-        notify ?? "script job script job completed",
-        expect.objectContaining({ agentId: "ops", sessionKey, expectedTarget, deliveryContext }),
-      );
-      expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    },
-  );
-
-  it("delivers nothing and enqueues nothing when notify and wake are absent", async () => {
+  it("delivers nothing and enqueues nothing for a quiet check", async () => {
     const enqueueSessionEvent = vi.fn<NonNullable<StateDeps["enqueueSessionEvent"]>>();
-    const { state, runScriptJob } = scriptFixture(
+    const { state, evaluateCheck } = scriptFixture(
       {
-        status: "ok",
-        stateChanged: true,
+        kind: "evaluated",
+        action: "quiet",
         state: { revision: 2 },
-        delivered: false,
-        deliveryAttempted: false,
       },
       { defaultAgentId: undefined, resolveDefaultAgentId: () => undefined, enqueueSessionEvent },
     );
@@ -313,12 +264,11 @@ describe("cron service timer seam coverage", () => {
       }),
     ).resolves.toMatchObject({
       status: "ok",
-      scriptStateChanged: true,
-      scriptState: { revision: 2 },
+      triggerEval: { fired: false, stateChanged: true, state: { revision: 2 } },
       delivered: false,
       deliveryAttempted: false,
     });
-    expect(runScriptJob).toHaveBeenCalledOnce();
+    expect(evaluateCheck).toHaveBeenCalledOnce();
     expect(runSessionEvent).not.toHaveBeenCalled();
     expect(enqueueSessionEvent).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
@@ -326,29 +276,29 @@ describe("cron service timer seam coverage", () => {
 
   it("rejects nextCheck without pacing before applying state", async () => {
     const { state } = scriptFixture({
-      status: "ok",
-      stateChanged: true,
+      kind: "evaluated",
+      action: "quiet",
       state: { revision: 2 },
       nextCheck: { delayMs: 5_000 },
     });
 
     await expect(executeJobCore(state, createDueScriptJob({ now }))).resolves.toEqual({
       status: "error",
-      error: "cron script payload returned nextCheck, but this job has no pacing bounds",
+      error: "Automation check returned nextCheck, but this job has no pacing bounds",
       failureNotificationDetail: {
         kind: "script-failure",
-        source: "payload",
+        source: "trigger",
         code: "invalid_input",
       },
+      triggerEval: { fired: false, stateChanged: true, state: { revision: 2 } },
     });
   });
 
   it("does not persist script state from a failed run", async () => {
     const { state } = scriptFixture({
-      status: "error",
+      kind: "error",
+      code: "internal_error",
       error: "script threw",
-      stateChanged: true,
-      state: { revision: 2 },
     });
     await writeJobs(createDueScriptJob({ now }));
     await onTimer(state);
@@ -410,7 +360,7 @@ describe("cron quiet outcome finalization", () => {
     async ({ mode, failWrite }) => {
       const job = {
         ...createDueIsolatedAgentJob({ now }),
-        trigger: { script: "json({ fire: false })" },
+        check: { script: "json({ })" },
       };
       const force = mode === "manual-force";
       const pendingSlot = now + 30 * 60_000;
@@ -430,11 +380,11 @@ describe("cron quiet outcome finalization", () => {
       const database = openOpenClawStateDatabase().db;
       const state = createCronServiceState({
         cronConfig: { triggers: { enabled: true } },
-        evaluateCronTrigger: vi.fn(async () => {
+        evaluateCronCheck: vi.fn(async () => {
           if (mode.startsWith("retired")) {
             advanceCronActiveJobGeneration();
           }
-          return { kind: "evaluated" as const, fire: false };
+          return { kind: "evaluated" as const, action: "quiet" as const };
         }),
       });
 

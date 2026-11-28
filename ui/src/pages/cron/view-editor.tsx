@@ -4,6 +4,7 @@ import "../../components/agent-select-registration.ts";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
+import { supportsCronAnnounce } from "../../lib/cron/form.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { CronScratchEditor } from "./scratch-editor.tsx";
@@ -34,9 +35,7 @@ type EditorProps = CronProps & {
 function payloadFacts(props: CronProps) {
   const payloadLocked = () => props.form.payloadLocked;
   const isAgentTurn = () => !payloadLocked() && props.form.payloadKind === "agentTurn";
-  const supportsAnnounce = () =>
-    props.form.payloadKind === "agentTurn" ||
-    (props.form.sessionTarget !== "main" && payloadLocked());
+  const supportsAnnounce = () => supportsCronAnnounce(props.form);
   const selectedDeliveryMode = () =>
     props.form.deliveryMode === "announce" && !supportsAnnounce()
       ? "none"
@@ -272,11 +271,9 @@ function PromptBlock(
     phoneLayout: boolean;
   },
 ) {
-  const lockedPayloadLabel = () =>
-    props.form.payloadKind === "script" ? t("cron.form.script") : t("cron.form.command");
   const promptLabel = () =>
     props.payloadLocked
-      ? lockedPayloadLabel()
+      ? t("cron.form.command")
       : props.form.payloadKind === "systemEvent"
         ? t("cron.form.mainTimelineMessage")
         : t("cron.form.assistantTaskPrompt");
@@ -310,7 +307,9 @@ function PromptBlock(
             }
           />
         </Show>
-        {props.payloadLocked ? (
+        {props.form.payloadKind === "none" ? (
+          <div class="cron-help cron-prompt__note">{t("cron.form.checkOnlyHelp")}</div>
+        ) : props.payloadLocked ? (
           <>
             <pre
               id="cron-payload-text"
@@ -323,10 +322,7 @@ function PromptBlock(
               <SanitizedHtml
                 tag="code"
                 class="hljs"
-                html={highlightCodeHtml(
-                  props.form.payloadText,
-                  props.form.payloadKind === "script" ? "javascript" : "bash",
-                )}
+                html={highlightCodeHtml(props.form.payloadText, "bash")}
               />
             </pre>
             <div class="cron-help cron-prompt__note">{promptHelp()}</div>

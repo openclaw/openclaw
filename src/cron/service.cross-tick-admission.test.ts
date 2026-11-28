@@ -158,7 +158,7 @@ it("keeps a queued condition check pending through a graceful shutdown and resta
   const jobs = ["w1", "w2", "w3", "waiter"].map((id) =>
     Object.assign(dueJob(id, nowMs, dueAtMs), {
       schedule: { kind: "every" as const, everyMs: 300_000, anchorMs: dueAtMs },
-      trigger: { script: "return { fire: false }" },
+      check: { script: "return { }" },
     }),
   );
   const store = await seedJobs(jobs);
@@ -170,10 +170,10 @@ it("keeps a queued condition check pending through a graceful shutdown and resta
       nowMs: () => nowMs,
       cronConfig: { triggers: { enabled: true } },
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      evaluateCronTrigger: async ({ job }) => {
+      evaluateCronCheck: async ({ job }) => {
         evaluated.push(job.id);
         await release.promise;
-        return { kind: "evaluated", fire: false };
+        return { kind: "evaluated", action: "quiet" as const };
       },
     });
   const waiter = async () =>
@@ -218,7 +218,7 @@ it.each([true, false])(
     const jobs = ["c1", "c2", "c3", "free"].map((id) =>
       Object.assign(dueJob(id, nowMs, dueAtMs), {
         schedule: { kind: "every" as const, everyMs: 300_000, anchorMs: dueAtMs },
-        trigger: { script: "return { fire: false }" },
+        check: { script: "return { }" },
         ...(id === "free"
           ? {}
           : {
@@ -242,9 +242,9 @@ it.each([true, false])(
       nowMs: () => nowMs,
       cronConfig: { triggers: { enabled: true } },
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      evaluateCronTrigger: async ({ job }) => {
+      evaluateCronCheck: async ({ job }) => {
         evaluated.push(job.id);
-        return { kind: "evaluated", fire: false };
+        return { kind: "evaluated", action: "quiet" as const };
       },
     });
     const running = await captureCronSchedulerWakeForTest(() => start(state));
@@ -318,7 +318,7 @@ it("checks conditions while every run slot is busy and runs a fired payload when
   const watchers = ["quiet", "fires"].map((id) =>
     Object.assign(dueJob(id, nowMs, dueAtMs), {
       schedule: { kind: "every" as const, everyMs: 300_000, anchorMs: dueAtMs },
-      trigger: { script: "return { fire: true }" },
+      check: { script: "return { wake: '' }" },
     }),
   );
   const store = await seedJobs([...longs, ...watchers]);
@@ -337,9 +337,9 @@ it("checks conditions while every run slot is busy and runs a fired payload when
       }
       return { status: "ok" as const, summary: job.id };
     },
-    evaluateCronTrigger: async ({ job }) => {
+    evaluateCronCheck: async ({ job }) => {
       evaluated.push(job.id);
-      return { kind: "evaluated", fire: job.id === "fires" };
+      return { kind: "evaluated", action: job.id === "fires" ? "wake" : "quiet" };
     },
   });
   const running = await captureCronSchedulerWakeForTest(() => start(state));
@@ -379,7 +379,7 @@ it.each([
   const longs = Array.from({ length: 8 }, (_, index) => dueJob(`long-${index}`, nowMs, dueAtMs));
   const watcher = Object.assign(dueJob("fires", nowMs, dueAtMs), {
     schedule: { kind: "every" as const, everyMs: 300_000, anchorMs: dueAtMs },
-    trigger: { script: "return { fire: true }" },
+    check: { script: "return { wake: '' }" },
   });
   const store = await seedJobs([...longs, watcher]);
   const release = createDeferred();
@@ -396,7 +396,7 @@ it.each([
       }
       return { status: "ok" as const, summary: job.id };
     },
-    evaluateCronTrigger: async () => ({ kind: "evaluated" as const, fire: true }),
+    evaluateCronCheck: async () => ({ kind: "evaluated" as const, action: "wake" as const }),
   };
   const state = cron.createCronRegressionState(deps);
   const replacement = cron.createCronRegressionState(deps);
@@ -483,7 +483,7 @@ it("recovers after default runs finish and resumes the same parked condition", a
   const dueAtMs = nowMs + 1_000;
   const waits = dueJob("waits", nowMs, dueAtMs + 1_000);
   waits.schedule = { kind: "every", everyMs: 300_000, anchorMs: dueAtMs + 1_000 };
-  waits.trigger = { script: "return { fire: true }" };
+  waits.check = { script: "return { fire: true }" };
   const healthy = dueJob("healthy", nowMs, dueAtMs + 2_000);
   const store = await seedJobs([
     ...Array.from({ length: 16 }, (_, index) => dueJob(`burst-${index}`, nowMs, dueAtMs)),
@@ -493,12 +493,15 @@ it("recovers after default runs finish and resumes the same parked condition", a
   const finish = createDeferred();
   const finishDefault = createDeferred();
   const started: string[] = [];
-  const evaluateCronTrigger = vi.fn(async () => ({ kind: "evaluated" as const, fire: true }));
+  const evaluateCronCheck = vi.fn(async () => ({
+    kind: "evaluated" as const,
+    action: "wake" as const,
+  }));
   const state = cron.createCronRegressionState({
     storePath: store.storePath,
     nowMs: () => nowMs,
     cronConfig: { triggers: { enabled: true } },
-    evaluateCronTrigger,
+    evaluateCronCheck,
     runIsolatedAgentJob: async ({ job, providerRunSlot, abortSignal }) => {
       const provider = job.id === healthy.id ? "healthy" : "stand-in";
       if (providerRunSlot && !providerRunSlot.tryStart(provider)) {
@@ -548,7 +551,7 @@ it("recovers after default runs finish and resumes the same parked condition", a
     await wake(state);
     await vi.waitFor(() => expect(started).toContain(waits.id));
     expect(store.receipt(waits)?.receiptId).toBe(parkedReceipt);
-    expect(evaluateCronTrigger).toHaveBeenCalledOnce();
+    expect(evaluateCronCheck).toHaveBeenCalledOnce();
   } finally {
     finishDefault.resolve();
     finish.resolve();

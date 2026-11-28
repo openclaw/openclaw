@@ -486,7 +486,7 @@ it.each([
       owner: { agentId: "main", sessionKey: sourceSessionKey },
       payload: agentPayload(),
       delivery: { mode: "announce" },
-      trigger: { script: "return { fire: false };" },
+      check: { script: "return {};" },
       state: { consecutiveErrors: 2 },
     });
     const expected = {

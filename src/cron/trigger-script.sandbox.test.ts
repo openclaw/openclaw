@@ -137,7 +137,7 @@ finish(1, "Unexpected Docker fixture command: " + JSON.stringify(args));
         script: `
         const result = await exec({ command: "printf cron-sandbox-ready" });
         if (result.exitCode !== 0) throw new Error(JSON.stringify(result));
-        return { fire: true, state: result.aggregated };
+        return { wake: "", state: result.aggregated };
       `,
         state: null,
       };
@@ -148,8 +148,8 @@ finish(1, "Unexpected Docker fixture command: " + JSON.stringify(args));
           .split("\n")
           .map((line) => JSON.parse(line));
       const runPayload = async () => {
-        const result = await runtime.executePayload(input);
-        expect(result).toMatchObject({ kind: "completed", state: "cron-sandbox-ready" });
+        const result = await runtime.evaluateCheck(input);
+        expect(result).toMatchObject({ kind: "evaluated", state: "cron-sandbox-ready" });
       };
       const stop = (failStart = false) => writeState({ ...readState(), running: false, failStart });
 
@@ -163,7 +163,7 @@ finish(1, "Unexpected Docker fixture command: " + JSON.stringify(args));
       // A failed restart must prevent user code and leave the next condition able to recover.
       stop(true);
       const checkpoint = readCalls().length;
-      await expect(runtime.evaluateTrigger(input)).resolves.toMatchObject({
+      await expect(runtime.evaluateCheck(input)).resolves.toMatchObject({
         kind: "error",
         error: expect.stringContaining("fixture start failed"),
       });
@@ -173,9 +173,9 @@ finish(1, "Unexpected Docker fixture command: " + JSON.stringify(args));
           .filter((argv) => argv[0] === "exec"),
       ).toEqual([]);
       stop();
-      await expect(runtime.evaluateTrigger(input)).resolves.toMatchObject({
+      await expect(runtime.evaluateCheck(input)).resolves.toMatchObject({
         kind: "evaluated",
-        fire: true,
+        action: "wake",
         state: "cron-sandbox-ready",
       });
 
@@ -187,7 +187,7 @@ finish(1, "Unexpected Docker fixture command: " + JSON.stringify(args));
 
       // A missing ID can also signal that the daemon changed.
       writeState({ exists: false, running: false });
-      await expect(runtime.executePayload(input)).resolves.toMatchObject({ kind: "error" });
+      await expect(runtime.evaluateCheck(input)).resolves.toMatchObject({ kind: "error" });
       expect(
         readCalls()
           .slice(calls.length)

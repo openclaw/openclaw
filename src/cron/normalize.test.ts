@@ -227,10 +227,9 @@ it("rejects invalid explicit cron stagger before create or patch defaults", () =
 
 it("normalizes trigger scripts and preserves patch clears", () => {
   expect(
-    createMain({ trigger: { script: "  json({ fire: true })  ", once: "true", ignored: true } })
-      .trigger,
-  ).toEqual({ script: "json({ fire: true })", once: true });
-  expect(normalizeCronJobPatch({ trigger: null })).toEqual({ trigger: null });
+    createMain({ check: { script: "  json({ wake: '' })  ", once: "true", ignored: true } }).check,
+  ).toEqual({ script: "json({ wake: '' })", once: true });
+  expect(normalizeCronJobPatch({ check: null })).toEqual({ check: null });
 });
 
 it.each<[UnknownRecord, UnknownRecord]>([
@@ -413,7 +412,6 @@ it.each([
 const payloads = [
   { kind: "agentTurn", message: "Synthetic reminder" },
   { kind: "command", argv: ["printf", "synthetic-proof"] },
-  { kind: "script", script: "return { output: 'synthetic-proof' };" },
 ] satisfies CronPayload[];
 
 it.each(payloads)("sets, preserves, and clears a $kind timeout", (payload) => {

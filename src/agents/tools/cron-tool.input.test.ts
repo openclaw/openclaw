@@ -87,3 +87,39 @@ it("recovers a malformed wrapper for a partial update", async () => {
     expect.anything(),
   );
 });
+
+it.each([
+  { check: { script: "return {};", once: true } },
+  { "check.script": "return {};", "check.once": true },
+])("preserves flat check fields before Gateway submission %j", async (fields) => {
+  const tool = createTestCronTool();
+  await tool.execute("check-recovery", {
+    action: "add",
+    name: "Check changes",
+    schedule: { kind: "every", everyMs: 60_000 },
+    payload: { kind: "agentTurn", message: "Handle changes" },
+    ...fields,
+  });
+  expect(readGatewayCall()).toMatchObject({
+    method: "cron.add",
+    params: {
+      check: { script: "return {};", once: true },
+      payload: { kind: "agentTurn", message: "Handle changes" },
+    },
+  });
+});
+
+it("recovers a flat check-only payload kind", async () => {
+  const tool = createTestCronTool();
+  await tool.execute("check-only", {
+    action: "add",
+    name: "Check changes",
+    schedule: { kind: "every", everyMs: 60_000 },
+    kind: "none",
+    check: { script: "return {};" },
+  });
+  expect(readGatewayCall()).toMatchObject({
+    method: "cron.add",
+    params: { payload: { kind: "none" }, check: { script: "return {};" } },
+  });
+});

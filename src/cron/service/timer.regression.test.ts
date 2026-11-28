@@ -70,9 +70,9 @@ function mainJob(id: string, payload: CronJob["payload"]): CronJob {
   return { ...job, sessionTarget: "main", wakeMode: "now", payload };
 }
 const conditionJob = () => ({
-  ...mainJob("main-cancel", { kind: "systemEvent", text: "queued downstream work" }),
+  ...mainJob("main-cancel", { kind: "agentTurn", message: "queued downstream work" }),
   schedule: { kind: "every" as const, everyMs: 60_000, anchorMs: AT - 60_000 },
-  trigger: { script: "json({ fire: true })" },
+  check: { script: "json({ wake: '' })" },
 });
 function jobIn(jobs: CronJob[] | undefined, id: string) {
   const job = jobs?.find((candidate) => candidate.id === id);
@@ -228,7 +228,7 @@ describe("cron service timer regressions", () => {
     const runner = heldRunner({ status: "ok" as const });
     const { state, storePath } = await setup([job], {
       runSessionEvent: runner.run,
-      evaluateCronTrigger: async () => ({ kind: "evaluated", fire: true }),
+      evaluateCronCheck: async () => ({ kind: "evaluated", action: "wake" as const }),
     });
     const running = tick(state);
     await awaitGateBeforeSettlement(runner.started, running, "Early session completion");
@@ -245,12 +245,16 @@ describe("cron service timer regressions", () => {
   it.each(["operator cancellation", "restart generation"] as const)(
     "suppresses late main-target script output after %s",
     async (reason) => {
-      const job = mainJob("script", { kind: "script", script: "return {}", timeoutSeconds: 0 });
-      const runner = heldRunner({ status: "ok" as const, notify: "stale", wake: "now" as const });
+      const job = { ...mainJob("check", { kind: "none" }), check: { script: "return {}" } };
+      const runner = heldRunner({
+        kind: "evaluated" as const,
+        action: "post" as const,
+        message: "stale",
+      });
       const onAbort = vi.fn();
       const { state, storePath, stored } = await setup([job], {
         cronConfig: { triggers: { enabled: true } },
-        runScriptJob: async ({ abortSignal }) => {
+        evaluateCronCheck: async ({ abortSignal }) => {
           abortSignal?.addEventListener("abort", onAbort, { once: true });
           return await runner.run(); // Ignore abort to exercise late-output suppression.
         },
@@ -296,9 +300,12 @@ describe("cron service timer regressions", () => {
       } else {
         requestActiveCronJobCancellation(job.id, "Cron job disabled by operator.");
       }
-      const evaluateCronTrigger = vi.fn(async () => ({ kind: "evaluated" as const, fire: true }));
+      const evaluateCronCheck = vi.fn(async () => ({
+        kind: "evaluated" as const,
+        action: "wake" as const,
+      }));
       const runSessionEvent = vi.fn(async () => ({ status: "ok" as const }));
-      const { state } = await setup([], { evaluateCronTrigger, runSessionEvent });
+      const { state } = await setup([], { evaluateCronCheck, runSessionEvent });
       await expect(
         executeJobCoreWithTimeout(state, job, { activeJobMarker: marker }),
       ).resolves.toMatchObject({
@@ -309,7 +316,7 @@ describe("cron service timer regressions", () => {
             : "Cron job disabled by operator.",
       });
       expect(state.deps.runIsolatedAgentJob).not.toHaveBeenCalled();
-      expect(evaluateCronTrigger).not.toHaveBeenCalled();
+      expect(evaluateCronCheck).not.toHaveBeenCalled();
       expect(runSessionEvent).not.toHaveBeenCalled();
     },
   );

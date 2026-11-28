@@ -82,8 +82,10 @@ export function parseCronIntegerOption(
 export function assertCronTimeoutSupported(
   payloadKind: CronJob["payload"]["kind"],
 ): asserts payloadKind is "agentTurn" | "command" {
-  if (payloadKind === "script") {
-    throw new CronCliError("Use --script-timeout-seconds for script jobs, not --timeout-seconds.");
+  if (payloadKind === "none") {
+    throw new CronCliError(
+      "Use --check-timeout-seconds for check-only jobs, not --timeout-seconds.",
+    );
   }
   if (payloadKind !== "agentTurn" && payloadKind !== "command") {
     throw new CronCliError(`--timeout-seconds is not supported for ${payloadKind} jobs.`);
@@ -316,7 +318,7 @@ export function createCronAmbiguousNameError(jobs: readonly CronJob[]): CronCliE
         schedule:
           job.schedule?.kind === "on-exit" || job.schedule?.kind === "stream"
             ? job.schedule.kind
-            : formatSchedule(job.schedule, job.trigger !== undefined),
+            : formatSchedule(job.schedule, job.check !== undefined),
         enabled: job.enabled,
         status: computeStatus(job),
       })),
@@ -584,7 +586,7 @@ export function printCronList(
       id: [job.id, theme.accent],
       declaration: [job.declarationKey, theme.muted],
       name: [job.displayName ?? job.name, theme.info],
-      schedule: [formatSchedule(job.schedule, job.trigger !== undefined), theme.info],
+      schedule: [formatSchedule(job.schedule, job.check !== undefined), theme.info],
       next: [job.enabled ? formatRelative(state.nextRunAtMs, now) : "-", theme.muted],
       last: [formatRelative(state.lastRunAtMs, now), theme.muted],
       status: [status.label, status.color],
@@ -628,7 +630,7 @@ export function printCronShow(
   runtime.log(`owner agent: ${showValue(job.owner?.agentId)}`);
   runtime.log(`owner session: ${showValue(job.owner?.sessionKey)}`);
   runtime.log(`enabled: ${job.enabled ? "yes" : "no"}`);
-  const schedule = formatSchedule(job.schedule, job.trigger !== undefined, "detail");
+  const schedule = formatSchedule(job.schedule, job.check !== undefined, "detail");
   runtime.log(`schedule: ${showValue(schedule)}`);
   runtime.log(`policies: ${formatCronPolicies(job) || "-"}`);
   if (job.schedule?.kind === "stream") {
@@ -636,7 +638,7 @@ export function printCronShow(
     runtime.log(`stream error: ${showValue(state.streamError)}`);
   }
   runtime.log(
-    `trigger: ${job.trigger ? `once=${job.trigger.once === true ? "yes" : "no"}; evals=${state.triggerEvalCount ?? 0}; last eval=${formatRelative(state.lastTriggerEvalAtMs, Date.now())}; last fire=${formatRelative(state.lastTriggerFireAtMs, Date.now())}` : "-"}`,
+    `check: ${job.check ? `once=${job.check.once === true ? "yes" : "no"}; evals=${state.triggerEvalCount ?? 0}; last eval=${formatRelative(state.lastTriggerEvalAtMs, Date.now())}; last fire=${formatRelative(state.lastTriggerFireAtMs, Date.now())}` : "-"}`,
   );
   runtime.log(`session: ${showValue(job.sessionTarget)}`);
   runtime.log(`agent: ${showValue(job.agentId)}`);

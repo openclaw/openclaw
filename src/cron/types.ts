@@ -390,7 +390,7 @@ export type CronJobState = Omit<
   deliverySuppressionReason?: NormalizeReplySkipReason;
 };
 
-type CronTrigger = SchemaContract<NonNullable<CronJobWire["trigger"]>>;
+type CronCheck = SchemaContract<NonNullable<CronJobWire["check"]>>;
 
 /**
  * Closed failure taxonomy for trigger-script evaluation. Mirrors the code-mode
@@ -411,7 +411,13 @@ export type CronTriggerFailureCode =
 
 /** Result union returned by the cron trigger-script evaluator. */
 export type CronTriggerEvaluationResult =
-  | { kind: "evaluated"; fire: boolean; message?: string; state?: unknown }
+  | {
+      kind: "evaluated";
+      action: "quiet" | "post" | "wake";
+      message?: string;
+      state?: unknown;
+      nextCheck?: CronNextCheckProposal;
+    }
   | { kind: "error"; code: CronTriggerFailureCode; error: string };
 
 /** Public cron job contract with spec fields and mutable run state. */
@@ -442,7 +448,7 @@ export type CronJob = CronJobBase<
   };
   /** Server-authored provenance for requester-scoped scheduled tool authority. */
   scheduledToolPolicy?: CronScheduledToolPolicy;
-  trigger?: CronTrigger;
+  check?: CronCheck;
   state: CronJobState;
 };
 
@@ -570,7 +576,7 @@ export type CronJobPatch = Partial<
     | "activeHours"
     | "idleOnly"
     | "cyberAccessProgram"
-    | "trigger"
+    | "check"
   >
 > & {
   displayName?: string | null;
@@ -578,7 +584,7 @@ export type CronJobPatch = Partial<
   activeHours?: CronActiveHours | null;
   idleOnly?: boolean | null;
   cyberAccessProgram?: CronJob["cyberAccessProgram"] | null;
-  trigger?: CronTrigger | null;
+  check?: CronCheck | null;
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;
   failureAlert?: CronFailureAlertPatch | false | null;

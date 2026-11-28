@@ -14,6 +14,7 @@ import {
   noteCronJobsStoreCommit,
   loadCronJobsStoreWithConfigJobsByKey,
   saveCronJobsStoreWithRevisionByKey,
+  type LoadedCronStore,
   type QuarantinedCronConfigJob,
 } from "../store.js";
 import {
@@ -216,7 +217,22 @@ export async function ensureLoaded(
   const loadedJobs = (loaded.store.jobs ?? []).filter(isRecord);
   const jobs: CronJob[] = [];
   const durableNextRunAtMsByJobId = new Map<string, number | undefined>();
-  const quarantinedConfigJobs: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
+  const quarantinedConfigJobs: QuarantinedCronConfigJob[] = loaded.invalidConfigRows.filter(
+    (row) => {
+      if (row.reason !== "legacy-check-repair-required") {
+        return true;
+      }
+      const key = `check:${row.sourceIndex}`;
+      if (!state.warnedInvalidPersistedJobKeys.has(key)) {
+        state.warnedInvalidPersistedJobKeys.add(key);
+        state.deps.log.warn(
+          { jobId: row.job?.id },
+          "cron: automation check withheld; run openclaw doctor --fix",
+        );
+      }
+      return false;
+    },
+  );
   for (const [index, raw] of loadedJobs.entries()) {
     if (!hasCanonicalCronDeliveryMode(raw.delivery)) {
       const warningKey = `delivery:${raw.id}`;
@@ -315,7 +331,7 @@ export async function ensureLoaded(
     quarantinedConfigJobs.sort((left, right) => left.sourceIndex - right.sourceIndex);
     state.pendingQuarantineConfigJobs = quarantinedConfigJobs;
     try {
-      if (await persistQuarantinedJobs(state, state.store)) {
+      if (await persistQuarantinedJobs(state, state.store, loaded)) {
         state.deps.log.warn(
           {
             storePath: state.deps.storePath,
@@ -366,12 +382,17 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
   );
 }
 
-/** Persists quarantine and the surviving rows in one SQLite transaction. */
+/** Moves malformed rows to quarantine without rewriting jobs held for Doctor. */
 async function persistQuarantinedJobs(
   state: CronServiceState,
   store: CronStoreFile,
+  { jobsFingerprint, runtimeFingerprint }: LoadedCronStore,
 ): Promise<boolean> {
-  const quarantine = { entries: state.pendingQuarantineConfigJobs, nowMs: state.deps.nowMs() };
+  const quarantine = {
+    entries: state.pendingQuarantineConfigJobs,
+    nowMs: state.deps.nowMs(),
+    source: { jobsFingerprint, runtimeFingerprint },
+  };
   try {
     const committed = await saveCronJobsStoreWithRevisionByKey(state.deps.storeKey, store, {
       quarantine,

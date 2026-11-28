@@ -144,7 +144,7 @@ async function withWebchatTool(
               sessionTarget: target,
               schedule: { kind: "every", everyMs: 60_000 },
               payload: { kind: "agentTurn", message: "Report the condition result." },
-              trigger: { script: "return { fire: false };", once: true },
+              check: { script: "return { };", once: true },
               ...(delivery ? { delivery } : {}),
             },
           });
@@ -170,7 +170,7 @@ describe("WebChat automation creation through the tool and Gateway", () => {
           name: "basketball-reminder",
           enabled: false,
           schedule: { kind: "at", at, everyMs: 1, anchorMs: 0, expr: "", tz: "", staggerMs: 0 },
-          trigger: { script: "return { fire: true };", once: true },
+          check: { script: "return { wake: '' };", once: true },
           payload: {
             kind: "systemEvent",
             text: "Reminder: play basketball!",
@@ -186,7 +186,7 @@ describe("WebChat automation creation through the tool and Gateway", () => {
           },
           deleteAfterRun: true,
         },
-        patch: { name: "", schedule: { kind: "at", at: "" }, trigger: null },
+        patch: { name: "", schedule: { kind: "at", at: "" }, check: null },
       };
       await expect(tool.execute("blank-destination", args)).rejects.toThrow(
         "omit delivery.failureDestination if unused, or supply a valid target. No changes were saved. Retry with corrected arguments; do not report success unless the retry succeeds.",
@@ -196,13 +196,13 @@ describe("WebChat automation creation through the tool and Gateway", () => {
       // This main-session reminder needs no separate delivery destination.
       const retry = { ...args, job: { ...args.job, delivery: undefined } };
       await expect(tool.execute("incompatible-trigger", retry)).rejects.toThrow(
-        'schedule.kind="at" cannot include trigger. Remove trigger for a one-time reminder, or use a recurring every/cron schedule. No changes were saved. Retry with corrected arguments; do not report success unless the retry succeeds.',
+        "cron checks can only be combined with an agent prompt, not a command or system event",
       );
       expect(await cron.list({ includeDisabled: true })).toEqual([]);
 
       await tool.execute("corrected-reminder", {
         ...retry,
-        job: { ...retry.job, trigger: undefined },
+        job: { ...retry.job, check: undefined },
       });
       expect(await cron.list({ includeDisabled: true })).toEqual([
         expect.objectContaining({
@@ -274,7 +274,7 @@ describe("WebChat automation creation through the tool and Gateway", () => {
           enabled: false,
           delivery: delivery ?? { mode: "announce" },
           payload: expect.objectContaining({ kind: "agentTurn", toolsAllow: ["read"] }),
-          trigger: { script: "return { fire: false };", once: true },
+          check: { script: "return { };", once: true },
         }),
       ]);
     }, storedContext);

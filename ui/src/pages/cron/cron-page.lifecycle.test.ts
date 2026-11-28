@@ -704,7 +704,8 @@ it("refreshes off-page condition activity without replacing unsaved settings", a
   const selected = createCronViewJob("selected-runtime", {
     name: "Saved automation",
     configRevision: "saved-definition",
-    trigger: { script: "return true" },
+    payload: { kind: "none" },
+    check: { script: "return {}" },
     state: { triggerEvalCount: 1, nextRunAtMs: Date.now() + 60_000 },
   });
   const pending = deferred(selected);

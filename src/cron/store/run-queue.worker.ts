@@ -464,7 +464,7 @@ function drainCronQueueInDatabase(
       );
       continue;
     }
-    const checksCondition = job.trigger !== undefined;
+    const checksCondition = job.check !== undefined && job.payload.kind !== "none";
     if (
       input.preparingAgentIds?.includes(agentId) ||
       (timed && input.busyConversationJobIds?.includes(job.id))

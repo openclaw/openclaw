@@ -123,7 +123,7 @@ it.each([
 ] as const)("applies %s", (_label, pacing, delayMs, expectedDelay, trigger) => {
   const job = makePacedJob(pacing);
   if (trigger) {
-    job.trigger = { script: "return true" };
+    job.check = { script: "return true" };
   }
   complete(job, { nextCheck: { delayMs } });
   expectSlot(job, ENDED_AT + expectedDelay);

@@ -67,9 +67,9 @@ export function createDueScriptJob(params: {
     pacing: params.pacing,
     sessionTarget: params.sessionTarget ?? "isolated",
     wakeMode: "now",
-    payload: {
-      kind: "script",
-      script: "return { notify: 'done' }",
+    payload: { kind: "none" },
+    check: {
+      script: "return { post: 'done' }",
       timeoutSeconds: 300,
       toolBudget: 50,
     },

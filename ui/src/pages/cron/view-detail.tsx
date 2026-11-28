@@ -55,7 +55,7 @@ export function DetailView(
   };
   const conditionActivity = () => {
     const job = selectedJob();
-    return job?.trigger
+    return job?.check
       ? {
           checkCount: job.state?.triggerEvalCount ?? 0,
           lastCheckedAtMs: job.state?.lastTriggerEvalAtMs,
@@ -157,7 +157,7 @@ function DetailHeader(
         {subtitle() ? (
           <div class="cron-detail-meta">
             <span class="cron-detail-sub">{subtitle()}</span>
-            {props.selectedJob?.trigger ? <TriggerIndicator /> : undefined}
+            {props.selectedJob?.check ? <TriggerIndicator /> : undefined}
           </div>
         ) : undefined}
         {editStatus() ? (
@@ -228,14 +228,14 @@ function SavedPrompt(props: CronProps & { job: CronJob }) {
   return (
     <div class="cron-prompt" data-test-id="cron-saved-prompt">
       <div class="cron-prompt__sheet">
-        {saved().payloadLocked ? (
+        {saved().payloadLocked || saved().payloadKind === "none" ? (
           <pre class="code-block cron-payload-code cron-payload-code--saved" tabindex="0">
             <SanitizedHtml
               tag="code"
               class="hljs"
               html={highlightCodeHtml(
-                saved().payloadText,
-                saved().payloadKind === "script" ? "javascript" : "bash",
+                saved().payloadKind === "none" ? saved().triggerScript : saved().payloadText,
+                saved().payloadKind === "none" ? "javascript" : "bash",
               )}
             />
           </pre>

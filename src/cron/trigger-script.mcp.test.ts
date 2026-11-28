@@ -59,8 +59,8 @@ function createMcpFixture(serverArgs: string[] = [], deny?: string[]) {
   };
   const runtime = createCronScriptRuntime({ config });
   return {
-    evaluate: (input: Partial<Parameters<typeof runtime.evaluateTrigger>[0]> = {}) =>
-      runtime.evaluateTrigger({
+    evaluate: (input: Partial<Parameters<typeof runtime.evaluateCheck>[0]> = {}) =>
+      runtime.evaluateCheck({
         jobId: "mcp-trigger",
         script: listScript(),
         state: null,
@@ -72,8 +72,8 @@ function createMcpFixture(serverArgs: string[] = [], deny?: string[]) {
   };
 }
 const listScript = (server = "sources") => `
-const listed = await MCP.${server}.listSources({ since: trigger.state?.cursor ?? "start" });
-return { fire: false, state: {
+const listed = await MCP.${server}.listSources({ since: check.state?.cursor ?? "start" });
+return { state: {
     ...listed.structuredContent,
     deleteVisible: typeof MCP.${server}.deleteSource === "function",
 } };
@@ -91,7 +91,7 @@ it.each([
   });
   expect(result).toMatchObject({
     kind: "evaluated",
-    fire: false,
+    action: "quiet",
     state: { tool: "list_sources", since: cursor ?? "start", deleteVisible: false },
   });
   const state = "state" in result ? (result.state as { pid: number }) : undefined;
@@ -100,7 +100,7 @@ it.each([
   if (server === "sources") {
     await expect(
       fixture.evaluate({
-        script: "await MCP.broken.ping({}); return { fire: false };",
+        script: "await MCP.broken.ping({}); return { };",
         toolsAllow: ["sources__list_sources", "broken__*"],
       }),
     ).resolves.toMatchObject({
@@ -117,8 +117,8 @@ it.each([
 ])("starts no MCP server for $caps", async ({ toolsAllow }) => {
   const fixture = createMcpFixture();
   await expect(
-    fixture.evaluate({ script: "return { fire: false, state: typeof MCP };", toolsAllow }),
-  ).resolves.toEqual({ kind: "evaluated", fire: false, state: "undefined" });
+    fixture.evaluate({ script: "return { state: typeof MCP };", toolsAllow }),
+  ).resolves.toEqual({ kind: "evaluated", action: "quiet", state: "undefined" });
   expect(fixture.starts()).toBe(0);
 });
 

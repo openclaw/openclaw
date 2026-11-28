@@ -54,7 +54,7 @@ const CompactCronJobSchema = closedObject({
       ),
     ),
   ),
-  trigger: Type.Optional(Type.Literal(true)),
+  check: Type.Optional(Type.Literal(true)),
   lastRunAt: nullableString,
   lastRunAtMs: nullableNumber,
   lastRunStatus: Type.Union([...job.lastRunStatus.anyOf, Type.Null()]),

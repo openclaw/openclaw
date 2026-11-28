@@ -24,9 +24,9 @@ describe("cron form validation", () => {
   it.each([
     ["main", "agentTurn", false, "announce"],
     ["main", "systemEvent", false, "none"],
-    ["main", "script", true, "none"],
+    ["main", "none", false, "none"],
     ["main", "command", true, "none"],
-    ["isolated", "script", true, "announce"],
+    ["isolated", "none", false, "announce"],
     ["isolated", "command", true, "announce"],
   ] as const)(
     "normalizes announce delivery for %s/%s",

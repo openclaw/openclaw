@@ -65,12 +65,12 @@ describe("tryCronScheduleIdentity", () => {
 
     expect(
       cronSchedulingInputsEqual(
-        { schedule, trigger: { script: "return true" } },
-        { schedule, trigger: { script: "return false" } },
+        { schedule, check: { script: "return true" } },
+        { schedule, check: { script: "return false" } },
       ),
     ).toBe(true);
     expect(
-      cronSchedulingInputsEqual({ schedule }, { schedule, trigger: { script: "return true" } }),
+      cronSchedulingInputsEqual({ schedule }, { schedule, check: { script: "return true" } }),
     ).toBe(false);
   });
 });

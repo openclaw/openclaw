@@ -123,12 +123,6 @@ export async function planLegacyCronStoreRepair(params: LegacyCronStoreRepairPar
             !blockedRuntimePolicyTargets.has(cronCodexRuntimePolicyTargetKey(target)),
         });
   warnings.push(
-    ...normalized.unsupportedLegacyTriggerScriptJobs.map(
-      (job) =>
-        `Cron trigger script for ${job} uses legacy Code Mode APIs that cannot be safely converted; inspect the automation and update its trigger script manually to use direct tool calls.`,
-    ),
-  );
-  warnings.push(
     ...normalized.unsupportedDeliveryModeJobs.map(
       (job) =>
         `Cron job ${job} has an unsupported delivery mode. Review its intended delivery and set mode to "none", "announce", or "webhook"; Doctor cannot infer the intended route.`,

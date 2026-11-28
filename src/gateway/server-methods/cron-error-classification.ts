@@ -14,14 +14,15 @@ export function isCronInvalidRequestError(err: unknown): boolean {
     message.includes("cron declarationKey") ||
     message.includes("cron displayName") ||
     message.includes("cron announce delivery requires an explicit channel") ||
-    message.includes("cron script payload has a syntax error") ||
-    message.includes("cron trigger script has a syntax error") ||
-    message.includes("cron script payload must not be empty") ||
-    message.includes("cron script payloads cannot be combined") ||
-    message.includes("cron script payloads are disabled") ||
-    message.includes("cron triggers are disabled") ||
-    message.includes("cron triggers require") ||
-    message.includes("cron trigger every interval") ||
+    message.includes("cron check script has a syntax error") ||
+    message.includes("cron check script must not be empty") ||
+    message.includes('cron payload.kind="none" requires a check') ||
+    message.includes("cron checks can only be combined") ||
+    message.includes("cron checks are disabled") ||
+    message.includes("cron checks with an agent prompt require") ||
+    message.includes("cron check every interval") ||
+    message.includes("cron check timeoutSeconds must be") ||
+    message.includes("cron check toolBudget must be") ||
     message.includes("cron job is missing sessionTarget") ||
     message.includes("invalid cron sessionTarget session id") ||
     message.startsWith('cron sessionTarget "') ||

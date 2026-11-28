@@ -48,8 +48,8 @@ export function registerCronMutationOptions(command: Command, mode: "add" | "edi
     )
     .option("--stagger <duration>", "Cron stagger window (e.g. 30s, 5m)")
     .option("--exact", "Disable cron staggering (set stagger to 0)", create ? false : undefined)
-    .option("--trigger-script <path|->", "Condition script file, or - for stdin")
-    .option("--trigger-once", "Disable after the first successful triggered run", false)
+    .option("--check-script <path|->", "Model-free check script file, or - for stdin")
+    .option("--check-once", "Disable after the first successful check action", false)
     .option("--system-event <text>", "System event payload (main session)")
     .option("--message <text>", "Agent message payload")
     .option(
@@ -59,9 +59,8 @@ export function registerCronMutationOptions(command: Command, mode: "add" | "edi
     .option("--no-skip-if-scratch-empty", "Run agent turns even with empty scratch")
     .option("--include-reasoning", "Include reasoning in agent job delivery")
     .option("--no-include-reasoning", "Keep reasoning out of agent job delivery")
-    .option("--script <file|->", "Headless script payload file, or - for stdin")
-    .option("--script-timeout-seconds <n>", "Script wall-clock timeout seconds")
-    .option("--script-tool-budget <n>", "Maximum script tool calls")
+    .option("--check-timeout-seconds <n>", "Script wall-clock timeout seconds")
+    .option("--check-tool-budget <n>", "Maximum script tool calls")
     .option(
       "--command <shell>",
       "Command payload run through the Gateway host shell (sh -lc, or cmd.exe on Windows)",

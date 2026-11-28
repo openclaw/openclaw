@@ -94,9 +94,10 @@ export function publishCronRunReceiptMutation(params: {
 export function resolveCronRunReceiptTerminalStatus(
   status: CronRunStatus,
   triggerFired?: boolean,
+  completionStatus?: import("../completion-status.js").CronCompletionStatus,
 ): Exclude<CronRunReceiptStatus, "running"> {
   if (status === "ok") {
-    return triggerFired === false ? "skipped" : "ok";
+    return triggerFired === false && completionStatus !== "succeeded" ? "skipped" : "ok";
   }
   return status === "skipped" ? "skipped" : "error";
 }

@@ -375,7 +375,7 @@ export async function createFixture(
     const definition = {
       ...ciAutomationJobSpec(selected, option),
       enabled: false,
-      ...(legacy ? { trigger: undefined } : {}),
+      ...(legacy ? { check: undefined } : {}),
       ...(messageOverride
         ? { payload: { kind: "agentTurn" as const, message: messageOverride } }
         : {}),
@@ -463,7 +463,7 @@ export async function createFixture(
       storePath: path.join(stateDir, "cron", "jobs.json"),
       defaultAgentId: "main",
       runSchedulerOwned: createScheduledGatewayRunner(creator.context.resolveGatewayContext),
-      evaluateCronTrigger: createCronScriptRuntime({
+      evaluateCronCheck: createCronScriptRuntime({
         config,
         resolveGatewayContext: creator.context.resolveGatewayContext,
         prepareRuntime: async () => ({
@@ -477,7 +477,7 @@ export async function createFixture(
           },
           scheduledToolPolicy: undefined,
         }),
-      }).evaluateTrigger,
+      }).evaluateCheck,
       onEvent: (event) => {
         if (event.action === "finished") {
           lastFinished = event;
@@ -559,7 +559,7 @@ export async function createFixture(
           ),
           patch: {
             enabled,
-            ...(enabled ? { trigger: ciAutomationJobSpec(target, option).trigger } : {}),
+            ...(enabled ? { check: ciAutomationJobSpec(target, option).check } : {}),
           },
         }),
       ).toMatchObject({ ok: true }),

@@ -17,7 +17,10 @@ import {
   registerCronQuarantineInDatabase,
 } from "./quarantine.kernel.js";
 import {
+  deleteCronJobConfigRowInDatabase,
   deleteCronJobRowInDatabase,
+  fingerprintCronJobRows,
+  fingerprintCronRuntimeRows,
   loadedCronStoreFromRows,
   loadCronRows,
   projectCronJobThroughStorageCodec,
@@ -264,14 +267,30 @@ export function saveCronStoreInDatabase(
       entries: opts.deleteQuarantineEntries,
     });
   }
-  // Hot-path timer updates mutate runtime columns only; malformed-row
-  // quarantine and full replacement commit together or roll back together.
-  if (stateOnly) {
+  if (opts?.quarantine?.source) {
+    // Source indexes include unparseable rows. Bind them to the same ordered
+    // SQLite snapshot before removing any row by its physical primary key.
+    const rows = loadCronRows(database.db, storeKey);
+    const { source, entries } = opts.quarantine;
+    if (
+      fingerprintCronJobRows(rows) !== source.jobsFingerprint ||
+      fingerprintCronRuntimeRows(rows) !== source.runtimeFingerprint
+    ) {
+      throw new CronJobsStoreChangedError(storeKey);
+    }
+    for (const entry of entries) {
+      deleteCronJobConfigRowInDatabase(database.db, storeKey, rows[entry.sourceIndex]!.job_id);
+    }
+  } else if (stateOnly) {
     updateCronRuntimeRows(database.db, storeKey, store);
-    hooks?.hooks.afterWrite?.(database.db, hooks.receiptSchema);
-    return;
+  } else {
+    replaceCronStoreRowsInDatabase(
+      database.db,
+      storeKey,
+      store,
+      opts?.preserveRuntimeState === true,
+    );
   }
-  replaceCronStoreRowsInDatabase(database.db, storeKey, store, opts?.preserveRuntimeState === true);
   hooks?.hooks.afterWrite?.(database.db, hooks.receiptSchema);
 }
 

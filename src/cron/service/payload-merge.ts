@@ -79,13 +79,6 @@ function mergePayloadFields(existing: CronPayload, patch: CronPayloadPatch): Cro
     if (typeof patch.outputMaxBytes === "number") {
       next.outputMaxBytes = patch.outputMaxBytes;
     }
-  } else if (patch.kind === "script" && next.kind === "script") {
-    if (typeof patch.script === "string") {
-      next.script = patch.script;
-    }
-    if (typeof patch.toolBudget === "number") {
-      next.toolBudget = patch.toolBudget;
-    }
   } else if (patch.kind === "agentTurn" && next.kind === "agentTurn") {
     if (typeof patch.message === "string") {
       next.message = patch.message;
@@ -117,7 +110,7 @@ function mergePayloadFields(existing: CronPayload, patch: CronPayloadPatch): Cro
   }
 
   applyToolsAllowPatch(next, patch, existing);
-  if ("timeoutSeconds" in patch && next.kind !== "systemEvent") {
+  if ("timeoutSeconds" in patch && (next.kind === "command" || next.kind === "agentTurn")) {
     if (typeof patch.timeoutSeconds === "number") {
       next.timeoutSeconds = patch.timeoutSeconds;
     } else if (patch.timeoutSeconds === null) {
@@ -142,11 +135,8 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     return { kind: "command", argv: patch.argv };
   }
 
-  if (patch.kind === "script") {
-    if (typeof patch.script !== "string" || patch.script.trim().length === 0) {
-      throw new Error('cron.update payload.kind="script" requires script');
-    }
-    return { kind: "script", script: patch.script };
+  if (patch.kind === "none") {
+    return { kind: "none" };
   }
 
   if (typeof patch.message !== "string" || patch.message.length === 0) {

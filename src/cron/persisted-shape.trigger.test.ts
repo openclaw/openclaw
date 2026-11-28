@@ -5,8 +5,8 @@ function candidate(overrides: Record<string, unknown> = {}) {
   return {
     id: "job-1",
     schedule: { kind: "every", everyMs: 30_000 },
-    trigger: { script: "json({ fire: true })" },
-    payload: { kind: "systemEvent", text: "changed" },
+    check: { script: "json({ wake: '' })" },
+    payload: { kind: "agentTurn", message: "changed" },
     sessionTarget: "main",
     ...overrides,
   };
@@ -23,12 +23,10 @@ describe("persisted cron trigger shape", () => {
   });
 
   it("rejects empty scripts and non-object triggers", () => {
-    expect(getInvalidPersistedCronJobReason(candidate({ trigger: { script: "  " } }))).toBe(
-      "invalid-trigger",
+    expect(getInvalidPersistedCronJobReason(candidate({ check: { script: "  " } }))).toBe(
+      "invalid-check",
     );
-    expect(getInvalidPersistedCronJobReason(candidate({ trigger: "script" }))).toBe(
-      "invalid-trigger",
-    );
+    expect(getInvalidPersistedCronJobReason(candidate({ check: "script" }))).toBe("invalid-check");
   });
 
   it("rejects triggers on at and on-exit schedules", () => {
@@ -36,11 +34,11 @@ describe("persisted cron trigger shape", () => {
       getInvalidPersistedCronJobReason(
         candidate({ schedule: { kind: "at", at: "2026-08-01T00:00:00.000Z" } }),
       ),
-    ).toBe("invalid-trigger");
+    ).toBe("invalid-check");
     expect(
       getInvalidPersistedCronJobReason(
         candidate({ schedule: { kind: "on-exit", command: "make build" } }),
       ),
-    ).toBe("invalid-trigger");
+    ).toBe("invalid-check");
   });
 });

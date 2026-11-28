@@ -87,8 +87,9 @@ async function createCommandWebhook(
     timeoutSeconds?: number;
     oneShot?: boolean;
     runCommandJob?: CronServiceDeps["runCommandJob"];
-    runScriptJob?: CronServiceDeps["runScriptJob"];
+    evaluateCronCheck?: CronServiceDeps["evaluateCronCheck"];
     payload?: CronAddInput["payload"];
+    check?: CronAddInput["check"];
     beforeClose?: () => void;
   } = {},
 ) {
@@ -118,7 +119,8 @@ async function createCommandWebhook(
     runCronFailureRepair,
     enqueueSystemEvent,
     runCommandJob: options.runCommandJob ?? runCronCommandJob,
-    runScriptJob: options.runScriptJob,
+    evaluateCronCheck: options.evaluateCronCheck,
+    deliverCheckPost: async ({ message }) => ({ summary: message }),
     sendCronWebhook: (params) =>
       sendGatewayCronWebhook({ ...params, ssrfPolicy: { allowedHostnames: ["127.0.0.1"] } }),
   });
@@ -136,6 +138,7 @@ async function createCommandWebhook(
       argv: [process.execPath, "-e", "process.stdout.write('HOOKSCHED_PAYLOAD')"],
       ...(options.timeoutSeconds === undefined ? {} : { timeoutSeconds: options.timeoutSeconds }),
     },
+    check: options.check,
     delivery: { mode: "webhook", to: `${url}/hook` },
   });
   return {
@@ -212,20 +215,21 @@ describe("CronService persists delivered status", () => {
       const restarting = cause !== "operator";
       const deliveryTimesOut = cause === "restart-timeout";
       const entered = createDeferred();
-      const runScriptJob = vi.fn<NonNullable<CronServiceDeps["runScriptJob"]>>(
+      const evaluateCronCheck = vi.fn<NonNullable<CronServiceDeps["evaluateCronCheck"]>>(
         async ({ abortSignal }) => {
           entered.resolve();
           await new Promise<void>((resolve) => {
             abortSignal?.addEventListener("abort", () => resolve(), { once: true });
           });
-          return { status: "error", error: "script stopped" };
+          return { kind: "error", code: "aborted", error: "script stopped" };
         },
       );
       await using h = await createCommandWebhook({
         oneShot: true,
         responseStatus: deliveryTimesOut ? undefined : 204,
-        payload: { kind: "script", script: "return {};", timeoutSeconds: 180 },
-        runScriptJob,
+        payload: { kind: "none" },
+        check: { script: "return {};", timeoutSeconds: 180 },
+        evaluateCronCheck,
       });
       h.clock.setTime(h.job.state.nextRunAtMs!);
       const run = h.run("due");
@@ -271,7 +275,7 @@ describe("CronService persists delivered status", () => {
       }
       expect((await h.cron.readJob(h.job.id))?.enabled).toBe(false);
       expect((await h.cron.readJob(h.job.id))?.state.nextRunAtMs).toBeUndefined();
-      expect(runScriptJob).toHaveBeenCalledOnce();
+      expect(evaluateCronCheck).toHaveBeenCalledOnce();
       expect(h.sendCronFailureAlert).not.toHaveBeenCalled();
     },
   );
@@ -306,8 +310,13 @@ describe("CronService persists delivered status", () => {
         timeoutSeconds: cause === "deadline" ? 1 : 0,
         ...(cause === "restart"
           ? {
-              payload: { kind: "script" as const, script: "return {};" },
-              runScriptJob: async () => ({ status: "ok" as const, notify: "HOOKSCHED_PAYLOAD" }),
+              payload: { kind: "none" as const },
+              check: { script: "return {};" },
+              evaluateCronCheck: async () => ({
+                kind: "evaluated" as const,
+                action: "post" as const,
+                message: "HOOKSCHED_PAYLOAD",
+              }),
             }
           : {}),
       });

@@ -15,7 +15,9 @@ import {
 function toolJob(toolsAllow: readonly string[] | undefined): CronStoredJob {
   return {
     ...createDueIsolatedJob({ id: "job-1", nowMs: 1, nextRunAtMs: 1 }),
-    payload: { kind: "script", script: "return {}", toolsAllow: toolsAllow?.slice() },
+    schedule: { kind: "every", everyMs: 60_000 },
+    payload: { kind: "none", toolsAllow: toolsAllow?.slice() },
+    check: { script: "return {}" },
   };
 }
 
@@ -24,6 +26,7 @@ it.each(["operator", "owned", "external-content", "unknown", "external"])(
   (scenario) => {
     const previous: CronStoredJob = {
       ...toolJob(["read"]),
+      check: undefined,
       payload: { kind: "agentTurn", message: "work", toolsAllow: ["read"] },
       scheduledToolPolicy: { version: 1, mode: "trusted" },
       toolsAllowProvenance: {
@@ -124,6 +127,7 @@ it("binds a recorded caller origin to executable inputs but not display metadata
 });
 it("uses its owner's tools instead of a stale automatic tool snapshot", () => {
   const job = toolJob(["read"]);
+  delete job.check;
   job.payload = { kind: "agentTurn", message: "post", toolsAllow: ["read"] };
   job.scheduledToolPolicy = { version: 1, mode: "trusted" };
   expect(resolveCronRunToolsAllow(job)).toEqual(["read"]);
@@ -148,6 +152,8 @@ it.each([false, true])(
     const previousJob = { ...toolJob(["read"]), operatorSource: source };
     const job: CronStoredJob = {
       ...previousJob,
+      sessionTarget: "main",
+      check: undefined,
       payload: { kind: "systemEvent", text: "changed execution" },
     };
     const reconcile = () =>

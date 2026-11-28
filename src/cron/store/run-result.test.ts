@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { CronJob } from "../types.js";
+import { makeCronJob } from "../delivery.test-helpers.js";
 import { cronRunResultEvent } from "./run-result.js";
 import type { CronRunFinalizationOutcome } from "./runtime-worker.types.js";
 
@@ -9,7 +9,7 @@ describe("finished cron run identity", () => {
     ["public-manual", "admitted-task", "public-manual"],
     [undefined, undefined, undefined],
   ])("retains public %s or admitted %s identity", (manualRunId, taskRunId, expected) => {
-    const job = { id: "scheduled-job", state: {} } as CronJob;
+    const job = makeCronJob({ id: "scheduled-job" });
     const result: Omit<CronRunFinalizationOutcome, "errorReason"> = {
       jobId: job.id,
       job,
