@@ -42,7 +42,7 @@ function program(shell: boolean): WindowsSpawnProgram {
 
 async function expectFailedRuntime(
   config: StdioMcpServerLaunchConfig,
-  options: { abortSignal?: AbortSignal; serverName?: string } = {},
+  options: { abortSignal?: AbortSignal; serverName?: string },
   failure = "stop after spawn",
 ) {
   vi.spyOn(bundleLspConfig, "loadEnabledBundleLspConfig").mockReturnValue({

@@ -33,7 +33,7 @@ function makeMessage(index: number): AgentMessage {
 
 async function runSummary(
   messageCount: number,
-  overrides: Partial<Omit<SummarizeInput, "messages" | "signal">> = {},
+  overrides: Partial<Omit<SummarizeInput, "messages" | "signal">>,
 ) {
   return await summarizeCompactionHistory({
     ...summarizeBase,

@@ -10,7 +10,7 @@ import {
 describe("context-window-guard", () => {
   const guardFor = (tokens: number, source: "model" | "modelsConfig" = "model") =>
     evaluateContextWindowGuard({ info: { tokens, source } });
-  const resolve = (overrides: Partial<Parameters<typeof resolveContextWindowInfo>[0]> = {}) =>
+  const resolve = (overrides: Partial<Parameters<typeof resolveContextWindowInfo>[0]>) =>
     resolveContextWindowInfo({
       cfg: undefined,
       provider: "openai",
