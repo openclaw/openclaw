@@ -5,6 +5,10 @@ import { getMediaFileExtension } from "./media-file-extension.ts";
 
 describe("getMediaFileExtension", () => {
   it.each([
+    { value: "https://cdn.example/.hidden", expected: "hidden" },
+    { value: "https://cdn.example/report.", expected: undefined },
+    { value: "https://cdn.example/render%252Emp4", expected: undefined },
+    { value: "https://cdn.example/bad%C3%28%2Emp4", expected: undefined },
     { value: "https://cdn.example/render%2Emp4?download=1#preview", expected: "mp4" },
     { value: "https://cdn.example/render%2Em%70%34", expected: "mp4" },
     { value: "/media/inbound/photo.png?mediaTicket=signed#preview", expected: "png" },
