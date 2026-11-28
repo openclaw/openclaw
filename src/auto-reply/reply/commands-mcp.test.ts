@@ -83,7 +83,7 @@ async function runMcp(
   return expectDefined(await handleMcpCommand(params, true), "MCP command result");
 }
 
-function expectText(text: string | undefined, present: string[], absent: string[] = []) {
+function expectText(text: string | undefined, present: string[], absent: string[]) {
   for (const part of present) {
     expect(text).toContain(part);
   }
