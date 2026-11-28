@@ -202,6 +202,28 @@ it("always excludes dock conversations and filters automation unless the scope o
   expect(board.selectFacts.mock.lastCall?.[0]).not.toHaveProperty("excludeSubagents");
 });
 
+it("selects the saved theme and refreshes group boards when sidebar membership changes", async () => {
+  const key = facts("work").key;
+  const board = await createFixture([], {
+    spec: {
+      scope: { includeSessionKeys: [key], group: "Mobile", projectId: "app", titleContains: "iOS" },
+    },
+  });
+  await board.read({ involvingMe: true });
+  expect(board.selectFacts.mock.lastCall?.[0]).toMatchObject({
+    sessionKeys: [key],
+    group: "Mobile",
+    projectId: "app",
+    titleContains: "iOS",
+    involvingMe: true,
+  });
+  const changes = vi.fn();
+  board.store.onChange = changes;
+  board.emit(key, "category");
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(changes).toHaveBeenCalledOnce();
+});
+
 it("excludes each agent's configured Home session from reads and moves", async () => {
   const home = { ...facts("home"), isMain: true };
   const otherHome = {

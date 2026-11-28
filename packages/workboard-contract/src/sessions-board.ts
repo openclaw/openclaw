@@ -89,8 +89,11 @@ export type WorkboardSessionsBoardRead = {
   warning?: string;
 };
 
-export function createDefaultWorkboardSessionsBoardSpec(): WorkboardSessionsBoardSpec {
+export function createDefaultWorkboardSessionsBoardSpec(
+  scope?: unknown,
+): WorkboardSessionsBoardSpec {
   return {
+    ...(scope === undefined ? {} : { scope: normalizeScope(scope) }),
     columns: [
       {
         id: "needs-input",
@@ -238,6 +241,10 @@ function normalizeColumn(value: unknown) {
 function normalizeScope(value: unknown) {
   const input = record(value, "scope", [
     "agentIds",
+    "includeSessionKeys",
+    "group",
+    "projectId",
+    "titleContains",
     "includeArchived",
     "includeAutomation",
     "includeHome",
@@ -251,6 +258,15 @@ function normalizeScope(value: unknown) {
     agentIds = [...new Set(input.agentIds.map((id: unknown) => text(id, "agent id", 1)))];
   }
   const maxAgeHours = input.maxAgeHours;
+  let includeSessionKeys: string[] | undefined;
+  if (input.includeSessionKeys !== undefined) {
+    if (!Array.isArray(input.includeSessionKeys)) {
+      throw new Error("scope.includeSessionKeys must be an array.");
+    }
+    includeSessionKeys = [
+      ...new Set(input.includeSessionKeys.map((key: unknown) => text(key, "session key", 1, 512))),
+    ];
+  }
   if (
     maxAgeHours !== undefined &&
     (typeof maxAgeHours !== "number" || !Number.isFinite(maxAgeHours) || maxAgeHours <= 0)
@@ -259,6 +275,14 @@ function normalizeScope(value: unknown) {
   }
   return {
     ...(agentIds !== undefined ? { agentIds } : {}),
+    ...(includeSessionKeys !== undefined ? { includeSessionKeys } : {}),
+    ...(input.group !== undefined ? { group: text(input.group, "scope.group", 0) } : {}),
+    ...(input.projectId !== undefined
+      ? { projectId: text(input.projectId, "scope.projectId", 1) }
+      : {}),
+    ...(input.titleContains !== undefined
+      ? { titleContains: text(input.titleContains, "scope.titleContains", 1) }
+      : {}),
     ...(input.includeArchived !== undefined
       ? { includeArchived: boolean(input.includeArchived, "scope.includeArchived") }
       : {}),

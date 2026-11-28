@@ -105,6 +105,7 @@ function activeState() {
 }
 
 function sessionSelection(board: WorkboardSessionsBoard, view?: WorkboardSessionsBoardView) {
+  const scope = board.sessions.scope;
   return {
     configuredAgentsOnly: true,
     includeGlobal: false,
@@ -113,6 +114,10 @@ function sessionSelection(board: WorkboardSessionsBoard, view?: WorkboardSession
     ...(board.sessions.scope?.includeAutomation ? {} : { excludeCron: true, excludeSystem: true }),
     archived: board.sessions.scope?.includeArchived ? ("all" as const) : false,
     sortBy: "activity" as const,
+    ...(scope?.includeSessionKeys !== undefined ? { sessionKeys: scope.includeSessionKeys } : {}),
+    ...(scope?.group !== undefined ? { group: scope.group } : {}),
+    ...(scope?.projectId ? { projectId: scope.projectId } : {}),
+    ...(scope?.titleContains ? { titleContains: scope.titleContains } : {}),
     activeMinutes: Math.max(1, Math.ceil((board.sessions.scope?.maxAgeHours ?? 72) * 60)),
     ...(board.sessions.scope?.agentIds?.length === 1
       ? { agentId: board.sessions.scope.agentIds[0] }
@@ -202,7 +207,12 @@ function createOwner(
     caller?.assertCurrent();
   };
   const unsubscribe = params.gateway.subscribeSessionChanges(({ factsInvalidated }) => {
-    if (stopped || !hasRead || factsInvalidated === "category") {
+    if (
+      stopped ||
+      !hasRead ||
+      (factsInvalidated === "category" &&
+        ![...projections.values()].some(({ board }) => board.sessions.scope?.group !== undefined))
+    ) {
       return;
     }
     if (revision !== params.store.sessionsRevision) {

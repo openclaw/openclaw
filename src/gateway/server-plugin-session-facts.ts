@@ -250,19 +250,26 @@ export async function withTrustedPluginSessionFacts<T>(
           roster.revision !== projectionState.revision ||
           at > (roster.selected.activityExpiresAt ?? Infinity)
         ) {
-          const opts = { ...select, limit: Number.MAX_SAFE_INTEGER };
+          const { sessionKeys, titleContains, ...listOptions } = select;
+          const opts = {
+            ...listOptions,
+            ...(titleContains ? { search: titleContains, searchTitlesOnly: true } : {}),
+            limit: Number.MAX_SAFE_INTEGER,
+          };
           const { prepared, filters, presentation } = prepareProjectedSessionList({
             projection,
             opts,
+            candidateKeys: sessionKeys && new Set(sessionKeys),
             context,
             client: resolved.client,
             now: at,
             metadataPrepared: true,
             visibility: authority?.visibility,
           });
-          const selected = presentation.select(opts, () =>
-            withAgentRosterFactsBatch(prepared.cfg, () => selectSessionEntries(filters)),
-          );
+          const selectEntries = () =>
+            withAgentRosterFactsBatch(prepared.cfg, () => selectSessionEntries(filters));
+          // The ordinary list cache has no exact-key dimension. The plugin read scope does.
+          const selected = sessionKeys ? selectEntries() : presentation.select(opts, selectEntries);
           const targets = new Map<string, SelectionRow>();
           const bySessionId = new Map<string, Set<string>>();
           for (const [key] of selected.entries) {

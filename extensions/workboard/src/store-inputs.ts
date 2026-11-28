@@ -167,6 +167,7 @@ export type WorkboardReclaimInput = Pick<WorkboardReassignInput, "status" | "rea
 export type WorkboardBoardInput = {
   id?: unknown;
   kind?: unknown;
+  scope?: unknown;
   name?: unknown;
   description?: unknown;
   icon?: unknown;

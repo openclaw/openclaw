@@ -132,13 +132,31 @@ describe("workboard tools", () => {
       const move = expectDefined(tools.get("workboard_sessions_board_move"), "Sessions board move");
       await expect(read.execute("none", {})).rejects.toThrow("No Sessions board exists");
       const create = expectDefined(tools.get("workboard_board_create"), "Board create");
-      expect(Value.Check(create.parameters, { id: "sessions", kind: "sessions" })).toBe(true);
-      await create.execute("create", { id: "sessions", name: "My sessions", kind: "sessions" });
+      const initialScope = {
+        includeSessionKeys: ["agent:main:mobile"],
+        group: "Mobile",
+        projectId: "app",
+        titleContains: "iOS",
+      };
+      const createInput = {
+        id: "sessions",
+        name: "My sessions",
+        kind: "sessions",
+        scope: initialScope,
+      };
+      expect(Value.Check(create.parameters, createInput)).toBe(true);
+      await create.execute("create", createInput);
       expect(readPayload(await read.execute("one", {}))).toMatchObject({
-        board: { id: "sessions", kind: "sessions" },
+        board: { id: "sessions", kind: "sessions", sessions: { scope: initialScope } },
         sessions: [],
       });
-      const scope = { includeArchived: true, includeAutomation: true, includeHome: true };
+      const scope = {
+        ...initialScope,
+        includeSessionKeys: [],
+        includeArchived: true,
+        includeAutomation: true,
+        includeHome: true,
+      };
       expect(Value.Check(update.parameters, { scope })).toBe(true);
       for (const field of ["includeAutomation", "includeHome"]) {
         expect(Value.Check(update.parameters, { scope: { [field]: false } })).toBe(true);

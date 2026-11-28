@@ -26,6 +26,25 @@ function specWithMatch(match: unknown) {
 }
 
 describe("Sessions board match normalization", () => {
+  it("keeps an explicit empty selection distinct from an unrestricted board", () => {
+    const scope = (input: unknown) =>
+      normalizeWorkboardSessionsBoardSpec({ ...specWithMatch({}), scope: input }).scope;
+    expect(scope({})).toEqual({});
+    expect(scope({ includeSessionKeys: [] })).toEqual({ includeSessionKeys: [] });
+    expect(
+      scope({ includeSessionKeys: [" key ", "key"], group: "", titleContains: " iOS " }),
+    ).toEqual({ includeSessionKeys: ["key"], group: "", titleContains: "iOS" });
+    for (const invalid of [
+      { includeSessionKeys: "key" },
+      { includeSessionKeys: [""] },
+      { projectId: " " },
+      { group: false },
+      { titleContains: [] },
+    ]) {
+      expect(() => scope(invalid)).toThrow();
+    }
+  });
+
   it.each([
     {},
     { includeAutomation: true, includeHome: true },

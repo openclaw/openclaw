@@ -30,6 +30,12 @@ export function mountPage(
     if (method === "workboard.cards.list") {
       return { cards };
     }
+    if (method === "sessions.groups.list") {
+      return { groups: [] };
+    }
+    if (method === "projects.list") {
+      return { projects: [] };
+    }
     if (method === "workboard.boards.upsert") {
       return {
         board: { ...(requestParams as Record<string, unknown>), createdAt: 1, updatedAt: 1 },

@@ -11,6 +11,7 @@ import {
   strictObject,
   workspaceField,
 } from "./tools-card-mutations.js";
+import { sessionsBoardScopeField } from "./tools-sessions-board-scope.js";
 
 const CardIdSchema = strictObject({
   id: cardIdField(),
@@ -34,6 +35,7 @@ const toolSchemas = {
         description: "Board kind, set only at creation. Default cards.",
       }),
     ),
+    scope: sessionsBoardScopeField,
     name: Type.Optional(Type.String({ description: "Display name." })),
     description: Type.Optional(Type.String({ description: "Board description." })),
     icon: Type.Optional(Type.String({ description: "Short icon or label." })),
@@ -199,7 +201,7 @@ export function createWorkboardOrchestrationTools(params: {
       name: "workboard_board_create",
       label: "Workboard Board Create",
       description:
-        "Create or update a Workboard board with persisted SQLite metadata. Choose kind sessions on creation for columns with rules over Gateway-owned session facts; card tools do not apply to Sessions boards. Board kind cannot change after creation.",
+        "Create or update a Workboard board with persisted SQLite metadata. Choose kind sessions and optionally set scope on creation to track matching sessions. Card tools do not apply to Sessions boards. Board kind cannot change after creation. Use workboard_sessions_board_update to edit an existing scope.",
       parameters: toolSchemas.board_create,
       execute: async (_toolCallId, rawParams) =>
         jsonResult({ board: await store.upsertBoard(asNonArrayRecord(rawParams)) }),

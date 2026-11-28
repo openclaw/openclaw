@@ -16,6 +16,7 @@ import { createWorkboardSessionsBoardService } from "./src/sessions-board.js";
 import { resolveWorkboardSqliteWorkerModuleUrl } from "./src/sqlite-store-paths.js";
 import { registerWorkboardStoreLifecycle } from "./src/store-lifecycle.js";
 import { strictObject } from "./src/tools-card-mutations.js";
+import { sessionsBoardScopeField } from "./src/tools-sessions-board-scope.js";
 import { createWorkboardTools } from "./src/tools.js";
 import {
   guardWorkboardToolsForWorkspaceAccess,
@@ -75,23 +76,7 @@ const sessionsBoardReadSchema = strictObject({ boardId: boardIdField });
 const sessionsBoardUpdateSchema = strictObject({
   boardId: boardIdField,
   columns: Type.Optional(Type.Array(columnSchema, { minItems: 2, maxItems: 12 })),
-  scope: Type.Optional(
-    strictObject({
-      agentIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-      includeArchived: Type.Optional(Type.Boolean()),
-      includeAutomation: Type.Optional(
-        Type.Boolean({
-          description: "Include automation (cron) and system sessions. Defaults to false.",
-        }),
-      ),
-      includeHome: Type.Optional(
-        Type.Boolean({
-          description: "Include each agent's Home session. Defaults to false.",
-        }),
-      ),
-      maxAgeHours: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
-    }),
-  ),
+  scope: sessionsBoardScopeField,
 });
 
 const sessionsBoardMoveSchema = strictObject({
@@ -249,7 +234,7 @@ export default definePluginEntry({
               name: "workboard_sessions_board_read",
               label: "Sessions Board Read",
               description:
-                "Read a Sessions board and its session placements. Columns match Gateway-owned session status, observer health, and pull-request facts in order; operator pins take precedence. Card tools do not apply to Sessions boards.",
+                "Read a Sessions board, its saved scope, and matching sessions. Columns match Gateway-owned session status, observer health, and pull-request facts in order; operator pins take precedence. Card tools do not apply to Sessions boards.",
               parameters: sessionsBoardReadSchema,
               execute: async (_toolCallId, rawParams) => {
                 const record = asNonArrayRecord(rawParams);
@@ -262,7 +247,7 @@ export default definePluginEntry({
               name: "workboard_sessions_board_update",
               label: "Sessions Board Update",
               description:
-                "Edit a Sessions board's columns, match rules, or scope. columns replaces the full ordered list; preserve ids when renaming labels. All fields in each rule must match; a match array accepts any rule, and the first matching column wins. Exactly one fallback is required. Card tools do not apply to Sessions boards.",
+                "Edit a Sessions board's columns, match rules, or scope. Read the board before changing scope: scope replaces the entire saved scope, so keep existing fields when adding or removing session keys. All scope filters apply together. columns replaces the full ordered list; preserve ids when renaming labels. All fields in each rule must match; a match array accepts any rule, and the first matching column wins. Exactly one fallback is required. Card tools do not apply to Sessions boards.",
               parameters: sessionsBoardUpdateSchema,
               execute: async (_toolCallId, rawParams) => {
                 const record = asNonArrayRecord(rawParams);
