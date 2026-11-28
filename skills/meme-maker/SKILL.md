@@ -18,7 +18,7 @@ Quick start
 
 Modes
 
-- `local` is default. It downloads template images from their source URL with a browser-like user agent, caches them under the user cache dir, embeds the image in an SVG, and writes SVG. If `--out` ends in `.png`, it renders through an isolated headless browser using OpenClaw's Playwright support. PNG output requires Playwright's Chromium or an installed Google Chrome; SVG output needs no browser.
+- `local` is default. Pass at most one `--text` argument per template field. It downloads template images from their source URL with a browser-like user agent, caches them under the user cache dir, embeds the image in an SVG, and writes SVG. If `--out` ends in `.png`, it renders through an isolated headless browser using OpenClaw's Playwright support. PNG output requires Playwright's Chromium or an installed Google Chrome; SVG output needs no browser.
 - `imgflip` calls Imgflip `caption_image` and prints the hosted URL. It requires `IMGFLIP_USER` and `IMGFLIP_PASS` unless supplied via `--username` and `--password`.
 
 Commands
