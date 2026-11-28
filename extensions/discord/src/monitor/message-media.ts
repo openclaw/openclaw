@@ -42,7 +42,7 @@ const DISCORD_STICKER_ASSET_BASE_URL = "https://media.discordapp.net/stickers";
 
 export type DiscordMediaInfo = Pick<
   ChannelInboundMediaInput,
-  "contentType" | "fileName" | "kind" | "path"
+  "contentType" | "fileName" | "kind" | "path" | "transcribed"
 >;
 
 type DiscordMediaResolveOptions = {
@@ -213,13 +213,20 @@ async function resolveMessageMedia(
 export async function resolveMediaList(
   message: DiscordMediaSource,
   maxBytes: number,
-  options?: DiscordMediaResolveOptions,
+  options?: DiscordMediaResolveOptions & { transcribedAttachmentIndex?: number },
 ): Promise<DiscordMediaInfo[]> {
-  return resolveMessageMedia(
+  const media = await resolveMessageMedia(
     message,
     createDiscordMediaOperation(maxBytes, options),
     "discord: failed to download",
   );
+  // Native attachment facts retain their original order even when a download fails.
+  // Mark the selected attachment here before any forwarded media is appended.
+  const index = options?.transcribedAttachmentIndex;
+  if (index !== undefined && media[index]) {
+    media[index].transcribed = true;
+  }
+  return media;
 }
 
 export async function resolveForwardedMediaList(

@@ -446,15 +446,14 @@ export async function preflightDiscordMessage(
     channelConfig,
     guildInfo,
   });
-  const shouldRequireMentionByConfig = mentionPolicy.requireMention;
-  const shouldRequireMention = shouldRequireMentionByConfig && !isBoundThreadSession;
+  const shouldRequireMention = mentionPolicy.requireMention && !isBoundThreadSession;
 
   // Only authorized guild senders should reach the expensive transcription path.
   const { resolveDiscordPreflightAudioMentionContext } = await loadPreflightAudioRuntime();
   if (params.isPolicyCurrent?.() === false) {
     return null;
   }
-  const { hasTypedText, transcript: preflightTranscript } =
+  const { hasTypedText, transcript, attachmentIndex } =
     await resolveDiscordPreflightAudioMentionContext({
       message,
       isDirectMessage,
@@ -478,7 +477,7 @@ export async function preflightDiscordMessage(
     mentionedEveryone: message.mentionedEveryone,
     referencedAuthorId: message.referencedMessage?.author?.id,
     senderIsPluralKit: sender.isPluralKit,
-    transcript: preflightTranscript,
+    transcript,
   });
   const hasActiveBotMention =
     requiresActiveBotMention &&
@@ -488,7 +487,7 @@ export async function preflightDiscordMessage(
         source.activeNativeMention ||
         source.documents.some((text) => matchesActiveDiscordMentionPatterns(text, mentionRegexes)),
     ) ||
-      matchesActiveDiscordMentionPatterns(preflightTranscript ?? "", mentionRegexes));
+      matchesActiveDiscordMentionPatterns(transcript ?? "", mentionRegexes));
   const groupThread = resolveGroupThreadMentionFacts({
     cfg: params.cfg,
     channel: "discord",
@@ -502,7 +501,7 @@ export async function preflightDiscordMessage(
       : params.cfg.broadcast?.[`discord:${messageChannelId}`] !== undefined
         ? messageChannelId
         : (threadParentId ?? messageChannelId),
-    text: (hasTypedText ? baseText : "") || preflightTranscript || "",
+    text: (hasTypedText ? baseText : "") || transcript || "",
     sessionKey: boundSessionKey || effectiveRoute.sessionKey,
     acpBinding: Boolean(configuredBinding),
   });
@@ -668,6 +667,7 @@ export async function preflightDiscordMessage(
     readIdleTimeoutMs: DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
     totalTimeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
     abortSignal: params.abortSignal,
+    transcribedAttachmentIndex: attachmentIndex,
   };
   const preparedMedia = await resolveMediaList(message, params.mediaMaxBytes, mediaResolveOptions);
   if (params.abortSignal?.aborted) {
@@ -722,7 +722,7 @@ export async function preflightDiscordMessage(
     resolveChannelIngress: messageAccess.resolveChannelIngress,
     baseText,
     messageText,
-    ...(preflightTranscript !== undefined ? { preflightAudioTranscript: preflightTranscript } : {}),
+    ...(transcript !== undefined ? { preflightAudioTranscript: transcript } : {}),
     preparedMedia,
     conversationAvatar,
     route: effectiveRoute,
@@ -739,7 +739,7 @@ export async function preflightDiscordMessage(
     baseSessionKey,
     channelConfig,
     shouldRequireMention,
-    groupRequireMention: shouldRequireMentionByConfig,
+    groupRequireMention: mentionPolicy.requireMention,
     hasAnyMention,
     hasControlCommand: hasControlCommandInMessage,
     shouldBypassMention: mentionDecision.shouldBypassMention,

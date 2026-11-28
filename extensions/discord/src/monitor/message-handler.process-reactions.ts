@@ -6,12 +6,14 @@ import {
   type StatusReactionAdapter,
   type StatusReactionController,
 } from "openclaw/plugin-sdk/channel-feedback";
+import type { BuiltChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createDiscordRestClient, createDiscordRuntimeAccountContext } from "../client.js";
 import { reactMessageDiscord, removeReactionDiscord } from "../send.js";
 import { resolveDiscordTargetChannelId } from "../send.shared.js";
 import { resolveDiscordChannelId } from "../target-parsing.js";
+import { loadPreflightAudioRuntime } from "./message-handler.preflight-runtime.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
 
 export function createDiscordMessageReactionRuntime(params: {
@@ -188,6 +190,34 @@ export function createDiscordMessageReactionRuntime(params: {
     }
   };
 
+  const afterRecord = async ({
+    OriginatingTo,
+    MessageThreadId,
+  }: Pick<BuiltChannelInboundEventContext, "OriginatingTo" | "MessageThreadId">) => {
+    queueInitialAckReactionAfterRecord();
+    const transcript = ctx.preflightAudioTranscript;
+    if (
+      !transcript ||
+      !OriginatingTo ||
+      params.isRoomEvent ||
+      !cfg.tools?.media?.audio?.echoTranscript
+    ) {
+      return;
+    }
+    const { sendDiscordPreflightAudioTranscriptEcho } = await loadPreflightAudioRuntime();
+    // Preflight can transcribe before mention admission. Only echo after the
+    // accepted conversation has been recorded and its reply route is known.
+    if (!ctx.abortSignal?.aborted && ctx.isPolicyCurrent?.() !== false) {
+      await sendDiscordPreflightAudioTranscriptEcho({
+        cfg,
+        transcript,
+        accountId: route.accountId,
+        originatingTo: OriginatingTo,
+        messageThreadId: MessageThreadId?.toString(),
+      });
+    }
+  };
+
   const finish = async (result: {
     dispatchAborted: boolean;
     dispatchError: boolean;
@@ -215,7 +245,7 @@ export function createDiscordMessageReactionRuntime(params: {
       return statusReactions;
     },
     maybeBindToToolReaction,
-    queueInitialAckReactionAfterRecord,
+    afterRecord,
     finish,
   };
 }

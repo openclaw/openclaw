@@ -379,8 +379,7 @@ describe("preflightDiscordMessage", () => {
       }),
     });
 
-    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
-    expect(transcribeFirstAudioMock).toHaveBeenCalledWith(
+    expect(transcribeFirstAudioMock).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         ctx: {
           media: [
@@ -400,6 +399,7 @@ describe("preflightDiscordMessage", () => {
         contentType: "audio/ogg",
         fileName: "voice.ogg",
         kind: "audio",
+        transcribed: true,
       },
     ]);
   });
