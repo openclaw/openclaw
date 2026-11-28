@@ -1,5 +1,5 @@
 import { createMemo, createSignal, For } from "solid-js";
-import { Icon } from "../../components/solid/icon.tsx";
+import { cronFormTimezone } from "../../lib/cron/form.ts";
 import type { CronFieldKey } from "../../lib/cron/types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { formSentenceFrequency } from "./schedule-sentence.ts";
@@ -12,7 +12,7 @@ import {
   CronSelect,
   TrayInput,
 } from "./view-fields.tsx";
-import { ScheduleSentence } from "./view-schedule-sentence.tsx";
+import { ScheduleHours, ScheduleSentence } from "./view-schedule-sentence.tsx";
 import type { CronProps } from "./view-types.ts";
 export function DurationRow(
   props: CronProps & {
@@ -62,7 +62,14 @@ export function DurationRow(
   );
 }
 /** Schedule fields whose validation messages appear below the tray. */
-export const TRAY_SCHEDULE_FIELDS = ["scheduleAt", "everyAmount", "cronExpr"] as const;
+export const TRAY_SCHEDULE_FIELDS = [
+  "scheduleAt",
+  "everyAmount",
+  "cronExpr",
+  "cronTz",
+  "activeHoursStart",
+  "activeHoursEnd",
+] as const;
 /** The Repeat choice and its per-kind fields, compact enough to share the prompt's tray. */
 export function ScheduleControls(props: CronProps & { phoneLayout: boolean }) {
   const form = () => props.form;
@@ -94,6 +101,15 @@ export function ScheduleControls(props: CronProps & { phoneLayout: boolean }) {
     }
     const read = formSentenceFrequency(draft);
     return preferredMode === "daily" && read === "weekly" ? "daily" : read;
+  });
+  const savedHoursZone = createMemo(() => {
+    const draft = form();
+    const zone = draft.activeHoursTimezone;
+    return draft.activeHoursEnabled &&
+      draft.scheduleKind === "cron" &&
+      zone !== (draft.cronTz.trim() || "local")
+      ? zone
+      : undefined;
   });
   const canChooseEvent = () =>
     form().scheduleKind === "event" ||
@@ -176,6 +192,57 @@ export function ScheduleControls(props: CronProps & { phoneLayout: boolean }) {
           />
         </span>
       ) : undefined}
+      <ScheduleHours {...props} />
+      {form().activeHoursEnabled ? (
+        <span class="cron-sentence__row">
+          <span class="cron-sentence__label" aria-hidden="true">
+            {t("cron.schedule.hours")}
+          </span>
+          <span class="cron-tray-pair">
+            <TrayInput
+              {...props}
+              field="activeHoursStart"
+              label={t("cron.form.activeHoursStart")}
+              errorKey="activeHoursStart"
+              size="narrow"
+              placeholder="09:00"
+            />
+            <span aria-hidden="true">–</span>
+            <TrayInput
+              {...props}
+              field="activeHoursEnd"
+              label={t("cron.form.activeHoursEnd")}
+              errorKey="activeHoursEnd"
+              size="narrow"
+              placeholder="17:00"
+            />
+          </span>
+        </span>
+      ) : undefined}
+      {form().scheduleKind === "cron" || form().activeHoursEnabled ? (
+        <span class="cron-sentence__row">
+          <span class="cron-sentence__label" aria-hidden="true">
+            {t("cron.form.timezoneOptional")}
+          </span>
+          <TrayInput
+            {...props}
+            field="cronTz"
+            value={cronFormTimezone(form())}
+            label={t("cron.form.timezoneOptional")}
+            help={t("cron.form.timezoneHelp")}
+            errorKey="cronTz"
+            list="cron-tz-suggestions"
+            placeholder={t("cron.form.timezoneGateway")}
+          />
+        </span>
+      ) : undefined}
+      {savedHoursZone() ? (
+        <span class="cron-sentence__row">
+          <span class="cron-tray-note__text">
+            {t("cron.form.splitTimezone", { zone: savedHoursZone() ?? "" })}
+          </span>
+        </span>
+      ) : undefined}
     </>
   );
 }
@@ -195,30 +262,6 @@ export function TrayErrors(props: Pick<CronProps, "fieldErrors"> & { fields: Cro
         </div>
       )}
     </For>
-  );
-}
-/** A configured time zone changes how the schedule’s times are interpreted. */
-export function ScheduleTimeZone(props: CronProps) {
-  const timeZone = () => (props.form.scheduleKind === "cron" ? props.form.cronTz.trim() : "");
-  return (
-    <>
-      {timeZone() ? (
-        <span class="cron-sentence__row">
-          <span class="cron-sentence__label" aria-hidden="true">
-            {t("cron.form.timezoneOptional")}
-          </span>
-          <span
-            class="cron-tray-note__text"
-            data-test-id="cron-schedule-note"
-            title={t("cron.form.timezoneOptional")}
-          >
-            <Icon name="globe" />
-            <span class="sr-only">{t("cron.form.timezoneOptional")}: </span>
-            <span>{timeZone()}</span>
-          </span>
-        </span>
-      ) : undefined}
-    </>
   );
 }
 /** Schedule settings too large for the tray: the event source and process-backed notes. */

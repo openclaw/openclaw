@@ -45,13 +45,13 @@ export type CronFormState = {
   everyUnit: "seconds" | "minutes" | "hours" | "days";
   cronExpr: string;
   cronTz: string;
+  activeHoursTimezone?: string;
   scheduleExact: boolean;
   staggerAmount: string;
   staggerUnit: "seconds" | "minutes";
   activeHoursEnabled: boolean;
   activeHoursStart: string;
   activeHoursEnd: string;
-  activeHoursTimezone: string;
   idleOnly: boolean;
   payloadSkipIfScratchEmpty: boolean;
   deliveryTarget: "" | "owner";
@@ -101,7 +101,6 @@ export type CronFieldKey =
   | "staggerAmount"
   | "activeHoursStart"
   | "activeHoursEnd"
-  | "activeHoursTimezone"
   | "triggerScript"
   | "payloadText"
   | "payloadModel"

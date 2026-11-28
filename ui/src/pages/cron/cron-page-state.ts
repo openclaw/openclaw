@@ -479,7 +479,11 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       current,
       resolveCronEventPatch(current, patch),
     );
-    const next = normalizeCronFormState({ ...cron.cronForm, ...resolvedPatch }, resolvedPatch);
+    const next = normalizeCronFormState(
+      { ...current, ...resolvedPatch },
+      resolvedPatch,
+      cron.cronEditingJob ?? cron.cronCloningJob,
+    );
     cron.cronForm = next;
     cron.cronFieldErrors = validateCronForm(cron.cronForm);
     if (requiresDirectoryReload(current, next)) {

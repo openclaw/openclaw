@@ -24,7 +24,6 @@ const CRON_FIELD_LABEL_KEYS: Record<CronFieldKey, string> = {
   staggerAmount: "cron.form.staggerWindow",
   activeHoursStart: "cron.form.activeHoursStart",
   activeHoursEnd: "cron.form.activeHoursEnd",
-  activeHoursTimezone: "cron.form.timezoneOptional",
   triggerScript: "cron.form.triggerScript",
   payloadText: "cron.form.assistantTaskPrompt",
   payloadModel: "cron.form.model",
@@ -200,7 +199,10 @@ export function CronInput(props: FormProps & CronInputOptions) {
  */
 export function TrayInput(
   props: FormProps &
-    Omit<CronInputOptions, "inline" | "describeError"> & { size?: "narrow" | "wide" },
+    Omit<CronInputOptions, "inline" | "describeError"> & {
+      size?: "narrow" | "wide";
+      value?: string;
+    },
 ) {
   const helpId = () => `${inputIdForField(props.field)}-help`;
   const error = () => (props.errorKey ? props.fieldErrors[props.errorKey] : undefined);
@@ -224,7 +226,7 @@ export function TrayInput(
         aria-label={props.label}
         title={props.help ?? props.label}
         aria-required={props.required ? "true" : undefined}
-        value={props.form[props.field]}
+        value={props.value ?? props.form[props.field]}
         list={props.list}
         disabled={props.disabled ?? false}
         aria-invalid={props.errorKey ? (error() ? "true" : "false") : undefined}

@@ -539,6 +539,91 @@ it("syncs form enabled after header pause", async () => {
   });
 });
 
+it("restores one-shot hours and keeps their user time zone when switching to hourly", async () => {
+  const job = scheduledJob("hours-source", {
+    schedule: { kind: "at", at: "2099-01-01T12:00:00.000Z" },
+    activeHours: { start: "08:00", end: "22:00", timezone: "UTC" },
+    delivery: { mode: "none" },
+  });
+  const request = cronRpc({
+    "cron.list": () => harness.cronListResponse([job]),
+    "cron.update": () => job,
+  });
+  const { page } = mountCronPage(request);
+  await harness.editJob(page, job.id);
+  for (const choice of ["all-day", "between"]) {
+    dom.click(page, dom.testId("cron-schedule-hours"));
+    await page.settle();
+    dom.click(page, dom.testId(`cron-schedule-${choice}`));
+    await page.settle();
+  }
+  dom.fillInput(page, "#cron-active-hours-start", "08:30");
+  dom.fillInput(page, "#cron-active-hours-end", "22:00");
+  dom.fillInput(page, "#cron-cron-tz", "user");
+  dom.click(page, dom.testId("cron-schedule-frequency"));
+  await page.settle();
+  dom.click(page, dom.testId("cron-schedule-frequency-hourly"));
+  await page.settle();
+  expect(page.querySelector(".cron-editor-schedule")?.textContent).toContain(
+    "The run window uses the user time zone",
+  );
+  await submitWhenReady(page);
+  await expectRpc(
+    request,
+    "cron.update",
+    expect.objectContaining({
+      id: job.id,
+      patch: expect.objectContaining({
+        schedule: expect.objectContaining({ kind: "cron", expr: "0 * * * *" }),
+        activeHours: { start: "08:30", end: "22:00", timezone: "user" },
+      }),
+    }),
+  );
+});
+
+it("explains and preserves the split time zone when cloning an automation", async () => {
+  const job = scheduledJob("split-zone-source", {
+    schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+    activeHours: { start: "08:00", end: "22:00", timezone: "America/Toronto" },
+    delivery: { mode: "none" },
+  });
+  const request = cronRpc({
+    "cron.list": () => harness.cronListResponse([job]),
+    "cron.add": () => ({ id: "split-zone-copy" }),
+  });
+  const { page } = mountCronPage(request);
+  await harness.openJob(page, job.id);
+  await dom.waitForElement(page, ".cron-job-menu");
+  await openCronMenu(page, ".cron-job-menu");
+  dom.click(page, '.cron-job-menu [data-value="clone"]');
+  await dom.waitForElement(page, "#cron-name");
+  expect(dom.inputValue(page, "#cron-cron-tz")).toBe("UTC");
+  expect(page.querySelector(".cron-editor-schedule")?.textContent).toContain("America/Toronto");
+  dom.fillInput(page, "#cron-cron-tz", "Europe/London");
+  await page.settle();
+  dom.fillInput(page, "#cron-cron-tz", "UTC");
+  await page.settle();
+  for (const [frequency, timezone] of [
+    ["every", "America/Toronto"],
+    ["hourly", "UTC"],
+  ]) {
+    dom.click(page, dom.testId("cron-schedule-frequency"));
+    await page.settle();
+    dom.click(page, dom.testId(`cron-schedule-frequency-${frequency}`));
+    await page.settle();
+    expect(dom.inputValue(page, "#cron-cron-tz")).toBe(timezone);
+  }
+  await submitWhenReady(page);
+  await expectRpc(
+    request,
+    "cron.add",
+    expect.objectContaining({
+      schedule: job.schedule,
+      activeHours: job.activeHours,
+    }),
+  );
+});
+
 it.each([
   { name: "maximum bound", kind: "cron", pacing: { max: "1h" }, once: false },
   { name: "a one-time copy", kind: "every", pacing: { min: "5m", max: "1h" }, once: true },

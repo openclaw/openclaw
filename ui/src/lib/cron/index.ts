@@ -166,7 +166,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
         ? editingJob
           ? undefined
           : sourceJob.schedule
-        : buildCronSchedule(form, editingJob?.schedule);
+        : buildCronSchedule(form, sourceJob?.schedule);
     const preserveLockedPayload = Boolean(
       editingJob && form.payloadLocked && isReadOnlyCronPayload(sourcePayload),
     );
@@ -249,6 +249,8 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
     const agentId = form.clearAgent ? null : form.agentId.trim();
     const sessionKeyRaw = form.sessionKey.trim();
     const sessionKey = sessionKeyRaw || (editingJob?.sessionKey ? null : undefined);
+    const windowTimezone = (form.activeHoursTimezone ?? form.cronTz).trim() || "local";
+    const savedHours = sourceJob?.activeHours;
     const job: Record<string, unknown> = {
       // Without a name, cron.add names a new automation from its prompt and an edit keeps the old one.
       name: form.name.trim() || undefined,
@@ -266,9 +268,10 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
         ? {
             start: form.activeHoursStart,
             end: form.activeHoursEnd,
-            ...(form.activeHoursTimezone.trim()
-              ? { timezone: form.activeHoursTimezone.trim() }
-              : {}),
+            timezone:
+              windowTimezone === "user" && savedHours && savedHours.timezone === undefined
+                ? undefined
+                : windowTimezone,
           }
         : editingJob?.activeHours
           ? null

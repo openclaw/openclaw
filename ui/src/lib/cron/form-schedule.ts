@@ -85,6 +85,11 @@ export function parseStaggerSchedule(
   };
 }
 
+function cronTimezone(form: CronFormState): string | undefined {
+  const zone = form.cronTz.trim();
+  return zone === "local" ? undefined : zone || undefined;
+}
+
 export function hasUnchangedCronSchedule(form: CronFormState, job: CronJob): boolean {
   const schedule = job.schedule;
   if (form.scheduleKind !== schedule.kind) {
@@ -114,7 +119,7 @@ export function hasUnchangedCronSchedule(form: CronFormState, job: CronJob): boo
     const stagger = parseStaggerSchedule(schedule.staggerMs);
     return (
       form.cronExpr.trim() === schedule.expr &&
-      form.cronTz.trim() === (schedule.tz ?? "") &&
+      cronTimezone(form) === schedule.tz &&
       form.scheduleExact === stagger.scheduleExact &&
       form.staggerAmount.trim() === stagger.staggerAmount &&
       form.staggerUnit === stagger.staggerUnit
@@ -172,5 +177,5 @@ export function buildCronSchedule(form: CronFormState, previous?: CronJob["sched
       throw new Error(t("cron.errors.invalidStaggerAmount"));
     }
   }
-  return { kind: "cron" as const, expr, tz: form.cronTz.trim() || undefined, staggerMs };
+  return { kind: "cron" as const, expr, tz: cronTimezone(form), staggerMs };
 }

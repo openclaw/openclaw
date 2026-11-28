@@ -30,8 +30,12 @@ function isCronFormSessionTarget(value: string): value is CronFormState["session
 export function normalizeCronFormState(
   form: CronFormState,
   changed: Partial<CronFormState> = {},
+  source?: CronJob | null,
 ): CronFormState {
   let normalized = form;
+  if (changed.cronTz !== undefined) {
+    normalized = { ...form, ...cronTimezoneFields(changed.cronTz, form.scheduleKind, source) };
+  }
   if (!form.payloadLocked && form.payloadKind === "systemEvent" && form.sessionTarget !== "main") {
     normalized =
       changed.sessionTarget !== undefined
@@ -51,10 +55,9 @@ export function normalizeCronFormState(
   };
 }
 
-function parsesAsCron(expr: string, timezone?: string): boolean {
+function parsesAsCron(expr: string): boolean {
   try {
-    // Croner validates the timezone lazily, on the first run lookup.
-    new Cron(expr, { timezone: timezone || undefined, catch: false }).nextRun();
+    new Cron(expr, { catch: false }).nextRun();
     return true;
   } catch {
     return false;
@@ -91,12 +94,8 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
     const cronExpr = form.cronExpr.trim();
     if (!cronExpr) {
       errors.cronExpr = "cron.errors.cronExprRequired";
-    } else if (!parsesAsCron(cronExpr, form.cronTz.trim())) {
-      if (parsesAsCron(cronExpr)) {
-        errors.cronTz = "cron.errors.cronTzInvalid";
-      } else {
-        errors.cronExpr = "cron.errors.cronExprInvalid";
-      }
+    } else if (!parsesAsCron(cronExpr)) {
+      errors.cronExpr = "cron.errors.cronExprInvalid";
     }
     if (!form.scheduleExact) {
       const staggerAmount = form.staggerAmount.trim();
@@ -143,13 +142,19 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
     if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(form.activeHoursEnd) && form.activeHoursEnd !== "24:00") {
       errors.activeHoursEnd = "cron.errors.activeHoursTime";
     }
-    const timezone = form.activeHoursTimezone.trim();
-    if (timezone && timezone !== "local" && timezone !== "user") {
-      try {
+  }
+  const timezone = cronFormTimezone(form).trim();
+  if (
+    (form.scheduleKind === "cron" || form.activeHoursEnabled) &&
+    timezone &&
+    timezone !== "local"
+  ) {
+    try {
+      if (timezone !== "user" || form.scheduleKind === "cron") {
         new Intl.DateTimeFormat("en", { timeZone: timezone }).format();
-      } catch {
-        errors.activeHoursTimezone = "cron.errors.activeHoursTimezone";
       }
+    } catch {
+      errors.cronTz = "cron.errors.cronTzInvalid";
     }
   }
   if (form.deliveryMode === "webhook") {
@@ -182,6 +187,31 @@ export function isReadOnlyCronPayload(payload: CronPayload | null): boolean {
   return payload?.kind === "command" || payload?.kind === "script";
 }
 
+function cronTimezoneFields(
+  value: string,
+  kind: CronFormState["scheduleKind"],
+  source?: CronJob | null,
+): Pick<CronFormState, "cronTz" | "activeHoursTimezone"> {
+  // The scheduler accepts "user" only for the run window. A new cron cadence uses the host zone.
+  if (kind !== "cron" && value.trim() === "user") {
+    return { cronTz: "", activeHoursTimezone: "user" };
+  }
+  // Restoring the saved cadence zone in the draft also restores its original window zone.
+  const keepSavedWindow =
+    kind === "cron" &&
+    source?.schedule.kind === "cron" &&
+    value.trim() === (source.schedule.tz ?? "");
+  return {
+    cronTz: value,
+    activeHoursTimezone:
+      keepSavedWindow && source?.activeHours ? (source.activeHours.timezone ?? "user") : undefined,
+  };
+}
+
+export function cronFormTimezone(form: CronFormState): string {
+  return form.scheduleKind === "cron" ? form.cronTz : (form.activeHoursTimezone ?? form.cronTz);
+}
+
 export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   const failureAlert = typeof job.failureAlert === "object" ? job.failureAlert : undefined;
   const payload = job.payload;
@@ -211,14 +241,21 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     eventArguments: "{}",
     originalScheduleAt,
     scheduleAt: originalScheduleAt?.local ?? "",
-    cronTz: "",
+    ...cronTimezoneFields(
+      job.schedule.kind === "cron"
+        ? (job.schedule.tz ?? "")
+        : job.activeHours
+          ? (job.activeHours.timezone ?? "user")
+          : "",
+      job.schedule.kind,
+      job,
+    ),
     scheduleExact: false,
     staggerAmount: "",
     staggerUnit: "seconds",
     activeHoursEnabled: job.activeHours !== undefined,
     activeHoursStart: job.activeHours?.start ?? DEFAULT_CRON_FORM.activeHoursStart,
     activeHoursEnd: job.activeHours?.end ?? DEFAULT_CRON_FORM.activeHoursEnd,
-    activeHoursTimezone: job.activeHours?.timezone ?? "",
     idleOnly: job.idleOnly === true,
     payloadSkipIfScratchEmpty: payload?.kind === "agentTurn" && payload.skipIfScratchEmpty === true,
     deliveryTarget:
@@ -280,7 +317,6 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     Object.assign(next, parseEverySchedule(job.schedule.everyMs));
   } else if (job.schedule.kind === "cron") {
     next.cronExpr = job.schedule.expr;
-    next.cronTz = job.schedule.tz ?? "";
     Object.assign(next, parseStaggerSchedule(job.schedule.staggerMs));
   }
   // Process-backed schedule kinds are shown read-only in the list and have no

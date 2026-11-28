@@ -33,7 +33,6 @@ const enCron = {
     },
     errors: {
       activeHoursTime: "Enter HH:MM (24:00 is allowed only for the end).",
-      activeHoursTimezone: "Enter a valid IANA time zone, local, or user.",
       scheduleAtInvalid: "Enter a valid date and time.",
       everyAmountInvalid: "Interval must be greater than 0.",
       triggerIntervalTooShort:
@@ -41,7 +40,7 @@ const enCron = {
       cronExprRequired: "Enter a cron expression, such as 0 7 * * *.",
       cronExprInvalid:
         "Check the cron expression. For example, 0 7 * * * means every day at 7:00 AM.",
-      cronTzInvalid: "Enter a valid IANA timezone, such as America/New_York.",
+      cronTzInvalid: "Enter a valid IANA time zone, such as America/New_York.",
       staggerAmountInvalid: "Stagger must be greater than 0.",
       triggerScriptRequired: "Trigger script is required when the condition trigger is enabled.",
       triggerScriptPayloadUnsupported:
@@ -223,17 +222,15 @@ const enCron = {
       nextRunAt: "Next activity at {at}",
       noNextRun: "No next run scheduled",
       timezoneOptional: "Time zone",
-      timezonePlaceholder: "America/Los_Angeles",
+      timezoneGateway: "Gateway time zone",
+      splitTimezone:
+        "The run window uses the {zone} time zone. A different time zone applies to both.",
       timezoneHelp: "Leave blank to use the time zone of the computer running OpenClaw.",
-      activeHoursTimezoneHelp: "Leave blank to use your time zone.",
       runsIn: "Runs in",
       mainSession: "Main session",
       isolatedSession: "Its own session",
       sessionHelp:
         "Main adds the task to the agent’s main session. Isolated starts a reply in a separate session.",
-      activeHours: "Only run during set hours",
-      activeHoursHelp:
-        "Scheduled runs outside these hours are skipped, and one-time runs wait. Manual runs follow it too. Hours can cross midnight.",
       activeHoursStart: "From",
       activeHoursEnd: "Until",
       idleOnly: "Wait until the agent is free",
@@ -374,7 +371,6 @@ const enCron = {
       hours: "Hours",
       on: "On",
       onThe: "On the",
-      betweenLabel: "Between",
       onDays: "on {days}",
       onDayOfMonth: "on day {day}",
       atTime: "at {time}",
@@ -382,11 +378,8 @@ const enCron = {
       weekdays: "weekdays",
       weekend: "weekends",
       allDay: "all day",
-      between: "between {from} – {until}",
       allDayOption: "All day",
       betweenOption: "Between hours",
-      from: "From",
-      until: "Until",
     },
     jobState: {
       nextRelative: "Next {at}",

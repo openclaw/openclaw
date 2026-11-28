@@ -21,7 +21,6 @@ import { CronModelControls } from "./view-model-controls.tsx";
 import {
   ScheduleControls,
   ScheduleDetails,
-  ScheduleTimeZone,
   TRAY_SCHEDULE_FIELDS,
   TrayErrors,
 } from "./view-schedule.tsx";
@@ -369,7 +368,6 @@ function PromptBlock(
         <div class="cron-prompt__controls">
           <div class="cron-editor-schedule">
             <ScheduleControls {...props} phoneLayout={props.phoneLayout} />
-            <ScheduleTimeZone {...props} />
           </div>
           {props.isAgentTurn ? (
             <span class="cron-prompt__run-controls" data-picker-below>

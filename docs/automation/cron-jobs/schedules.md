@@ -58,6 +58,10 @@ as schedules or read `HEARTBEAT.md`.
 
 ### Monitoring policies
 
+In the Control UI, **Between hours** sets the window for scheduled runs and **Run now**. A window from `08:00` to `22:00` opens at 08:00 and closes at 22:00. Leave **Time zone** blank to use the Gateway host time zone for a new window.
+
+An hour range saved in a cron expression controls scheduled occurrences. It opens as **Custom** and still allows **Run now** outside that range unless the job also has an active-hours window. Editing or cloning a job preserves its expression and window. If they use different time zones, the editor shows the window's saved zone. Saving a different **Time zone** applies it to both. Restoring the original value before saving keeps the two saved zones.
+
 Use job-level policies for periodic checks that should respect quiet hours and
 agent-wide activity. They apply through ordinary scheduler and session admission;
 no separate heartbeat runner is involved.

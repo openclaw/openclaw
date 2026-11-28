@@ -153,9 +153,6 @@ function DeliveryRows(
 /** Fields the Advanced sections hold; a validation error on one opens the disclosure. */
 const ADVANCED_FIELDS = [
   "timeoutSeconds",
-  "activeHoursStart",
-  "activeHoursEnd",
-  "activeHoursTimezone",
   "triggerScript",
   "deliveryMode",
   "deliveryDirectPolicy",
@@ -163,7 +160,6 @@ const ADVANCED_FIELDS = [
   "failureAlertAfter",
   "failureAlertCooldownSeconds",
   "staggerAmount",
-  "cronTz",
 ] as const;
 /**
  * Every setting beyond the prompt, schedule, model, agent and action, behind one quiet
@@ -308,15 +304,6 @@ export function Advanced(
         </SettingsSection>
         {isCronSchedule() ? (
           <SettingsSection title={t("cron.form.advancedTiming")}>
-            <CronInput
-              {...props}
-              field="cronTz"
-              errorKey="cronTz"
-              label={t("cron.form.timezoneOptional")}
-              help={t("cron.form.timezoneHelp")}
-              list="cron-tz-suggestions"
-              placeholder={t("cron.form.timezonePlaceholder")}
-            />
             <ToggleRow
               {...props}
               field="scheduleExact"
@@ -327,39 +314,6 @@ export function Advanced(
           </SettingsSection>
         ) : undefined}
         <SettingsSection title={t("cron.form.advancedConditions")}>
-          <ToggleRow
-            {...props}
-            field="activeHoursEnabled"
-            label={t("cron.form.activeHours")}
-            help={t("cron.form.activeHoursHelp")}
-          />
-          {props.form.activeHoursEnabled ? (
-            <>
-              <CronInput
-                {...props}
-                field="activeHoursStart"
-                label={t("cron.form.activeHoursStart")}
-                errorKey="activeHoursStart"
-                placeholder="09:00"
-              />
-              <CronInput
-                {...props}
-                field="activeHoursEnd"
-                label={t("cron.form.activeHoursEnd")}
-                errorKey="activeHoursEnd"
-                placeholder="17:00"
-              />
-              <CronInput
-                {...props}
-                field="activeHoursTimezone"
-                label={t("cron.form.timezoneOptional")}
-                help={t("cron.form.activeHoursTimezoneHelp")}
-                errorKey="activeHoursTimezone"
-                list="cron-tz-suggestions"
-                placeholder={t("cron.form.timezonePlaceholder")}
-              />
-            </>
-          ) : undefined}
           <ToggleRow
             {...props}
             field="idleOnly"

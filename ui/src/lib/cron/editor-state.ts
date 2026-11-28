@@ -27,7 +27,6 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   activeHoursEnabled: false,
   activeHoursStart: "09:00",
   activeHoursEnd: "17:00",
-  activeHoursTimezone: "",
   idleOnly: false,
   payloadSkipIfScratchEmpty: false,
   deliveryTarget: "",
