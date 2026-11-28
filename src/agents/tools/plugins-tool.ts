@@ -89,6 +89,7 @@ const PluginsToolSchema = Type.Object(
       "inspect",
       "search",
       "install",
+      "update",
       "enable",
       "disable",
       "uninstall",
@@ -145,7 +146,7 @@ export function createPluginsTool(options?: {
     label: "Plugins",
     async: false,
     description:
-      "Inspect, search, install from the official catalog or ClawHub, enable, disable, uninstall, or reload plugins. After editing local plugin files, use reloadAndResume to end this turn, finish cleanup, reload, and resume this same conversation with success or failure. Never wait for a CLI reload from a turn holding that plugin. reload is synchronous for callers not holding it. Check restartRequired: compiled bundled code needs a Gateway restart. Cleanup is best effort; read warnings in the result. Supported conversations refresh their tools at the next model step after running programs settle; finish the current program before using changed tools. Other runtimes may require a new conversation for changed tool names or schemas. Do not repeat completed mutations.",
+      "Inspect, search, install from the official catalog or ClawHub, update an existing install from the same sources, enable, disable, uninstall, or reload plugins. After editing local plugin files, use reloadAndResume to end this turn, finish cleanup, reload, and resume this same conversation with success or failure. Never wait for a CLI reload from a turn holding that plugin. reload is synchronous for callers not holding it. Check restartRequired: compiled bundled code needs a Gateway restart. Cleanup is best effort; read warnings in the result. Supported conversations refresh their tools at the next model step after running programs settle; finish the current program before using changed tools. Other runtimes may require a new conversation for changed tool names or schemas. Do not repeat completed mutations.",
     parameters: PluginsToolSchema,
     execute: async (_toolCallId, args, signal) => {
       runtimeRefresh.assertCurrent();
@@ -194,7 +195,8 @@ export function createPluginsTool(options?: {
           method = "plugins.setEnabled";
           request = { pluginId: required("pluginId"), enabled: action === "enable", ...consent };
           break;
-        case "install": {
+        case "install":
+        case "update": {
           const source = required("source");
           if (!["official", "clawhub"].includes(source)) {
             throw new ToolInputError(`Unknown plugin installation source: ${source}`);
@@ -218,6 +220,8 @@ export function createPluginsTool(options?: {
                   ...(expectedPluginId ? { expectedPluginId } : {}),
                   ...(expectedIntegrity ? { expectedIntegrity } : {}),
                 }),
+            // Install refuses an existing plugin; update deliberately replaces it.
+            ...(action === "update" ? { mode: "update" } : {}),
             ...(params.acknowledgeInstallPolicyWarning === true
               ? { acknowledgeInstallPolicyWarning: true }
               : {}),
