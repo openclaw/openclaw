@@ -153,6 +153,84 @@ describe("consumePendingToolMediaIntoReply", () => {
 });
 
 describe("pending tool-media reply ownership", () => {
+  it("omits queued tool media delivered to the current reply route", () => {
+    const state = {
+      pendingToolMediaUrls: ["file:///tmp/already-sent.jpg", "/tmp/keep.jpg"],
+      pendingToolMediaAttachments: [
+        { type: "image" as const, path: "/tmp/already-sent.jpg" },
+        { type: "image" as const, path: "/tmp/keep.jpg" },
+      ],
+      pendingToolMediaTrustByUrl: new Map([
+        ["file:///tmp/already-sent.jpg", true],
+        ["/tmp/keep.jpg", false],
+      ]),
+      pendingToolAudioAsVoice: false,
+      messagingToolSentMediaUrls: ["/tmp/already-sent.jpg"],
+      currentSourceMessagingToolSentMediaUrls: ["/tmp/already-sent.jpg"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "slack",
+          to: "channel:C1",
+          mediaUrls: ["/tmp/already-sent.jpg"],
+        },
+      ],
+    };
+
+    expect(readPendingToolMediaReply(state)).toEqual({
+      mediaUrls: ["/tmp/keep.jpg"],
+      attachments: [{ type: "image", path: "/tmp/keep.jpg" }],
+      audioAsVoice: undefined,
+    });
+  });
+
+  it("preserves queued tool media already delivered to a different route", () => {
+    const state = {
+      pendingToolMediaUrls: ["file:///tmp/already-sent.jpg"],
+      pendingToolMediaAttachments: [{ type: "image" as const, path: "/tmp/already-sent.jpg" }],
+      pendingToolMediaTrustByUrl: new Map([["file:///tmp/already-sent.jpg", true]]),
+      pendingToolAudioAsVoice: false,
+      messagingToolSentMediaUrls: ["/tmp/already-sent.jpg"],
+      currentSourceMessagingToolSentMediaUrls: [],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "discord",
+          to: "channel:C2",
+          mediaUrls: ["/tmp/already-sent.jpg"],
+        },
+      ],
+    };
+
+    expect(readPendingToolMediaReply(state)).toEqual({
+      mediaUrls: ["file:///tmp/already-sent.jpg"],
+      attachments: [{ type: "image", path: "/tmp/already-sent.jpg", trustedLocalMedia: true }],
+      audioAsVoice: undefined,
+      trustedLocalMedia: true,
+    });
+  });
+
+  it("does not return a voice-only reply when all queued media was already delivered", () => {
+    const state = {
+      pendingToolMediaUrls: ["/tmp/already-sent.opus"],
+      pendingToolMediaAttachments: [{ type: "audio" as const, path: "/tmp/already-sent.opus" }],
+      pendingToolMediaTrustByUrl: new Map([["/tmp/already-sent.opus", true]]),
+      pendingToolAudioAsVoice: true,
+      messagingToolSentMediaUrls: ["/tmp/already-sent.opus"],
+      currentSourceMessagingToolSentMediaUrls: ["/tmp/already-sent.opus"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "whatsapp",
+          to: "group-1",
+          mediaUrls: ["/tmp/already-sent.opus"],
+        },
+      ],
+    };
+
+    expect(readPendingToolMediaReply(state)).toBeNull();
+  });
+
   it("reads a media-only reply without consuming queued tool media", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/reply.opus"],

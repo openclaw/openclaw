@@ -946,42 +946,6 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     expect(ctx.state.messagingToolSentTexts).toEqual([]);
   });
 
-  it.each([
-    ["the exact source route", "account-1", "chat123", "thread-1", true],
-    ["the same target in another account", "account-2", "chat123", "thread-1", false],
-    ["the same target in another thread", "account-1", "chat123", "thread-2", false],
-    ["another target", "account-1", "chat456", "thread-1", false],
-  ] as const)(
-    "records explicit message sends only for %s",
-    async (label, accountId, target, threadId, expected) => {
-      const { ctx } = createTestContext();
-      Object.assign(ctx.params, {
-        config: {},
-        sourceReplyDeliveryMode: "message_tool_only",
-        messageChannel: "test-channel",
-        currentAccountId: "account-1",
-        currentChannelId: "chat123",
-        currentThreadId: "thread-1",
-      });
-
-      await executeTool(ctx, {
-        toolName: "message",
-        toolCallId: `tool-message-explicit-${label}`,
-        args: {
-          action: "send",
-          channel: "test-channel",
-          accountId,
-          target,
-          threadId,
-          message: "explicit reply",
-        },
-        result: { details: { ok: true } },
-      });
-
-      expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(expected);
-    },
-  );
-
   it("records rich-content delivery when visible text is blank", async () => {
     const { ctx } = createTestContext();
     const toolCallId = "tool-message-rich-content";

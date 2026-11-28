@@ -210,6 +210,7 @@ export class EmbeddedAgentSubscribeState {
   messagingToolSentTexts: string[] = [];
   messagingToolSentTextsNormalized: string[] = [];
   currentSourceMessagingToolSentTextsNormalized: string[] = [];
+  currentSourceMessagingToolSentMediaUrls: string[] = [];
   currentSourceMessagingToolHeldPartial?: string = undefined;
   messagingToolSentTargets: MessagingToolSend[] = [];
   messagingToolSentMediaUrls: string[] = [];
