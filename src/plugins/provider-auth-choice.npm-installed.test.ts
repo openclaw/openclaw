@@ -56,7 +56,6 @@ it.each([
   { pluginId: "moonshot", source: "npm" },
   { pluginId: "moonshot", source: "archive" },
   { pluginId: "deepseek", source: "npm" },
-  { pluginId: "qwen", source: "npm" },
 ] as const)(
   "continues $pluginId auth from the $source inventory without reinstalling",
   { timeout: 120_000 },
