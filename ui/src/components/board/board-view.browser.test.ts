@@ -275,7 +275,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
   );
 
   it("holds a narrow card at its drop target until a newer snapshot arrives", async () => {
-    const saving = createDeferred<void>();
+    const saving = createDeferred<undefined>();
     const applyOps = vi.fn(() => saving.promise);
     const view = await mount(applyOps);
     view.style.width = "354px";
@@ -294,7 +294,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     expect(view.querySelector(".board-widget--dragging")).toBeNull();
     await updateSnapshot(view, { revision: 2 });
     expect(firstIsAbove()).toBe(true);
-    saving.resolve();
+    saving.resolve(undefined);
     await settle(view);
     expect(firstIsAbove()).toBe(true);
   });

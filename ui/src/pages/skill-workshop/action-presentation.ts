@@ -7,12 +7,16 @@ import {
   type SourceAccessor,
 } from "solid-js";
 import type { SkillWorkshopMode } from "./mode.ts";
-import type { SkillWorkshopPageState } from "./skill-workshop-page.tsx";
 
 /** Scoped pending feedback for actions whose result is not a predictable library move. */
-export function createWorkshopActionPresentation(
-  owner: Pick<SkillWorkshopPageState, "scope" | "presentationFailed">,
-  scope: () => SkillWorkshopPageState["scope"],
+export function createWorkshopActionPresentation<
+  Scope extends { retired: Promise<unknown> } | null,
+>(
+  owner: {
+    readonly scope: Scope;
+    presentationFailed(kind: "mutation" | "mode" | "learning", error: unknown): void;
+  },
+  scope: () => Scope,
   list: SourceAccessor<unknown>,
   mode: SourceAccessor<SkillWorkshopMode | null>,
 ) {
