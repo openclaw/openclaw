@@ -107,6 +107,7 @@ function createDefaultState(): WorkboardUiState {
     error: null,
     cards: [],
     inlinePreviews: new Map(),
+    pendingDrops: new Map(),
     nextCursor: null,
     boards: [],
     statuses: WORKBOARD_STATUSES,

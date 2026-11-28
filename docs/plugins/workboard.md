@@ -788,7 +788,10 @@ In a card’s details, selecting a priority or agent, or saving labels, shows th
    for an existing session.
 3. Drag the card between columns, or focus its compact status control and use
    the menu or ArrowLeft/ArrowRight. During a drag, the source card dims and
-   available drop columns gain an outline.
+   available drop columns gain an outline. When you drop the card, it appears in
+   the new position immediately and stays dimmed until the Gateway responds.
+   If a move fails, the board shows the error and keeps any changes the Gateway
+   already confirmed.
 4. Start an unlinked card when it has no active or unresolved task association.
 5. Open the linked session from the card while the agent works.
 6. Let lifecycle sync move running work into `review`/`blocked`, then manually

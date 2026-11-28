@@ -225,7 +225,7 @@ export function WorkboardBoardWidget(props: WidgetProps) {
   const filter = () => boardId() ?? WORKBOARD_ALL_BOARDS_FILTER;
   const cards = createMemo(() => {
     void props.revision;
-    return props.model.cards.filter((card) => matchesBoardFilter(card, filter()));
+    return props.model.boardCards.filter((card) => matchesBoardFilter(card, filter()));
   });
   const byStatus = createMemo(() => groupWorkboardCardsByStatus(cards(), props.model.statuses));
   const workboard: WorkboardProps = {
@@ -268,6 +268,7 @@ export function WorkboardBoardWidget(props: WidgetProps) {
                 workboard={workboard}
                 status={status()}
                 cards={byStatus().get(status()) ?? []}
+                unfilteredCards={cards()}
                 options={{ surface: "widget", boardFilter: filter() }}
               />
             )}

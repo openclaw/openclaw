@@ -75,6 +75,7 @@ export type WorkboardUiState = {
   error: string | null;
   cards: WorkboardCard[];
   inlinePreviews: Map<WorkboardCard, WorkboardCard>;
+  pendingDrops: Map<string, Pick<WorkboardCard, "status" | "position">>;
   nextCursor: WorkboardCardCursor | null;
   boards: WorkboardBoardSummary[];
   statuses: readonly WorkboardStatus[];
