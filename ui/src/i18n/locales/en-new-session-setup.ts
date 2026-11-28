@@ -193,7 +193,7 @@ const enNewSessionSetup = {
     local: "This computer",
     folderPlaceholder: "Agent workspace",
     localProjects: "Local projects",
-    manageSavedProjects: "Manage projects",
+    manageSavedProjects: "Remove saved projects",
     doneManagingProjects: "Done",
     removeSavedProjectTitle: "Remove {name}?",
     removeSavedProjectImpact:
@@ -202,6 +202,8 @@ const enNewSessionSetup = {
     removeSavedProjectHint: "Remove from the shared catalog; keep files and sessions",
     noLocalProjects: "No local projects registered",
     noLocalProjectMatches: "No local projects match",
+    noSharedProjects: "No projects are shared with your role. Ask an admin to share one.",
+    manageProjects: "Manage projects",
     noAdditionalGithubProjects: "No additional GitHub repositories",
     projectsAdminHint: "Admins can register projects from Browse folders",
     projectSearchPlaceholder: "Search projects or paste a Git URL",

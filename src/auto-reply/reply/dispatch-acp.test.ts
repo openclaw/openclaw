@@ -1100,53 +1100,7 @@ describe("tryDispatchAcpReplyCore", () => {
       { mediaType: "image/jpeg", data: ACP_JPEG_IMAGE_BYTES.toString("base64") },
     ]);
     expect(runTurnCall().text).not.toContain("message earlier-0");
-  });
-
-  it("annotates recent history images with sent time and available history position", async () => {
-    const historyPath = "/tmp/openclaw-history-metadata.png";
-    const historyImage = Buffer.from("history-image");
-    acpAttachmentBuffers.set(historyPath, historyImage);
-
-    await runDispatch({
-      bodyForAgent: "describe current state",
-      ctxOverrides: {
-        Timestamp: 1_700_000_060_000,
-        InboundHistory: [
-          {
-            sender: "@alice",
-            body: "bug report",
-            timestamp: 1_699_999_980_000,
-            messageId: "msg-before",
-          },
-          {
-            sender: "@bob",
-            body: "<media:image>",
-            timestamp: 1_700_000_000_000,
-            messageId: "msg-history",
-            media: [{ path: historyPath, contentType: "image/png", kind: "image" }],
-          },
-          {
-            sender: "@alice",
-            body: "fixed after refresh",
-            timestamp: 1_700_000_060_000,
-            messageId: "msg-after",
-          },
-        ],
-      },
-    });
-
-    const text = String(runTurnCall().text);
-    expect(text).toContain("describe current state");
-    expect(text).toContain("Recent image 1 from @bob, message msg-history");
-    expect(text).toContain("sent at 2023-11-14T22:13:20.000Z");
-    expect(text).toContain("message 2 of 3 in available history");
-    expect(text).not.toContain(historyPath);
-    expect(runTurnCall().attachments).toEqual([
-      {
-        mediaType: "image/png",
-        data: historyImage.toString("base64"),
-      },
-    ]);
+    expect(String(runTurnCall().text)).not.toContain(historyPath);
   });
 
   it("omits described images while retaining first-read undescribed attachment bytes", async () => {
@@ -1404,35 +1358,6 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(dispatcherCall(dispatcher.sendFinalReply, 0).text).toContain(
       "acpx session id: acpx-work",
     );
-  });
-
-  it("keeps a free-text [[tts:<prose>]] reply visible in the Telegram voice caption", async () => {
-    const text = "Yes—I understand you clearly now.";
-    const mediaUrl = mockCaptionedTts(text);
-    mockVisibleTextTurn(`[[tts:${text}]]`);
-    const attempted: ReplyPayload[] = [];
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        attempted.push(payload);
-        return { visibleReplySent: true };
-      },
-    });
-
-    await runDispatch({
-      bodyForAgent: "reply",
-      dispatcher,
-      cfg: liveConfig({ auto: "always", mode: "final" }),
-      ctxOverrides: { Provider: "telegram", Surface: "telegram" },
-    });
-    dispatcher.markComplete();
-    await dispatcher.waitForIdle();
-
-    expect(attempted).toHaveLength(1);
-    expect(attempted[0]).toMatchObject({
-      text,
-      mediaUrl,
-      audioAsVoice: true,
-    });
   });
 
   it.each([

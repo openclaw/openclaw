@@ -16,29 +16,22 @@ import {
   resolveOpenClawRegisteredAgentDatabasePath,
 } from "./openclaw-state-db.paths.js";
 
-/**
- * The caller retains shared-state write admission through this synchronous repair.
- * Update Doctor only counts: rollback compares the updater's captured exact-path inventory.
- */
-export function repairOpenClawAgentDatabasePaths(
-  database: Pick<OpenClawStateDatabase, "db" | "path">,
-  updateDoctor = false,
-): { repaired: number; warnings: string[] } {
-  const { db, path: pathname } = database;
-  const postgres = isPostgresSqlConnection(db);
-  if (!postgres && !updateDoctor) {
-    assertOpenClawStateDatabaseForMaintenance(db, { pathname });
-  }
+type AgentDatabasePathRepair = {
+  stored: string;
+  aliases: AgentDatabases[];
+  newest: AgentDatabases;
+  registeredPath: string;
+  sentinel: boolean;
+};
 
-  const queries = getNodeSqliteKysely<Pick<DB, "agent_databases">>(db);
-  const rows = executeSqliteQuerySync(
-    db,
-    queries
-      .selectFrom("agent_databases")
-      .selectAll()
-      .orderBy("last_seen_at", "desc")
-      .orderBy("path"),
-  ).rows;
+/**
+ * The registrations to repair and how many rows they cover, from every `agent_databases` row
+ * ordered newest `last_seen_at` first, then by path. Pure: callers own the read.
+ */
+export function planOpenClawAgentDatabasePathRepairs(
+  pathname: string,
+  rows: readonly AgentDatabases[],
+): { repairs: AgentDatabasePathRepair[]; pending: number } {
   const agents = new Map<string, { stored: string; aliases: AgentDatabases[] }>();
   for (const row of rows) {
     const stored = resolveOpenClawAgentDatabaseStoredPath(
@@ -65,6 +58,35 @@ export function repairOpenClawAgentDatabasePaths(
   const pending = repairs.reduce(
     (count, { sentinel, aliases }) => count + (sentinel ? aliases.length : 1),
     0,
+  );
+  return { repairs, pending };
+}
+
+/**
+ * The caller retains shared-state write admission through this synchronous repair.
+ * Update Doctor only counts: rollback compares the updater's captured exact-path inventory.
+ */
+export function repairOpenClawAgentDatabasePaths(
+  database: Pick<OpenClawStateDatabase, "db" | "path">,
+  updateDoctor = false,
+): { repaired: number; warnings: string[] } {
+  const { db } = database;
+  const postgres = isPostgresSqlConnection(db);
+  if (!postgres && !updateDoctor) {
+    assertOpenClawStateDatabaseForMaintenance(db, { pathname: database.path });
+  }
+
+  const queries = getNodeSqliteKysely<Pick<DB, "agent_databases">>(db);
+  const { repairs, pending } = planOpenClawAgentDatabasePathRepairs(
+    database.path,
+    executeSqliteQuerySync(
+      db,
+      queries
+        .selectFrom("agent_databases")
+        .selectAll()
+        .orderBy("last_seen_at", "desc")
+        .orderBy("path"),
+    ).rows,
   );
   if (pending === 0) {
     return { repaired: 0, warnings: [] };

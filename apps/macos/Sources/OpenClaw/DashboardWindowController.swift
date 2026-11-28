@@ -997,7 +997,21 @@ extension DashboardWindowController {
 
     var pendingGatewaySwitch: DashboardGatewaySwitchIntent? {
         get { (window as? DashboardWindow)?.pendingGatewaySwitch }
-        set { (window as? DashboardWindow)?.pendingGatewaySwitch = newValue }
+        set {
+            guard let window = self.window as? DashboardWindow else { return }
+            let wasPending = window.pendingGatewaySwitch != nil
+            window.pendingGatewaySwitch = newValue
+            if wasPending != (newValue != nil) {
+                self.updateFailureReloadProgress()
+            }
+        }
+    }
+
+    private func updateFailureReloadProgress() {
+        guard self.isShowingFailurePage, self.signedOut == nil,
+              self.webView.url?.absoluteString == "about:blank" else { return }
+        self.webView.evaluateJavaScript(DashboardFailurePage.reloadProgressScript(
+            isReloading: self.pendingGatewaySwitch != nil))
     }
 
     func navigateBack() {
@@ -1499,7 +1513,13 @@ extension DashboardWindowController {
         if self.nativeBrowser.owns(webView) {
             self.nativeBrowser.navigationDidFinish(navigation, for: webView)
         } else if webView === self.webView {
-            guard !self.isShowingFailurePage else { return }
+            if self.isShowingFailurePage {
+                // A background endpoint update can redraw the error while the native retry is still pending.
+                if self.pendingGatewaySwitch != nil {
+                    self.updateFailureReloadProgress()
+                }
+                return
+            }
             // A superseded navigation, such as a failure page replaced by a restore,
             // can report completion after the newer load starts. Flushing native
             // actions into it would let their fallback cut the restore short, so defer

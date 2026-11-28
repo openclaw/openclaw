@@ -531,7 +531,15 @@ on:
         required: false
       BYTEPLUS_API_KEY:
         required: false
+      CELERIS_API_KEY:
+        required: false
       CEREBRAS_API_KEY:
+        required: false
+      FASTINO_API_KEY:
+        required: false
+      NACE_API_KEY:
+        required: false
+      PERPLEXITY_API_KEY:
         required: false
       DEEPINFRA_API_KEY:
         required: false
@@ -4609,7 +4617,7 @@ jobs:
             profiles: stable full
           - suite_id: native-live-test
             label: Native live test harnesses
-            command: OPENCLAW_LIVE_CODEX_NODE_EXEC_TIMEOUT=1 node .release-harness/scripts/test-live-shard.mjs native-live-test
+            command: OPENCLAW_LIVE_CODEX_NODE_EXEC_TIMEOUT=1 OPENCLAW_LIVE_CODEX_GOAL_RESUME=1 OPENCLAW_LIVE_OWNER_ASSIGNMENT=1 OPENCLAW_LIVE_RESEARCH_ACCEPTANCE=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key OPENCLAW_LIVE_CODEX_HARNESS_MODEL=openai/gpt-5.6-luna node .release-harness/scripts/test-live-shard.mjs native-live-test
             timeout_minutes: 60
             profile_env_only: false
             profiles: stable full
@@ -4644,6 +4652,10 @@ jobs:
             profile_env_only: false
             profiles: full
     env:
+      CELERIS_API_KEY: ${{ matrix.suite_id == 'native-live-test' && secrets.CELERIS_API_KEY || '' }}
+      FASTINO_API_KEY: ${{ matrix.suite_id == 'native-live-test' && secrets.FASTINO_API_KEY || '' }}
+      NACE_API_KEY: ${{ matrix.suite_id == 'native-live-test' && secrets.NACE_API_KEY || '' }}
+      PERPLEXITY_API_KEY: ${{ matrix.suite_id == 'native-live-test' && secrets.PERPLEXITY_API_KEY || '' }}
       ELEVENLABS_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-l-n' && secrets.ELEVENLABS_API_KEY || '' }}
       MODEL_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-l-n' && secrets.MODEL_API_KEY || '' }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

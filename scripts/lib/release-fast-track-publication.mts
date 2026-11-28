@@ -144,28 +144,32 @@ export async function authenticateFastTrackPolicy(input: {
   );
   const { request } = packet;
   if (request.policy === "approved-fast-track-v1") {
-    // A shipped, non-fast-tracked release already passed its own publication gates.
-    // Do not replay its historical validation evidence under current tooling.
-    const release = input.readPublishedRelease(request.reference.releaseTag);
-    if (
-      release.draft !== false ||
-      !release.published_at ||
-      release.targetSha !== request.reference.targetSha ||
-      release.fastTracked
-    ) {
-      throw new Error(
-        "Fast-track baseline must be a published release that was not itself fast-tracked.",
-      );
+    // The request schema omits reference/delta only for beta prereleases, which have
+    // no delta ceiling. Everything else is measured against a shipped baseline.
+    if (request.reference) {
+      // A shipped, non-fast-tracked release already passed its own publication gates.
+      // Do not replay its historical validation evidence under current tooling.
+      const release = input.readPublishedRelease(request.reference.releaseTag);
+      if (
+        release.draft !== false ||
+        !release.published_at ||
+        release.targetSha !== request.reference.targetSha ||
+        release.fastTracked
+      ) {
+        throw new Error(
+          "Fast-track baseline must be a published release that was not itself fast-tracked.",
+        );
+      }
+      collectFastTrackEligibility({
+        repositoryRoot: input.repositoryRoot,
+        request,
+        validatedReference: {
+          repository: request.repository,
+          ...request.reference,
+          published: true,
+        },
+      });
     }
-    collectFastTrackEligibility({
-      repositoryRoot: input.repositoryRoot,
-      request,
-      validatedReference: {
-        repository: request.repository,
-        ...request.reference,
-        published: true,
-      },
-    });
   } else {
     const actual = fastTrackValidationSnapshot(input.manifest, input.jobs);
     const expected = request.validationSnapshot;

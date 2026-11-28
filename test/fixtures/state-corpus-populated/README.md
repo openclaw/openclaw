@@ -22,6 +22,9 @@ a BLOB (issue #110186), produced by Python's `sqlite3`, not OpenClaw code.
 Frozen JSON manifests preserve the source commit and values each surface
 wrote, and where each value was found (`verification`). Tests reconstruct the
 `2026.7.1-blob` and `2026.7.35` manifests from the frozen `2026.7.1` manifest.
+Unused per-table inventory reports are omitted; database paths, kinds, versions,
+and integrity observations remain.
+
 Paths inside the databases and `openclaw.json` still name `/home/fixture`;
 tests rewrite the config to their temporary directory.
 
@@ -29,5 +32,5 @@ The synthetic device keys (`identity/device.json`, `device_identities`) are
 stored with the PEM marker spelled `PRIVATE_KEY` so the repository
 private-key scanner passes. The e2e test restores the marker on its copy.
 
-Consumers: `src/state/sqlite-copy-swap.test.ts` (generic rebuild) and
-`test/state-upgrade.e2e.test.ts` (Gateway start on each release).
+Consumer: `test/state-upgrade.e2e.test.ts` (Gateway start on each release,
+with canonical in-place schema migration).

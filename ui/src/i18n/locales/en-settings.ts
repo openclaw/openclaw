@@ -776,6 +776,7 @@ const enSettings = {
     testProvider: "Test {provider}",
     testing: "Searching…",
     query: "Search query",
+    queryTooLong: "Shorten the search query to {limit} characters or fewer.",
     queryPlaceholder: "What would you like to find?",
     queryDefault: "OpenClaw documentation",
     success: "Search succeeded",
@@ -1289,6 +1290,18 @@ const enSettings = {
         "The saved sign-in for {provider} is removed from OpenClaw. You can add this account again later.",
       loggingOut: "Signing out…",
       done: "Signed out",
+      deviceAction: "Sign out on this device",
+      deviceActionFor: "Sign out {account} on this device",
+    },
+    disconnect: {
+      action: "Disconnect account",
+      actionFor: "{action}: {account}",
+      title: "{action}?",
+      confirm:
+        "OpenClaw asks the provider to revoke its access for {account}, then removes the saved sign-in from this Gateway. Other devices and agents that use this sign-in stop working. To remove it from this Gateway only, use Sign out on this device.",
+      failed: "Couldn’t disconnect {account}",
+      retry: "Try again",
+      manage: "Manage connected apps",
     },
     remove: {
       action: "Remove provider",
@@ -2114,6 +2127,9 @@ const enSettings = {
       textSize: "Text size",
     },
     chatPrefs: {
+      compactSessionOpening: "Open with 24 messages",
+      compactSessionOpeningHint:
+        "Fetch the latest 24 messages when opening a conversation without saved history. Scroll up to read earlier messages.",
       title: "Chat",
       devices: "Microphone and camera",
       messageWidth: "Message width",
@@ -2304,9 +2320,13 @@ const enSettings = {
       description: "These plugins add features to your memory engine. You can use more than one.",
       activeMemory: {
         title: activeMemoryPresentation.memoryAddon.label,
+        knowledgeDescription:
+          "Recalls relevant Knowledge records before a reply. Knowledge does not support private conversation transcript recall.",
       },
       memoryWiki: {
         title: memoryWikiPresentation.memoryAddon.label,
+        knowledgeDescription:
+          "Browse and search the selected agent’s Knowledge records alongside compiled wiki insights.",
       },
       toggleAriaLabel: "Enable or disable {plugin}",
       changeFailed: "Couldn’t update {plugin}. Try again.",

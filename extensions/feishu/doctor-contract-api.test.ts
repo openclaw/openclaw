@@ -1,8 +1,21 @@
 // Feishu tests cover the doctor contract artifact surface.
-import { describe, expect, it } from "vitest";
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+import { describe, expect, it, vi } from "vitest";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract-api.js";
+import { FeishuConfigSchema } from "./src/config-validator.js";
+
+vi.mock(import("openclaw/plugin-sdk/channel-config-schema"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, buildChannelConfigSchema: vi.fn(actual.buildChannelConfigSchema) };
+});
+
+const projectedOnImport = vi.mocked(buildChannelConfigSchema).mock.calls.map(([schema]) => schema);
 
 describe("feishu doctor contract artifact", () => {
+  it("loads its validator without converting the Feishu schema for the channel editor", () => {
+    expect(projectedOnImport).not.toContain(FeishuConfigSchema);
+  });
+
   it("exposes registry-shaped streaming alias rules and the config normalizer", () => {
     // The doctor contract registry keeps rules whose path is an array and
     // whose message is a string (coerceLegacyConfigRules); anything else is

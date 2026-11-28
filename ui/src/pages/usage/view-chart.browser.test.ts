@@ -1,8 +1,11 @@
 import { afterEach, expect, it } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import "../../styles.css";
 import "../../styles/usage.css";
+import { buildProviderSeries } from "./provider-series.ts";
+import { dailyEntry } from "./usage-chart.test-support.ts";
 import { CostBreakdownCompact, DailyChartCompact } from "./view-chart.tsx";
 import { mountView } from "./view-render.test-support.ts";
 
@@ -52,6 +55,34 @@ it.each(["by-provider", "by-type"] as const)(
       );
       expect(plot.scrollWidth).toBeLessThanOrEqual(plot.clientWidth + 1);
     }
+  },
+);
+
+it.each([
+  ["tokens", "1.0K"],
+  ["cost", "$15.63"],
+] as const)(
+  "shows the full daily %s total in the provider chart readout",
+  (chartMode, expected) => {
+    const date = "2026-05-01";
+    const providerSeries = buildProviderSeries([
+      { date, provider: "openai", model: "example", tokens: 999, cost: 999 / 64, count: 1 },
+    ]);
+    const view = mountView(() =>
+      DailyChartCompact({
+        dailyEntries: [dailyEntry(date, 1_000, 1_000 / 64)],
+        dailyChartMode: "by-provider",
+        chartMode,
+        selectedDays: [date],
+        providerSeries,
+        onSelectDay: () => {},
+        range: { startDate: date, endDate: date, complete: true },
+      }),
+    );
+
+    view.getByRole("button", { name: /1\.0K tokens, \$15\.63/ }).focus();
+    flush();
+    expect(view.getByRole("status").textContent).toContain(` · ${expected}`);
   },
 );
 

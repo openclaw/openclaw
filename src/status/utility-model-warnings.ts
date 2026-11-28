@@ -17,6 +17,8 @@ import {
   buildModelAliasIndex,
   resolveModelRefFromString,
 } from "../agents/model-selection-shared.js";
+import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
+import { selectUtilityModel } from "../agents/utility-model-selection.js";
 import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
@@ -25,14 +27,18 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { resolvePluginSetupCliBackend } from "../plugins/setup-registry.js";
 import type { CliBackendPlugin } from "../plugins/types.js";
 
-/** Known descriptor mismatches only; model quality and live availability remain runtime facts. */
+/** Known descriptor and role-policy mismatches; model quality and live availability remain runtime facts. */
 export function collectUtilityModelWarnings(
   config: OpenClawConfig,
   loadMetadata: () => Pick<PluginMetadataSnapshot, "plugins"> &
     Partial<Pick<PluginMetadataSnapshot, "owners">> = () =>
     loadManifestMetadataSnapshot({ config }),
 ): ConfigValidationIssue[] {
+  const restrictedRoles = Object.entries(config.gateway?.roles?.definitions ?? {}).filter(
+    ([, role]) => role.modelPolicy,
+  );
   if (
+    restrictedRoles.length === 0 &&
     config.agents?.defaults?.utilityModel === undefined &&
     !Object.values(config.agents?.entries ?? {}).some((agent) => agent.utilityModel !== undefined)
   ) {
@@ -54,19 +60,50 @@ export function collectUtilityModelWarnings(
     backends.set(normalized, backend);
     return backend;
   };
+  const manifest = () => {
+    metadata ??= loadMetadata();
+    return metadata.owners ? { owners: metadata.owners } : metadata.plugins;
+  };
   withAgentRosterFactsBatch(config, () => {
+    // One prepared policy per role; the role, not the agent, defines it.
+    const rolePolicies = restrictedRoles.map(([name, role]) => ({
+      name,
+      agents: role.agents,
+      policy: prepareOperatorModelPolicy({
+        cfg: config,
+        policy: role.modelPolicy,
+        manifestPlugins: manifest(),
+      }),
+    }));
     for (const agentId of listAgentIds(config)) {
       const utility = readUtilityModelSetting(config, agentId);
       if (utility.kind === "disabled") {
         continue;
+      }
+      for (const { name, agents, policy } of rolePolicies) {
+        if (agents !== "*" && !agents.includes(agentId)) {
+          continue;
+        }
+        const selection = selectUtilityModel({
+          cfg: config,
+          agentId,
+          metadataSnapshot: metadata,
+          // Configuration facts only: live inventory stays unknown here.
+          catalog: { entries: [], authoritative: false },
+          modelPolicy: policy,
+        });
+        if ("disabled" in selection && selection.disabled === "role-policy") {
+          const path = `gateway.roles.definitions.${name}.modelPolicy`;
+          const message = `Role "${name}" allows no utility model for agent "${agentId}", so Activity recaps are off for sessions this role owns. Allow a utility model in this role's modelPolicy, or set a utilityModel the role allows.`;
+          warnings.set(`${path}:${message}`, { path, message });
+        }
       }
       const candidates =
         utility.kind === "explicit" ? [utility.modelRef, ...utility.fallbacks] : utility.fallbacks;
       if (candidates.length === 0) {
         continue;
       }
-      metadata ??= loadMetadata();
-      const manifestPlugins = metadata.owners ? { owners: metadata.owners } : metadata.plugins;
+      const manifestPlugins = manifest();
       const defaultProvider =
         resolveDefaultModelForAgent({ cfg: config, agentId, manifestPlugins })?.provider ??
         DEFAULT_PROVIDER;

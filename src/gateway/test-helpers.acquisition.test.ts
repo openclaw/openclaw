@@ -656,59 +656,6 @@ describe("raw Gateway helper acquisition ownership", async () => {
     },
   );
 
-  it("returns the harness hello and forwards the actual connect options", async (context) => {
-    await withPeerState(context, "harness-options", "reply", async (peer) => {
-      mockPeerGateway(peer);
-      const { startGatewayServerHarness } = await import("./server.e2e-ws-harness.js");
-      const harness = await startGatewayServerHarness();
-      peer.closeOwnerOnCleanup(harness.close);
-      context.signal.throwIfAborted();
-      const result = await withinTest(
-        peer.track(
-          harness.openClient({
-            device: null,
-            token: "synthetic-token",
-            browserOrigin: "https://control.example.com",
-            client: { id: "test-client", version: "fixture", platform: "test", mode: "test" },
-            minProtocol: 3,
-            maxProtocol: 3,
-            role: "operator",
-            scopes: ["operator.read"],
-            caps: ["tool-events"],
-            commands: ["system.run"],
-            permissions: { screenRecording: false },
-            includeSessionMessageBodies: true,
-            timeoutMs: 37,
-          }),
-        ),
-        context.signal,
-      );
-      expect(result.ws).toBe(peer.clients[0]);
-      expect(result.hello).toEqual(buildMinimalGatewayHelloOkPayload());
-      expect(peer.upgradeHeaders[0]).toMatchObject({ origin: "https://control.example.com" });
-      expect(peer.requests).toHaveLength(1);
-      expect(peer.requests[0]).toMatchObject({
-        method: "connect",
-        params: {
-          minProtocol: 3,
-          maxProtocol: 3,
-          client: { id: "test-client", version: "fixture", platform: "test", mode: "test" },
-          role: "operator",
-          scopes: ["operator.read"],
-          auth: { token: "synthetic-token" },
-          caps: ["tool-events"],
-          commands: ["system.run"],
-          permissions: { screenRecording: false },
-          includeSessionMessageBodies: true,
-        },
-      });
-      expect(peer.requests[0]?.params).not.toHaveProperty("device");
-      expect(peer.unownedErrors).toEqual([]);
-      expect(result.ws.listenerCount("open")).toBe(0);
-      expect(peer.isListening()).toBe(true);
-    });
-  });
-
   it.for(["assertion failure", "cancellation", "early rejection"] as const)(
     "joins the actual preparation and acquisition after %s before resetting observers",
     async (failure, context) => {

@@ -170,7 +170,7 @@ Open **Workspace** on New session to choose a saved project, a recent folder, or
 a repository URL. The search/paste field opens immediately, even on short lists.
 The picker offers **Browse folders** and, when permitted, **Search GitHub**.
 GitHub search requires at least two characters. Administrators can choose
-**Manage projects**, then select the saved entry they want to remove. Removing
+**Remove saved projects**, then select the saved entry they want to remove. Removing
 a saved project requires confirmation and affects the shared Gateway catalog; it
 keeps the checkout, files, sessions, and history. Built-in workspaces cannot be removed.
 
@@ -314,6 +314,8 @@ Saved desktop Details also restores session attribution, participant counts, and
 The saved Details snapshot also retains the running-process preview while reconnecting, so Processes does not appear later and push Automations down. Saved process rows cannot stop processes. Live process reads refresh the preview, remove finished processes, and hide it if access is denied.
 
 A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen. A reader action checks up to three consecutive pages when entries are empty, overlapping, or hidden by display preferences; longer hidden intervals remain available through another action. Transient read failures retry within the existing one-minute history-recovery budget, honoring the server’s backoff. Permission denials are not automatically retried. The touch-friendly history control keeps keyboard focus during loading and ignores repeated activation. Failed reads show **Retry earlier messages** at that same boundary without removing the loaded conversation. The **Show earlier** label stays steady while reconnecting or loading. The control exposes its busy and unavailable state to assistive technology and ignores activation until ready.
+
+In **Appearance → Chat**, enable **Open with 24 messages** to fetch a smaller history window when opening a chat without saved history. Reopening a chat can reuse its saved messages. Scroll up or choose **Show earlier** to load preceding messages. With this option on, typing in Find also loads earlier pages to search the conversation.
 
 Earlier history is offered only when the Gateway provides a cursor or a loaded transcript entry can anchor the request. Tool activity summaries do not prevent loading older messages. If neither boundary exists, the control stays hidden and automatic loading stops without an error.
 
@@ -695,9 +697,10 @@ Folders are not downloadable. Downloads require the Control UI and its Gateway
 connection to share an origin (including a same-origin Gateway proxy).
 
 Detected PDFs opened from chat file links or the Files panel use the same
-browser-native preview as PDF attachments, up to 16 MiB. Preview failures and
-larger PDFs retain **Download file**. Rendering depends on your browser's PDF
-support; the generic text and image inline-preview limit is unchanged.
+browser-native preview as PDF attachments, up to 16 MiB. In browsers that support
+these settings, the PDF fits the preview pane's width and opens with page
+thumbnails collapsed. Preview failures and larger PDFs retain **Download file**.
+The generic text and image inline-preview limit is unchanged.
 Refreshing unchanged file metadata keeps the PDF reader's page and scroll
 position. The preview still reads fresh bytes and checks file access; changed
 contents reload the document, and selecting a different source replaces it.

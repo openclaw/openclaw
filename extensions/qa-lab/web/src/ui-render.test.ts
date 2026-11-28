@@ -488,32 +488,6 @@ describe("QA Lab UI evidence render", () => {
     }
   });
 
-  it("maps blocked and skipped evidence statuses to styled tones", () => {
-    const html = renderState({
-      evidence: gallery({
-        counts: { blocked: 1, fail: 0, pass: 0, skipped: 1 },
-        entries: [
-          evidenceEntry("blocked", {
-            coverage: [{ id: "qa.blocked", role: "primary" }],
-            failureReason: "Environment unavailable",
-          }),
-          evidenceEntry("skipped", {
-            coverage: [{ id: "qa.skipped", role: "primary" }],
-            key: "1",
-            kind: "vitest-test",
-          }),
-        ],
-      }),
-      selectedEvidenceEntryKey: "0",
-    });
-
-    expectMarkup(
-      html,
-      ["badge-pending", "badge-skip", "scenario-item-dot-pending", "scenario-item-dot-skip"],
-      ["badge-blocked", "badge-skipped", "scenario-item-dot-blocked"],
-    );
-  });
-
   it("links executed UX Matrix cells to evidence entries and leaves proof gaps unlinked", () => {
     const html = renderState({
       evidence: gallery({

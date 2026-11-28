@@ -13,6 +13,7 @@ import {
 import { createDoctorPrompterFixture as makePrompter } from "../flows/doctor-health-context.test-support.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
+  checkShellCompletionRepairPending,
   checkShellCompletionStatus,
   doctorShellCompletion,
   ensureCompletionCacheExists,
@@ -171,6 +172,25 @@ describe("doctorShellCompletion", () => {
     expectCompletionNote(command);
     expectCompletionNote("session only");
     expectCompletionNote(failedPath);
+  });
+
+  it("reports pending work exactly where the repair would write", async () => {
+    await setupBashHome();
+    // Without a profile, only an interactive Doctor offers to install completion.
+    await expect(checkShellCompletionRepairPending({ nonInteractive: true })).resolves.toBe("none");
+    await doctorShellCompletion(makePrompter(true, false), { nonInteractive: true });
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+    expect(installCompletionMock).not.toHaveBeenCalled();
+    await expect(checkShellCompletionRepairPending({ nonInteractive: false })).resolves.toBe(
+      "work",
+    );
+
+    const { profilePath } = await setupBashHome(true);
+    const slowProfile = await fs.readFile(profilePath, "utf8");
+    await expect(checkShellCompletionRepairPending({ nonInteractive: true })).resolves.toBe("work");
+    expect(await fs.readFile(profilePath, "utf8")).toBe(slowProfile);
+    await doctorShellCompletion(makePrompter(true, false), { nonInteractive: true });
+    expect(installCompletionMock).toHaveBeenCalledTimes(1);
   });
 
   it("re-throws non-permission errors from installCompletion", async () => {

@@ -13,16 +13,12 @@ const TURN_FLAGS = new Set([
   "reconnectResumeRequested",
   "isLinkedOwnerDevice",
   "isAuthenticatedOwner",
-  "recordedOperatorAuthority",
-  "senderIsOwnerByScope",
-  "isHumanTurn",
-  "canPrepareSkillAuthoring",
   "prepareCommandOwnerAuthority",
   "isConfiguredCommandOwner",
 ]);
 export const TURN_FLAG_FILES = new Set([
   "src/agents/tools/gateway-tool.ts",
-  "src/auto-reply/command-auth.ts",
+  "src/auto-reply/command-owner-facts.ts",
   "src/auto-reply/reply/reply-source-admission.ts",
   "src/auto-reply/reply/session-event-target.ts",
   "src/auto-reply/reply/session.ts",
@@ -48,26 +44,19 @@ export const OWNER_PRODUCER_FILES = new Set([
   // Principals admission does not see yet: they match their own credential or owner config.
   "extensions/discord/src/monitor/native-command-auth.ts", // native slash command, no turn yet
   "extensions/discord/src/voice/speaker-context.ts", // realtime voice speaker, `ownerAllowFrom`
-  // FaceTime callers match the plugin's own `ownerHandles`; moving them into
-  // `commands.ownerAllowFrom` is a config migration that waits on an owner decision.
-  "extensions/facetime/src/call-events.ts",
-  "extensions/facetime/src/talk-consult-controller.ts", // same caller claim
   // Channel command owner: the `commands.ownerAllowFrom` config match. Asserted-identity owners
   // and pre-turn senders have no grant yet, so this fact still sets the bit.
-  "src/auto-reply/command-auth.ts",
   "src/auto-reply/reply/reply-source-admission.ts",
   "src/gateway/agent-turn/agent-run-user-turn.ts",
-  "src/gateway/talk/client-tool-authority.ts", // Talk caller: admin scope + `ownerAllowFrom` match
-  // Scheduled and requester-owner continuations (cron creator authority).
-  "src/agents/openclaw-plugin-tools.ts",
+  // Scheduled write: an operator-authorized job's operator-policy message action.
+  "src/channels/plugins/message-action-dispatch.ts",
+  // Recorded data read back, never decided: protocol field, transcript and lineage receipts,
+  // and the owner bit scheduled occurrence admission minted (`facts.authority.owner`).
+  "packages/gateway-protocol/src/schema/agent.ts",
   "src/agents/openclaw-tools.ts",
   "src/agents/scheduled-message-invocation.ts",
-  "src/channels/plugins/message-action-dispatch.ts", // scheduled write: the job's operator
-  "src/cron/execution-context-registry.ts",
-  "src/plugins/tool-factory-context.ts",
-  // Recorded data read back, never decided: protocol field, transcript and lineage receipts.
-  "packages/gateway-protocol/src/schema/agent.ts",
   "src/auto-reply/reply/memory-flush-prepare.ts",
+  "src/cron/execution-context-registry.ts",
   "src/gateway/session-transcript-message.ts",
   "src/plugins/memory-audience.ts",
 ]);

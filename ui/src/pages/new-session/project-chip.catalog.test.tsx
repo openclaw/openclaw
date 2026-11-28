@@ -335,7 +335,7 @@ async function removalFixture(scopes = ["operator.admin"]) {
     expect(view.container.querySelectorAll('[data-value^="project:"]')).toHaveLength(3),
   );
   const openRemoval = async () => {
-    view.getByText("Manage projects").click();
+    view.getByText("Remove saved projects").click();
     flush();
     const opener = view.container.querySelector<HTMLButtonElement>('[data-value="project:saved"]')!;
     opener.focus();
@@ -357,13 +357,13 @@ async function removalFixture(scopes = ["operator.admin"]) {
 
 it("hides shared catalog management from write-only operators", async () => {
   const { view } = await removalFixture(["operator.write"]);
-  expect(view.queryByText("Manage projects")).toBeNull();
+  expect(view.queryByText("Remove saved projects")).toBeNull();
   expect(view.queryByRole("button", { name: /^Remove / })).toBeNull();
 });
 
 it("keeps saved projects selectable if management access ends while the picker is open", async () => {
   const { view, browser, context, changed } = await removalFixture();
-  view.getByText("Manage projects").click();
+  view.getByText("Remove saved projects").click();
   flush();
   Object.assign(context.gateway.snapshot.hello!, { features: { methods: ["projects.list"] } });
   changed();
@@ -515,4 +515,45 @@ it("re-reads the catalog after removal instead of adopting an in-flight pre-writ
     expect(view.container.querySelector('[data-value="project:saved"]')).toBeNull(),
   );
   expect(request.mock.calls.filter(([method]) => method === "projects.list")).toHaveLength(3);
+});
+
+it.each([
+  { connection: "restricted", admin: false, write: false },
+  { connection: "admin", admin: true, write: true },
+])("explains an empty project catalog: $connection", async ({ admin, write }) => {
+  const fixture = createRepositoryFixture();
+  const { browser, state: place, request, context } = fixture;
+  request.mockResolvedValue({ projects: [] });
+  prepareCatalog(fixture, true);
+  vi.spyOn(place, "isAdmin").mockReturnValue(admin);
+  vi.spyOn(place, "canWrite").mockReturnValue(write);
+  const navigate = vi.fn();
+  Object.assign(context, { basePath: "", navigate });
+  const view = mountProjectChip(fixture, () => ({
+    folder: "",
+    workspace: "/home/openclaw/.openclaw/workspace",
+    projectId: browser.projectId,
+    selectedRemoteProject: browser.remoteProject,
+    projects: browser.projects,
+    recents: [],
+    projectQuery: browser.projectQuery,
+  }));
+  await openProjectSearch(view.container);
+  const shared = "No projects are shared with your role. Ask an admin to share one.";
+  await waitForSolid(() =>
+    expect(view.container.textContent).toContain(admin ? "No local projects registered" : shared),
+  );
+  expect(view.container.textContent?.includes(shared)).toBe(!admin);
+  const manage = view.container.querySelector<HTMLAnchorElement>(
+    ".new-session-page__manage-projects",
+  );
+  // Gateway folder browsing needs operator.write, so restricted roles never see it.
+  expect(view.container.querySelector('[data-value="browse"]') === null).toBe(!write);
+  if (!admin) {
+    expect(manage).toBeNull();
+    return;
+  }
+  expect(manage?.getAttribute("href")).toBe("/projects");
+  manage!.click();
+  expect(navigate).toHaveBeenCalledWith("projects");
 });

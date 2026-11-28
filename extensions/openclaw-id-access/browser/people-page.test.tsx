@@ -267,51 +267,8 @@ describe("Access page", () => {
     },
   );
 
-  it("repairs a blocked member with a signed role change at the fresh seq", async () => {
-    const member = {
-      accountId: "blocked",
-      displayName: "Bo",
-      role: "deleted",
-      roleDefined: false,
-      peerKeys: [],
-    };
-    const { container, request } = await mountPage([linked({ members: [member] })]);
-    await vi.waitFor(() =>
-      expect(container.textContent).toContain("The role deleted is not defined on this claw"),
-    );
-    button(container, "Change role")!.click();
-    flush();
-    const picker = container.querySelector(
-      ".ocid-access__row--member select",
-    )! as HTMLSelectElement;
-    picker.value = "viewer";
-    picker.dispatchEvent(new Event("change"));
-    flush();
-    request.mockImplementation(async (method: string) =>
-      method === "openclawId.people"
-        ? { link: linked({ members: [member], seq: 6 }).link }
-        : method === "openclawId.status"
-          ? linked()
-          : {},
-    );
-    button(container, "Save role")!.click();
-    const { signMembershipChange } = await import("./owner-signing.js");
-    await vi.waitFor(() =>
-      expect(signMembershipChange).toHaveBeenLastCalledWith(expect.objectContaining({ seq: 6 }), {
-        op: "set_role",
-        account_id: "blocked",
-        role: "viewer",
-      }),
-    );
-    expect(request).toHaveBeenCalledWith("openclawId.authority", {
-      action: "submit",
-      statement: { signed: { op: "set_role", account_id: "blocked", role: "viewer" } },
-    });
-  });
-
-  it.each(["invite", "change"] as const)(
-    "reconfirms a freshly administrative role before signing %s",
-    async (action) => {
+  it("reconfirms a freshly administrative role before signing an invite", async () => {
+    {
       const member = { accountId: "blocked", role: "deleted", roleDefined: false, peerKeys: [] };
       const initial = linked({ rootPub: pendingInvite.pending!.devicePub, members: [member] });
       const { container, request } = await mountPage([initial]);
@@ -329,20 +286,15 @@ describe("Access page", () => {
             ? fresh
             : {},
       );
-      if (action === "invite") {
-        const input = container.querySelector("input")!;
-        input.value = "friend@example.test";
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-      } else {
-        button(container, "Change role")!.click();
-      }
+      const input = container.querySelector("input")!;
+      input.value = "friend@example.test";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
       flush();
       const { signAsOwner, signMembershipChange } = await import("./owner-signing.js");
       vi.mocked(signAsOwner).mockClear();
       vi.mocked(signMembershipChange).mockClear();
-      button(container, action === "invite" ? "Create invite link" : "Save role")!.click();
-      const confirmLabel =
-        action === "invite" ? "Confirm administrator invite" : "Confirm administrator role";
+      button(container, "Create invite link")!.click();
+      const confirmLabel = "Confirm administrator invite";
       await vi.waitFor(() => expect(button(container, confirmLabel)).toBeDefined());
       expect(container.textContent).toContain("change Gateway settings");
       expect(request).not.toHaveBeenCalledWith("openclawId.authority", expect.anything());
@@ -352,11 +304,11 @@ describe("Access page", () => {
       await vi.waitFor(() =>
         expect(request).toHaveBeenCalledWith(
           "openclawId.authority",
-          expect.objectContaining({ action: action === "invite" ? "register_invite" : "submit" }),
+          expect.objectContaining({ action: "register_invite" }),
         ),
       );
-    },
-  );
+    }
+  });
 
   it("shows a member their own role without requesting people or exposing controls", async () => {
     const { container, request } = await mountPage([

@@ -325,6 +325,9 @@ function SenderIdentity(props: { frame: MessageGroupFrame }) {
       <Show when={frame().showSenderName}>
         <PersonName label={frame().who} link={activityLink()} class="chat-sender-name" />
       </Show>
+      <Show when={frame().suggestedByLabel}>
+        <span class="chat-message-source">{frame().suggestedByLabel}</span>
+      </Show>
       <Show when={frame().visibleSources?.length}>
         <span class="chat-message-source">
           {messageClientSourcesLabel(frame().visibleSources!)}
@@ -556,6 +559,7 @@ function FramedMessageGroup(props: {
                   frame().normalizedRole === "user" &&
                   Boolean(
                     frame().visibleSources?.length ||
+                    frame().suggestedByLabel ||
                     frame().isPeerGroup ||
                     (frame().showSenderName && frame().avatarPlacement !== "footer"),
                   ),

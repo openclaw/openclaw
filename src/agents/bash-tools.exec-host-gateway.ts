@@ -38,7 +38,6 @@ import {
   resolveExecAutoReviewDecision,
 } from "../infra/exec-auto-review.js";
 import { hasPosixShellStartupBeforeInlineCommand } from "../infra/exec-wrapper-resolution.js";
-import { LruCache } from "../infra/lru-cache.js";
 import {
   prepareSystemRunMutableFileBinding,
   type SystemRunMutableFileBinding,
@@ -62,6 +61,11 @@ import {
   buildExecApprovalTurnSourceContext,
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
+import {
+  MAX_CONSECUTIVE_AUTO_REVIEW_DENIALS,
+  consecutiveAutoReviewDenials,
+  recordAutoReviewDenial,
+} from "./bash-tools.exec-auto-review-state.js";
 import { prepareCronStandingGrantConsumption } from "./bash-tools.exec-cron-grant.js";
 import {
   buildGatewayExecApprovalFollowupSummary,
@@ -86,6 +90,7 @@ import {
 import { inlineEvalFact, opaqueProgramAsk } from "./bash-tools.exec-interpreter-approval.js";
 import { createApprovalSlug, runExecProcess } from "./bash-tools.exec-runtime.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
+import { hasObservedExit, isShellCleanupCertain } from "./shell-call-receipt.js";
 
 const ONE_SHOT_ALLOW_ALWAYS: AllowAlwaysPersistenceDecision = {
   kind: "one-shot",
@@ -93,21 +98,6 @@ const ONE_SHOT_ALLOW_ALWAYS: AllowAlwaysPersistenceDecision = {
 };
 // Keep compound reviews bounded independently of the serialized prompt cap.
 const MAX_GATEWAY_AUTO_REVIEW_CANDIDATES = 64;
-const MAX_CONSECUTIVE_AUTO_REVIEW_DENIALS = 3;
-const MAX_AUTO_REVIEW_SESSIONS = 256;
-const consecutiveAutoReviewDenials = new LruCache<number>(MAX_AUTO_REVIEW_SESSIONS);
-
-function recordAutoReviewDenial(sessionKey: string | undefined): number {
-  if (!sessionKey) {
-    return 1;
-  }
-  const count = Math.min(
-    (consecutiveAutoReviewDenials.get(sessionKey) ?? 0) + 1,
-    MAX_CONSECUTIVE_AUTO_REVIEW_DENIALS,
-  );
-  consecutiveAutoReviewDenials.set(sessionKey, count);
-  return count;
-}
 
 /** Processes gateway exec policy and returns execution/approval/denial outcome. */
 export async function processGatewayAllowlist(
@@ -1019,11 +1009,17 @@ export async function processGatewayAllowlist(
     const effectiveTimeout =
       typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec;
     const followupTarget = buildExecApprovalFollowupTarget(params, approvalId);
-    const sendDeniedFollowup = (reason: string) =>
-      sendExecApprovalFollowupResult(
+    const recordOutcome = await params.admitShellDispatch?.();
+    let gatewayInvocationStarted = false;
+    const sendDeniedFollowup = async (reason: string) => {
+      if (!gatewayInvocationStarted) {
+        await recordOutcome?.({ kind: "not-dispatched" });
+      }
+      return sendExecApprovalFollowupResult(
         followupTarget,
         `Exec denied (gateway id=${approvalId}, ${reason}): ${params.command}`,
       );
+    };
     const denyApprovalStateWriteFailure = async () => {
       emitApprovalEvent({
         action: "exec.approval.denied",
@@ -1038,7 +1034,6 @@ export async function processGatewayAllowlist(
         await sendDeniedFollowup("approval-request-failed");
       }
     };
-    let gatewayInvocationStarted = false;
 
     void (async () => {
       const approvalDecision = await resolveApprovalForExecution(sendApprovalRequestFailedFollowup);
@@ -1087,6 +1082,7 @@ export async function processGatewayAllowlist(
             gatewayInvocationStarted = true;
             run = await runExecProcess({
               approvalTransport: params.approvalTransport,
+              spillOwner: params.spillOwner,
               command: params.command,
               execCommand: approvalDecision.execCommandOverride,
               workdir: params.workdir,
@@ -1153,6 +1149,7 @@ export async function processGatewayAllowlist(
         return;
       }
       if (admitted.status === "operand-drift") {
+        await recordOutcome?.({ kind: "not-dispatched" });
         await sendExecApprovalFollowupResult(followupTarget, admitted.message);
         return;
       }
@@ -1164,6 +1161,9 @@ export async function processGatewayAllowlist(
       const { run } = admitted;
 
       const outcome = await run.promise;
+      if (!outcome.timedOut && isShellCleanupCertain(run.session) && hasObservedExit(outcome)) {
+        await recordOutcome?.({ kind: "exited", exitCode: outcome.exitCode });
+      }
       const dynamicFollowupText = await resolveGatewayExecApprovalFollowupText({
         approvalFollowup: params.approvalFollowup,
         approvalId,

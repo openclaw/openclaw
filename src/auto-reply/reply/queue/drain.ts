@@ -162,6 +162,7 @@ function resolveCollectedRun(items: readonly FollowupRun[], source: FollowupRun[
   const collected = {
     ...source,
     senderId: undefined,
+    mcpRequesterProfileId: undefined,
     senderName: undefined,
     senderUsername: undefined,
     senderE164: undefined,

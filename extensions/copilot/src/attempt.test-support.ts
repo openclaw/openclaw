@@ -130,6 +130,7 @@ function createFakeSession(id: string) {
       return () => off(eventType, handler);
     }),
     rpc: {
+      remote: { disable: vi.fn(async () => {}) },
       history: {
         cancelBackgroundCompaction: vi.fn(async () => ({ cancelled: true })),
       },

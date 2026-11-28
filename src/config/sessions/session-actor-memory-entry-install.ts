@@ -65,6 +65,7 @@ export function installSessionActorMemoryEntry(
   }
   // Publication never follows a copied transcript; only its lifecycle owner may select an audience.
   delete next.publicShare;
+  delete next.pendingShellCalls;
   if (previous && !sameWindow) {
     if (options.preserveVisibility && previous.visibility !== undefined) {
       next.visibility = previous.visibility;

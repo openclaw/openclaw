@@ -42,7 +42,6 @@ import { sanitizeNodeIdFragment, sanitizeServerName } from "./agent-bundle-mcp-n
 import { bindAgentToolExecutionLocation } from "./agent-tool-metadata.js";
 import { resolveApiKeyForProfile, resolveAuthProfileOrder } from "./auth-profiles.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { bindRequesterOwnerIdentity } from "./cron-creator-authority-context.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import {
   createMcpClientElicitationHandler,
@@ -350,15 +349,6 @@ function* resolveOpenClawPluginToolSteps(
     getRuntimeConfig: resolveCurrentRuntimeConfig,
   });
   const authProfileStore = params.options?.authProfileStore;
-  const requesterOwner =
-    pluginToolInputs.context.senderIsOwner === true
-      ? undefined
-      : bindRequesterOwnerIdentity({
-          runId: params.options?.runId,
-          sessionKey: pluginToolInputs.context.sessionKey,
-          sessionId: pluginToolInputs.context.sessionId,
-          agentId: pluginToolInputs.context.agentId,
-        });
   const delivery = createPluginToolDelivery({
     options: params.options,
     context: pluginToolInputs.context,
@@ -522,7 +512,6 @@ function* resolveOpenClawPluginToolSteps(
           assertRequestCurrent();
         }
       : assertCallerCurrent,
-    ownerContinuation: requesterOwner,
     clientCaps: params.options?.clientCaps,
     toolAllowlist: params.options?.pluginToolAllowlist,
     toolDenylist: params.options?.pluginToolDenylist,

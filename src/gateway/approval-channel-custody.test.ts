@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, expect, it, vi } from "vitest";
+import type * as CommandOwnerFacts from "../auto-reply/command-owner-facts.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
 import type { SessionDeliveryState } from "../config/sessions/types.js";
@@ -29,7 +30,8 @@ vi.mock("../channels/plugins/index.js", () => ({
 }));
 
 // mock-isolation: Match synthetic owners without loading channel plugins; qa-channel covers that boundary.
-vi.mock("../auto-reply/command-auth.js", () => ({
+vi.mock("../auto-reply/command-owner-facts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof CommandOwnerFacts>()),
   isConfiguredCommandOwner: (cfg: OpenClawConfig, actor: { channel: string; senderId: string }) =>
     cfg.commands?.ownerAllowFrom?.includes(`${actor.channel}:${actor.senderId}`) === true,
 }));

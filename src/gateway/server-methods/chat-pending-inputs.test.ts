@@ -514,7 +514,13 @@ describe("pending input read boundary", () => {
         content: "Internal continuation",
         idempotencyKey: "hidden:user",
       });
-      expect((await readChatPendingInputs(scope, { limit: 20, maxChars: 100 })).items).toEqual([]);
+      expect(
+        await readChatPendingInputs(scope, {
+          limit: 20,
+          maxChars: 100,
+          queuedRunIds: new Set(["hidden-run"]),
+        }),
+      ).toMatchObject({ items: [], queuedCount: 0 });
       const message = await read(
         await createHistoryReadContext(),
         {

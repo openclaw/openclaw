@@ -110,10 +110,7 @@ const MINIMAX_USAGE_ENV_VAR_KEYS = [
   "MINIMAX_API_KEY",
 ] as const;
 const MINIMAX_PROVIDER_HOOKS = {
-  ...buildProviderReplayFamilyHooks({
-    family: "hybrid-anthropic-openai",
-    anthropicModelDropThinkingBlocks: true,
-  }),
+  ...buildProviderReplayFamilyHooks({ family: "hybrid-anthropic-openai" }),
   wrapStreamFn: wrapMinimaxProviderStream,
   wrapSimpleCompletionStreamFn: wrapMinimaxProviderStream,
   resolveReasoningOutputMode: () => "native" as const,

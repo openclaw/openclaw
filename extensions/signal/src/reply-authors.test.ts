@@ -129,3 +129,18 @@ it("persists and reloads merged reply context with zero parent-thread SQL", asyn
   await expectReloaded({ ambiguous: true }, recoveredReply);
   expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
 });
+
+it("keeps legacy context readable and preserves confirmed send provenance across reloads", async () => {
+  installRuntime();
+  const groupReply = { ...reply, to: "group:TestGroup" };
+
+  await register(groupReply);
+  await expectReloaded({ author: input.author, body: input.body }, groupReply);
+
+  await register({ ...groupReply, sentByOpenClaw: true });
+  await register({ ...groupReply, body: "edited", sourceTimestamp: 400 });
+  await expectReloaded({ author: input.author, body: "edited", sentByOpenClaw: true }, groupReply);
+
+  await register({ ...groupReply, author: "+15555550999" });
+  await expectReloaded({ ambiguous: true }, groupReply);
+});

@@ -185,7 +185,7 @@ it("keeps saved-project confirmation in the native modal and returns focus on Es
     method === "projects.list" ? { projects: [project] } : { branches: [] },
   );
   await browser.refreshProjects();
-  await page.getByRole("button", { name: "Manage projects" }).click();
+  await page.getByRole("button", { name: "Remove saved projects" }).click();
   const opener = view.getByRole<HTMLButtonElement>("button", {
     name: "Remove Registered workspace /workspace",
   });

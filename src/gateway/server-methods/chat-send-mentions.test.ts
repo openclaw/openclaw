@@ -388,7 +388,7 @@ describe("committed human mentions", () => {
     };
   }
 
-  it("leaves transcript fencing to the commit owner while rechecking invitation permission", async () => {
+  it("leaves transcript fencing to the commit owner and retains admitted invitation permission", async () => {
     await using fixture = await createInvitationFixture();
     const entry = loadSessionEntry(fixture.scope);
     if (!entry) {
@@ -407,7 +407,7 @@ describe("committed human mentions", () => {
     expect(() => prepared.assertCurrent()).not.toThrow();
     expect(prepared.invitation.expectedEntry.sessionId).toBe(writerEntry);
     setUserProfileRole(fixture.bobId, "staff");
-    expect(() => prepared.assertCurrent()).toThrow("Mention invitation is not authorized");
+    expect(() => prepared.assertCurrent()).not.toThrow();
   });
 
   it("invites a guest at the original human commit and never regrants a removed membership on replay", async () => {
@@ -538,7 +538,7 @@ describe("committed human mentions", () => {
     },
   );
 
-  it("rolls back an invitation when the sender loses admin authority at the original commit", async () => {
+  it("commits an admitted invitation when the sender loses admin authority at the original commit", async () => {
     await using fixture = await createInvitationFixture({ creator: "carol" });
     const cfg = getRuntimeConfig();
     const roles = cfg.gateway!.roles!;
@@ -590,20 +590,16 @@ describe("committed human mentions", () => {
       admit(request, grant);
     });
     try {
-      await expect(recorder.persistApproved()).rejects.toThrow(
-        "Mention invitation is not authorized",
-      );
+      expect((await recorder.persistApproved())?.appended).toBe(true);
     } finally {
       observe.mockRestore();
     }
     expect(revoked).toBe(true);
-    expect(recorder.hasPersisted()).toBe(false);
-    expect(fixture.readTranscript()).toEqual(fixture.activeTranscript);
-    expect(await fixture.members()).toEqual([]);
-    expect(
-      loadSessionEntry(fixture.scope)?.profileInvolvement?.profiles[fixture.bobId],
-    ).toBeUndefined();
-    expect(await fixture.read()).toEqual([]);
+    expect(recorder.hasPersisted()).toBe(true);
+    expect(await fixture.members()).toEqual([
+      expect.objectContaining({ identityId: fixture.bobId, addedBy: fixture.aliceId }),
+    ]);
+    expect(fixture.readTranscript()).not.toEqual(fixture.activeTranscript);
   });
 
   it.each([false, true])(

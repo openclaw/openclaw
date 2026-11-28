@@ -1,7 +1,7 @@
 // `update.run`: admit the request, record the run, answer with its ID, then prepare the
 // release in the background. A pending trial ends with a cooperative restart; the launcher
 // switches and the Gateway that starts next finishes the run (src/update/gateway-trial.ts).
-import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
+import { prepareCommandOwnerAuthority } from "../../auto-reply/command-owner-facts.js";
 import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import {

@@ -33,7 +33,10 @@ This operation accepts only regular files within the active host workspace
 available for sandbox paths or operator actions. It does not grant arbitrary
 Gateway-file access. Remote and sandbox clients must chain authorized
 file-reading results directly into `knowledge_attach` programmatically, without
-printing or regenerating base64 through the model.
+printing or regenerating base64 through the model. File errors name the authorized
+workspace and distinguish missing or unreadable files from boundary or alias
+failures. Paths outside that workspace get the same error whether they exist
+or not.
 
 `knowledge_attach` uploads bytes in sequential chunks of at most 48 KiB decoded,
 with a stable request UUID and unchanging filename, media type, and attribution.

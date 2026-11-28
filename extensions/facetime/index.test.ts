@@ -50,7 +50,7 @@ function registerPlugin(enabled?: boolean) {
   let toolFactory: (() => { execute(id: string, input: unknown): Promise<unknown> }) | undefined;
   const api = createTestPluginApi({
     rootDir: "/plugin",
-    pluginConfig: { enabled, ownerHandles: ["owner@example.com"] },
+    pluginConfig: { enabled, allowedCallers: ["owner@example.com"] },
     runtime: { system: { runCommandWithTimeout: vi.fn() } } as never,
     registerGatewayMethod: (name, handler) =>
       void gatewayMethods.set(name, handler as (options: unknown) => Promise<void>),

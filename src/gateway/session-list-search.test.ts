@@ -155,7 +155,7 @@ test("non-status vocabulary misses skip per-row run state and model facts", () =
     projectActiveRun,
   });
   using getModelFacts = vi.spyOn(params, "getModelFacts");
-  const display = vi.spyOn(rowContext.subagentRuns, "getDisplaySubagentRun");
+  const display = vi.spyOn(rowContext.subagentRuns, "getSessionDisplayFacts");
   withPluginRuntimeRegistryScope(registry, () => {
     using probe = vi.spyOn(String.prototype, "includes");
     expect(filterSessionEntries(params).entries).toEqual([]);
@@ -386,7 +386,7 @@ function eagerSearchFields(params: SessionListFilterParams, key: string, entry: 
         params.cfg,
         entry,
         target.agentId,
-        rowContext.subagentRuns.getDisplaySubagentRun(storeKey)?.model,
+        rowContext.subagentRuns.getSessionDisplayFacts(storeKey)?.model,
         {
           allowPluginNormalization: false,
           configuredDefaultModelByAgent: rowContext.configuredDefaultModelByAgent,

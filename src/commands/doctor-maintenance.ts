@@ -11,6 +11,7 @@ import { acquireWithWait } from "../infra/acquire-with-wait.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatGatewayLockFailure } from "../infra/gateway-lock-diagnostics.js";
 import { assertLegacyGatewayStoppedForMaintenance } from "../infra/gateway-lock-legacy.js";
+import { GatewayLockNamespaceError } from "../infra/gateway-lock-payload.js";
 import { GatewayLockError, readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
@@ -387,12 +388,16 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       throw error;
     }
     const newerSchema = findStartupMaintenanceRequiredError(error)?.kind === "newer-schema";
+    const legacyLock =
+      error instanceof GatewayLockError &&
+      error.cause instanceof GatewayLockNamespaceError &&
+      error.cause.legacyLock;
     // Released Git drivers consume the original refusal prefix and recovery tail.
     const refusal =
       error instanceof DoctorMaintenanceRefusalError
         ? error
         : new DoctorMaintenanceRefusalError(
-            `Doctor could not enter maintenance. ${error instanceof GatewayLockError ? formatGatewayLockFailure(error) : String(error)}${newerSchema || hasGatewayServiceStopUnsafeError(error) ? "" : ` Stop the Gateway service and other OpenClaw processes using this state, then run ${formatCliCommand("openclaw doctor --fix", env)} from an independent shell.`}`,
+            `Doctor could not enter maintenance. ${error instanceof GatewayLockError ? formatGatewayLockFailure(error) : String(error)}${newerSchema || legacyLock || hasGatewayServiceStopUnsafeError(error) ? "" : ` Stop the Gateway service and other OpenClaw processes using this state, then run ${formatCliCommand("openclaw doctor --fix", env)} from an independent shell.`}`,
             classifyDoctorMaintenanceRefusal(error),
             {
               cause: error,
@@ -462,7 +467,9 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
           // State admission may refuse a live owner before a maintenance handle exists.
           warn(serviceVerdict.message);
         }
-        if (inspection.serviceUpdateVerdict?.kind !== "absent" && inspection.offline !== true) {
+        // An offline service is not proof that no update owns it: the package updater
+        // replaces the live tree after its stop, outside the service operation lock.
+        if (inspection.serviceUpdateVerdict?.kind !== "absent") {
           assertAuthority(() => {
             const admitted = resolveDoctorUpdateAdmission(env);
             // Storage guards can run inside a transaction; receipts belong to service admission.
@@ -669,10 +676,6 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       for (const message of result.warnings) {
         warn(message);
       }
-    },
-    async cleanupRetainedRuntimes() {
-      assertHeld(this, "Updater runtime cleanup");
-      await settle(() => state.cleanupRetainedRuntimes(serviceVerdict !== undefined));
     },
     async release() {
       if (this !== maintenance) {

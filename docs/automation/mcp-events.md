@@ -161,6 +161,10 @@ A successful webhook response acknowledges durable receipt, not model completion
 or output delivery. OpenClaw verifies the signature over the exact request body,
 checks the signing timestamp and source binding, and stores the event before
 returning `2xx`. One request contains one event, no larger than 256 KiB.
+The signed `webhook-id` identifies the delivered message, as the MCP Events
+specification ([SEP-3415](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/seps/3415-events-extension.md))
+defines it. OpenClaw accepts a `webhook-id` that equals the body's `eventId` or
+differs from it, and deduplicates on `eventId`.
 
 The existing ingress queue retains pending events while an automation is busy.
 Duplicate event IDs are scoped to their source binding; they do not suppress

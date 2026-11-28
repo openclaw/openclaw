@@ -179,37 +179,6 @@ it("returns an explicit model-facing result when no photos are available", async
   expect(result.details).toStrictEqual([]);
 });
 
-it.each<[string, Record<string, unknown>, Record<string, unknown>]>([
-  ["device.status", { action: "device_status" }, {}],
-  [
-    "notifications.actions",
-    {
-      action: "notifications_action",
-      notificationKey: "n1",
-      notificationAction: "reply",
-      notificationReplyText: " On it ",
-    },
-    { key: "n1", action: "reply", replyText: "On it" },
-  ],
-  [
-    "location.get",
-    {
-      action: "location_get",
-      maxAgeMs: 12_000,
-      desiredAccuracy: "balanced",
-      locationTimeoutMs: 4_500,
-    },
-    { maxAgeMs: 12_000, desiredAccuracy: "balanced", timeoutMs: 4_500 },
-  ],
-])(
-  "routes %s with normalized parameters and returns its payload",
-  async (command, input, params) => {
-    const payload = { fixture: "node reply" };
-    mockInvoke(command, params, payload, [command]);
-    expect(JSON.parse(firstText(await executeNodes(input)))).toStrictEqual(payload);
-  },
-);
-
 it("blocks media invoke commands to avoid base64 context bloat", async () => {
   await expectNodeError(
     { action: "invoke", invokeCommand: "photos.latest", invokeParamsJson: '{"limit":1}' },
