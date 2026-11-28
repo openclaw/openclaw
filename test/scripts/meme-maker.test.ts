@@ -48,6 +48,41 @@ globalThis.fetch = () => { throw new Error("Unexpected network access"); };
 }
 
 describe("meme-maker local rendering", () => {
+  it.skipIf(process.platform !== "linux")(
+    "does not keep a partially written template in the cache",
+    async () => {
+      const root = createTempDir("openclaw-meme-cache-write-");
+      const cache = path.join(root, "cache");
+      const hook = path.join(root, "template.mjs");
+      fs.writeFileSync(hook, "globalThis.fetch = async () => new Response(new Uint8Array(8192));");
+      const out = path.join(root, "meme.svg");
+
+      await expect(
+        execFileAsync(
+          "bash",
+          [
+            "-c",
+            'trap "" XFSZ; ulimit -f 1; exec "$@"',
+            "meme-maker",
+            testNodeExecPath,
+            "--import",
+            hook,
+            scriptPath,
+            "render",
+            template.id,
+            "--text",
+            "Retry",
+            "--out",
+            out,
+          ],
+          { env: { ...process.env, XDG_CACHE_HOME: cache }, timeout: 5_000 },
+        ),
+      ).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining("EFBIG") });
+      expect(fs.existsSync(out)).toBe(false);
+      expect(fs.readdirSync(path.join(cache, "openclaw/meme-maker"))).toEqual([]);
+    },
+  );
+
   it("writes a self-contained SVG with escaped, box-centered text without optional rendering dependencies", async () => {
     const { image, out, result } = renderFixture("svg", true);
     const { stdout } = await result;

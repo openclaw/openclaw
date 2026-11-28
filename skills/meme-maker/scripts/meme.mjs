@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { Buffer } from "node:buffer";
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -181,10 +182,18 @@ async function cachedTemplateImage(template) {
     dir,
     `${template.id}-${template.imgflipId}${extFromUrl(template.imageUrl)}`,
   );
-  if (existsSync(file)) return { file, buffer: await readFile(file) };
+  if (existsSync(file)) return readFile(file);
   const buffer = await fetchBuffer(template.imageUrl);
-  await writeFile(file, buffer);
-  return { file, buffer };
+  // Publish only a complete download so retries and concurrent renders see valid cache entries.
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, buffer);
+    await rename(temporary, file);
+  } catch (error) {
+    await rm(temporary, { force: true });
+    throw error;
+  }
+  return buffer;
 }
 
 function escapeXml(value) {
@@ -259,7 +268,7 @@ function defaultBoxes(count) {
 }
 
 async function renderLocal(template, texts, flags) {
-  const { buffer } = await cachedTemplateImage(template);
+  const buffer = await cachedTemplateImage(template);
   const imageMime = mimeFromExt(extFromUrl(template.imageUrl));
   const imageData = `data:${imageMime};base64,${buffer.toString("base64")}`;
   const boxes = template.boxes?.length
