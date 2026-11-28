@@ -171,6 +171,7 @@ const operationIcons = new Map<string, IconName>([
   ["qa_restart_unsafe_probe", "bug"],
   ["decision_evaluate", "scale"],
   ["sessions_create", "messageSquarePlus"],
+  ["sessions_list", "messageSquare"],
   ["sessions_history", "messageSquare"],
   ["conversations_turn", "messageSquare"],
   ["github_identity_status", "github"],
