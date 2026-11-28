@@ -319,10 +319,13 @@ it("attributes slow transcript matching while retaining its hot snapshot", async
             hostAdmissionWaitMs: 0,
             databaseAdmissionWaitMs: 0,
             commitMs: 0,
+            prepareCommitMs: 0,
+            nativeCommitMs: 0,
           },
           pid: process.pid,
           threadId,
           thresholdMs: 1_000,
+          transactionId: expect.any(String),
         },
       ]);
     } finally {
