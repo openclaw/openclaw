@@ -173,28 +173,6 @@ function itemRole(type: MenuItem["type"]): "menuitem" | "menuitemcheckbox" | "me
   return type ? `menuitem${type}` : "menuitem";
 }
 
-function MenuItemLabel(props: { item: MenuItem; content?: JSX.Element }) {
-  return (
-    <>
-      <Show when={props.item.icon}>
-        <span class="oc-menu-item__icon">{props.item.icon}</span>
-      </Show>
-      <span
-        class={[
-          "oc-menu-item__label",
-          { "oc-menu-item__label--text": props.content === undefined },
-          props.item.labelClass,
-        ]}
-      >
-        {props.content ?? props.item.label}
-      </span>
-      <Show when={props.item.details}>
-        <span class="oc-menu-item__details">{props.item.details}</span>
-      </Show>
-    </>
-  );
-}
-
 /** Menus share native visibility authority; Zag owns navigation and pointer intent. */
 export function Menu(props: BranchProps): JSX.Element {
   let trigger!: HTMLButtonElement;
@@ -494,6 +472,25 @@ export function Menu(props: BranchProps): JSX.Element {
         return (
           <Show when={actionable()} fallback={fallback()}>
             {(item) => {
+              const renderLabel = (content?: () => JSX.Element) => (
+                <>
+                  <Show when={item().icon}>
+                    <span class="oc-menu-item__icon">{item().icon}</span>
+                  </Show>
+                  <span
+                    class={[
+                      "oc-menu-item__label",
+                      { "oc-menu-item__label--text": content?.() === undefined },
+                      item().labelClass,
+                    ]}
+                  >
+                    {content?.() ?? item().label}
+                  </span>
+                  <Show when={item().details}>
+                    <span class="oc-menu-item__details">{item().details}</span>
+                  </Show>
+                </>
+              );
               const Leaf = () => {
                 // The keyed leaf retains its renderer; its live bindings carry item changes.
                 const initialRenderCustom = untrack(() => item().render);
@@ -557,7 +554,7 @@ export function Menu(props: BranchProps): JSX.Element {
                           </Show>
                         </span>
                       </Show>
-                      <MenuItemLabel item={item()} content={item().content} />
+                      {renderLabel(() => item().content)}
                     </Item>
                   );
                 };
@@ -581,7 +578,7 @@ export function Menu(props: BranchProps): JSX.Element {
                         items={childEntries()}
                         controls={props.controls}
                         placement={childPlacement()}
-                        trigger={item().trigger ?? <MenuItemLabel item={item()} />}
+                        trigger={item().trigger ?? renderLabel()}
                         parent={overlay}
                         root={menuRoot}
                         parentBinding={binding}
