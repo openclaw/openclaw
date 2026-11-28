@@ -44,14 +44,15 @@ const { clientCtorMock, wsClientCtorMock } = vi.hoisted(() => {
   return { clientCtorMock: makeConstructor(), wsClientCtorMock: makeConstructor() };
 });
 const proxyAgentInstance = vi.hoisted(() => ({ proxied: true, destroy: vi.fn() }));
-const proxyAgentCtorMock = vi.hoisted(() => vi.fn(() => proxyAgentInstance));
+const resolveProxyAgent = vi.hoisted(() =>
+  vi.fn<() => Promise<typeof proxyAgentInstance | undefined>>(),
+);
 const mockBaseHttpInstance = vi.hoisted(() => ({
   defaults: {},
   request: vi.fn(async (_options: Record<string, unknown>) => ({})),
   get: vi.fn().mockResolvedValue({}),
   interceptors: { request: { use: vi.fn() } },
 }));
-const proxyEnvKeys = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] as const;
 let createFeishuClient: ClientModule["createFeishuClient"];
 let createFeishuWSClient: ClientModule["createFeishuWSClient"];
 let withFeishuRequestContext: (typeof import("./send-context.js"))["withFeishuRequestContext"];
@@ -75,7 +76,7 @@ function createHttpInstance(
 }
 
 function expectProxyRequest(url: string) {
-  expect(proxyAgentCtorMock).toHaveBeenCalledTimes(1);
+  expect(resolveProxyAgent).toHaveBeenCalledTimes(1);
   expect(mockBaseHttpInstance.request).toHaveBeenCalledWith({
     url,
     timeout: FEISHU_HTTP_TIMEOUT_MS,
@@ -95,18 +96,16 @@ beforeAll(() => {
     EventDispatcher: vi.fn(),
     defaultHttpInstance: mockBaseHttpInstance,
   }));
-  vi.doMock("@openclaw/proxyline", () => ({
-    createAmbientNodeProxyAgent: proxyAgentCtorMock,
-    hasAmbientNodeProxyConfigured: vi.fn(() =>
-      Boolean(proxyEnvKeys.map((key) => process.env[key]).find((value) => value !== undefined)),
-    ),
+  vi.doMock("openclaw/plugin-sdk/extension-shared", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("openclaw/plugin-sdk/extension-shared")>()),
+    resolveAmbientNodeProxyAgent: resolveProxyAgent,
   }));
 });
 
 beforeEach(async () => {
-  for (const key of [...proxyEnvKeys, FEISHU_HTTP_TIMEOUT_ENV_VAR, "OPENCLAW_PROXY_ACTIVE"]) {
-    vi.stubEnv(key, undefined);
-  }
+  resolveProxyAgent.mockReset().mockResolvedValue(undefined);
+  vi.stubEnv(FEISHU_HTTP_TIMEOUT_ENV_VAR, undefined);
+  vi.stubEnv("OPENCLAW_PROXY_ACTIVE", undefined);
   vi.clearAllMocks();
   vi.resetModules();
   ({ createFeishuClient, createFeishuWSClient } = await import("./client.js"));
@@ -117,7 +116,7 @@ afterEach(() => vi.unstubAllEnvs());
 
 afterAll(() => {
   vi.doUnmock("@larksuiteoapi/node-sdk");
-  vi.doUnmock("@openclaw/proxyline");
+  vi.doUnmock("openclaw/plugin-sdk/extension-shared");
   vi.resetModules();
 });
 
@@ -182,7 +181,7 @@ describe("Feishu custom HTTPS API domains", () => {
   });
 
   it("routes WebSocket discovery through its configured origin and proxy", async () => {
-    process.env.HTTPS_PROXY = "http://upper-https:8002";
+    resolveProxyAgent.mockResolvedValueOnce(proxyAgentInstance);
     await createFeishuWSClient({
       ...baseAccount,
       accountId: "custom-domain-websocket",
@@ -292,7 +291,7 @@ describe("createFeishuClient HTTP timeout", () => {
   });
 
   it("overrides request-level agents while managed proxy mode is active", async () => {
-    process.env.HTTPS_PROXY = "http://upper-https:8002";
+    resolveProxyAgent.mockResolvedValueOnce(proxyAgentInstance);
     process.env.OPENCLAW_PROXY_ACTIVE = "1";
     const httpInstance = createHttpInstance("http-proxy-managed-agent");
     await httpInstance.request({
@@ -303,12 +302,8 @@ describe("createFeishuClient HTTP timeout", () => {
     expectProxyRequest("https://example.com/api");
   });
 
-  it("fails closed when managed proxy agent creation fails", async () => {
-    process.env.HTTPS_PROXY = "http://upper-https:8002";
+  it("fails closed when the managed proxy resolver returns no agent", async () => {
     process.env.OPENCLAW_PROXY_ACTIVE = "1";
-    proxyAgentCtorMock.mockImplementationOnce(() => {
-      throw new Error("proxy agent failed");
-    });
 
     const httpInstance = createHttpInstance("http-proxy-managed-failure");
     await expect(httpInstance.request({ url: "https://example.com/api" })).rejects.toThrow(
