@@ -175,7 +175,7 @@ struct NativeUsageScreen: View {
                 let interval = dates.lowerBound..<dates.upperBound
                 Text(verbatim: interval.formatted(.interval.year().month(.abbreviated).day()) + " · " + TimeZone.current
                     .identifier)
-                    .font(OpenClawType.caption).foregroundStyle(.secondary)
+                    .font(OpenClawType.caption)
             }
             if self.period == .custom {
                 Section {
