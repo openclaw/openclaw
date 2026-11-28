@@ -5,11 +5,17 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { captureWsEventAsync } from "../proxy-capture/runtime.js";
 import {
   createRealtimeTranscriptionWebSocketSession,
   type RealtimeTranscriptionWebSocketSessionOptions as WebSocketOptions,
   type RealtimeTranscriptionWebSocketTransport as Transport,
 } from "./websocket-session.js";
+
+// mock-isolation: Keep capture persistence and its worker lifecycle outside the transport fixture.
+vi.mock("../proxy-capture/runtime.js", () => ({
+  captureWsEventAsync: vi.fn().mockResolvedValue(undefined),
+}));
 
 let cleanup: (() => Promise<void>) | undefined;
 const sessions = new Set<ReturnType<typeof createRealtimeTranscriptionWebSocketSession>>();
@@ -359,16 +365,20 @@ it("lets providers mark ready after a JSON handshake", async () => {
   ]);
 });
 
-it.each(["connected", "closed", "superseded", "revoked"] as const)(
+it.each(["connected", "closed", "superseded", "revoked", "already-revoked", "timed-out"] as const)(
   "resolves async credentials: %s",
   async (phase) => {
     const url = createDeferred<string>();
     const onError = vi.fn();
-    let revoked = false;
+    let revoked = phase === "already-revoked";
     let attempts = 0;
+    const resolveUrl = vi.fn(() => (++attempts === 1 ? url.promise : state.url));
+    const resolveHeaders = vi.fn(async () => ({ Authorization: "Bearer resolved-token" }));
     const state: Awaited<ReturnType<typeof setup>> = await setup({
-      url: () => (++attempts === 1 ? url.promise : state.url),
-      headers: async () => ({ Authorization: "Bearer resolved-token" }),
+      url: resolveUrl,
+      headers: resolveHeaders,
+      connectTimeoutMs: phase === "timed-out" ? 10 : undefined,
+      connectTimeoutMessage: timeoutMessage,
       callbacks: {
         onError,
         assertCurrent: () => {
@@ -379,28 +389,129 @@ it.each(["connected", "closed", "superseded", "revoked"] as const)(
       },
     });
     const { session, connections } = state;
+    if (phase === "timed-out") {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    }
     const connecting = session.connect();
     if (phase === "revoked") {
       revoked = true;
-    } else if (phase !== "connected") {
+    } else if (phase === "closed" || phase === "superseded") {
       session.close();
     }
     if (phase === "superseded") {
       await session.connect();
     }
+    if (phase === "timed-out") {
+      const timedOut = expect(connecting).rejects.toThrow(timeoutMessage);
+      await vi.advanceTimersByTimeAsync(10);
+      await timedOut;
+    }
     url.resolve(state.url);
-    await connecting;
+    await (phase === "timed-out" ? url.promise : connecting);
     if (phase === "superseded") {
       await delay(20);
       expect(connections).toHaveLength(1);
     }
-    const stopped = phase === "closed" || phase === "revoked";
+    const stopped = phase !== "connected" && phase !== "superseded";
+    expect(resolveUrl).toHaveBeenCalledTimes(
+      phase === "already-revoked" ? 0 : phase === "superseded" ? 2 : 1,
+    );
+    expect(resolveHeaders).toHaveBeenCalledTimes(stopped ? 0 : 1);
     expect(state.authHeaders).toEqual(stopped ? [] : ["Bearer resolved-token"]);
     expect(session.isConnected()).toBe(!stopped);
-    if (phase === "revoked") {
+    if (phase === "revoked" || phase === "already-revoked") {
       expect(onError).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ message: "transcription authority revoked" }),
       );
+    } else if (phase === "timed-out") {
+      expectError(onError, timeoutMessage);
+    }
+  },
+);
+
+it.each(["current", "revoked"] as const)(
+  "admits inbound transcripts only with current authority: %s",
+  async (phase) => {
+    const capture = vi.mocked(captureWsEventAsync);
+    capture.mockClear();
+    const observed = createDeferred();
+    const onTranscript = vi.fn(() => observed.resolve());
+    const onError = vi.fn(() => observed.resolve());
+    let revoked = false;
+    const { session, connections, frames, waitFrames } = await setup({
+      reconnectDelayMs: 10,
+      maxReconnectAttempts: 1,
+      callbacks: {
+        onTranscript,
+        onError,
+        assertCurrent: () => {
+          if (revoked) {
+            throw new Error("transcription authority revoked");
+          }
+        },
+      },
+      onOpen: (transport) => {
+        transport.sendJson({
+          type: "session.update",
+          session: {
+            audio: {
+              input: {
+                transcription: {
+                  model: "gpt-4o-transcribe",
+                  prompt: "Synthetic terms: Caldera, Halcyon",
+                },
+              },
+            },
+          },
+        });
+      },
+      onClose: (transport) => transport.sendJson({ type: "finalize" }),
+      onMessage: handleProviderEvent,
+    });
+    await session.connect();
+    await waitFrames(1);
+    expect(frames).toEqual([
+      {
+        type: "session.update",
+        session: {
+          audio: {
+            input: {
+              transcription: {
+                model: "gpt-4o-transcribe",
+                prompt: "Synthetic terms: Caldera, Halcyon",
+              },
+            },
+          },
+        },
+      },
+    ]);
+    const socket = expectDefined(connections[0], "provider connection");
+    const closed = once(socket, "close");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    revoked = phase === "revoked";
+    socket.send(JSON.stringify({ text: "Caldera meets Halcyon" }));
+    await observed.promise;
+    if (revoked) {
+      expect(onTranscript).not.toHaveBeenCalled();
+      expect(capture).not.toHaveBeenCalledWith(expect.objectContaining({ direction: "inbound" }));
+      expectError(onError, "transcription authority revoked");
+      await closed;
+      session.sendAudio(Buffer.from("must not replay"));
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(session.isConnected()).toBe(false);
+      expect(connections).toHaveLength(1);
+      expect(frames).toHaveLength(1);
+      expect(onError).toHaveBeenCalledTimes(1);
+    } else {
+      expect(onTranscript).toHaveBeenCalledExactlyOnceWith("Caldera meets Halcyon");
+      expect(capture).toHaveBeenCalledWith(
+        expect.objectContaining({
+          direction: "inbound",
+          payload: Buffer.from('{"text":"Caldera meets Halcyon"}'),
+        }),
+      );
+      expect(onError).not.toHaveBeenCalled();
+      expect(session.isConnected()).toBe(true);
     }
   },
 );

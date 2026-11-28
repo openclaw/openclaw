@@ -357,6 +357,7 @@ export function buildOpenAIRealtimeTranscriptionProvider(
                   auditContext: "openai-realtime-transcription-session",
                   session: buildSessionPayload(),
                   authRejectedMessage: OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REJECTED,
+                  assertCurrent: config.assertCurrent,
                 },
                 runtime,
                 "OpenAI Realtime transcription",

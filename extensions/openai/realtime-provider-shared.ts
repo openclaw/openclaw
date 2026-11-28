@@ -40,6 +40,7 @@ type OpenAIRealtimeClientSecretRequest = {
   auditContext: string;
   session: Record<string, unknown>;
   authRejectedMessage?: string;
+  assertCurrent?: () => void;
 };
 
 export function resolveOpenAIRealtimeRequestHeaders(
@@ -68,8 +69,11 @@ export async function createOpenAIRealtimeClientSecret(
 ) {
   const { createProviderHttpError, readProviderJsonResponse, fetchWithSsrFGuard } = runtime;
   const url = `${OPENAI_REALTIME_API_BASE_URL}/realtime/client_secrets`;
+  // Minting a secret discloses the session hints before a WebSocket exists.
+  params.assertCurrent?.();
   const { response, release } = await fetchWithSsrFGuard({
     url,
+    beforeRequest: params.assertCurrent,
     init: {
       method: "POST",
       headers: resolveOpenAIRealtimeRequestHeaders(runtime, url, {
