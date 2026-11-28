@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import "../agents/openclaw-tools.js";
+import { normalizeTelegramTargetForTest } from "../../test/helpers/infra/telegram-targets.js";
 import type {
   ChannelMessageActionContext,
   ChannelPlugin,
@@ -167,6 +168,9 @@ it("reuses hydrated creator origin for script admission across warm cache change
         channels: { telegram: { accounts } },
       };
       configSnapshot.setRuntimeConfigSnapshot(config, config);
+      const sendText = vi.fn(async () => {
+        throw new Error("Unexpected text send during Telegram delete");
+      });
       const handleAction = vi.fn(async (_context: ChannelMessageActionContext) => ({
         content: [{ type: "text" as const, text: "deleted" }],
         details: { ok: true },
@@ -180,7 +184,11 @@ it("reuses hydrated creator origin for script admission across warm cache change
               cfg.channels?.telegram?.accounts?.[selectedAccountId ?? "default"] ?? {},
           },
         }),
-        messaging: { targetResolver: { looksLikeId: (value) => value === target } },
+        messaging: {
+          normalizeTarget: normalizeTelegramTargetForTest,
+          targetResolver: { looksLikeId: (value) => value === target },
+        },
+        outbound: { deliveryMode: "direct", sendText },
         actions: {
           describeMessageTool: () => ({ actions: ["delete"] }),
           providerOwnedReadGates: ["delete"],
@@ -298,6 +306,7 @@ it("reuses hydrated creator origin for script admission across warm cache change
       const restored = await invoke(validOrigin);
       expect(restored, JSON.stringify(restored)).toMatchObject({ kind: "evaluated" });
       expect(handleAction).toHaveBeenCalledTimes(2);
+      expect(sendText).not.toHaveBeenCalled();
     } finally {
       configSnapshot.clearRuntimeConfigSnapshot();
       plugins.restoreActivePluginRegistrySnapshot(registrySnapshot);

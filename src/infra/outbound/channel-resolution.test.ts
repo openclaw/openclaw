@@ -123,6 +123,36 @@ describe("outbound channel resolution", () => {
     },
   );
 
+  it.each(["loaded", "setup", "different-action"] as const)(
+    "selects an action-only channel from a %s registration",
+    (initial) => {
+      const base = createChannelTestPluginBase({ id: "alpha" });
+      const plugin = { ...base, actions: { handleAction: vi.fn() } };
+      const runtime = createTestRegistry([{ pluginId: "alpha", plugin, source: "runtime" }]);
+      const setup =
+        initial === "different-action"
+          ? { ...base, actions: { handleAction: vi.fn(), supportsAction: () => false } }
+          : base;
+      const scoped =
+        initial === "loaded"
+          ? runtime
+          : createTestRegistry([{ pluginId: "alpha", plugin: setup, source: "setup" }]);
+      resolveRuntimePluginRegistryMock.mockReturnValue(runtime);
+
+      const selected = withPluginRuntimeRegistryScope(scoped, () =>
+        channelResolution.resolveOutboundChannelPlugin({
+          channel: "alpha",
+          cfg: {},
+          allowBootstrap: true,
+          action: "delete",
+        }),
+      );
+
+      expect(selected).toBe(plugin);
+      expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(initial === "loaded" ? 0 : 1);
+    },
+  );
+
   it("keeps a bootstrapped external alias available to normal runtime lookups", async () => {
     const message = { send: { text: vi.fn() } };
     const plugin = {

@@ -22,3 +22,14 @@ export function parseTelegramTargetForTest(raw: string): {
     : "unknown";
   return { chatId, messageThreadId, chatType };
 }
+
+export function normalizeTelegramTargetForTest(raw: string): string | undefined {
+  const target = parseTelegramTargetForTest(raw);
+  if (!target.chatId) {
+    return undefined;
+  }
+  const normalizedTo = target.chatId.toLowerCase();
+  return target.messageThreadId == null
+    ? `telegram:${normalizedTo}`
+    : `telegram:${normalizedTo}:topic:${target.messageThreadId}`;
+}

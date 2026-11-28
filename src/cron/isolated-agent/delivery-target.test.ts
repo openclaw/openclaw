@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseTelegramTargetForTest } from "../../../test/helpers/infra/telegram-targets.js";
+import { normalizeTelegramTargetForTest } from "../../../test/helpers/infra/telegram-targets.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -80,20 +80,9 @@ function createStubOutbound(label: string, checkAllowlist = false): ChannelOutbo
   };
 }
 
-const normalizeTelegramTargetForDeliveryTest = (raw: string): string | undefined => {
-  const target = parseTelegramTargetForTest(raw);
-  if (!target.chatId) {
-    return undefined;
-  }
-  const normalizedTo = target.chatId.toLowerCase();
-  return target.messageThreadId == null
-    ? `telegram:${normalizedTo}`
-    : `telegram:${normalizedTo}:topic:${target.messageThreadId}`;
-};
-
 const telegramMessaging = {
   ...telegramMessagingForTest,
-  normalizeTarget: normalizeTelegramTargetForDeliveryTest,
+  normalizeTarget: normalizeTelegramTargetForTest,
 };
 
 function plugin(
