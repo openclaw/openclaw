@@ -88,7 +88,14 @@ const queueTextUpdate = (messageId: string, text?: string) =>
   );
 
 type MediaDelivery = {
-  dispatcherOptions: { deliver: (payload: { text: string; mediaUrl: string }) => Promise<void> };
+  dispatcherOptions: {
+    deliver: (payload: {
+      text?: string;
+      mediaUrl?: string;
+      mediaUrls?: string[];
+      ttsSupplement?: { spokenText: string; visibleTextAlreadyDelivered?: boolean };
+    }) => Promise<void>;
+  };
 };
 
 const deliverPhoto =
@@ -202,10 +209,94 @@ describe("Zalo polling media replies", () => {
     },
   );
 
+  it("delivers TTS answer text once when local audio cannot be hosted", async () => {
+    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
+      async ({ dispatcherOptions }: MediaDelivery) => {
+        await dispatcherOptions.deliver({
+          mediaUrl: "/tmp/tts-answer.mp3",
+          ttsSupplement: { spokenText: "spoken answer" },
+        });
+      },
+    );
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    const processed = queueTextUpdate("polling-local-tts", "speak reply");
+    await startPollingMediaMonitor({ webhookUrl: "" });
+
+    await processed;
+    expect(sendMessageMock).toHaveBeenCalledExactlyOnceWith(
+      "zalo-token",
+      { chat_id: "dm-chat-1", text: "spoken answer" },
+      undefined,
+    );
+    expect(sendPhotoMock).not.toHaveBeenCalled();
+    expect(prepareHostedZaloMediaUrlMock).not.toHaveBeenCalled();
+  });
+
+  it("delivers TTS answer text once and preserves remote media when local audio cannot be hosted", async () => {
+    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
+      async ({ dispatcherOptions }: MediaDelivery) => {
+        await dispatcherOptions.deliver({
+          mediaUrls: ["https://example.com/reply-image.png", "/tmp/tts-answer.mp3"],
+          ttsSupplement: {
+            spokenText: "spoken answer",
+            visibleTextAlreadyDelivered: false,
+          },
+        });
+      },
+    );
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    const processed = queueTextUpdate("polling-mixed-local-tts", "speak reply");
+    await startPollingMediaMonitor({ webhookUrl: "" });
+
+    await processed;
+    expect(sendPhotoMock).toHaveBeenCalledExactlyOnceWith(
+      "zalo-token",
+      {
+        chat_id: "dm-chat-1",
+        photo: "https://example.com/reply-image.png",
+        caption: "spoken answer",
+      },
+      undefined,
+    );
+    expect(sendMessageMock).not.toHaveBeenCalled();
+    expect(prepareHostedZaloMediaUrlMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves remote media without repeating already-delivered TTS text", async () => {
+    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
+      async ({ dispatcherOptions }: MediaDelivery) => {
+        await dispatcherOptions.deliver({
+          mediaUrls: ["https://example.com/reply-image.png", "/tmp/tts-answer.mp3"],
+          ttsSupplement: {
+            spokenText: "spoken answer",
+            visibleTextAlreadyDelivered: true,
+          },
+        });
+      },
+    );
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    const processed = queueTextUpdate("polling-mixed-delivered-tts", "speak reply");
+    await startPollingMediaMonitor({ webhookUrl: "" });
+
+    await processed;
+    expect(sendPhotoMock).toHaveBeenCalledExactlyOnceWith(
+      "zalo-token",
+      {
+        chat_id: "dm-chat-1",
+        photo: "https://example.com/reply-image.png",
+        caption: "",
+      },
+      undefined,
+    );
+    expect(sendMessageMock).not.toHaveBeenCalled();
+    expect(prepareHostedZaloMediaUrlMock).not.toHaveBeenCalled();
+  });
+
   it.each<FailureRow>([
     ["block text", "block", textReply],
     ["tool photo", "tool", photo("first")],
     ["final photo", "final", photo("final")],
+    ["local non-TTS photo", "final", { text: "caption", mediaUrl: "/tmp/reply.png" }],
     [
       "blocked hosted photo",
       "tool",

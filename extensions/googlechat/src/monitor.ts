@@ -13,7 +13,10 @@ import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gate
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { parseDateStringTimestampMs as resolveGoogleChatTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  getReplyPayloadTtsSupplement,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
@@ -448,11 +451,41 @@ async function processGoogleChatEvent(
               try {
                 text = formatGoogleChatMediaText(reply.text, reply.mediaUrls);
               } catch (cause) {
-                await cleanupTypingMessage();
-                throw new PlatformMessageNotDispatchedError(
-                  cause instanceof Error ? cause.message : String(cause),
-                  { cause, retryable: false },
-                );
+                const ttsSupplement = getReplyPayloadTtsSupplement(normalizedPayload);
+                const supportedMediaUrls = reply.mediaUrls.filter((mediaUrl) => {
+                  try {
+                    formatGoogleChatMediaText(undefined, [mediaUrl]);
+                    return true;
+                  } catch {
+                    return false;
+                  }
+                });
+                const fallbackAnswerText =
+                  ttsSupplement?.visibleTextAlreadyDelivered === true
+                    ? undefined
+                    : reply.hasText
+                      ? reply.text
+                      : ttsSupplement?.spokenText;
+                if (
+                  ttsSupplement &&
+                  supportedMediaUrls.length < reply.mediaUrls.length &&
+                  (fallbackAnswerText || supportedMediaUrls.length > 0)
+                ) {
+                  text = formatGoogleChatMediaText(fallbackAnswerText, supportedMediaUrls);
+                  if (!text) {
+                    await cleanupTypingMessage();
+                    throw new PlatformMessageNotDispatchedError(
+                      cause instanceof Error ? cause.message : String(cause),
+                      { cause, retryable: false },
+                    );
+                  }
+                } else {
+                  await cleanupTypingMessage();
+                  throw new PlatformMessageNotDispatchedError(
+                    cause instanceof Error ? cause.message : String(cause),
+                    { cause, retryable: false },
+                  );
+                }
               }
 
               const chunkLimit = account.config.textChunkLimit ?? 4000;
