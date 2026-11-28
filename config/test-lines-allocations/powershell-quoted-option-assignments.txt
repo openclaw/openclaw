@@ -1,0 +1,2 @@
+# Four native PowerShell cases for quoted long and short option assignments.
+4
