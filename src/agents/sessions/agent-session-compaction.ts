@@ -449,6 +449,9 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     if (pendingEntryIndex >= 0 && (firstKeptIndex < 0 || firstKeptIndex > pendingEntryIndex)) {
       throw new Error("Compaction must retain the unprocessed pending user request.");
     }
+    if (fromExtension && firstKeptIndex < 0) {
+      throw new Error("Compaction must retain an entry on the current session branch.");
+    }
     if (
       requestBudget &&
       requestTokenLimit !== undefined &&

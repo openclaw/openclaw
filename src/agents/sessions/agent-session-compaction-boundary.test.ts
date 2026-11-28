@@ -5,6 +5,7 @@ import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { readTranscriptStorageRows } from "../../config/sessions/session-accessor.sqlite-read.js";
+import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import type { CompactionProvider } from "../../plugins/compaction-provider.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
@@ -174,6 +175,74 @@ it.each(["human", "internal", "steering"] as const)(
         } finally {
           session.dispose();
         }
+      }
+    }),
+);
+
+it.each(["missing", "off-branch", "valid"] as const)(
+  "validates a %s manual compaction hook boundary before persisting it",
+  (boundary) =>
+    withSessionState(`manual-boundary-${boundary}`, async ({ scope, state }) => {
+      const manager = await SessionManager.openAsync(scope, state.root, { compaction: true });
+      const oldId = await manager.appendMessageAsync(makeUserMessage("old question", 1));
+      const answerId = await manager.appendMessageAsync({
+        ...createAssistant(testModel, "old answer"),
+        timestamp: 2,
+      });
+      const otherId = await manager.appendMessageAsync(makeUserMessage("other branch", 3));
+      await manager.branchAsync(answerId);
+      const recentId = await manager.appendMessageAsync(makeUserMessage("recent question", 4));
+      const chosen =
+        boundary === "missing"
+          ? "missing-boundary-id"
+          : boundary === "off-branch"
+            ? otherId
+            : recentId;
+      const { session } = await createTestSession({
+        sessionManager: manager,
+        settingsManager: SettingsManager.inMemory({
+          compaction: { enabled: false, reserveTokens: 64, keepRecentTokens: 1 },
+          retry: { enabled: false },
+        }),
+        extension(api) {
+          api.on("session_before_compact", async (event) => ({
+            compaction: {
+              summary: "synthetic summary",
+              firstKeptEntryId: chosen,
+              tokensBefore: event.preparation.tokensBefore,
+            },
+          }));
+        },
+      });
+      const before = manager.buildSessionContext().messages;
+      const branchBefore = manager.getBranch().map((entry) => entry.id);
+      expect(branchBefore).toContain(oldId);
+      expect(branchBefore).not.toContain(otherId);
+      try {
+        if (boundary === "valid") {
+          await expect(session.compact()).resolves.toBeDefined();
+          expect(manager.buildSessionContext().messages).toContainEqual(
+            makeUserMessage("recent question", 4),
+          );
+        } else {
+          await expect(session.compact()).rejects.toThrow(
+            "Compaction must retain an entry on the current session branch.",
+          );
+          expect(manager.getBranch().map((entry) => entry.id)).toEqual(branchBefore);
+          expect(manager.buildSessionContext().messages).toEqual(before);
+        }
+      } finally {
+        session.dispose();
+      }
+      await waitForSessionTranscriptProjection(scope);
+      const reopened = await SessionManager.openAsync(scope, state.root, { compaction: true });
+      if (boundary === "valid") {
+        expect(reopened.buildSessionContext().messages).toContainEqual(
+          makeUserMessage("recent question", 4),
+        );
+      } else {
+        expect(reopened.getBranch().map((entry) => entry.id)).toEqual(branchBefore);
+        expect(reopened.buildSessionContext().messages).toEqual(before);
       }
     }),
 );
