@@ -477,10 +477,15 @@ export function createGatewayReloadHandlers(
       if (plan.reloadPlugins) {
         // The plugin lifecycle owner drains and restores its own channel/service instances.
         // This config transaction owns only publication and unrelated config effects.
+        const pluginReloadChangedPaths =
+          plan.reloadPluginPaths ??
+          (plan.noopPaths.length > 0
+            ? plan.changedPaths.filter((path) => !plan.noopPaths.includes(path))
+            : plan.changedPaths);
         const result = await params.reloadPlugins({
           nextConfig,
           sourceConfig: publication ? publication.sourceConfig : nextConfig,
-          changedPaths: plan.changedPaths,
+          changedPaths: pluginReloadChangedPaths,
           reloadPluginIds: plan.reloadPluginIds,
           restartServiceIds: plan.restartServices,
           pluginLifecycle: plan.pluginLifecycle,

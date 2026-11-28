@@ -87,6 +87,11 @@ type GatewayReloadPlanOptions = {
 };
 
 const PLUGIN_INSTALL_TIMESTAMP_KEYS = ["installedAt", "resolvedAt"] as const;
+const PLUGIN_CAPABILITY_APPROVAL_KEYS = [
+  "acceptedSurface",
+  "acceptedSurfaceHash",
+  "acceptedSurfaceIntegrity",
+] as const;
 const AUTH_CREDENTIAL_PATHS = ["gateway.auth.token", "gateway.auth.password"];
 const SHARED_CHANNEL_PREFIXES = [
   "agents.defaults.mediaMaxMb",
@@ -419,7 +424,39 @@ export function resolveConfigReloadMetadata(path: string): Pick<ReloadRule, "kin
 function isPluginInstallTimestampPath(path: string): boolean {
   // Legacy compatibility only: new plugin install metadata lives in the
   // managed plugin index, but old config writes may still touch this path.
-  return /^plugins\.installs\..+\.(installedAt|resolvedAt)$/.test(path);
+  return /^plugins\.installs\..+\.(installedAt|resolvedAt|acceptedSurfaceAt)$/.test(path);
+}
+
+function areJsonValuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) {
+    return true;
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((item, index) => areJsonValuesEqual(item, right[index]))
+    );
+  }
+  if (!isPlainObject(left) || !isPlainObject(right)) {
+    return false;
+  }
+  const leftKeys = Object.keys(left).filter((key) => left[key] !== undefined);
+  const rightKeys = Object.keys(right).filter((key) => right[key] !== undefined);
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every((key) => rightKeys.includes(key) && areJsonValuesEqual(left[key], right[key]))
+  );
+}
+
+function hasSameCapabilityApproval(
+  prevRecord: Record<string, unknown>,
+  nextRecord: Record<string, unknown>,
+): boolean {
+  return PLUGIN_CAPABILITY_APPROVAL_KEYS.every((key) =>
+    areJsonValuesEqual(prevRecord[key], nextRecord[key]),
+  );
 }
 
 function getPluginInstallRecords(config: unknown): Record<string, unknown> {
@@ -454,6 +491,14 @@ export function resolvePluginInstallReloadMetadata(prevConfig: unknown, nextConf
     for (const key of PLUGIN_INSTALL_TIMESTAMP_KEYS) {
       if (prevRecord[key] !== nextRecord[key]) {
         noopPaths.push(`plugins.installs.${id}.${key}`);
+      }
+    }
+    if (prevRecord.acceptedSurfaceAt !== nextRecord.acceptedSurfaceAt) {
+      const surfaceAtPath = `plugins.installs.${id}.acceptedSurfaceAt`;
+      if (hasSameCapabilityApproval(prevRecord, nextRecord)) {
+        noopPaths.push(surfaceAtPath);
+      } else {
+        forceChangedPaths.push(surfaceAtPath);
       }
     }
   }
@@ -606,6 +651,7 @@ export function buildGatewayReloadPlan(
   if (pluginLifecycle) {
     plan.pluginLifecycle = pluginLifecycle;
     plan.reloadPlugins = true;
+    plan.reloadPluginPaths ??= [];
     const unrelatedRestart = plan.restartReasons.find(
       (path) => path !== "plugins" && !path.startsWith("plugins."),
     );
