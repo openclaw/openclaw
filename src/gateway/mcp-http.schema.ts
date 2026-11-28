@@ -2,6 +2,14 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { logWarn } from "../logger.js";
+import {
+  intersectPropertySchemas,
+  readSchemaTypeNames,
+} from "../shared/json-schema-conjunction.js";
+import {
+  findToolInputSchemaTopLevelUnionError,
+  TOOL_INPUT_SCHEMA_TOP_LEVEL_UNION_KEYWORDS,
+} from "../shared/json-schema-defaults.js";
 import { mergeLiteralSchemas } from "../shared/json-schema-literals.js";
 import type { resolveGatewayScopedTools } from "./tool-resolution.js";
 
@@ -38,17 +46,14 @@ function readLoopbackToolParameters(tool: McpLoopbackTool): Record<string, unkno
   }
 }
 
-function flattenUnionSchema(
-  raw: Record<string, unknown>,
+// MCP clients vary in union-schema support. Merge only safe object variants and
+// report the ones that cannot merge, so generated forms stay usable and a lost
+// constraint is never silent. Returns one required-key set per merged variant.
+function mergeVariantsIntoProperties(
+  variants: readonly unknown[],
   toolName: string,
-): Record<string, unknown> {
-  // MCP clients vary in union-schema support. Merge only safe object variants
-  // and keep common required fields so generated forms remain usable.
-  const variants = raw.anyOf ?? raw.oneOf;
-  if (!Array.isArray(variants) || variants.length === 0) {
-    return raw;
-  }
-  const mergedProps = Object.create(null) as Record<string, boolean | Record<string, unknown>>;
+  mergedProps: Record<string, boolean | Record<string, unknown>>,
+): Set<string>[] {
   const requiredSets: Set<string>[] = [];
   for (const variant of variants) {
     if (variant === true) {
@@ -102,14 +107,253 @@ function flattenUnionSchema(
       new Set(Array.isArray(variant.required) ? (variant.required as string[]) : []),
     );
   }
-  const required =
-    requiredSets.length > 0
-      ? [...(requiredSets[0] ?? [])].filter(
-          (key) => Object.hasOwn(mergedProps, key) && requiredSets.every((set) => set.has(key)),
-        )
-      : [];
-  const { anyOf: _anyOf, oneOf: _oneOf, ...rest } = raw;
-  return { ...rest, type: "object", properties: mergedProps, required };
+  return requiredSets;
+}
+
+function readSchemaVariants(value: unknown): readonly unknown[] | undefined {
+  return Array.isArray(value) ? value : undefined;
+}
+
+function hasTopLevelUnion(schema: Record<string, unknown>): boolean {
+  return TOOL_INPUT_SCHEMA_TOP_LEVEL_UNION_KEYWORDS.some((keyword) =>
+    Object.hasOwn(schema, keyword),
+  );
+}
+
+// Root properties, each allOf branch, and each sibling union keyword all hold at
+// once, so a key constrained on both sides of such a boundary publishes the exact
+// intersection: flat when one schema states both constraints, and a nested
+// conjunction when each side needs its own evaluation scope. Alternatives within
+// one keyword stay on the keep-first-and-warn contract instead.
+function combineConjunctiveProps(
+  target: Record<string, boolean | Record<string, unknown>>,
+  source: Record<string, boolean | Record<string, unknown>>,
+  toolName: string,
+): void {
+  for (const [key, schema] of Object.entries(source)) {
+    if (!Object.hasOwn(target, key)) {
+      target[key] = schema;
+      continue;
+    }
+    const existing = target[key]!;
+    const intersected = intersectPropertySchemas(existing, schema);
+    if (isNestedConjunction(intersected) && !isNestedConjunction(existing)) {
+      warnSchemaOnce(
+        `${MCP_LOOPBACK_LOG_PREFIX}: tool "${toolName}" constrains "${key}" on both sides of a combined top-level schema; publishing both constraints as a nested conjunction so neither is weakened`,
+      );
+    }
+    target[key] = intersected;
+  }
+}
+
+function isNestedConjunction(schema: boolean | Record<string, unknown>): boolean {
+  return isRecord(schema) && Object.hasOwn(schema, "allOf");
+}
+
+// Keywords this flattener either folds into the published object schema or that
+// only document it. Anything else on a branch is a real constraint the single
+// flat schema would silently drop.
+const FLATTENED_BRANCH_KEYWORDS = new Set([
+  "type",
+  "properties",
+  "required",
+  "additionalProperties",
+  "$comment",
+  "default",
+  "deprecated",
+  "description",
+  "example",
+  "examples",
+  "readOnly",
+  "title",
+  "writeOnly",
+]);
+
+function findUnsupportedBranchKeyword(branch: Record<string, unknown>): string | undefined {
+  return Object.keys(branch).find((keyword) => !FLATTENED_BRANCH_KEYWORDS.has(keyword));
+}
+
+function branchTypeAdmitsObject(value: unknown): boolean {
+  if (value === undefined) {
+    return true;
+  }
+  const names = readSchemaTypeNames(value);
+  return names ? names.has("object") : false;
+}
+
+// An `additionalProperties` other than `true` restricts the keys of the conjunct
+// that declares it, so the flattened object can republish it only when no other
+// combined schema contributed a key that conjunct does not list.
+type ClosedConjunct = {
+  readonly label: string;
+  readonly value: unknown;
+  readonly keys: ReadonlySet<string>;
+};
+
+function readClosedConjunct(
+  schema: Record<string, unknown>,
+  label: string,
+  keys: readonly string[],
+): ClosedConjunct | undefined {
+  const value = schema.additionalProperties;
+  if (value === undefined || value === true) {
+    return undefined;
+  }
+  return { label, value, keys: new Set(keys) };
+}
+
+function resolveAdditionalProperties(
+  conjuncts: readonly ClosedConjunct[],
+  mergedKeys: readonly string[],
+  toolName: string,
+): { readonly published: unknown } | undefined {
+  let published: unknown;
+  for (const conjunct of conjuncts) {
+    const foreign = mergedKeys.find((key) => !conjunct.keys.has(key));
+    if (foreign !== undefined) {
+      warnSchemaOnce(
+        `${MCP_LOOPBACK_LOG_PREFIX}: tool "${toolName}" closes ${conjunct.label} to additional properties while another combined schema contributes "${foreign}"; skipping the tool instead of publishing a weakened constraint`,
+      );
+      return undefined;
+    }
+    if (conjunct.value === false || published === false) {
+      published = false;
+      continue;
+    }
+    if (published === undefined || isDeepStrictEqual(published, conjunct.value)) {
+      published = conjunct.value;
+      continue;
+    }
+    warnSchemaOnce(
+      `${MCP_LOOPBACK_LOG_PREFIX}: tool "${toolName}" input schema constrains "additionalProperties" differently across combined top-level schemas; skipping the tool instead of publishing a weakened constraint`,
+    );
+    return undefined;
+  }
+  return { published };
+}
+
+// Collapses every top-level union keyword into the single object schema native
+// tool definitions require. `anyOf`/`oneOf` branches are alternatives, so only a
+// key required by every branch stays required; `allOf` branches all hold, so
+// their required keys are added. Sibling `properties`/`required` on the root are
+// kept rather than replaced, and an empty union list is reported instead of
+// being left in place for the provider to reject. Branch-level constraints are
+// carried over where one flat object can express them. Returns undefined when a
+// conjunct makes every flattening lossy; the caller skips the tool.
+function flattenTopLevelUnionSchema(
+  raw: Record<string, unknown>,
+  toolName: string,
+): Record<string, unknown> | undefined {
+  const mergedProps = Object.create(null) as Record<string, boolean | Record<string, unknown>>;
+  if (isRecord(raw.properties)) {
+    for (const [key, schema] of Object.entries(raw.properties)) {
+      if (isPropertySchema(schema)) {
+        mergedProps[key] = schema;
+      }
+    }
+  }
+  // SAFETY: JSON Schema `required` is a string list; this mirrors the variant read above.
+  const required = new Set<string>(Array.isArray(raw.required) ? (raw.required as string[]) : []);
+  const closedConjuncts: ClosedConjunct[] = [];
+  const rootClosure = readClosedConjunct(raw, "the root schema", Object.keys(mergedProps));
+  if (rootClosure) {
+    closedConjuncts.push(rootClosure);
+  }
+  for (const keyword of TOOL_INPUT_SCHEMA_TOP_LEVEL_UNION_KEYWORDS) {
+    const variants = readSchemaVariants(raw[keyword]);
+    if (!variants || variants.length > 0) {
+      continue;
+    }
+    warnSchemaOnce(
+      `${MCP_LOOPBACK_LOG_PREFIX}: dropping empty top-level "${keyword}" for "${toolName}", native tool schemas reject it`,
+    );
+  }
+  // Sibling anyOf and oneOf apply together, so each keyword's alternatives decide
+  // their own required keys instead of pooling branches into one alternative set.
+  for (const keyword of ["anyOf", "oneOf"] as const) {
+    const alternatives = readSchemaVariants(raw[keyword]) ?? [];
+    if (alternatives.length === 0) {
+      continue;
+    }
+    for (const alternative of alternatives) {
+      const dropped = isRecord(alternative) ? findUnsupportedBranchKeyword(alternative) : undefined;
+      if (dropped) {
+        // Alternatives keep the established keep-first publishing contract, so
+        // report the dropped branch constraint rather than withholding the tool.
+        warnSchemaOnce(
+          `${MCP_LOOPBACK_LOG_PREFIX}: tool "${toolName}" has a "${keyword}" alternative constraining "${dropped}", which the flattened object schema does not carry`,
+        );
+      }
+    }
+    // SAFETY: fresh null-prototype map; mergeVariantsIntoProperties validates every entry.
+    const groupProps = Object.create(null) as Record<string, boolean | Record<string, unknown>>;
+    const requiredSets = mergeVariantsIntoProperties(alternatives, toolName, groupProps);
+    combineConjunctiveProps(mergedProps, groupProps, toolName);
+    for (const key of requiredSets[0] ?? []) {
+      if (requiredSets.every((set) => set.has(key))) {
+        required.add(key);
+      }
+    }
+  }
+  // Every allOf branch holds on every instance, so a branch keyword this
+  // flattener does not fold in is a real constraint the published schema would
+  // lose. Withhold the tool by name instead of advertising a weaker definition.
+  for (const branch of readSchemaVariants(raw.allOf) ?? []) {
+    if (branch === true) {
+      continue;
+    }
+    if (!isRecord(branch)) {
+      warnSchemaOnce(
+        `${MCP_LOOPBACK_LOG_PREFIX}: tool "${toolName}" has an allOf branch that is not an object schema; skipping the tool instead of publishing a weakened constraint`,
+      );
+      return undefined;
+    }
+    if (!branchTypeAdmitsObject(branch.type)) {
+      warnSchemaOnce(
+        `${MCP_LOOPBACK_LOG_PREFIX}: tool "${toolName}" has an allOf branch whose "type" excludes objects; skipping the tool instead of publishing a weakened constraint`,
+      );
+      return undefined;
+    }
+    const unsupported = findUnsupportedBranchKeyword(branch);
+    if (unsupported) {
+      warnSchemaOnce(
+        `${MCP_LOOPBACK_LOG_PREFIX}: tool "${toolName}" has an allOf branch constraining "${unsupported}", which one flattened object schema cannot express; skipping the tool instead of publishing a weakened constraint`,
+      );
+      return undefined;
+    }
+    // SAFETY: fresh null-prototype map; mergeVariantsIntoProperties validates every entry.
+    const branchProps = Object.create(null) as Record<string, boolean | Record<string, unknown>>;
+    const requiredSets = mergeVariantsIntoProperties([branch], toolName, branchProps);
+    combineConjunctiveProps(mergedProps, branchProps, toolName);
+    const branchClosure = readClosedConjunct(branch, "an allOf branch", Object.keys(branchProps));
+    if (branchClosure) {
+      closedConjuncts.push(branchClosure);
+    }
+    for (const set of requiredSets) {
+      for (const key of set) {
+        required.add(key);
+      }
+    }
+  }
+  const additional = resolveAdditionalProperties(
+    closedConjuncts,
+    Object.keys(mergedProps),
+    toolName,
+  );
+  if (!additional) {
+    return undefined;
+  }
+  const { allOf: _allOf, anyOf: _anyOf, oneOf: _oneOf, ...rest } = raw;
+  const flattened: Record<string, unknown> = {
+    ...rest,
+    type: "object",
+    properties: mergedProps,
+    required: [...required].filter((key) => Object.hasOwn(mergedProps, key)),
+  };
+  if (additional.published !== undefined) {
+    flattened.additionalProperties = additional.published;
+  }
+  return flattened;
 }
 
 function isPropertySchema(value: unknown): value is boolean | Record<string, unknown> {
@@ -138,14 +382,29 @@ export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry
     if (!raw) {
       return [];
     }
-    if (raw.anyOf || raw.oneOf) {
-      raw = flattenUnionSchema(raw, name);
+    if (hasTopLevelUnion(raw)) {
+      const flattened = flattenTopLevelUnionSchema(raw, name);
+      if (!flattened) {
+        // A branch-level constraint no root object schema can carry. Skip the
+        // tool with the warning above instead of failing the whole catalog
+        // build mid run preparation.
+        return [];
+      }
+      raw = flattened;
     }
     if (raw.type !== "object") {
       raw.type = "object";
     }
     if (!raw.properties) {
       raw.properties = {};
+    }
+    // Publish-boundary invariant: the flatten above removes every top-level union
+    // keyword, and a schema carrying one past this point is rejected by native
+    // tool definitions as an opaque request-wide 400 that names only a tool index.
+    // Fail here, where the tool is named, rather than at the provider.
+    const unionError = findToolInputSchemaTopLevelUnionError(raw, name);
+    if (unionError) {
+      throw new Error(`${MCP_LOOPBACK_LOG_PREFIX}: ${unionError}`);
     }
     return {
       name,
