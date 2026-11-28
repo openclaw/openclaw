@@ -189,6 +189,44 @@ describe("legacy Gateway owner lease recovery", () => {
   );
 
   it.skipIf(process.platform !== "linux")(
+    "refuses a namespace-less legacy Gateway state lock before replacing the projection",
+    async () => {
+      const env = await seedClosedOwner({}, (stateEnv) => {
+        withOpenClawStateStartupMigrationCheckpointDatabase(
+          (db) => {
+            db.prepare(
+              "UPDATE state_leases SET expires_at = ?, payload_json = json_remove(payload_json, '$.owner.processNamespace') WHERE scope = 'gateway-owner'",
+            ).run(Date.now() - 1);
+          },
+          { env: stateEnv },
+        );
+      });
+      const paths = resolveGatewayLockPaths(env);
+      fs.mkdirSync(path.dirname(paths.stateLockPath), { recursive: true });
+      fs.writeFileSync(
+        paths.stateLockPath,
+        JSON.stringify({
+          pid: 2_147_483_647,
+          ownerId: "previous-generation",
+          role: "gateway",
+          createdAt: new Date(Date.now() - 300_001).toISOString(),
+          configPath: paths.configPath,
+          stateDir: paths.stateDir,
+        }),
+      );
+      const old = new Date(Date.now() - 600_000);
+      fs.utimesSync(paths.stateLockPath, old, old);
+      await expect(acquireLock(env, { role: "sqlite-maintenance", timeoutMs: 0 })).rejects.toThrow(
+        "cannot verify Gateway ownership",
+      );
+      const retained = JSON.parse(fs.readFileSync(paths.stateLockPath, "utf8")) as {
+        ownerId: string;
+      };
+      expect(retained.ownerId).toBe("previous-generation");
+    },
+  );
+
+  it.skipIf(process.platform !== "linux")(
     "admits maintenance after an expired legacy Gateway lease without leftover lock files",
     async () => {
       const env = await seedClosedOwner({ expiresAt: Date.now() - 1 }, (stateEnv) => {

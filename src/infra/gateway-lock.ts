@@ -495,6 +495,9 @@ export async function acquireGatewayLock(
           // Each attempt reports its own contention; never reuse a stale path.
           contendedLockPath = undefined;
           payload.createdAt = resolveTimestampMsToIsoString(Date.now());
+          await assertHistoricalGatewayOwnerStopped(paths, opts, (contended) => {
+            contendedLockPath = contended;
+          });
           const owner = acquireGatewayStateOwner({
             databasePath,
             payload,
