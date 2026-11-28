@@ -102,14 +102,14 @@ const account = (username: string, uid: number) => ({
   shell: "/bin/sh",
 });
 const otherInstall = ["/usr/bin/node", "/opt/other/openclaw/dist/index.js"];
-const serviceEnvironment = {
-  HOME: "/var/lib/openclaw",
-  OPENCLAW_STATE_DIR: "/var/lib/openclaw/.openclaw",
-  OPENAI_API_KEY: "unit-only-value",
-};
+let serviceHome: string;
 const serviceCommand = (overrides: Record<string, unknown> = {}) => ({
   programArguments: ["/usr/bin/node", path.join(root, "dist", "index.js"), "gateway"],
-  environment: serviceEnvironment,
+  environment: {
+    HOME: serviceHome,
+    OPENCLAW_STATE_DIR: "/var/lib/openclaw/.openclaw",
+    OPENAI_API_KEY: "unit-only-value",
+  },
   sourcePath: unit.unitPath,
   ...overrides,
 });
@@ -189,6 +189,8 @@ beforeEach(() => {
   }
   systemd.findScope.mockReset().mockResolvedValue(unit);
   systemd.readCommand.mockReset().mockRejectedValue(mismatch());
+  // The account's HOME, which it owns and can write; tests run as that account.
+  serviceHome = dirs.make("service-account-home-");
   // Root by default; refusal cases below remove one requirement for switching accounts.
   setEuid(0);
   systemd.readAccount.mockReset().mockResolvedValue({
@@ -476,7 +478,7 @@ describe("candidate admission run as the unit's account", () => {
     expect(launchEnv).not.toContain(stateDir);
     const env = JSON.parse(accountProcess.read("env.json")) as Record<string, string>;
     expect(env).toMatchObject({
-      HOME: "/var/lib/openclaw",
+      HOME: serviceHome,
       OPENCLAW_STATE_DIR: "/var/lib/openclaw/.openclaw",
       OPENAI_API_KEY: "unit-only-value",
       USER: "openclaw",
@@ -600,6 +602,11 @@ describe("candidate admission run as the unit's account", () => {
       blocker: "the account openclaw could not be resolved",
     },
     {
+      name: "the account cannot write its HOME",
+      setup: () => fs.chmodSync(serviceHome, 0o500),
+      blocker: "the unit's HOME (",
+    },
+    {
       name: "the unit's environment file cannot be read",
       setup: () => systemd.readAsRoot.mockRejectedValue(new Error("EnvironmentFile unreadable")),
       blocker: "the unit's effective environment could not be read",
@@ -633,11 +640,9 @@ describe("candidate admission run as the unit's account", () => {
 
     expect(process.exitCode).toBe(3);
     expect(verdict.reasons[0]?.code).toBe("service-account-mismatch");
-    expect(
-      verdict.reasons[0]?.nextAction?.startsWith(
-        `Automatic update as the service account is not possible: ${blocker}. `,
-      ),
-    ).toBe(true);
+    expect(verdict.reasons[0]?.nextAction).toContain(
+      `Automatic update as the service account is not possible: ${blocker}`,
+    );
     expect(accountProcess.exists("argv")).toBe(false);
   });
 });

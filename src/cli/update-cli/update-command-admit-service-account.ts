@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveConfigPath, resolveStateDir } from "../../config/paths.js";
@@ -167,6 +168,14 @@ async function resolveServiceAccountExecution(
   const home = command?.environment?.HOME;
   if (!command || !home || command.reloadPending) {
     return { blocker: "the unit's effective environment could not be read" };
+  }
+  // The account keeps its update backup under its HOME; find out now, before the package
+  // is replaced, whether it can.
+  const homeInfo = await fs.stat(home).catch(() => null);
+  if (!homeInfo?.isDirectory() || homeInfo.uid !== ids.uid || (homeInfo.mode & 0o200) === 0) {
+    return {
+      blocker: `the unit's HOME (${home}) is not a directory ${account} owns and can write`,
+    };
   }
   if (command.stateIdentityUnverified) {
     return { blocker: "the unit's sandboxing or environment hides where its state is" };
