@@ -39,9 +39,9 @@ export function resolveToolFsConfig(params: { cfg?: OpenClawConfig; agentId?: st
 /**
  * Derive the filesystem policy for callers that build OpenClaw tools without one.
  * Mirrors the embedded runner: a session permission mode decides when present,
- * otherwise `tools.fs.workspaceOnly`. Returns undefined when unrestricted so
- * callers keep their unrestricted behavior; a restricted run can never be
- * mistaken for an unrestricted one by omission.
+ * otherwise `tools.fs.workspaceOnly`. Always explicit, so media tools see the same
+ * host read access as `read` and a restricted run is never mistaken for an
+ * unrestricted one by omission.
  */
 export function resolveOpenClawToolsFsPolicy(params: {
   cfg?: OpenClawConfig;
@@ -49,15 +49,12 @@ export function resolveOpenClawToolsFsPolicy(params: {
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
   /** Host-owned roots read-only tools may consume, such as a subagent attachment root. */
   attachmentReadRoot?: string;
-}): ToolFsPolicy | undefined {
+}): ToolFsPolicy {
   const workspaceOnly = params.sessionPermissionPolicy
     ? resolveSessionPermissionCoreToolPolicy(params.sessionPermissionPolicy).workspaceOnly
     : resolveEffectiveToolFsWorkspaceOnly(params);
-  if (!workspaceOnly) {
-    return undefined;
-  }
   return {
-    workspaceOnly: true,
+    workspaceOnly,
     ...(params.sessionPermissionPolicy ? { root: params.sessionPermissionPolicy.root } : {}),
     ...(params.attachmentReadRoot ? { readOnlyRoots: [params.attachmentReadRoot] } : {}),
   };
