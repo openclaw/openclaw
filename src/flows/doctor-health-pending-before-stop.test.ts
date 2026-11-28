@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,9 +9,17 @@ import {
 } from "../commands/doctor-database-preflight.js";
 import type { DoctorPendingDecisions } from "../commands/doctor-maintenance-pending.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
+import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { databaseFixture } from "../state/database-preflight-fixtures.test-support.js";
-import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  isOpenClawAgentDatabaseOpen,
+} from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  isOpenClawStateDatabaseOpen,
+} from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -165,5 +175,44 @@ describe("Doctor pending decisions before the stop", () => {
 
     expect(decisions.get("state-database-repair")).toBe("work");
     expect(fs.statSync(databases.statePath).mode & 0o777).toBe(0o644);
+  });
+
+  it("leaves no store connection of its own open for the stop", async () => {
+    const preflight = await prepare();
+    await closeStores();
+    // The serving Gateway holds the stores from another process.
+    const gateway = spawn(
+      process.execPath,
+      [
+        "-e",
+        `const { DatabaseSync } = require("node:sqlite");
+         const held = process.argv.slice(1).map((p) => new DatabaseSync(p));
+         for (const db of held) db.prepare("SELECT count(*) FROM sqlite_schema").get();
+         process.stdout.write("held\\n");
+         process.stdin.on("end", () => held.forEach((db) => db.close())).resume();`,
+        databases.statePath,
+        databases.agentPath("main"),
+      ],
+      { stdio: ["pipe", "pipe", "inherit"] },
+    );
+    try {
+      await once(gateway.stdout, "data");
+      // Doctor's command runs inside a read-only worker scope that lasts until it exits.
+      const outer = await withSqliteReadOnlyWorkerScope(
+        async () => {
+          const decisions = await decide(preflight);
+          expect(decisions.get("config-flow.agent-databases")).toMatch(/^(?:none|work)$/u);
+          return readOnlyWorkerScope.getStore();
+        },
+        { signal: new AbortController().signal, deadlineOwnedByCaller: false },
+      );
+      // No reader the evaluation started outlives it into the stop.
+      expect(outer?.worker).toBeUndefined();
+      expect(isOpenClawStateDatabaseOpen(databases.statePath)).toBe(false);
+      expect(isOpenClawAgentDatabaseOpen(databases.agentPath("main"))).toBe(false);
+    } finally {
+      gateway.stdin.end();
+      await once(gateway, "exit");
+    }
   });
 });

@@ -224,7 +224,9 @@ export async function decideDoctorPendingBeforeStop(params: {
                 await decideContributions(ctx, decide);
                 await decideReadinessSteps({ options: params.options, preflight, decide });
               },
-              signal ? { signal, deadlineOwnedByCaller: false } : undefined,
+              // Its own scope: readers it starts close here, not when the command exits, so
+              // none of them holds a store open through the stop.
+              { signal: signal ?? new AbortController().signal, deadlineOwnedByCaller: false },
             ),
           signal,
         );
