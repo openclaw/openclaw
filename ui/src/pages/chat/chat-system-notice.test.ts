@@ -101,12 +101,6 @@ describe("system notices through pending-to-history promotion", () => {
       false,
     ],
     [
-      "cli_harness_context",
-      "System · injected context",
-      "Base directory for this skill: /tmp/skills/autoreview\n\n# Auto Review",
-      true,
-    ],
-    [
       "claude_cli_task_notification",
       "System · background task",
       "<task-notification>\n<status>completed</status>\n</task-notification>",
@@ -118,7 +112,6 @@ describe("system notices through pending-to-history promotion", () => {
   ] as const)(
     "preserves %s presentation, search and turn boundaries",
     (sourceTool, label, text, midTurn) => {
-      const imported = sourceTool === "cli_harness_context";
       const message = {
         ...baseMessage,
         content:
@@ -126,15 +119,6 @@ describe("system notices through pending-to-history promotion", () => {
             ? "Automation repair request from the scheduler.\n<untrusted-text>Private task payload and last error</untrusted-text>"
             : (midTurn ? "" : "[System] ") + text,
         provenance: { kind: "internal_system", sourceTool },
-        __openclaw: imported
-          ? {
-              id: "input-1",
-              importedFrom: "claude-cli",
-              cliSessionId: "cli-1",
-              externalId: "input-1",
-              transport: { clients },
-            }
-          : baseMessage["__openclaw"],
       };
       const inputs = pending(message);
       const before = { role: "user", content: "before", timestamp: 999 };
@@ -171,7 +155,7 @@ describe("system notices through pending-to-history promotion", () => {
         expect(framed.filter((item) => item.kind === "agent-run-frame")).toMatchObject([
           { runId: "run", boundaryId: "send:run", parts: [items[stage === 1 ? 2 : 1]] },
         ]);
-        expect(notice.boundaryId).toBe(stage === 1 && !imported ? "send:run" : undefined);
+        expect(notice.boundaryId).toBe(stage === 1 ? "send:run" : undefined);
       }
       for (const messages of stages) {
         expect(render(messages, inputs, "after")).toMatchObject([
@@ -181,7 +165,7 @@ describe("system notices through pending-to-history promotion", () => {
     },
   );
 
-  it.each(["cli_harness_context", "claude_cli_task_notification", "plugin:review-helper"])(
+  it.each(["claude_cli_task_notification", "plugin:review-helper"])(
     "keeps %s between tool groups without starting a turn",
     (sourceTool) => {
       const call = (id: string) => ({
@@ -208,6 +192,43 @@ describe("system notices through pending-to-history promotion", () => {
       expect(chatItemStartsDisplayTurn(notice)).toBe(false);
     },
   );
+
+  it("hides imported Claude context without removing the surrounding conversation", () => {
+    const content = "This session is being continued from a previous conversation.";
+    const before = { role: "user", content: "Continue the review.", timestamp: 999 };
+    const after = { role: "assistant", content: "The review is complete.", timestamp: 1001 };
+    const context = {
+      role: "user",
+      content,
+      timestamp: 1000,
+      provenance: { kind: "internal_system", sourceTool: "cli_harness_context" },
+      __openclaw: {
+        id: "context-1",
+        importedFrom: "claude-cli",
+        cliSessionId: "cli-1",
+        externalId: "context-1",
+      },
+    };
+    expect(render([before, context, after], [])).toMatchObject([
+      { kind: "group", role: "user", messages: [{ message: before }] },
+      { kind: "group", role: "assistant", messages: [{ message: after }] },
+    ]);
+    expect(render([before, context, after], [], content)).toEqual([]);
+    const pasted = { role: "user", content, timestamp: 1002 };
+    expect(render([pasted], [], content)).toMatchObject([
+      { kind: "group", role: "user", messages: [{ message: pasted }] },
+    ]);
+    const tool = (id: string, timestamp: number) => ({
+      role: "assistant",
+      content: [{ type: "toolCall", id, name: "read", arguments: { path: "README.md" } }],
+      timestamp,
+      __openclaw: { runId: "same-run" },
+    });
+    expect(render([tool("before", 999), context, tool("after", 1001)], [])).toMatchObject([
+      { kind: "group", role: "tool" },
+      { kind: "group", role: "tool", startsActivityGroup: true },
+    ]);
+  });
 
   it("keeps a user's System prefix and sender attribution through promotion", () => {
     const inputs = pending(baseMessage);

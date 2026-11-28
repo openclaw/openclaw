@@ -233,6 +233,19 @@ export function projectChatSystemNotice(
   if (sourceTool === "restart") {
     return [];
   }
+  if (sourceTool === "cli_harness_context") {
+    // Keep the surrounding activity separate without showing model-only context.
+    return [
+      {
+        kind: "notice",
+        key: item.key,
+        timestamp: message.timestamp,
+        text: "",
+        activityBoundary: true,
+      },
+      ...pendingItems,
+    ];
+  }
   const noticeKind = resolveSystemNoticeKind(sourceTool);
   const pluginSteering = sourceTool?.startsWith("plugin:")
     ? asRecord(asRecord(raw?.["__openclaw"])?.pluginSteering)
