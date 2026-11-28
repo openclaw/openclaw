@@ -5,6 +5,7 @@ export type ChatPaneElement = HTMLElement & {
   readonly composerElement?: HTMLTextAreaElement | null;
   readonly headerElement?: HTMLElement | null;
   discardStagedAttachments?: () => void;
+  focusComposerInput?: () => boolean;
   paneId?: string;
   prepareForEviction?: () => void;
   hasQueuedMessageEdit?: boolean;

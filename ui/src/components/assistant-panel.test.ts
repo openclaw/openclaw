@@ -15,6 +15,7 @@ import {
   CHAT_ROUTE_READY_EVENT,
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
 } from "../pages/chat/chat-history-events.ts";
+import { registerChatPane } from "../pages/chat/chat-pane-elements.ts";
 import { publishChatWorkContext } from "../pages/chat/chat-work-context.ts";
 import { createContext } from "../pages/custodian/custodian-page.test-harness.ts";
 import { CustodianSessionStore } from "../pages/custodian/custodian-session-store.ts";
@@ -278,6 +279,50 @@ describe("assistant panel", () => {
     panel.remove();
     expect(chatInputOwnerForContext(context).current).toBe("page");
   });
+
+  it.each(["composer ready", "another field focused"] as const)(
+    "focuses the Home composer once it mounts unless the user moved on (%s)",
+    async (outcome) => {
+      const { panel } = await mountPanel({ homeAvailable: true, pageRouteId: "appearance" });
+      const pageField = document.createElement("input");
+      document.body.append(pageField);
+      await openHome(panel);
+      expect(home(panel)).not.toBeNull();
+
+      // The real pane mounts its composer after the dock opens, then reports readiness.
+      const composer = document.createElement("textarea");
+      composer.value = "Existing draft";
+      composer.setSelectionRange(0, 0);
+      const pane = Object.assign(document.createElement("div"), {
+        composerElement: composer,
+        focusComposerInput: () => {
+          composer.focus();
+          return true;
+        },
+      });
+      pane.append(composer);
+      onTestFinished(registerChatPane(pane));
+      home(panel)!.append(pane);
+      if (outcome === "another field focused") {
+        pageField.focus();
+      }
+      pane.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT, { bubbles: true }));
+      await panel.updateComplete;
+
+      if (outcome === "composer ready") {
+        expect(document.activeElement).toBe(composer);
+        expect(composer.value).toBe("Existing draft");
+        expect([composer.selectionStart, composer.selectionEnd]).toEqual([14, 14]);
+      } else {
+        expect(document.activeElement).toBe(pageField);
+        // The retired request does not reclaim focus on a later refresh.
+        pageField.blur();
+        pane.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT, { bubbles: true }));
+        await panel.updateComplete;
+        expect(document.activeElement).not.toBe(composer);
+      }
+    },
+  );
 
   it("replaces the custodian with an activation-owned session and follows navigation without restoring closed docks", async () => {
     const { context, panel, store, dom } = await mountPanel();
