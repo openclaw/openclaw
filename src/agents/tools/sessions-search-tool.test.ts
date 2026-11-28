@@ -11,6 +11,7 @@ import { GatewayTransportError } from "../../gateway/transport-error.js";
 import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
 import { finalizeAgentTools } from "../agent-tools.finalize.js";
 import { describeSessionLinkRule } from "../tool-description-presets.js";
+import { createSessionChannelReadFixture } from "./sessions-channel-read-result.test-support.js";
 import { createSessionsSearchTool } from "./sessions-search-tool.js";
 
 const { warn } = vi.hoisted(() => ({ warn: vi.fn() }));
@@ -149,6 +150,127 @@ function expectSearch(
 
 describe("sessions_search tool", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  it("delegates channel searches to the indexed Gateway recall owner", async () => {
+    const requester = "agent:main:slack:channel:c111:thread:1.001";
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsSearchTool({
+      config: { tools: { sessions: { visibility: "channel" } } },
+      agentSessionKey: requester,
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        return { results: [hit({ sessionKey: requester })] } as T;
+      },
+    });
+
+    await expect(
+      tool.execute("channel-indexed-recall", { query: "context" }),
+    ).resolves.toMatchObject({
+      details: { results: [expect.objectContaining({ sessionKey: requester })] },
+    });
+    expect(requests).toEqual([
+      expect.objectContaining({
+        method: "sessions.search",
+        params: expect.objectContaining({
+          query: "context",
+          recall: expect.objectContaining({
+            requesterAgentId: "main",
+            requesterSessionKey: requester,
+            visibility: "channel",
+          }),
+        }),
+      }),
+    ]);
+  });
+
+  it.each(["before", "during", "replaced", "retained"] as const)(
+    "checks targeted channel search at admission and publication (%s)",
+    async (mode) => {
+      const requester = "agent:main:slack:channel:c111:thread:3.001";
+      const sibling = "agent:main:slack:channel:c111:thread:3.002";
+      const store = path.join(
+        tempDirs.make("openclaw-channel-search-admission-"),
+        "sessions.sqlite",
+      );
+      replaceSessionEntrySync(
+        { storePath: store, sessionKey: requester },
+        { sessionId: "requester-session", updatedAt: 1 },
+      );
+      replaceSessionEntrySync(
+        { storePath: store, sessionKey: sibling },
+        { sessionId: "sibling-session", updatedAt: 1 },
+      );
+      const row = (key: string, sessionId: string, to: string) => ({
+        key,
+        agentId: "main",
+        sessionId,
+        chatType: "channel" as const,
+        space: "t111",
+        origin: { provider: "slack", chatType: "channel" as const },
+        deliveryContext: { channel: "slack", accountId: "default", to },
+      });
+      const requesterRow = row(requester, "requester-session", "channel:c111");
+      const admittedSibling = row(sibling, "sibling-session", "channel:c111");
+      const reassignedSibling = row(sibling, "sibling-session", "channel:c222");
+      const config: OpenClawConfig = {
+        session: { store },
+        tools: { sessions: { visibility: "channel" } },
+      };
+      const owner = createSessionChannelReadFixture([requesterRow, admittedSibling], config);
+      let targetDescriptions = 0;
+      const requests: CallGatewayRequest[] = [];
+      const tool = createSessionsSearchTool({
+        config,
+        agentSessionKey: requester,
+        callGateway: async <T = Record<string, unknown>>(
+          request: CallGatewayRequest,
+        ): Promise<T> => {
+          requests.push(request);
+          if (request.method === "sessions.resolve") {
+            return { key: sibling } as T;
+          }
+          if (request.method === "sessions.describe") {
+            const key = (request.params as { key?: string }).key;
+            if (key === sibling) {
+              targetDescriptions += 1;
+              return {
+                session:
+                  mode === "before" && targetDescriptions > 1 ? reassignedSibling : admittedSibling,
+              } as T;
+            }
+            return { session: requesterRow } as T;
+          }
+          expect(request.method).toBe("sessions.search");
+          if (mode === "during") {
+            owner.setRow(reassignedSibling);
+          }
+          return {
+            results: [
+              hit({
+                sessionKey: sibling,
+                sessionId: mode === "replaced" ? "earlier-session" : "sibling-session",
+              }),
+            ],
+            truncated: true,
+          } as T;
+        },
+      });
+
+      const result = owner.run(() =>
+        tool.execute("targeted-channel-search", { query: "context", sessionKey: sibling }),
+      );
+      if (mode === "before") {
+        await expect(result).rejects.toThrow();
+        expect(requests.some((request) => request.method === "sessions.search")).toBe(false);
+      } else if (mode === "during" || mode === "replaced") {
+        expect((await result).details).toEqual({ results: [] });
+      } else {
+        expect((await result).details).toMatchObject({
+          results: [expect.objectContaining({ sessionKey: sibling, snippet: "matching text" })],
+          truncated: true,
+        });
+      }
+    },
+  );
 
   it.each([
     { elapsed: 4999, fails: false },

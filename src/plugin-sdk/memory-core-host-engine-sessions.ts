@@ -1,11 +1,13 @@
 /** Private-local SDK subpath for memory session transcript helpers. */
 import { isMainThread } from "node:worker_threads";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import {
   buildSessionEntry as buildSessionEntryFromHost,
   listSessionTranscriptCorpusEntriesForAgent as listSessionTranscriptCorpusEntriesFromHost,
   readSessionResetRecallCutoff as readSessionResetRecallCutoffFromHost,
 } from "../../packages/memory-host-sdk/src/engine-sessions.js";
 import { assertBoundIncognitoMemorySyncAccess } from "../../packages/memory-host-sdk/src/host/session-memory-authority.js";
+import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import {
   listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
@@ -25,6 +27,227 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { isIncognitoSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../utils/delivery-context.read.js";
+
+export type SessionTranscriptChannelReadTarget = {
+  key: string;
+  agentId: string;
+  expectedSessionId: string;
+  storePath: string;
+};
+
+export type PreparedSessionTranscriptChannelRead = {
+  withCurrentAccess: <T>(
+    consume: (
+      visible: readonly boolean[],
+    ) => T & (T extends PromiseLike<unknown> ? never : unknown),
+  ) => Promise<T>;
+};
+
+/** Retain exact transcript owners, then consume the complete disclosure batch synchronously. */
+export async function prepareSessionTranscriptChannelRead(params: {
+  cfg: OpenClawConfig;
+  requesterAgentId: string;
+  requesterSessionKey: string;
+  sandboxed: boolean;
+  groups: readonly (readonly SessionTranscriptChannelReadTarget[])[];
+}): Promise<PreparedSessionTranscriptChannelRead> {
+  if (!params.requesterSessionKey.trim()) {
+    throw new Error("Session transcript disclosure requires a requesting session.");
+  }
+  const [
+    { getInProcessGatewayToolContext },
+    { getSessionRowProjection },
+    rows,
+    channel,
+    visibility,
+  ] = await Promise.all([
+    import("../agents/tools/in-process-gateway.js"),
+    import("../gateway/session-row-projection-access.js"),
+    import("../gateway/session-row-prepared-read.js"),
+    import("../agents/tools/sessions-channel-read-result.js"),
+    import("./session-visibility.js"),
+  ]);
+  const projection = getSessionRowProjection(getInProcessGatewayToolContext());
+  if (!projection) {
+    const standalonePolicy = visibility.createAgentToAgentPolicy(params.cfg, {
+      sandboxed: params.sandboxed,
+    });
+    return {
+      withCurrentAccess: async (consume) => {
+        const allowed = channel.currentSessionChannelReadAccess({
+          requesterAgentId: params.requesterAgentId,
+          requesterSessionKey: params.requesterSessionKey,
+          a2aPolicy: standalonePolicy,
+          sandboxed: params.sandboxed,
+          targets: params.groups.flat(),
+        });
+        let offset = 0;
+        const result = consume(
+          params.groups.map((group) => {
+            const visible =
+              group.length > 0 && allowed.slice(offset, offset + group.length).every(Boolean);
+            offset += group.length;
+            return visible;
+          }),
+        );
+        if (isPromiseLike(result)) {
+          void Promise.resolve(result).catch(() => {});
+          throw new Error("Session transcript read consumers must remain synchronous");
+        }
+        return result;
+      },
+    };
+  }
+  const { bindSessionListRowRead, withCurrentSessionListRows } =
+    await import("../gateway/session-list-read-result.js");
+  const requester = { agentId: params.requesterAgentId, key: params.requesterSessionKey };
+  return rows.withReadySessionRows<PreparedSessionTranscriptChannelRead>(
+    projection,
+    () => [requester, ...params.groups.flat()],
+    (read) => {
+      const requesterRow = read.describe(requester);
+      if (!requesterRow) {
+        throw new Error("The requesting session is no longer available.");
+      }
+      const policyConfig = read.state.policyConfig;
+      const a2aPolicy = visibility.createAgentToAgentPolicy(policyConfig, {
+        sandboxed: params.sandboxed,
+      });
+      const admittedChecker = visibility.createSessionVisibilityRowChecker({
+        action: "history",
+        requesterAgentId: params.requesterAgentId,
+        requesterSessionKey: params.requesterSessionKey,
+        mainSessionKey: resolveCanonicalMainSessionKey({
+          agentId: params.requesterAgentId,
+          mainKey: policyConfig.session?.mainKey,
+          sessionScope: policyConfig.session?.scope,
+        }),
+        visibility: visibility.resolveEffectiveSessionToolsVisibility({
+          cfg: policyConfig,
+          sandboxed: params.sandboxed,
+        }),
+        a2aPolicy,
+        requesterChannelRow: {
+          key: requesterRow.key,
+          chatType: requesterRow.entry.chatType,
+          space: requesterRow.entry.space,
+          origin: sessionDeliveryOrigin(requesterRow.entry),
+          deliveryContext: deliveryContextFromSession(requesterRow.entry),
+        },
+      });
+      const requesterBinding = {};
+      bindSessionListRowRead(requesterBinding, { projection, record: requesterRow });
+      const groups = params.groups.map((targets) =>
+        targets.map((target) => {
+          const record = read.describe(target);
+          if (!record) {
+            return undefined;
+          }
+          const row = {
+            key: record.key,
+            agentId: record.agentId,
+            spawnedBy: record.entry.spawnedBy,
+            parentSessionKey: record.entry.parentSessionKey,
+            chatType: record.entry.chatType,
+            space: record.entry.space,
+            origin: sessionDeliveryOrigin(record.entry),
+            deliveryContext: deliveryContextFromSession(record.entry),
+          };
+          if (
+            record.entry.sessionId !== target.expectedSessionId ||
+            record.entry.archivedAt !== undefined ||
+            !admittedChecker.check(row).allowed
+          ) {
+            return undefined;
+          }
+          const binding = {};
+          bindSessionListRowRead(binding, { projection, record });
+          return {
+            binding,
+            target: {
+              agentId: record.agentId,
+              key: record.key,
+              storePath: record.storeTarget.storePath,
+              expectedSessionId: record.entry.sessionId,
+            },
+          };
+        }),
+      );
+      const captured = groups.flatMap((group) => group.flatMap((entry) => entry ?? []));
+      return {
+        withCurrentAccess: (consume) =>
+          withCurrentSessionListRows(
+            [requesterBinding, ...captured.map((entry) => entry.binding)],
+            (current, currentRead) => {
+              if (
+                !currentRead ||
+                getSessionRowProjection(getInProcessGatewayToolContext()) !== projection
+              ) {
+                throw new Error("Gateway changed while preparing transcript disclosure; retry.");
+              }
+              const channelAllowed = channel.currentSessionChannelReadAccess(
+                {
+                  requesterAgentId: params.requesterAgentId,
+                  requesterSessionKey: params.requesterSessionKey,
+                  a2aPolicy,
+                  sandboxed: params.sandboxed,
+                  targets: captured.map((entry) => entry.target),
+                },
+                currentRead,
+              );
+              const allowedByBinding = new Map(
+                captured.map((entry, index) => [
+                  entry.binding,
+                  current[0] === true &&
+                    current[index + 1] === true &&
+                    channelAllowed[index] === true,
+                ]),
+              );
+              const identity = (target: { key: string; agentId: string; storePath: string }) =>
+                JSON.stringify([target.agentId, target.storePath, target.key]);
+              return consume(
+                groups.map((group) => {
+                  if (group.length === 0 || group.some((entry) => !entry)) {
+                    return false;
+                  }
+                  const aliases = new Set(
+                    group.flatMap((entry) => (entry ? [identity(entry.target)] : [])),
+                  );
+                  return group.every(
+                    (entry) =>
+                      entry &&
+                      allowedByBinding.get(entry.binding) === true &&
+                      projection
+                        .findBySessionId({
+                          agentId: entry.target.agentId,
+                          storePath: entry.target.storePath,
+                          sessionId: entry.target.expectedSessionId,
+                        })
+                        .every((row) =>
+                          aliases.has(
+                            identity({
+                              agentId: row.agentId,
+                              key: row.key,
+                              storePath: row.storeTarget.storePath,
+                            }),
+                          ),
+                        ),
+                  );
+                }),
+              );
+            },
+            true,
+            [requester],
+          ),
+      };
+    },
+    { selection: { metadataOnly: true } },
+  );
+}
 
 export type {
   MemorySessionSelectors,

@@ -428,6 +428,7 @@ export async function executeSessionsSend(
     cfg,
     storePath: opts?.expectedTargetStorePath,
     agentId: targetAgentId,
+    ...access,
     expectedSessionId,
     ...(opts?.signal ? { signal: opts.signal } : {}),
     targetSessionKey: resolvedKey,

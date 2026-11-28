@@ -183,6 +183,94 @@ test.each(["needle", "会"])(
   },
 );
 
+test.each(["route", "policy"] as const)(
+  "channel recall publishes only hits still readable after a %s change",
+  async (change) => {
+    await withSearchState(async () => {
+      const owner = ensureProfileForEmail("channel-recall@example.test").id;
+      const cfg: OpenClawConfig = {
+        agents: { entries: { main: {} } },
+        tools: { sessions: { visibility: "channel" } },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      const route = (to: string) => ({
+        chatType: "channel" as const,
+        space: "t111",
+        delivery: {
+          kind: "external" as const,
+          route: {
+            channel: "slack",
+            accountId: "default",
+            target: { to, chatType: "channel" as const },
+          },
+          context: { channel: "slack", accountId: "default", to },
+          origin: { provider: "slack", chatType: "channel" as const },
+        },
+      });
+      const requester = await seed(
+        "main",
+        "slack:channel:c111:thread:1.001",
+        owner,
+        "channelneedle requester",
+        route("channel:c111"),
+      );
+      const sibling = await seed(
+        "main",
+        "slack:channel:c111:thread:1.002",
+        owner,
+        "channelneedle sibling",
+        route("channel:c111"),
+      );
+      const other = await seed(
+        "main",
+        "slack:channel:c222:thread:1.003",
+        owner,
+        "channelneedle other customer",
+        route("channel:c222"),
+      );
+      const context = requestContext(cfg);
+      const client = identifiedClient(owner);
+      const params = {
+        query: "channelneedle",
+        recall: {
+          requesterAgentId: "main",
+          requesterSessionKey: requester,
+          visibility: "channel" as const,
+        },
+      };
+      const initial = await search(context, client, params);
+      expect(initial.ok, initial.error?.message).toBe(true);
+      expect(new Set(initial.payload?.results.map((hit) => hit.sessionKey))).toEqual(
+        new Set([requester, sibling]),
+      );
+      expect(initial.payload?.results.map((hit) => hit.sessionKey)).not.toContain(other);
+
+      const readIndex = transcriptSearch.searchSessionTranscripts;
+      vi.spyOn(transcriptSearch, "searchSessionTranscripts").mockImplementationOnce(
+        async (...args) => {
+          const page = await readIndex(...args);
+          expect(page.hits.map((hit) => hit.sessionKey)).toContain(sibling);
+          if (change === "route") {
+            await upsertSessionEntryCore(
+              { agentId: "main", sessionKey: sibling },
+              route("channel:c222"),
+            );
+          } else {
+            cfg.tools = { sessions: { visibility: "self" } };
+            setRuntimeConfigSnapshot(cfg);
+          }
+          return { ...page, indexing: true, truncated: true, archivedTranscriptsExcluded: 7 };
+        },
+      );
+      const updated = await search(context, client, params);
+      expect(updated.ok, updated.error?.message).toBe(true);
+      expect(updated.payload).toEqual({
+        results: initial.payload!.results.filter((hit) => hit.sessionKey === requester),
+      });
+    });
+  },
+);
+
 test("recall batch verdicts match singleton checks over mixed physical owners", async () => {
   await withSearchState(async () => {
     const viewer = ensureProfileForEmail("recall-mixed@example.test").id;

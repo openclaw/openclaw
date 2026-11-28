@@ -72,6 +72,50 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     combinedSessionStore = crossAgentStore;
   });
 
+  it("keeps transcript recall channel-scoped and rejects ambiguous aliases and archives", async () => {
+    const requester = "agent:main:slack:channel:c111:thread:1.001";
+    const sibling = "agent:main:slack:channel:c111:thread:1.002";
+    const other = "agent:main:slack:channel:c222:thread:1.003";
+    const stored = (id: string, to: string) =>
+      sessionEntry(id, 1, `/tmp/sessions/${id}.jsonl`, {
+        chatType: "channel",
+        space: "t111",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "slack", accountId: "default", to },
+          origin: { provider: "slack", accountId: "default", chatType: "channel", to },
+        }),
+      });
+    combinedSessionStore = {
+      [requester]: stored("current", "channel:c111"),
+      [sibling]: stored("past", "channel:c111"),
+      [other]: stored("secret", "channel:c222"),
+    };
+    const visible = searchHit("sessions/past.jsonl", "sessions", "same channel");
+    const privateHit = searchHit("sessions/secret.jsonl", "sessions", "other customer");
+    const archived = searchHit(
+      "sessions/past.jsonl.reset.2026-01-01T00-00-00.000Z",
+      "sessions",
+      "old scope unknown",
+    );
+    const request = {
+      cfg: asOpenClawConfig({ tools: { sessions: { visibility: "channel" } } }),
+      agentId: "main",
+      requesterSessionKey: requester,
+      sandboxed: false,
+      hits: [visible, privateHit, archived],
+    };
+    expect(await filterMemorySearchHitsBySessionVisibility(request)).toEqual([]);
+    const capturedTargets = vi.fn();
+    const ownedRequest = { ...request, captureChannelTargets: capturedTargets };
+    expect(await filterMemorySearchHitsBySessionVisibility(ownedRequest)).toEqual([visible]);
+    expect(capturedTargets).toHaveBeenCalledWith([expect.objectContaining({ hit: visible })]);
+    combinedSessionStore[sibling] = { ...stored("past", "channel:c111"), space: undefined };
+    expect(await filterMemorySearchHitsBySessionVisibility(ownedRequest)).toEqual([]);
+    combinedSessionStore[sibling] = stored("past", "channel:c111");
+    combinedSessionStore[other] = stored("past", "channel:c222");
+    expect(await filterMemorySearchHitsBySessionVisibility(ownedRequest)).toEqual([]);
+  });
+
   it("drops sessions-sourced hits when requester key is missing (fail closed)", async () => {
     const hits: MemorySearchResult[] = [searchHit("sessions/u1.jsonl", "sessions", "x")];
     const filtered = await filter(hits, {
@@ -79,6 +123,56 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
       requesterSessionKey: undefined,
     });
     expect(filtered).toStrictEqual([]);
+  });
+
+  it("retains channel requester routing when transcript inventory is limited to the search", async () => {
+    const legacyGuard = vi.spyOn(sessionVisibility, "createSessionVisibilityGuard");
+    const requester = "agent:main:slack:channel:c111:thread:1.001";
+    const sibling = "agent:main:slack:channel:c111:thread:1.002";
+    const channelEntry = (id: string) =>
+      sessionEntry(id, 1, `/tmp/sessions/${id}.jsonl`, {
+        chatType: "channel",
+        space: "t111",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "slack", accountId: "default", to: "channel:c111" },
+          origin: {
+            provider: "slack",
+            accountId: "default",
+            chatType: "channel",
+            to: "channel:c111",
+          },
+        }),
+      });
+    const inventory = { [requester]: channelEntry("current"), [sibling]: channelEntry("past") };
+    const selectedInventory: typeof engineSessions.loadMemorySearchSessionStore = async (
+      _cfg,
+      selection,
+    ) => ({
+      storePath: "(test)",
+      store: Object.fromEntries(
+        Object.entries(inventory).filter(
+          ([key, row]) =>
+            selection.sessionKeys.includes(key) || selection.sessionIds.includes(row.sessionId),
+        ),
+      ),
+    });
+    vi.mocked(engineSessions.loadMemorySearchSessionStore).mockImplementationOnce(
+      selectedInventory,
+    );
+    const hit = searchHit("sessions/past.jsonl", "sessions", "same channel");
+
+    await expect(
+      filterMemorySearchHitsBySessionVisibility({
+        cfg: asOpenClawConfig({ tools: { sessions: { visibility: "channel" } } }),
+        agentId: "main",
+        requesterSessionKey: requester,
+        sandboxed: false,
+        hits: [hit],
+        captureChannelTargets: () => {},
+      }),
+    ).resolves.toEqual([hit]);
+    expect(engineSessions.loadMemorySearchSessionStore).toHaveBeenCalledTimes(1);
+    expect(legacyGuard).not.toHaveBeenCalled();
   });
 
   it("does not load session history for memory-only hits with configured recall", async () => {
@@ -145,6 +239,42 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
       "prior private context",
     );
     const filtered = await recall([hit]);
+
+    expect(filtered).toStrictEqual([]);
+  });
+
+  it("reloads private recall metadata after the visibility guard awaits", async () => {
+    const sourceSessionKey = "agent:main:webchat:direct:friend";
+    const anchor = sessionEntry("current", 2, "/tmp/sessions/current.jsonl", {
+      chatType: "direct",
+    });
+    const source = sessionEntry("source", 1, "/tmp/sessions/source.jsonl", {
+      chatType: "direct",
+    });
+    combinedSessionStore = { [anchorSessionKey]: anchor, [sourceSessionKey]: source };
+    const createGuard = sessionVisibility.createSessionVisibilityGuard;
+    vi.spyOn(sessionVisibility, "createSessionVisibilityGuard").mockImplementation(
+      async (options) => {
+        combinedSessionStore = {
+          [anchorSessionKey]: anchor,
+          "agent:main:telegram:group:team": anchor,
+          [sourceSessionKey]: source,
+        };
+        return await createGuard(options);
+      },
+    );
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg: asOpenClawConfig({ tools: { sessions: { visibility: "tree" } } }),
+      requesterSessionKey: anchorSessionKey,
+      sandboxed: false,
+      hits: [searchHit("sessions/source.jsonl", "sessions", "private context")],
+      conversationRecall: {
+        anchorSessionKey,
+        scope: "same-agent-private",
+        corpus: "sessions",
+      },
+    });
 
     expect(filtered).toStrictEqual([]);
   });
