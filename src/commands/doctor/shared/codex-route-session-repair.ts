@@ -13,6 +13,7 @@ import {
   loadPersistedSharedAuthProfileStore,
 } from "../../../agents/auth-profiles/persisted.js";
 import { isLegacyCodexProviderId } from "../../../config/legacy-codex-provider.js";
+import { resolveIsConfigReadOnly } from "../../../config/paths.js";
 import {
   applySessionEntryReplacements,
   scanDoctorSessionEntriesStrict,
@@ -46,6 +47,7 @@ import {
   isBlockedLegacyCodexModelRef,
   isOpenAICodexModelRef,
   isProviderlessModelRef,
+  legacyCodexProviderIdentityKey,
   toCanonicalOpenAIModelRef,
   toOpenAIModelId,
   resolveRuntimeModelRef,
@@ -490,6 +492,16 @@ export async function maybeRepairCodexSessionRoutes(params: {
   providerRenames?: readonly ProviderRename[];
 }): Promise<CodexSessionRouteRepairSummary> {
   const env = params.env ?? process.env;
+  const blockedModelIdentities = new Set(params.blockedModelIdentities);
+  if (resolveIsConfigReadOnly(env)) {
+    // A pending provider rename cannot move saved selections ahead of the external config.
+    for (const provider of Object.keys(params.cfg.models?.providers ?? {})) {
+      const identity = legacyCodexProviderIdentityKey(provider);
+      if (identity) {
+        blockedModelIdentities.add(identity);
+      }
+    }
+  }
   const authProfileOnly =
     !params.providerRenameOnly && !params.shouldRepair && params.authProfileOnly === true;
   const shouldRepair = params.shouldRepair || authProfileOnly;
@@ -586,7 +598,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
       }
       return repairCodexSessionStoreRoutes({
         store,
-        blockedModelIdentities: params.blockedModelIdentities,
+        blockedModelIdentities,
         authProfileIdMap,
         authProfileOnly,
         providerRenameOnly: params.providerRenameOnly,
