@@ -7,6 +7,7 @@ import {
   installMockGateway,
   waitForTranscriptScrollIdle,
 } from "./chat-flow.test-support.ts";
+import { historyMessageCount } from "./chat-history-pagination-probe.test-support.ts";
 import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -53,11 +54,13 @@ suite.define(() => {
       });
       const gateway = await installMockGateway(page, {
         sessions: [{ key: "agent:main:main", sessionId: "find-session" }],
+        deferredRequests: [{ method: "chat.history", match: { cursor: "before-54" } }],
         methodResponses: {
           "chat.startup": history(54, 78),
           "chat.history": {
             cases: [
-              { match: { cursor: "before-54" }, response: history(24, 54) },
+              { match: { cursor: "before-54" }, response: history(40, 54) },
+              { match: { cursor: "before-40" }, response: history(24, 40) },
               { match: { cursor: "before-24" }, response: history(0, 24) },
             ],
           },
@@ -70,6 +73,14 @@ suite.define(() => {
       const search = pane.getByRole("textbox", { name: "Search loaded messages" });
       await search.waitFor();
       expect(await gateway.getRequests("chat.history")).toHaveLength(0);
+      await search.fill("Folio 1 · meadow");
+      await gateway.waitForRequest("chat.history", { match: { cursor: "before-54" } });
+      await search.press("Escape");
+      await gateway.resolveDeferred("chat.history");
+      await expect.poll(() => historyMessageCount(pane)).toBe(38);
+      await waitForTranscriptScrollIdle(pane.locator(".chat-thread"));
+      expect(await gateway.getRequests("chat.history")).toHaveLength(1);
+      await pane.locator(".agent-chat__composer-combobox textarea").press("ControlOrMeta+f");
       await search.fill("Folio 1 · meadow");
       await pane.locator('.chat-bubble[data-entry-id="folio-1"]').waitFor();
     });

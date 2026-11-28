@@ -51,6 +51,7 @@ import { TranscriptHistoryInput } from "./chat-scroll-input.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
+import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { readTranscriptViewport } from "./components/chat-transcript-scroll-events.ts";
 import { persistChatComposerState } from "./composer-draft-storage.ts";
 import { captureChatSessionScrollPosition, saveChatSessionScrollPosition } from "./scroll.ts";
@@ -173,6 +174,14 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     }
     this.transcriptScrollTop = null;
     this.olderCursorsSeen.clear();
+  }
+
+  protected reconcileHistoryAfterRender(): void {
+    this.evaluateHistoryEdge();
+    if (this.conversationPresented && this.state?.settings.compactSessionOpening) {
+      // A query can precede the first history page, a reconnect, or a pane reveal.
+      void getTranscriptState(this.presentationId).search.resumeEarlierHistory?.();
+    }
   }
 
   /**
@@ -317,13 +326,7 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     this.evaluateHistoryEdge();
   }
 
-  protected readonly searchEarlier = async (isSearching: () => boolean) => {
-    while (isSearching()) {
-      if (!(await this.loadOlderMessages(false))) {
-        return;
-      }
-    }
-  };
+  protected readonly searchEarlier = () => this.loadOlderMessages(false);
 
   protected async loadOlderMessages(readerIntent = true): Promise<boolean> {
     if (this.activeOlderLoad) {
