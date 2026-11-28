@@ -22,7 +22,7 @@ function writePackage(root: string, name?: string) {
   writeFileSync(join(root, "docs", "guide.md"), "fixture guide");
 }
 
-function expectedMetadata(root: string, name = "openclaw") {
+function expectedMetadata(root: string, name: string) {
   return {
     appName: name,
     configDir: `.${name}`,

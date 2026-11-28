@@ -381,7 +381,7 @@ function status(
   return getSessionStatusTool(requester, options).execute("status", params);
 }
 
-function runSessionTool(persisted = true, thinking = false, treeVisibility = false) {
+function runSessionTool(persisted: boolean, thinking: boolean, treeVisibility: boolean) {
   resetSessionStore({
     [liveKey]: fixtureSession("s-tg-direct", {
       updatedAt: 5,

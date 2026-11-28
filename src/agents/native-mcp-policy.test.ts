@@ -26,7 +26,7 @@ function makeTool(
 function makeCatalog(
   servers: [string, string, number][],
   tools: McpToolCatalog["tools"],
-  extra: Partial<McpToolCatalog> = {},
+  extra: Partial<McpToolCatalog>,
 ): McpToolCatalog {
   return {
     version: 1,

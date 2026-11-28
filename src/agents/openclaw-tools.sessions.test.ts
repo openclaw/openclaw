@@ -90,7 +90,7 @@ async function activeSession(
   return activeRun(key, options);
 }
 
-async function writeFinal(sessionKey: string, runId: string, text: string, sessionId = sessionKey) {
+async function writeFinal(sessionKey: string, runId: string, text: string, sessionId: string) {
   await persistSessionTranscriptTurn(
     { agentId: parseAgentSessionKey(sessionKey)!.agentId, sessionKey, sessionId },
     {
