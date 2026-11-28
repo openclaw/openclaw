@@ -594,7 +594,7 @@ export function createCodexDynamicToolBridge(params: {
             extractSourceReplyPayload: extractMessagingToolSourceReplyPayload,
             collectMessagingMediaUrls: collectAgentHarnessMessagingMediaUrls,
             resolveMessagingMediaSourceUrls: (mediaUrls) =>
-              resolveCodexMediaSourceUrls(mediaUrls, preparedMessageMedia?.sourcePathsByStagedPath),
+              resolveCodexMediaSourceUrls(mediaUrls, preparedMessageMedia),
             toolName,
             args: executedArgs,
             result,
