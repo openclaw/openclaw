@@ -102,7 +102,12 @@ export const readToolInputSchema = Type.Object({
 export const readTruncationOutputSchema = Type.Object(
   {
     truncated: Type.Literal(true),
-    truncatedBy: Type.Union([Type.Literal("lines"), Type.Literal("bytes")]),
+    truncatedBy: Type.Union([
+      Type.Literal("lines"),
+      Type.Literal("bytes"),
+      // The weighted model budget removed content the byte cap would have kept.
+      Type.Literal("budget"),
+    ]),
     totalLines: Type.Optional(
       Type.Integer({ minimum: 0, description: "Exact line count; absent until EOF is reached." }),
     ),
