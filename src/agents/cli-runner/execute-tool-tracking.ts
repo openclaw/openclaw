@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import {
   beginMcpLoopbackToolCallCapture,
   clearMcpLoopbackToolCallCapture,
@@ -42,6 +41,8 @@ import {
 import { stripOpenClawMcpToolPrefix } from "../tool-display-call.js";
 import { readToolResultDetails } from "../tool-result-error.js";
 import { closeCliLiveSession } from "./cli-live-session-registry.js";
+import { matchesCliLoopbackCall } from "./cli-loopback-call-match.js";
+import { isSuccessfulCliSchedulerAdd } from "./cli-scheduler-add-evidence.js";
 import {
   attachCliMessagingDeliveryEvidence,
   projectCliMessagingDeliveryEvidence,
@@ -111,13 +112,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   let toolAudioAsVoice = false;
   let toolTrustedLocalMedia = false;
   const acceptedSessionSpawns: AcceptedSessionSpawn[] = [];
-  const matchesCliLoopbackCall = (
-    toolName: string,
-    toolArgs: Record<string, unknown>,
-    call: McpLoopbackToolCallStart,
-  ) =>
-    stripOpenClawMcpToolPrefix(toolName) === call.toolName &&
-    isDeepStrictEqual(toolArgs, call.args);
+  let successfulCronAdds = 0; // #193958: successful scheduler adds this turn, for the reminder guard
   const markCliLoopbackCallsAmbiguous = (
     calls: CliLoopbackCall[],
     activeEntries = Array.from(activeCliTools.entries()).filter(
@@ -453,6 +448,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         ) {
           acceptedSessionSpawns.push(acceptedSessionSpawn);
         }
+        successfulCronAdds += isSuccessfulCliSchedulerAdd(call) ? 1 : 0;
         const candidate = candidates.length === 1 ? candidates[0] : undefined;
         const isLatestToolResult = observeToolResult(candidate, candidate?.boundToolCallId);
         yieldTurnEnd.observe(toolName, call);
@@ -703,6 +699,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         ...(current.acceptedSessionSpawns.length > 0
           ? { acceptedSessionSpawns: current.acceptedSessionSpawns.slice() }
           : {}),
+        ...(successfulCronAdds > 0 ? { successfulCronAdds } : {}),
       };
     },
     attachDeliveryEvidence(error: unknown) {
