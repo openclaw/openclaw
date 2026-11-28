@@ -25,7 +25,9 @@ import {
   detectImageReferences,
   hasHydratableMediaImages,
 } from "../embedded-agent-runner/run/images.js";
+import type { ToolSummaryTrace } from "../embedded-agent-runner/types.js";
 import { prepareAgentExecScratch } from "../exec-scratch.js";
+import { findCliTimeoutError, recordModelFallbackStop } from "../failover-error.js";
 import { resolveFastModeForElapsed } from "../fast-mode.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
@@ -86,6 +88,19 @@ type ExecutePreparedCliRunOptions = {
   /** Receives the exact composed prompt sent to the CLI, once per attempt. */
   onPromptPrepared?: (prompt: string) => void;
 };
+
+// A run deadline that expires after the turn started tool work cannot be replayed on
+// a fallback model: the next candidate would restart the task and repeat those tool
+// effects (#203465). Timeouts before any tool stay failover-eligible (#186915).
+function stopFallbackAfterOverallTimeoutWithToolEffects(
+  error: unknown,
+  toolSummary: ToolSummaryTrace,
+): void {
+  const timeoutError = findCliTimeoutError(error);
+  if (toolSummary.calls > 0 && timeoutError?.cliTimeout.mode === "overall") {
+    recordModelFallbackStop(timeoutError);
+  }
+}
 
 export async function executePreparedCliRun(
   inputContext: PreparedCliRunContext,
@@ -588,6 +603,7 @@ export async function executePreparedCliRun(
           ...(acceptedSessionSpawns ? { acceptedSessionSpawns } : {}),
         });
       }
+      stopFallbackAfterOverallTimeoutWithToolEffects(runError, events.getToolSummary());
       throw toolTracking.attachDeliveryEvidence(runError);
     }
     if (!runOutput) {
