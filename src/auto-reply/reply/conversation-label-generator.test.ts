@@ -249,6 +249,30 @@ describe("generateConversationLabel", () => {
     },
   );
 
+  it("stops the utility chain when its owner retires during an attempt", async () => {
+    const retired = new Error("The title owner retired.");
+    let current = true;
+    // Isolated completion re-checks its caller after resolving the model.
+    runIsolatedCompletion.mockImplementation(async (request: { assertCurrent?: () => void }) => {
+      request.assertCurrent?.();
+      current = false;
+      request.assertCurrent?.();
+      return { text: "Stale title" };
+    });
+    const label = generate({
+      cfg: modelConfig("openai/gpt-main", "openai/gpt-mini", ["openai/utility-backup"]),
+      agentId: "main",
+      abortSignal: new AbortController().signal,
+      assertCurrent() {
+        if (!current) {
+          throw retired;
+        }
+      },
+    });
+    await expect(label).rejects.toBe(retired);
+    expect(attemptedModels()).toEqual(["gpt-mini"]);
+  });
+
   it("bounds without splitting surrogate pairs", async () => {
     runIsolatedCompletion.mockResolvedValue({ text: `${"a".repeat(11)}😀tail` });
 
