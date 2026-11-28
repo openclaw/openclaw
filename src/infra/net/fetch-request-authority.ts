@@ -88,6 +88,11 @@ function createRequestAuthority(source: {
   };
 }
 
+/** Start work that outlives the caller (an accepted autonomous run) with no inherited request fence. */
+export function runOutsideGuardedFetchRequestAuthority<T>(run: () => T): T {
+  return requestAuthority.exit(run);
+}
+
 /** Carry a host-owned assertion through provider preparation without granting new authority. */
 export async function withGuardedFetchRequestAuthority<T>(
   assertCurrent: (() => void) | undefined,

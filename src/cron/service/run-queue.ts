@@ -1,5 +1,6 @@
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { runOutsideOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
+import { runOutsideGuardedFetchRequestAuthority } from "../../infra/net/fetch-request-authority.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import {
@@ -553,7 +554,10 @@ export async function launchCronRunQueueResult(
                 }
               }
             };
-            return state.deps.runSchedulerOwned ? state.deps.runSchedulerOwned(run) : run();
+            // A cron-root caller's request fence ends with its run; the launched job has its own admission.
+            return runOutsideGuardedFetchRequestAuthority(() =>
+              state.deps.runSchedulerOwned ? state.deps.runSchedulerOwned(run) : run(),
+            );
           }),
         ),
       "cron:run",
