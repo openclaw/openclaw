@@ -929,6 +929,9 @@ fn ensure_quickchat_window(app: &AppHandle) -> Result<Window, String> {
     .visible(false)
     .build()
     .map_err(|error| format!("Could not create Quick Chat window: {error}"))?;
+    #[cfg(target_os = "linux")]
+    crate::linux_clipboard_paste::install_webview(window.as_ref())
+        .map_err(|error| format!("Could not prepare Quick Chat clipboard paste: {error}"))?;
     app.state::<GatewayClient>().activate(app.clone());
     Ok(window.as_ref().window())
 }
