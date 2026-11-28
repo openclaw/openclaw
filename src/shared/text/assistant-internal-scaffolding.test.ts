@@ -13,11 +13,21 @@ describe("batch internal scaffolding", () => {
     );
   });
 
+  it("hides leaked DSML envelopes but keeps code-owned examples", () => {
+    expect(
+      stripAssistantInternalScaffolding(
+        "Before <｜DSML｜tool_calls>hidden</｜DSML｜tool_calls> after `<|DSML|tool_call>x</|DSML|tool_call>`",
+      ),
+    ).toBe("Before  after `<|DSML|tool_call>x</|DSML|tool_call>`");
+    expect(stripAssistantInternalScaffolding("Before <|DSML|tool_call>unfinished")).toBe("Before ");
+  });
+
   it.each([
     "!<tool_call/>[example `<parameter>x</parameter>`][id]\n\n[id]: /image",
     "Before <|assistant|> <relevant-memories>private</relevant-memories> after",
     'Use `[TOOL_CALL] tool => "read" args => {} [/TOOL_CALL]` literally.\n<internal>private</internal>',
     "> ```\n> <internal>literal</internal>\n> ```\n<final>Answer</final>\n",
+    'Before <｜｜DSML｜｜tool_calls>{"text":"</｜｜DSML｜｜tool_calls>"}</｜｜DSML｜｜tool_calls> after',
   ])("matches the shared server profile at every prefix: %j", (text) => {
     const filters = assistantVisibleTextFilters("internal-scaffolding");
     for (let end = 0; end <= text.length; end++) {
