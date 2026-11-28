@@ -3,7 +3,7 @@ import { listAgentEntriesWithSource, listAgentIds } from "../agents/agent-roster
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { getMemoryEmbeddingCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
-import { createConfigIO } from "../config/io.js";
+import { captureRuntimeConfigAsyncReader, clearRuntimeConfigSnapshot } from "../config/io.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
 import { getScopedDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { runDatabasePortTask } from "../infra/database-engine/port-command.worker.js";
@@ -56,12 +56,14 @@ export async function rebuildPortedAgentMemory(params: {
       onForeignOwner: "refuse",
       runLocal: async ({ env, assertCurrent }) => {
         // Port publication intentionally leaves the running command's config snapshot unchanged.
-        const config = await createConfigIO({
-          env,
-          configPath: env.OPENCLAW_CONFIG_PATH,
+        // Drop any pre-port snapshot and prepare the freshly published config for runtime readers.
+        assertCurrent();
+        clearRuntimeConfigSnapshot();
+        const config = await captureRuntimeConfigAsyncReader({
+          assertCurrent,
           observe: false,
-          pluginValidation: "skip",
-        }).loadConfigAsync({ assertCurrent });
+          skipPluginValidation: true,
+        })();
         const registered = await inspectOpenClawRegisteredAgentDatabases({ env });
         const known = new Map(
           [
