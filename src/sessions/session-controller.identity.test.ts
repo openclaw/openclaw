@@ -156,7 +156,7 @@ it("explains an ambiguous session even when the store is known", () => {
   try {
     const overlap = captureTarget({ storeScope, sessionKey: key, aliases: ["previous"] });
     expect(() => reserve(overlap)).toThrow(
-      "OpenClaw found more than one match and couldn’t tell which session to use.",
+      "OpenClaw found conflicting session records and couldn’t tell which session to use. Try again in a moment.",
     );
   } finally {
     retireInput(current);

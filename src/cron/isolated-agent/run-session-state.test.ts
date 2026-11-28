@@ -74,9 +74,12 @@ function makeGuardedPersistSessionEntry(persistedStore: Record<string, SessionEn
 it.each([
   [
     "previous",
-    "OpenClaw mixed up this run with unfinished work from the previous run, so the agent didn’t start.",
+    "The agent didn’t start because work from the previous run was still active. Wait a moment, then try running it again.",
   ],
-  ["unrelated", "The agent didn’t start. OpenClaw found conflicting session records for this run."],
+  [
+    "unrelated",
+    "The agent didn’t start because OpenClaw found conflicting session records for this run. Wait a moment, then try running it again.",
+  ],
 ])("explains a preparation conflict with work from the %s run", async (heldId, message) => {
   const storePath = path.join(sessionDirs.make(), "sessions.json");
   const agentSessionKey = "agent:main:cron:briefing";

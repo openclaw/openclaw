@@ -305,7 +305,9 @@ export class AmbiguousSessionControllerError extends Error {
   readonly #workSessionKeys: string[];
 
   constructor(matches: readonly SessionControllerEntry[]) {
-    super("OpenClaw found more than one match and couldn’t tell which session to use.");
+    super(
+      "OpenClaw found conflicting session records and couldn’t tell which session to use. Try again in a moment.",
+    );
     // An owner's original key can outlive its work. Capture the effects' own targets instead.
     this.#workSessionKeys = matches.flatMap(({ lifecycle }) =>
       Array.from(lifecycle?.effects ?? [], (effect) => effect.ref.target.sessionKey),

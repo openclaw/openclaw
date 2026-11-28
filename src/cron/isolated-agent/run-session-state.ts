@@ -177,8 +177,8 @@ export async function beginCronPreparationEffect(params: {
       previousId !== cronSession.sessionEntry.sessionId &&
       cause.hasWorkFor(`${agentSessionKey}:run:${previousId}`);
     cause.message = previousRunHasWork
-      ? "OpenClaw mixed up this run with unfinished work from the previous run, so the agent didn’t start."
-      : "The agent didn’t start. OpenClaw found conflicting session records for this run.";
+      ? "The agent didn’t start because work from the previous run was still active. Wait a moment, then try running it again."
+      : "The agent didn’t start because OpenClaw found conflicting session records for this run. Wait a moment, then try running it again.";
     throw cause;
   });
 }
