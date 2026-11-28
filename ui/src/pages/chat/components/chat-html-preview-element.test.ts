@@ -6,6 +6,7 @@ import type {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { bumpCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
+import { WIDGET_LOAD_TIMEOUT_MS } from "../../../lib/widget-sandbox-host.ts";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { ChatHtmlPreviewElement } from "./chat-html-preview-element.tsx";
@@ -723,6 +724,35 @@ describe("ordinary HTML preview transport", () => {
     view.querySelector("button")!.click();
     await frameFor(view);
     expect(request).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("sandbox readiness timeout", () => {
+  it.each([
+    ["an inferred remote origin", undefined, true],
+    ["an explicit origin", "https://sbx.example", false],
+  ])("offers routing guidance only for %s", async (_name, sandboxOrigin, hint) => {
+    const readyTimers: (() => void)[] = [];
+    const realSetTimeout = window.setTimeout.bind(window);
+    vi.spyOn(window, "setTimeout").mockImplementation(((fn: () => void, delay?: number) => {
+      if (delay === WIDGET_LOAD_TIMEOUT_MS) {
+        readyTimers.push(fn);
+        return 0;
+      }
+      return realSetTimeout(fn, delay);
+    }) as typeof window.setTimeout);
+    const { view } = mount(vi.fn().mockResolvedValue({ ...metadata, sandboxOrigin }));
+    await frameFor(view);
+    await expect.poll(() => readyTimers.length).toBeGreaterThan(0);
+    readyTimers.forEach((fire) => fire());
+    await waitForSolid(() => {
+      expect(view.querySelector('[role="alert"]')).not.toBeNull();
+    });
+    expect(view.querySelector("details")?.textContent ?? "").toContain(
+      hint ? "mcp.apps.sandboxOrigin" : "",
+    );
+    expect(view.querySelector("details") !== null).toBe(hint);
+    expect(view.querySelector("button")).not.toBeNull();
   });
 });
 

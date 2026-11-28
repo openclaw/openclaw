@@ -6,7 +6,10 @@ import type {
 import { defaultTreeAdapter, html, parse, type DefaultTreeAdapterTypes } from "parse5";
 import { Errored, Show, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import type { ApplicationContext } from "../../../app/context.ts";
-import { resolveSandboxHostUrl } from "../../../components/sandbox-host.ts";
+import {
+  isDerivedRemoteSandboxOrigin,
+  resolveSandboxHostUrl,
+} from "../../../components/sandbox-host.ts";
 import { registerBoardEnglish } from "../../../i18n/locales/en-board.ts";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
@@ -112,6 +115,7 @@ type PreviewView = {
   binding: PreviewBinding;
   url: string;
   origin: string;
+  sandboxOriginInferred: boolean;
   preparedCsp?: SessionsFilesPreviewResult;
   release: () => void;
 };
@@ -169,9 +173,15 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
       { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
     );
 
-    const ErrorNotice = (notice: { message: string }) => (
+    const ErrorNotice = (notice: { message: string; hint?: boolean }) => (
       <div class="chat-html-preview__error" role="alert">
         {notice.message}
+        <Show when={notice.hint}>
+          <details>
+            <summary>{t("board.widget.moreInfo")}</summary>
+            <p>{t("board.widget.sandboxUnreachableHint")}</p>
+          </details>
+        </Show>
         <button
           class="btn btn--sm"
           type="button"
@@ -188,6 +198,7 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
     // The keyed branches pass plain identity values and own all transport presentation state.
     const renderFrame = (preview: PreviewView, mode: EmbedSandboxMode) => {
       const [frameError, setFrameError] = createSignal("");
+      const [unreachable, setUnreachable] = createSignal(false);
       const [rendered, setRendered] = createSignal(false);
       const [omittedAssets, setOmittedAssets] = createSignal(preview.preparedCsp?.omitted ?? 0);
       const generation = ++frameGeneration;
@@ -255,7 +266,10 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
           },
           onError: fail,
           // A failed frame stays terminal until Retry or a mode change.
-          onReadyTimeout: () => fail(new Error(t("board.widget.sandboxUnavailable"))),
+          onReadyTimeout: () => {
+            fail(new Error(t("board.widget.sandboxUnavailable")));
+            setUnreachable(preview.sandboxOriginInferred);
+          },
         });
         sandboxHost = transport;
         const stopMessages = listen(window, "message", (event) => {
@@ -276,7 +290,10 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
         };
       });
       return (
-        <Show when={!frameError()} fallback={<ErrorNotice message={frameError()} />}>
+        <Show
+          when={!frameError()}
+          fallback={<ErrorNotice message={frameError()} hint={unreachable()} />}
+        >
           <Show when={preview.preparedCsp?.status === "unsupported"}>
             <div class="file-view__save-notice" role="status">
               {t("chat.detailPanel.cspPreviewUnsupported")}
@@ -374,20 +391,25 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
                 return undefined;
               }
             }
+            const explicitOrigin = preparedCsp?.sandboxPath
+              ? preparedCsp.sandboxOrigin
+              : document.sandboxOrigin;
             const url = resolveSandboxHostUrl(
               preparedCsp?.sandboxPath ?? document.sandboxUrl,
               document.sandboxPort,
-              preparedCsp?.sandboxPath ? preparedCsp.sandboxOrigin : document.sandboxOrigin,
+              explicitOrigin,
               context.gateway.connection.gatewayUrl,
               window.location.origin,
               undefined,
               preparedCsp?.sandboxPath,
             );
+            const origin = new URL(url).origin;
             return {
               document,
               binding: current,
               url,
-              origin: new URL(url).origin,
+              origin,
+              sandboxOriginInferred: isDerivedRemoteSandboxOrigin(explicitOrigin, origin),
               preparedCsp,
               release,
             };
