@@ -38,13 +38,14 @@ final class CommandSessionsMutationUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Check your connection and try again."].exists)
         self.capture("initial-roster-unavailable", app: app)
         try await self.setListRejected(false, fixture: fixture)
-        self.openDestination("overview", in: app)
-        self.openSessions(in: app)
+        app.buttons["Sessions.LoadFailure.Retry"].tap()
 
-        let first = self.row("Synthetic session 1", app: app)
-        let second = self.row("Synthetic session 2", app: app)
+        let first = app.buttons.matching(identifier: "SessionDashboard.Session.agent:main:navigation-1").firstMatch
+        let second = app.buttons.matching(identifier: "SessionDashboard.Session.agent:main:navigation-2").firstMatch
         XCTAssertTrue(first.waitForExistence(timeout: 10))
         XCTAssertTrue(second.exists)
+        XCTAssertEqual(first.label, "Synthetic session 1")
+        XCTAssertEqual(second.label, "Synthetic session 2")
         self.capture("loaded-before-pin", app: app)
         self.pin(first, in: app)
         // The failure is a toast that names the row and offers Try again.
@@ -52,13 +53,14 @@ final class CommandSessionsMutationUITests: XCTestCase {
             format: "identifier == %@ AND label BEGINSWITH %@", "Toast.Text", "Couldn’t pin “Synthetic session 1”"))
             .firstMatch
         XCTAssertTrue(rejection.waitForExistence(timeout: 10))
+        XCTAssertEqual(app.buttons["Toast.Action"].label, "Try again")
         self.capture("rejected-pin", app: app)
         XCTAssertTrue(first.exists, "Rejected Pin must retain its loaded conversation")
         XCTAssertTrue(second.exists, "Rejected Pin must retain unrelated loaded conversations")
         XCTAssertTrue(first.isHittable)
         XCTAssertTrue(second.isHittable)
         XCTAssertFalse(app.staticTexts["Couldn’t load sessions"].exists)
-        XCTAssertFalse(app.staticTexts["Pinned"].exists)
+        XCTAssertFalse(app.buttons["Sessions.Group.pinned"].exists)
 
         second.tap()
         XCTAssertTrue(app.staticTexts["Opened agent:main:navigation-2"].waitForExistence(timeout: 10))
@@ -67,7 +69,8 @@ final class CommandSessionsMutationUITests: XCTestCase {
 
         // A rejected action must still offer Pin, not an optimistic Unpin.
         self.pin(first, in: app)
-        XCTAssertTrue(app.staticTexts["Pinned"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["Sessions.Group.pinned"].waitForExistence(timeout: 10))
+        XCTAssertEqual(first.value as? String, "Pinned")
         XCTAssertTrue(rejection.waitForNonExistence(timeout: 10))
         XCTAssertTrue(first.exists)
         XCTAssertTrue(second.exists)
@@ -81,11 +84,6 @@ final class CommandSessionsMutationUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Opened agent:main:navigation-1"].waitForExistence(timeout: 10))
     }
 
-    private func row(_ title: String, app: XCUIApplication) -> XCUIElement {
-        app.buttons.matching(NSPredicate(
-            format: "label BEGINSWITH %@ AND label CONTAINS %@", "\(title),", ", chat,")).firstMatch
-    }
-
     private func pin(_ row: XCUIElement, in app: XCUIApplication) {
         row.press(forDuration: 1)
         let pin = app.buttons["Pin"]
@@ -95,22 +93,11 @@ final class CommandSessionsMutationUITests: XCTestCase {
 
     private func openSessions(in app: XCUIApplication) {
         app.buttons["RootTabs.Sidebar.Show"].tap()
-        let sessions = app.buttons["RootTabs.Sidebar.ViewAllSessions"]
-        XCTAssertTrue(sessions.waitForExistence(timeout: 10))
-        for _ in 0..<5 where !sessions.isHittable {
-            app.swipeUp()
-        }
-        XCTAssertTrue(sessions.isHittable)
-        sessions.tap()
-        self.waitForDestination("sessions", in: app)
-    }
-
-    private func openDestination(_ destination: String, in app: XCUIApplication) {
-        app.buttons["RootTabs.Sidebar.Show"].tap()
-        let button = app.buttons["RootTabs.Sidebar.Destination.\(destination)"]
-        XCTAssertTrue(button.waitForExistence(timeout: 5))
+        let button = app.buttons["RootTabs.Sidebar.Destination.sessions"]
+        XCTAssertTrue(button.waitForExistence(timeout: 10))
+        XCTAssertTrue(button.isHittable)
         button.tap()
-        self.waitForDestination(destination, in: app)
+        self.waitForDestination("sessions", in: app)
     }
 
     private func waitForDestination(_ destination: String, in app: XCUIApplication) {
