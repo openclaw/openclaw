@@ -5,6 +5,7 @@ import {
 import { classifyGatewayConnectFailure } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type {
   AgentsListResult,
+  SessionsResolveParams,
   SessionsResolveResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
@@ -178,20 +179,28 @@ export async function resolveSessionTarget(params: {
   }
 
   const ref = parsed.ref;
-  const request =
+  const literalSessionKey = ref.kind === "short" ? ref.literalSessionKey : undefined;
+  const initialRequest =
     ref.kind === "short"
       ? {
           shortId: ref.shortId,
           ...(ref.slugHint ? { slugHint: ref.slugHint } : {}),
+          ...(literalSessionKey ? { allowMissing: true } : {}),
         }
       : { key: ref.sessionKey };
-  const result = await callSessionTargetGateway<SessionsResolveResult>({
-    gateway,
-    method: "sessions.resolve",
-    request,
-    requiredScope: params.requiredScope ?? "operator.read",
-    shortRef: ref.kind === "short",
-  });
+  const resolve = (request: SessionsResolveParams, shortRef = false) =>
+    callSessionTargetGateway<SessionsResolveResult>({
+      gateway,
+      method: "sessions.resolve",
+      request,
+      requiredScope: params.requiredScope ?? "operator.read",
+      shortRef,
+    });
+  let result = await resolve(initialRequest, ref.kind === "short");
+  // Match the Control UI's fallback for old links with an unescaped literal key.
+  if (literalSessionKey && !result.ok && !result.candidates?.length) {
+    result = await resolve({ reference: { key: literalSessionKey } });
+  }
   if (result.ok) {
     const keyOwner = parseAgentSessionKey(result.key)?.agentId;
     const owner = normalizeAgentIdStrict(result.agentId ?? keyOwner);
