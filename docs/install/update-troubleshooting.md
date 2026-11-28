@@ -156,6 +156,49 @@ budget. These facts appear before the recovery guidance so bounded reports retai
 them. Preserve those facts when reporting the problem; task definitions and raw
 native output are excluded.
 
+## Confirming the Gateway actually stopped
+
+On macOS, checking whether the Gateway has stopped by process name is
+unreliable: `pgrep -f` truncates long argument vectors (false negatives) and
+can also match unrelated processes (false positives). This was observed on
+macOS arm64 hosts; behaviour on other platforms was not tested. Check the
+port owner instead.
+
+**Record the PID before you stop the service.** Shutdown closes the listening
+socket before the process finishes exiting, so a lookup performed only
+afterwards can legitimately return nothing even though the old process is still
+alive:
+
+```bash
+# 1) BEFORE stopping: capture the PID that owns the port
+lsof -nP -tiTCP:18789 -sTCP:LISTEN   # note this value
+
+# 2) Stop the service, then test whether that exact PID still exists
+ps -p <pid> -o pid= >/dev/null 2>&1; echo "rc=$?"
+```
+
+Interpret the result, because "process is gone" and "could not check" are
+different answers:
+
+| `ps -p <pid> -o pid=` | Meaning |
+|---|---|
+| rc=0 | Process exists — still running, or still draining |
+| rc=1 | No such process — the Gateway has exited |
+
+`ps` reports existence for any user's PID, so rc=1 is a real "gone" answer
+rather than a permissions artefact.
+
+If you reach for `kill -0` instead, do not branch on its exit status alone: on
+macOS it returns **1 for both** "no such process" and "operation not permitted",
+and the accompanying message text differs between shells and `/bin/kill`
+(`No such process` vs `no such process`). Use `ps -p`, or parse the message text
+explicitly, before concluding the process is gone.
+
+An empty `lsof` result plus `ps -p <pid>` rc=1 means the Gateway is stopped.
+During a graceful shutdown the listener may close while in-flight work settles,
+so allow a generous margin before concluding that a stop failed, and prefer
+stopping while the Gateway is idle.
+
 ## Node and global install permissions
 
 An updater containing the completed-journal repair automatically archives a
