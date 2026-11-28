@@ -17,7 +17,7 @@ import { MEMORY_INDEX_META_TABLE } from "openclaw/plugin-sdk/memory-core-host-en
  * Writers that do not normalize (an earlier release, after a downgrade or
  * beside a newer one) advance the revision without carrying the marker, so
  * it goes stale and search falls back to the exact cosine expression until
- * the next sync verifies the vectors again. The marker is set by publishing
+ * the next memory manager's sync verifies the vectors again. The marker is set by publishing
  * a full reindex or by that verification
  * (manager-vector-unit-norm-migration.worker.ts), and cleared by doctor's
  * legacy import, which copies vectors without normalizing them.
@@ -25,12 +25,15 @@ import { MEMORY_INDEX_META_TABLE } from "openclaw/plugin-sdk/memory-core-host-en
 export const VECTOR_UNIT_NORM_META_KEY = "memory_vector_unit_norm_v1";
 
 /**
- * Vectors stored by this release: sanitized and L2-normalized. A vector with
- * no usable direction (zero, too small to normalize, or overflowing) has no
- * cosine similarity to anything, so it is not stored: an empty result, which
- * writers already treat as "no vector for this chunk".
+ * Vectors stored by this release: L2-normalized. A vector with a nonfinite
+ * coordinate (which the fallback scorer gives similarity 0) or no usable
+ * direction (zero, too small to normalize, or overflowing) is not stored: an
+ * empty result, which writers already treat as "no vector for this chunk".
  */
 export function normalizeStoredEmbedding(embedding: readonly number[]): number[] {
+  if (!embedding.every(Number.isFinite)) {
+    return [];
+  }
   const normalized = sanitizeAndNormalizeEmbedding([...embedding]);
   let squared = 0;
   for (const value of normalized) {

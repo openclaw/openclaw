@@ -88,11 +88,18 @@ function readVector(db: DatabaseSync, table: string, id: string): Float32Array {
 }
 
 /** Runs the migration in a write transaction, as the publication worker does. */
-function normalizeIndex(db: DatabaseSync, table = "memory_index_chunks_vec", dimensions = DIMS) {
+function normalizeIndex(
+  db: DatabaseSync,
+  table = "memory_index_chunks_vec",
+  dimensions: number | undefined = DIMS,
+  /** Runs just before the write lock: another writer committing after the scan. */
+  beforeWrite?: () => void,
+) {
   return normalizeMemoryVectorsInPlace(
     db,
     { ...admitMemoryVectorIndex(db, table), dimensions },
     (run) => {
+      beforeWrite?.();
       db.exec("BEGIN IMMEDIATE");
       try {
         const result = run();
@@ -226,7 +233,8 @@ describe("unit-norm vector search", () => {
     expect(normalizeStoredEmbedding([1e-12, 0])).toEqual([]);
     expect(normalizeStoredEmbedding([1e200, 1e200])).toEqual([]);
     expect(normalizeStoredEmbedding([3, 4])).toEqual([0.6, 0.8]);
-    expect(normalizeStoredEmbedding([Number.POSITIVE_INFINITY, 2])).toEqual([0, 1]);
+    // The fallback scorer gives any nonfinite vector similarity 0.
+    expect(normalizeStoredEmbedding([Number.POSITIVE_INFINITY, 2])).toEqual([]);
   });
 });
 
@@ -284,7 +292,7 @@ describe("normalizeMemoryVectorsInPlace", () => {
     },
   );
 
-  it("drops stored vectors without a direction and repairs NaN coordinates", async () => {
+  it("drops stored vectors without a direction or with NaN coordinates", async () => {
     using db = await createVectorDb();
     const table = "memory_index_chunks_vec";
     const zeros = Array.from({ length: DIMS }, () => 0);
@@ -293,7 +301,7 @@ describe("normalizeMemoryVectorsInPlace", () => {
     insertVector(db, table, "unit", [1, ...zeros.slice(1)]);
     expect(normalizeIndex(db)).toBe(true);
     expect(db.prepare(`SELECT id FROM ${table} WHERE id = 'tiny'`).get()).toBeUndefined();
-    expect(Array.from(readVector(db, table, "nan"))).toEqual([0, 1, ...zeros.slice(2)]);
+    expect(db.prepare(`SELECT id FROM ${table} WHERE id = 'nan'`).get()).toBeUndefined();
     expect(Array.from(readVector(db, table, "unit"))).toEqual([1, ...zeros.slice(1)]);
     expect(readMemoryVectorsUnitNorm(db)).toBe(true);
   });
@@ -323,6 +331,45 @@ describe("normalizeMemoryVectorsInPlace", () => {
     expect(normalizeIndex(db, table, DIMS / 2)).toBe(false);
     expect(chunksRoot(db)).toBe(root);
     expect(Array.from(readVector(db, table, "raw"))).toEqual(Array.from(new Float32Array(raw!)));
+    expect(readMemoryVectorsUnitNorm(db)).toBe(false);
+  });
+
+  it("rebuilds an index whose metadata has no dimensions yet, from the stored width", async () => {
+    using db = await createVectorDb();
+    const [raw] = seededVectors(2);
+    insertVector(db, "memory_index_chunks_vec", "raw", raw!);
+    expect(normalizeIndex(db, "memory_index_chunks_vec", undefined)).toBe(true);
+    expect(norm(readVector(db, "memory_index_chunks_vec", "raw"))).toBeCloseTo(1, 5);
+    expect(readMemoryVectorsUnitNorm(db)).toBe(true);
+  });
+
+  it("does not mark vectors another writer changed after the scan", async () => {
+    using db = await createVectorDb();
+    const table = "memory_index_chunks_vec";
+    insertVector(db, table, "unit", normalizeStoredEmbedding(seededVectors(1)[0]!));
+    // The scan sees only unit vectors; then an earlier release adds a raw one.
+    const foreignWrite = () => {
+      insertVector(db, table, "raw", seededVectors(2)[1]!);
+      db.exec("UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1");
+    };
+    expect(normalizeIndex(db, table, DIMS, foreignWrite)).toBe(false);
+    expect(readMemoryVectorsUnitNorm(db)).toBe(false);
+    // The next verification sees it and rebuilds.
+    expect(normalizeIndex(db)).toBe(true);
+    expect(norm(readVector(db, table, "raw"))).toBeCloseTo(1, 5);
+    expect(readMemoryVectorsUnitNorm(db)).toBe(true);
+  });
+
+  it("does not rebuild when another writer committed after the scan", async () => {
+    using db = await createVectorDb();
+    const table = "memory_index_chunks_vec";
+    const [raw] = seededVectors(2);
+    insertVector(db, table, "raw", raw!);
+    const root = chunksRoot(db);
+    const foreignBump = () =>
+      db.exec("UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1");
+    expect(normalizeIndex(db, table, DIMS, foreignBump)).toBe(false);
+    expect(chunksRoot(db)).toBe(root);
     expect(readMemoryVectorsUnitNorm(db)).toBe(false);
   });
 

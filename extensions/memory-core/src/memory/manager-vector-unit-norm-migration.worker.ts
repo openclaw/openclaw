@@ -13,6 +13,14 @@ import {
 import { memoryVectorSearchSchema } from "./manager-search-schema.js";
 import { markMemoryVectorsUnitNorm, normalizeStoredEmbedding } from "./manager-vector-unit-norm.js";
 
+function readMemoryIndexRevision(db: DatabaseSync): unknown {
+  return (
+    db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get() as
+      | { revision?: unknown }
+      | undefined
+  )?.revision;
+}
+
 /** Stored vectors whose norm differs from 1 by more than this are rewritten. */
 const UNIT_NORM_TOLERANCE = 1e-5;
 /** Rows per multi-row vector write; bounds statement size and memory. */
@@ -41,8 +49,10 @@ function needsNormalization(vector: Float32Array): boolean {
  *
  * The scan that decides whether anything needs rewriting runs before the
  * write lock is taken, so providers that already normalize only pay for a
- * read and a one-row write. A table whose rows are not float32 vectors of the
- * index's dimensions is left untouched and unmarked (`false`).
+ * read and a one-row write; the marker is written only if the index revision
+ * is still the one scanned. A table whose rows are not float32 vectors of one
+ * width (the index's dimensions when recorded) is left untouched and
+ * unmarked (`false`).
  *
  * When some vectors need it, the vec0 table is rebuilt through the vector
  * capability (drop, create, write) with the schema admissions staged, as
@@ -61,33 +71,58 @@ export function normalizeMemoryVectorsInPlace<R>(
   vector: { capability: VectorCapability; index: VectorIndex; dimensions?: number },
   write: (run: () => boolean) => R,
 ): R {
-  const { capability, index, dimensions } = vector;
-  if (!tableExists(db, index.table)) {
-    return write(() => {
+  const { capability, index } = vector;
+  // A writer that commits between the scan and the write lock advances the
+  // revision; the marker is then only written by a rebuild under the lock.
+  const scannedRevision = readMemoryIndexRevision(db);
+  const markIfUnchanged = () =>
+    write(() => {
+      if (readMemoryIndexRevision(db) !== scannedRevision) {
+        return false;
+      }
       markMemoryVectorsUnitNorm(db);
       return true;
     });
+  if (!tableExists(db, index.table)) {
+    return markIfUnchanged();
   }
+  // vec0 enforces the declared width, so stored rows also give the dimensions
+  // when the index metadata has not recorded them yet.
+  let dimensions = vector.dimensions;
   let rewrite = false;
+  let compatible = true;
   for (const row of db.prepare(`SELECT embedding FROM ${index.table}`).iterate()) {
     const blob = (row as { embedding?: unknown }).embedding;
-    if (!(blob instanceof Uint8Array) || (dimensions && blob.byteLength !== dimensions * 4)) {
+    dimensions ??= blob instanceof Uint8Array ? blob.byteLength / 4 : undefined;
+    if (!(blob instanceof Uint8Array) || blob.byteLength !== (dimensions ?? 0) * 4) {
       // Not this release's FLOAT[dimensions] layout: never reinterpret it.
-      return write(() => false);
+      compatible = false;
+      break;
     }
     rewrite ||= needsNormalization(readFloat32(blob));
   }
+  if (!compatible) {
+    return write(() => false);
+  }
   if (!rewrite) {
     // Providers that already normalize: nothing to rewrite, the layout stays.
-    return write(() => {
-      markMemoryVectorsUnitNorm(db);
-      return true;
-    });
+    return markIfUnchanged();
   }
   if (!dimensions || !Number.isSafeInteger(dimensions)) {
     return write(() => false);
   }
   return write(() => {
+    // Rebuild only what was scanned: same revision, same live width.
+    const first = db.prepare(`SELECT embedding FROM ${index.table} LIMIT 1`).get() as
+      | { embedding?: unknown }
+      | undefined;
+    if (
+      readMemoryIndexRevision(db) !== scannedRevision ||
+      !(first?.embedding instanceof Uint8Array) ||
+      first.embedding.byteLength !== dimensions * 4
+    ) {
+      return false;
+    }
     stageMemoryIndexSchemaExtension(db);
     stageOpenClawAgentDatabaseSchemaExtension(db);
     const stage = `${index.table}_unit_norm_stage`;

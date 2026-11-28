@@ -280,6 +280,9 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
       if (
         vectorReady &&
         !params?.force &&
+        !hasTargetSessionRequest &&
+        !this.memoryFullRetryDirty &&
+        !this.sessionsFullRetryDirty &&
         !this.vectorUnitNormAttempted &&
         indexIdentity.status === "valid" &&
         this.database.admission?.engine !== "postgres" &&
