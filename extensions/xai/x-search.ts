@@ -70,6 +70,14 @@ function normalizeOptionalIsoDate(value: string | undefined, label: string): str
   return trimmed;
 }
 
+// xAI matches handles written without "@" and silently ignores prefixed ones.
+function readXHandlesParam(args: Record<string, unknown>, key: string): string[] | undefined {
+  const handles = readStringArrayParam(args, key)
+    ?.map((handle) => handle.replace(/^@+/u, ""))
+    .filter(Boolean);
+  return handles?.length ? handles : undefined;
+}
+
 export function createXSearchTool(options?: {
   config?: unknown;
   runtimeConfig?: Record<string, unknown> | null;
@@ -109,8 +117,8 @@ export function createXSearchTool(options?: {
     }
 
     const query = readStringParam(args, "query", { required: true });
-    const allowedXHandles = readStringArrayParam(args, "allowed_x_handles");
-    const excludedXHandles = readStringArrayParam(args, "excluded_x_handles");
+    const allowedXHandles = readXHandlesParam(args, "allowed_x_handles");
+    const excludedXHandles = readXHandlesParam(args, "excluded_x_handles");
     if (allowedXHandles && excludedXHandles) {
       throw new PluginToolInputError(
         "allowed_x_handles and excluded_x_handles cannot be used together",
