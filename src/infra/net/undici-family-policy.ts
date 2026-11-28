@@ -3,7 +3,13 @@
 import * as net from "node:net";
 import { isWSL2Sync } from "../wsl.js";
 
-const AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS = 300;
+// Node abandons a non-final Happy Eyeballs attempt when this timer expires, even
+// if the kernel handshake already completed while the event loop was stalled.
+// The abandoned IPv4 socket plus an immediate IPv6 failure becomes
+// UND_ERR_CONNECT_TIMEOUT. 300 ms is inside normal Gateway stalls. One second
+// stays inside RFC 8305 and still starts the next address when the first does
+// not answer. A stall longer than this budget can still lose the race.
+const AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS = 1_000;
 
 /** Resolves the process default autoSelectFamily policy, with WSL2 forced to IPv4. */
 export function resolveUndiciAutoSelectFamily(): boolean | undefined {
