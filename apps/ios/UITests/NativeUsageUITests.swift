@@ -27,7 +27,9 @@ final class NativeUsageUITests: XCTestCase {
             XCTAssertEqual(period.label, "Last 30 days")
             let position = period.frame.midY
             period.tap()
-            app.buttons["Last 7 days"].tap()
+            let week = app.descendants(matching: .any)["Last 7 days"].firstMatch
+            XCTAssertTrue(week.waitForExistence(timeout: 5), "Tapping the period control should open the menu")
+            week.tap()
             let changed = XCTNSPredicateExpectation(
                 predicate: NSPredicate(format: "exists == YES AND label != %@", original),
                 object: summary)

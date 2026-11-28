@@ -10,39 +10,42 @@ struct NativeUsagePeriodControl: View {
 
     var body: some View {
         Section {
-            HStack(spacing: 12) {
-                Menu {
-                    ForEach(NativeUsageScreen.Period.allCases) { option in
-                        Button {
-                            if option == .custom { self.editingDates = true } else { self.period = option }
-                        } label: {
-                            let title: LocalizedStringKey = option == .custom ? "Custom range…" : option.title
-                            if option == self.period {
-                                Label { Text(title).font(OpenClawType.body) } icon: { Image(systemName: "checkmark") }
-                            } else {
-                                Text(title).font(OpenClawType.body)
-                            }
+            Menu {
+                ForEach(NativeUsageScreen.Period.allCases) { option in
+                    Button {
+                        if option == .custom { self.editingDates = true } else { self.period = option }
+                    } label: {
+                        let title: LocalizedStringKey = option == .custom ? "Custom range…" : option.title
+                        if option == self.period {
+                            Label { Text(title).font(OpenClawType.body) } icon: { Image(systemName: "checkmark") }
+                        } else {
+                            Text(title).font(OpenClawType.body)
                         }
                     }
-                } label: {
+                }
+            } label: {
+                HStack(spacing: 12) {
                     HStack(spacing: 8) {
                         Text(self.period.title).font(OpenClawType.subheadSemiBold)
                         Image(systemName: "chevron.down").font(OpenClawType.caption).accessibilityHidden(true)
                     }
-                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
+                    if self.isUpdating {
+                        ProgressView().controlSize(.small).accessibilityLabel(Text("Updating date range…"))
+                    }
+                    Spacer(minLength: 0)
                 }
-                .menuOrder(.fixed)
-                .menuIndicator(.hidden)
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
-                .controlSize(.large)
-                .accessibilityIdentifier("Usage.Period")
-                if self.isUpdating {
-                    ProgressView().controlSize(.small).accessibilityLabel(Text("Updating date range…"))
-                }
-                Spacer(minLength: 0)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+                .foregroundStyle(.primary)
             }
-            .listRowInsets(EdgeInsets())
+            .menuOrder(.fixed)
+            .menuIndicator(.hidden)
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("Usage.Period")
+            .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
         } footer: {
