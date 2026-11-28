@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { rotateDeviceToken } from "../infra/device-pairing-tokens.js";
-import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
 import {
   expectCurrent,
   restoreFixture,
@@ -15,7 +14,7 @@ describe("native UI operator recovery", () => {
     "openclaw-ios",
     "openclaw-android",
   ] as const)(
-    "keeps admitted %s delegation after revocation and refuses the next restoration",
+    "keeps admitted %s delegation after token rotation and refuses the next restoration",
     (id) =>
       withRecovery(
         async (fixture) => {
@@ -24,7 +23,6 @@ describe("native UI operator recovery", () => {
           expect(
             (await rotateDeviceToken({ deviceId: "recovery-device", role: "operator" })).ok,
           ).toBe(true);
-          invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
           expectCurrent(restored.authority);
           await expect(fixture.restore()).rejects.toThrow();
         },
