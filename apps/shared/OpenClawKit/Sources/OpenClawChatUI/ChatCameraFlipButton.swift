@@ -15,14 +15,16 @@ struct ChatCameraFlipButton: View {
         Button {
             self.control.flipCamera?()
         } label: {
+            // A plain glyph like the composer's other secondary controls: no disc, no tint.
             Image(systemName: "arrow.triangle.2.circlepath.camera")
-                .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .subheadline))
-                .foregroundStyle(.primary)
+                #if os(iOS)
+                    .font(OpenClawChatTypography.composerGlyph)
+                    .foregroundStyle(CleanChatComposerMetrics.footerInk)
+                #else
+                    .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .subheadline))
+                    .foregroundStyle(.secondary)
+                #endif
                 .frame(width: self.visualSize, height: self.visualSize)
-                .background {
-                    Circle()
-                        .fill(OpenClawChatTheme.accent.opacity(0.12))
-                }
                 .frame(width: self.controlHeight, height: self.controlHeight)
                 .contentShape(Rectangle())
         }

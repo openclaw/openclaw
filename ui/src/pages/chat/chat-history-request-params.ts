@@ -1,8 +1,5 @@
 import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
 
-export function openingHistoryLimit(compact: boolean | undefined, cursor?: string) {
-  return compact && cursor === undefined ? 24 : 80;
-}
 const CHAT_HISTORY_REQUEST_MAX_BYTES = 256 * 1024;
 export const CHAT_HISTORY_TOOL_RESULT_MAX_CHARS = 2_000;
 
@@ -35,7 +32,7 @@ export function chatHistoryRequestParams(
     knownState,
     ...(requestAgentId ? { agentId: requestAgentId } : {}),
     ...(cursor !== undefined ? { cursor } : {}),
-    limit: openingHistoryLimit(compactOpening, cursor),
+    limit: compactOpening && cursor === undefined ? 24 : 80,
     maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES,
     ...(inputRunIds.length ? { inputRunIds } : {}),
   };

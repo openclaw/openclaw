@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import { runDoctorSessionSqlite } from "../../src/commands/doctor-session-sqlite.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
-import { migrateLegacyAcpSessionMetadata } from "../../src/infra/state-migrations.session-store.js";
+import { migrateLegacyAcpSessionMetadata } from "../../src/infra/state-migrations.acp-session-metadata.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../../src/plugins/legacy-session-surfaces.types.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../src/state/openclaw-state-db.js";

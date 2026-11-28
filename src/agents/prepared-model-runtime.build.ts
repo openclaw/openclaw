@@ -106,6 +106,7 @@ export type PreparedModelRuntimeBuildCandidate = Readonly<{
   input: PreparedModelRuntimeInput;
   catalogOwner: PreparedModelRuntimeSnapshot["catalogOwner"];
   inventoryOwner?: Parameters<typeof createFullModelCatalogAccess>[0]["inventoryOwner"];
+  seedInventory?: Parameters<typeof createFullModelCatalogAccess>[0]["seedInventory"];
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
   prepareInboundPluginRegistry?: boolean;
   isGenerationCurrent?: () => boolean;
@@ -175,6 +176,7 @@ async function buildSnapshotBatch(
         isCurrent: candidate.isGenerationCurrent ?? (() => false),
         retirementSignal: candidate.retirementSignal,
         inventoryOwner: candidate.inventoryOwner ?? {},
+        seedInventory: candidate.seedInventory,
       },
       () => assertBuildCurrent(candidate.input),
     );

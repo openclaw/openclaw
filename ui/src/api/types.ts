@@ -144,6 +144,7 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   icon?: GatewaySessionRow["icon"];
   color?: GatewaySessionRow["color"];
   category?: GatewaySessionRow["category"];
+  snoozedUntil?: GatewaySessionRow["snoozedUntil"];
   updatedAt?: number;
   createdAt?: number;
   pinned?: boolean;

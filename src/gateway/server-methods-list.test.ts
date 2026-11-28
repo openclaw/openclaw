@@ -17,6 +17,7 @@ it.each([
   ["session.members.setAccess", "operator.write", { since: "2026.11" }],
   ["toolUsage.status", "operator.admin", { since: "2026.11" }],
   ["openclaw.setup.options", "operator.admin", { since: "2026.11" }],
+  ["models.authProfileRename", "operator.admin", { since: "2026.11", controlPlaneWrite: true }],
   [
     "toolUsage.import toolUsage.reset",
     "operator.admin",

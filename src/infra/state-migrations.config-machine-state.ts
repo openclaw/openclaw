@@ -11,11 +11,11 @@ import { readConfigMachineState } from "../state/config-machine-state.js";
 
 const BUNDLED_DISCOVERY_STATE_CUTOVER_VERSION = "2026.7.2";
 
-/** Preserve retired machine-owned config fields before Doctor strips them. */
-export function migrateLegacyConfigMachineState(params: {
+/** The retired machine-owned config fields still present in a config. */
+function collectLegacyConfigMachineState(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): { changes: string[]; warnings: string[] } {
+}) {
   const raw = params.config as Record<string, unknown>;
   const entries: Array<readonly [string, unknown]> = [];
   const meta = asOptionalRecord(raw.meta);
@@ -65,6 +65,27 @@ export function migrateLegacyConfigMachineState(params: {
   if (cron && Object.hasOwn(cron, "store")) {
     entries.push(["cron.store", cron.store]);
   }
+  return { entries, installs, hasInstalls };
+}
+
+/**
+ * Whether a config still holds machine-owned fields to preserve. The bundled-discovery inference
+ * reads the canonical row through the shared read-only state reader.
+ */
+export function hasLegacyConfigMachineState(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  const { entries, hasInstalls } = collectLegacyConfigMachineState(params);
+  return entries.length > 0 || hasInstalls;
+}
+
+/** Preserve retired machine-owned config fields before Doctor strips them. */
+export function migrateLegacyConfigMachineState(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): { changes: string[]; warnings: string[] } {
+  const { entries, installs, hasInstalls } = collectLegacyConfigMachineState(params);
   if (entries.length === 0 && !hasInstalls) {
     return { changes: [], warnings: [] };
   }
