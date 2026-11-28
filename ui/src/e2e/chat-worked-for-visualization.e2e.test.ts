@@ -141,7 +141,7 @@ suite.define(() => {
             ...(source === "live"
               ? {
                   inFlightRun: { runId, startedAt: 1_000, text: "" },
-                  sessionInfo: { hasActiveRun: true, activeRunIds: [runId] },
+                  sessionInfo: { key: sessionKey, hasActiveRun: true, activeRunIds: [runId] },
                 }
               : {}),
           });

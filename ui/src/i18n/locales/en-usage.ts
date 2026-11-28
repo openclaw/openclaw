@@ -197,7 +197,6 @@ const enUsage = {
       details: "Session details",
       showTop: "Show top {count}",
       total: "{count} total",
-      avg: "avg",
       all: "All",
       recentShort: "Recent",
       sort: "Sort",

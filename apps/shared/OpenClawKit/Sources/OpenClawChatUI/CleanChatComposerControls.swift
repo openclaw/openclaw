@@ -88,9 +88,11 @@ enum CleanChatComposerMetrics {
     static let footerInlineInset: CGFloat = 8
     static let footerBlockInset: CGFloat = 6
     static let rowGap: CGFloat = 4
+    #if !os(iOS) && !os(macOS)
     static let regularModelMaxWidth: CGFloat = 148
     static let effortTrailingPadding: CGFloat = 6
     static let compactModelWidth: CGFloat = controlTouchSize
+    #endif
 }
 
 #if !os(macOS)

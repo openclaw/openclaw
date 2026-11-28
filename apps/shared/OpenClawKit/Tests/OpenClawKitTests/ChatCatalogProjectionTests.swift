@@ -105,7 +105,7 @@ struct ChatCatalogProjectionTests {
         let model = try self.viewModel(#"{"id":"choice","name":"Choice","provider":"fixture"}"#)
         #expect(model.composerPhoneEffortLockReason == nil)
         model.pendingRuns.insert("r")
-        #expect(model.hasActiveRunForComposerSettings)
+        #expect(model.pendingRunCount == 1)
         #expect(model.composerPhoneEffortLockReason == nil)
         #expect(!model.composerModelChoicesLocked)
     }
@@ -202,7 +202,7 @@ struct ChatCatalogProjectionTests {
         await model.fetchModels()
 
         #expect(model.modelSelectionID == OpenClawChatViewModel.defaultModelSelectionID)
-        #expect(model.isSelectedModel(OpenClawChatViewModel.defaultModelSelectionID))
+        #expect(model.canonicalModelSelectionID == OpenClawChatViewModel.defaultModelSelectionID)
         #expect(model.composerInlineModelLabel == (hasDefault ? "Allowed" : "Default"))
         #expect(model.selectedModelChoice(for: model.sessions.first)?
             .selectionID == (hasDefault ? "fixture/allowed" : nil))
