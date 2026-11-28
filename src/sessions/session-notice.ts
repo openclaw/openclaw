@@ -1,6 +1,7 @@
 import { extractDeliveryInfo } from "../config/sessions/delivery-info.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
@@ -10,6 +11,7 @@ import type { PluginNotice } from "../shared/plugin-notice.js";
 import { PLUGIN_NOTICE_KIND } from "../shared/transcript-only-openclaw-assistant.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { chatRef, type ChatRef } from "./chat-ref.js";
+import { resolveSendPolicy } from "./send-policy.js";
 
 /** The exact session incarnation a background producer observed; a reset or replacement ends it. */
 export type SessionGeneration = Readonly<
@@ -78,7 +80,7 @@ export async function captureSessionGeneration(params: {
 
 async function readCurrentEntry<T>(
   target: Pick<SessionGeneration, "agentId" | "storePath" | "sessionKey">,
-  consume: (entry: { sessionId?: string; lifecycleRevision?: string } | undefined) => T,
+  consume: (entry: InternalSessionEntry | undefined) => T,
 ): Promise<T> {
   return await withSessionEntriesFromStoresInWorker(
     [
@@ -138,7 +140,7 @@ export async function postSessionNotice(
       entry?.sessionId !== generation.sessionId ||
       (entry.lifecycleRevision ?? null) !== generation.lifecycleRevision
     ) {
-      return false;
+      return undefined;
     }
     assertCurrent();
     // Queued in the same read that proved the generation and the owner, before any awaited work.
@@ -147,7 +149,15 @@ export async function postSessionNotice(
         sessionKey: resolveSystemEventQueueKey(sessionKey, agentId),
       });
     }
-    return true;
+    // A conversation that denies automatic sends keeps the notice in its transcript only.
+    return {
+      sendPolicy: resolveSendPolicy({
+        cfg: config,
+        entry,
+        sessionKey,
+        channel: route?.deliveryContext?.channel,
+      }),
+    };
   });
   if (!current) {
     return { status: "skipped", reason: "session-changed" };
@@ -157,6 +167,7 @@ export async function postSessionNotice(
   const delivery =
     channel &&
     target?.to &&
+    current.sendPolicy !== "deny" &&
     isDeliverableMessageChannel(channel) &&
     !params.deliver?.skipChannels?.includes(channel)
       ? {
