@@ -12,6 +12,10 @@ type FinalTagMatch = {
 
 export const FINAL_TAG_NAME = "final";
 const FINAL_TAG_CANDIDATE_RE = /<[^<>]*>/g;
+// Cheap absence probe: most assistant text and tool output contains tag-shaped
+// spans but no final marker. Scanning every span with matchAll is wasteful and
+// becomes a main-thread stall on large HTML-like payloads.
+const FINAL_TAG_PROBE_RE = /<(?:\s*\/)?\s*final(?=[\s/>]|$)/i;
 
 function parseAttributeList(text: string): boolean {
   const attribute = /[^\s=/"'<>]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'<>]+))?/y;
@@ -59,6 +63,9 @@ function parseFinalTag(text: string): Omit<FinalTagMatch, "index" | "text"> | nu
 
 /** Finds valid `<final>` control tags so callers can strip only actual model markers. */
 export function findFinalTagMatches(text: string): FinalTagMatch[] {
+  if (!FINAL_TAG_PROBE_RE.test(text)) {
+    return [];
+  }
   const matches: FinalTagMatch[] = [];
   for (const match of text.matchAll(FINAL_TAG_CANDIDATE_RE)) {
     const tagText = match[0];
