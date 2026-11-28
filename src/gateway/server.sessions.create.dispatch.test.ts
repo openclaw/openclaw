@@ -3,7 +3,11 @@ import path from "node:path";
 import { expect, test, vi, onTestFinished } from "vitest";
 import type WebSocket from "ws";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
-import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
@@ -431,7 +435,10 @@ test.each(["generated key", "junction"])(
           expect(key).toBe(requestedKey);
         }
         const workspaceId = repository
-          ? requireNonEmptyString(created.payload?.entry?.repositoryWorkspaceId, "repository workspace")
+          ? requireNonEmptyString(
+              created.payload?.entry?.repositoryWorkspaceId,
+              "repository workspace",
+            )
           : undefined;
         expect(loadSessionEntry({ agentId: "ops", sessionKey: key, storePath })).toMatchObject({
           sessionId,

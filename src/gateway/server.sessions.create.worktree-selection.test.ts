@@ -64,7 +64,6 @@ async function createState(prefix: string) {
   return state;
 }
 
-
 function selection(provider: string, model: string, runtime: string, profile: string) {
   return {
     expectedEntry: {
@@ -280,7 +279,6 @@ test("sessions.create does not start title generation for a model denied by poli
   expect(findLiveRegistryWorktreeByOwner(process.env, "session", key)).toBeUndefined();
   expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
 });
-
 
 test("sessions.create skips the worktree setup script for non-admin callers", async () => {
   await expectNonAdminWorktreeSetupIsSkipped({
