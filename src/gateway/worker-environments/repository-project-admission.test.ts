@@ -511,6 +511,98 @@ describe("repository project admission", () => {
     expect((await prepareRepositoryWorkerProjectSource(initial)).setupRecipe).toBeUndefined();
   });
 
+  describe("transient GitHub read failures", () => {
+    const repositoryRead = "/repos/acme/project";
+    const transportFailure = () => Promise.reject(new TypeError("fetch failed"));
+    const repositoryReads = () => requestPaths().filter((path) => path === repositoryRead);
+    // Fail only revalidation's final repository read, the one that lost a prepared machine.
+    const admitThenFailRepositoryRead = async (fail: () => Promise<Response>, times = Infinity) => {
+      const admitted = await prepareRepositoryWorkerProjectSource(initial);
+      const respond = fetchImpl.getMockImplementation();
+      let remaining = times;
+      fetchImpl.mockClear();
+      fetchImpl.mockImplementation(async (input, init) => {
+        if (new URL(new Request(input).url).pathname === repositoryRead && remaining > 0) {
+          remaining -= 1;
+          return await fail();
+        }
+        return (await respond?.(input, init)) ?? new Response(null, { status: 500 });
+      });
+      return admitted;
+    };
+    const settleWithRetries = async (pending: Promise<void>) => {
+      const settled = pending.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await vi.runAllTimersAsync();
+      return await settled;
+    };
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it.each([
+      ["a transport failure", transportFailure],
+      ["an upstream 503", async () => new Response(null, { status: 503 })],
+    ])("retries %s instead of failing the prepared machine", async (_name, fail) => {
+      const admitted = await admitThenFailRepositoryRead(fail, 1);
+      await expect(settleWithRetries(admitted.revalidate())).resolves.toBeUndefined();
+      expect(repositoryReads()).toHaveLength(2);
+    });
+
+    it("fails closed once the bounded attempts are exhausted", async () => {
+      const admitted = await admitThenFailRepositoryRead(transportFailure);
+      await expect(settleWithRetries(admitted.revalidate())).resolves.toMatchObject({
+        message: "Could not reach GitHub",
+      });
+      expect(repositoryReads()).toHaveLength(3);
+    });
+
+    it.each([
+      ["access loss", 404],
+      ["a quota rejection", 429],
+    ])("does not retry %s", async (_name, status) => {
+      const admitted = await admitThenFailRepositoryRead(
+        async () => new Response(null, { status }),
+      );
+      await expect(settleWithRetries(admitted.revalidate())).resolves.toMatchObject({
+        statusCode: status,
+      });
+      expect(repositoryReads()).toHaveLength(1);
+    });
+
+    it("rechecks repository authority before every retry", async () => {
+      const admitted = await admitThenFailRepositoryRead(async () => {
+        selected = false;
+        return await transportFailure();
+      });
+      await expect(settleWithRetries(admitted.revalidate())).resolves.toMatchObject({
+        message: "GitHub identity changed",
+      });
+      expect(repositoryReads()).toHaveLength(1);
+    });
+
+    it("stops waiting for a retry when the caller cancels", async () => {
+      const failed = createDeferred();
+      const admitted = await admitThenFailRepositoryRead(async () => {
+        failed.resolve();
+        return await transportFailure();
+      });
+      const controller = new AbortController();
+      const pending = admitted.revalidate(controller.signal);
+      await failed.promise;
+      await vi.advanceTimersByTimeAsync(0);
+      controller.abort();
+      await expect(pending).rejects.toThrow();
+      expect(repositoryReads()).toHaveLength(1);
+    });
+  });
+
   it("rejects incomplete trees rather than interpreting a missing recipe as no setup", async () => {
     truncated = true;
     await expect(prepareRepositoryWorkerProjectSource(initial)).rejects.toThrow(
