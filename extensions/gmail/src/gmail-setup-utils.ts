@@ -10,6 +10,7 @@ import {
   type SpawnResult,
 } from "openclaw/plugin-sdk/process-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
+import { asRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeServePath } from "./gmail.js";
 
@@ -237,13 +238,13 @@ export async function ensureTailscaleEndpoint(params: {
   if (status.code !== 0) {
     throw new Error(formatCommandResult(statusCommand, status));
   }
-  let parsed: { Self?: { DNSName?: string } };
+  let parsed: Record<string, unknown>;
   try {
-    parsed = JSON.parse(status.stdout) as { Self?: { DNSName?: string } };
+    parsed = asRecord(JSON.parse(status.stdout));
   } catch (err) {
     throw new Error(formatJsonParseFailure(statusCommand, status, err), { cause: err });
   }
-  const dnsName = parsed.Self?.DNSName?.replace(/\.$/, "");
+  const dnsName = readStringField(asRecord(parsed.Self), "DNSName")?.replace(/\.$/, "");
   if (!dnsName) {
     throw new Error("tailscale DNS name missing; run tailscale up");
   }
@@ -277,7 +278,7 @@ export async function resolveProjectIdFromGogCredentials(): Promise<string | nul
   for (const candidate of candidates) {
     try {
       const raw = fs.readFileSync(candidate, "utf-8");
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const parsed = asRecord(JSON.parse(raw));
       const clientId = extractGogClientId(parsed);
       const projectNumber = clientId?.match(/^(\d+)-/)?.[1] ?? null;
       if (!projectNumber) {
@@ -322,8 +323,10 @@ function gogCredentialsPaths(): string[] {
 }
 
 function extractGogClientId(parsed: Record<string, unknown>): string | null {
-  const installed = parsed.installed as Record<string, unknown> | undefined;
-  const web = parsed.web as Record<string, unknown> | undefined;
-  const candidate = installed?.client_id || web?.client_id || parsed.client_id || "";
-  return typeof candidate === "string" ? candidate : null;
+  return (
+    readStringField(asRecord(parsed.installed), "client_id") ||
+    readStringField(asRecord(parsed.web), "client_id") ||
+    readStringField(parsed, "client_id") ||
+    null
+  );
 }

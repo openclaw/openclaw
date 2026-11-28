@@ -16,13 +16,13 @@ import { resolveGogServeInvocation } from "./gmail.js";
 type GogTokenEnvSupport = "supported" | "unsupported" | "indeterminate";
 export type GogInspection = { executable: string | undefined; support: GogTokenEnvSupport };
 type GogOptions = { env?: NodeJS.ProcessEnv; signal?: AbortSignal };
-export type GogUpgrade = {
+type GogUpgrade = {
   eligible: true;
   brew: string;
   formula: string;
   executable: string;
 };
-export type GogUpgradeInspection = GogUpgrade | { eligible: false; reason: string };
+type GogUpgradeInspection = GogUpgrade | { eligible: false; reason: string };
 
 const GOG_FORMULAE = new Set(["gogcli", "openclaw/tap/gogcli", "steipete/tap/gogcli"]);
 

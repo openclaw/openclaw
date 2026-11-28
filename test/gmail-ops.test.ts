@@ -49,10 +49,11 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
 }));
 
 // Vite loads the public plugin modules in the same test runtime as the process fixtures.
-vi.mock("../src/hooks/gmail-plugin.js", async () => {
+vi.mock(import("../src/hooks/gmail-plugin.js"), async (importOriginal) => {
   const api = await import("../extensions/gmail/api.js");
   const runtime = await import("../extensions/gmail/runtime-api.js");
   return {
+    ...(await importOriginal()),
     loadGmailApi: () => api,
     loadGmailRuntime: () => ({
       ...runtime,
@@ -60,7 +61,7 @@ vi.mock("../src/hooks/gmail-plugin.js", async () => {
       inspectGogUpgrade: mocks.inspectGogUpgrade,
       upgradeGog: mocks.upgradeGog,
     }),
-  } satisfies typeof import("../src/hooks/gmail-plugin.js");
+  };
 });
 
 // mock-isolation: control terminal upgrade answers without opening an interactive prompt.
