@@ -47,7 +47,7 @@ function createProbe(overrides: Partial<Probe> = {}): Probe {
   };
 }
 
-function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
+function createSessionEntry(overrides: Partial<SessionEntry>): SessionEntry {
   return { sessionId: "session", updatedAt: 1, ...overrides };
 }
 
