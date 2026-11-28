@@ -1,4 +1,5 @@
 /** @jsxImportSource @solidjs/web */
+/// <reference lib="es2024.collection" />
 import type { WorkboardBoardSummary, WorkboardSessionFacts } from "@openclaw/workboard-contract";
 import { dynamic, type JSX } from "@solidjs/web";
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
@@ -113,6 +114,7 @@ export function SessionsBoard(props: SessionsBoardProps) {
             PULL_REQUEST_STATE_PRIORITY[left.state] - PULL_REQUEST_STATE_PRIORITY[right.state],
         ),
       }));
+    const sessionsByColumn = Map.groupBy(sessions, (session) => session.columnId);
     return {
       canWrite: host.connection.canWrite,
       boardOptions: [
@@ -140,7 +142,7 @@ export function SessionsBoard(props: SessionsBoardProps) {
         label: column.label,
         description: column.description,
         color: host.components.resolveAppearanceColor(column.color) || "var(--muted)",
-        sessions: sessions.filter((session) => session.columnId === column.id),
+        sessions: sessionsByColumn.get(column.id) ?? [],
       })),
     };
   });

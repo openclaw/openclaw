@@ -117,6 +117,23 @@ function peoplePicker(page: ReturnType<typeof mountPage>) {
   );
 }
 
+it("keeps board column order and snapshot order within each column", async () => {
+  const page = sessionsPage();
+  const done = expectDefined(page.result.sessions[1], "done session");
+  page.result.sessions.unshift({ ...done, key: "agent:writer:reviewed", sessionId: "reviewed-id" });
+  await page.connect();
+
+  const columns = [...page.container.querySelectorAll<HTMLElement>("[data-session-column]")];
+  expect(columns.map((column) => column.dataset.sessionColumn)).toEqual(["working", "done"]);
+  expect(
+    columns.map((column) =>
+      [...column.querySelectorAll<HTMLElement>("[data-session-key]")].map(
+        (tile) => tile.dataset.sessionKey,
+      ),
+    ),
+  ).toEqual([["agent:main:working"], ["agent:writer:reviewed", "agent:writer:done"]]);
+});
+
 it("keeps unaccepted session results unknown and retains accepted empty results during refresh", async () => {
   const page = sessionsPage();
   const request = expectDefined(page.request.getMockImplementation(), "request");
