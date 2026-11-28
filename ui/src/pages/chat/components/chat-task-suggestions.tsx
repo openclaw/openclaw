@@ -6,7 +6,7 @@ import type {
 } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
-import { Menu } from "../../../components/solid/menu.tsx";
+import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
 import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -26,7 +26,7 @@ export type TaskSuggestionAcceptance =
   | {
       phase: "failed";
       error: string;
-      repository?: { cwd: string; open: boolean; projects: ProjectRecord[] };
+      repository?: { cwd: string; open: boolean };
     };
 
 export type ChatTaskSuggestionTrayProps = {
@@ -44,6 +44,11 @@ export type ChatTaskSuggestionTrayProps = {
   ) => void;
   onCopyTaskSuggestionPrompt?: (suggestion: TaskSuggestion) => void;
   canAcceptTaskSuggestions?: boolean;
+  /** Registered projects with a repository; read only by cards that need a worktree source. */
+  taskRepositoryProjects?: () => {
+    status: "loading" | "ready" | "failed";
+    projects: readonly ProjectRecord[];
+  };
   taskSuggestionBlockedReason?: string;
   canDismissTaskSuggestions?: boolean;
   onAcceptTaskSuggestion?: (
@@ -116,6 +121,8 @@ function TaskSuggestionCard(props: {
     return value?.phase === "failed" ? value : undefined;
   };
   const repository = () => failure()?.repository;
+  const catalog = () => props.view.taskRepositoryProjects?.();
+  const projects = () => catalog()?.projects ?? [];
   const title = () => sanitizeTaskSuggestionText(props.suggestion.title);
   const cwd = () => sanitizeTaskSuggestionText(props.suggestion.cwd);
   const copyLabel = () =>
@@ -126,7 +133,15 @@ function TaskSuggestionCard(props: {
     );
   // Native edits and manual disclosure state survive unrelated owner refreshes.
   const repositoryCwd = createMemo(() => repository()?.cwd ?? "");
-  const instructionsOpen = createMemo(() => Boolean(acceptance()));
+  // The card names the project picked in the chooser; typed paths leave it unchanged.
+  const location = () => {
+    const picked = repository()?.open
+      ? projects().find((project) => project.repoRoot === repositoryCwd())?.repoRoot
+      : undefined;
+    return picked ? sanitizeTaskSuggestionText(picked) : cwd();
+  };
+  // Keep the repository chooser in view; preserved instructions stay one click away.
+  const instructionsOpen = createMemo(() => Boolean(acceptance()) && !repository()?.open);
   const pathRef = createScrollStateRef(
     (element, state) => element.toggleAttribute("data-overflow-right", !state.atEnd),
     { presented: () => props.active, horizontal: true, content: cwd },
@@ -135,6 +150,36 @@ function TaskSuggestionCard(props: {
     if (!busy() && canAccept()) {
       props.view.onAcceptTaskSuggestion?.(props.suggestion, mode, undefined);
     }
+  };
+
+  // A folder outside a repository can still start in a worktree of a registered project.
+  // Without a project catalog, the plain item keeps the repository chooser reachable.
+  const worktreeItem = (): MenuItem => {
+    const item = {
+      id: "worktree",
+      label: t("chat.taskSuggestions.startWorktree"),
+      disabled: busy() || !canAccept(),
+    };
+    if (props.suggestion.worktreeSource !== false || catalog()?.status === "failed") {
+      return item;
+    }
+    return {
+      ...item,
+      details: <Icon name="chevronRight" />,
+      // Projects first; the last row opens the chooser for any other repository path.
+      children: () => [
+        ...(projects().length > 0
+          ? projects().map((project) => ({
+              id: `worktree:${project.id}`,
+              label: project.displayName,
+              attributes: { title: project.repoRoot ?? "" },
+            }))
+          : catalog()?.status === "ready"
+            ? []
+            : [{ id: "worktree:loading", label: t("common.loading"), disabled: true }]),
+        { id: "worktree", label: t("chat.taskSuggestions.chooseRepository") },
+      ],
+    };
   };
 
   function TaskStartMenu() {
@@ -154,11 +199,7 @@ function TaskSuggestionCard(props: {
             label: t("chat.taskSuggestions.startSession"),
             disabled: busy() || !canAccept(),
           },
-          {
-            id: "worktree",
-            label: t("chat.taskSuggestions.startWorktree"),
-            disabled: busy() || !canAccept(),
-          },
+          worktreeItem(),
           {
             id: "session",
             label: t("chat.taskSuggestions.startCurrentSession"),
@@ -168,6 +209,11 @@ function TaskSuggestionCard(props: {
         onSelect={(item) => {
           if (item.id === "local" || item.id === "worktree" || item.id === "session") {
             accept(item.id);
+            return;
+          }
+          const project = projects().find((entry) => `worktree:${entry.id}` === item.id);
+          if (project?.repoRoot && !busy() && canAccept()) {
+            props.view.onAcceptTaskSuggestion?.(props.suggestion, "worktree", project.repoRoot);
           }
         }}
       />
@@ -181,9 +227,9 @@ function TaskSuggestionCard(props: {
       hidden={!props.active}
     >
       <header class="task-suggestion__header">
-        <div class="task-suggestion__eyebrow" title={cwd()}>
+        <div class="task-suggestion__eyebrow" title={location()}>
           {t("chat.taskSuggestions.eyebrow", {
-            repo: sanitizeTaskSuggestionText(pathDisplayName(cwd())),
+            repo: sanitizeTaskSuggestionText(pathDisplayName(location())),
           })}
           <Show when={props.count > 1}>
             <span class="task-suggestion__position">
@@ -258,6 +304,65 @@ function TaskSuggestionCard(props: {
         <div class="task-suggestion__summary">
           {sanitizeTaskSuggestionText(props.suggestion.tldr)}
         </div>
+        <Show when={!repository()?.open && failure()}>
+          {(value) => (
+            <InlineAlert tone="danger" role="alert">
+              <span>
+                {repository() ? undefined : t("chat.taskSuggestions.startUnconfirmed")}{" "}
+                {value().error}
+              </span>
+            </InlineAlert>
+          )}
+        </Show>
+        <Show when={repository()?.open}>
+          {(_open) => {
+            let chooser: HTMLDivElement | undefined;
+            // Short trays scroll the card body; bring the chooser into view when it opens.
+            onSettled(() => chooser?.scrollIntoView({ block: "nearest" }));
+            return (
+              <div
+                class="task-suggestion__repository"
+                ref={(element) => {
+                  chooser = element;
+                }}
+              >
+                <p>{t("chat.taskSuggestions.chooseRepositoryHelp")}</p>
+                <label>
+                  <span>{t("chat.taskSuggestions.repositoryFolder")}</span>
+                  <input
+                    type="text"
+                    class="task-suggestion__repository-path"
+                    value={repositoryCwd()}
+                    disabled={!canAccept()}
+                    onInput={(event) =>
+                      props.view.onChangeTaskRepository?.(props.suggestion, {
+                        cwd: event.currentTarget.value,
+                      })
+                    }
+                  />
+                </label>
+                <For each={projects()}>
+                  {(project) => (
+                    <button
+                      type="button"
+                      class="btn task-suggestion__repository-choice"
+                      disabled={!canAccept()}
+                      title={project.repoRoot ?? ""}
+                      onClick={() =>
+                        props.view.onChangeTaskRepository?.(props.suggestion, {
+                          cwd: project.repoRoot ?? "",
+                        })
+                      }
+                    >
+                      {project.displayName}
+                      <small>{project.repoRoot}</small>
+                    </button>
+                  )}
+                </For>
+              </div>
+            );
+          }}
+        </Show>
         <details class="task-suggestion__instructions" open={instructionsOpen()}>
           <summary>
             <span class="task-suggestion__instructions-chevron" aria-hidden="true">
@@ -271,60 +376,6 @@ function TaskSuggestionCard(props: {
             <pre>{sanitizeTaskSuggestionText(props.suggestion.prompt)}</pre>
           </div>
         </details>
-        <Show when={failure()}>
-          {(value) => (
-            <InlineAlert tone="danger" role="alert">
-              <span>
-                {repository() ? undefined : t("chat.taskSuggestions.startUnconfirmed")}{" "}
-                {value().error}
-              </span>
-            </InlineAlert>
-          )}
-        </Show>
-        <Show when={repository()?.open}>
-          <div class="task-suggestion__repository">
-            <p>{t("chat.taskSuggestions.chooseRepositoryHelp")}</p>
-            <label>
-              <span>{t("chat.taskSuggestions.repositoryFolder")}</span>
-              <input
-                type="text"
-                class="task-suggestion__repository-path"
-                value={repositoryCwd()}
-                disabled={!canAccept()}
-                onInput={(event) =>
-                  props.view.onChangeTaskRepository?.(props.suggestion, {
-                    cwd: event.currentTarget.value,
-                  })
-                }
-              />
-            </label>
-            <For each={repository()?.projects ?? []}>
-              {(project) => (
-                <button
-                  type="button"
-                  class="btn task-suggestion__repository-choice"
-                  disabled={!canAccept()}
-                  title={project.repoRoot ?? ""}
-                  onClick={() =>
-                    props.view.onChangeTaskRepository?.(props.suggestion, {
-                      cwd: project.repoRoot ?? "",
-                    })
-                  }
-                >
-                  {project.displayName}
-                  <small>{project.repoRoot}</small>
-                </button>
-              )}
-            </For>
-            <button
-              type="button"
-              class="btn"
-              onClick={() => props.view.onChangeTaskRepository?.(props.suggestion, { open: false })}
-            >
-              {t("common.cancel")}
-            </button>
-          </div>
-        </Show>
       </div>
       <div class="task-suggestion__actions">
         <Show
@@ -345,6 +396,15 @@ function TaskSuggestionCard(props: {
             </>
           }
         >
+          <Show when={repository()?.open}>
+            <button
+              type="button"
+              class="btn task-suggestion__cancel"
+              onClick={() => props.view.onChangeTaskRepository?.(props.suggestion, { open: false })}
+            >
+              {t("common.cancel")}
+            </button>
+          </Show>
           <button
             class="btn task-suggestion__start task-suggestion__retry"
             type="button"

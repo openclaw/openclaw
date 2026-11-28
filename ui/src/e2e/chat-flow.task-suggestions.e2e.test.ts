@@ -179,6 +179,54 @@ suite.define(() => {
     },
   );
 
+  it("starts a folder outside a repository in a registered project's worktree", async () => {
+    const suggestion = makeTask({
+      id: "task_workspace",
+      cwd: "/home/user/workspace",
+      worktreeSource: false,
+    });
+    const { page, gateway } = await openTasks([suggestion], {
+      featureMethods: [...acceptMethods, "projects.list"],
+      methodResponses: {
+        "projects.list": {
+          projects: [
+            { id: "notes", displayName: "Notes", source: "registered" },
+            {
+              id: "workspace:main",
+              displayName: "Workspace",
+              repoRoot: "/home/user/workspace",
+              source: "workspace",
+            },
+            { id: "app", displayName: "App", repoRoot: "/projects/app", source: "registered" },
+          ],
+        },
+      },
+    });
+    const card = taskCard(page, suggestion.id);
+    await findButton(card, optionsLabel).click();
+    await card.getByRole("menuitem", { name: "Start in a new worktree" }).click();
+    const project = card.getByRole("menuitem", { name: "App", exact: true });
+    await project.waitFor(visible);
+    // Any other repository path stays reachable through the chooser.
+    await card.getByRole("menuitem", { name: "Choose repository", exact: true }).waitFor(visible);
+    for (const name of ["Notes", "Workspace"]) {
+      expect(await card.getByRole("menuitem", { name, exact: true }).count()).toBe(0);
+    }
+    await gateway.deferNext("taskSuggestions.accept");
+    await project.click();
+    await gateway.waitForRequest("taskSuggestions.accept");
+    const accepted = await gateway.getRequests("taskSuggestions.accept");
+    expect(accepted.map(({ params }) => params)).toEqual([
+      { taskId: suggestion.id, mode: "worktree", cwd: "/projects/app" },
+    ]);
+    await gateway.resolveDeferred("taskSuggestions.accept", {
+      taskId: suggestion.id,
+      key: "agent:main:dashboard:suggested",
+    });
+    await card.waitFor({ state: "detached" });
+    expect(await page.getByText("Choose a repository").count()).toBe(0);
+  });
+
   it.each([
     { width: 390, height: 844 },
     { width: 820, height: 950 },

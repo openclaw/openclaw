@@ -422,7 +422,7 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
   "taskSuggestions.create": defineValidatedGatewayHandler(
     "taskSuggestions.create",
     validateTaskSuggestionsCreateParams,
-    ({ params, respond, context }) => {
+    async ({ params, respond, context }) => {
       if (!path.isAbsolute(params.cwd)) {
         respondError(respond, ErrorCodes.INVALID_REQUEST, "task suggestion cwd must be absolute");
         return;
@@ -438,7 +438,12 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
         return;
       }
       const agentId = normalizeAgentId(sourceOwner.agentId);
-      const created = createTaskSuggestion({ ...params, agentId });
+      // Clients offer a worktree only where acceptance can start one; accept still rechecks.
+      const worktreeSource = await resolveProjectCheckout(params.cwd).then(
+        () => true,
+        () => false,
+      );
+      const created = createTaskSuggestion({ ...params, agentId, worktreeSource });
       if (created.status === "full") {
         respond(
           false,

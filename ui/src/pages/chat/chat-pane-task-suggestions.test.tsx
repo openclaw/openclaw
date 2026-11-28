@@ -4,7 +4,6 @@ import { createSignal, flush, type Setter } from "solid-js";
 import { expect, it, vi } from "vitest";
 import type {
   AgentsListResult,
-  ProjectsListResult,
   TaskSuggestion,
   TaskSuggestionsAcceptResult as AcceptResult,
   TaskSuggestionsListResult as ListResult,
@@ -298,7 +297,7 @@ it("hides a launched task through early events and stale lists without changing 
 
 it("recovers a worktree source on the same card without changing the prompt or launch mode", async () => {
   let attempts = 0;
-  const { request, container, draw, query, acceptance, accept } = createRequestPane(
+  const { state, request, container, draw, query, acceptance, accept } = createRequestPane(
     async (method) => {
       if (method === "projects.list") {
         return {
@@ -324,12 +323,20 @@ it("recovers a worktree source on the same card without changing the prompt or l
   });
   draw();
   expect(container.textContent).toContain(suggestion.prompt);
-  expect(container.textContent).toContain("Checkout has no commits");
+  // The chooser explains the missing repository; the error is not repeated above it.
+  expect(container.textContent).not.toContain("Checkout has no commits");
+  expect(state.chatError).toBeNull();
+  // The chooser stays above the preserved instructions so short trays still show it.
+  const chooser = query(".task-suggestion__repository")!;
+  const instructions = query<HTMLDetailsElement>(".task-suggestion__instructions")!;
+  expect(chooser.compareDocumentPosition(instructions)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  expect(instructions.open).toBe(false);
   const input = () => query<HTMLInputElement>(".task-suggestion__repository-path")!;
   expect(input().value).toBe(suggestion.cwd);
   query<HTMLButtonElement>(".task-suggestion__repository-choice")!.click();
   draw();
   expect(input().value).toBe("/projects/app");
+  expect(query(".task-suggestion__eyebrow")?.textContent).toContain("in app");
   expect(attempts).toBe(1);
   [...container.querySelectorAll<HTMLButtonElement>("button")]
     .find((button) => button.textContent?.trim() === "Cancel")!
@@ -356,24 +363,6 @@ it("recovers a worktree source on the same card without changing the prompt or l
     acceptCall("worktree", "/projects/app"),
   ]);
   expect(request.mock.calls.some(([method]) => method === "sessions.create")).toBe(false);
-});
-
-it("does not populate a recovery chooser from a retired connection", async () => {
-  const projects = createDeferred<ProjectsListResult>();
-  const { pane, acceptance, accept } = createRequestPane(
-    (method) => (method === "projects.list" ? projects.promise : Promise.reject(sourceRequired)),
-    ["taskSuggestions.accept", "projects.list"],
-  );
-  await accept("worktree");
-  pane.connectionGeneration += 1;
-  projects.resolve({
-    projects: [
-      { id: "stale", displayName: "Stale project", repoRoot: "/stale", source: "registered" },
-    ],
-  });
-  await projects.promise;
-  const outcome = acceptance();
-  expect(outcome?.phase === "failed" && outcome.repository?.projects).toEqual([]);
 });
 
 it("keeps submitted content through reconnect and fences a late acceptance behind a same-task retry", async () => {
