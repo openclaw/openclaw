@@ -465,16 +465,40 @@ describe("channelsRemoveCommand", () => {
       plugin.lifecycle = { onAccountRemoved, onAccountConfigChanged };
 
       await channelsRemoveCommand(
-        { channel: "external-chat", account: "work", delete: deleteConfig },
+        {
+          channel: "external-chat",
+          account: "work",
+          delete: deleteConfig,
+          agent: deleteConfig ? undefined : "main",
+        },
         runtime,
         { hasFlags: true },
       );
 
       expectNoRemoval(`Channel "external-chat" does not support ${action}.`);
+      const retry = "openclaw channels remove --channel external-chat --account work";
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining(deleteConfig ? `${retry} ` : `${retry} --agent main --delete`),
+      );
       expect(onAccountRemoved).not.toHaveBeenCalled();
       expect(onAccountConfigChanged).not.toHaveBeenCalled();
     },
   );
+
+  it("does not offer an unsupported alternative when neither mutation is available", async () => {
+    const plugin = installWorkAccountChannel();
+    delete plugin.config.deleteAccount;
+    delete plugin.config.setAccountEnabled;
+
+    await channelsRemoveCommand(
+      { channel: "external-chat", account: "work", delete: true },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expectNoRemoval('Channel "external-chat" does not support delete.');
+    expect(runtime.error.mock.calls[0]?.[0]).not.toContain("channels remove");
+  });
 
   it("channelsRemoveCommand refuses a colliding delete before runtime, lifecycle, or config effects", async () => {
     const plugin = installWorkAccountChannel();
