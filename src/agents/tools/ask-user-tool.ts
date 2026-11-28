@@ -31,7 +31,7 @@ import {
   type NormalizedAskUserParams,
   normalizeAskUserParams,
 } from "./ask-user-tool-normalization.js";
-import { type AnyAgentTool, ToolInputError, textResult } from "./common.js";
+import { type AnyAgentTool, ToolInputError, jsonResult, textResult } from "./common.js";
 import {
   createGatewayQuestionCanceller,
   createQuestionPromptLifetime,
@@ -373,11 +373,17 @@ function unresolvedActionResult(
   reason: "cancelled" | "expired" | "declined",
   replacedByComposer = false,
 ) {
-  const payload = { status: "action_unresolved" as const, reason };
-  const note = replacedByComposer
-    ? `The required manual step remains incomplete and its dependent actions remain blocked. ${QUESTION_COMPOSER_REPLACEMENT_GUIDANCE}`
-    : `The required manual step was ${reason}. The dependent task remains blocked; do not continue its dependent actions, retry this handoff, or claim success. Preserve completed progress and report this outcome. Wait for a new user instruction before trying this step again.`;
-  return textResult(`${note}\n\n${JSON.stringify(payload)}`, payload);
+  let nextAction: string;
+  if (replacedByComposer) {
+    nextAction = `The required manual step remains incomplete and its dependent actions remain blocked. ${QUESTION_COMPOSER_REPLACEMENT_GUIDANCE}`;
+  } else if (reason === "declined") {
+    nextAction =
+      "Stop this task as requested. Preserve completed progress and report what remains undone. Do not retry the handoff.";
+  } else {
+    nextAction =
+      "If this request is still active, continue independent authorized work. Keep dependent actions blocked. Report the missing prerequisite without bypassing it, repeating the handoff, or claiming it was satisfied.";
+  }
+  return jsonResult({ status: "action_unresolved" as const, reason, nextAction });
 }
 
 function noAnswerResult(
