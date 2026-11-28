@@ -12,7 +12,6 @@ const enApprovals = {
     expiresIn: "expires in {time}",
     expired: "expired",
     execApprovalNeeded: "Command approval needed",
-    runCommand: "Run this command?",
     pluginApprovalNeeded: "Plugin approval needed",
     requestedBySession: "Approval requested by session {session}",
     requestedDuringTurn: "For {name}’s turn",
@@ -126,7 +125,6 @@ const enApprovals = {
     offline: "Reconnect to load approval history.",
     invalidResponse: "Couldn’t load approval history. Try again.",
     unknown: "Unknown",
-    notApplicable: "N/A",
     fields: {
       kind: "Kind",
       source: "Source",

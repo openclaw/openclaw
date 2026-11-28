@@ -11,8 +11,6 @@ const enSidebarAttention = {
       roleState: "Access follows your role",
       status: "Limited access",
       inboxState: "Admin access required",
-      showDetails: "Show limited access details",
-      closeDetails: "Close limited access details",
       request: "Request admin",
       requesting: "Requesting admin access…",
       requestingAction: "Requesting…",
@@ -42,8 +40,6 @@ const enSidebarAttention = {
     mentions: {
       from: "{sender} mentioned you",
       open: "Open",
-      dismiss: "Dismiss",
-      dismissing: "Dismissing…",
       emptyTitle: "No mentions yet.",
       emptyBody: "When someone mentions you in a session, it appears here.",
       retention: "Mentions expire after 7 days.",
@@ -73,11 +69,7 @@ const enSidebarAttention = {
     modelAuthExpiredState: "{status} · {time}",
     modelAuthExpiredWithScope: "{scope} · {status} · {time}",
     reconnect: "Review account",
-    pendingApproval: "{count} pending approval",
-    pendingApprovals: "{count} pending approvals",
     alerts: {
-      updateQuestion:
-        "These are the available update facts:\n{facts}\nSummarize what is new and whether anything needs my attention before updating.",
       modelAuthExpiredQuestion:
         "These model-provider credentials need attention:\n{facts}\nExplain what expired and how to re-authenticate them.",
     },
