@@ -183,9 +183,8 @@ public final class OpenClawVoiceNoteRecorder {
             try? FileManager.default.removeItem(at: fileURL)
             self.capture.cancel()
             self.onRecordingActiveChanged?(false)
-            self.fail(message: String(
-                format: String(localized: "Could not start recording: %@"),
-                error.localizedDescription))
+            chatUILogger.error("voice note start failed: \(error.localizedDescription, privacy: .public)")
+            self.fail(message: String(localized: "Couldn’t start recording."))
             return false
         }
 

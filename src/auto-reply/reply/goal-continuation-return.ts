@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import type { CurrentInboundPromptContext } from "../../agents/internal-runtime-context.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
+import { isRequesterYieldCohortMember } from "../../agents/subagents/registry/subagent-requester-settle-identity.js";
 import { getSubagentRunRuntimeKey } from "../../agents/subagents/registry/subagent-run-generation.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { registerAgentEventLifecycleRotationHandler } from "../../infra/agent-events.js";
@@ -195,18 +196,17 @@ export function promoteGoalContinuationYield(params: {
   ) {
     return;
   }
-  const continuation = owner.continuation;
-  if (!continuation) {
+  if (!owner.continuation) {
     return;
   }
   const { sessionKey, base } = owner.params;
+  const batchRunIds = params.entries[0]?.requesterSettleWake?.batchRunIds ?? [];
   if (
     params.entries.some(
       (entry) =>
         entry.requesterSessionKey !== sessionKey ||
         entry.requesterAgentId !== base.run.agentId ||
-        entry.requesterSettleWake?.rearmGeneration !== params.rearmGeneration ||
-        entry.requesterSettleWake?.requesterYieldBatch !== true,
+        !isRequesterYieldCohortMember(entry, batchRunIds, params.rearmGeneration),
     )
   ) {
     return;
@@ -250,14 +250,16 @@ export function promoteGoalContinuationYield(params: {
 function findGoalReturn(entries: readonly SubagentRunRecord[]): GoalReturn | undefined {
   const first = entries[0];
   const owner = first && cohortReturns.get(getSubagentRunRuntimeKey(first));
+  const cohort = owner?.cohort;
+  const batchRunIds = first?.requesterSettleWake?.batchRunIds ?? [];
   return owner &&
     !owner.closed &&
     owner.generation === getAgentRunLifecycleGeneration() &&
-    owner.cohort?.keys.length === entries.length &&
+    cohort?.keys.length === entries.length &&
     entries.every(
       (entry) =>
         cohortReturns.get(getSubagentRunRuntimeKey(entry)) === owner &&
-        entry.requesterSettleWake?.rearmGeneration === owner.cohort?.rearmGeneration,
+        isRequesterYieldCohortMember(entry, batchRunIds, cohort.rearmGeneration),
     )
     ? owner
     : undefined;

@@ -3,6 +3,90 @@ import OpenClawKit
 import Testing
 @testable import OpenClawChatUI
 
+extension ChatSessionsCodingTests {
+    @Test @MainActor func `CLI assistant text keeps its place before each live tool`() {
+        let model = OpenClawChatViewModel(
+            sessionKey: "main", transport: ToolResultIngestionTransport())
+        defer { model.detachTransport() }
+        model.pendingRuns.insert("run")
+        func words(_ text: String, _ seq: Int) {
+            model.handleTransportEvent(.agent(.init(runId: "run", seq: seq, stream: "assistant", ts: seq, data: [
+                "itemId": .init("cli-assistant:run"), "text": .init(text),
+            ])))
+        }
+        func tool(_ id: String, _ seq: Int) {
+            model.handleTransportEvent(.agent(.init(runId: "run", seq: seq, stream: "item", ts: seq, data: [
+                "kind": .init("tool"), "phase": .init("start"), "itemId": .init("tool:" + id),
+                "toolCallId": .init(id), "title": .init("Read sample"),
+            ])))
+        }
+        words("Opening alpha", 1)
+        tool("alpha", 2)
+        words("Opening alpha\n\nOpening beta", 3)
+        tool("beta", 4)
+        words("Opening alpha\n\nOpening beta\n\nDone", 5)
+        // Commentary is sealed by the call event, even without a live tool row.
+        #expect(model.transcriptMessages.map(\.rawText) == ["Opening alpha", "Opening beta"])
+        let projection = ChatTranscriptPresentation.project(
+            model.transcriptMessages,
+            model: model,
+            includesTools: true,
+            searchActive: false,
+            collapsesWork: true,
+            streamingTextRunID: model.streamingAssistantRunID,
+            isMessageVisible: { _, _ in true })
+        let labels = projection.inspectionRows.compactMap { row -> String? in
+            guard case let .message(message) = row else { return nil }
+            return message.content.first(where: \.isToolCall)?.id ?? message.rawText
+        }
+        let parts = ChatAssistantRunGroup.orderedParts(
+            model.transcriptMessages.map(ChatTranscriptRow.message), tools: model.toolActivities)
+        let inOrder = parts.compactMap { part -> String? in
+            switch part {
+            case let .row(.message(message)): message.rawText
+            case let .tool(call): call.id
+            default: nil
+            }
+        }
+        #expect(inOrder == ["Opening alpha", "alpha", "Opening beta", "beta"])
+        #if os(iOS)
+        #expect(labels == inOrder)
+        #else
+        // The Mac renders live calls in the assistant run group, not the inspection rows.
+        #expect(labels == ["Opening alpha", "Opening beta"])
+        #endif
+        #expect(model.streamingAssistantText == "Done")
+        words("Done", 6) // CLI dispatch replaces its cumulative snapshot with the final answer.
+        #expect(model.streamingAssistantText == "Done")
+        let liveIDs = model.transcriptMessages.map(\.id)
+        model.handleTransportEvent(.chat(.init(
+            runId: "run",
+            sessionKey: "main",
+            state: "final",
+            message: AnyCodable(["role": "assistant", "content": "Done"]),
+            errorMessage: nil)))
+        #expect(model.toolActivities.map(\.id) == ["alpha", "beta"])
+        let history = ["alpha", "beta"].flatMap { name in
+            [
+                OpenClawChatMessage(
+                    role: "assistant",
+                    content: [.init(type: "text", text: "Opening " + name)],
+                    timestamp: nil),
+                OpenClawChatMessage(
+                    role: "assistant",
+                    content: [.init(type: "toolcall", id: name, name: "read")],
+                    timestamp: nil),
+            ]
+        }
+        // CLI replay rows carry the following call identity, not segment/run metadata.
+        model.replaceMessages(history)
+        #expect(model.transcriptMessages.map(\.rawText) == ["Opening alpha", "", "Opening beta", ""])
+        #expect(model.transcriptMessages.filter { !$0.rawText.isEmpty }.map(\.id) == liveIDs)
+        model.replaceMessages([], narrationSettled: true)
+        #expect(model.transcriptMessages.isEmpty)
+    }
+}
+
 struct ChatSessionsCodingTests {
     private struct ExecutorProbe: Decodable, Sendable {
         let decodedOnMainThread: Bool
@@ -139,6 +223,54 @@ struct ChatSessionsCodingTests {
         }
     }
 
+    @Test @MainActor func `clearing local chat copies preserves drafts and queued sends`() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clear-chat-cache-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databases = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? databases.close() }
+        let store = databases.store(gatewayID: "local-cache-a")
+        let otherStore = databases.store(gatewayID: "local-cache-b")
+        let reply = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "text", text: "An earlier reply", mimeType: nil, fileName: nil, content: nil)],
+            timestamp: 1000)
+        await store.storeCanonicalTranscript(
+            sessionKey: "main", agentID: nil, messages: [reply], canonicalMessageIdempotencyKeys: [])
+        await otherStore.storeCanonicalTranscript(
+            sessionKey: "main", agentID: nil, messages: [reply], canonicalMessageIdempotencyKeys: [])
+
+        let draftSaved = await store.saveComposerDraftText(key: "main", text: "Unsent draft", revision: 1)
+        try #require(draftSaved)
+        let queued = OpenClawChatOutboxCommand(
+            id: UUID().uuidString,
+            sessionKey: "main",
+            deliverySessionKey: "agent:main:main",
+            routingContract: "per-sender|main|main",
+            agentID: "main",
+            text: "Send when online",
+            thinking: "off",
+            createdAt: Date().timeIntervalSince1970,
+            status: .queued,
+            retryCount: 0,
+            lastError: nil)
+        let enqueued = await store.enqueueCommand(queued)
+        try #require(enqueued)
+
+        let before = try await databases.gatewayCacheUsage()
+        #expect(before.conversations == 2 && before.hasCachedData && before.bytes > 0)
+
+        let after = try await databases.clearGatewayCache()
+        #expect(after.conversations == 0 && !after.hasCachedData)
+        #expect(await store.loadTranscript(sessionKey: "main").isEmpty)
+        #expect(await otherStore.loadTranscript(sessionKey: "main").isEmpty)
+        #expect(await store.loadComposerDraft(key: "main")?.text == "Unsent draft")
+        let commands = await store.loadCommands()
+        #expect(commands.map(\.id) == [queued.id])
+        #expect(commands.map(\.status) == [.queued])
+        #expect(commands.map(\.text) == ["Send when online"])
+    }
+
     @Test @MainActor func `ios sqlite cache preserves legacy text alongside nested output on reopen`() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("nested-chat-cache-\(UUID().uuidString)", isDirectory: true)
@@ -255,6 +387,26 @@ struct ChatSessionsCodingTests {
         let recorded = try #require(ChatToolActivity.items(message: decoded, liveTools: [live]).first)
         #expect(recorded.displayState == .finished && !recorded.isPending)
         #expect(recorded.resultText == "Nested success output")
+    }
+
+    @Test @MainActor func `answer preview does not create tool activity`() {
+        let model = OpenClawChatViewModel(
+            sessionKey: "main", transport: ToolResultIngestionTransport())
+        defer { model.detachTransport() }
+        model.pendingRuns.insert("run")
+        model.handleTransportEvent(.agent(.init(runId: "run", seq: 1, stream: "item", ts: 1, data: [
+            "kind": .init("tool"), "phase": .init("start"), "itemId": .init("read"), "title": .init("Read sample"),
+        ])))
+        model.handleTransportEvent(.agent(.init(runId: "run", seq: 2, stream: "item", ts: 2, data: [
+            "kind": .init("answer_candidate"), "phase": .init("update"), "itemId": .init("answer"),
+            "title": .init("Answer candidate"), "status": .init("candidate"), "progressText": .init("Done"),
+            "hideFromChannelProgress": .init(true),
+        ])))
+        model.handleTransportEvent(.agent(.init(runId: "run", seq: 3, stream: "assistant", ts: 3, data: [
+            "text": .init("Done"),
+        ])))
+        #expect(model.toolActivities.map(\.toolCallId) == ["read"])
+        #expect(model.streamingAssistantText == "Done")
     }
 
     @Test @MainActor func `ios nested live row adopts history without changing presentation identity`() async throws {
@@ -875,6 +1027,47 @@ struct ChatSessionsCodingTests {
 
 #if os(iOS)
 extension ChatSessionsCodingTests {
+    @Test @MainActor func `streamed result keeps its own runs terminal activity`() throws {
+        let model = OpenClawChatViewModel(
+            sessionKey: "main", transport: ToolResultIngestionTransport())
+        defer { model.detachTransport() }
+        model.pendingRuns.insert("run")
+        let call = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "toolCall", id: "call", name: "bash")],
+            timestamp: 1,
+            transcriptRunID: "run",
+            activity: [Self.nestedActivity(callID: "call", status: nil)])
+        model.handleTransportEvent(.sessionMessage(.init(
+            sessionKey: "main", message: call, messageId: "call-row", messageSeq: 1)))
+        model.handleTransportEvent(.agent(.init(runId: "run", seq: 2, stream: "item", ts: 2, data: [
+            "kind": .init("command"), "itemId": .init("tool:call"), "toolCallId": .init("call"),
+            "phase": .init("end"), "status": .init("completed"), "title": .init("Run command"),
+        ])))
+        func receive(_ run: String, _ id: String, _ activity: [OpenClawAgentActivityItem]? = nil) {
+            let result = OpenClawChatMessage(
+                role: "toolResult",
+                content: [.init(type: "text", text: "timed")],
+                timestamp: 3,
+                transcriptRunID: run,
+                toolCallId: "call",
+                toolName: "bash",
+                isError: false,
+                activity: activity)
+            model.handleTransportEvent(.sessionMessage(.init(
+                sessionKey: "main", message: result, messageId: id, messageSeq: 3)))
+        }
+        receive("run", "result")
+        let merged = try #require(ChatTranscriptRow.mergeToolResults(in: model.messages).first)
+        #expect(ChatToolActivity.items(message: merged).first?.displayState == .finished)
+        #expect(ChatToolActivity.items(message: merged).first?.resultText == "timed")
+        receive("other", "foreign-result")
+        #expect(model.messages.last?.activity == nil)
+        let recorded = [Self.nestedActivity(callID: "call", status: "blocked")]
+        receive("run", "prepared-result", recorded)
+        #expect(model.messages.last?.activity == recorded)
+    }
+
     @Test(arguments: [
         "inferred-final", "inferred-commentary", "ordinary-final", "inferred-only",
         "ambiguous-earlier", "ordinary-ambiguous", "nested-only-earlier", "unknown-earlier",

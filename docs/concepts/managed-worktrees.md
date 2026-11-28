@@ -34,6 +34,11 @@ workspace filesystem instead of a host `/tmp` tmpfs. Keep workspaces on disk and
 use the provided variables (for example, `mktemp -d "$TMPDIR/validation.XXXXXXXX"`).
 Explicit command or sandbox environment overrides remain supported.
 
+When scratch creation fails with `EACCES` or `EROFS`, OpenClaw uses its private
+temporary directory if a safe one is available. Other workspace validation
+failures still stop execution. This fallback leaves workspace permissions
+unchanged and is outside the checkout's snapshots and workspace scratch cleanup.
+
 Unix-domain sockets have much shorter path limits than ordinary files. A deeply
 nested workspace can therefore fail socket creation with `AF_UNIX path too long`.
 For those tools, select a short workspace path or explicitly override the temp
@@ -770,7 +775,7 @@ Remote sessions started from a Gateway folder retain a durable managed-worktree 
 
 The Control UI offers **Worktree** only after confirming a usable Git checkout with at least one commit, or when a selected remote Git repository is awaiting cloning. Plain folders and newly initialized repositories without commits can run directly on the Gateway. A failed Git check also leaves direct execution available if the folder is accessible; a `.git` entry or saved project alone does not enable isolation. If you already selected **Worktree** and a later check fails, that selection stays visible and starting is blocked. Clear **Worktree** to run directly, or reselect the folder to check it again.
 
-The base-ref field suggests up to 100 local and 100 remote refs, plus the default and current branches. The current branch comes from the selected checkout, including linked worktrees; a detached checkout has no current branch. Branch discovery reads that checkout directly without inventorying sibling worktrees. Repeated lookups reuse the completed branch list, including bounded suggestions from large repositories, for up to 30 seconds without checking ref or HEAD metadata or starting another Git process. Repository changes can leave suggestions and repository status stale until that refresh; they never bypass validation of the selected ref during creation. You can enter any branch or commit even when it is not suggested. If branch suggestions cannot be loaded, the Control UI explains that you can enter a ref manually; a verified Git checkout remains available for worktrees. The selected ref must still resolve to a commit before session creation.
+The base-ref field suggests up to 100 local and 100 remote refs, plus the default and current branches. When suggestions share a short branch name, the picker shows just one: it prefers the local branch, then `origin`. The current branch comes from the selected checkout, including linked worktrees; a detached checkout has no current branch. Branch discovery reads that checkout directly without inventorying sibling worktrees. Repeated lookups reuse the completed branch list, including bounded suggestions from large repositories, for up to 30 seconds without checking ref or HEAD metadata or starting another Git process. Repository changes can leave suggestions and repository status stale until that refresh; they never bypass validation of the selected ref during creation. You can enter any branch or commit even when it is not suggested. If branch suggestions cannot be loaded, the Control UI explains that you can enter a ref manually; a verified Git checkout remains available for worktrees. The selected ref must still resolve to a commit before session creation.
 
 Group **New session defaults** checks the agent workspace the same way as a custom folder. If verification fails, retry before saving the group defaults. A remembered cloud destination cannot block a new local draft in a plain folder; a transient Git-check failure leaves the saved destination intact for the next visit.
 
@@ -823,8 +828,10 @@ has no snapshot, **Restore fresh checkout** recreates its recorded branch, or it
 recorded base if that branch is gone. Invalid saved snapshots report an error;
 they never silently fall back to a fresh checkout.
 
-The button uses the existing admin-authorized `worktrees.restore` operation,
-also available in **Settings > Worktrees**. Progress stays visible during restore;
+The button uses the `worktrees.restore` operation. Administrators and the person
+who started the conversation see it; everyone else is asked to have an
+administrator restore the workspace or to start a new conversation.
+**Settings > Worktrees** offers the same restore to administrators. Progress stays visible during restore;
 failure includes a typed reason and recovery guidance. Restore has a five-minute
 budget, including lease waits, and joins started Git cleanup before returning.
 Concurrent restores serialize through the worktree lifecycle. An expired registry
@@ -1314,7 +1321,7 @@ their specific input error and exit with code 1 before cleanup or removal.
 | `worktrees.recoverRemoval` | Complete an interrupted removal from the exact pending snapshot.             |
 | `worktrees.retireSnapshot` | Retire one redundant snapshot with exact retained-source guards.             |
 
-`worktrees.list` requires `operator.write` because it returns every session's worktree paths, repository roots, and branches. `worktrees.create` and `worktrees.branches` require `operator.write` for configured agent workspaces and registered projects; arbitrary host paths still require `operator.admin`. All creation disables repository Git hooks; write-scoped creation also skips `.openclaw/worktree-setup.sh`. Removing, restoring, and garbage-collecting worktrees remain admin-only. Branch listing reads existing refs only and never fetches. Unchanged inventories are reused after checking checkout, ref, configuration, and object-storage metadata, including repositories with large pack directories; changed metadata refreshes the inventory. Remote-only branches come back remote-qualified (`origin/feature-a`) so every returned name resolves as a base ref. New Session can also request a typed repository status from this method; a plain directory or unavailable checkout returns no branches instead of forcing the UI to infer Git capability from an error string.
+`worktrees.list` requires `operator.write` because it returns every session's worktree paths, repository roots, and branches. `worktrees.create` and `worktrees.branches` require `operator.write` for configured agent workspaces and registered projects; arbitrary host paths still require `operator.admin`. All creation disables repository Git hooks; write-scoped creation also skips `.openclaw/worktree-setup.sh`. Removing and garbage-collecting worktrees remain admin-only. Restoring is admin-only, except that a caller with `operator.sessions.write` may restore the worktree of a conversation they started. Branch listing reads existing refs only and never fetches. Unchanged inventories are reused after checking checkout, ref, configuration, and object-storage metadata, including repositories with large pack directories; changed metadata refreshes the inventory. Remote-only branches come back remote-qualified (`origin/feature-a`) so every returned name resolves as a base ref. New Session can also request a typed repository status from this method; a plain directory or unavailable checkout returns no branches instead of forcing the UI to infer Git capability from an error string.
 
 Owner-routed requests require `operator.admin` and the corresponding
 [capability](/gateway/protocol/versioning#local-state-owner-routing). Their wire

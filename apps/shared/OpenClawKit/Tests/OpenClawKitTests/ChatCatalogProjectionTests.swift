@@ -86,6 +86,30 @@ struct ChatCatalogProjectionTests {
         #expect(model.effectiveThinkingLevelForSend("high") == "high")
     }
 
+    @Test func `effort control is offered only when the model has levels or speed options`() throws {
+        let plain = try self.viewModel(#"{"id":"choice","name":"Choice","provider":"fixture"}"#)
+        plain.syncThinkingLevelOptions()
+        #expect(!plain.composerOffersEffortChoices)
+        let levels = try self.viewModel(
+            #"{"id":"choice","name":"Choice","provider":"fixture","thinkingLevels":[{"id":"low","label":"low"},{"id":"high","label":"high"}]}"#)
+        levels.syncThinkingLevelOptions()
+        #expect(levels.composerOffersEffortChoices)
+        let speedOnly = try self
+            .viewModel(#"{"id":"choice","name":"Choice","provider":"fixture","supportsFastMode":true}"#)
+        speedOnly.syncThinkingLevelOptions()
+        #expect(!speedOnly.showsThinkingPicker)
+        #expect(speedOnly.composerOffersEffortChoices)
+    }
+
+    @Test func `effort controls stay open while a reply runs`() throws {
+        let model = try self.viewModel(#"{"id":"choice","name":"Choice","provider":"fixture"}"#)
+        #expect(model.composerPhoneEffortLockReason == nil)
+        model.pendingRuns.insert("r")
+        #expect(model.hasActiveRunForComposerSettings)
+        #expect(model.composerPhoneEffortLockReason == nil)
+        #expect(!model.composerModelChoicesLocked)
+    }
+
     @Test func `unknown availability stays selectable without refusal guidance`() throws {
         let model = try self.viewModel(#"{"id":"choice","name":"Choice","provider":"fixture"}"#)
         model.modelAvailabilityIsSessionScoped = true

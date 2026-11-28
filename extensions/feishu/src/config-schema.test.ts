@@ -1,6 +1,7 @@
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
-import { FeishuChannelConfigSchema, FeishuConfigSchema } from "./config-schema.js";
+import { feishuPlugin } from "../channel-plugin-api.js";
+import { FeishuConfigSchema } from "./config-schema.js";
 
 // Separate negative fixture tokens from webhook literals to avoid the
 // GHSA-G353-MGV3-8PCJ opengrep rule. Positive fixtures stay literal.
@@ -52,7 +53,7 @@ describe("FeishuConfigSchema", () => {
   function expectCatalogValidation(value: Record<string, unknown>, accepted: boolean) {
     expect(FeishuConfigSchema.safeParse(value).success, "Zod validation").toBe(accepted);
     const result = validateJsonSchemaValue({
-      schema: FeishuChannelConfigSchema.schema,
+      schema: feishuPlugin.configSchema!.schema,
       cacheKey: "feishu-sticker-catalog-test",
       value,
       applyDefaults: true,

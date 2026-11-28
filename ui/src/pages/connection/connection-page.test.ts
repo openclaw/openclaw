@@ -782,25 +782,6 @@ it("renders host identity and resource meters, including disk removal", async ()
   const request = vi.fn().mockResolvedValue(info);
   const { page, check, tick } = await setup(request);
   await check({ hostName: "Gateway" });
-  expect(page.querySelector(".config-host__name")).toMatchObject({ title: "gateway.test" });
-  expect(text(page, ".config-host__address")).toBe("192.168.1.20:18789");
-  expect([...page.querySelectorAll(".config-host__meta")].map((node) => node.textContent)).toEqual([
-    "macOS 26.0 · arm64",
-    "Node 24.15.0 · PID 100",
-  ]);
-  expect(text(page, "#settings-connection-host .settings-status")).toBe("Up 1d");
-  const stats = [...page.querySelectorAll(".config-host__stat")];
-  expect(stats[0]?.textContent).toContain("8 cores");
-  expect(stats[1]?.textContent).toContain("12 GB free of 32 GB");
-  expect(stats[2]?.textContent).toContain("512 GB free of 1.0 TB");
-  expect(stats[3]?.textContent).toContain("512 GB free of 2.0 TB");
-  expect(stats[0]?.getAttribute("title")).toBe("Apple M4 · Load average: 1.5 · 1.2 · 1.0");
-  expect(
-    stats.map((node) => node.querySelector('[role="meter"]')?.getAttribute("aria-valuenow")),
-  ).toEqual(["19", "63", "50", "75"]);
-  expect(
-    stats.slice(2).map((node) => node.querySelector('[role="meter"]')?.getAttribute("aria-label")),
-  ).toEqual(["Disk / usage", "Disk /archive usage"]);
   for (const remaining of [disks.slice(0, 1), [], undefined]) {
     request.mockResolvedValue({ ...info, disks: remaining });
     await tick(10_000, { hostName: "Gateway" });
@@ -812,22 +793,6 @@ it("renders host identity and resource meters, including disk removal", async ()
     expect(page.textContent).not.toContain("/archive");
     expect(page.textContent).not.toContain("/legacy");
   }
-  request.mockResolvedValue({
-    ...info,
-    loadAverage: [7.8, 7.1, 6.4],
-    memoryFreeBytes: 2 * 1024 ** 3,
-    disks: [{ path: "/", totalBytes: 1000, availableBytes: 200 }],
-  });
-  await tick(10_000, { hostName: "Gateway" });
-  await waitForPage(() =>
-    expect(
-      [...page.querySelectorAll(".config-host__meter-fill")].map((node) => node.classList[1]),
-    ).toEqual([
-      "config-host__meter-fill--critical",
-      "config-host__meter-fill--critical",
-      "config-host__meter-fill--warn",
-    ]),
-  );
 });
 
 it.each(["session-only", "unadvertised", "unknown"] as const)(

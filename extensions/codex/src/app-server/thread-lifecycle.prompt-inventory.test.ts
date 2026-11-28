@@ -41,13 +41,8 @@ it("materializes the openclaw_direct prompt inventory once with matching guidanc
     ],
   });
   expect(namespaceReads).toBe(1);
-  expect(instructions.includes("`openclaw_direct.sessions_yield`")).toBe(true);
-  expect(instructions.includes("native `wait_agent`")).toBe(true);
   expect(instructions).toContain(
     "Deferred searchable OpenClaw dynamic tools available: openclaw_direct.alpha_tool, openclaw_direct.skill_workshop, openclaw_direct.zeta_tool.",
-  );
-  expect(instructions).toContain(
-    "Use Codex native `spawn_agent` for work that only needs Codex-native tools",
   );
   expect(instructions).toContain(
     "Use `tool_search` for deferred tools when it is directly callable",
@@ -56,7 +51,4 @@ it("materializes the openclaw_direct prompt inventory once with matching guidanc
     "Do not repeat a completed call to retrieve a result you already have.",
   );
   expect(instructions).not.toContain("On code-mode-only models");
-  expect(instructions).toContain(
-    "For new delegated work that needs OpenClaw tools, use `openclaw_direct.sessions_spawn` from the start.",
-  );
 });

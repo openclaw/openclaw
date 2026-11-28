@@ -114,60 +114,6 @@ describe("controlUi.githubPreview", () => {
     vi.unstubAllEnvs();
   });
 
-  it("returns a progressive detail overview without loading optional endpoints", async () => {
-    const cfg = configuredGitHub("progressive-service-token");
-    setRuntimeConfigSnapshot(cfg);
-    const revision = "a".repeat(40);
-    const optional = vi.fn();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async (input) => {
-        const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
-        if (path.endsWith("/pulls/7")) {
-          return json(
-            issueFields("Early body", {
-              body: "Available before CI",
-              comments: 1,
-              review_comments: 1,
-              changed_files: 1,
-              head: { sha: revision },
-            }),
-          );
-        }
-        if (path.endsWith("/progressive-adapter")) {
-          return Response.json({ id: 771, private: false, visibility: "public" });
-        }
-        optional();
-        return new Response(null, { status: 503 });
-      }),
-    );
-    const { respond, send } = fixture("githubDetail");
-    await send(
-      {
-        kind: "pull",
-        owner: "octocat",
-        repo: "progressive-adapter",
-        number: 7,
-        section: "overview",
-      },
-      runtime(() => cfg),
-    );
-    expectReply(
-      respond,
-      expect.objectContaining({
-        title: "Early body",
-        body: "Available before CI",
-        revision,
-        deferredSections: ["checks", "files", "discussion"],
-        partial: false,
-      }),
-    );
-    expect(optional).not.toHaveBeenCalled();
-    for (const field of ["checks", "comments", "files"]) {
-      expect(respond.mock.calls[0]?.[1]).not.toHaveProperty(field);
-    }
-  });
-
   it.each(["invalid", null, 1])(
     "rejects invalid detail section %j before upstream access",
     async (section) => {

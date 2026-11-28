@@ -405,11 +405,15 @@ describe("extension relay HTTP auth v2", { concurrent: false }, () => {
         }),
       );
       expect(attachCommand.type).toBe("attach");
-      sendJson(extension, {
-        type: "result",
-        seq: attachCommand.seq,
-        result: { targetId: "target-1" },
-      });
+      const focusCommand = await messageAfter(extension, () =>
+        sendJson(extension, {
+          type: "result",
+          seq: attachCommand.seq,
+          result: { targetId: "target-1" },
+        }),
+      );
+      expect(focusCommand.method).toBe("Emulation.setFocusEmulationEnabled");
+      sendJson(extension, { type: "result", seq: focusCommand.seq, result: {} });
       await vi.waitFor(() =>
         expect(clientFrames.some((frame) => frame.method === "Target.attachedToTarget")).toBe(true),
       );

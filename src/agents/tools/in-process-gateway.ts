@@ -519,6 +519,7 @@ async function callInProcessGatewayToolBound<T>(
             ...(creation.completionOwnerSessionKey
               ? { completionOwnerSessionKey: creation.completionOwnerSessionKey }
               : {}),
+            ...(creation.createdIndependently ? { createdIndependently: true } : {}),
             requesterSenderIsOwner: creation.requesterSenderIsOwner,
             inheritedToolPolicy: creation.inheritedToolPolicy,
             ...(creation.inheritedPermissionMode

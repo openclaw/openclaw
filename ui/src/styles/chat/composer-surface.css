@@ -521,7 +521,7 @@
   position: absolute;
   inset: 0 0 auto;
   padding-block: var(--chat-composer-editor-inset-block);
-  color: var(--muted);
+  color: var(--chat-composer-placeholder);
   font-size: var(--chat-composer-editor-size);
   font-weight: var(--control-ui-font-weight-normal);
   line-height: var(--chat-composer-editor-line);

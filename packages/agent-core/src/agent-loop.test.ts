@@ -13,7 +13,6 @@ import {
   makeTool,
   model,
   reply,
-  TEST_USAGE,
   toolResultMessages,
   user,
 } from "./agent-loop.test-support.js";
@@ -26,13 +25,7 @@ import {
   attachInternalToolResultProvenance,
   getInternalToolResultProvenance,
 } from "./internal-hooks.js";
-import {
-  type AssistantMessage,
-  createAssistantMessageEventStream,
-  type Context,
-  type Message,
-  type Model,
-} from "./llm.js";
+import type { AssistantMessage, Context, Message } from "./llm.js";
 import type {
   AgentContext,
   AgentEvent,
@@ -971,82 +964,5 @@ describe("agentLoop tool termination", () => {
       "agent_end",
     ]);
     expect(events.at(-1)).toMatchObject({ type: "agent_end" });
-  });
-});
-
-describe("Agent next-turn preparation", () => {
-  it("forwards completed-turn context and applies its update to the following request", async () => {
-    const nextModel: Model = { ...model, id: "next-model", thinkingLevelMap: { off: "low" } };
-    const requests: Array<{
-      model: string;
-      systemPrompt: string;
-      tools: string[];
-      reasoning: string | undefined;
-    }> = [];
-    let turn = 0;
-    const streamFn: StreamFn = (activeModel, context, options) => {
-      requests.push({
-        model: activeModel.id,
-        reasoning: options?.reasoning,
-        systemPrompt: context.systemPrompt ?? "",
-        tools: context.tools?.map((tool) => tool.name) ?? [],
-      });
-      turn += 1;
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        const content: AssistantMessage["content"] =
-          turn === 1 ? [makeCall("refresh", "call-refresh")] : [{ type: "text", text: "done" }];
-        stream.push({
-          type: "done",
-          reason: turn === 1 ? "toolUse" : "stop",
-          message: {
-            role: "assistant",
-            content,
-            api: activeModel.api,
-            provider: activeModel.provider,
-            model: activeModel.id,
-            usage: TEST_USAGE,
-            stopReason: turn === 1 ? "toolUse" : "stop",
-            timestamp: turn,
-          },
-        });
-        stream.end();
-      });
-      return stream;
-    };
-    const tool: AgentTool = {
-      name: "refresh",
-      label: "refresh",
-      description: "refresh turn state",
-      parameters: Type.Object({}, { additionalProperties: false }),
-      execute: async () => ({ content: [{ type: "text", text: "refreshed" }], details: {} }),
-    };
-    const prepareNextTurnWithContext = vi.fn(({ context }) => ({
-      context: { ...context, systemPrompt: "refreshed prompt", tools: [] },
-      model: nextModel,
-    }));
-    const prepareNextTurn = vi.fn(() => ({
-      context: { systemPrompt: "legacy prompt", messages: [], tools: [tool] },
-    }));
-    const agent = new Agent({
-      initialState: { model, systemPrompt: "initial prompt", tools: [tool] },
-      convertToLlm: (messages) => messages as Message[],
-      streamFn,
-      prepareNextTurn,
-      prepareNextTurnWithContext,
-    });
-
-    await agent.prompt("start");
-
-    expect(prepareNextTurnWithContext).toHaveBeenCalled();
-    expect(prepareNextTurn).not.toHaveBeenCalled();
-    expect(prepareNextTurnWithContext.mock.calls[0]?.[0]).toMatchObject({
-      message: { role: "assistant", stopReason: "toolUse" },
-      toolResults: [{ role: "toolResult", toolName: "refresh" }],
-    });
-    expect(requests).toEqual([
-      { model: model.id, systemPrompt: "initial prompt", tools: ["refresh"], reasoning: "off" },
-      { model: nextModel.id, systemPrompt: "refreshed prompt", tools: [], reasoning: "low" },
-    ]);
   });
 });

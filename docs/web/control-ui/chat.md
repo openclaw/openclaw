@@ -181,9 +181,9 @@ A parent update that receives `already_pending` from `sessions_yield` has not
 created another handoff. After that update settles, it does not leave a stale
 waiting status or start a new idle clock, even while an earlier child continues.
 The intervening user message starts a request of its own, so it does not mark
-the original handoff as resumed. A later automatic child completion gets a rule
-such as **Resumed · 2s later · Agent finished**, rather than inventing a new confirmed
-handoff or child list. Its settled duration and the completed reply remain
+the original handoff as resumed. A later automatic child completion gets an activity row
+with the agent completion and when it happened, rather than inventing a new
+confirmed handoff or child list. Its settled duration and the completed reply remain
 after reload.
 
 The parent’s own working indicator remains visible while the parent is actively
@@ -205,10 +205,11 @@ handoff, unless a **Resumed** rule marks the resume.
 
 Work the agent picks up again on its own continues the block it belongs to, with
 or without a handoff: when a background command finishes, when the Gateway
-restarts during a run, or when a subagent of this session finishes. A thin rule
-such as **Resumed · 3m later · Background command finished** marks each place it
-picked up again; the other labels are **Gateway restarted** and **Agent
-finished**. An answer the agent already gave stays in place above the rule. A
+restarts during a run, or when a subagent of this session finishes. An activity row
+such as **A background command finished · 3m later** marks where work picked up
+again. A subagent completion shows its outcome once in the existing agent
+activity row, with the elapsed time alongside it. An earlier answer stays in
+place above the activity. A
 heartbeat, a scheduled automation, or a message from another person or session
 still starts a block of its own. In dashboard sessions, tool activity recorded after the resumed
 answer, such as the step that sent it, joins the activity before that answer,
@@ -495,8 +496,8 @@ Saving keeps your existing draft and does not send a message.
 
 **Ask in side chat** asks about the passage in Side chat. **New session**
 opens the new-session launcher with the passage attached as a
-comment; starting the session sends it as a quote ahead of your prompt. The
-launcher's comment preview can delete the passage but not edit it, and your
+comment; starting the session sends it as a quote ahead of your prompt,
+followed by a link to the session it came from. The launcher's comment preview can delete the passage but not edit it, and your
 current chat draft is left unchanged.
 
 Saving leaves a small, filled comment marker beside the selected passage. Click
@@ -997,8 +998,10 @@ renaming its existing Git branch. Concurrent naming requests share the same work
 if that request fails, a waiting dashboard request retries once. Naming starts
 when the first reply begins; if it fails while that reply is still running, as on
 a model server that handles one request at a time, it retries once after the turn
-ends. If both model routes fail, the session uses a two-word crustacean-themed name.
-The Gateway logs a warning when chat naming uses this fallback.
+ends. If naming still fails, OpenClaw does not save a title. The session shows a
+shortened version of the first message if it has text. The next message triggers
+another naming attempt unless you set a custom name first.
+The Gateway logs a warning when chat naming fails.
 
 Collapsed tool rows keep the tool label visible and truncate long summaries with an ellipsis. Completed answers stay visible outside collapsed work, including when a later Gateway notice arrives. The completed response footer keeps the final answer's timestamp when earlier tool activity is restored after a reload. Expand a tool row to inspect its command, path, or query. Inspect subagent status from the parent conversation with `/subagents list` and `/subagents info <id|#>`, or read recent child messages with `/subagents log <id|#>`. See [Sub-agent slash command](/tools/subagents/slash-command).
 
@@ -1043,7 +1046,7 @@ When a reply fails and its thread notice is unavailable, the card above the comp
     - Long tool output uses 2,000-character text previews in history. Complete structured results keep their existing display limit so source cards and embedded views remain available. Choose **Show full output** to load the captured result on demand; copying or downloading from that view uses the full result. User and assistant text keep their separate display limits.
     - When a visible assistant message was truncated in `chat.history`, the Control UI automatically fetches the full display-normalized transcript entry through `chat.message.get` by `sessionKey`, active `agentId` when needed, and transcript `messageId`. The preview remains visible while the entry loads; recovered text replaces it inline.
     - Image previews reserve their space while loading. New uploaded images retain their pixel dimensions in saved messages. Previews without dimensions use a temporary 3:2 placeholder, then adopt the decoded image’s aspect ratio without letterboxing; uploaded dimensions also update an already-visible preview. Single images retain that ratio when returning from Settings or reloading the conversation. Open an image to view its full size.
-    - Assistant/generated images are persisted as managed media references. New clients resolve their stable artifact ids through authenticated `artifacts.download` and receive short-lived, exact-resource media URLs, so reloads do not depend on raw base64 payloads or reusable credentials in image URLs. The chat uses bounded thumbnails for still images. GIF attachments load their original bytes inline so they animate without opening the image viewer. Opening uses a screen-sized rendition; Download and Copy explicitly request the full image. These actions share the browser's bounded in-memory image cache, avoiding repeated downloads while a rendition remains cached.
+    - Assistant/generated images are persisted as managed media references. New clients resolve their stable artifact ids through authenticated `artifacts.download` and receive short-lived, exact-resource media URLs, so reloads do not depend on raw base64 payloads or reusable credentials in image URLs. The chat uses bounded thumbnails for still images. When an opaque photo exceeds the preview byte limit, the Gateway tries stronger compression before reducing its dimensions. GIF attachments load their original bytes inline so they animate without opening the image viewer. Opening uses a screen-sized rendition; Download and Copy explicitly request the full image. These actions share the browser's bounded in-memory image cache, avoiding repeated downloads while a rendition remains cached.
     - The Gateway prepares `chat.history` for display, stripping inline directive tags (for example `[[reply_to_*]]` and `[[audio_as_voice]]`), plain-text tool-call XML payloads (`<tool_call>`, `<function_call>`, `<tool_calls>`, `<function_calls>`, and truncated blocks), and leaked ASCII/full-width model control tokens. Stored assistant visibility honors display, phase, and final-source facts first, then omits raw assistant text that trims to uppercase `NO_REPLY`; lowercase and wrapped forms remain visible. User text is never classified as silence. Heartbeat acknowledgments retain their separate display rules. The Control UI renders prepared history and live output without parsing silence tokens.
     - When a native tool call follows an unphased text group containing only an unfinished tool marker (such as `<` or `<tool_`), live chat and history hide that group. A marker fragment without a following native call remains a terminal literal. Prose and inline or fenced examples keep their existing rendering. Stored message text and tool arguments do not change.
     - During an active send and the final history refresh, the chat view keeps local optimistic user/assistant messages visible if `chat.history` briefly returns an older snapshot; the saved transcript replaces those local messages once the Gateway history catches up. Pending sends in shared sessions remain a single bubble while incremental history catches up, even when another participant's reply arrives first. Saved commentary also replaces its matching live item when incremental history arrives after completion, cancellation, or failure, keeping the progress text in its original place.
@@ -1096,6 +1099,12 @@ When a reply fails and its thread notice is unavailable, the card above the comp
     - Chat and New session block sending when the Gateway reports missing provider credentials or a confirmed authentication failure. Missing credentials point to **Models → Connect provider**; authentication failures ask you to review the credential or sign-in. An explicit account choice in New session also waits for a successful preview confirming that account and an eligible model; pending or failed previews show why Start is blocked. Otherwise, temporary credential cooldowns and unknown model availability do not block sending or show an authentication banner; run errors remain visible in the transcript. Unavailable model choices stay disabled in the picker.
     - After a config change or a published credential update, connected Chat and New session views re-read model readiness automatically; no page reload or picker action is needed. Chat also re-reads its session projection after a model or auth-profile selection changes. An existing missing-credential or authentication-failure block stays in place while that read is pending or fails, until replacement metadata changes it. Existing chats keep their session's selected auth profile; New session readiness reflects its draft account choice when one is set. This refresh is event-driven, not a timed polling guarantee.
     - The chat composer usage ring follows the selected session and agent, including global sessions. Open it for the current context window, latest-run token counts, and the current provider's account, plan, and quota when reported. Subscription quota replaces dollar estimates; other sessions can show estimated total cost and the latest provider response's input/output/cache cost breakdown. Fresh usage switches to warning styling at high context pressure; stale token snapshots remain visible as approximate usage without that warning. During an agent switch, the previous agent's session row is not reused for the ring.
+
+  </Accordion>
+  <Accordion title="Voice dictation">
+    Once dictation starts, it keeps recording when you move the pointer away, switch browser tabs or applications, or minimize the browser. You can read reference material while speaking without splitting the recording. Use **Stop and keep text** to finish and keep the transcript in your draft, or **Escape** to discard it. Switching away does not send a message.
+
+    The microphone stays active while the page is in the background. Closing or reloading the page, changing the conversation or draft, and microphone or connection failures can still end capture. Browsers and operating systems may suspend background capture, especially on mobile or when the device locks; OpenClaw does not keep the device awake or restart recording automatically.
 
   </Accordion>
   <Accordion title="Talk mode (browser realtime)">
@@ -1243,9 +1252,15 @@ Document cards show a labeled **Download** action without hovering, both in the
 transcript and in the **Files** panel when no preview is available.
 Uploaded images also retain their names in accessible transcript image and image-viewer labels after sending and reloading; descriptive alt text takes precedence when provided.
 Select **Open** on an uploaded text attachment to read it directly in the **Files** side
-panel. Plain-text attachments, CSV, and JSON preserve line breaks and indentation. Markdown attachments render as documents
-with interactive code blocks. When an open attachment refreshes with unchanged
-text, its code blocks keep your expansion and wrapping choices after loading.
+panel. Plain-text attachments, CSV, and JSON preserve line breaks and indentation.
+CSV attachments open as tables with the first record as column headers. If the
+file declares `text/csv; header=absent`, every record appears as a data row.
+Use **View raw text** to see the original CSV. Files with malformed quoting or
+more than 10,000 cells open directly as raw text.
+
+Markdown attachments render as documents with interactive code blocks. When an
+open attachment refreshes with unchanged text, its code blocks keep your
+expansion and wrapping choices after loading.
 A different attachment or changed text starts with fresh controls. Long previews
 scroll inside their file tab; switching tabs preserves your reading position. HTML files
 (`.html`, `.htm`, or `text/html`, including MIME parameters) render as a sandboxed
@@ -1629,8 +1644,10 @@ other runs are not included. Source cards require run identity in the transcript
 and follow tool-activity visibility. They are hidden while a run is active or
 transcript search is filtering messages.
 
-In completed dashboard turns answered by OpenAI models, commentary, reasoning-only
-messages, and tool activity can share one **Worked for…** disclosure above the answers.
+In completed dashboard turns answered by OpenAI models, commentary the model labels as
+such, reasoning-only messages, and tool activity can share one **Worked for…** disclosure
+above the answers. Assistant text without a commentary label, such as text before a
+tool call on Chat Completions transports, stays visible below the disclosure.
 For other models, mixed-model work, or history that does not identify the model,
 there is no turn-wide disclosure: text and tools stay inline. Switching the selected
 model does not change earlier turns. Tool names and tool grouping are unchanged.

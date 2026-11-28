@@ -115,4 +115,35 @@ describe("Signal formatting", () => {
     expect(markdownToSignalText("ordinary   ").text).toBe("ordinary");
     expect(markdownToSignalText("```\nhello\n```").text).toBe("hello");
   });
+
+  it("prefixes every quoted line and chunk while styles keep their words", () => {
+    expect(
+      markdownToSignalText(
+        "> line one\n> **line two**\n>\n> second para\n> > nested one\n> > nested two",
+      ),
+    ).toEqual({
+      text: "> line one\n> line two\n\n> second para\n\n> > nested one\n> > nested two",
+      styles: [{ start: 13, length: 8, style: "BOLD" }],
+    });
+    expect(
+      markdownToSignalTextChunks(`> ${"word ".repeat(18)}`, 40).map((chunk) => chunk.text),
+    ).toEqual([
+      "> word word word word word word word",
+      "> word word word word word word word",
+      "> word word word word",
+    ]);
+  });
+
+  it("keeps the quote prefix when a transcript-role header starts a chunk", () => {
+    const header = "user[2026-07-02]";
+    const chunks = markdownToSignalTextChunks(`> > padding padding ${header} question`, 25);
+    const roleChunk = chunks.find((chunk) => chunk.text.includes(header));
+
+    expect(roleChunk?.text).toBe(`> > ${header}`);
+    expect(roleChunk?.styles).toContainEqual({
+      start: "> > ".length,
+      length: header.length,
+      style: "MONOSPACE",
+    });
+  });
 });

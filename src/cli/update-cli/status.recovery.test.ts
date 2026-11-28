@@ -437,6 +437,56 @@ it("reports a capture-root enumeration failure globally", async () => {
   expect(status).not.toHaveProperty("recoverySets");
   expect(await text(store)).toBe("not a directory");
 });
+it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  "keeps unreadable captures beside readable ones without losing the recovery set",
+  async () => {
+    const c = await capture();
+    const locked = await capture(secondId);
+    await fs.chmod(locked.directory, 0o000);
+    try {
+      mocks.readRun.mockResolvedValue(await run(c));
+      const status = await inspect();
+      expect(status).not.toHaveProperty("recoverySetsError");
+      expect(status.recoverySets).toMatchObject([
+        { runId: firstId, manifestPath: c.manifestPath },
+        { directory: locked.directory, status: "unreadable" },
+      ]);
+      expect(await text(c.manifestPath)).toBe(c.raw);
+    } finally {
+      await fs.chmod(locked.directory, 0o755);
+      expect(await text(locked.manifestPath)).toBe(locked.raw);
+    }
+  },
+);
+it.skipIf(process.platform === "win32" || process.getuid?.() === 0).each([
+  { target: "root", mode: "000" },
+  { target: "parent", mode: "000" },
+  { target: "root", mode: "0444" },
+])(
+  "keeps the recovery set when the capture $target is unreadable (mode $mode)",
+  async ({ target, mode }) => {
+    const c = await capture();
+    const store = `${stateDir}.update-captures`;
+    const locked = target === "root" ? store : root;
+    if (mode === "0444") {
+      await fs.writeFile(path.join(store, ".DS_Store"), "fixture");
+    }
+    await fs.chmod(locked, Number.parseInt(mode, 8));
+    try {
+      mocks.readRun.mockResolvedValue(await run(c));
+      const status = await inspect();
+      expect(status).not.toHaveProperty("recoverySetsError");
+      const unreadable = mode === "0444" ? c.directory : store;
+      expect(status.recoverySets).toMatchObject([{ directory: unreadable, status: "unreadable" }]);
+      expect(status.recoverySets[0].message).toContain(
+        mode === "0444" ? "Update capture at" : "capture root",
+      );
+    } finally {
+      await fs.chmod(locked, 0o755);
+      expect(await text(c.manifestPath)).toBe(c.raw);
+    }
+  },
+);
 it("reports one failed set as unresolved and multiple failed sets as ambiguous", async () => {
   const c = await capture();
   mocks.readRun.mockResolvedValue(await run(c));

@@ -37,6 +37,25 @@ struct ChatMessageBubbleEquatableTests {
         #expect(baseline != Self.bubble(message: message) { $0.liveToolCalls = [tool] })
     }
 
+    @Test func `a user message redraws when its send state changes`() {
+        let message = OpenClawChatMessage(
+            role: "user",
+            content: [OpenClawChatMessageContent(type: "text", text: "Two more from the trip.")],
+            timestamp: 1)
+        func bubble(_ phase: ChatUserSendPresentation.Phase?) -> ChatMessageBubble {
+            Self.bubble(message: message) {
+                $0.userBubbleAccessories = ChatUserBubbleAccessories(
+                    menu: { AnyView(EmptyView()) },
+                    reactions: { AnyView(EmptyView()) },
+                    send: phase.map { ChatUserSendPresentation(phase: $0) })
+            }
+        }
+
+        #expect(bubble(.uploading) != bubble(nil))
+        #expect(bubble(.sending) != bubble(.notSent))
+        #expect(bubble(.queued) == bubble(.queued))
+    }
+
     @Test func `Gateway state changes leave the row environment equal`() throws {
         // Rows take no Gateway state. ChatView hands leaves one value per owner, and the leaves read
         // health and the source context through it, so a health flip or a source refresh changes

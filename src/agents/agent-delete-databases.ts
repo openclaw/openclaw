@@ -129,6 +129,17 @@ export async function readAgentDeleteDatabaseRegistry(options: OpenClawStateData
   return read.result.entries;
 }
 
+/**
+ * A retired agent's registered databases: an agent absent from config can still be
+ * registered (#205927). Explicit deletion consumes this; config absence alone never
+ * removes a registration.
+ */
+export async function readRegisteredAgentDatabasePaths(agentId: string): Promise<string[]> {
+  return (await readAgentDeleteDatabaseRegistry())
+    .filter((entry) => normalizeAgentId(entry.agentId) === agentId)
+    .map((entry) => entry.path);
+}
+
 export function prepareJournaledAgentDirOwnership(
   cfg: OpenClawConfig,
   agentId: string,

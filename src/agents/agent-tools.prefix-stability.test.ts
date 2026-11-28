@@ -246,7 +246,9 @@ it("refuses a wake-turn screen call without a requesting UI through the executio
     expect(result.details).toMatchObject({ gated: true });
     expect(JSON.stringify(result.content)).toContain("open Control UI");
     expect(JSON.stringify(result.content)).toContain(
-      senderIsOwner ? "requires a connected requesting client" : "needs the owner's authority",
+      senderIsOwner
+        ? "requires a connected requesting client"
+        : "needs the Gateway owner's authority",
     );
   }
 });

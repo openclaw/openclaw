@@ -12,6 +12,7 @@ import {
 } from "../requester-cron-authority.js";
 import { promoteRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { resolveRecordedRequester } from "./subagent-child-owner-match.js";
+import { hasSubagentKill, isSubagentCompletionCancelled } from "./subagent-control-kill-intent.js";
 import { hasSubagentControllerInput } from "./subagent-controller-inputs.js";
 import { isSubagentRetirementSettled } from "./subagent-delivery-state.js";
 import { trackSubagentProgressYield } from "./subagent-progress-draft.js";
@@ -31,6 +32,12 @@ import {
   isRequesterSettleWakeForRun,
   owesRequesterCompletion,
 } from "./subagent-requester-settle-identity.js";
+import {
+  hasPendingRequesterTurnResult,
+  hasRequesterTurnYielded,
+  isSubagentPausedByYield,
+  hasRequesterTurn,
+} from "./subagent-requester-turn-custody.js";
 import {
   bindSubagentRunRuntimeKey,
   compareSubagentRunGeneration,
@@ -68,12 +75,10 @@ export async function adoptSubagentRunForRequesterTurnInRuns(params: {
           isSameSubagentRunOwner(entry, params.expected) &&
           entry.requesterSessionKey === params.requesterSessionKey &&
           resolveRecordedRequester(entry) === params.requesterAgentId &&
-          (!entry.requesterTurnRunId || entry.requesterTurnRunId === requesterTurnRunId) &&
+          (!hasPendingRequesterTurnResult(entry) || hasRequesterTurn(entry, requesterTurnRunId)) &&
           entry.expectsCompletionMessage === true &&
           entry.collect !== true &&
-          !entry.killIntent &&
-          !entry.killReconciliation &&
-          entry.suppressCompletionDelivery !== true &&
+          !isSubagentCompletionCancelled(entry) &&
           entry.cleanupCompletedAt === undefined &&
           !hasSubagentControllerInput(entry) &&
           (entry.requesterSettleWake?.batchRunIds === undefined
@@ -92,7 +97,7 @@ export async function adoptSubagentRunForRequesterTurnInRuns(params: {
         childSessionKey: entry.childSessionKey,
         expectsCompletionMessage: true,
       };
-      if (entry.requesterTurnRunId === requesterTurnRunId) {
+      if (hasRequesterTurn(entry, requesterTurnRunId)) {
         subagentRuns.bindRequesterRunInstance(entry, params.requesterRunInstance);
         return { value: accepted };
       }
@@ -233,7 +238,7 @@ export function listUnsettledRequesterChildrenInRuns(params: {
       entry.collect === true ||
       entry.expectsCompletionMessage !== true ||
       (excludedTurnRunId !== undefined &&
-        (entry.requesterTurnRunId === excludedTurnRunId ||
+        (hasRequesterTurn(entry, excludedTurnRunId) ||
           isRequesterSettleWakeForRun({
             entry,
             runId: excludedTurnRunId,
@@ -241,9 +246,7 @@ export function listUnsettledRequesterChildrenInRuns(params: {
             requesterAgentId: params.requesterAgentId,
             runsById: params.runs,
           }))) ||
-      entry.killIntent ||
-      entry.killReconciliation ||
-      entry.suppressCompletionDelivery === true
+      isSubagentCompletionCancelled(entry)
     ) {
       continue;
     }
@@ -255,7 +258,7 @@ export function listUnsettledRequesterChildrenInRuns(params: {
         continue;
       }
       state = "running";
-    } else if (entry.pauseReason === "sessions_yield") {
+    } else if (isSubagentPausedByYield(entry)) {
       // markSubagentRunPausedAfterYield records a pause as an ended execution
       // without an outcome; the child resumes only through a continuation.
       state = "paused";
@@ -297,7 +300,6 @@ function selectRequesterTurnChildren(
       (entry) =>
         entry.requesterSessionKey === requesterSessionKey &&
         (!requesterAgentId || resolveRecordedRequester(entry) === requesterAgentId) &&
-        entry.requesterTurnRunId === requesterTurnRunId &&
         entry.expectsCompletionMessage === true,
     )
     .filter((entry) => {
@@ -320,11 +322,6 @@ function selectRequesterTurnChildren(
     });
 }
 
-/** Bound children whose completion obligation was not retired by kill or suppression. */
-const selectOwingRequesterTurnChildren = (
-  ...args: Parameters<typeof selectRequesterTurnChildren>
-): SubagentRunRecord[] => selectRequesterTurnChildren(...args).filter(owesRequesterCompletion);
-
 const nextRearmGeneration = (entries: readonly SubagentRunRecord[]) =>
   Math.max(0, ...entries.map((entry) => entry.requesterSettleWake?.rearmGeneration ?? 0)) + 1;
 
@@ -345,14 +342,12 @@ export async function markRequesterTurnYieldedInRuns(params: {
   const { preparedAuthority } = params;
   let cronAuthority: Awaited<ReturnType<PreparedRequesterCronAuthority["bind"]>>;
   try {
-    const selectEntries = () =>
-      selectOwingRequesterTurnChildren(
-        params.runs,
-        requesterSessionKey,
-        params.requesterAgentId,
-        requesterTurnRunId,
-      );
-    const selectedEntries = selectEntries();
+    const selectedEntries = selectRequesterTurnChildren(
+      params.runs,
+      requesterSessionKey,
+      params.requesterAgentId,
+      requesterTurnRunId,
+    ).filter(owesRequesterCompletion);
     if (selectedEntries.length === 0) {
       return 0;
     }
@@ -366,7 +361,7 @@ export async function markRequesterTurnYieldedInRuns(params: {
       },
       mutate: (entries) => {
         for (const entry of entries) {
-          if (entry.requesterTurnRunId !== requesterTurnRunId) {
+          if (!hasRequesterTurn(entry, requesterTurnRunId)) {
             throw new SubagentRegistryMutationRejectedError("Requester child changed its turn");
           }
           entry.requesterTurnYielded = true;
@@ -427,11 +422,11 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
     const spawn = spawnsByRunId.get(entry.taskRunId ?? entry.runId);
     return (
       spawn !== undefined &&
-      entry.requesterTurnRunId === requesterTurnRunId &&
+      hasRequesterTurn(entry, requesterTurnRunId) &&
       entry.childSessionKey === spawn.childSessionKey &&
       (!params.requesterYielded ||
         !owesRequesterCompletion(entry) ||
-        entry.requesterTurnYielded === true)
+        hasRequesterTurnYielded(entry))
     );
   };
   const requiredRunIds = new Set(
@@ -453,8 +448,7 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
   // A cohort holds the remaining obligations, plus members the yield claimed that retired
   // since; those resolve into the cohort's one continuation instead of disappearing.
   const isCohortMember = (entry: SubagentRunRecord) =>
-    owesRequesterCompletion(entry) ||
-    (params.requesterYielded && entry.requesterTurnYielded === true);
+    owesRequesterCompletion(entry) || (params.requesterYielded && hasRequesterTurnYielded(entry));
   const selectedEntries = boundEntries.filter(isCohortMember);
   if (selectedEntries.length === 0) {
     return true;
@@ -470,8 +464,7 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
   ): requester is SubagentRunRecord =>
     params.requesterYielded &&
     requester?.childSessionKey === requesterSessionKey &&
-    !requester.killIntent &&
-    !requester.killReconciliation &&
+    !hasSubagentKill(requester) &&
     ![...params.runs.values()].some(
       (entry) =>
         entry.childSessionKey === requesterSessionKey &&
@@ -494,6 +487,8 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
             "Requester spawn receipt lost its child owner",
           );
         }
+        entry.requesterTurnRunId = undefined;
+        entry.requesterTurnYielded = undefined;
       }
       const firstEntry = entries[0]!;
       const requester = members.find((entry) => entry.runId === requesterTurnRunId);
@@ -603,8 +598,6 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
             // Clear its provisional wake so settling the parent cannot replay the batch.
             entry.requesterSettleWake = undefined;
           }
-          entry.requesterTurnRunId = undefined;
-          entry.requesterTurnYielded = undefined;
           if (
             entry.completionTarget === "parent" &&
             typeof entry.execution.endedAt === "number" &&
@@ -624,13 +617,6 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
       // event. Publish the paused task owner in the same commit as that wake batch.
       if (pauseRequester) {
         markSubagentRunPausedAfterYield({ entry: pauseRequester });
-      }
-      // The same write releases the yielded cohort from its ending requester turn.
-      if (needsCohortRelease) {
-        for (const entry of entries) {
-          entry.requesterTurnRunId = undefined;
-          entry.requesterTurnYielded = undefined;
-        }
       }
       return retired;
     },
@@ -653,7 +639,7 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
     afterRelease: (members) => {
       const entries = children(members);
       for (const entry of entries) {
-        if (entry.pauseReason === "sessions_yield" && entry.requesterSettleWake?.pauseNotice) {
+        if (isSubagentPausedByYield(entry) && entry.requesterSettleWake?.pauseNotice) {
           params.schedule(entry.runId, entry, "settle");
           continue;
         }

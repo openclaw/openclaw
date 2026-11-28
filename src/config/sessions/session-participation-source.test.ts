@@ -5,11 +5,8 @@ import {
   captureSessionParticipationSource,
   captureSessionParticipationTarget,
   intersectSessionParticipationSources,
-  matchesSessionParticipationRevocation,
   matchesSessionParticipationSource,
   matchesSessionParticipationTarget,
-  retainSessionParticipation,
-  publishSessionParticipationMemberChange,
 } from "./session-participation-source.js";
 import type { SessionEntry } from "./types.js";
 
@@ -61,60 +58,6 @@ it("captures and restores one immutable original invitation, never a successor",
     matchesSessionParticipationTarget(selected, captureSessionParticipationTarget(target)),
   ).toBe(false);
   expect(matchesSessionParticipationSource(restored, target, "/fallback")).toBe(false);
-});
-
-it("retires only exact committed invitation producers and never revives retained custody", () => {
-  const target = {
-    profileId: "person",
-    agentId: "main",
-    sessionKey: "agent:main:invited",
-    sessionId: "original",
-  };
-  const lifetime = retainSessionParticipation(target);
-  try {
-    target.sessionId = "caller-mutation";
-    publishSessionParticipationMemberChange(target.agentId, target.sessionKey, {
-      sessionId: target.sessionId,
-      identityId: target.profileId,
-      present: false,
-    });
-    expect(lifetime.signal.aborted).toBe(false);
-    lifetime.followIncarnation("original", "admitted");
-    const committed = { ...target, sessionId: "admitted" };
-    const invitation = {
-      ...committed,
-      source: {
-        agentId: "main",
-        sessionId: "admitted",
-        lifecycleRevision: null,
-        creatorProfileId: "creator",
-        root: "/invited",
-      },
-    };
-    expect(matchesSessionParticipationRevocation(invitation, committed)).toBe(true);
-    expect(
-      matchesSessionParticipationRevocation(invitation, { ...committed, sessionId: "original" }),
-    ).toBe(false);
-    publishSessionParticipationMemberChange(committed.agentId, committed.sessionKey, {
-      sessionId: committed.sessionId,
-      identityId: "unrelated",
-      present: false,
-    });
-    expect(lifetime.signal.aborted).toBe(false);
-    publishSessionParticipationMemberChange(committed.agentId, committed.sessionKey, {
-      sessionId: committed.sessionId,
-      identityId: committed.profileId,
-      present: false,
-    });
-    expect(lifetime.signal.aborted).toBe(true);
-    lifetime.followIncarnation("admitted", "reinvited");
-    expect(lifetime.signal.aborted).toBe(true);
-    const renewed = retainSessionParticipation(committed);
-    expect(renewed.signal.aborted).toBe(false);
-    renewed.release();
-  } finally {
-    lifetime.release();
-  }
 });
 
 it("owns detached read preconditions without retaining mutable caller metadata", () => {

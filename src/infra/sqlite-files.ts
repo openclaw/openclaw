@@ -60,6 +60,34 @@ export function resolveSqliteDatabaseFilePaths(pathname: string): string[] {
   return SQLITE_DATABASE_FILE_SUFFIXES.map((suffix) => `${pathname}${suffix}`);
 }
 
+const SQLITE_HEADER_BYTES = 100;
+// https://sqlite.org/fileformat2.html#file_format_version_numbers: 2 means WAL.
+const SQLITE_HEADER_WAL_VERSION_OFFSET = 18;
+
+/**
+ * A read-only connection to a WAL database creates its -wal and -shm files when they are
+ * missing, and cannot roll back a hot journal. Both sidecars exist while any connection
+ * (the Gateway, or Doctor itself) holds the database open.
+ */
+export function readOnlyOpenWouldCreateSqliteSidecars(pathname: string): boolean {
+  if (fs.existsSync(`${pathname}-wal`) && fs.existsSync(`${pathname}-shm`)) {
+    return false;
+  }
+  if (fs.existsSync(`${pathname}-journal`)) {
+    return true;
+  }
+  const header = Buffer.alloc(SQLITE_HEADER_BYTES);
+  const fd = fs.openSync(pathname, "r");
+  try {
+    if (fs.readSync(fd, header, 0, SQLITE_HEADER_BYTES, 0) < SQLITE_HEADER_BYTES) {
+      return true;
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return header[SQLITE_HEADER_WAL_VERSION_OFFSET] === 2;
+}
+
 export function hasOrphanedSqliteSidecars(pathname: string): boolean {
   return (
     !fs.existsSync(pathname) &&

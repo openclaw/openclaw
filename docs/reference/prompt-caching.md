@@ -62,10 +62,12 @@ and refuses its calls. A tool or plugin configuration change starts a new pin.
 With Tool Search on (`tools.toolSearch` enabled in `mode: "tools"` without
 `include` or `exclude` selections), every turn of a session builds the same list:
 
-- `message` is listed on every turn: user, cron, wake, subagent completion, and
+- `message` is listed on every turn of a session that has a supported source or a
+  configured messaging route: user, cron, wake, subagent completion, and
   child-session turns. A turn whose reply delivery or tool policy does not allow
   the message tool refuses the call with a visible message. The turn's own
-  delivery rules still decide whether a send is allowed.
+  delivery rules still decide whether a send is allowed. A session with neither,
+  such as `openclaw agent --local` on an install without channels, omits it.
 - A run's `toolsAllow` (scheduled runs, queued follow-ups, and cross-session
   events) and group `tools` / `toolsBySender` policy keep the session's tools
   listed and refuse each call they do not allow with a visible message, including
@@ -138,9 +140,16 @@ conversation. Reaction
 execution still requires the current prompt's live authority; an advertised
 action does not grant permission to execute it.
 
-Isolated settled-turn finalization uses a separate cache key scoped to the run.
-Its tool-free prompt and full transcript differ from the conversation request,
-so it does not replace the conversation's cache or history-diagnostic baseline.
+Settled-turn finalization (the request that asks for a final answer after a
+turn ends with only `NO_REPLY`) is one more request of that turn. On protocols
+where `tool_choice` is outside the cache key (OpenAI Responses and Anthropic
+Messages), it sends the turn's last request (system prompt, tools, parameters,
+cache key and history) unchanged, followed by its own new items and
+`tool_choice: none`, so it reads the turn's cached prefix and cannot call a
+tool. It falls back to a tool-free prompt under a run-scoped cache key on other
+protocols, when the provider rejected the turn's context, when the turn's
+prepared request was a `previous_response_id` delta, or when its last item is
+missing from the recovery's history.
 
 Inter-session messages steered into an active turn carry their source envelope
 on the first model request. Reopening the session replays the same envelope,
@@ -425,6 +434,7 @@ cache billing are described in [Model Studio context caching](https://www.alibab
 
 - Prompt caching is automatic on supported recent models; OpenClaw does not inject block-level cache markers.
 - OpenClaw sends a stable `prompt_cache_key` across turns. On models before GPT-5.6 this helps cache routing; on GPT-5.6 and later it separates cache accounting, while OpenAI handles routing automatically. Responses and Chat Completions requests to direct `api.openai.com` hosts get this automatically when a session or explicit cache key is available; `compat.supportsPromptCacheKey: false` disables it. OpenAI-compatible proxies (oMLX, llama.cpp, custom endpoints) need `compat.supportsPromptCacheKey: true` in model config to opt in - this is never auto-detected for a proxy.
+- `/status` shows `cache key: not sent` after the endpoint when the session's last completed request to an OpenAI-style route had no `prompt_cache_key`. It reflects that request, so it is not shown while a turn runs and updates only after the next completed request. A key is not sent when the route has not opted in, when `cacheRetention` is `"none"`, or when `compat.supportsPromptCacheKey` is `false`. Many providers still cache automatically or through other markers. To opt in, set `compat.supportsPromptCacheKey: true` on that model only if the endpoint accepts `prompt_cache_key`; remove it again if requests are rejected (HTTP 400 or 422).
 - `cacheRetention: "long"` requests `prompt_cache_options: { ttl: "30m" }` for GPT-5.6 and later on both APIs. Earlier native models receive `prompt_cache_retention: "24h"` only for OpenAI's documented extended-retention models: GPT-5.5 / GPT-5.5 Pro, GPT-5.4, GPT-5.2, GPT-5.1 / Codex / Codex Max / Codex Mini / Chat Latest, GPT-5 / Codex, and GPT-4.1 (including dated snapshots). Other earlier native models receive no lifetime field. See [OpenAI cache lifetime](https://developers.openai.com/api/docs/guides/prompt-caching#cache-lifetime).
 - Lifetime fields require both cache-key support and `compat.supportsLongCacheRetention` (true by default; Together AI and Cloudflare profiles disable it). Opted-in proxies use the same GPT-5.6+ TTL mapping and otherwise receive `"24h"`; disable long-retention support if the proxy rejects lifetime fields.
 - `cacheRetention: "short"` sends the key without lifetime fields, leaving the provider's default lifetime in effect. `cacheRetention: "none"` suppresses the key and both lifetime fields; it does not disable OpenAI's automatic prompt caching.
@@ -764,6 +774,14 @@ Every embedded Gateway session pins its system prompt and tool definitions when
 it starts, on every provider route. Each later request in the session extends the
 previous one byte for byte: system prompt, tools, and every earlier message stay
 unchanged, and earlier runtime-context carriers stay in history.
+
+State snapshots in those carriers (active exec sessions, subagents,
+media-generation tasks, approved executables, temporal context) are sent only
+when they change. A turn compares each snapshot with the latest copy the request
+already carries and omits an identical one, so history does not grow with
+repeated state. A snapshot the request does not carry, for example after
+compaction or on a route that clears turn-scoped updates, is sent in full,
+including its empty form.
 
 Mid-session changes (skills, workspace files, permissions, exec wakes,
 inter-session input, subagent completions) go out as appended deltas: an

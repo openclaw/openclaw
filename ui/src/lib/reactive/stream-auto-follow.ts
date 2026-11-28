@@ -12,8 +12,6 @@ export function useStreamAutoFollow(options: {
   enabled: () => boolean;
   identity: () => unknown;
   content?: () => unknown;
-  /** Virtualized streams own convergence as estimated row heights settle. */
-  scrollToEnd?: () => void;
 }) {
   let atBottom = true;
   let frame: { id: number; atBottom: boolean } | undefined;
@@ -37,19 +35,12 @@ export function useStreamAutoFollow(options: {
       if (!force && (!options.enabled() || (!wasAtBottom && !isNearStreamEnd(container)))) {
         return;
       }
-      if (options.scrollToEnd) {
-        options.scrollToEnd();
-      } else {
-        container.scrollTop = container.scrollHeight;
-      }
+      container.scrollTop = container.scrollHeight;
       atBottom = true;
     });
     frame = { id, atBottom: wasAtBottom };
   }
   const follow = {
-    reset() {
-      atBottom = true;
-    },
     schedule(force = false) {
       schedule(options.identity(), force);
     },

@@ -1,3 +1,7 @@
+import type {
+  RecordDeferredShellOutcome,
+  ShellCallReceipt,
+} from "../config/sessions/transcript-shell-receipt.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import type { ExecAsk, ExecMode, ExecSecurity } from "../infra/exec-approvals.js";
@@ -13,17 +17,17 @@ import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/ty
 import type { ExecApprovalTransport } from "./exec-approval-transport.js";
 import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
 import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.types.js";
+import type { SpillOwner } from "./sessions/tools/private-temp-file.js";
 
 /** Restart notification policy captured only for a durable launch. */
 export type DurableExecOptions = { notifyOnExit: boolean; notifyOnExitEmptySuccess: boolean };
 
 export type ExecToolDefaults = ExecToolRoutingDefaults & {
+  spillOwner?: SpillOwner;
   /** Host-stamped participation context, never a tool argument. */
   participation?: boolean;
   /** Installed only by the managed embedded session that owns restart recovery. */
-  admitShellCall?: (
-    callId: string,
-  ) => Promise<import("../config/sessions/transcript-shell-receipt.js").ShellCallReceipt>;
+  admitShellCall?: (callId: string) => Promise<ShellCallReceipt>;
   /** Host-owned starting-directory boundary; this does not sandbox command arguments. */
   participationRoot?: string;
   /** Retained participant allowlist misses cannot be reopened by a host approval. */
@@ -118,9 +122,8 @@ export type ExecToolDefaults = ExecToolRoutingDefaults & {
 
 /** Request and approval context shared by Gateway and node execution hosts. */
 export type ExecHostCommandParams = {
-  admitShellDispatch?: () => Promise<
-    import("../config/sessions/transcript-shell-receipt.js").RecordDeferredShellOutcome | undefined
-  >;
+  admitShellDispatch?: () => Promise<RecordDeferredShellOutcome | undefined>;
+  spillOwner?: SpillOwner;
   approvalTransport?: ExecApprovalTransport;
   command: string;
   env: Record<string, string>;

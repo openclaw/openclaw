@@ -6,6 +6,7 @@ export * from "./schema/human-mentions.js";
 export * from "./schema/presence.js";
 export * from "./schema/templates.js";
 export * from "./schema/template-drafts.js";
+export { ModelsAuthProfileRenameParamsSchema } from "./schema/model-auth-profile.js";
 export * from "./public-schema-push.js";
 export * from "./public-schema-users.js";
 export * from "./public-schema-plugins.js";

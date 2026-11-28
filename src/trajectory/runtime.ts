@@ -14,6 +14,7 @@ import {
   TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES,
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
 } from "./paths.js";
+import { fragmentTrajectorySnapshot } from "./runtime-snapshot.js";
 import { createSqliteTrajectoryRuntimeSink } from "./runtime-store-writer.js";
 import type { TrajectoryEvent, TrajectoryToolDefinition } from "./types.js";
 
@@ -138,15 +139,25 @@ function prepareTrajectoryEventJson(event: TrajectoryEvent) {
 function serializeBoundedTrajectoryEvent(
   event: TrajectoryEvent,
   stringify: (event: TrajectoryEvent) => string | null | undefined,
+  maxCaptureBytes: number | undefined,
   measuredBytes?: number,
-): string | undefined {
+): Array<{ event: TrajectoryEvent; line: string }> | undefined {
   const line = measuredBytes === undefined ? stringify(event) : undefined;
   if (measuredBytes === undefined && !line) {
     return undefined;
   }
   const bytes = measuredBytes ?? Buffer.byteLength(line!, "utf8");
   if (bytes <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) {
-    return line ?? stringify(event) ?? undefined;
+    const serialized = line ?? stringify(event);
+    return serialized ? [{ event, line: serialized }] : undefined;
+  }
+
+  const fragments =
+    maxCaptureBytes === undefined
+      ? undefined
+      : fragmentTrajectorySnapshot(event, bytes, maxCaptureBytes);
+  if (fragments) {
+    return fragments;
   }
 
   const originalData = event.data ?? {};
@@ -175,7 +186,7 @@ function serializeBoundedTrajectoryEvent(
       },
     });
     if (reduced && Buffer.byteLength(reduced, "utf8") <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) {
-      return reduced;
+      return [{ event, line: reduced }];
     }
   }
 
@@ -216,7 +227,7 @@ function serializeBoundedTrajectoryEvent(
     }
     preservedDataKeys.delete(key);
   }
-  return best;
+  return best ? [{ event, line: best }] : undefined;
 }
 
 function truncatedTrajectoryValue(reason: string, details: Record<string, unknown> = {}): unknown {
@@ -471,13 +482,16 @@ export async function createTrajectoryRuntimeRecorder(input: TrajectoryRuntimeIn
       const boundedLine = serializeBoundedTrajectoryEvent(
         event,
         prepared?.stringify ?? (serialization.needsSafeJson ? safeJsonStringify : JSON.stringify),
+        serialization.needsSafeJson ? undefined : maxRuntimeFileBytes,
         prepared?.bytes,
       );
       if (!boundedLine) {
         return;
       }
-      seq = nextSeq;
-      sink.write(event, boundedLine);
+      seq = boundedLine.at(-1)!.event.seq;
+      for (const record of boundedLine) {
+        sink.write(record.event, record.line);
+      }
     },
     flush: sink.flush,
     describeFlushState: sink.describeFlushState,

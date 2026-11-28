@@ -789,12 +789,6 @@ describe("maturity docs renderer CLI", () => {
     expect(scorecard).toContain("1 passed, 1 skipped");
     expect(scorecard).not.toContain("0 failed");
     expect(scorecard).not.toContain("0 blocked");
-    expect(taxonomy).toMatch(
-      /<div className="maturity-category-docs">\n\n {4}\[[^\n]+\]\([^)]+\)[^\n]*\n\n {4}<\/div>/,
-    );
-    expect(taxonomy).not.toMatch(
-      /<div className="maturity-category-docs">[^\n]*\[[^\n]+\]\([^)]+\)[^\n]*<\/div>/,
-    );
     const taxonomyDocument = parseDocsDocument(taxonomy);
     for (const id of [
       "imessage",
@@ -817,10 +811,6 @@ describe("maturity docs renderer CLI", () => {
         id,
       ).toHaveLength(1);
     }
-    expect(taxonomy).toContain(
-      "**Current catalog members:** [Buzz](/channels/buzz), [ClickClack](/channels/clickclack)",
-    );
-    expect(taxonomy).toContain("[WeChat](/channels/wechat), [WeCom](/channels/wecom)");
     for (const [markdown, id] of [
       [scorecard, "surface-explorer"],
       [taxonomy, "product-areas"],

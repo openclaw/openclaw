@@ -34,6 +34,27 @@ struct ShareContentExtractorTests {
         #expect(extracted.attachmentSummary == ShareAttachmentSummary())
     }
 
+    @Test(arguments: [
+        (nil, "\n  Field notes\n"),
+        ("", "\n  Field notes\n"),
+        (" \t\n", "\n  Field notes\n"),
+        ("  Heading  ", "  Heading  "),
+    ] as [(String?, String)])
+    @MainActor func `shared URL uses a meaningful title or its attributed caption`(
+        _ title: String?,
+        _ expectedTitle: String) async
+    {
+        let url = "https://example.com/article"
+        let item = self.extensionItem(providers: [self.itemProvider(url as NSString, type: .url)])
+        item.attributedTitle = title.map { NSAttributedString(string: $0) }
+        item.attributedContentText = NSAttributedString(string: "\n  Field notes\n")
+
+        let extracted = await ShareContentExtractor.extract(from: [item])
+
+        #expect(extracted.payload.title == expectedTitle)
+        #expect(ShareDraftComposer.compose(from: extracted.payload) == "\(expectedTitle)\n\n\(url)")
+    }
+
     @Test @MainActor func `URL-only provider composes one URL`() async throws {
         let url = try #require(URL(string: "https://example.com/article"))
         let extracted = await ShareContentExtractor.extract(from: [

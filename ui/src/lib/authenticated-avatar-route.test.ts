@@ -277,6 +277,43 @@ it.each([401, 403])("recovers auth %s before cleanup", async (status) => {
   }
 });
 
+it.each([401, 403])("keeps exhausted auth %s retryable before final cleanup", async (status) => {
+  mockBlobUrl("blob:retried-auth");
+  const createObjectURL = vi.spyOn(URL, "createObjectURL");
+  const cleanup = createDeferred();
+  const cancel = vi.fn(() => cleanup.promise);
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(new Response(null, { status }))
+    .mockResolvedValueOnce(streamingResponse(status, cancel))
+    .mockResolvedValueOnce(avatar());
+  const { onUpdate, read } = setup(fetchMock);
+  try {
+    expect(read(route, recoverableTokens)).toBeNull();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.map((call) => call[1].headers.Authorization)).toEqual([
+      "Bearer stale-token",
+      "Bearer session-password",
+    ]);
+    expect(fetchMock.mock.calls[1]?.[1].signal.aborted).toBe(true);
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(createObjectURL).not.toHaveBeenCalled();
+
+    expect(read(route, recoverableTokens)).toBeNull();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(read(route, recoverableTokens)).toBe("blob:retried-auth");
+    expect(onUpdate).toHaveBeenCalledOnce();
+    if (status === 403) {
+      cleanup.reject(new Error("final cleanup failed"));
+    }
+  } finally {
+    cleanup.resolve();
+  }
+});
+
 it.each([undefined, "0", "invalid", "31"])("caches 503 (retry hint %s)", async (hint) => {
   const fetchMock = vi.fn().mockResolvedValue(unavailable(hint));
   const { read } = setup(fetchMock, true);

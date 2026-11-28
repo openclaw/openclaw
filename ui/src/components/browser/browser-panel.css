@@ -143,7 +143,10 @@ openclaw-browser-panel {
     color: var(--text);
     font-size: 12px;
     line-height: 16px;
+    overflow: hidden;
     text-align: start;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   /* The "Go to" option belongs to the address being typed: hidden once focus leaves it. */
   .bp-toolbar .bp-toolbar-location:not(:focus-within) .bp-toolbar-go {

@@ -10,7 +10,7 @@ import {
   prepareSqliteQueryTakeFirstSync,
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { createTranscriptSpeakerLabels, presentTranscriptTurn } from "./speaker-labels.js";
+import { createTranscriptSpeakerLabels, presentTranscriptTurns } from "./speaker-labels.js";
 import { iterateTranscriptSpeakerObservations } from "./store-speakers.js";
 import {
   meetingTranscriptDb,
@@ -87,8 +87,9 @@ type SummarySnapshotRow = Pick<
   | "created_at_ms"
   | "updated_at_ms"
 >;
+type SummarySnapshotSelector = TranscriptSessionIdentity & { minimumNextSequence: number };
 const summarySnapshotQuery = createSqliteQueryCache((database: EngineConnection) =>
-  prepareSqliteQueryTakeFirstSync<TranscriptSessionIdentity, SummarySnapshotRow>(
+  prepareSqliteQueryTakeFirstSync<SummarySnapshotSelector, SummarySnapshotRow>(
     database,
     (parameter) =>
       meetingTranscriptDb(database)
@@ -102,6 +103,12 @@ const summarySnapshotQuery = createSqliteQueryCache((database: EngineConnection)
           "started_at",
           "=",
           parameter((value) => value.startedAt),
+        )
+        // An idle live tick can finish before loading the prior notes, speech and speaker roster.
+        .where(
+          "next_utterance_seq",
+          ">=",
+          parameter((value) => value.minimumNextSequence),
         )
         // Retain native integer decoding while omitting unrelated export bookkeeping.
         .select([
@@ -121,14 +128,16 @@ export function readTranscriptSummarySnapshot(
   database: EngineConnection,
   session: TranscriptSessionIdentity,
   maxUtterances: number,
+  minimumNextSequence = 0,
 ): TranscriptSummarySnapshot | undefined {
-  const row = summarySnapshotQuery(database)(session);
+  const row = summarySnapshotQuery(database)({ ...session, minimumNextSequence });
   if (!row) {
     return undefined;
   }
   const summaryRevision = readStoredTranscriptSummaryRevision(database, session);
   const query = meetingTranscriptUtteranceQuery(database, session).select([
     "sequence",
+    "started_at",
     "speaker_id",
     "speaker_label",
     "text",
@@ -152,8 +161,12 @@ export function readTranscriptSummarySnapshot(
       label(speaker.speaker_id, speaker.speaker_label);
     }
   }
-  const turns = rows.flatMap(
-    (turn) => presentTranscriptTurn(turn.text, label(turn.speaker_id, turn.speaker_label)) ?? [],
+  const turns = presentTranscriptTurns(
+    rows.map((turn) => ({
+      text: turn.text,
+      startedAt: turn.started_at,
+      speakerLabel: label(turn.speaker_id, turn.speaker_label),
+    })),
   );
   return {
     ...(hasSpeakerAliases ? { hasSpeakerAliases: true } : {}),
