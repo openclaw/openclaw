@@ -3,8 +3,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as state from "../state/openclaw-state-db.js";
 import * as ledger from "./update-run-ledger.js";
 import { updateOwedStepRow } from "./update-run-owed-step.js";
-import { toPublicUpdateRun } from "./update-run-record.js";
-import { renderUpdateRunReport } from "./update-run-report.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { updateRunLedgerSchema } from "./update-run-write.js";
 
@@ -94,14 +92,14 @@ describe("update run ledger compaction", () => {
     ledger.finishUpdateRun(run.runId, { status: "succeeded" }, options);
     state.closeOpenClawStateDatabaseForTest();
     const persisted = ledger.getUpdateRun(run.runId, options)!;
-    const published = toPublicUpdateRun(persisted);
-    const report = renderUpdateRunReport(published);
-    expect(report.headline).toMatch(/warnings? needs? attention/);
-    expect(report.markdown).toContain(
-      "Automatic database restoration unavailable: databases changed after snapshot capture; the writer is unknown.",
+    expect(persisted.steps).toContainEqual(
+      expect.objectContaining({
+        step: "warning:database migration writes",
+        detail:
+          "Automatic database restoration unavailable: databases changed after snapshot capture; the writer is unknown. Snapshots retained at $OPENCLAW_STATE_DIR/backup.",
+      }),
     );
-    expect(report.markdown).toContain("Snapshots retained at $OPENCLAW_STATE_DIR/backup.");
-    expect(report.markdown).not.toContain(options.env.OPENCLAW_STATE_DIR);
+    expect(JSON.stringify(persisted.steps)).not.toContain(options.env.OPENCLAW_STATE_DIR);
     for (const expected of evidence) {
       expect(persisted.steps.find(({ step }) => step === expected.step)).toMatchObject(expected);
     }
@@ -138,11 +136,22 @@ describe("update run ledger compaction", () => {
     }
     ledger.finishUpdateRun(run.runId, { status: "succeeded" }, options);
     const stored = ledger.getUpdateRun(run.runId, options)!;
-    const report = renderUpdateRunReport(toPublicUpdateRun(stored));
-    expect(report.headline).toContain("2 warnings need attention");
-    // Requested phase + two warnings + count plain rows, plus the new marker.
-    expect(report.lines).toContain(
-      `Update history truncated: ${count + 4 - stored.steps.length} rows omitted.`,
+    expect(stored.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          step: "warning:finalize:plugins:skipped",
+          detail: "warning:finalize:plugins:skipped",
+        }),
+        expect.objectContaining({
+          step: "warning:update-channel-note",
+          detail: "warning:update-channel-note",
+        }),
+        // Requested phase + two warnings + count plain rows, plus the new marker.
+        expect.objectContaining({
+          step: "history:truncated",
+          detail: String(count + 4 - stored.steps.length),
+        }),
+      ]),
     );
   });
 
@@ -172,29 +181,42 @@ describe("update run ledger compaction", () => {
     state.closeOpenClawStateDatabaseForTest();
 
     const persisted = ledger.getUpdateRun(run.runId, options)!;
-    const report = renderUpdateRunReport(toPublicUpdateRun(persisted));
-    expect(report.lines).toEqual(
+    expect(persisted.steps).toEqual(
       expect.arrayContaining([
-        "Update history truncated: 1 row omitted.",
-        `Warning: ${browserWarning}`,
-        "Failed: service-refresh — Service definition unchanged.",
-        expect.stringContaining("Gateway service definition refresh is owed"),
+        expect.objectContaining({ step: "history:truncated", detail: "1" }),
+        expect.objectContaining({ step: "warning:doctor:browser", detail: browserWarning }),
+        expect.objectContaining({
+          step: "service-refresh",
+          status: "failed",
+          detail: "Service definition unchanged.",
+        }),
+        expect.objectContaining({
+          step: "finalize:owed:service-definition",
+          status: "skipped",
+          detail: "Review the service installation.",
+        }),
       ]),
     );
-    expect(report.markdown).toContain(browserWarning);
     expect(persisted.steps.some((step) => step.step === "diagnostic:disposable")).toBe(false);
 
     cleanup("warning:recovery-artifact-cleanup:extra");
     state.closeOpenClawStateDatabaseForTest();
     const overflow = ledger.getUpdateRun(run.runId, options)!;
-    const overflowReport = renderUpdateRunReport(toPublicUpdateRun(overflow));
     expect(Buffer.byteLength(JSON.stringify(overflow.steps))).toBeLessThanOrEqual(16 * 1024);
-    expect(overflowReport.lines).toContain("Update history truncated: 3 rows omitted.");
-    expect(overflowReport.lines).toContain(
-      "Failed: service-refresh — Service definition unchanged.",
-    );
-    expect(overflowReport.lines).toContainEqual(
-      expect.stringContaining("Gateway service definition refresh is owed"),
+    expect(overflow.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ step: "history:truncated", detail: "3" }),
+        expect.objectContaining({
+          step: "service-refresh",
+          status: "failed",
+          detail: "Service definition unchanged.",
+        }),
+        expect.objectContaining({
+          step: "finalize:owed:service-definition",
+          status: "skipped",
+          detail: "Review the service installation.",
+        }),
+      ]),
     );
   });
 

@@ -10,6 +10,38 @@ type OpenClawAgentMetadataDatabase = {
   schema_meta: OpenClawAgentKyselyDatabase["schema_meta"] & { min_reader: number | null };
 };
 
+/**
+ * Read-only: whether `persistAgentSchemaMetadata` with the same arguments would leave the
+ * primary row unchanged (its upsert writes only when one of these facts differs).
+ */
+export function hasCurrentAgentSchemaMetadata(
+  db: DatabaseSync,
+  agentId: string,
+  targetVersion: number,
+  minReader = targetVersion,
+): boolean {
+  const lowerFloor = minReader < targetVersion;
+  const hasFloorColumn = tableHasColumn(db, "schema_meta", "min_reader");
+  if (lowerFloor && !hasFloorColumn) {
+    return false;
+  }
+  const row = db // sqlite-allow-raw -- Read-only metadata comparison.
+    .prepare(
+      `SELECT schema_version, app_version, agent_id${hasFloorColumn ? ", min_reader" : ""} FROM schema_meta WHERE meta_key = 'primary'`,
+    )
+    // SAFETY: the selected schema_meta columns are nullable scalars; each is compared, never trusted.
+    .get() as
+    | { schema_version: unknown; app_version: unknown; agent_id: unknown; min_reader?: unknown }
+    | undefined;
+  return (
+    row !== undefined &&
+    row.schema_version === targetVersion &&
+    (!hasFloorColumn || (row.min_reader ?? null) === (lowerFloor ? minReader : null)) &&
+    row.app_version === VERSION &&
+    row.agent_id === agentId
+  );
+}
+
 export function persistAgentSchemaMetadata(
   db: DatabaseSync,
   agentId: string,

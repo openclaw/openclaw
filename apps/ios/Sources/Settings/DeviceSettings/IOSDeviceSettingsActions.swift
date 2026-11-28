@@ -104,6 +104,7 @@ enum IOSDeviceSettingsActions {
 
     static func setNotificationsEnabled(
         _ enabled: Bool,
+        openSettingsWhenDenied: Bool = true,
         confirmDisclosure: @MainActor () async -> Bool,
         isCurrent: @escaping @MainActor @Sendable () -> Bool = { true }) async -> UNAuthorizationStatus?
     {
@@ -124,12 +125,17 @@ enum IOSDeviceSettingsActions {
         }
         UserDefaults.standard.set(true, forKey: NotificationServingPreference.storageKey)
         self.registerForRemoteNotificationsIfEnrollmentReady(status: status)
-        if !SettingsNotificationStatus(status).allowsNotifications,
-           let url = URL(string: UIApplication.openNotificationSettingsURLString)
-        {
-            await UIApplication.shared.open(url)
+        if openSettingsWhenDenied, !SettingsNotificationStatus(status).allowsNotifications {
+            _ = await self.openNotificationSettings()
         }
         return status
+    }
+
+    static func openNotificationSettings() async -> Bool {
+        guard !Task.isCancelled,
+              let url = URL(string: UIApplication.openNotificationSettingsURLString)
+        else { return false }
+        return await UIApplication.shared.open(url)
     }
 
     static func requestNotificationPermission(
@@ -164,6 +170,7 @@ enum IOSDeviceSettingsActions {
     }
 
     private static func authorizeNotifications(
+        enableServing: Bool = true,
         isCurrent: @escaping @MainActor @Sendable () -> Bool) async -> UNAuthorizationStatus?
     {
         guard !Task.isCancelled, isCurrent() else { return nil }
@@ -174,10 +181,12 @@ enum IOSDeviceSettingsActions {
         guard !Task.isCancelled, isCurrent() else { return nil }
         let status = await center.notificationSettings().authorizationStatus
         guard !Task.isCancelled, isCurrent() else { return nil }
-        UserDefaults.standard.set(
-            granted && SettingsNotificationStatus(status).allowsNotifications,
-            forKey: NotificationServingPreference.storageKey)
-        self.registerForRemoteNotificationsIfEnrollmentReady(status: status)
+        if enableServing {
+            UserDefaults.standard.set(
+                granted && SettingsNotificationStatus(status).allowsNotifications,
+                forKey: NotificationServingPreference.storageKey)
+            self.registerForRemoteNotificationsIfEnrollmentReady(status: status)
+        }
         return status
     }
 }

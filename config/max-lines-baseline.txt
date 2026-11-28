@@ -36,7 +36,6 @@ extensions/codex/src/conversation-binding.test.ts
 extensions/codex/src/migration/provider.test.ts
 extensions/codex/src/supervision-tools.ts
 extensions/copilot/harness.test.ts
-extensions/copilot/harness.ts
 extensions/copilot/src/attempt.test.ts
 extensions/crabbox/src/crabbox-worker-provider.test.ts
 extensions/diagnostics-otel/src/service.test.ts
@@ -185,7 +184,6 @@ src/agents/subagents/announce/subagent-announce-delivery.test.ts
 src/agents/subagents/registry/subagent-control.test.ts
 src/agents/subagents/registry/subagent-registry-lifecycle.test.ts
 src/agents/subagents/registry/subagent-registry.test.ts
-src/agents/system-prompt.ts
 src/agents/tool-search.test.ts
 src/agents/tools/image-generate-tool.test.ts
 src/agents/tools/image-tool.test.ts

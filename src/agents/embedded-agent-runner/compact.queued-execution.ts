@@ -366,14 +366,13 @@ export async function executeQueuedContextEngineCompaction(input: {
               params.forcePreflight === true ||
               params.preflightRequired === true ||
               params.trigger === "manual",
+            ...(params.forcePreflight === true || params.preflightRequired === true
+              ? { reason: "preflight" as const }
+              : params.trigger
+                ? { reason: params.trigger }
+                : {}),
             runtimeContext: {
               ...runtimeContext,
-              forceReason:
-                params.forcePreflight === true || params.preflightRequired === true
-                  ? "preflight_required"
-                  : params.trigger === "manual"
-                    ? "manual"
-                    : undefined,
               preflightCompactionTrigger,
             },
             runtimeSettings: contextEngineRuntimeSettings,

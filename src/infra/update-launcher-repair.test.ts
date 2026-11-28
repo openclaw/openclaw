@@ -4,7 +4,10 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { repairPublishedPnpmLaunchers } from "./update-launcher-repair.js";
+import {
+  hasPublishedPnpmLauncherRepairWork,
+  repairPublishedPnpmLaunchers,
+} from "./update-launcher-repair.js";
 
 const runFile = promisify(execFile);
 const GROUP = "v11/926ea0a51a5e60b563a5c9f5e53c1fda01ec614676ee4355740d8c425a806cdb";
@@ -85,12 +88,21 @@ describe.skipIf(process.platform === "win32")("staged launcher repair", () => {
         // A FIFO with no writer on PATH would block any reader; the scan must skip it.
         await fs.mkdir(path.join(base, "fifo-bin"));
         await runFile("mkfifo", [path.join(base, "fifo-bin", "openclaw")]);
+        // A custom global directory name is found through PNPM_HOME, not the path layout.
+        const env = { PNPM_HOME: home, PATH: path.join(base, "fifo-bin") };
+        const launcherFacts = async () => {
+          const stat = await fs.stat(launcher, { bigint: true });
+          return [await fs.readFile(launcher, "utf8"), stat.mtimeNs, stat.ino, stat.mode];
+        };
+        const stale = await launcherFacts();
+        // Doctor's pending check reads the same facts and changes nothing.
+        await expect(hasPublishedPnpmLauncherRepairWork({ root: packageRoot, env })).resolves.toBe(
+          true,
+        );
+        expect(await launcherFacts()).toEqual(stale);
+        expect((await fs.readdir(path.dirname(launcher))).toSorted()).toEqual(["node", "openclaw"]);
 
-        const { repaired, failed } = await repairPublishedPnpmLaunchers({
-          root: packageRoot,
-          // A custom global directory name is found through PNPM_HOME, not the path layout.
-          env: { PNPM_HOME: home, PATH: path.join(base, "fifo-bin") },
-        });
+        const { repaired, failed } = await repairPublishedPnpmLaunchers({ root: packageRoot, env });
 
         expect(failed).toEqual([]);
         expect(repaired).toEqual([
@@ -108,12 +120,13 @@ describe.skipIf(process.platform === "win32")("staged launcher repair", () => {
         expect((await fs.stat(launcher)).mode & 0o777).toBe(0o755);
         expect(await fs.readFile(launcher, "utf8")).not.toContain(STAGE);
         // Repaired once; a second pass finds a current launcher and leaves no staging behind.
-        await expect(
-          repairPublishedPnpmLaunchers({
-            root: packageRoot,
-            env: { PNPM_HOME: home, PATH: path.join(base, "fifo-bin") },
-          }),
-        ).resolves.toEqual({ repaired: [], failed: [] });
+        await expect(repairPublishedPnpmLaunchers({ root: packageRoot, env })).resolves.toEqual({
+          repaired: [],
+          failed: [],
+        });
+        await expect(hasPublishedPnpmLauncherRepairWork({ root: packageRoot, env })).resolves.toBe(
+          false,
+        );
         expect((await fs.readdir(path.dirname(launcher))).toSorted()).toEqual(["node", "openclaw"]);
       }),
   );
@@ -261,6 +274,9 @@ describe.skipIf(process.platform === "win32")("staged launcher repair", () => {
       const before = await fs.readFile(launcher, "utf8");
 
       // PNPM_HOME presents the launcher in every case, so each guard must refuse it.
+      await expect(
+        hasPublishedPnpmLauncherRepairWork({ root, env: { PNPM_HOME: home } }),
+      ).resolves.toBe(false);
       await expect(
         repairPublishedPnpmLaunchers({ root, env: { PNPM_HOME: home } }),
       ).resolves.toEqual({

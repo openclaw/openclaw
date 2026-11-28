@@ -325,9 +325,10 @@ export function canStartGatewayStartupPlugin(params: GatewayStartupActivationPar
         activationSource.plugins.entries[normalizePluginPolicyId(plugin.pluginId)],
       )) &&
       passesPluginStartupPolicy(params, "hook")) ||
-    // Tool factories execute synchronously while an agent surface is built. Load enabled owners
-    // at the Gateway lifecycle boundary so a first concurrent turn cannot block control traffic.
-    ((manifest?.contracts?.tools?.length ?? 0) > 0 && passesPluginStartupPolicy(params, "tool")) ||
+    // Prepare enabled tool factories and result middleware before an agent needs them.
+    (((manifest?.contracts?.tools?.length ?? 0) > 0 ||
+      (manifest?.contracts?.agentToolResultMiddleware?.length ?? 0) > 0) &&
+      passesPluginStartupPolicy(params, "tool")) ||
     ((manifest?.contracts?.trustedToolPolicies?.length ?? 0) > 0 &&
       passesPluginStartupPolicy(params, "provider"))
   );

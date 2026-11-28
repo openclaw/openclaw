@@ -68,13 +68,31 @@ The prompt names the Memory files to read: `MEMORY.md`, daily notes
 (`memory/YYYY-MM-DD.md`) and the Dreaming diary (`DREAMS.md`), all in the
 agent workspace.
 
-1. Read the named files with the host file tools (`ls`, `read`). Never
-   write, move or delete Memory files, and do not run Memory commands.
-2. Take durable items: decisions, preferences, facts, commitments, lessons. A
-   daily note's date is the item's date unless the text gives another.
-   `DREAMS.md` is a diary the dreaming job wrote: import only items it states as
-   grounded facts, as `agent_inference` citing the entry; skip reflections.
-3. Before each save, `knowledge_grep` for it. Skip what Knowledge already
-   says; reconcile what changed it with `knowledge-correct`. A rerun then adds
-   nothing new.
-4. Count files read and items saved, already known and skipped.
+Save progress after each completed file. If the Gateway restarts while the
+import is running, continue with the original file selections and reload the
+checkpoint before processing any files
+([#205796](https://github.com/openclaw/openclaw/issues/205796)).
+
+1. List only the files selected in the current settings. Never write, move,
+   or delete Memory files, or run Memory commands.
+2. Call `knowledge_memory_import_progress` with `operation: "check"` and the
+   selected paths, in groups of up to 100. It returns their SHA-256 hashes and
+   completed paths. Skip the completed paths before reading them. Supply hashes
+   from the authorized workspace when the tool cannot read it, such as in a sandbox.
+   If a hash is unavailable, process the file normally and leave its progress unmarked.
+3. Read each remaining file with the host file tools and take durable
+   decisions, preferences, facts, commitments, and lessons. A daily note's
+   date is the item's date unless the text gives another. From `DREAMS.md`,
+   take only grounded facts as `agent_inference` citing the entry. Skip
+   reflections. Use `knowledge_grep` before saving to skip what Knowledge
+   already says. Reconcile changed facts with `knowledge-correct`.
+4. Use `knowledge_remember` to save a file's new source claims together when
+   they fit in one call. Retain only the cited passages as the excerpt. Save
+   `DREAMS.md` inferences with `knowledge_create_claim`, citing the entry.
+   After all saves for a hashed file succeed, or when it has nothing new to save, call
+   `knowledge_memory_import_progress` with `operation: "complete"` and the
+   file's path and hash before moving on. If the turn stops before this call
+   succeeds, the next run checks the file again and skips facts Knowledge
+   already has.
+5. Report files read and skipped and items saved or already known. End with
+   `done` once every selected file is accounted for.

@@ -14,25 +14,22 @@ import {
   type SessionStoreTarget,
 } from "../../config/sessions/targets.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import {
-  resolveSessionChannelScope,
-  sameChannelScope,
-} from "../../plugin-sdk/session-visibility-internal.js";
+import { resolveSessionChannelScope } from "../../plugin-sdk/session-visibility-internal.js";
 import { createAgentToAgentPolicy } from "../../plugin-sdk/session-visibility.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
 } from "../../utils/delivery-context.read.js";
-import { filterSessionEntries } from "../session-list-filters.js";
 import {
   toProjectedSessionSharingTarget,
   withReadySessionRows,
   type SessionRowReadView,
 } from "../session-row-prepared-read.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
+import { selectUniqueSessionRow } from "../session-row-selection.js";
+import { prepareProjectedSessionSharing } from "../session-sharing.js";
 import { resolveSessionChildOwners } from "../session-utils-core.js";
-import { prepareProjectedSessionList } from "../session-utils-list.js";
 import type { GatewayClient } from "./types.js";
 
 /** Recall searches transcript indexes first; current owners authorize only matching keys. */
@@ -91,7 +88,7 @@ export async function searchRecallSessionTranscripts(params: {
     read: SessionRowReadView,
     requesterChannelScope?: ReturnType<typeof resolveSessionChannelScope>,
   ) => {
-    const cfg = read.state.cfg;
+    const { cfg, policyConfig, rowContext } = read.state;
     const context = resolveSessionToolContext({
       config: cfg,
       agentId: recall.requesterAgentId,
@@ -126,16 +123,17 @@ export async function searchRecallSessionTranscripts(params: {
       }),
     );
     const now = Date.now();
-    const subagentRuns = read.state.rowContext.subagentRuns.atTime(now);
-    // Share list selection and presentation across this admitted candidate batch.
-    const { prepared, presentation, filters } = prepareProjectedSessionList({
-      projection,
-      candidateKeys: new Set(keys),
-      now,
-      client: params.client,
-      opts: { archived: "all", includeGlobal: true },
-    });
-    const visibleKeys = new Set(filterSessionEntries(filters).entries.map(([key]) => key));
+    const subagentRuns = rowContext.subagentRuns.atTime(now);
+    const scope = projection.state.scope({});
+    const sharing =
+      params.client === undefined
+        ? undefined
+        : prepareProjectedSessionSharing({
+            cfg: policyConfig,
+            client: params.client,
+            isMember: ({ agentId, storePath, storeKey }, id) =>
+              read.hasMembership(storePath, storeKey, id, agentId),
+          });
     return keys.map((key) => {
       if (isIncognitoSessionKey(key) || key === "unknown") {
         return false;
@@ -154,16 +152,16 @@ export async function searchRecallSessionTranscripts(params: {
       }
       // Global has no agent prefix: authorize the physical transcript owner, not
       // another store's federated copy of the same sentinel.
-      const globalRow = key === "global" ? read.describe({ ...target, key }) : undefined;
-      const row = key === "global" ? globalRow : prepared.getTarget(key);
-      if (!row || row.entry.incognito || row.selection.isPhantom) {
-        return false;
-      }
+      const row =
+        key === "global"
+          ? read.describe({ ...target, key })
+          : selectUniqueSessionRow(cfg, scope, projection.selectEntries({ key, sortBy: null }));
       if (
-        globalRow
-          ? params.client !== undefined &&
-            !presentation.sharing.canReadTarget(toProjectedSessionSharingTarget(globalRow))
-          : !visibleKeys.has(key)
+        !row ||
+        row.entry.incognito ||
+        row.selection.isPhantom ||
+        row.selection.isCronRun ||
+        sharing?.canReadTarget(toProjectedSessionSharingTarget(row)) === false
       ) {
         return false;
       }
@@ -253,7 +251,6 @@ export async function searchRecallSessionTranscripts(params: {
         const requesterCurrent =
           recall.visibility !== "channel" ||
           (liveRequester !== undefined && liveRequester.entry.sessionId === requester?.sessionId);
-        const requesterScope = liveRequester && channelScopeFor(liveRequester);
         const current = requesterCurrent
           ? pages.filter(({ target, page }) =>
               recall.visibility === "channel"
@@ -263,16 +260,7 @@ export async function searchRecallSessionTranscripts(params: {
                     if (!row || expected === undefined || row.entry.sessionId !== expected) {
                       return false;
                     }
-                    if (
-                      hit.sessionKey === recall.requesterSessionKey &&
-                      target.agentId === recall.requesterAgentId
-                    ) {
-                      return true;
-                    }
-                    return (
-                      sameChannelScope(requester?.channelScope, requesterScope) &&
-                      sameChannelScope(requesterScope, channelScopeFor(row))
-                    );
+                    return true;
                   })
                 : authorize(
                     target,

@@ -17,6 +17,7 @@ import { isBunRuntime } from "../daemon/runtime-binary.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { gitCommitPrefixesMatch, resolveLoadedCommitHash } from "../infra/git-commit.js";
+import { gitCommandArgv } from "../infra/git-exec.js";
 import { resolveNpmCommand } from "../infra/npm-command.js";
 import { compareSemverStrings } from "../infra/npm-registry-spec.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
@@ -24,6 +25,7 @@ import { readBuiltGatewayBuildId } from "../infra/update-git-runtime.js";
 import { isPackageTargetAlreadyCurrent } from "../infra/update-global.js";
 import { describeUnavailableMacosSystemGit } from "../infra/update-macos-git.js";
 import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "../infra/update-run-limits.js";
+import { listUpdateRunsAsync } from "../infra/update-run-reader.js";
 import type { UpdateRunStep } from "../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../infra/update-run-recovery-admission.js";
 import {
@@ -48,7 +50,6 @@ import { preparePackage } from "./prepare-package.js";
 import {
   acquireUpdateLock,
   allocateStaging,
-  collectReleases,
   createTrialPending,
   hasReleaseUpdateOwner,
   publishStaging,
@@ -110,7 +111,7 @@ export async function prepareUpdate(params: {
   // Already current: plugins are still maintained, by the running core; the caller restarts
   // a running Gateway only when they changed.
   const current = async (version: string): Promise<UpdateRunOutcome> => {
-    const { plugins, step } = await runPluginMaintenance({
+    const { plugins, step, nextAction } = await runPluginMaintenance({
       root: params.runningRoot,
       node,
       env,
@@ -121,7 +122,11 @@ export async function prepareUpdate(params: {
     await recordUpdateRunStepAsync(params.runId, step, { env });
     await finishUpdateRunAsync(
       params.runId,
-      { status: "skipped", reason: "already-current" },
+      {
+        status: "skipped",
+        reason: "already-current",
+        ...(nextAction ? { nextAction } : {}),
+      },
       { env },
     );
     return { status: "current", version, pluginsChanged: plugins?.changed === true };
@@ -148,6 +153,7 @@ export async function prepareUpdate(params: {
     return { status: "failed", reason, message };
   };
   let staging: Awaited<ReturnType<typeof allocateStaging>> | undefined;
+  let gitCheckout: string | undefined;
   try {
     const lock = await acquireUpdateLock(
       { runId: params.runId, pid: process.pid, deadlineMs: timeoutMs },
@@ -164,15 +170,45 @@ export async function prepareUpdate(params: {
           "Another update is switching releases. Try again in a few minutes.",
         );
       }
-      if (lock.previous) {
-        await finishUpdateRunAsync(
-          lock.previous.runId,
-          { status: "failed", reason: "interrupted" },
-          { env },
-        );
-      }
       await checkUpdateInstallationSlot(params.runningRoot, env);
       await assertUpdateRecoveryAdmission({ env });
+      const runningRoot = await fs.realpath(params.runningRoot);
+      const servingTrialRoot =
+        trial && (trial.phase === "committed" || trial.phase === "rolled-back")
+          ? await fs
+              .realpath(
+                path.resolve(prefix, trial.phase === "rolled-back" ? trial.previous : trial.target),
+              )
+              .catch((error: unknown) => {
+                if (!hasErrnoCode(error, "ENOENT")) {
+                  throw error;
+                }
+                return undefined;
+              })
+          : undefined;
+      // The serving release may still own its handed-over plugin work after commit.
+      const handedOverRunId = servingTrialRoot === runningRoot ? trial?.runId : undefined;
+      for (;;) {
+        const unfinished = await listUpdateRunsAsync(
+          {
+            active: true,
+            limit: 100,
+            excludeRunIds: handedOverRunId ? [params.runId, handedOverRunId] : [params.runId],
+          },
+          { env },
+          { current: true },
+        );
+        if (unfinished.length === 0) {
+          break;
+        }
+        for (const run of unfinished) {
+          await finishUpdateRunAsync(
+            run.runId,
+            { status: "failed", reason: "interrupted" },
+            { env },
+          );
+        }
+      }
       const missingGit = await describeUnavailableMacosSystemGit(runCommandWithTimeout, {
         timeoutMs: Math.min(10_000, Math.max(1, deadline - Date.now())),
       });
@@ -208,8 +244,6 @@ export async function prepareUpdate(params: {
         }
         throw error;
       }
-      // Releases left by an earlier update; never on the critical path.
-      void collectReleases(prefix).catch(() => undefined);
       staging = await allocateStaging({ kind: install.kind }, prefix);
       let target;
       try {
@@ -313,10 +347,12 @@ export async function prepareUpdate(params: {
           { env },
         );
       };
+      gitCheckout = target.kind === "git" ? target.checkout : undefined;
       const prepared: PrepareResult =
         target.kind === "git"
           ? await prepareGit({
               checkout: target.checkout,
+              runningRoot: params.runningRoot,
               sha: target.sha,
               staging: staging.path,
               node,
@@ -502,6 +538,14 @@ export async function prepareUpdate(params: {
       return { status: "pending", target: { version: prepared.version }, releaseRoot };
     } finally {
       if (staging) {
+        if (gitCheckout) {
+          // Candidate checks can fail after a successful build. Retire Git's registration
+          // before deleting the unpublished tree; published releases have left this owner.
+          await runCommandWithTimeout(
+            gitCommandArgv(gitCheckout, ["worktree", "remove", "--force", staging.releaseRoot]),
+            { timeoutMs: 30_000, killProcessTree: true },
+          ).catch(() => undefined);
+        }
         await fs.rm(staging.path, { recursive: true, force: true }).catch(() => undefined);
       }
       await releaseUpdateLock(prefix).catch(() => undefined);
@@ -564,8 +608,8 @@ async function runCheckRelease(releaseRoot: string, node: string, env: NodeJS.Pr
 }
 
 /**
- * Plugins follow the core that will serve, so that core's own code maintains them. A plugin
- * problem, or a release without `update plugins`, is a recorded warning, never a failed update.
+ * Plugins follow the serving core and report their required maintenance result separately
+ * from core activation. A failed step keeps the core serving but fails the aggregate run.
  */
 export async function runPluginMaintenance(params: {
   root: string;
@@ -574,7 +618,11 @@ export async function runPluginMaintenance(params: {
   channel: UpdateChannel;
   timeoutMs: number;
   acceptCapabilities?: boolean;
-}): Promise<{ plugins: PostCorePluginUpdateResult | undefined; step: UpdateRunStep }> {
+}): Promise<{
+  plugins: PostCorePluginUpdateResult | undefined;
+  step: UpdateRunStep;
+  nextAction?: string;
+}> {
   const startedAtMs = Date.now();
   const args = [
     "plugins",
@@ -601,7 +649,7 @@ export async function runPluginMaintenance(params: {
     ];
   }
   const failures = plugins?.npm.outcomes.filter((outcome) => outcome.status === "error") ?? [];
-  // Plugin failures are warnings for the core update, but remain failed plugin steps.
+  // Failed maintenance remains a failed step, not a failed core update.
   const failed =
     result.code !== 0 ||
     !plugins ||
@@ -630,12 +678,15 @@ export async function runPluginMaintenance(params: {
         (result.code === null ? "timed out" : `exited ${result.code}`),
     );
   }
-  if (failed && !plugins?.warnings?.some((warning) => warning.guidance.length > 0)) {
-    const ids = failures.map((outcome) => outcome.pluginId).join(" ");
-    messages.push(`Run \`openclaw plugins update ${ids || "--all"}\` to retry.`);
+  const nextAction = failed
+    ? `openclaw plugins update ${failures.map((outcome) => outcome.pluginId).join(" ") || "--all"}`
+    : undefined;
+  if (nextAction && !plugins?.warnings?.some((warning) => warning.guidance.length > 0)) {
+    messages.push(`Run \`${nextAction}\` to retry.`);
   }
   return {
     plugins,
+    ...(nextAction ? { nextAction } : {}),
     step: {
       step: "plugins",
       status: failed ? "failed" : "completed",

@@ -303,7 +303,7 @@ describe("grouped chat attachments", () => {
 describe("grouped chat images", () => {
   const imageElement = (root: Element = harness.view) =>
     root.querySelector<HTMLImageElement>(".chat-message-image");
-  const thumbnail = (source: string) => `${source.replace(/\/full$/u, "/thumbnail")}?v=4&width=480`;
+  const thumbnail = (source: string) => `${source.replace(/\/full$/u, "/thumbnail")}?v=5&width=480`;
 
   function mountAssistantImage(
     url: string,

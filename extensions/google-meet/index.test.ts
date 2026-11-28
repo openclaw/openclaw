@@ -568,7 +568,6 @@ function createBrowserProxyHandler(options: {
   handleChromeStart?: boolean;
   navigateTo?: BrowserProxyTab;
   openedTargetId?: string | ((url: string | undefined) => string);
-  openedTitle?: string;
   tabs?: BrowserProxyTab[];
 }) {
   return async (params: { command: string; params?: unknown }) => {
@@ -589,7 +588,7 @@ function createBrowserProxyHandler(options: {
             : (options.openedTargetId ?? "tab-1");
         return browserProxyPayload({
           targetId,
-          title: options.openedTitle ?? "Meet",
+          title: "Meet",
           url: proxy.body?.url,
         });
       }
@@ -1366,7 +1365,6 @@ describe("google-meet plugin", () => {
   function mockLocalMeetBrowserRequestWithTabState(options?: {
     reused?: boolean;
     tabUrlAfterJoin?: string;
-    leaveClicked?: boolean;
     nonFinalTranscriptGate?: Promise<void>;
     onNonFinalTranscriptRead?: () => void;
     shouldGateNonFinalTranscriptRead?: () => boolean;
@@ -1450,9 +1448,6 @@ describe("google-meet plugin", () => {
             const urlMatched = currentUrl?.includes("/abc-defg-hij") === true;
             if (!urlMatched) {
               return { result: JSON.stringify({ departed: true, urlMatched: false }) };
-            }
-            if (options?.leaveClicked === false) {
-              return { result: JSON.stringify({ departed: false, urlMatched: true }) };
             }
             leaveStep += 1;
             if (leaveStep === 1) {

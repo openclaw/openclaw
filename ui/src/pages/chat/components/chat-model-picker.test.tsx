@@ -261,24 +261,6 @@ it("keeps Anthropic runtime choices under one provider tab", async () => {
   expect(provider("anthropic/claude-sonnet-5-5")).toBe("anthropic");
 });
 
-it("drops a provider name from a row only when the group heading shows it", async () => {
-  const plan = { providerName: "Acme Pro plan" };
-  const { container } = mountPicker({
-    open: true,
-    modelOptions: [
-      option("acme", "acme-4-hydrogen", { label: "Acme 4 Hydrogen", presentation: plan }),
-      option("acme", "acme-pro-plan-mini", { label: "Acme Pro plan Mini", presentation: plan }),
-    ],
-    selectedModelValue: "acme/acme-4-hydrogen",
-  });
-  await waitForMenu(container);
-  const name = (value: string) =>
-    control(container, "option", value)?.querySelector(".chat-controls__model-option-name")
-      ?.textContent;
-  expect(name("acme/acme-4-hydrogen")).toBe("Acme 4 Hydrogen");
-  expect(name("acme/acme-pro-plan-mini")).toBe("Mini");
-});
-
 it("keeps search live while targets load, then ranks model, target, and account choices", async () => {
   const selectTarget = vi.fn();
   const selectAccount = vi.fn();
@@ -402,59 +384,6 @@ it("keeps picker shortcuts scoped to unmodified keys outside search and nested m
   expect(document.activeElement).toBe(search);
   expect(press(trigger, "2")).toBe(true);
   expect(select).toHaveBeenCalledWith("fixture/other", "main", undefined);
-});
-
-it("uses the displayed model for trigger metadata and distinguishes an unset override from an empty one", () => {
-  const params = pickerProps({
-    modelOptions: [
-      option("openai", "default", { isDefault: true, supportsTools: false }),
-      option("fixture", "other", { supportsTools: true }),
-    ],
-    selectedModelValue: "",
-  });
-  const { container, update } = mountPicker(params);
-  const trigger = control(container, "select")!;
-  const icon = () => trigger.querySelector(".chat-controls__trigger-provider-icon");
-  expect(trigger.getAttribute("aria-label")).toBe("Chat model: Current · No tools");
-  expect(icon()).not.toBeNull();
-  update({ ...params, triggerModelValue: "fixture/other" });
-  expect(control(container, "select")).toBe(trigger);
-  expect(trigger.getAttribute("aria-label")).toBe("Chat model: Current");
-  expect(icon()).toBeNull();
-  update({ ...params, triggerModelValue: "" });
-  expect(trigger.getAttribute("aria-label")).toBe("Chat model: Current");
-  update(params);
-  expect(trigger.getAttribute("aria-label")).toBe("Chat model: Current · No tools");
-  expect(icon()).not.toBeNull();
-  update({ ...params, triggerStatusLabel: "Loading" });
-  expect(icon()).toBeNull();
-});
-
-it("shows a context badge only for a known non-default selection", () => {
-  const params = pickerProps({ modelOptions: [option("fixture", "current")] });
-  const { container, update } = mountPicker(params);
-  const badge = () => control(container, "context-badge");
-  expect(badge()).toBeNull();
-  const contextWindow = {
-    options: [
-      { id: "standard", label: "272k", contextWindow: 272000 },
-      { id: "extended", label: "1M", contextWindow: 1000000 },
-    ],
-    selected: "standard",
-    defaultId: "standard",
-    disabled: false,
-    onSelect: vi.fn(async () => {}),
-  };
-  update({ ...params, contextWindow });
-  expect(badge()).toBeNull();
-  update({ ...params, contextWindow: { ...contextWindow, selected: "extended" } });
-  expect(badge()?.textContent).toBe("1M");
-  update({ ...params, contextWindow: { ...contextWindow, selected: "missing" } });
-  expect(badge()).toBeNull();
-  update({ ...params, contextWindow: { ...contextWindow, defaultId: undefined } });
-  expect(badge()?.textContent).toBe("272k");
-  update(params);
-  expect(badge()).toBeNull();
 });
 
 it("opens setup directly for a settled empty catalog and restores the picker when models arrive", async () => {

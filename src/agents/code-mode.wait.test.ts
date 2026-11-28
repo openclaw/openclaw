@@ -31,6 +31,7 @@ import {
   createCatalogCodeModeHarness,
   jsonTool,
 } from "./code-mode.test-support.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
@@ -247,6 +248,29 @@ it("preserves an accepted host handoff while wait is parked without resuming the
     await waiting;
   }
 });
+
+it.each([
+  ["ask_user", { value: "Proceed?" }],
+  ["secrets", { action: "request", value: "STRIPE_API_KEY" }],
+] as const)(
+  "keeps an ordinary cell's native %s request owned past its budget until answered",
+  async (name, input) => {
+    mockClock();
+    const parked = createDeferred();
+    const question = controlledTool(fakeTool(name, "Ask the owner"));
+    cleanups.push(question.release.resolve);
+    observeSettlement(parked.resolve);
+    const result = harness([question.tool], { codeMode: { timeoutMs: 1_000 } }).run(
+      `return await ${name}(${JSON.stringify(input)});`,
+    );
+    await parked.promise;
+    // An unowned `waiting` result would let turn teardown cancel the pending question.
+    await vi.advanceTimersByTimeAsync(60_000);
+    question.release.resolve();
+    expectCompleted(await result, { name, input });
+    expect((await question.started.promise)?.aborted).toBe(false);
+  },
+);
 
 it.each(["failure", "cancel", "replace"] as const)(
   "settles required work on %s without late guest effects",

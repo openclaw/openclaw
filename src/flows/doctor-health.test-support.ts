@@ -61,6 +61,14 @@ const mocks = vi.hoisted(() => {
     lint: vi.fn<(typeof import("../commands/doctor-lint.js"))["runDoctorLintCli"]>(),
     config: vi.fn<() => OpenClawConfig>(),
     runContributions: vi.fn<(ctx: DoctorHealthFlowContext) => Promise<void>>(),
+    // The contribution list owner has its own tests; this keeps its after-restart order.
+    runAfterRestart: vi.fn(async (ctx: DoctorHealthFlowContext) => {
+      const deferred = ctx.afterRestartContributions ?? [];
+      ctx.afterRestartContributions = undefined;
+      for (const contribution of deferred) {
+        await contribution.run(ctx);
+      }
+    }),
     writeUpdatePostInstallDoctorResult: vi.fn(),
     service: vi.fn(),
     resident: vi.fn<() => { pid: number } | undefined>(),
@@ -130,7 +138,10 @@ const mocks = vi.hoisted(() => {
         [Symbol.asyncDispose]: async () => undefined,
       }),
     },
-    "./doctor-health-contributions.js": { runDoctorHealthContributions: handles.runContributions },
+    "./doctor-health-contributions.js": {
+      runDoctorHealthContributions: handles.runContributions,
+      runDoctorAfterRestartContributions: handles.runAfterRestart,
+    },
   };
   for (const [module, replacement] of Object.entries(replacements)) {
     vi.doMock(module, () => replacement);

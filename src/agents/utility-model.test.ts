@@ -12,6 +12,7 @@ import {
   resolveAutomaticUtilityRuntimeOverride,
   resolveConfiguredSetupModelForAgent,
   resolveUtilityModelRefForAgent,
+  resolveUtilityModelSelectionForAgent,
 } from "./utility-model.js";
 
 /** A string declares the provider's small model; a map declares a router's per-vendor models. */
@@ -232,7 +233,7 @@ it.each([
     listedIds: ["primary"],
     expected: "fixture/primary@work",
   },
-  { name: "no offered recovery", ids: ["other"], expected: "fixture/small@work" },
+  { name: "no offered recovery", ids: ["other"], expected: undefined },
   {
     name: "failed provider with retained rows",
     ids: ["primary"],
@@ -336,6 +337,38 @@ it.each([
     );
   },
 );
+
+it("disables utility work for a role that refuses it instead of spending the main model", () => {
+  const cfg: OpenClawConfig = { agents: { defaults: { model: "fixture/primary" } } };
+  const catalog = {
+    entries: [
+      { provider: "fixture", id: "small" },
+      { provider: "fixture", id: "primary" },
+    ],
+    providerOutcomes: [{ provider: "fixture", status: "ready" as const }],
+  };
+  const metadataSnapshot = snapshotWithDefaults({ fixture: "small" });
+  const onlyPrimary = { allows: (ref: { model: string }) => ref.model === "primary" };
+  const withoutSmall = { ...catalog, entries: [{ provider: "fixture", id: "primary" }] };
+  const select = (inventory: typeof catalog, modelPolicy: typeof onlyPrimary) =>
+    resolveUtilityModelSelectionForAgent({
+      cfg,
+      agentId: "main",
+      catalog: inventory,
+      metadataSnapshot,
+      modelPolicy,
+    });
+  // A refusal does not depend on whether the catalog has published the small model.
+  expect([select(catalog, onlyPrimary), select(withoutSmall, onlyPrimary)]).toEqual([
+    { disabled: "role-policy" },
+    { disabled: "role-policy" },
+  ]);
+  // Absence, unlike a refusal, still recovers to the offered primary.
+  expect(select(withoutSmall, { allows: () => true })).toEqual({
+    modelRef: "fixture/primary",
+    source: "provider-default",
+  });
+});
 
 it.each([
   { fallback: "gpt-6-luna", provider: "openai", modelId: "gpt-6-luna" },

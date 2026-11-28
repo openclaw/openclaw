@@ -349,6 +349,12 @@ export function ChatPreferencesSection(props: ConfigProps) {
         />
         <LocalToggleRow
           config={props}
+          setting="compactSessionOpening"
+          title={t("configView.chatPrefs.compactSessionOpening")}
+          hint={t("configView.chatPrefs.compactSessionOpeningHint")}
+        />
+        <LocalToggleRow
+          config={props}
           setting="chatShowTaskProgress"
           title={t("configView.chatPrefs.showTaskProgress")}
           hint={t("configView.chatPrefs.showTaskProgressHint")}

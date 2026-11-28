@@ -382,7 +382,7 @@ it("retries signed artifact downloads without forwarding gateway or requester cr
   expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
   expect(fetch).toHaveBeenCalledTimes(2);
   for (const [requestUrl, init] of fetch.mock.calls) {
-    expect(requestUrl).toBe(`${ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail")}&v=4&width=480`);
+    expect(requestUrl).toBe(`${ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail")}&v=5&width=480`);
     const headers = new Headers(init?.headers);
     expect(headers.has("Authorization")).toBe(false);
     expect(headers.has("x-openclaw-requester-session-key")).toBe(false);

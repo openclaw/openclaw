@@ -9,11 +9,13 @@ import UIKit
 @MainActor
 struct ChatCodeBlockView: View {
     let block: ChatCodeBlock
+    var bodyScale: CGFloat = 1
+    @Environment(\.openClawChatWrapCodeLines) private var wrapsCodeLines
 
     var body: some View {
         #if os(iOS) || os(macOS)
         if self.block.language == "mermaid", self.block.isComplete {
-            ChatMermaidBlockView(source: self.block.code)
+            ChatMermaidBlockView(source: self.block.code, bodyScale: self.bodyScale)
         } else {
             self.codeBody
         }
@@ -36,12 +38,14 @@ struct ChatCodeBlockView: View {
                     .frame(height: 20)
             }
             .foregroundStyle(.secondary)
-            ScrollView(.horizontal, showsIndicators: false) {
-                Text(self.attributedCode)
-                    .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote))
-                    .foregroundStyle(OpenClawChatTheme.assistantText)
-                    .lineSpacing(2)
-                    .textSelection(.enabled)
+            if self.wrapsCodeLines {
+                self.codeText
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    self.codeText
+                }
             }
         }
         .padding(10)
@@ -52,6 +56,14 @@ struct ChatCodeBlockView: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)))
+    }
+
+    private var codeText: some View {
+        Text(self.attributedCode)
+            .font(OpenClawChatTypography.mono(size: 13 * self.bodyScale, relativeTo: .footnote))
+            .foregroundStyle(OpenClawChatTheme.assistantText)
+            .lineSpacing(2 * self.bodyScale)
+            .textSelection(.enabled)
     }
 
     private var attributedCode: AttributedString {
@@ -69,7 +81,15 @@ struct ChatMathBlockView: View {
     let block: ChatMathBlock
     let textColor: Color
 
-    @ScaledMetric(relativeTo: .body) private var fontSize: CGFloat = OpenClawChatTypography.bodySize
+    let bodyScale: CGFloat
+    @ScaledMetric private var fontSize: CGFloat
+
+    init(block: ChatMathBlock, textColor: Color, bodyScale: CGFloat = 1) {
+        self.block = block
+        self.textColor = textColor
+        self.bodyScale = bodyScale
+        self._fontSize = ScaledMetric(wrappedValue: OpenClawChatTypography.bodySize * bodyScale, relativeTo: .body)
+    }
 
     var body: some View {
         if self.block.isComplete,
@@ -91,7 +111,7 @@ struct ChatMathBlockView: View {
             ChatCodeBlockView(block: ChatCodeBlock(
                 language: nil,
                 code: self.block.latex,
-                isComplete: false))
+                isComplete: false), bodyScale: self.bodyScale)
         }
     }
 }
@@ -155,6 +175,8 @@ struct ChatMarkdownTableView: View {
     /// Narrowest column that still reads as a column. A table that cannot keep every column this
     /// wide at the reply's own width keeps them and scrolls instead of squeezing the cells.
     static let minimumColumnWidth: CGFloat = 120
+
+    @Environment(\.self) private var environment
 
     /// Width the reply proposes to this card, so 0 until the first layout pass reports it.
     @State private var cardWidth: CGFloat = 0
@@ -224,7 +246,11 @@ struct ChatMarkdownTableView: View {
     }
 
     private var tableGrid: some View {
-        Grid(alignment: .topLeading, horizontalSpacing: Self.columnSpacing, verticalSpacing: 7) {
+        Grid(
+            alignment: .topLeading,
+            horizontalSpacing: Self.columnSpacing,
+            verticalSpacing: 7 * self.typography.bodyScale)
+        {
             GridRow {
                 ForEach(self.table.header.indices, id: \.self) { column in
                     // One cell per column carries the GFM alignment.
@@ -246,8 +272,13 @@ struct ChatMarkdownTableView: View {
     private func cell(_ text: String, isHeader: Bool, column: Int) -> some View {
         // Cells read at the size of the reply's body text; a fixed footnote size stayed
         // smaller than the surrounding prose at every Dynamic Type setting.
-        ChatMarkdownInlineChips.text(ChatMarkdownInlineChips.inlineMarkdown(text), fileLabels: self.fileLabels)
-            .font(isHeader ? self.typography.proseFont.weight(.semibold) : self.typography.proseFont)
+        let font = isHeader ? self.typography.proseFont.weight(.semibold) : self.typography.proseFont
+        return ChatMarkdownInlineChips.text(
+            ChatMarkdownInlineChips.inlineMarkdown(text),
+            fileLabels: self.fileLabels,
+            font: font,
+            environment: self.environment)
+            .font(font)
             .foregroundStyle(OpenClawChatTheme.assistantText)
             .textSelection(.enabled)
             // Grid cells otherwise accept compressed row proposals and ellipsize wrapped text.
@@ -281,14 +312,14 @@ struct ChatMarkdownListView: View {
     var isStreaming = false
 
     var body: some View {
-        Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 7) {
+        Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 7 * self.typography.bodyScale) {
             ForEach(self.list.items.indices, id: \.self) { index in
                 GridRow(alignment: .top) {
                     self.marker(for: self.list.items[index], at: index)
                         .frame(minWidth: 18, alignment: .trailing)
                         .padding(.top, 1)
 
-                    VStack(alignment: .leading, spacing: 7) {
+                    VStack(alignment: .leading, spacing: 7 * self.typography.bodyScale) {
                         if self.list.items[index].content.isEmpty {
                             Text(verbatim: " ")
                                 .font(self.typography.proseFont)
@@ -353,7 +384,7 @@ struct ChatMarkdownListView: View {
                 self.markdownRenderer(markdown)
             }
         case let .code(code):
-            ChatCodeBlockView(block: code)
+            ChatCodeBlockView(block: code, bodyScale: self.typography.bodyScale)
         case let .list(list):
             self.nestedListView(list)
         }

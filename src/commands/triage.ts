@@ -23,7 +23,6 @@ import {
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { createProcessSignalBridge } from "../infra/process-signal-bridge.js";
 import { acceptTriageContinuation } from "../infra/triage-continuation.js";
-import { writeTriageUpdateFailure } from "../infra/update-failure-report-artifact.js";
 import type { UpdateRepairValidation } from "../infra/update-repair-protocol.js";
 import {
   redactSupportString,
@@ -41,6 +40,7 @@ import {
   readTriageUpdateFailure,
   readPendingTriageUpdateFailure,
   sanitizeTriageUpdateFailure,
+  writeTriageUpdateFailure,
   type TriageUpdateFailure,
 } from "./triage-update.js";
 

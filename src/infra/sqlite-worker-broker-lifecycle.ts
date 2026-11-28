@@ -219,7 +219,6 @@ export function createSqliteWorkerLifecycle({
     const databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
     // The Worker constructor inherits this exact synchronous snapshot.
     captureSqliteDatabaseAdmissions(databaseAdmissionCursor);
-    const postgresPool = createPostgresPoolEndpoints();
     // Lean: one carrier per class is a logical endpoint; external databases stay isolated.
     // A broker that captured unqualified native close retires carriers by worker exit.
     const hostedKey =
@@ -230,13 +229,11 @@ export function createSqliteWorkerLifecycle({
       hostedKey !== "" &&
       explicitSqliteCloseReleasesNativeResources &&
       claimsSharedHostSlot(carrierUrl, hostedKey);
+    // Only native carriers inherit workerData. Hosted carriers bind the pool on open.
+    const postgresPool = hosted ? undefined : createPostgresPoolEndpoints();
     const { worker, exited } = runInDetachedAsyncContext(() => ({
       worker: hosted
-        ? createHostedWorker(
-            carrierUrl,
-            { workerData: { postgresPool }, transferList: postgresPoolTransferList(postgresPool) },
-            { key: hostedKey, ready: false },
-          )
+        ? createHostedWorker(carrierUrl, {}, { key: hostedKey, ready: false })
         : createCpuTrackedWorker(
             carrierUrl,
             {
