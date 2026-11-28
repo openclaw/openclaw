@@ -158,8 +158,10 @@ in its `ExecStart`:
    `openclaw gateway health` now, the backup is not removed: the unit restores the
    state and leaves the service stopped.
 
-If the new release does not come ready, the service's state is restored from that
-backup as the service account, only after the unit is confirmed stopped, and the
+If the new release does not come ready, or systemd keeps restarting it, the
+service's state is restored from that backup as the service account, only after
+the unit is confirmed stopped (systemd reports it stopped and no process is left in
+its cgroup, read from cgroup v2 or the legacy systemd hierarchy), and the
 update fails, so the installed updater restores the previous package. The unit
 starts again on its own once the previous package is back; it is never started on
 the new package with the restored state. If the unit cannot be confirmed stopped

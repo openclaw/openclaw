@@ -42,6 +42,8 @@ vi.mock("../../daemon/systemd-lifecycle.js", async (importOriginal) => ({
   },
   startSystemdService: async () => {
     native.events.push("start");
+    // systemctl reset-failed before start clears the restart counter.
+    native.restarts = 0;
     native.unit = native.crashLoop
       ? { active: "activating", pid: 0 }
       : { active: "active", pid: native.startPid };
@@ -329,7 +331,8 @@ describe("system service update as the unit's account", () => {
 
   it("restores without waiting out readiness when systemd keeps restarting the candidate", async () => {
     native.crashLoop = true;
-    native.restarts = 3;
+    // The previous service had restarted often; starting resets the counter.
+    native.restarts = 1000;
     installAccount({ migrate: ok("migrated"), health: [0, "{}"], restore: ok("restored") });
     const started = Date.now();
 
@@ -383,6 +386,8 @@ describe("settle step after the installed updater exits", () => {
     active: string;
     controlGroup?: string;
     cgroupEvents?: string;
+    /** No cgroup hierarchy systemd tracks units in is mounted. */
+    noCgroupHierarchy?: boolean;
     account: Record<string, [number, string]>;
   };
 
@@ -427,6 +432,9 @@ describe("settle step after the installed updater exits", () => {
         }
         throw Object.assign(new Error("missing"), { code: "ENOENT" });
       },
+      statfsSync: (dir: string) => ({
+        type: dir === "/sys/fs/cgroup" && !world.noCgroupHierarchy ? 0x63677270 : 0,
+      }),
       existsSync: (file: string) =>
         file === `${payload.handoffDir}/verified` && world.verified === true,
       rmSync: (dir: string) => events.push(`rm ${dir}`),
@@ -554,6 +562,11 @@ describe("settle step after the installed updater exits", () => {
     {
       name: "processes remain in the unit's cgroup",
       world: { cgroupEvents: "populated 1\n", account: { restore: ok("restored") } },
+      restoreRuns: false,
+    },
+    {
+      name: "the cgroup hierarchy cannot be verified",
+      world: { noCgroupHierarchy: true, account: { restore: ok("restored") } },
       restoreRuns: false,
     },
   ])("leaves the unit stopped when $name", async ({ world, restoreRuns }) => {

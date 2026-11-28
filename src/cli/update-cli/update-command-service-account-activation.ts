@@ -88,11 +88,26 @@ const asAccount = (expected, ...args) => {
   try { return JSON.parse(text.slice(at)).status === expected; } catch { return false; }
 };
 // Stopped means inactive with no populated cgroup; KillMode= can leave processes behind.
+// Same rule as isSystemdControlGroupEmpty: a missing group is empty only in a hierarchy
+// systemd tracks units in (unified, hybrid unified/, or legacy systemd/).
+const fsType = (dir) => { try { return fs.statfsSync(dir).type; } catch { return 0; } };
+const procsBelow = (dir) => {
+  try {
+    if (fs.readFileSync(dir + "/cgroup.procs", "utf8").trim()) return true;
+    return fs.readdirSync(dir, { withFileTypes: true }).some((e) => e.isDirectory() && procsBelow(dir + "/" + e.name));
+  } catch (error) { if (error && error.code === "ENOENT") return false; throw error; }
+};
 const emptyCgroup = (cg) => {
   if (!cg) return true;
   if (!cg.startsWith("/") || cg.split("/").slice(1).some((part) => !part || part === "." || part === "..")) return false;
-  try { return /^populated 0$/m.test(fs.readFileSync("/sys/fs/cgroup" + cg + "/cgroup.events", "utf8")); }
-  catch (error) { return Boolean(error && error.code === "ENOENT"); }
+  try {
+    const unified = ["/sys/fs/cgroup", "/sys/fs/cgroup/unified"].find((dir) => fsType(dir) === 0x63677270);
+    if (unified) {
+      try { return /^populated 0$/m.test(fs.readFileSync(unified + cg + "/cgroup.events", "utf8")); }
+      catch (error) { return Boolean(error && error.code === "ENOENT"); }
+    }
+    return fsType("/sys/fs/cgroup/systemd") === 0x27e0eb && !procsBelow("/sys/fs/cgroup/systemd" + cg);
+  } catch { return false; }
 };
 const stopped = () => ["inactive", "failed"].includes(show("ActiveState")) && emptyCgroup(show("ControlGroup")) && emptyCgroup(p.controlGroup);
 const deadline = Date.now() + 2 * 60 * 60000;
@@ -437,12 +452,12 @@ async function activateSystemServiceAsAccount(
     ) {
       return await restore(`Migrating ${account}'s state as ${account} did not complete.`);
     }
-    const restartsBeforeStart = (await readUnit(unitName)).restarts;
     try {
       await control("start");
     } catch (error) {
       return await restore(`${unitName} could not be started (${formatErrorMessage(error)}).`);
     }
+    let restartsSinceStart = Number.POSITIVE_INFINITY;
     // Ready means systemd runs the candidate and the account's own client reaches that Gateway
     // with the unit's config and credentials; root reads only the exit status.
     const ready = await waitForUnit(
@@ -456,10 +471,14 @@ async function activateSystemServiceAsAccount(
       Math.min(DEFAULT_READY_TIMEOUT_MS, budget(DEFAULT_READY_TIMEOUT_MS)),
       // A candidate that keeps exiting under Restart= will not come ready; restore now rather
       // than leave the service down for the whole readiness window.
-      (unit) =>
-        Number.isFinite(unit.restarts) &&
-        Number.isFinite(restartsBeforeStart) &&
-        unit.restarts - restartsBeforeStart >= CRASH_LOOP_RESTARTS,
+      // Starting resets the counter (reset-failed), so count from the lowest value seen since.
+      (unit) => {
+        if (!Number.isSafeInteger(unit.restarts)) {
+          return false;
+        }
+        restartsSinceStart = Math.min(restartsSinceStart, unit.restarts);
+        return unit.restarts - restartsSinceStart >= CRASH_LOOP_RESTARTS;
+      },
     );
     if (!ready) {
       return await restore(`${unitName} did not come ready on ${options.candidateVersion}.`);

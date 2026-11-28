@@ -42,7 +42,14 @@ vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<
     typeof import("node:fs") & { default: typeof import("node:fs") }
   >();
-  const overrides = { readFileSync: vi.fn(actual.readFileSync) };
+  const overrides = {
+    readFileSync: vi.fn(actual.readFileSync),
+    // A unified cgroup hierarchy, as on current systemd hosts.
+    statfsSync: ((dir: string) =>
+      dir === "/sys/fs/cgroup"
+        ? { ...actual.statfsSync("/"), type: 0x63677270 }
+        : actual.statfsSync(dir)) as typeof actual.statfsSync,
+  };
   return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 const { readFileSync: nativeReadFileSync } =
