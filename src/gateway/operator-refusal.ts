@@ -66,6 +66,11 @@ const refusalCauses = {
     why: "Only the person who started this conversation or an administrator can restore its workspace.",
     nextStep: "Ask an administrator to restore this workspace, or start a new conversation.",
   },
+  "owner-private-memory": {
+    why: "Stored memories belong to the agent's owner, and this session is not one of the owner's private sessions with this agent.",
+    nextStep:
+      "Ask the owner to do it in a direct chat with the agent, or ask a Gateway admin to share stored memories with every session in the memory plugin's settings.",
+  },
 } as const satisfies Record<string, { why: string; nextStep: string }>;
 
 export type OperatorRefusalCause = keyof typeof refusalCauses;

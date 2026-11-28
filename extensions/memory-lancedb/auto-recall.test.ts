@@ -1,5 +1,6 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { operatorRefusalText } from "openclaw/plugin-sdk/tool-results";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import memoryPlugin from "./index.js";
 import { MemoryDB } from "./lancedb-store.js";
@@ -63,40 +64,39 @@ const groupChat = {
   sessionKey: "agent:main:telegram:group:synthetic",
   sessionId: "synthetic-session",
 };
-const noOwnerAudience = "this session has no owner-private memory audience";
-const allowed = { denial: undefined, embeds: 2, searches: 2, deletes: 1, namesOptOut: false };
-const refused = (denial: string) => ({
-  denial,
-  embeds: 0,
-  searches: 0,
-  deletes: 0,
-  namesOptOut: true,
-});
-// Every refusal names the opt-out that works for every session, never a repair that cannot.
-const namesOptOut = (result: { content?: unknown }) =>
-  JSON.stringify(result.content).includes("ownerOnly: false");
+const allowed = { refused: [false, false], embeds: 2, searches: 2, deletes: 1 };
+const refused = { refused: [true, true], embeds: 0, searches: 0, deletes: 0 };
 const allowRecall = {
   fingerprint: "synthetic-memory-authority",
   allows: (toolName: string) => toolName === "memory_recall",
   assertActive: () => undefined,
 };
+const isRefused = (result: { details?: { reason?: unknown } }) =>
+  result.details?.reason === "owner_private_memory";
+const resultText = (result: { content?: Array<{ text?: string }> }) => result.content?.[0]?.text;
 
-// ownerOnly: false goes only into the live config, so the rule must read it per call.
-function registerWithLiveConfig(ownerOnly: boolean, audience: unknown) {
+// `ownerOnly` is the plugin config the plugin registered with. `live` is what the runtime
+// config reports afterwards, before the plugin reload that a config change starts.
+function registerMemoryPlugin(params: { ownerOnly?: boolean; live?: () => boolean | undefined }) {
   const pluginConfig = {
     embedding: { provider: "openai", model: "synthetic-test-embedding", dimensions: 3 },
     autoRecall: true,
     autoCapture: false,
+    ...(params.ownerOnly === undefined ? {} : { ownerOnly: params.ownerOnly }),
   };
   const config = { plugins: { entries: { "memory-lancedb": { config: pluginConfig } } } };
-  const live = ownerOnly ? pluginConfig : { ...pluginConfig, ownerOnly };
   const on = vi.fn();
   const registerTool = vi.fn();
   const runtime = createPluginRuntimeMock();
-  runtime.config.current = () => ({ plugins: { entries: { "memory-lancedb": { config: live } } } });
+  runtime.config.current = () => {
+    const ownerOnly = params.live?.();
+    const live = ownerOnly === undefined ? pluginConfig : { ...pluginConfig, ownerOnly };
+    return { plugins: { entries: { "memory-lancedb": { config: live } } } };
+  };
   memoryPlugin.register(createTestPluginApi({ pluginConfig, config, runtime, on, registerTool }));
   return {
-    tool: (name: string) =>
+    // The host prepares a turn's tools by calling each factory with the turn's audience.
+    prepareTool: (name: string, audience: unknown) =>
       registerTool.mock.calls.find(([, options]) => options?.name === name)?.[0]?.({
         agentId: "main",
         config,
@@ -106,15 +106,51 @@ function registerWithLiveConfig(ownerOnly: boolean, audience: unknown) {
   };
 }
 
+// One turn: prepare its memory tools, then call both and run automatic recall.
+async function runTurn(
+  plugin: ReturnType<typeof registerMemoryPlugin>,
+  audience: unknown,
+  afterPrepare?: () => void,
+) {
+  const search = vi.spyOn(MemoryDB.prototype, "search").mockResolvedValue([]);
+  const remove = vi.spyOn(MemoryDB.prototype, "delete").mockResolvedValue(false);
+  const recallTool = plugin.prepareTool("memory_recall", audience);
+  const forgetTool = plugin.prepareTool("memory_forget", audience);
+  afterPrepare?.();
+  const recall = await recallTool.execute("recall", { query: "synthetic query" });
+  const forget = await forgetTool.execute("forget", {
+    memoryId: "00000000-0000-4000-8000-000000000000",
+  });
+  await plugin.hook(
+    { prompt: "synthetic automatic recall prompt", messages: [] },
+    {
+      agentId: "main",
+      sessionKey: "agent:main:synthetic",
+      memoryAudience: audience,
+      toolAuthority: allowRecall,
+    },
+  );
+  return {
+    recall,
+    forget,
+    summary: {
+      refused: [isRefused(recall), isRefused(forget)],
+      embeds: embed.mock.calls.length,
+      searches: search.mock.calls.length,
+      deletes: remove.mock.calls.length,
+    },
+  };
+}
+
 describe("stored memory access by session audience", () => {
   test.each([
     { name: "the owner's direct chat", audience: ownerChat, expected: allowed },
-    { name: "a group chat", audience: groupChat, expected: refused(noOwnerAudience) },
-    { name: "a session with no audience", audience: undefined, expected: refused(noOwnerAudience) },
+    { name: "a group chat", audience: groupChat, expected: refused },
+    { name: "a session with no audience", audience: undefined, expected: refused },
     {
       name: "another agent's owner chat",
       audience: { kind: "owner-private", agentId: "other" },
-      expected: refused("the memory audience belongs to another agent"),
+      expected: refused,
     },
     {
       name: "a group chat with ownerOnly off",
@@ -123,40 +159,39 @@ describe("stored memory access by session audience", () => {
       expected: allowed,
     },
   ])("recall, forget and automatic recall in $name", async (row) => {
-    const search = vi.spyOn(MemoryDB.prototype, "search").mockResolvedValue([]);
-    const remove = vi.spyOn(MemoryDB.prototype, "delete").mockResolvedValue(false);
-    const { tool, hook } = registerWithLiveConfig(row.ownerOnly !== false, row.audience);
+    const turn = await runTurn(registerMemoryPlugin({ ownerOnly: row.ownerOnly }), row.audience);
 
-    const recall = await tool("memory_recall").execute("recall", { query: "synthetic query" });
-    const forget = await tool("memory_forget").execute("forget", {
-      memoryId: "00000000-0000-4000-8000-000000000000",
-    });
-    await hook(
-      { prompt: "synthetic automatic recall prompt", messages: [] },
-      {
-        agentId: "main",
-        sessionKey: "agent:main:synthetic",
-        memoryAudience: row.audience,
-        toolAuthority: allowRecall,
-      },
-    );
+    expect(turn.summary).toEqual(row.expected);
+  });
 
-    expect([recall.details?.denial, forget.details?.denial]).toEqual([
-      row.expected.denial,
-      row.expected.denial,
+  test("a refused tool call gets the Gateway's owner-private memory refusal", async () => {
+    const turn = await runTurn(registerMemoryPlugin({}), groupChat);
+
+    expect([resultText(turn.recall), resultText(turn.forget)]).toEqual([
+      operatorRefusalText("owner-private-memory", "search stored memories"),
+      operatorRefusalText("owner-private-memory", "delete stored memories"),
     ]);
-    expect({
-      denial: row.expected.denial,
-      embeds: embed.mock.calls.length,
-      searches: search.mock.calls.length,
-      deletes: remove.mock.calls.length,
-      namesOptOut: namesOptOut(recall) && namesOptOut(forget),
-    }).toEqual(row.expected);
+  });
+
+  // A config change reaches the next turn through the plugin reload it starts. A turn whose
+  // tools are already prepared keeps the rule it was prepared with.
+  test.each([
+    { change: "turned on", registered: false, live: true, expected: allowed },
+    { change: "turned off", registered: true, live: false, expected: refused },
+  ])("ownerOnly $change after a turn's tools are prepared", async (row) => {
+    let live: boolean | undefined;
+    const plugin = registerMemoryPlugin({ ownerOnly: row.registered, live: () => live });
+
+    const turn = await runTurn(plugin, groupChat, () => {
+      live = row.live;
+    });
+
+    expect(turn.summary).toEqual(row.expected);
   });
 
   test("automatic recall neither embeds nor searches once the audience is stale", async () => {
     const search = vi.spyOn(MemoryDB.prototype, "search").mockResolvedValue([]);
-    const { hook } = registerWithLiveConfig(true, ownerChat);
+    const { hook } = registerMemoryPlugin({});
 
     const result = await hook(
       { prompt: "what tea do I like?", messages: [] },

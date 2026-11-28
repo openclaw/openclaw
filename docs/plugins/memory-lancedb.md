@@ -117,9 +117,10 @@ Every other session is refused: group chats and channels (including the owner's
 own messages there), direct chats with anyone else, and sessions with no chat,
 such as unlinked scheduled jobs, hook runs, Gateway `tools.invoke` calls, and
 `openclaw agent --session-key` runs on a key that names no chat.
-The tools return a result that names the reason and the next step, and
-automatic recall skips the turn before its prompt reaches the embedding
-provider. `memory_store` and automatic capture still save from every session
+The tools return the Gateway's refusal, which names the reason and the next
+step, and automatic recall skips the turn before its prompt reaches the
+embedding provider. Each turn's access is fixed when its tools are prepared,
+from the audience the Gateway gave the session. `memory_store` and automatic capture still save from every session
 except incognito ones, and operators can still list and search the store with
 `openclaw ltm`.
 
@@ -142,6 +143,10 @@ To let every session recall and forget the agent's memories, as before, turn off
 
 Replies in a group are visible to everyone in it, so this shares whatever the
 agent recalls there with the whole group.
+
+Changing `ownerOnly` reloads the plugin without a Gateway restart. Turns that
+start after the reload use the new setting; a turn already running keeps the
+one it started with.
 
 ## Embedding config
 

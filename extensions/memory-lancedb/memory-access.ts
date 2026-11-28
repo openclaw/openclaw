@@ -1,6 +1,6 @@
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import { textResult } from "openclaw/plugin-sdk/tool-results";
+import { operatorRefusalText, textResult } from "openclaw/plugin-sdk/tool-results";
 
 type MemoryAudience = OpenClawPluginToolContext["memoryAudience"];
 
@@ -23,34 +23,23 @@ export function resolveSessionMemoryDenial(
 }
 
 /**
- * Why a session's memory tools and automatic recall may not use stored memories, or undefined
- * when they may. `ownerOnly: false` opens them to every session, as before this rule.
+ * Why a turn's memory tools and automatic recall may not use stored memories, or undefined
+ * when they may. Both inputs are fixed for the turn: the audience the host minted when it
+ * admitted the turn, and `ownerOnly` as the plugin registered it. `false` opens stored
+ * memories to every session, as before this rule.
  */
 export function resolveStoredMemoryDenial(
   audience: MemoryAudience,
   agentId: string,
-  config: { ownerOnly?: boolean },
+  ownerOnly: boolean,
 ): string | undefined {
-  return config.ownerOnly === false ? undefined : resolveSessionMemoryDenial(audience, agentId);
+  return ownerOnly ? resolveSessionMemoryDenial(audience, agentId) : undefined;
 }
 
-const ownerOnlyOptOut =
-  "An operator can set ownerOnly: false in the memory-lancedb config to use them in every session, which also shares them with group chats and channels.";
-
-function refusedSessionScope(audience: MemoryAudience): string {
-  if (audience?.kind === "conversation") {
-    return "They are used only in direct chats with the agent's owner, whom commands.ownerAllowFrom names.";
-  }
-  if (audience?.kind === "owner-private") {
-    return "They are used only in owner sessions of the agent they belong to.";
-  }
-  return "Sessions without a chat, such as tools.invoke calls, unlinked scheduled jobs and hook runs, have no owner-private audience.";
-}
-
-/** The tool result for a refused session: the reason, where stored memories are used, and the opt-out. */
-export function storedMemoriesUnavailableResult(audience: MemoryAudience, denial: string) {
-  return textResult(
-    `Stored memories are not available in this session: ${denial}. ${refusedSessionScope(audience)} ${ownerOnlyOptOut}`,
-    { status: "blocked", reason: "owner_private_memory", denial },
-  );
+/** The result of a refused memory tool call. `action` names the refused work. */
+export function storedMemoriesRefusal(action: string) {
+  return textResult(operatorRefusalText("owner-private-memory", action), {
+    status: "blocked",
+    reason: "owner_private_memory",
+  });
 }

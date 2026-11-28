@@ -35,6 +35,8 @@ const SENTENCES = {
     "I did not start this request. It has no recorded inference account, so OpenClaw refused the selected credentials. Select an authorized stored account with `openclaw automations edit <jobId> --model <provider/model>@<account>`, or use a configured provider key. For eligible host-managed accounts, `openclaw doctor --fix` can record the account.",
   "workspace-not-owned":
     "I did not start this request. Only the person who started this conversation or an administrator can restore its workspace. Ask an administrator to restore this workspace, or start a new conversation.",
+  "owner-private-memory":
+    "I did not start this request. Stored memories belong to the agent's owner, and this session is not one of the owner's private sessions with this agent. Ask the owner to do it in a direct chat with the agent, or ask a Gateway admin to share stored memories with every session in the memory plugin's settings.",
 } satisfies Record<OperatorRefusalCause, string>;
 
 async function runRefusedTool(failure: () => unknown) {
