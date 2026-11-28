@@ -74,6 +74,7 @@ describe("Doctor foreign launchd jobs", () => {
     expect(report).toContain("Gateway lifecycle=restart");
     expect(report).toContain(reportOnlyJob.label);
     expect(report).toContain("3 external forced Gateway restart(s)");
+    expect(report).toContain("Run openclaw doctor --fix");
     expect(mocks.repair).not.toHaveBeenCalled();
   });
 
@@ -133,18 +134,47 @@ describe("Doctor foreign launchd jobs", () => {
   });
 
   it.each([
-    { reason: "external service policy", env: { OPENCLAW_SERVICE_REPAIR_POLICY: "external" } },
-    { reason: "active update", env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" } },
-    { reason: "nondefault identity", env: {}, defaultIdentity: false },
-    { reason: "external supervisor", env: {}, manageService: false },
-  ])("reports but does not repair with $reason", async (testCase) => {
+    {
+      reason: "service repair is configured as external",
+      nextStep: "launchctl bootout",
+      env: { OPENCLAW_SERVICE_REPAIR_POLICY: "external" },
+    },
+    {
+      reason: "an OpenClaw update is in progress",
+      nextStep: "After the update completes",
+      env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+    },
+    {
+      reason: "this is a non-default install identity",
+      nextStep: "owning installation and profile",
+      env: {},
+      defaultIdentity: false,
+    },
+    {
+      reason: "an external supervisor owns service management",
+      nextStep: "launchctl bootout",
+      env: { OPENCLAW_SUPERVISOR_MODE: "external" },
+      manageService: false,
+    },
+  ])("explains why repair is unavailable when $reason", async (testCase) => {
     mocks.defaultIdentity.mockReturnValue(testCase.defaultIdentity ?? true);
     mocks.manageService.mockResolvedValue(testCase.manageService ?? true);
 
+    await expect(
+      checkMacForeignLaunchdJobRepairPending({ repair: true }, testCase.env),
+    ).resolves.toBe("none");
+    await run({}, testCase.env);
     await run({ repair: true }, testCase.env);
 
-    expect(mocks.note).toHaveBeenCalled();
+    expect(mocks.note).toHaveBeenCalledTimes(2);
+    for (const [report] of mocks.note.mock.calls) {
+      expect(report).not.toContain("doctor --fix");
+      expect(report).toContain(testCase.reason);
+      expect(report).toContain(testCase.nextStep);
+    }
     expect(mocks.repair).not.toHaveBeenCalled();
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("No jobs were removed."));
+    expect(runtime.log).toHaveBeenCalledWith(
+      `Foreign launchd job repair skipped: ${testCase.reason}. No jobs were removed.`,
+    );
   });
 });

@@ -545,9 +545,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       );
     }
     if (shouldWarn && service.foreignLaunchdJobs.some((job) => job.safeToRemove)) {
-      printWarning(
-        `Remove confirmed stray Gateway lifecycle jobs with ${formatCliCommand("openclaw doctor --fix")}.`,
-      );
+      printWarning(`Run ${formatCliCommand("openclaw doctor")} for launchd cleanup guidance.`);
     }
     spacer();
   }

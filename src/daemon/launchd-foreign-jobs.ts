@@ -351,7 +351,7 @@ export function formatForeignLaunchdJobs(jobs: ForeignLaunchdJob[]): string {
       [
         terminalText`${job.label}: program=${job.program}, keepalive=${job.keepAlive}, Gateway lifecycle=${job.gatewayActions.join("|") || "not verified"}`,
         job.safeToRemove
-          ? "  Removable with openclaw doctor --fix."
+          ? "  Confirmed stray Gateway lifecycle job."
           : "  Report only; left unchanged.",
         ...(job.diagnostic ? [terminalText`  ${job.diagnostic}`] : []),
       ].join("\n"),

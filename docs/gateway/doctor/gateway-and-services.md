@@ -33,6 +33,8 @@ restoration failure; slow startup does not undo a completed repair.
 
     Cleanup previews include only legacy launchd services and recognized legacy systemd unit names in the user scope. Legacy Windows services, unrecognized Linux unit names, and services in the system scope remain findings for manual review.
 
+    On macOS, Doctor reports stray launchd jobs with verified Gateway lifecycle commands. It recommends `openclaw doctor --fix` when the invocation can manage those jobs. For a non-default installation, external service management, or an update in progress, Doctor explains the reason and gives the next step. When Doctor unloads a plist-backed job, it disables the job at login and keeps the plist.
+
     Windows extra-service hints use read-only `schtasks /Query` inspection. Node hosts remain visible in diagnostics; discovery alone does not make a service a removal target. Unreadable unrelated Scheduled Tasks do not block discovery or test runtime preparation, regardless of whether they are running. Selected tasks, recognized OpenClaw launchers, and custom aliases with OpenClaw launcher content still report incomplete inspection when their command cannot be verified.
 
     Linux user-service cleanup preserves the unit file if stopping or disabling the service fails. An interrupted status check does not permit file-only removal; that fallback is reported only when `systemctl` is unavailable.

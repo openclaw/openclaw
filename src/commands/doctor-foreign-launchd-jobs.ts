@@ -10,14 +10,46 @@ import {
 } from "../daemon/launchd-foreign-jobs.js";
 import { readGatewayForcedRestartSummary } from "../daemon/restart-storm.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveGatewayPlatformSupervisor } from "../infra/gateway-supervision.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import {
-  resolveServiceRepairPolicy,
   isServiceRepairDeferred,
+  resolveServiceRepairPolicy,
   shouldManageGatewayService,
 } from "./doctor-service-repair-policy.js";
+
+async function resolveForeignLaunchdRepairBlock(env: NodeJS.ProcessEnv) {
+  if (!isDefaultInstallIdentity(env)) {
+    return {
+      reason: "this is a non-default install identity",
+      nextStep: "Run Doctor from the owning installation and profile.",
+    };
+  }
+  const policy = resolveServiceRepairPolicy(env);
+  if (policy === "update") {
+    return {
+      reason: "an OpenClaw update is in progress",
+      nextStep: "After the update completes, rerun Doctor.",
+    };
+  }
+  const deferred = isServiceRepairDeferred(policy);
+  if (deferred || !(await shouldManageGatewayService(env))) {
+    let reason = "service management is unavailable in this environment";
+    if (policy === "external") {
+      reason = "service repair is configured as external";
+    } else if (deferred || resolveGatewayPlatformSupervisor(env)) {
+      reason = "an external supervisor owns service management";
+    }
+    return {
+      reason,
+      nextStep:
+        "Ask the job owner to unload the listed label with launchctl bootout gui/$UID/<label> and disable its launchd entry if needed.",
+    };
+  }
+  return undefined;
+}
 
 const selectRemovableJobs = (jobs: readonly ForeignLaunchdJob[]) =>
   jobs.filter((job) => job.safeToRemove);
@@ -30,7 +62,11 @@ export async function checkMacForeignLaunchdJobRepairPending(
   if (process.platform !== "darwin" || options.repair !== true) {
     return "none";
   }
-  return selectRemovableJobs(await findForeignLaunchdJobs(env)).length > 0 ? "work" : "none";
+  const candidates = selectRemovableJobs(await findForeignLaunchdJobs(env));
+  if (candidates.length === 0 || (await resolveForeignLaunchdRepairBlock(env))) {
+    return "none";
+  }
+  return "work";
 }
 
 /** Reports foreign launchd jobs; only explicit Doctor repair may remove lifecycle jobs. */
@@ -63,7 +99,13 @@ export async function noteMacForeignLaunchdJobs(
     );
   }
   const candidates = selectRemovableJobs(jobs);
-  if (candidates.length > 0) {
+  const repairBlock =
+    candidates.length > 0 ? await resolveForeignLaunchdRepairBlock(env) : undefined;
+  if (repairBlock) {
+    lines.push(
+      `Doctor cannot remove the confirmed stray jobs because ${repairBlock.reason}. ${repairBlock.nextStep}`,
+    );
+  } else if (candidates.length > 0 && options.repair !== true) {
     lines.push(
       `Run ${formatCliCommand("openclaw doctor --fix", env)} to remove confirmed stray Gateway lifecycle jobs.`,
     );
@@ -72,14 +114,8 @@ export async function noteMacForeignLaunchdJobs(
   if (options.repair !== true || candidates.length === 0) {
     return;
   }
-  if (
-    !isDefaultInstallIdentity(env) ||
-    isServiceRepairDeferred(resolveServiceRepairPolicy(env)) ||
-    !(await shouldManageGatewayService(env))
-  ) {
-    runtime.log(
-      "Foreign launchd job repair skipped: this Doctor invocation does not own service repair or an update is in progress. No jobs were removed.",
-    );
+  if (repairBlock) {
+    runtime.log(`Foreign launchd job repair skipped: ${repairBlock.reason}. No jobs were removed.`);
     return;
   }
   for (const job of candidates) {

@@ -1349,7 +1349,8 @@ describe("gatherDaemonStatus", () => {
       expect(output).toContain("keepalive=true");
       expect(output).toContain("Gateway lifecycle=restart");
       expect(output).toContain("3 external forced Gateway restart(s)");
-      expect(output).toContain("openclaw doctor --fix");
+      expect(output).toContain("Run openclaw doctor for launchd cleanup guidance.");
+      expect(output).not.toContain("openclaw doctor --fix");
       expect(status.service.foreignLaunchdJobs).toEqual([job]);
       expect(status.service.forcedRestartSummary).toEqual({ count: 3, windowMs: 600_000 });
       expect(findForeignLaunchdJobs.mock.calls[0]?.[0]?.OPENCLAW_STATE_DIR).toBe(
