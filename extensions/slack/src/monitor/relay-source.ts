@@ -247,7 +247,10 @@ export function buildRelayWebSocketOptions(authToken: string, url: string): Clie
 }
 
 export function buildRelayWebSocketUrl(config: SlackRelaySourceConfig): string {
-  const url = new URL(config.url);
+  const url = URL.parse(config.url);
+  if (!url) {
+    throw new Error("Slack relay URL is invalid. Check relay.url for this Slack account.");
+  }
   if (url.protocol === "http:") {
     url.protocol = "ws:";
   } else if (url.protocol === "https:") {
