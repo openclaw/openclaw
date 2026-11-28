@@ -432,8 +432,27 @@ describe("catalog publication session rows", () => {
         rotationProfile(kind),
       );
       const previousOwner = await currentOwner();
-      const { started, reply } = holdCatalogReply();
       const rotated = rotationProfile(kind, true);
+      if (kind === "oauth") {
+        // Rotation preserves this account's identity; there is no discovery to await.
+        const before = rows.materializedCount;
+        const workerCalls = mocks.runPreparedModelCatalogWorker.mock.calls.length;
+        persistProfile(rotated);
+        const owner = await currentOwner();
+        expect(owner).not.toBe(previousOwner);
+        expect(() => previousOwner.readFullModelCatalog!()).toThrow();
+        const retained = await owner.loadFullModelCatalog!({ changedOnly: true });
+        expect(
+          getPreparedModelFullCatalogAuth(retained)?.authStore.profiles["custom:synthetic"],
+        ).toEqual(rotated);
+        await settleCatalog();
+        expect((await list()).sessions).toEqual(initial.sessions);
+        expect(rows.dirtyRowCount).toBe(0);
+        expect(rows.materializedCount).toBe(before);
+        expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(workerCalls);
+        return;
+      }
+      const { started, reply } = holdCatalogReply();
       const publication =
         vi.fn<Parameters<typeof registerPreparedModelRuntimePublicationListener>[0]>();
       const unsubscribe = registerPreparedModelRuntimePublicationListener(publication);
@@ -450,7 +469,7 @@ describe("catalog publication session rows", () => {
         await list();
         const before = rows.materializedCount;
         const reads = readCatalog.mock.calls.length;
-        reply.resolve(catalog(kind === "token" ? { ...model, contextWindow: 64_000 } : model));
+        reply.resolve(catalog({ ...model, contextWindow: 64_000 }));
         const discovered = await discovery;
         expect(
           getPreparedModelFullCatalogAuth(discovered)?.authStore.profiles["custom:synthetic"],
@@ -464,13 +483,8 @@ describe("catalog publication session rows", () => {
           modelFactsChanged: true,
           refreshStatusChanged: true,
         });
-        if (kind === "oauth") {
-          expect(result.sessions).toEqual(initial.sessions);
-          expect(rows.materializedCount).toBe(before);
-        } else {
-          expect(result.sessions.every((row) => row.contextTokens === 64_000)).toBe(true);
-          expect(rows.materializedCount - before).toBe(rowCount);
-        }
+        expect(result.sessions.every((row) => row.contextTokens === 64_000)).toBe(true);
+        expect(rows.materializedCount - before).toBe(rowCount);
       } finally {
         reply.resolve(catalog());
         await discovery;
