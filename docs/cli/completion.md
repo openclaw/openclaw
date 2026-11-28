@@ -36,7 +36,7 @@ The install writes a small `# OpenClaw Completion` block into your shell profile
 | Shell      | Profile                                                                                                                                                                                    |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | bash       | `~/.bashrc` (falls back to `~/.bash_profile` when `~/.bashrc` is missing)                                                                                                                  |
-| fish       | `~/.config/fish/config.fish`                                                                                                                                                               |
+| fish       | `$XDG_CONFIG_HOME/fish/config.fish` when `XDG_CONFIG_HOME` is an absolute path; otherwise `~/.config/fish/config.fish`                                                                     |
 | powershell | `~/.config/powershell/Microsoft.PowerShell_profile.ps1` (on Windows: `Documents/PowerShell/Microsoft.PowerShell_profile.ps1`, or `Documents/WindowsPowerShell/...` for Windows PowerShell) |
 | zsh        | `$ZDOTDIR/.zshrc` when `ZDOTDIR` is defined; otherwise `~/.zshrc` (an empty `ZDOTDIR` resolves to `/.zshrc`)                                                                               |
 
