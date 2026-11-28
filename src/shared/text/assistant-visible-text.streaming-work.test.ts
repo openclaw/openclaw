@@ -10,7 +10,7 @@ import {
 import { assistantVisibleTextFilters } from "./assistant-visible-text.js";
 import { canReuseMarkdownOwnership, findCodeOwnership } from "./code-regions.js";
 import { expectPrefixParity, regexWork, streamChunks } from "./streaming.test-support.js";
-import { createTextProjection } from "./text-projection.js";
+import { applyTextFilters, createTextProjection } from "./text-projection.js";
 
 const settledProse =
   "The guard rejects the call when values differ.\nIt keeps the settled prefix.\n".repeat(128);
@@ -52,6 +52,22 @@ it("keeps a bare relevant-memories mention off the whole-reply re-scan", () => {
   );
   expect(scanned).toBeLessThan(source.length * 8);
 });
+
+it.each(["relevant-memories", "relevant_memories"])(
+  "matches canonical %s filtering at every streamed prefix",
+  (tag) => {
+    const source = `Before.\n\n<${tag}>\nsecret\n</${tag}>\n\nAfter.`;
+    expectPrefixParity(
+      source,
+      () => createAssistantVisibleStreamText("final_answer"),
+      (text) => sanitizeAssistantVisibleStreamText(text, "final_answer"),
+    );
+    const final = sanitizeAssistantVisibleStreamText(source, "final_answer");
+    expect(final).not.toContain("secret");
+    expect(final).toContain("Before.");
+    expect(final).toContain("After.");
+  },
+);
 
 // A real ``<relevant-memories>`` tag still gates on and is stripped exactly once.
 it("strips a real relevant-memories tag when it appears", () => {
@@ -437,6 +453,22 @@ it.each([
   ["Intro `x\n[tool:read] {}\nx` |   \n:", "-\n"],
 ])("rechecks ownership when a GFM table delimiter changes a paragraph", (...chunks: string[]) => {
   expectOwnershipCorrection(chunks);
+});
+
+it("rechecks relevant-memories ownership when a GFM table delimiter changes", () => {
+  const chunks = [
+    "Intro `x\n<relevant-memories>secret</relevant-memories>\nx` |\n---",
+    ":\n",
+  ] as const;
+  const source = chunks.join("");
+  const stream = createTextProjection(assistantVisibleTextFilters("final-answer-delivery", true));
+
+  chunks.forEach((chunk) => stream.append(chunk));
+
+  expect(stream.text).toBe(
+    applyTextFilters(source, assistantVisibleTextFilters("final-answer-delivery", true)),
+  );
+  expect(stream.text).not.toContain("secret");
 });
 
 it.each([

@@ -821,6 +821,44 @@ describe("assistant text projection", () => {
     expect([visible, wire]).toEqual(["Visible.\n\nX", "Visible.\n\nX"]);
   });
 
+  it.each([1, 4])(
+    "filters private live-chat metadata and tool text with %i-character deltas",
+    (chunkSize) => {
+      const source = [
+        "Before.",
+        "Conversation info: ⟦openclaw:ctx⟧",
+        "```json",
+        '{"id":"synthetic"}',
+        "```",
+        "",
+        '<minimax:tool_call><invoke name="exec">MINIMAX_PRIVATE</invoke></minimax:tool_call>',
+        "",
+        "<relevant-memories>",
+        "RELEVANT_MEMORY_PRIVATE",
+        "</relevant-memories>",
+        "",
+        "Context:",
+        "<active_memory_plugin>",
+        "ACTIVE_MEMORY_PRIVATE",
+        "</active_memory_plugin>",
+        "",
+        "After.",
+      ].join("\n");
+
+      for (let offset = 0; offset < source.length; offset += chunkSize) {
+        state.updateBuffer("reply", { delta: source.slice(offset, offset + chunkSize) });
+        const visible = state.resolveBuffer("reply").text;
+        expect(visible).not.toContain("MINIMAX_PRIVATE");
+        expect(visible).not.toContain("RELEVANT_MEMORY_PRIVATE");
+        expect(visible).not.toContain("ACTIVE_MEMORY_PRIVATE");
+      }
+
+      const visible = state.resolveBuffer("reply").text;
+      expect(visible).toContain("Before.");
+      expect(visible).toContain("After.");
+    },
+  );
+
   it("retains commits received before text", () => {
     state.retireBuffer("reply", ["saved"]);
     state.updateBuffer("reply", { itemId: "saved", text: "Saved." });
