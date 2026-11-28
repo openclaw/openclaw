@@ -749,9 +749,11 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     return this.sessionResourceLoader;
   }
 
-  /** Abort the current run; yield callers pass a turnHandoff reason to skip interruption guidance. */
+  /** Abort the current run and in-flight compaction; yield callers pass a turnHandoff reason to skip interruption guidance. */
   async abort(reason?: unknown): Promise<void> {
     this.abortRetry();
+    // A held session_before_compact hook must not commit after the run is cancelled.
+    this.abortCompaction();
     this.agent.abort(reason);
     await this.agent.waitForIdle();
   }
