@@ -136,11 +136,16 @@ export function resolveSourceDeliveryOutcome(
   const hasVerifiedMessageToolDelivery = visibleDeliveries.some(
     (delivery) => didSendViaMessageTool && delivery.verifiedTarget,
   );
+  // A progress send (`final: false`) reached the target, but the final reply still has to.
+  const hasVerifiedFinalMessageToolDelivery = visibleDeliveries.some(
+    (delivery) =>
+      didSendViaMessageTool && delivery.verifiedTarget && delivery.target.progress !== true,
+  );
   return {
     visibleDeliveries,
     verifiedMessageToolDelivery: hasVerifiedMessageToolDelivery,
     satisfiesSourceDelivery:
-      plan.fallback.skipWhenMessageToolSentToTarget && hasVerifiedMessageToolDelivery,
+      plan.fallback.skipWhenMessageToolSentToTarget && hasVerifiedFinalMessageToolDelivery,
     unverifiedMessageToolDelivery:
       didSendViaMessageTool && sentTargets.length > 0 && !hasVerifiedMessageToolDelivery,
   };

@@ -38,6 +38,8 @@ export type SourceDeliveryMessageToolTarget = {
   threadSuppressed?: boolean;
   text?: string;
   mediaUrls?: string[];
+  /** Sent with `final: false`: it reached the target, but the final reply still has to. */
+  progress?: true;
 };
 
 /** Visible message-tool delivery with target verification state. */

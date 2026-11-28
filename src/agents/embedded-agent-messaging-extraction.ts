@@ -329,6 +329,7 @@ export function extractMessagingToolSend(
     accountId: resolvedAccountId,
     to,
     ...threadEvidence,
+    ...(args.final === false ? { progress: true as const } : {}),
   };
 }
 
