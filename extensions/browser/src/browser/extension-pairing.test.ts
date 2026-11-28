@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { parsePairingString } from "../../chrome-extension/modules/relay-core.js";
 import { relayTestKey } from "../../chrome-extension/relay-key.test-support.js";
 import { buildBrowserExtensionPairing as buildPairing } from "./extension-pairing.js";
 import { ensureExtensionRelayToken } from "./extension-relay/relay-auth.js";
@@ -57,6 +58,22 @@ it.each(["browser-node", "direct-remote"] as const)(
     });
   },
 );
+
+it("omits a plaintext non-loopback gateway hint that the extension cannot parse", async () => {
+  const browser = { profiles: { chrome: extensionProfile(19199) } };
+  const result = await buildPairing({
+    cfg: {
+      browser,
+      gateway: { mode: "remote" as const, remote: { url: "ws://192.168.1.20:8080" } },
+    },
+  });
+  expect(result.topology).toBe("browser-node");
+  expect(result.pairingString).toBe(`ws://127.0.0.1:19199/extension#${RELAY_KEY}`);
+  expect(parsePairingString(result.pairingString)).toEqual({
+    relayUrl: "ws://127.0.0.1:19199/extension",
+    token: RELAY_KEY,
+  });
+});
 
 it("requires an explicit certificate hostname for local Gateway TLS", async () => {
   await expect(buildPairing({ cfg: { gateway: { tls: { enabled: true } } } })).rejects.toThrow(
