@@ -1,0 +1,2 @@
+7
+# xAI video 21:9 and 5:2: advertised capability and submitted aspect_ratio for each wide ratio.

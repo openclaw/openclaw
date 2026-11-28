@@ -315,8 +315,8 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
     - Classic modes: text-to-video, image-to-video, reference-image generation,
       remote video edit, and remote video extension
     - Video 1.5 mode: image-to-video only, with exactly one first-frame image
-    - Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`;
-      classic and Video 1.5 image-to-video inherit the source image ratio when
+    - Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`,
+      `5:2`; classic and Video 1.5 image-to-video inherit the source image ratio when
       omitted
     - Resolutions: classic `480P`/`720P`; Video 1.5 also supports `1080P`; all
       generation modes default to `480P`
