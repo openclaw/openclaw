@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   MAX_DATE_TIMESTAMP_MS,
   asSafeIntegerInRange,
@@ -8,6 +8,7 @@ import {
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   generatePkceVerifierChallenge,
+  ProviderAuthFailure,
   toFormUrlEncoded,
   type OAuthCredential,
 } from "openclaw/plugin-sdk/provider-auth";
@@ -18,6 +19,7 @@ import {
 import {
   createOAuthRefreshError,
   createOAuthRefreshResponseError,
+  generateOAuthState,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import {
   ensureGlobalUndiciEnvProxyDispatcher,
@@ -89,6 +91,13 @@ async function withMiniMaxOAuthResponse<T>(
   }
 }
 
+// Sign-in HTTP failures are typed; the provider's response body never reaches the message.
+function miniMaxSignInHttpFailure(status: number): ProviderAuthFailure {
+  return new ProviderAuthFailure(
+    status === 429 ? "rate_limited" : status >= 500 ? "provider_unavailable" : "grant_rejected",
+  );
+}
+
 type MiniMaxOAuthAuthorization = {
   user_code: string;
   verification_uri: string;
@@ -109,7 +118,7 @@ type MiniMaxOAuthToken = {
 
 type TokenResult =
   | { status: "success"; token: MiniMaxOAuthToken }
-  | { status: "pending"; message?: string }
+  | { status: "pending" }
   | { status: "error"; message: string };
 
 async function parseMiniMaxOAuthTokenResponse(
@@ -148,11 +157,7 @@ async function parseMiniMaxOAuthTokenResponse(
   }
 
   if (!response.ok) {
-    return {
-      status: "error",
-      message:
-        (payload?.base_resp?.status_msg ?? text) || "MiniMax OAuth failed to parse response.",
-    };
+    throw miniMaxSignInHttpFailure(response.status);
   }
 
   if (!payload) {
@@ -160,14 +165,11 @@ async function parseMiniMaxOAuthTokenResponse(
   }
 
   if (payload.status === "error") {
-    return {
-      status: "error",
-      message: payload.base_resp?.status_msg || "An error occurred. Please try again later",
-    };
+    throw new ProviderAuthFailure("device_code_denied");
   }
 
   if (payload.status !== "success") {
-    return { status: "pending", message: "current user code is not authorized" };
+    return { status: "pending" };
   }
 
   // A refresh response may omit refresh_token when the server does not rotate it.
@@ -218,9 +220,6 @@ function resolveMiniMaxRegionFromBaseUrl(baseUrl: string | undefined): MiniMaxRe
   );
 }
 
-const MINIMAX_SIGN_IN_AGAIN =
-  "Run `openclaw models auth login --provider minimax-portal` to sign in again.";
-
 /**
  * Refresh a MiniMax Portal OAuth credential at the token endpoint its login
  * recorded. The refresh token is only sent back to that regional endpoint:
@@ -237,18 +236,20 @@ export async function refreshMiniMaxPortalOAuthCredential(
     (candidate) => getOAuthEndpoints(candidate).tokenEndpoint === credential.tokenEndpoint,
   );
   if (!region) {
-    throw new Error(
-      `MiniMax OAuth credential does not record the account region it was issued for. ${MINIMAX_SIGN_IN_AGAIN}`,
-    );
+    throw new ProviderAuthFailure("refresh_rejected", {
+      providerDetail: "This MiniMax sign-in does not record the account region it was issued for.",
+    });
   }
   const configuredRegion = resolveMiniMaxRegionFromBaseUrl(providerBaseUrl);
   if (configuredRegion && configuredRegion !== region) {
-    throw new Error(
-      `MiniMax OAuth credential was issued for the ${region === "cn" ? "CN" : "Global"} region, but models.providers.minimax-portal.baseUrl now points to ${MINIMAX_OAUTH_CONFIG[configuredRegion].baseUrl}. ${MINIMAX_SIGN_IN_AGAIN}`,
-    );
+    throw new ProviderAuthFailure("refresh_rejected", {
+      providerDetail: `This MiniMax sign-in was issued for the ${region === "cn" ? "CN" : "Global"} region, but models.providers.minimax-portal.baseUrl now points to ${MINIMAX_OAUTH_CONFIG[configuredRegion].baseUrl}.`,
+    });
   }
   if (!credential.refresh) {
-    throw new Error(`MiniMax OAuth credential has no refresh token. ${MINIMAX_SIGN_IN_AGAIN}`);
+    throw new ProviderAuthFailure("refresh_rejected", {
+      providerDetail: "This MiniMax sign-in has no refresh token.",
+    });
   }
   ensureGlobalUndiciEnvProxyDispatcher();
   const endpoints = getOAuthEndpoints(region);
@@ -296,7 +297,7 @@ export async function loginMiniMaxPortalOAuth(params: {
     params.assertCurrent?.();
   };
   const { verifier, challenge } = generatePkceVerifierChallenge();
-  const state = randomBytes(16).toString("base64url");
+  const state = generateOAuthState();
   const endpoints = getOAuthEndpoints(region);
   const oauth = await withMiniMaxOAuthResponse(
     endpoints,
@@ -311,8 +312,9 @@ export async function loginMiniMaxPortalOAuth(params: {
     },
     async (response) => {
       if (!response.ok) {
-        const text = await readResponseTextLimited(response, MINIMAX_OAUTH_ERROR_BODY_LIMIT_BYTES);
-        throw new Error(`MiniMax OAuth authorization failed: ${text || response.statusText}`);
+        // Release closes the dispatcher, so cancel the unread body first.
+        await response.body?.cancel().catch(() => undefined);
+        throw miniMaxSignInHttpFailure(response.status);
       }
 
       const payload = await readProviderJsonResponse<
@@ -408,5 +410,5 @@ export async function loginMiniMaxPortalOAuth(params: {
     pollIntervalMs = Math.max(pollIntervalMs, 2000);
   }
 
-  throw new Error("MiniMax OAuth timed out before authorization completed.");
+  throw new ProviderAuthFailure("device_code_expired");
 }

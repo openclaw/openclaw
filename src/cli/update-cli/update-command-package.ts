@@ -6,10 +6,12 @@ import {
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveInstallWorkTimeoutMs } from "../../infra/install-mode-options.js";
+import { resolvePackageReleaseSlotForRootSync } from "../../infra/package-release-slot-path.js";
 import { runGlobalPackageUpdateSteps } from "../../infra/package-update-steps.js";
 import type {
   PackageActivationOptions,
   PackageUpdateTransaction,
+  StagedPackageSwapParams,
 } from "../../infra/package-update-swap-contract.js";
 import { PackageUpdateActivationError } from "../../infra/package-update-swap-contract.js";
 import { deferPackageStateVerification } from "../../infra/package-update-verification-step.js";
@@ -19,10 +21,7 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
 import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
-import {
-  getUpdateDoctorConfigFailureReason,
-  type UpdateDoctorConfigChange,
-} from "../../infra/update-doctor-config.js";
+import { getUpdateDoctorConfigFailureReason } from "../../infra/update-doctor-config.js";
 import { createDoctorServiceInspectionBudget } from "../../infra/update-doctor-deadline.js";
 import {
   consumeUpdatePostInstallDoctorResult,
@@ -34,7 +33,6 @@ import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
   createGlobalInstallEnv,
   resolveGlobalInstallSpec,
-  verifyPackageUpdateRecovery,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
 import type { UpdateRecoveryBaselineRef } from "../../infra/update-recovery-baseline-capture.js";
@@ -77,7 +75,6 @@ type PackageDoctorContext = {
   executorFence: UpdateRecoveryFence;
   requester?: Readonly<UpdateRequester>;
   inputHash: string;
-  changes: UpdateDoctorConfigChange[];
   databaseBackup?: UpdateDatabaseBackup;
   originalRecoveryCapture?: UpdateRecoveryBaselineRef;
   assertCurrent: () => void;
@@ -312,61 +309,6 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   return outcome.step;
 }
 
-/** Keep package staging open until its source owner publishes the validated checkout. */
-export async function prepareGitPackageExposure(
-  params: Omit<Parameters<typeof runGlobalPackageUpdateSteps>[0], "beforeActivate">,
-) {
-  const prepared = createDeferredCore();
-  const activation = createDeferredCore<boolean>();
-  const cancellation = new Error("Source activation cancelled before global exposure");
-  const completed = runGlobalPackageUpdateSteps({
-    ...params,
-    beforeActivate: async () => {
-      prepared.resolve();
-      if (!(await activation.promise)) {
-        throw cancellation;
-      }
-    },
-  });
-  const outcome = await Promise.race([prepared.promise.then(() => null), completed]);
-  if (outcome) {
-    const failure = outcome.failedStep;
-    throw new UpdatePreMutationError(
-      outcome.reason ??
-        (failure
-          ? normalizeFallbackFailureReason(failure.name)
-          : "source-exposure-preparation-failed"),
-      failure?.stderrTail ?? "Global source exposure did not reach the activation gate",
-      {
-        failureFacts: failure?.failureFacts,
-        stepResult: { steps: outcome.steps, failedStep: failure ?? undefined },
-      },
-    );
-  }
-  return {
-    activate: () => {
-      activation.resolve(true);
-      return completed;
-    },
-    cancel: async () => {
-      activation.resolve(false);
-      try {
-        return await completed;
-      } catch (error) {
-        if (error !== cancellation) {
-          throw error;
-        }
-        // Only this gate's cancellation leaves the package untouched. Recheck
-        // it after staging cleanup without masking the source owner's failure.
-        return {
-          steps: [],
-          recovery: await verifyPackageUpdateRecovery(params.installTarget.packageRoot),
-        };
-      }
-    },
-  };
-}
-
 export type PackageInstallUpdateParams = Omit<PackageDoctorOptions, "results"> & {
   reapplyLocalOverrides?: boolean;
   requirePackageReplacement?: boolean;
@@ -384,6 +326,7 @@ export type PackageInstallUpdateParams = Omit<PackageDoctorOptions, "results"> &
   reserveInstallSlot?: (root: string) => void;
   onTransaction: (transaction: PackageUpdateTransaction) => void | Promise<void>;
   getActivation?: () => PackageActivationOptions | undefined;
+  onPackageRelease?: StagedPackageSwapParams["onPackageRelease"];
 };
 
 /** Retain one staged target while its runtime initializes a fresh profile. */
@@ -451,6 +394,7 @@ export async function stagePackageInstallUpdate(
       reserveInstallSlot: (root) => requireActive().reserveInstallSlot?.(root),
       getActivation: () => requireActive().getActivation?.(),
       onTransaction: (transaction) => requireActive().onTransaction(transaction),
+      onPackageRelease: (release) => requireActive().onPackageRelease?.(release),
       onConfigSnapshot: (snapshot) => requireActive().onConfigSnapshot?.(snapshot),
     },
     () => requireActive(),
@@ -539,6 +483,8 @@ export async function runPackageInstallUpdate(
     reserveInstallSlot: params.reserveInstallSlot,
     onTransaction: params.onTransaction,
     getActivation: params.getActivation,
+    releaseLayout: true,
+    onPackageRelease: params.onPackageRelease,
     installTarget,
     installSpec,
     installCwd: params.invocationCwd,
@@ -583,7 +529,11 @@ export async function runPackageInstallUpdate(
           ? "error"
           : "ok",
     mode: installTarget.manager,
-    root: packageUpdate.activePackageRoot ?? undefined,
+    // A release replaced in place behind its link is the installation at the link.
+    root: packageUpdate.activePackageRoot
+      ? (resolvePackageReleaseSlotForRootSync(packageUpdate.activePackageRoot) ??
+        packageUpdate.activePackageRoot)
+      : undefined,
     reason:
       getUpdateDoctorConfigFailureReason(packageUpdate.failedStep?.configWriteRefusal) ??
       packageUpdate.reason ??

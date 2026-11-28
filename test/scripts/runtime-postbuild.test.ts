@@ -4,7 +4,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { create as createTar } from "tar";
+import { create as createTar } from "tar/raw";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { collectPackageDistImportErrors } from "../../scripts/lib/package-dist-imports.mjs";
@@ -601,11 +601,11 @@ describe("runtime postbuild static assets", () => {
     );
   });
 
-  it.each(["//#region", "//"])(
+  it.each(["//#region ", "// ", "//!"])(
     "does not treat source-owned implementations as runtime wrappers (%s)",
     async (label) => {
       const f = await runtimeFixture({
-        "owner.runtime-Impl123.mjs": `import { value } from "./owner.runtime-Other456.mjs";\n${label} src/infra/owner.ts\nexport const current = value;\n`,
+        "owner.runtime-Impl123.mjs": `import { value } from "./owner.runtime-Other456.mjs";\n${label}src/infra/owner.ts\nexport const current = value;\n`,
         "owner.runtime-Other456.mjs": "export const value = true;\n",
         "owner.runtime.js": 'export * from "./owner.runtime-Stale.js";\n',
       });
@@ -743,7 +743,14 @@ describe("runtime postbuild static assets", () => {
         const loaded = await load(rootDir, `dist/${chunk.path}`);
         for (const { exported, origin } of chunk.exports) {
           expect(await loaded[exported](), `${release.version}: ${chunk.path}:${exported}`).toBe(
-            origin.symbol,
+            // Both immutable 9.36/9.37 updaters denied leased-handoff authority; the
+            // recorded immutable export is inline, not a named runtime export.
+            origin.module === "src/infra/update-managed-service-handoff-current.ts" &&
+              origin.symbol === "isImmutableManagedServiceUpdateHandoffProcess" &&
+              chunk.path === "update-managed-service-handoff-current-E5XsvJxw.mjs" &&
+              exported === "isCurrentManagedServiceUpdateHandoffProcess"
+              ? false
+              : origin.symbol,
           );
         }
       }
@@ -843,11 +850,11 @@ describe("previous release update compatibility", () => {
         ].join("\n"),
         ...(includePrivateWorker
           ? {
-              "state/openclaw-state-read.worker.js":
-                '//#region src/cli/update-cli/update-command-service-command.ts\nexport async function restart() { return await import("./openclaw-state-read-service-abcdefgh.mjs"); }\n',
-              "state/openclaw-state-read-command.mjs":
-                '//#region src/daemon/inspect.ts\nexport async function inspect() { return await import("./openclaw-state-read-service-abcdefgh.mjs"); }\n',
-              "state/openclaw-state-read-service-abcdefgh.mjs":
+              "infra/shared-worker-host.worker.js":
+                '//#region src/cli/update-cli/update-command-service-command.ts\nexport async function restart() { return await import("./shared-worker-host-service-abcdefgh.mjs"); }\n',
+              "infra/shared-worker-host-command.mjs":
+                '//#region src/daemon/inspect.ts\nexport async function inspect() { return await import("./shared-worker-host-service-abcdefgh.mjs"); }\n',
+              "infra/shared-worker-host-service-abcdefgh.mjs":
                 '//#region src/cli/update-cli/runner.ts\nexport function resolveRunner() { return "private worker"; }\n',
             }
           : {}),

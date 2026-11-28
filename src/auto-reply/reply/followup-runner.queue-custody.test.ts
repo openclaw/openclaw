@@ -109,7 +109,6 @@ it("acquires fresh required placement for a queued successor after its predecess
     executeLocalTurn: async (_claim, run) => await run(),
     executeTurn: async (_claim, _turn, run) => await run(),
   });
-  const typing = createTypingController({});
   state.admit.mockImplementation(async () => {
     successor = createReplyOperation({
       ...identity,
@@ -156,7 +155,7 @@ it("acquires fresh required placement for a queued successor after its predecess
         enqueueFollowupRun(identity.sessionKey, queued, { mode: "followup", debounceMs: 0 });
         scheduleFollowupDrain(
           identity.sessionKey,
-          createFollowupRunner({ typing, typingMode: "never", defaultModel: "gpt-test" }),
+          createFollowupRunner({ typingMode: "never", defaultModel: "gpt-test" }),
         );
         // Settlement wakes the successor from the predecessor's retained async context.
         retirement = releasePredecessor.promise.then(() => predecessor.complete());
@@ -184,7 +183,6 @@ it("acquires fresh required placement for a queued successor after its predecess
     await queued.controllerInput?.settlement.promise;
     uninstall();
     clearRuntimeConfigSnapshot();
-    typing.cleanup();
   }
 });
 
@@ -206,7 +204,6 @@ it.each([
   let effects = 0;
   const executedPrompts: string[] = [];
   const failure = new Error("closed preparation or committed effect failure");
-  const typing = createTypingController({});
   for (const prompt of phase === "adopted preparation" ? ["first", "second"] : ["first"]) {
     const source = createQueueTestRun({ prompt });
     source.run.sessionKey = key;
@@ -260,7 +257,7 @@ it.each([
       progress: { drain: async () => {} },
     };
   });
-  const runner = createFollowupRunner({ typing, typingMode: "never", defaultModel: "gpt-test" });
+  const runner = createFollowupRunner({ typingMode: "never", defaultModel: "gpt-test" });
   try {
     scheduleFollowupDrain(key, async (queued) => {
       try {
@@ -300,7 +297,6 @@ it.each([
     }
     clearFollowupQueue(key);
     await Promise.allSettled(sources.map((source) => source.controllerInput!.settlement.promise));
-    typing.cleanup();
   }
 });
 

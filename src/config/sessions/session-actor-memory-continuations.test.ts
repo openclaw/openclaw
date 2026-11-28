@@ -24,7 +24,6 @@ import {
 import { listSessionPendingInputs } from "./session-pending-input-history.js";
 import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
 import { readSessionPendingInputReceiptsInWorker } from "./session-pending-input-receipts.js";
-import { readPendingInputSource } from "./session-pending-input-source.js";
 import { preparePendingInputStore } from "./session-pending-input-store.js";
 import { discardSessionPendingInput } from "./session-pending-input-withdrawal.js";
 import type { SessionEntry } from "./types.js";
@@ -77,7 +76,10 @@ const makePendingOwner = (
   databasePath: scope.storePath,
   workerDatabasePath: scope.storePath,
   assertCurrent() {},
+  assertReadCurrent() {},
   finish() {},
+  release() {},
+  relinquish() {},
 });
 
 async function fixture(patch: Partial<SessionEntry> = {}) {
@@ -186,9 +188,9 @@ describe("memory continuation adapters", () => {
     registerSessionPendingInputOwner(pendingOwner);
     try {
       await runWithSessionActorStorage(binding, async () => {
-        expect(await readPendingInputSource(scope, idempotencyKey, false)).toMatchObject({
-          snapshot: { current: true, pending: { input_id: "pending-input" } },
-        });
+        expect(await readSessionSubmittedInput(scope, idempotencyKey)).toEqual(
+          userMessage("pending", idempotencyKey),
+        );
         expect(await listSessionPendingInputs(scope)).toMatchObject({
           items: [{ id: "pending-input", state: "queued" }],
         });
@@ -202,13 +204,10 @@ describe("memory continuation adapters", () => {
         expect(await listSessionPendingInputs(scope)).toMatchObject({
           items: [],
         });
-        const fresh = await readPendingInputSource(
-          { ...scope, sessionId: "window-2" },
-          idempotencyKey,
-          false,
-        );
-        expect(fresh).toMatchObject({ snapshot: { current: true } });
-        expect(fresh?.snapshot.pending).toBeUndefined();
+        expect(current.actor.snapshot(authority)?.entry?.sessionId).toBe("window-2");
+        expect(
+          await readSessionSubmittedInput({ ...scope, sessionId: "window-2" }, idempotencyKey),
+        ).toBeUndefined();
       });
     } finally {
       releaseSessionPendingInputOwner(pendingOwner);
@@ -302,7 +301,7 @@ describe("memory continuation adapters", () => {
         status: "ok",
       });
     } finally {
-      receipt.finish("interrupted");
+      receipt.finish("interrupted", "failed");
       await receipt.settled?.();
     }
     expect(await stageSessionPendingInput(target, options)).toMatchObject({
@@ -311,7 +310,7 @@ describe("memory continuation adapters", () => {
     });
     owner.closeSession(scope.sessionKey);
     await expect(stageSessionPendingInput(target, options)).rejects.toThrow("closed or removed");
-    expect(await readPendingInputSource(scope, message.idempotencyKey, false)).toBeUndefined();
+    expect(await readSessionSubmittedInput(scope, message.idempotencyKey)).toBeUndefined();
     expect(await listSessionPendingInputs(scope)).toMatchObject({ items: [] });
     expect(await readSessionPendingInputReceiptsInWorker(scope, { runIds: ["recorded"] })).toEqual(
       [],

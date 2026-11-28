@@ -2,6 +2,7 @@ import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import type { BackupResourceInventory } from "../commands/backup-resource-inventory.js";
+import { BackupSqliteSourceAppearedError } from "./backup-sqlite-discovery-retry.js";
 import { ignoreMissingPath } from "./errno.js";
 import { sameFileMutationFingerprint, type FileMutationFingerprint } from "./file-descriptor.js";
 import { assertNotUpdateCapturePath } from "./update-capture-paths.js";
@@ -10,7 +11,10 @@ export type CanonicalSqliteSource = {
   archiveSourcePath: string;
   identity: BigIntStats;
   sourcePath: string;
-} & ({ role: "global" | "quarantine" | "client" } | { role: "agent"; agentId: string });
+} & (
+  | { role: "global" | "quarantine" | "client" | "services" }
+  | { role: "agent"; agentId: string }
+);
 
 export async function planBackupSqliteSources(
   inventory: BackupResourceInventory,
@@ -30,7 +34,10 @@ export async function planBackupSqliteSources(
     }
     let canonicalSource: CanonicalSqliteSource | undefined;
     if (owner.role !== "plugin") {
-      if (!owner.identity || !sameFileIdentity(owner.identity, identity)) {
+      if (!owner.identity) {
+        throw new BackupSqliteSourceAppearedError(archiveSourcePath);
+      }
+      if (!sameFileIdentity(owner.identity, identity)) {
         throw new Error(`Canonical SQLite path changed after discovery: ${archiveSourcePath}`);
       }
       canonicalSource = {

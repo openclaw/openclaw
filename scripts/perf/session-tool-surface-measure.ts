@@ -97,7 +97,14 @@ const append = async (customType: string, data: unknown) => {
 };
 const parameters = { routeKey: "synthetic-route", toolPolicy: "synthetic-policy", entries };
 runtime.prepareSessionToolSurface({ ...parameters, state: lease.state, tools });
-await runtime.persistSessionToolSurface(lease.state, append);
+runtime
+  .prepareSessionSystemPrompt({
+    ...parameters,
+    state: lease.state,
+    systemPrompt: "synthetic prompt",
+  })
+  .commit();
+await runtime.persistSessionSystemPrompt(lease.state, append);
 if (values.case !== "warm") {
   lease[Symbol.dispose]();
   lease = runtime.retainEmbeddedSessionPromptState("surface-benchmark");
@@ -119,7 +126,7 @@ async function verify() {
     assert.deepEqual((await tool.execute("fixture-call", {})).details, { executor: "current" });
   }
   assert.equal(lease.state.pendingToolSurface, undefined);
-  await runtime.persistSessionToolSurface(lease.state, append);
+  await runtime.persistSessionSystemPrompt(lease.state, append);
   assert.equal(checkpoints, 1, "An unchanged pin must not append another checkpoint");
 }
 await verify();

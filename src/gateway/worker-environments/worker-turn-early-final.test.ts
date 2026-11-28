@@ -108,7 +108,8 @@ it.for(["accepted", "conflict", "failure"] as const)(
         type: "message",
         message: { role: "assistant", content: [{ type: "text", text: "Worker reply" }] },
       });
-      expect(before.getLeafId()).toBe(terminalId);
+      // Only the session prompt checkpoint may follow the terminal reply.
+      expect(before.getBranch().findLast((entry) => entry.type === "message")?.id).toBe(terminalId);
       if (outcome === "accepted") {
         followup = execute(followupInput);
         void followup.catch(() => {});

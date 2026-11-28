@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { ErrorCodes, type AgentWaitParams } from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
 import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import { runWithSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
@@ -17,7 +17,6 @@ import { registerChatAbortController } from "../chat-abort.js";
 import type { OffloadedRef } from "../chat-attachments.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { readInProcessSubagentResume } from "../in-process-subagent-resume.js";
-import { createCronContinuationController } from "../server-methods/agent-cron-continuation.js";
 import { runAgentResetPhase } from "../server-methods/agent-reset-phase.js";
 import { buildAgentSessionPatch } from "../server-methods/agent-session-patch.js";
 import { prepareAgentSession } from "../server-methods/agent-session-prepare.js";
@@ -35,7 +34,6 @@ import { isGatewayAgentAbortRejection } from "./agent-run-dispatch-outcome.js";
 import { startAgentRunExecution } from "./agent-run-execution-phase.js";
 import {
   persistAgentSessionPhase,
-  type AgentSessionPersistParams,
   type AgentSessionPersistResult,
 } from "./agent-session-persist.js";
 import { finishAgentTurnPreparation } from "./agent-turn-admission-cleanup.js";
@@ -46,7 +44,6 @@ import {
   registerAgentTurnSourceAdmission,
 } from "./agent-turn-source-admission.js";
 import type { AgentTurnStartRequest } from "./agent-turn-start-request.types.js";
-import { prepareAgentWaitForTurn } from "./agent-wait.js";
 
 export function createAgentTurnService(
   { context, isWebchatConnect }: Pick<GatewayRequestHandlerOptions, "context" | "isWebchatConnect">,
@@ -58,6 +55,7 @@ export function createAgentTurnService(
     privateCompletion,
     replyExpectation,
     settleWakeReplay,
+    subagentCompletions,
     assertAdmissionCurrent,
     assertCancellationCurrent,
     executionSource,
@@ -93,7 +91,6 @@ export function createAgentTurnService(
       request,
       cfg,
       runId,
-      canUseCronRunContinuation,
       expectedSession,
       expectedExistingSessionId,
       normalizedSpawned,
@@ -215,11 +212,6 @@ export function createAgentTurnService(
       let preparedOffloadedRefs: OffloadedRef[] = [];
       let releaseGatewayAdmission = () => {};
       let respondToAdmissionOutcome = () => false;
-      const cronContinuation = createCronContinuationController({
-        runId,
-        lifecycleGeneration,
-        context,
-      });
       try {
         assertAdmissionCurrent?.();
         const content = await prepareAgentContentPhase({
@@ -276,7 +268,6 @@ export function createAgentTurnService(
           groupSpace: normalizedSpawned.groupSpace,
         };
         let effectiveBootstrapContextRunKind = preflight.bootstrapContextRunKind;
-        let restoredCronContinuationIdentity: AgentSessionPersistParams["restoredCronContinuationIdentity"];
         let cfgForAgent: OpenClawConfig | undefined;
         let freshChild = false;
         let sessionStorePath: string | undefined;
@@ -352,8 +343,6 @@ export function createAgentTurnService(
             agentId,
             recipientChannel,
             request,
-            canUseCronRunContinuation,
-            lifecycleGeneration,
             effectiveBootstrapContextRunKind,
             preAttachmentSession,
             respond,
@@ -371,8 +360,9 @@ export function createAgentTurnService(
             maintenanceConfig: sessionMaintenanceConfig,
             canonicalSessionAgentId: sessionAgentId,
             mainSessionKey,
-            touchInteraction,
           } = preparedSession;
+          const touchInteraction =
+            preparedSession.touchInteraction && !preflight.preserveUserFacingSessionModelState;
           const { entry } = preparedSession;
           cfgForAgent = cfgLocal;
           freshChild = preparedSession.freshChild;
@@ -385,13 +375,13 @@ export function createAgentTurnService(
             principal,
             sessionKey: canonicalSessionKey,
             agentId: sessionAgentId,
+            entry,
           });
           if (sessionAuthorizationError) {
             io.emitAcceptance([false, undefined, sessionAuthorizationError]);
             return;
           }
           effectiveBootstrapContextRunKind = preparedSession.effectiveBootstrapContextRunKind;
-          restoredCronContinuationIdentity = preparedSession.restoredCronContinuationIdentity;
           session.sessionPersistedBeforeGatewayAdmission =
             preparedSession.sessionPersistedBeforeGatewayAdmission;
           const requestDeliveryHint = normalizeDeliveryContext({
@@ -409,6 +399,7 @@ export function createAgentTurnService(
           ) =>
             buildAgentSessionPatch({
               ...preparedSession,
+              touchInteraction,
               freshEntry,
               initialEntry: entry,
               sessionAgentId,
@@ -422,7 +413,6 @@ export function createAgentTurnService(
                   ? normalizeOptionalString(principal?.internal?.pluginRuntimeOwnerId)
                   : undefined,
               expectedExistingSessionId,
-              hasRestoredCronContinuation: restoredCronContinuationIdentity !== undefined,
               requestedSessionId,
               fallbackSessionId,
             });
@@ -520,7 +510,6 @@ export function createAgentTurnService(
             runId,
             agentId,
             suppressVisibleSessionEffects,
-            restoredCronContinuationIdentity,
             initialPatchBuild: patchBuild,
             buildSessionPatch: (freshEntry) => buildSessionPatch(freshEntry, fallbackSessionId),
             state: session,
@@ -530,7 +519,6 @@ export function createAgentTurnService(
             maintenanceConfig: sessionMaintenanceConfig,
             assertGatewayWorkAdmissionAllowed: admissionController.assertAllowed,
             respondToGatewayAdmissionOutcome: admissionController.respondToOutcome,
-            setCronContinuationClaim: cronContinuation.setClaim,
             respond,
           });
           if (!persistedSession) {
@@ -586,7 +574,6 @@ export function createAgentTurnService(
           promptedAt,
           requestedSessionKeyRaw,
           preAcceptedReservedSessionKey,
-          restoredCronContinuationIdentity,
           getAdmittedSessionId: () => session.admittedSessionId,
           ownerConnId,
           ownerDeviceId,
@@ -599,6 +586,7 @@ export function createAgentTurnService(
           privateCompletion,
           replyExpectation,
           settleWakeReplay,
+          subagentCompletions,
           acquireGatewayWorkAdmission: admissionController.acquire,
           assertGatewayWorkAdmissionAllowed: admissionController.assertAllowed,
           hasGatewayAdmissionOutcome: admissionController.hasOutcome,
@@ -639,7 +627,6 @@ export function createAgentTurnService(
                 media,
                 inputProvenance: preparedDispatch.userTurn.inputProvenance,
                 effectiveBootstrapContextRunKind,
-                releaseCronContinuationClaimWithRecovery: cronContinuation.releaseWithRecovery,
               }),
             );
           } finally {
@@ -663,7 +650,6 @@ export function createAgentTurnService(
           transferred: gatewayAdmissionTransferred,
           cleanupRunAbort: () => earlyRunAbort?.cleanup(),
           releaseGatewayAdmission,
-          releaseCronContinuation: cronContinuation.releaseWithRecovery,
           getOffloadedRefs: () => preparedOffloadedRefs,
           clearUnaccepted: dedupeLifecycle.clearUnaccepted,
           settleSourceWork: preparationSource.settle,
@@ -681,9 +667,5 @@ export function createAgentTurnService(
     }
   };
 
-  const prepareWaitForTurn = (params: AgentWaitParams) =>
-    prepareAgentWaitForTurn(context, params, { exactTurnSource: true });
-  const waitForTurn = async (params: AgentWaitParams) => await prepareWaitForTurn(params).wait();
-
-  return { startTurn, prepareWaitForTurn, waitForTurn };
+  return { startTurn };
 }

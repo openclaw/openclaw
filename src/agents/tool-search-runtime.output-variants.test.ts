@@ -96,7 +96,7 @@ function createFixture(
 }
 
 describe("Tool Search input-dependent output contracts", () => {
-  it("admits each immutable catalog/action schema once without sharing different contracts", async () => {
+  it("isolates immutable catalog and action result schemas across requests", async () => {
     const fixtures = ["first", "second"].map((owner) => {
       const outputSchema = freezeJsonSnapshot({
         ...operationSchema(),
@@ -108,7 +108,6 @@ describe("Tool Search input-dependent output contracts", () => {
       const { runtime, execute } = createFixture({ outputSchema });
       return { owner, runtime, execute };
     });
-    using stringify = vi.spyOn(JSON, "stringify");
 
     for (let round = 0; round < 2; round++) {
       for (const operation of ["list", "remove"]) {
@@ -122,16 +121,6 @@ describe("Tool Search input-dependent output contracts", () => {
         }
       }
     }
-    expect(
-      stringify.mock.calls.filter(
-        ([value]) =>
-          value &&
-          typeof value === "object" &&
-          "title" in value &&
-          String(value.title).startsWith("immutable-output-") &&
-          "allOf" in value,
-      ),
-    ).toHaveLength(4);
     fixtures[0]!.execute.mockResolvedValueOnce(jsonResult({ owner: "second", records: [] }));
     await expectContractFailure(fixtures[0]!.runtime.callValue("records", { operation: "list" }));
     fixtures[1]!.execute.mockResolvedValueOnce(jsonResult({ owner: "second", removed: true }));

@@ -21,10 +21,11 @@ struct RootTabsPresentationTests {
 
     @Test func `every sidebar destination resolves to a native screen or a valid Dashboard route`() {
         let expected: [RootTabs.SidebarDestination: RootTabs.SidebarScreen] = [
-            .chat: .chat, .overview: .overview, .agents: .agents, .sessions: .sessions,
-            .files: .files, .desktop: .desktop, .terminal: .terminal, .docs: .docs,
+            .chat: .chat, .sessions: .sessions,
+            .files: .files, .desktop: .desktop, .terminal: .terminal,
             .settings: .settings, .gateway: .gateway,
             .activity: .dashboard("/activity"), .workboard: .dashboard("/workboard"),
+            .systems: .dashboard("/systems"),
             .skillWorkshop: .dashboard("/skills/workshop"), .instances: .dashboard("/settings/devices"),
             .dreaming: .dashboard("/settings/memory/dreams"), .usage: .dashboard("/usage"),
             .cron: .dashboard("/automations"),
@@ -41,15 +42,15 @@ struct RootTabsPresentationTests {
     @Test func `session activity clamps current and future timestamps to just now`() {
         let now = Date(timeIntervalSince1970: 1_750_000_000)
 
-        #expect(CommandCenterTab.relativeTimeText(
+        #expect(SessionPresentation.relativeTimeText(
             forMilliseconds: now.timeIntervalSince1970 * 1000,
             relativeTo: now) == "just now")
-        #expect(CommandCenterTab.relativeTimeText(
+        #expect(SessionPresentation.relativeTimeText(
             forMilliseconds: now.addingTimeInterval(30).timeIntervalSince1970 * 1000,
             relativeTo: now) == "just now")
     }
 
-    @Test func `dashboard deep link requests overview navigation`() async throws {
+    @Test func `dashboard deep link requests root navigation`() async throws {
         let appModel = NodeAppModel()
         let initialRequestID = appModel.dashboardNavigationRequestID
         let url = try #require(URL(string: "openclaw://dashboard"))
@@ -80,21 +81,7 @@ struct RootTabsPresentationTests {
         #expect(appModel.consumeNewChatRequest(appModel.newChatRequestID))
     }
 
-    @Test func `overview session metrics exclude snoozed archived and internal sessions`() {
-        let now = Date(timeIntervalSince1970: 1_750_000_000)
-        let visible = CommandCenterTab.visibleOverviewSessions([
-            Self.sessionEntry(key: "main"),
-            Self.sessionEntry(key: "onboarding"),
-            Self.sessionEntry(key: "agent:main:onboarding"),
-            Self.sessionEntry(key: "archived", archived: true),
-            Self.sessionEntry(key: "snoozed", snoozedUntil: now.addingTimeInterval(3600).timeIntervalSince1970 * 1000),
-            Self.sessionEntry(key: "expired", snoozedUntil: now.timeIntervalSince1970 * 1000),
-        ], now: now)
-
-        #expect(visible.map(\.key) == ["main", "expired"])
-    }
-
-    @Test func `overview token usage sums known totals and marks stale or missing rows partial`() {
+    @Test func `roster token usage sums known totals and marks stale or missing rows partial`() {
         let summary = RootSidebarModel.tokenUsageSummary(for: [
             Self.sessionEntry(key: "fresh", totalTokens: 1200, totalTokensFresh: true, contextTokens: 200_000),
             Self.sessionEntry(key: "stale", totalTokens: 300, totalTokensFresh: false, contextTokens: 200_000),
@@ -191,6 +178,22 @@ struct RootTabsPresentationTests {
         #expect(snapshot.sessions.count == 200)
         #expect(snapshot.totalCount == 350)
         #expect(!snapshot.isComplete)
+        #expect(snapshot.incompleteLoadMessage == "Couldn’t load some sessions. Try again.")
+    }
+
+    @Test func `incomplete-load notice stays silent for complete and cached rosters`() {
+        let rows = [Self.sessionEntry(key: "one")]
+        let complete = ChatSessionRosterSnapshot(
+            sessions: rows,
+            isCached: false,
+            totalCount: 1,
+            isComplete: true)
+        let cached = ChatSessionRosterSnapshot(sessions: rows, isCached: true, isComplete: false)
+        let unknownTotal = ChatSessionRosterSnapshot(sessions: rows, isCached: false, isComplete: false)
+
+        #expect(complete.incompleteLoadMessage == nil)
+        #expect(cached.incompleteLoadMessage == nil)
+        #expect(unknownTotal.incompleteLoadMessage == "Couldn’t load some sessions. Try again.")
     }
 
     @Test func `session roster rejects a nonadvancing gateway cursor without losing rows`() async throws {
@@ -262,8 +265,6 @@ struct RootTabsPresentationTests {
     }
 
     @Test func `recent session cap is disabled while search is active`() {
-        #expect(RootSidebar.recentSessionCap(searchText: "") == 20)
-        #expect(RootSidebar.recentSessionCap(searchText: "  \n") == 20)
         #expect(RootSidebar.recentSessionCap(searchText: "deploy") == nil)
     }
 
@@ -276,6 +277,19 @@ struct RootTabsPresentationTests {
             shouldPresentOnLaunch: true)
 
         #expect(route == .none)
+    }
+
+    @Test func `first gateway help requires a loaded empty registry and no configured route`() {
+        #expect(!RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: false, hasSavedGateway: nil, hasRuntimeOrLegacyGatewayConfig: false))
+        #expect(!RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: false, hasSavedGateway: true, hasRuntimeOrLegacyGatewayConfig: false))
+        #expect(!RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: false, hasSavedGateway: false, hasRuntimeOrLegacyGatewayConfig: true))
+        #expect(!RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: true, hasSavedGateway: false, hasRuntimeOrLegacyGatewayConfig: false))
+        #expect(RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: false, hasSavedGateway: false, hasRuntimeOrLegacyGatewayConfig: false))
     }
 
     @Test func `fresh install presents onboarding`() {
@@ -341,26 +355,23 @@ struct RootTabsPresentationTests {
 
         #expect(RootTabs.sidebarDestinations == [
             .chat,
-            .overview,
             .workboard,
             .usage,
             .cron,
             .sessions,
             .activity,
+            .systems,
             .skillWorkshop,
-            .agents,
             .instances,
             .files,
             .dreaming,
             .desktop,
             .terminal,
-            .docs,
         ])
         #expect(destinationIDs == [
             "chat",
-            "overview",
             "activity",
-            "agents",
+            "systems",
             "workboard",
             "skillWorkshop",
             "instances",
@@ -371,7 +382,6 @@ struct RootTabsPresentationTests {
             "cron",
             "desktop",
             "terminal",
-            "docs",
             "settings",
             "gateway",
         ])
@@ -395,10 +405,10 @@ struct RootTabsPresentationTests {
 
     @Test func `app launch uses requested destination before chat fallback`() {
         #expect(RootTabs
-            .initialDestination(arguments: ["OpenClaw", "--openclaw-initial-destination", "overview"]) == .overview)
+            .initialDestination(arguments: ["OpenClaw", "--openclaw-initial-destination", "overview"]) == .chat)
         #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-destination", "chat"]) == .chat)
         #expect(RootTabs
-            .initialDestination(arguments: ["OpenClaw", "--openclaw-initial-destination", "agents"]) == .agents)
+            .initialDestination(arguments: ["OpenClaw", "--openclaw-initial-destination", "agents"]) == .chat)
         #expect(RootTabs
             .initialDestination(arguments: ["OpenClaw", "--openclaw-initial-destination", "gateway"]) == .gateway)
         #expect(
@@ -412,12 +422,12 @@ struct RootTabsPresentationTests {
     }
 
     @Test func `legacy initial tab aliases map directly to sidebar destinations`() {
-        #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "control"]) == .overview)
-        #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "overview"]) == .overview)
+        #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "control"]) == .chat)
+        #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "overview"]) == .chat)
         #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "chat"]) == .chat)
         #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "talk"]) == .chat)
         #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "voice"]) == .chat)
-        #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "agents"]) == .agents)
+        #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "agents"]) == .chat)
         #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "settings"]) == .settings)
     }
 
@@ -680,16 +690,6 @@ struct RootTabsPresentationTests {
         #expect(keys.contains("agent:main:cron:daily") == showsAutomation)
     }
 
-    @Test func `sidebar agent badges use canonical identity fallback`() {
-        #expect(RootSidebar.agentBadge(
-            name: "Research Agent",
-            identity: ["emoji": AnyCodable(" 🦞 ")]) == "🦞")
-        #expect(RootSidebar.agentBadge(
-            name: "Research Agent",
-            identity: ["emoji": AnyCodable("?")]) == "RA")
-        #expect(RootSidebar.agentBadge(name: "Research Agent", identity: nil) == "RA")
-    }
-
     @Test func `session work subtitle mirrors the web repo and branch line`() {
         func entry(repoRoot: String?, branch: String?) -> OpenClawChatSessionEntry {
             Self.sessionEntry(
@@ -867,19 +867,20 @@ struct RootTabsPresentationTests {
     }
 
     @Test func `pinned pages storage round trips and preserves pin order`() {
+        #expect(RootTabs.defaultPinnedSidebarPages == [.sessions, .cron, .usage])
         #expect(RootTabs.pinnedSidebarPages(from: "") == RootTabs.defaultPinnedSidebarPages)
         #expect(RootTabs.pinnedSidebarPages(from: "none").isEmpty)
         #expect(RootTabs.pinnedSidebarPagesStorage([]) == "none")
 
         // Storage order is the user's pin order (web parity).
-        let parsed = RootTabs.pinnedSidebarPages(from: "usage,overview,docs")
-        #expect(parsed == [.usage, .overview, .docs])
+        let parsed = RootTabs.pinnedSidebarPages(from: "usage,overview,docs,agents")
+        #expect(parsed == [.usage])
 
-        let storage = RootTabs.pinnedSidebarPagesStorage([.docs, .overview, .usage])
-        #expect(RootTabs.pinnedSidebarPages(from: storage) == [.docs, .overview, .usage])
+        let storage = RootTabs.pinnedSidebarPagesStorage([.sessions, .activity, .usage])
+        #expect(RootTabs.pinnedSidebarPages(from: storage) == [.sessions, .activity, .usage])
 
         // Duplicates collapse to first occurrence.
-        #expect(RootTabs.pinnedSidebarPages(from: "usage,usage,docs") == [.usage, .docs])
+        #expect(RootTabs.pinnedSidebarPages(from: "usage,usage,sessions") == [.usage, .sessions])
 
         // Unknown raw values are dropped; chat is never pinnable.
         #expect(RootTabs.pinnedSidebarPages(from: "chat,bogus").isEmpty)
@@ -947,23 +948,12 @@ struct RootTabsPresentationTests {
         #expect(!RootTabs.sidebarVisibility(layoutMode: .drawer, splitPreference: nil))
     }
 
-    @Test func `destination headers own hidden sidebar reveal control`() {
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: false,
-                layoutMode: .drawer))
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: false,
-                layoutMode: .split))
-        #expect(
-            !RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: true,
-                layoutMode: .drawer))
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: true,
-                layoutMode: .split))
+    @Test func `destination header control hides only a visible split sidebar`() {
+        // A drawer opening must not change the destination toolbar, so its control stays Show.
+        #expect(!RootTabs.sidebarHeaderControlHidesSidebar(isSidebarVisible: false, layoutMode: .drawer))
+        #expect(!RootTabs.sidebarHeaderControlHidesSidebar(isSidebarVisible: true, layoutMode: .drawer))
+        #expect(!RootTabs.sidebarHeaderControlHidesSidebar(isSidebarVisible: false, layoutMode: .split))
+        #expect(RootTabs.sidebarHeaderControlHidesSidebar(isSidebarVisible: true, layoutMode: .split))
     }
 
     private static func sessionEntry(

@@ -76,12 +76,15 @@ suite.define(() => {
         [writes, { operatorRead: false, writesEnabled: false }],
       ] as const) {
         const before = (await gateway.getRequests("config.set")).length;
-        await control.click();
-        const request = await gateway.waitForRequest("config.set", { after: before });
+        // Observe the brief Saved notice before request inspection can outlive it.
+        const [request] = await Promise.all([
+          gateway.waitForRequest("config.set", { after: before }),
+          page.locator(".settings-save-indicator--saved").waitFor(),
+          control.click(),
+        ]);
         expect(JSON.parse(String(asRecord(request.params).raw))).toEqual({
           plugins: { entries: { knowledge: { enabled: true, config: expected } } },
         });
-        await page.locator(".settings-save-indicator--saved").waitFor();
         await page.reload();
         await read.waitFor();
         expect(await read.isChecked()).toBe(false);

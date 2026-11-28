@@ -1,5 +1,5 @@
 import type { FeatureClientContract } from "openclaw/plugin-sdk/feature-contract";
-import type { contract } from "./contract.js";
+import type { FullOutputContract } from "./contract.js";
 
 // Keep backend schemas out of the browser while checking every operation's kind.
 export const browserContract = {
@@ -23,6 +23,7 @@ export const browserContract = {
     edit_body: { kind: "action" },
     extract_section: { kind: "action" },
     save_page: { kind: "action" },
+    memory_import_progress: { kind: "action" },
     remember: { kind: "action" },
     relink: { kind: "action" },
     create_claim: { kind: "action" },
@@ -33,7 +34,7 @@ export const browserContract = {
     unmerge: { kind: "action" },
     supersede: { kind: "action" },
     recall: { kind: "action" },
-    connections: { kind: "query" },
+    connections_detail: { kind: "query" },
     resume: { kind: "action" },
     revision: { kind: "query" },
     mutation: { kind: "query" },
@@ -41,8 +42,8 @@ export const browserContract = {
     status: { kind: "query" },
     grep: { kind: "query" },
     lookup: { kind: "query" },
-    records: { kind: "query" },
-    record: { kind: "query" },
+    records_detail: { kind: "query" },
+    record_detail: { kind: "query" },
     ontology: { kind: "query" },
     diagnostics: { kind: "query" },
     maintenance_status: { kind: "query" },
@@ -53,4 +54,4 @@ export const browserContract = {
     agent_query: { kind: "query" },
     agent_action: { kind: "action" },
   },
-} satisfies FeatureClientContract<typeof contract>;
+} satisfies FeatureClientContract<FullOutputContract>;

@@ -9,6 +9,7 @@ import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { readSessionTranscriptIndexStatus } from "../config/sessions/session-transcript-projection-writer.js";
 import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readSqliteDatabaseScopedWriteToken } from "../infra/sqlite-database-admission.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
@@ -83,12 +84,20 @@ it.each([false, true])(
           markdown: "First",
           plan: [{ step: "Persist", status: "in_progress" }],
         });
+        // First-use DDL may invalidate receipts; warm card-only mutations must not.
+        const sessionToken = () =>
+          readSqliteDatabaseScopedWriteToken(db, [sessionKey, "agent:main:unrelated"]);
+        const before = sessionToken();
+        expect(before).toBeDefined();
         await tool.execute("replace", { markdown: "Second" });
+        expect(sessionToken()).toBe(before);
         expect(await invoke({ sessionKey, expectedRevision: 1 })).toMatchObject({
           card: { revision: 2, markdown: "Second" },
         });
         expect(await invoke({ sessionKey, expectedRevision: 2 })).toEqual({ card: null });
+        expect(sessionToken()).toBe(before);
         await tool.execute("recreate", { plan: [{ step: "Done", status: "completed" }] });
+        expect(sessionToken()).toBe(before);
         expect(sql.queries).toEqual([]);
       } finally {
         sql.restore();
@@ -227,5 +236,31 @@ it("never replays a lost committed reply", async () => {
       revision: 2,
       markdown: "Committed once",
     });
+  });
+});
+
+it("checks caller authority once per progress-card owner assertion", async () => {
+  await withCardSession(false, async () => {
+    const current = vi.fn();
+    const open = publications.openOpenClawAgentSqliteWorkerStore;
+    let observed = false;
+    vi.spyOn(publications, "openOpenClawAgentSqliteWorkerStore").mockImplementation(
+      async (...args) => {
+        const worker = await open(...args);
+        const execute = worker.execute.bind(worker);
+        worker.execute = (command, assertCurrent, options) => {
+          const before = current.mock.calls.length;
+          assertCurrent();
+          expect(current.mock.calls.length - before).toBe(1);
+          observed = true;
+          return execute(command, assertCurrent, options);
+        };
+        return worker;
+      },
+    );
+    expect(await put({ markdown: "Once", assertCurrent: current })).toMatchObject({
+      card: { revision: 1, markdown: "Once" },
+    });
+    expect(observed).toBe(true);
   });
 });

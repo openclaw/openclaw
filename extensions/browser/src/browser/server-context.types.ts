@@ -1,4 +1,5 @@
 import type { Server } from "node:http";
+import type { OperatorBrowserPagesOption } from "./cdp-target-filter.js";
 import type { ChromeMcpPageProbe } from "./chrome-mcp-contracts.js";
 import type { RunningChrome } from "./chrome.js";
 import type {
@@ -37,7 +38,7 @@ export type ProfileRuntimeState = {
   /** Stable, user-facing tab aliases scoped to this profile runtime. */
   tabAliases?: {
     nextTabNumber: number;
-    byTargetId: Record<string, { tabId: string; label?: string; url?: string }>;
+    byTargetId: Record<string, { tabId: string; label?: string; url?: string; crashedAt?: number }>;
   };
 };
 
@@ -51,7 +52,7 @@ export type BrowserServerState = {
   stopUnhandledRejectionHandler?: () => void;
 };
 
-export type BrowserOperationOptions = {
+export type BrowserOperationOptions = OperatorBrowserPagesOption & {
   signal?: AbortSignal;
   timeoutMs?: number;
 };
@@ -59,11 +60,16 @@ export type BrowserOperationOptions = {
 export type EnsureTabAvailableOptions = BrowserOperationOptions & {
   /** Allow a target-id-only tab when the caller can continue through Playwright. */
   allowPlaywrightFallback?: boolean;
+  preserveWarmup?: boolean;
 };
 
 export type ProfileContext = {
   profile: ResolvedBrowserProfile;
-  ensureBrowserAvailable: (opts?: { headless?: boolean; signal?: AbortSignal }) => Promise<void>;
+  ensureBrowserAvailable: (opts?: {
+    headless?: boolean;
+    prewarm?: true;
+    signal?: AbortSignal;
+  }) => Promise<void>;
   ensureTabAvailable: (
     targetId?: string,
     options?: EnsureTabAvailableOptions,
@@ -78,7 +84,7 @@ export type ProfileContext = {
   listTabs: (options?: BrowserOperationOptions) => Promise<BrowserTab[]>;
   openTab: (
     url: string,
-    opts?: {
+    opts?: OperatorBrowserPagesOption & {
       label?: string;
       signal?: AbortSignal;
       timeoutMs?: number;

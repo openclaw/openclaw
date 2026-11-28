@@ -5,11 +5,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MediaUnderstandingOutput } from "../../packages/media-understanding-common/src/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ImageCompressionModelPolicy } from "../media/web-media.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { MediaUnderstandingProvider } from "./provider-types.js";
 import {
+  createAudioInputBudgetReader,
   describeVideoFile,
   describeImageFile,
   describeImageFileWithModel,
+  describePreparedImageWithModel,
   extractStructuredWithModel,
   runMediaUnderstandingFile,
   transcribeAudioFile,
@@ -32,7 +41,9 @@ const mocks = vi.hoisted(() => {
     normalizeMediaProviderId: vi.fn((provider: string) => provider.trim().toLowerCase()),
     buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
     getMediaUnderstandingProvider: vi.fn(),
-    describeImageWithModel: vi.fn(async () => ({ text: "generic image ok", model: "vision" })),
+    describeImageWithModel: vi.fn<typeof import("./image-runtime.js").describeImageWithModel>(
+      async () => ({ text: "generic image ok", model: "vision" }),
+    ),
     convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
     resolveImageCompressionModelPolicy: vi.fn(
       async (): Promise<ImageCompressionModelPolicy> => ({}),
@@ -391,6 +402,25 @@ describe("media-understanding runtime", () => {
     );
   });
 
+  it("cancels an admitted explicit image provider request", async () => {
+    const controller = new AbortController();
+    const reason = new DOMException("interrupted", "AbortError");
+    mocks.describeImageWithModel.mockImplementationOnce(async (request) => {
+      controller.abort(reason);
+      request.signal?.throwIfAborted();
+      return { text: "late result", model: "vision" };
+    });
+    await expect(
+      describePreparedImageWithModel(
+        {
+          ...IMAGE_MODEL_DEFAULTS,
+          image: { buffer: Buffer.from("image"), fileName: "image.png" },
+        },
+        { signal: controller.signal, assertCurrent: () => controller.signal.throwIfAborted() },
+      ),
+    ).rejects.toBe(reason);
+  });
+
   it("caps explicit structured extraction timeouts before provider execution", async () => {
     const extractStructured = vi.fn<NonNullable<MediaUnderstandingProvider["extractStructured"]>>(
       async () => ({
@@ -536,6 +566,33 @@ describe("media-understanding audio input budget", () => {
       expect(mocks.runCapability).not.toHaveBeenCalled();
     },
   );
+
+  it("refreshes inferred upload limits when the active or request-scoped provider registry changes", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: { audio: { maxBytes: 4096 }, models: [{ provider: "example", maxBytes: 8192 }] },
+      },
+    };
+    const previous = captureActivePluginRegistrySnapshot();
+    try {
+      mocks.buildProviderRegistry.mockReturnValue(new Map());
+      const readBudget = createAudioInputBudgetReader(() => cfg);
+      expect(readBudget()).toEqual({ enabled: true, maxBytes: 4096 });
+      const audioProvider = new Map([["example", { capabilities: ["audio"] }]]);
+      mocks.buildProviderRegistry.mockReturnValue(audioProvider);
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      expect(readBudget()).toEqual({ enabled: true, maxBytes: 8192 });
+      mocks.buildProviderRegistry.mockReturnValue(new Map());
+      withPluginRuntimeGatewayRequestScope(
+        { pluginRegistry: createEmptyPluginRegistry(), isWebchatConnect: () => false },
+        () => expect(readBudget()).toEqual({ enabled: true, maxBytes: 4096 }),
+      );
+      mocks.buildProviderRegistry.mockReturnValue(audioProvider);
+      expect(readBudget()).toEqual({ enabled: true, maxBytes: 8192 });
+    } finally {
+      restoreActivePluginRegistrySnapshot(previous);
+    }
+  });
 
   it("does not load providers to prepare disabled audio input", async () => {
     await expect(

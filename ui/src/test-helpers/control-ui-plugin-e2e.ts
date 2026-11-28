@@ -24,23 +24,21 @@ export async function prepareNativePluginMockGatewayScenario({
     return { scenario, assets: new Map<string, { body: Buffer; contentType: string }>() };
   }
   const { catalog, assets } = await prepareNativeControlUiPluginFixtures(nativePlugins);
-  const preparedScenario = catalog.plugins.length
-    ? {
-        ...scenario,
-        featureMethods: [
-          ...new Set([
-            ...(scenario.featureMethods ?? defaultControlUiFeatureMethods),
-            "plugins.controlUi.list",
-            "plugins.controlUi.report",
-          ]),
-        ],
-        methodResponses: {
-          ...scenario.methodResponses,
-          "plugins.controlUi.list": catalog,
-          "plugins.controlUi.report": { ok: true },
-        },
-      }
-    : scenario;
+  const preparedScenario = {
+    ...scenario,
+    featureMethods: [
+      ...new Set([
+        ...(scenario.featureMethods ?? defaultControlUiFeatureMethods),
+        "plugins.controlUi.list",
+        "plugins.controlUi.report",
+      ]),
+    ],
+    methodResponses: {
+      ...scenario.methodResponses,
+      "plugins.controlUi.list": catalog,
+      "plugins.controlUi.report": { ok: true },
+    },
+  };
   return { scenario: preparedScenario, assets };
 }
 
@@ -48,12 +46,21 @@ export async function prepareNativePluginMockGatewayScenario({
 export async function installNativePluginMockGateway(
   page: Page,
   scenario: NativeControlUiMockGatewayScenario = {},
-  options: ControlUiMockGatewayInstallOptions = {},
+  {
+    nativeAssetLatencyMs = 0,
+    ...options
+  }: ControlUiMockGatewayInstallOptions & { nativeAssetLatencyMs?: number } = {},
 ): Promise<MockGatewayControls> {
   const prepared = await prepareNativePluginMockGatewayScenario(scenario);
   if (prepared.assets.size) {
     await page.route(`**${controlUiPluginAssetRoot()}**`, async (route) => {
       const asset = prepared.assets.get(new URL(route.request().url()).pathname);
+      // Fulfilled plugin assets bypass the benchmark's delayed HTTP server.
+      if (nativeAssetLatencyMs > 0) {
+        await new Promise((resolve) => {
+          setTimeout(resolve, nativeAssetLatencyMs);
+        });
+      }
       await route.fulfill(asset ? { status: 200, ...asset } : { status: 404 });
     });
   }

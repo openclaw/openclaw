@@ -1,12 +1,26 @@
 import { it } from "vitest";
 import * as S from "./agents-models-skills.js";
 import { ModelsListParamsSchema } from "./model-catalog.js";
+import * as Auth from "./models-auth.js";
 import { accepts, rejects } from "./schema.test-support.js";
 import { ToolsEffectiveResultSchema } from "./tools-catalog.js";
 
 const deleted = { ok: true, agentId: "ops", removedBindings: 1 };
 const auth = (overrides: object = {}) => ({ provider: "openai", ...overrides });
 it.each([
+  [
+    "optional agent welcome metadata",
+    S.AgentSummarySchema,
+    [
+      { id: "briefing" },
+      { id: "briefing", description: "Follows repositories.", recommendedPrompts: ["Brief me"] },
+      { id: "briefing", recommendedPrompts: [] },
+    ],
+    [
+      { id: "briefing", recommendedPrompts: "Brief me" },
+      { id: "briefing", recommendedPrompts: [""] },
+    ],
+  ],
   [
     "per-path agent cleanup",
     S.AgentsDeleteResultSchema,
@@ -46,7 +60,7 @@ it.each([
   ],
   [
     "agent-scoped auth status",
-    S.ModelsAuthStatusParamsSchema,
+    Auth.ModelsAuthStatusParamsSchema,
     [
       {},
       { refresh: true, agentId: "writer" },
@@ -57,13 +71,18 @@ it.each([
   ],
   [
     "agent-scoped logout",
-    S.ModelsAuthLogoutParamsSchema,
-    [auth({ profileIds: ["openai:writer"], agentId: "writer" }), auth(), auth({ agentId: "" })],
-    [auth({ profileIds: [] })],
+    Auth.ModelsAuthLogoutParamsSchema,
+    [
+      auth({ profileIds: ["openai:writer"], agentId: "writer" }),
+      auth(),
+      auth({ agentId: "" }),
+      auth({ profileIds: ["openai:writer"], revoke: true }),
+    ],
+    [auth({ profileIds: [] }), auth({ profileIds: ["openai:writer"], revoke: false })],
   ],
   [
     "nonempty unique auth order",
-    S.ModelsAuthOrderSetParamsSchema,
+    Auth.ModelsAuthOrderSetParamsSchema,
     [auth({ profileIds: ["openai:writer"] }), auth({ agentId: "writer" })],
     [
       auth({ profileIds: [] }),

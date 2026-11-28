@@ -3,9 +3,11 @@ import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 import "../../styles/channels.css";
 import { ChannelIcon } from "../../components/solid/channel-icon.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import "../../components/openclaw-mascot.tsx";
+import { LoadingState } from "../../components/solid/loading-state.tsx";
 import {
   SettingsEmpty,
   SettingsPage,
@@ -129,7 +131,10 @@ export function ChannelsView(props: ChannelsProps) {
   );
 
   return (
-    <>
+    <Show
+      when={snapshot() || props.channels.channelsError || !props.channels.channelsLoading}
+      fallback={<LoadingState route />}
+    >
       <SettingsPage>
         <ChannelStatusFeedback channels={props.channels} />
         {/* An open channel shows this above its own footer instead. */}
@@ -192,7 +197,7 @@ export function ChannelsView(props: ChannelsProps) {
       </Show>
       {props.canAdmin ? <ChannelWizard {...props} /> : undefined}
       {renderChannelPairingPrompt(props)}
-    </>
+    </Show>
   );
 }
 
@@ -308,6 +313,7 @@ function AvailableRow(params: { channelId: string; props: ChannelsProps }) {
         <button
           type="button"
           class="btn btn--sm"
+          aria-label={t("channels.setup.dialogLabel", { channel: label() })}
           disabled={!params.props.channels.connected}
           onClick={() => params.props.onStartSetup(params.channelId)}
         >
@@ -563,14 +569,14 @@ function WizardDialog(props: { controls: ChannelsProps }) {
             </Show>
             {t("channels.setup.title", { channel: label() })}
           </h2>
-          <button
-            type="button"
+          <IconButton
+            size={28}
             class="oc-dialog__close"
-            aria-label={t("common.close")}
+            icon="x"
+            label={t("common.close")}
+            tooltip={false}
             onClick={() => props.controls.wizardHost.close()}
-          >
-            <Icon name="x" />
-          </button>
+          />
           <div class="oc-dialog__description">
             <p class="channels-wizard__subtitle">
               <span>{t("channels.setup.subtitle")}</span>{" "}

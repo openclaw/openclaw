@@ -1,9 +1,11 @@
 import { assert, expect, it } from "vitest";
+import { z } from "zod";
 import {
   normalizeModelCatalog,
   normalizeModelCatalogProviderRows as normalizeRows,
 } from "./model-catalog-normalize.js";
 import type { ModelInferenceCapabilities } from "./model-catalog-types.js";
+import { ModelInferenceCapabilitiesSchema } from "./model-inference-capabilities.js";
 
 const tokenBilling = { unit: "tokens", source: "provider-catalog" };
 
@@ -130,9 +132,18 @@ it("strips undeclared provider diagnostics and does not mutate the descriptor", 
     decision: { ...decision, privateDiagnostic: "synthetic-only" },
     privateEndpoint: "https://fixture.invalid",
   };
+  const original = structuredClone(supplied);
   expect(catalog(supplied)?.providers?.fixture?.models[0]?.inference).toEqual({
     chat: false,
     decision,
   });
-  expect(supplied).toHaveProperty("privateEndpoint");
+  expect(supplied).toEqual(original);
+});
+
+it("keeps the unlikely-chat marker, which readers that predate it drop to plain chat", () => {
+  const unlikely = { chat: true, chatEvidence: "unlikely" };
+  expect(ModelInferenceCapabilitiesSchema.parse(unlikely)).toEqual(unlikely);
+  // The 2026.11.5 beta reader: the same non-strict object without the key.
+  const released = z.object({ chat: z.boolean(), decision: z.unknown().optional() });
+  expect(released.parse(unlikely)).toEqual({ chat: true });
 });

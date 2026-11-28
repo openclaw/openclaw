@@ -191,7 +191,9 @@ public enum ChatSessionSidebarModel {
         mainSessionKey: String = "main",
         activeAgentID: String? = nil,
         groups: [OpenClawChatSessionGroup] = [],
+        pinnedOrder: [String: Int]? = nil,
         excludesMainSession: Bool = false,
+        includeEmptyGroups: Bool = false,
         query: String,
         rankedSearch: Bool = false,
         sessionRoutingContract: String? = nil,
@@ -285,9 +287,14 @@ public enum ChatSessionSidebarModel {
             #endif
         }
         // Explicit pin and category placement takes precedence over ancestry.
-        let pinned = self.tree(
-            from: OpenClawChatSessionListOrganizer.organize(visible.filter { $0.pinned == true }),
-            identity: identity)
+        let pinnedRows = visible.filter { $0.pinned == true }
+        // A personal pin is an independent shortcut even when both parent and child are pinned.
+        let pinned = if let pinnedOrder {
+            pinnedRows.sorted { (pinnedOrder[$0.key] ?? .max) < (pinnedOrder[$1.key] ?? .max) }
+                .map { self.node(session: $0, children: []) }
+        } else {
+            self.tree(from: OpenClawChatSessionListOrganizer.organize(pinnedRows), identity: identity)
+        }
         let unpinned = visible.filter { $0.pinned != true }
         let orderedGroups = groups.sorted { lhs, rhs in
             lhs.position == rhs.position ? lhs.name < rhs.name : lhs.position < rhs.position
@@ -303,8 +310,9 @@ public enum ChatSessionSidebarModel {
             result.append(Section(id: "pinned", title: "Pinned", nodes: pinned))
         }
         for group in orderedGroups {
-            let nodes = self.tree(from: unpinned.filter { $0.category == group.name }, identity: identity)
-            if !nodes.isEmpty {
+            let nodes = self.tree(
+                from: unpinned.filter { $0.category == group.name }, identity: identity)
+            if !nodes.isEmpty || includeEmptyGroups {
                 result.append(Section(id: "group:\(group.name)", title: group.name, nodes: nodes))
             }
         }

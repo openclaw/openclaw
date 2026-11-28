@@ -12,13 +12,14 @@ import {
 } from "./mcp-client-elicitation.js";
 
 /** The SDK transport callback does not inherit the calling tool's async scope. */
-export function bindMcpClientElicitation(client: Client) {
+export function bindMcpClientElicitation(client: Client, openAiForms = true) {
   const active = new Set<{
     handler?: McpElicitationHandler;
     signal: AbortSignal;
     holdForHumanInput?: () => () => void;
   }>();
-  for (const method of ["elicitation/create", "openai/elicitation/create"] as const) {
+  const methods = ["elicitation/create", "openai/elicitation/create"] as const;
+  for (const method of openAiForms ? methods : methods.slice(0, 1)) {
     const handle = async (params: Record<string, unknown>, extra: ClientContext) => {
       // MCP 2025-11-25 does not carry a portable parent-call id. Never route a
       // server question to a different collaborator when requests overlap.

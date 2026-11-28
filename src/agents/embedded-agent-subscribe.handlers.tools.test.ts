@@ -187,55 +187,6 @@ describe("automation check activity", () => {
   );
 });
 
-describe("progress_card compatibility plan events", () => {
-  it("emits the typed full plan snapshot after a successful write", async () => {
-    const { ctx, onAgentEvent } = createTestContext();
-    ctx.params.onToolResult = vi.fn();
-    ctx.shouldEmitToolResult = () => true;
-    ctx.shouldEmitToolOutput = () => true;
-    const emitted: CapturedAgentEvent[] = [];
-    const unsubscribe = registerAgentEventListener((event) => emitted.push(event));
-    try {
-      await executeTool(ctx, {
-        toolName: "progress_card",
-        toolCallId: "plan-1",
-        args: {
-          markdown: "Implementation underway",
-          plan: [
-            { step: "Inspect", status: "completed" },
-            { step: "Patch", status: "in_progress" },
-          ],
-        },
-        result: textResult("Progress card updated (rev 2, 1/2 done)", {
-          revision: 2,
-          steps: { completed: 1, total: 2 },
-        }),
-      });
-      await Promise.resolve();
-
-      const expected = {
-        stream: "plan",
-        data: {
-          phase: "update",
-          title: "Plan updated",
-          source: "openclaw",
-          explanation: "1/2 complete",
-          steps: [
-            { step: "Inspect", status: "completed" },
-            { step: "Patch", status: "in_progress" },
-          ],
-        },
-      };
-      expect(onAgentEvent).toHaveBeenCalledWith(expected);
-      expect(emitted).toContainEqual(expect.objectContaining(expected));
-      expect(ctx.emitToolSummary).not.toHaveBeenCalled();
-      expect(ctx.emitToolOutput).not.toHaveBeenCalled();
-    } finally {
-      unsubscribe();
-    }
-  });
-});
-
 const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function expectRecordFields(value: unknown, label: string, expected: Record<string, unknown>) {
@@ -821,25 +772,24 @@ describe("handleToolExecutionEnd MCP App channel view tracking", () => {
   });
 });
 
-describe("handleToolExecutionEnd MCP connect action tracking", () => {
-  it("retains only a successful HTTP(S) connect action", async () => {
-    const { ctx } = createTestContext();
+it.each([false, true])("retains HTTP(S) sign-in recovery (tool failed: %s)", async (isError) => {
+  const { ctx } = createTestContext();
 
-    await endTool(ctx, {
-      toolName: "mcp_connect",
-      toolCallId: "mcp-connect",
-      result: resultWithDetails({
-        mcpConnect: {
-          serverName: "calendar",
-          authorizationUrl: "https://auth.example/authorize?state=opaque",
-        },
-      }),
-    });
+  await endTool(ctx, {
+    toolName: "mcp_connect",
+    toolCallId: "mcp-connect",
+    isError,
+    result: resultWithDetails({
+      mcpConnect: {
+        serverName: "calendar",
+        authorizationUrl: "https://auth.example/authorize?state=opaque",
+      },
+    }),
+  });
 
-    expect(ctx.state.latestMcpConnectAction).toEqual({
-      serverName: "calendar",
-      authorizationUrl: "https://auth.example/authorize?state=opaque",
-    });
+  expect(ctx.state.latestMcpConnectAction).toEqual({
+    serverName: "calendar",
+    authorizationUrl: "https://auth.example/authorize?state=opaque",
   });
 });
 
@@ -1493,7 +1443,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     );
     expect(text).toContain("no interactive approval client is currently available");
     expect(text).toContain(
-      "Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox.",
+      "Print the web app URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox.",
     );
     expect(text).toContain(
       "Inspect the node's effective exec policy with `openclaw approvals get --node node-mac-1`.",

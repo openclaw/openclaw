@@ -90,3 +90,26 @@ describe("parseMattermostQuestionContext", () => {
     ).toBeNull();
   });
 });
+
+describe("resolveMattermostPresentation agent controls", () => {
+  it("renders a typed callback button a message action authored, and only that one", () => {
+    const { buttons } = resolveMattermostPresentation({
+      text: "Pick one",
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Agent", action: { type: "callback", value: "::pick:a" } },
+              { label: "Plugin", action: { type: "callback", value: "pick:b" } },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(buttons).toEqual([
+      [expect.objectContaining({ text: "Agent", callback_data: "::pick:a" })],
+    ]);
+  });
+});

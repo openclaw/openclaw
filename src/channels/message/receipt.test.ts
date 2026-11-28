@@ -5,6 +5,7 @@ import {
   resolveMessageReceiptPrimaryId,
   resolveReceiptSourceId,
 } from "./receipt.js";
+import type { MessageReceipt } from "./types.js";
 
 function nestedReceipt(id: string, threadId: string, sentAt: number) {
   return {
@@ -77,6 +78,40 @@ describe("createMessageReceiptFromOutboundResults", () => {
     expect(receipt.platformMessageIds).toEqual([]);
     expect(receipt.parts).toEqual([]);
     expect(receipt.raw).toEqual([result]);
+  });
+
+  it("keeps observed non-replies through serialization and inherits the route for unknown parts", () => {
+    const observed: MessageReceipt = {
+      platformMessageIds: ["a", "b"],
+      parts: ["a", "b"].map((platformMessageId, index) => ({
+        platformMessageId,
+        index,
+        kind: "text",
+        nativeReplyAbsent: true,
+      })),
+      sentAt: 123,
+    };
+    const aggregate = createMessageReceiptFromOutboundResults({ results: [{ receipt: observed }] });
+    const serialized = JSON.stringify(aggregate);
+    const restored: MessageReceipt = JSON.parse(serialized);
+    expect(restored.parts.map((part) => [part.platformMessageId, part.nativeReplyAbsent])).toEqual([
+      ["a", true],
+      ["b", true],
+    ]);
+    const legacy = createMessageReceiptFromOutboundResults({
+      results: ["c", "d"].map((messageId) => ({ channel: "zalouser", messageId })),
+    });
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: [{ receipt: restored }, { receipt: legacy }],
+      replyToId: "431",
+    });
+    expect(receipt.replyToId).toBe("431");
+    expect(receipt.parts.map((part) => [part.platformMessageId, part.replyToId])).toEqual([
+      ["a", undefined],
+      ["b", undefined],
+      ["c", "431"],
+      ["d", "431"],
+    ]);
   });
 
   it("does not fabricate platform ids from iMessage bridge placeholders", () => {

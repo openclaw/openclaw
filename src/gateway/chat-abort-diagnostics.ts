@@ -34,7 +34,9 @@ export function resolveChatAbortDiagnosticReason(
     case "archive":
     case "delete":
       return entry.abortStopReason;
-    default:
-      return resolveAgentRunAbortLifecycleFields(signal).stopReason ?? "aborted";
+    default: {
+      const reason = resolveAgentRunAbortLifecycleFields(signal).stopReason;
+      return reason === "auth-revoked" ? "authority-revoked" : (reason ?? "aborted");
+    }
   }
 }

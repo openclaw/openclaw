@@ -68,6 +68,7 @@ export function resolveSignalAccountConfig(
   const channelConfig = cfg.channels?.signal;
   const {
     transport: _transport,
+    implicitMentions: _implicitMentions,
     accounts: _accounts,
     defaultAccount: _defaultAccount,
     ...shared
@@ -81,7 +82,7 @@ export function resolveSignalAccountConfig(
       | undefined,
     accountId,
     channelId: "signal",
-    nestedObjectKeys: ["aliases"],
+    nestedObjectKeys: ["aliases", "implicitMentions"],
   });
   if (accountId === DEFAULT_ACCOUNT_ID && channelConfig?.transport) {
     // Setup and doctor store the default account transport at the channel root.

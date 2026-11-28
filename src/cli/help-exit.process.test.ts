@@ -274,8 +274,9 @@ describe("CLI help process exit", () => {
   });
 });
 
-it("does not scaffold a selected profile before option validation", async () => {
+it("does not scaffold profile state before option validation", async () => {
   const profile = "rejected-profile";
+  const fixture = await createHelpProcessFixture();
   const result = await runCliProcess({
     args: [
       "onboard",
@@ -289,12 +290,20 @@ it("does not scaffold a selected profile before option validation", async () => 
     entry: preparedCliEntry,
     expectedExitCode: 1,
     pristineHome: true,
+    fixture,
+    env: { OPENCLAW_HOME: fixture.root },
   });
 
   expect(result.stderr).toContain("--gateway-port must be an integer between 1 and 65535.");
-  await expect(fs.access(path.join(result.root, `.openclaw-${profile}`))).rejects.toMatchObject({
-    code: "ENOENT",
-  });
+  // Reporting the error can log without creating operational profile state.
+  const profileDir = path.join(result.root, `.openclaw-${profile}`);
+  const entries = await fs.readdir(profileDir, { withFileTypes: true });
+  expect(entries.map((entry) => [entry.name, entry.isDirectory()])).toEqual([["logs", true]]);
+  const logs = await fs.readdir(path.join(profileDir, "logs"), { withFileTypes: true });
+  const logName = /^openclaw-rejected--profile-\d{4}-\d{2}-\d{2}\.log$/u;
+  expect(
+    logs.filter((entry) => !entry.isFile() || !logName.test(entry.name)).map((entry) => entry.name),
+  ).toEqual([]);
 });
 
 it.each(
@@ -336,13 +345,8 @@ it.each(
     ok: false,
     error: { type: "cli_error", message },
   });
-  if (provider === "autoqa-no-such-provider") {
-    expect(result.stderr).toContain("[openclaw] The CLI command failed.");
-    expect(result.stderr).toContain("[openclaw] For help, run `openclaw doctor`.");
-    expect(result.stderr).not.toContain(message);
-  } else {
-    expect(result.stderr).toContain(message);
-  }
+  expect(result.stderr).toContain(message);
+  expect(result.stderr).not.toContain("[openclaw] The CLI command failed.");
 });
 
 it.runIf(process.platform !== "win32")(

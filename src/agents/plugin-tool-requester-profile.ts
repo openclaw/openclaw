@@ -3,8 +3,8 @@ import { readTransferredRequesterProfile } from "../auto-reply/requester-profile
 import type { OpenClawPluginToolContext } from "../plugins/tool-types.js";
 import { assertAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import {
-  captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
+  resolveGatewayToolOperatorSelection,
 } from "./tools/gateway-caller-context.js";
 
 /** The original admitted requester is not a model-selected participant or a transport sender. */
@@ -48,13 +48,22 @@ export function capturePluginToolRequesterProfile(target: {
   ) {
     return undefined;
   }
-  const assertCallerCurrent = captureGatewayToolCallerAssertion();
+  const assertCallerCurrent = caller.receiptAuthority;
+  const selection = caller.personalToolIdentityScoped
+    ? resolveGatewayToolOperatorSelection()
+    : undefined;
   if (!assertCallerCurrent) {
     return undefined;
   }
   const id = authority.profileId;
   const assertCurrent = () => {
+    for (const signal of caller.approvalSignals ?? []) {
+      signal.throwIfAborted();
+    }
     assertCallerCurrent();
+    authority.signal?.throwIfAborted();
+    selection?.operatorAuthority?.signal?.throwIfAborted();
+    selection?.assertCurrent();
     participant.assertCurrent();
     const current = getGatewayToolCallerIdentity();
     if (

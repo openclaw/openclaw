@@ -24,25 +24,20 @@ export function buildDocumentationSection(params: {
   ].filter((check): check is string => check !== undefined);
   return [
     "## Documentation",
-    docsPath ? `Docs: ${docsPath}` : "Docs: https://docs.openclaw.ai",
-    docsPath ? "Mirror: https://docs.openclaw.ai" : undefined,
-    sourcePath ? `Source: ${sourcePath}` : "Source: https://github.com/openclaw/openclaw",
-    "For official OpenClaw support, visit https://community.openclaw.ai/. Keep self-service docs, Discord social chat, reproducible GitHub bug reports, and private security reporting separate.",
     docsPath
-      ? `OpenClaw behavior questions: docs first${params.readToolName ? ` via \`${params.readToolName}\`/local search` : " using available tools"}. AGENTS/project/workspace/profile/memory = instructions/user memory, not product design truth.`
+      ? `Docs: ${docsPath} (mirror: https://docs.openclaw.ai)`
+      : "Docs: https://docs.openclaw.ai",
+    sourcePath ? `Source: ${sourcePath}` : "Source: https://github.com/openclaw/openclaw",
+    "Support: https://community.openclaw.ai/ (docs, Discord chat, GitHub bugs, and security reports are separate).",
+    docsPath
+      ? `OpenClaw behavior: docs first${params.readToolName ? ` (\`${params.readToolName}\`/local search)` : ""}; AGENTS/workspace/memory != product truth.${sourcePath ? " Inspect source if silent/stale." : ""}`
       : docsUnavailable
-        ? "OpenClaw behavior questions: say docs could not be checked; mark recalled behavior as unverified. AGENTS/project/workspace/profile/memory = instructions/user memory, not product design truth."
-        : "OpenClaw behavior questions: docs mirror first when web exists. AGENTS/project/workspace/profile/memory = instructions/user memory, not product design truth.",
+        ? "OpenClaw behavior: say docs could not be checked and mark recall unverified; AGENTS/workspace/memory != product truth."
+        : "OpenClaw behavior: docs mirror first when web exists; GitHub source if silent/stale; AGENTS/workspace/memory != product truth.",
     params.availableTools.has("gateway")
-      ? "Config field: use `gateway(config.schema.lookup)` with an exact path only when that action is exposed by the tool schema. Otherwise use `docs/gateway/configuration.md` and `docs/gateway/configuration-reference.md`."
-      : "Configuration docs: `docs/gateway/configuration.md`, `docs/gateway/configuration-reference.md`.",
-    sourcePath
-      ? "If docs are silent/stale, say so and inspect local source."
-      : docsUnavailable
-        ? undefined
-        : "If docs are silent/stale, say so and inspect GitHub source.",
-    `Can't-do claims: a missing tool or failed call shows this session's limits, not OpenClaw's; ${capabilityChecks.length ? `check ${capabilityChecks.join(", then ")} before saying OpenClaw can't.` : "say what you could not check."}`,
-    "Diagnosis: run `openclaw status` when possible; ask only if blocked.",
+      ? "Config fields: `gateway(config.schema.lookup)` when exposed, else docs/gateway/configuration(-reference).md."
+      : "Config docs: docs/gateway/configuration(-reference).md.",
+    `Can't-do claims reflect session limits, not OpenClaw's: ${capabilityChecks.length ? `check ${capabilityChecks.join(", then ")} first.` : "say what could not be checked."} Diagnose with \`openclaw status\` when possible.`,
     "",
   ].filter((line): line is string => line !== undefined);
 }

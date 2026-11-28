@@ -1,4 +1,5 @@
 /** Tool-loop diagnostic logging and trusted tool.loop event emission. */
+import type { ToolRepeatVerdict } from "../../packages/agent-core/src/tool-repeat-guard.js";
 import {
   areDiagnosticsEnabledForProcess,
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
@@ -14,7 +15,7 @@ import {
   type SessionRef,
 } from "./diagnostic-session-state.js";
 
-export function logToolLoopAction(
+function logToolLoopAction(
   params: SessionRef & Omit<DiagnosticToolLoopEvent, "type" | "seq" | "ts" | "trace">,
 ) {
   if (!areDiagnosticsEnabledForProcess()) {
@@ -46,4 +47,26 @@ export function logToolLoopAction(
     pairedToolName: params.pairedToolName,
   });
   markActivity();
+}
+
+/** One `tool.loop` record per repeat-guard note (warn) or stop (block). */
+export function toolRepeatDiagnostics({
+  sessionKey,
+  sessionId,
+  agentId,
+}: SessionRef & { agentId?: string }): (verdict: ToolRepeatVerdict) => void {
+  return ({ kind, toolName, count }) => {
+    const stop = kind === "stop";
+    logToolLoopAction({
+      sessionKey,
+      sessionId,
+      ...(agentId ? { agentId } : {}),
+      toolName,
+      count,
+      level: stop ? "critical" : "warning",
+      action: stop ? "block" : "warn",
+      detector: "tool_repeat",
+      message: stop ? "repeat limit reached; turn ended" : "redirect note added",
+    });
+  };
 }

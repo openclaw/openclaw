@@ -580,6 +580,18 @@ admission are rechecked after awaited routing and before new effects.
 Native runtime history, cancellation, and submission receipts remain owned by
 the harness; there is no generic task registry or managed-flow API.
 
+Use `registerAgentHarnessCompletion` once per native assignment to report its
+completion and consumed receipt. Keep native protocol parsing in the harness.
+The returned handle's `complete`, `consume`, and `release` operations
+delegate deduplication, retries, consumption, and retirement to the shared
+completion obligation owner. `waitForDelivery` waits for an accepted attempt; `isConsumed`
+and `isRetiring` expose that owner's recorded facts. Readiness and persistence
+callbacks adapt native execution and storage; they do not choose retry policy.
+Registration grants no authority: its delivery callback must still use
+`deliverAgentHarnessCompletion` with the admitting scope and custody.
+Native assignments keep their existing six retry delays. Persisted registry
+completions retain their separate expiry policy under the same policy owner.
+
 For detached native work, await `captureAgentHarnessCompletionCustody(scope)`
 during the admitting parent registration, before publishing the registration or
 starting native child work. Preparation retains the original requester lifecycle

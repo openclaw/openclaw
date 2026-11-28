@@ -10,9 +10,10 @@ import { createHash } from "node:crypto";
 import { Session } from "node:inspector/promises";
 import os from "node:os";
 import { performance, PerformanceObserver } from "node:perf_hooks";
-import { internSessionSkillSnapshot } from "../../src/config/sessions/session-skill-snapshot-intern.js";
+import { internSessionEntryField } from "../../src/config/sessions/session-skill-snapshot-intern.js";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
 import { freezeTrustedJsonSnapshot } from "../../src/shared/immutable-data.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const mode = process.argv[2];
 const allocations = process.argv.includes("--allocations");
@@ -41,12 +42,7 @@ const fixtures = Array.from({ length: 4 }, (_, version) =>
 global.gc();
 const inspector = allocations ? new Session() : undefined;
 if (inspector) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 4096,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 4096);
 }
 let gcMs = 0;
 let gcCount = 0;
@@ -69,7 +65,7 @@ const entries: SessionEntry[] = [];
 for (let index = 0; index < 10_000; index++) {
   const entry: SessionEntry = JSON.parse(fixtures[index % fixtures.length]!);
   if (mode === "candidate") {
-    entry.skillsSnapshot = internSessionSkillSnapshot(entry.skillsSnapshot!);
+    entry.skillsSnapshot = internSessionEntryField(entry.skillsSnapshot!);
   }
   entries[index % resident] = freezeTrustedJsonSnapshot(entry);
 }

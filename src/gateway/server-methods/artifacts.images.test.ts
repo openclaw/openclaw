@@ -15,7 +15,6 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { seedUnindexedTranscriptForTest } from "../../config/sessions/session-accessor.sqlite-import.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.message.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
@@ -407,8 +406,6 @@ it("keeps an admitted run on its stored main row when the public alias becomes g
         requestedSessionId: stored.sessionId,
         expectedExistingSessionId: stored.sessionId,
         request: { message: "stored address proof", idempotencyKey: runId },
-        canUseCronRunContinuation: false,
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
         respond: () => {
           throw new Error("Expected session admission");
         },

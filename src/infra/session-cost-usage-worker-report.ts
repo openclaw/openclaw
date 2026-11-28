@@ -1,4 +1,5 @@
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { createUsageCalendar } from "../shared/usage-calendar.js";
 import { sha256Hex } from "./crypto-digest.js";
 import {
   readSessionCostUsageRollupRowsInDatabase,
@@ -15,10 +16,7 @@ import {
   type UsageCostPartition,
 } from "./session-cost-usage-partitions.js";
 import { readSessionCostUsagePartitionsInDatabase } from "./session-cost-usage-partitions.worker.js";
-import {
-  createUsageDayKeyFormatter,
-  projectSessionCostSummaries,
-} from "./session-cost-usage-projection.js";
+import { projectSessionCostSummaries } from "./session-cost-usage-projection.js";
 import type { createUsageCostCollectionAccess } from "./session-cost-usage-refresh-inputs.worker.js";
 import {
   decodeUsageCostRollup,
@@ -125,13 +123,19 @@ export async function readUsageCostReportEntry(params: {
         }
       }
     }
-    const formatDay = createUsageDayKeyFormatter(params.dayBucket);
+    const calendar = createUsageCalendar(params.dayBucket);
     if (
-      Object.values(rollup.buckets).every(
-        (bucket) =>
-          formatDay(new Date(bucket.firstTimestampMs ?? bucket.timestampMs)) ===
-          formatDay(new Date(bucket.lastTimestampMs ?? bucket.timestampMs)),
-      )
+      Object.values(rollup.buckets).every((bucket) => {
+        const first = bucket.firstTimestampMs ?? bucket.timestampMs;
+        const last = bucket.lastTimestampMs ?? bucket.timestampMs;
+        if (first === last) {
+          return true;
+        }
+        const from = calendar.at(first);
+        const to = calendar.at(last);
+        // A clock change can briefly enter a different day between equal date labels.
+        return from.date === to.date && from.offset === to.offset;
+      })
     ) {
       return { ...cached, rollup };
     }

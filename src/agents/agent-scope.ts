@@ -134,7 +134,7 @@ export function resolveAutoFallbackPrimaryProbe(params: {
     | undefined;
   sessionKey?: string | null;
   primaryProvider: string;
-  primaryModel: string;
+  primaryModel: string | undefined;
   probeState?: Map<string, number>;
 }): AutoFallbackPrimaryProbe | undefined {
   const entry = params.entry;
@@ -255,6 +255,13 @@ export function resolveAgentExecutionContract(
   const agentConfig = resolveAgentConfig(cfg, agentId);
   const agentContract = agentConfig?.embeddedAgent?.executionContract;
   return agentContract ?? defaultContract;
+}
+
+/** The tool repeat guard is on unless `tools.loopDetection.enabled` is false (agent over global). */
+export function isAgentToolRepeatGuardEnabled(cfg: OpenClawConfig | undefined, agentId?: string) {
+  const agentSetting =
+    cfg && agentId ? resolveAgentConfig(cfg, agentId)?.tools?.loopDetection?.enabled : undefined;
+  return (agentSetting ?? cfg?.tools?.loopDetection?.enabled) !== false;
 }
 
 export function resolveAgentExplicitModelPrimary(

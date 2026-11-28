@@ -1,9 +1,17 @@
 import fs from "node:fs";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { getLogger } from "../../logging/logger.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { peerKindMatches } from "../../routing/peer-kind-match.js";
+import { resolveAgentRoute } from "../../routing/resolve-route.js";
+import {
+  normalizeAccountId,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import type { createAgentDeletionDatabaseCleanup } from "../../state/agent-deletion-cleanup.js";
+import { listRouteBindings } from "../bindings.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   createSessionsCleanupFailure,
@@ -93,15 +101,89 @@ function isMainScopeStaleDirectSessionKey(params: {
   if (parts[0] === "agent") {
     return false;
   }
-  return (
-    (parts.length === 2 && parts[0] === "direct" && Boolean(parts[1])) ||
-    (parts.length === 3 && Boolean(parts[0]) && parts[1] === "direct" && Boolean(parts[2])) ||
-    (parts.length === 4 &&
-      Boolean(parts[0]) &&
-      Boolean(parts[1]) &&
-      parts[2] === "direct" &&
-      Boolean(parts[3]))
+  const dmScope =
+    parts.length === 2 && parts[0] === "direct" && parts[1]
+      ? "per-peer"
+      : parts.length === 3 && parts[0] && parts[1] === "direct" && parts[2]
+        ? "per-channel-peer"
+        : parts.length === 4 && parts[0] && parts[1] && parts[2] === "direct" && parts[3]
+          ? "per-account-channel-peer"
+          : undefined;
+  if (!dmScope) {
+    return false;
+  }
+
+  const bindings = listRouteBindings(params.cfg);
+  // A wildcard account may still route here even when its default account is
+  // shadowed. Probe an account outside every configured exact-account match.
+  const accountIds = new Set(
+    bindings.map((binding) => normalizeAccountId(binding.match.accountId)),
   );
+  let wildcardAccount = "openclaw-cleanup-route";
+  while (accountIds.has(wildcardAccount)) {
+    wildcardAccount += "-next";
+  }
+  const keyPeerId = parts.at(-1)!;
+  return !bindings.some((binding) => {
+    if (
+      binding.session?.dmScope !== dmScope ||
+      normalizeAgentId(binding.agentId) !== normalizeAgentId(params.targetAgentId)
+    ) {
+      return false;
+    }
+    const channel = normalizeLowercaseStringOrEmpty(binding.match.channel);
+    if (dmScope !== "per-peer" && channel !== parts[0]) {
+      return false;
+    }
+    const accountId =
+      dmScope === "per-account-channel-peer"
+        ? parts[1]
+        : binding.match.accountId?.trim() === "*"
+          ? wildcardAccount
+          : binding.match.accountId;
+    const peers = new Set([keyPeerId]);
+    if (binding.match.peer?.id) {
+      peers.add(binding.match.peer.id);
+    }
+    // Stored keys use canonical linked identities; routing must be probed with
+    // their original channel peers to honor exact-peer binding precedence.
+    for (const [canonical, aliases] of Object.entries(params.cfg.session?.identityLinks ?? {})) {
+      if (normalizeLowercaseStringOrEmpty(canonical) !== keyPeerId) {
+        continue;
+      }
+      for (const alias of aliases) {
+        peers.add(
+          normalizeLowercaseStringOrEmpty(alias).startsWith(`${channel}:`)
+            ? alias.trim().slice(channel.length + 1)
+            : alias,
+        );
+      }
+    }
+    const roleWitnesses = binding.match.roles?.length
+      ? binding.match.roles.map((role) => [role])
+      : [[]];
+    return [...peers].some((id) =>
+      roleWitnesses.some(
+        (memberRoleIds) =>
+          resolveAgentRoute({
+            cfg: params.cfg,
+            channel,
+            accountId,
+            defaultAgentId: params.targetAgentId,
+            peer: { kind: "direct", id },
+            parentPeer:
+              channel === "matrix" &&
+              binding.match.peer &&
+              peerKindMatches(binding.match.peer.kind, "channel")
+                ? { kind: "channel", id: binding.match.peer.id }
+                : undefined,
+            guildId: binding.match.guildId,
+            teamId: binding.match.teamId,
+            memberRoleIds,
+          }).sessionKey === params.key,
+      ),
+    );
+  });
 }
 
 function retireMainScopeDirectSessionEntries(params: {
@@ -192,7 +274,7 @@ async function previewStoreCleanup(params: {
           },
         })
       : 0;
-  const preserveSessionKeys = await collectSessionMaintenancePreserveKeysForStore({
+  const protection = await collectSessionMaintenancePreserveKeysForStore({
     storePath: params.target.storePath,
     store: previewStore,
     baseKeys: [params.activeKey],
@@ -208,7 +290,8 @@ async function previewStoreCleanup(params: {
     initialUnarchivedCount: countUnarchivedSessionEntries(previewStore),
     // Cleanup previews apply the same immediate cap as the apply path.
     forceMaintenance: true,
-    readPreserveKeys: () => preserveSessionKeys,
+    readPreserveKeys: () => protection.keys,
+    deferArchiving: protection.deferArchiving,
     log: false,
     readAgeCandidates: () => previewStore,
     readCapCandidates: () => ({ store: previewStore, maxEntries: params.maintenance.maxEntries }),

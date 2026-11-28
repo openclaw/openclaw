@@ -20,11 +20,9 @@ import {
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
+import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-publication.js";
 import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
-import {
-  commitSessionEntryReplacementsInDatabase,
-  prepareSessionEntryReplacementPublication,
-} from "./session-accessor.sqlite-replacement-state.js";
+import { commitSessionEntryReplacementsInDatabase } from "./session-accessor.sqlite-replacement-state.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 
 describe("session entry replacement compare-and-swap", () => {

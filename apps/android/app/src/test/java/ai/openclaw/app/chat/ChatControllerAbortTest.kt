@@ -1,8 +1,8 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
-import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -80,7 +80,7 @@ class ChatControllerAbortTest {
         fixture.abortResponse = { params ->
           // Explicit-owner Gateways resolve a bare key before looking up its run.
           if (params["agentId"]?.jsonPrimitive?.content != "research") {
-            throw GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "Session has no explicit owner"))
+            throw GatewayRequestRejected(ErrorShape("INVALID_REQUEST", "Session has no explicit owner"))
           }
           stopped += params.getValue("runId").jsonPrimitive.content
           """{"ok":true,"aborted":true}"""
@@ -129,7 +129,7 @@ class ChatControllerAbortTest {
     }
 
   @Test
-  fun rejectedStopIsVisibleAndDoesNotDiscardRunsOrSkipRemainingRequests() = assertStopFailure(GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "unauthorized")))
+  fun rejectedStopIsVisibleAndDoesNotDiscardRunsOrSkipRemainingRequests() = assertStopFailure(GatewayRequestRejected(ErrorShape("INVALID_REQUEST", "unauthorized")))
 
   @Test
   fun unknownStopOutcomeIsVisibleAndDoesNotDiscardRunsOrSkipRemainingRequests() = assertStopFailure(GatewayRequestOutcomeUnknown("Gateway disconnected before response"))

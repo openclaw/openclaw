@@ -165,7 +165,7 @@ it("rejects a minted requester token at commit after its MCP capture is deactiva
       expect(creator).toMatchObject({ active: true, signal: { aborted: false } });
       expect(getAdmittedRunDelegatedAuthority(admitted)).toBe(delegatedAuthority);
       await expect(cron.add(requesterDeclaration(), { ...authority, commitGuard })).rejects.toThrow(
-        "Configured MCP cron authority is no longer active",
+        "This run's MCP cron access has ended",
       );
       expect(commitGuard).toHaveBeenCalledOnce();
       expect((await loadCronStore(storePath)).jobs).toEqual([]);

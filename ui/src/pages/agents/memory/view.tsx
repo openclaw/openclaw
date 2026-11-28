@@ -1,6 +1,7 @@
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { JSX } from "@solidjs/web";
 import { createMemo, createUniqueId, For, Show } from "solid-js";
+import { IconButton } from "../../../components/solid/icon-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { MarkdownHtml } from "../../../components/solid/markdown-html.tsx";
@@ -257,24 +258,18 @@ function DiaryPager(props: {
           onChange={(event) => props.onSelect(Number(event.currentTarget.value))}
         />
         <span class="dreams-diary__steps">
-          <button
-            type="button"
-            class="btn btn--icon btn--ghost"
-            aria-label={t("dreaming.diary.older")}
+          <IconButton
+            icon="chevronLeft"
+            label={t("dreaming.diary.older")}
             disabled={props.selectedPage >= props.entries.length - 1}
             onClick={() => props.onSelect(props.selectedPage + 1)}
-          >
-            <Icon name="chevronLeft" />
-          </button>
-          <button
-            type="button"
-            class="btn btn--icon btn--ghost"
-            aria-label={t("dreaming.diary.newer")}
+          />
+          <IconButton
+            icon="chevronRight"
+            label={t("dreaming.diary.newer")}
             disabled={props.selectedPage <= 0}
             onClick={() => props.onSelect(props.selectedPage - 1)}
-          >
-            <Icon name="chevronRight" />
-          </button>
+          />
         </span>
       </Show>
     </div>
@@ -466,7 +461,7 @@ function MaintenanceMenu(props: DreamingProps) {
       label={t("browser.moreActions")}
       placement="bottom-end"
       pointerFocus="trigger"
-      triggerClass="btn btn--icon btn--ghost"
+      triggerClass="oc-icon-button"
       trigger={<Icon name="moreHorizontal" />}
       items={items()}
       onSelect={(item) => {
@@ -671,8 +666,44 @@ function DreamingReview(props: DreamingProps) {
           owner={props}
           panel="wiki"
           title={t("dreaming.wiki.wikiTab")}
-          description={t("dreaming.wiki.wikiExplainer")}
+          description={t(
+            props.onOpenKnowledge
+              ? "dreaming.wiki.knowledgeExplainer"
+              : "dreaming.wiki.wikiExplainer",
+          )}
         >
+          <Show when={props.onOpenKnowledge}>
+            {(open) => (
+              <form
+                class="row wrap items-center gap-2"
+                role="search"
+                aria-label={t("dreaming.wiki.searchKnowledge")}
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const query = new FormData(event.currentTarget).get("query");
+                  if (typeof query === "string" && query.trim()) {
+                    open()(query.trim());
+                  }
+                }}
+              >
+                <input
+                  class="settings-input"
+                  type="search"
+                  name="query"
+                  required
+                  maxlength={200}
+                  aria-label={t("dreaming.wiki.searchKnowledge")}
+                  placeholder={t("dreaming.wiki.searchKnowledge")}
+                />
+                <button class="btn btn--sm" type="submit">
+                  {t("common.search")}
+                </button>
+                <button class="btn btn--subtle btn--sm" type="button" onClick={() => open()()}>
+                  {t("dreaming.wiki.browseKnowledge")}
+                </button>
+              </form>
+            )}
+          </Show>
           <DreamingRead
             on={[props.selectedAgentId, props.wikiOverview === null && props.wikiOverviewLoading]}
             errorClass="dreams-diary__error"

@@ -58,6 +58,15 @@ export function isUserInitiatedAgentRunAbortReason(value: unknown): boolean {
   return isAgentRunDirectAbortReason(value) && asOptionalRecord(value)?.userInitiated === true;
 }
 
+function directAbortStopReason(value: unknown): "stop" | "auth-revoked" | "aborted" {
+  const reason = asOptionalRecord(value)?.gatewayStopReason;
+  return reason === "auth-revoked"
+    ? "auth-revoked"
+    : reason === "rpc" || reason === "stop" || isUserInitiatedAgentRunAbortReason(value)
+      ? "stop"
+      : "aborted";
+}
+
 export function createAgentRunRestartAbortError(): Error {
   return Object.assign(createAbortError(AGENT_RUN_RESTART_ABORT_ERROR), {
     code: AGENT_RUN_RESTART_ABORT_ERROR_CODE,
@@ -109,6 +118,8 @@ export function resolveAgentRunAbortLifecycleFields(signal: AbortSignal | undefi
     | typeof AGENT_RUN_ABORTED_STOP_REASON
     | typeof AGENT_RUN_RESTART_ABORT_STOP_REASON
     | typeof AGENT_RUN_SUPERSEDED_STOP_REASON
+    | "stop"
+    | "auth-revoked"
     | "timeout";
 } {
   if (!signal?.aborted) {
@@ -121,7 +132,9 @@ export function resolveAgentRunAbortLifecycleFields(signal: AbortSignal | undefi
         ? AGENT_RUN_SUPERSEDED_STOP_REASON
         : isSignalTimeoutReason(signal.reason)
           ? "timeout"
-          : AGENT_RUN_ABORTED_STOP_REASON;
+          : isAgentRunDirectAbortReason(signal.reason)
+            ? directAbortStopReason(signal.reason)
+            : AGENT_RUN_ABORTED_STOP_REASON;
   return {
     aborted: true,
     stopReason,
@@ -173,7 +186,7 @@ export function resolveAgentRunErrorLifecycleFields(
   }
   // A run-owned controller can stop work without aborting its caller's signal.
   if (isAgentRunDirectAbortReason(error)) {
-    return { aborted: true, stopReason: "aborted" };
+    return { aborted: true, stopReason: directAbortStopReason(error) };
   }
   if (isAgentRunRestartAbortReason(error)) {
     return { aborted: true, stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON };

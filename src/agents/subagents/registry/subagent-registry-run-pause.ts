@@ -4,6 +4,7 @@ import {
   matchesSubagentChildSessionOwner,
   resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
+import { isSubagentCompletionCancelled } from "./subagent-control-kill-intent.js";
 import {
   clearDeliveryState,
   ensureCompletionState,
@@ -12,6 +13,7 @@ import {
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { mutateSubagentRuns, SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { isSameSubagentRunOwner, latestSubagentRun } from "./subagent-run-generation.js";
 import { isYieldedSubagentRun } from "./subagent-run-liveness.js";
 import { shouldSuppressSubagentSessionEffects } from "./subagent-session-effects-policy.js";
@@ -26,7 +28,17 @@ type YieldedRunContinuation = { state: "continuable" } | { state: "unreachable";
  * `isYieldedSubagentRun` (run liveness) holds. Callers settle an unreachable run through the
  * completion owner instead of leaving it parked. Every other yielded row stays continuable.
  */
-export function resolveYieldedRunContinuation(entry: SubagentRunRecord): YieldedRunContinuation {
+export function resolveYieldedRunContinuation(
+  entry: SubagentRunRecord,
+  requesterEnded = false,
+): YieldedRunContinuation {
+  if (entry.waitForMessage && requesterEnded) {
+    return {
+      state: "unreachable",
+      error:
+        "Requester finished or was released while this subagent waited for a continuation message.",
+    };
+  }
   // A collector result is read by an explicit wait, never delivered by a continuation.
   return entry.collect === true && entry.collectorCompletion === undefined
     ? { state: "unreachable", error: COLLECTOR_YIELD_ERROR }
@@ -42,12 +54,12 @@ export function isCompletionHeldByYield(
   // since resumed, finished, or been claimed by a kill. A kill claim keeps its pause reason.
   return request.settleYielded === true
     ? !isYieldedSubagentRun(entry)
-    : entry.pauseReason === "sessions_yield" && request.reason !== SUBAGENT_ENDED_REASON_KILLED;
+    : isSubagentPausedByYield(entry) && request.reason !== SUBAGENT_ENDED_REASON_KILLED;
 }
 
 type SubagentYieldClaim = "nothing-pending" | "pending-work" | { messageWaitRegistered: boolean };
 
-/** Claim a live native task, recording announcing waits before the yielded terminal. */
+/** Claim a live native task, recording message waits before the yielded terminal. */
 export async function claimSubagentYieldInRuns(params: {
   runId: string;
   sessionKey: string;
@@ -67,9 +79,7 @@ export async function claimSubagentYieldInRuns(params: {
       matchesSubagentChildSessionOwner(entry, params.sessionKey, params.agentId) &&
       !entry.collect &&
       entry.execution.status === "running" &&
-      !entry.killIntent &&
-      !entry.killReconciliation &&
-      !entry.suppressCompletionDelivery &&
+      !isSubagentCompletionCancelled(entry) &&
       // A separate admitted follow-up shares the session, not this logical task.
       isSameSubagentRunOwner(
         entry,
@@ -108,29 +118,29 @@ export async function claimSubagentYieldInRuns(params: {
       if (!entry) {
         throw new Error("Subagent yield lost its current native task");
       }
-      // Quiet native tasks may pause, but do not acquire a requester notice.
-      if (entry.expectsCompletionMessage !== true) {
-        return { value: { messageWaitRegistered: false } };
+      const messageWaitRegistered = entry.expectsCompletionMessage === true;
+      if (entry.waitForMessage) {
+        return { value: { messageWaitRegistered } };
       }
-      if (entry.requesterSettleWake?.pauseNotice) {
-        return { value: { messageWaitRegistered: true } };
+      const next = { ...entry, waitForMessage: true as const };
+      // Keep the wait after its one-shot notice is consumed, including quiet tasks.
+      if (messageWaitRegistered && !entry.requesterSettleWake?.pauseNotice) {
+        next.requesterSettleWake = {
+          ...resetRequesterSettleWakeRetry(entry.requesterSettleWake),
+          batchRunIds: entry.requesterSettleWake?.batchRunIds ?? [entry.runId],
+          pauseNotice: {
+            // A pending wake can outlive the reply that supplied this bounded notice.
+            acknowledgment: Buffer.from(
+              truncateUtf16Safe(
+                params.acknowledgment?.trim() || "Paused awaiting continuation.",
+                12_000,
+              ),
+              "utf16le",
+            ).toString("utf16le"),
+          },
+        };
       }
-      const next = { ...entry };
-      next.requesterSettleWake = {
-        ...resetRequesterSettleWakeRetry(entry.requesterSettleWake),
-        batchRunIds: entry.requesterSettleWake?.batchRunIds ?? [entry.runId],
-        pauseNotice: {
-          // A pending wake can outlive the reply that supplied this bounded notice.
-          acknowledgment: Buffer.from(
-            truncateUtf16Safe(
-              params.acknowledgment?.trim() || "Paused awaiting continuation.",
-              12_000,
-            ),
-            "utf16le",
-          ).toString("utf16le"),
-        },
-      };
-      return { value: { messageWaitRegistered: true }, postimages: new Map([[entry.runId, next]]) };
+      return { value: { messageWaitRegistered }, postimages: new Map([[entry.runId, next]]) };
     },
     {
       runs: params.runs,
@@ -163,7 +173,7 @@ export function markSubagentRunPausedAfterYield(params: {
   if (
     (shouldSuppressSubagentSessionEffects(entry) &&
       (resolveSubagentChildAuthority(entry).status !== "legacy-unverified" ||
-        (entry.execution.status === "terminal" && entry.pauseReason !== "sessions_yield"))) ||
+        (entry.execution.status === "terminal" && !isSubagentPausedByYield(entry)))) ||
     entry.endedReason === SUBAGENT_ENDED_REASON_KILLED ||
     entry.suppressAnnounceReason === "killed" ||
     (entry.cleanup === "delete" && Number.isFinite(entry.deleteCleanupDispatchedAt))
@@ -191,7 +201,7 @@ export function markSubagentRunPausedAfterYield(params: {
     delete entry.execution.outcome;
     mutated = true;
   }
-  if (entry.pauseReason !== "sessions_yield") {
+  if (!isSubagentPausedByYield(entry)) {
     entry.pauseReason = "sessions_yield";
     mutated = true;
   }

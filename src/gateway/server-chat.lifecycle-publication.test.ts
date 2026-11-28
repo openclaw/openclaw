@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   emitAgentEvent as emitRuntimeAgentEvent,
   getAgentEventLifecycleGeneration,
@@ -14,6 +15,7 @@ import { abortChatRunById } from "./chat-abort.js";
 import { createAgentEventTestHarness } from "./server-chat.agent-events.test-harness.js";
 import { subscribeAgentEvents } from "./server-chat.agent-events.test-helpers.js";
 import { registerRpcSourceForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
+import * as sessionEventRows from "./session-event-prepared-row.js";
 import type { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
@@ -39,6 +41,28 @@ describe("single lifecycle publication", () => {
       persistGatewaySessionLifecycleEventForEvent: persistGatewaySessionLifecycleEventMock,
     });
   }
+
+  it("does not prepare terminal session rows without receivers", async () => {
+    const preparation = vi.spyOn(sessionEventRows, "withPreparedSessionEventRow");
+    const persistence = createDeferred();
+    persistGatewaySessionLifecycleEventMock.mockReturnValueOnce(persistence.promise);
+    const h = createAgentEventTestHarness({
+      resolveSessionKeyForRun: () => "session-unobserved",
+      persistGatewaySessionLifecycleEventForEvent: persistGatewaySessionLifecycleEventMock,
+    });
+    onTestFinished(async () => {
+      persistence.resolve();
+      await h.handler.dispose();
+      preparation.mockRestore();
+    });
+
+    await h.emit("run-unobserved", "lifecycle", { phase: "end", endedAt: 1_700 });
+    expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledTimes(1);
+    persistence.resolve();
+    await persistence.promise;
+    expect(preparation).not.toHaveBeenCalled();
+    expect(h.changes()).toEqual([]);
+  });
 
   it("reserves the RPC abort terminal before synchronous lifecycle errors", async () => {
     const stopReason = "rpc";

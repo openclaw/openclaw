@@ -5,6 +5,8 @@ import {
 import { BrowserTabNotFoundError, BrowserTargetAmbiguousError } from "./errors.js";
 import type { BrowserTab, ProfileRuntimeState } from "./server-context.types.js";
 
+// A tab can reload outside OpenClaw between observations.
+const TAB_CRASH_OBSERVATION_TTL_MS = 5 * 60_000;
 const TAB_LABEL_PATTERN = /^[A-Za-z0-9_.:-]{1,64}$/;
 
 /** Validate and normalize a user-facing tab label before browser mutation. */
@@ -52,6 +54,9 @@ export function assignTabAlias(params: {
     suggestedTargetId: entry.label ?? entry.tabId,
     tabId: entry.tabId,
     ...labelFields,
+    ...(entry.crashedAt !== undefined && Date.now() - entry.crashedAt < TAB_CRASH_OBSERVATION_TTL_MS
+      ? { crashed: true }
+      : {}),
   };
 }
 
@@ -98,6 +103,8 @@ export function assignTabAliases(
       if (!candidate) {
         continue;
       }
+      // An alias can migrate to a replacement tab. Its renderer crash cannot.
+      delete staleEntry.crashedAt;
       aliases.byTargetId[candidate.targetId] = staleEntry;
       delete aliases.byTargetId[oldTargetId];
       if (profileState.lastTargetId === oldTargetId) {

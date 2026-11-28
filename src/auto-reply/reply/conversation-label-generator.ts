@@ -7,12 +7,15 @@ import {
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveCompatibleAgentRuntimeForProvider } from "../../agents/session-runtime-compat.js";
-import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-runtime.js";
+import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-selection.js";
 import {
   runUtilityCompletion,
   type UtilityCompletionAttempt,
 } from "../../agents/utility-completion.js";
-import { resolveAutomaticUtilityRuntimeOverride } from "../../agents/utility-model.js";
+import {
+  resolveAutomaticUtilityRuntimeOverride,
+  resolveUtilityModelSelectionForAgent,
+} from "../../agents/utility-model.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -133,7 +136,6 @@ async function runLabelAttempts(
   const maxLength = resolvePositiveInteger(params.maxLength, DEFAULT_MAX_LABEL_LENGTH);
   const assertCurrent = () => {
     params.assertCurrent?.();
-    params.operatorAuthority?.assertCurrent();
     params.abortSignal?.throwIfAborted();
   };
   const seen = new Set(
@@ -242,10 +244,19 @@ export async function generateConversationLabel(
   params: ConversationLabelParams,
 ): Promise<string | null> {
   const agentId = params.agentId ?? resolveDefaultAgentId(params.cfg);
+  const utility = params.modelRef
+    ? undefined
+    : resolveUtilityModelSelectionForAgent({
+        cfg: params.cfg,
+        agentId,
+        modelPolicy: params.operatorAuthority?.modelPolicy,
+      });
+  // A refusing role gets no utility attempt; the primary pass is its own permitted model.
+  const roleRefusesUtility = utility && "disabled" in utility && utility.disabled === "role-policy";
   const attempts: ConversationLabelAttempt[] = params.modelRef
     ? [{ modelRef: params.modelRef, phase: "primary fallback" }]
     : [
-        { useUtilityModel: true, phase: "utility" },
+        ...(roleRefusesUtility ? [] : [{ useUtilityModel: true, phase: "utility" as const }]),
         { useUtilityModel: false, phase: "primary fallback" },
       ];
   return await runLabelAttempts({ ...params, agentId, attempts });

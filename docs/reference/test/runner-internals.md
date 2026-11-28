@@ -38,6 +38,8 @@ detached descendants stopped. Before manually removing an abandoned lock directo
 inspect its `owner.json` and verify all associated build, compiler, and lint
 processes, including detached descendants, have stopped; then retry the command.
 
+The CI shard runner validates its runtime policy and plan-concurrency settings before
+preparing builds, so invalid job settings fail without acquiring artifact ownership.
 Runtime-consuming tests prepare checkout artifacts through the explicit build owner,
 not by launching the CLI with `--version`. Preparation reuses source-runner freshness
 checks and checkout artifact ownership, without updater service or database-maintenance

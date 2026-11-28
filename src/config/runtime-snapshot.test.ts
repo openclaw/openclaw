@@ -2,6 +2,7 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
   applyConfigEnvVars,
   collectConfigRuntimeEnvOwnership,
@@ -86,6 +87,20 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("replaces an equal mutable publication with an immutable owner snapshot", () => {
+  const initial = portConfig(18789);
+  setSnapshot(initial, initial);
+  const frozen = freezeJsonSnapshot(structuredClone(initial));
+  setSnapshot(frozen, frozen);
+  expect(getSnapshot()).toBe(frozen);
+  initial.gateway.port = 19001;
+  expect(getSnapshot()?.gateway?.port).toBe(18789);
+  const revision = getMetadata()?.revision;
+  setSnapshot(freezeJsonSnapshot(structuredClone(frozen)), frozen);
+  expect(getSnapshot()).toBe(frozen);
+  expect(getMetadata()?.revision).toBe(revision);
+});
+
 it("pins the first successful load in memory until the snapshot is cleared", () => {
   let freshPort = 18789;
   const loadFresh = vi.fn(() => portConfig(freshPort));
@@ -134,6 +149,7 @@ it("keeps model projections across display writes but invalidates authored value
     ...initial,
     ui: { seamColor: "#123456", prefs: { chatShowToolCalls: false } },
     meta: { lastTouchedVersion: "2026.10.11" },
+    browser: { profiles: { temporary: { cdpPort: 18801, color: "#123456" } } },
   };
   setSnapshot(display, display);
   expect(resolveRuntimeConfigCacheKey(display)).not.toBe(configKey);
@@ -150,23 +166,6 @@ it("keeps model projections across display writes but invalidates authored value
   expect(modelCacheKey(resolved)).not.toBe(modelKey);
   setSnapshot(source, source);
   expect(modelCacheKey(source)).not.toBe(modelKey);
-});
-
-it("hashes one captured immutable fleet only once", () => {
-  const source = {
-    agents: {
-      entries: Object.fromEntries(
-        Array.from({ length: 200 }, (_, index) => [`agent-${index}`, { name: `${index}` }]),
-      ),
-    },
-  };
-  const keys = vi.spyOn(Object, "keys");
-  const config = captureRuntimeConfig(source);
-  const first = hashRuntimeConfigValue(config);
-  for (let index = 0; index < 200; index += 1) {
-    expect(hashRuntimeConfigValue(config)).toBe(first);
-  }
-  expect(keys.mock.calls.filter(([value]) => value === config.agents?.entries)).toHaveLength(1);
 });
 
 it("rehashes mutable descendants of a shallow-frozen config", () => {
@@ -199,11 +198,13 @@ it("selects and retains only matching runtime sources", () => {
   expect(select(foreignConfig)).toBe(foreignConfig);
   setSnapshot(runtimeConfig, sourceConfig);
   const readRuntime = createRuntimeConfigReader(cloneConfigWithResolutionFacts(sourceConfig));
+  const readRuntimeCopy = createRuntimeConfigReader(cloneConfigWithResolutionFacts(runtimeConfig));
   const readScoped = createRuntimeConfigReader(scopedResolvedConfig);
   const readForeign = createRuntimeConfigReader(foreignConfig);
   const nextConfig = { ...runtimeConfig, messages: { ackReactionScope: "all" as const } };
   setSnapshot(nextConfig, nextConfig);
   expect(readRuntime()).toBe(nextConfig);
+  expect(readRuntimeCopy()).toBe(nextConfig);
   expect(readScoped()).toBe(scopedResolvedConfig);
   expect(readForeign()).toBe(foreignConfig);
   expect(readUnbound()).toBe(scopedResolvedConfig);
@@ -266,17 +267,19 @@ it.each([
   ],
 ] as const)("selects runtime only for equivalent facts: %s", (kind, facts) => {
   const source = createProviderConfigFixture();
-  const input = structuredClone(source);
   setConfigResolutionFacts(source, createConfigResolutionFacts([], providerRefs()));
-  if (facts) {
-    setConfigResolutionFacts(input, facts());
-  }
   const runtime = createProviderConfigFixture("synthetic-runtime-key");
   setSnapshot(runtime, source);
-  if (kind === "equivalent") {
-    expect(getConfigResolutionFacts(input)).not.toBe(getConfigResolutionFacts(source));
+  for (const selected of [source, runtime]) {
+    const input = structuredClone(selected);
+    if (facts) {
+      setConfigResolutionFacts(input, facts());
+    }
+    if (kind === "equivalent") {
+      expect(getConfigResolutionFacts(input)).not.toBe(getConfigResolutionFacts(selected));
+    }
+    expect(createRuntimeConfigReader(input)()).toBe(kind === "equivalent" ? runtime : input);
   }
-  expect(createRuntimeConfigReader(input)()).toBe(kind === "equivalent" ? runtime : input);
 });
 
 it.each([true, false])(

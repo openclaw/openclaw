@@ -3,6 +3,7 @@ import path from "node:path";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as nodeFilesystemPolicy from "./node-filesystem-policy.js";
 import {
   DEFAULT_POSIX_TMP_ROOT,
   resolvePreferredOpenClawTmpDir,
@@ -105,7 +106,7 @@ describe.skipIf(process.platform === "win32")("POSIX temp directory admission an
     });
   });
 
-  it.each(["private-state", "unsafe-state", "coordination"] as const)(
+  it.each(["private-state", "captured-state", "unsafe-state", "coordination", "worker"] as const)(
     "handles a real writable temp ancestor with %s policy",
     async (fallback) => {
       const root = fs.realpathSync(tempDirs.make("openclaw-temp-ancestor-"));
@@ -113,13 +114,20 @@ describe.skipIf(process.platform === "win32")("POSIX temp directory admission an
       fs.mkdirSync(unsafe);
       fs.chmodSync(unsafe, 0o775);
       const state = path.join(fallback === "unsafe-state" ? unsafe : root, "state");
-      vi.stubEnv("OPENCLAW_STATE_DIR", state);
+      vi.stubEnv(
+        "OPENCLAW_STATE_DIR",
+        fallback === "captured-state" ? path.join(unsafe, "other-state") : state,
+      );
+      if (fallback === "worker") {
+        vi.spyOn(nodeFilesystemPolicy, "getNodeTrustedWritableAncestors").mockReturnValue([unsafe]);
+      }
       const warn = vi.fn();
       const resolve = () =>
         resolvePreferredOpenClawTmpDir({
           preferredDir: path.join(unsafe, "openclaw"),
           tmpdir: () => unsafe,
-          purpose: fallback === "coordination" ? "coordination" : "workspace",
+          ...(fallback === "captured-state" ? { stateDir: state } : {}),
+          purpose: fallback === "worker" || fallback === "coordination" ? fallback : "workspace",
           warn,
         });
       if (fallback === "coordination") {

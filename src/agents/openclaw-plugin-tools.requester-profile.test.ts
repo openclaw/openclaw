@@ -20,10 +20,8 @@ import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js"
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { OpenClawPluginToolContext } from "../plugins/tool-types.js";
 import { testing as replyTesting } from "../sessions/session-controller.test-support.js";
-import {
-  createOperationalRunInstanceRef,
-  createAdmittedRunOperatorAuthority,
-} from "./admitted-run-context.js";
+import { createOperationalRunInstanceRef } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { withPreparedEmbeddedGatewayTools } from "./embedded-agent-runner/run/attempt-gateway-tools.js";
 import { withPreparedEmbeddedRunToolAuthority } from "./harness/tool-authority.runtime.js";
 import {
@@ -136,15 +134,11 @@ async function fixture(
   if (kind === "mismatched-origin") {
     ctx.OriginatingChannel = "telegram";
   }
-  let revoked = false;
-  const operatorAuthority = createAdmittedRunOperatorAuthority({
+  const revocation = new AbortController();
+  const operatorAuthority = createTestOperatorAuthority({
     profileId: kind === "authority-mismatch" ? "profile-other" : profileId,
     scopes,
-    assertCurrent() {
-      if (revoked) {
-        throw new Error("operator revoked");
-      }
-    },
+    signal: revocation.signal,
   });
   const input = {
     operatorAuthority,
@@ -261,16 +255,13 @@ async function fixture(
                   disconnect: () => connection.abort(),
                   steer: () =>
                     operation.personalToolParticipants!.accept({
-                      operatorAuthority: createAdmittedRunOperatorAuthority({
+                      operatorAuthority: createTestOperatorAuthority({
                         profileId: "profile-grace",
                         scopes,
-                        assertCurrent() {},
                       }),
                     }),
                   close,
-                  revoke: () => {
-                    revoked = true;
-                  },
+                  revoke: () => revocation.abort(new Error("operator revoked")),
                   context: () => context,
                   beforeEffect: (next) => {
                     wait = next;

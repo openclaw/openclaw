@@ -45,7 +45,7 @@ export type GatewayServiceInstallArgs = {
   runtimePinUpdate?: DaemonRuntimePinUpdate;
   /** Preserve the existing enable policy during an update-owned definition rebind. */
   preserveAutoStart?: boolean;
-  beforeMutation?: () => Promise<void>;
+  beforeMutation?: () => void | Promise<void>;
   /**
    * Runs only when a failed install's native recovery has stopped the replacement and is about to
    * restart the previous service, so state that service depends on is back in place first. Its
@@ -82,7 +82,7 @@ export type GatewayServiceControlArgs = {
   /** Correlation only: native stop needs live update authority and transferred helpers also revalidate their lease. */
   updateHandoff?: { root: string; runId: string };
   /** Revalidate captured binding after native lock and config admission, before effects. */
-  beforeMutation?: () => Promise<void>;
+  beforeMutation?: () => void | Promise<void>;
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
   /** Prepare service-targeted restart intent after foreground recovery has settled. */
@@ -346,6 +346,21 @@ export function hasGatewayServiceDefinitionOverrides(
   return command?.managedOverrides
     ? Object.keys(command.managedOverrides).length > 0
     : Boolean(command?.managedDefinition);
+}
+
+/** Rebinding and compensation rewrite the base, leaving inspected named overrides in place. */
+export function canPreserveGatewayServiceDefinitionOverrides(
+  command: GatewayServiceCommandConfig | null | undefined,
+): boolean {
+  return (
+    !hasGatewayServiceDefinitionOverrides(command) ||
+    Boolean(
+      command?.managedDefinition &&
+      command.managedOverrides &&
+      !hasGatewayServiceLauncherOverride(command) &&
+      resolveManagedGatewayServiceProcessEnv(command, {}) !== null,
+    )
+  );
 }
 
 /** Operator-owned launcher overrides cannot be repaired by rewriting the managed base. */

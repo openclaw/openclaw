@@ -36,8 +36,11 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 // mock-isolation: Image health fixtures exclude agent-directory registration and filesystem observers.
 vi.mock("../agents/agent-scope-config.js", () => ({ listAgentEntriesWithSource: () => [] }));
 
-const { maybeRepairSandboxImages, noteCodexBwrapNamespaceWarnings } =
-  await import("./doctor-sandbox.js");
+const {
+  checkSandboxImageRepairPending,
+  maybeRepairSandboxImages,
+  noteCodexBwrapNamespaceWarnings,
+} = await import("./doctor-sandbox.js");
 
 describe("sandbox health", () => {
   const mockRuntime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
@@ -88,6 +91,66 @@ describe("sandbox health", () => {
       }
     },
   );
+
+  it("checks and offers to build the image when only a gateway role requires a sandbox", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        roles: {
+          definitions: {
+            guest: { sessions: { others: "view" }, agents: "*", scopes: [], sandbox: "required" },
+          },
+        },
+      },
+    };
+    runExec.mockImplementation(async (_command: string, args: string[]) => {
+      if (args[0] === "image") {
+        throw Object.assign(new Error("missing image"), { stderr: "No such image" });
+      }
+      return { stdout: "", stderr: "" };
+    });
+    const warnings = await maybeRepairSandboxImages(cfg, mockRuntime, mockPrompter);
+    expect(warnings).toEqual([
+      expect.stringContaining(`Sandbox base image missing: ${DEFAULT_SANDBOX_IMAGE}`),
+    ]);
+    expect(mockPrompter.confirmRuntimeRepair).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Build base sandbox image now?" }),
+    );
+
+    vi.clearAllMocks();
+    runExec.mockRejectedValue(new Error("Docker not installed"));
+    await maybeRepairSandboxImages(cfg, mockRuntime, mockPrompter);
+    expectNote("A gateway role requires a sandbox but Docker is not available");
+    expectNote("gateway.roles.definitions.<role>.sandbox to inherit");
+
+    // Codex's host namespace check still follows sandbox mode, not role requirements.
+    await probeOnLinux(cfg);
+    expectNoCodexProbe();
+  });
+
+  it("has image work only when a configured image with a bundled build script is missing", async () => {
+    const missing = (image?: string) =>
+      runExec.mockImplementation(async (_command: string, args: string[]) => {
+        if (args[0] === "image" && args[2] === image) {
+          throw Object.assign(new Error("missing image"), { stderr: "No such image" });
+        }
+        return { stdout: "", stderr: "" };
+      });
+    const cfg = createSandboxConfig("all");
+    missing(DEFAULT_SANDBOX_IMAGE);
+    await expect(checkSandboxImageRepairPending(cfg)).resolves.toBe("work");
+    missing();
+    await expect(checkSandboxImageRepairPending(cfg)).resolves.toBe("none");
+    // A custom image has no bundled script; the repair only warns about it.
+    const custom = createSandboxConfig("all");
+    custom.agents!.defaults!.sandbox!.docker = { image: "example/custom:1" };
+    missing("example/custom:1");
+    await expect(checkSandboxImageRepairPending(custom)).resolves.toBe("none");
+    runExec.mockRejectedValue(new Error("Docker not installed"));
+    await expect(checkSandboxImageRepairPending(cfg)).resolves.toBe("none");
+    await expect(checkSandboxImageRepairPending(createSandboxConfig("off"))).resolves.toBe("none");
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(note).not.toHaveBeenCalled();
+  });
 
   it("validates the explicit Podman target before checking images", async () => {
     const cfg = createSandboxConfig("all");

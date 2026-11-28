@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
 import { nativeMessage } from "./chat-thread-fixtures.test-support.ts";
 import { createProps } from "./chat-thread.test-support.ts";
 import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
+import * as causalBoundary from "./stream-causal-boundary.ts";
 
 type PendingInput = NonNullable<BuildChatItemsProps["pendingInputs"]>[number];
 
@@ -79,6 +80,154 @@ beforeEach(() => resetChatThreadState("input-order"));
 afterEach(() => resetChatThreadState("input-order"));
 
 describe("transcript input order", () => {
+  it.each([
+    { timestamp: 100, withHistory: true, stopped: "none" },
+    { timestamp: -100, withHistory: true, stopped: "none" },
+    { timestamp: 100, withHistory: false, stopped: "none" },
+    { timestamp: 100, withHistory: false, stopped: "first" },
+    { timestamp: 100, withHistory: false, stopped: "last" },
+  ] as const)(
+    "keeps an observed handoff before canonical turns (timestamp=$timestamp, history=$withHistory, stopped=$stopped)",
+    ({ timestamp, withHistory, stopped }) => {
+      const earlier = withHistory
+        ? [
+            makeMessage("user", "Earlier input", 10, { id: "earlier-input", seq: 1 }),
+            makeMessage("assistant", "Earlier reply", 20, { id: "earlier-reply", seq: 2 }),
+          ]
+        : [];
+      const pendingInputs: PendingInput[] = [
+        {
+          id: "handoff",
+          runId: "handoff-run",
+          acceptedAt: 30,
+          state: "queued",
+          message: nativeMessage(
+            "assistant",
+            "Worker handoff",
+            30,
+            { id: "pending:handoff" },
+            {
+              provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+              senderSession: { sessionKey: "agent:helper:main" },
+            },
+          ),
+        },
+      ];
+      if (stopped !== "none") {
+        const cancelled = acceptedInput("Stopped request", 20, "cancelled");
+        if (stopped === "first") {
+          pendingInputs.unshift(cancelled);
+        } else {
+          pendingInputs.push(cancelled);
+        }
+      }
+      const stoppedRows =
+        stopped === "none"
+          ? []
+          : [
+              "Stopped request",
+              "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
+            ];
+      const rows = (messages: unknown[], searchQuery = "") =>
+        visibleRows(
+          { messages, pendingInputs, searchOpen: Boolean(searchQuery), searchQuery },
+          buildCachedChatItems,
+        );
+      const earlierText = withHistory ? ["Earlier input", "Earlier reply"] : [];
+      expect(rows(earlier)).toEqual([...earlierText, ...stoppedRows, "Worker handoff"]);
+
+      // Loading an older page is not a new successor of already visible custody.
+      const history = withHistory
+        ? [makeMessage("user", "Older page", 0, { id: "older-page", seq: 0 }), ...earlier]
+        : [];
+      const historyText = withHistory ? ["Older page", ...earlierText] : [];
+      expect(rows(history)).toEqual([...historyText, ...stoppedRows, "Worker handoff"]);
+      const next = makeMessage("user", "New canonical input", timestamp, {
+        id: "next-input",
+        seq: 3,
+        idempotencyKey: "next:user",
+      });
+      const expected = [...historyText, ...stoppedRows, "Worker handoff", "New canonical input"];
+      expect(rows([...history, next])).toEqual(expected);
+      const reply = makeMessage("assistant", "New canonical reply", timestamp + 1, {
+        id: "next-reply",
+        seq: 4,
+        runId: "next",
+      });
+      const completed = [...history, next, reply];
+      expect(rows(completed)).toEqual([...expected, "New canonical reply"]);
+      expect(rows(completed, "Worker handoff")).toEqual(["Worker handoff"]);
+      expect(rows(completed)).toEqual([...expected, "New canonical reply"]);
+
+      // Losing all observed history anchors is not an empty-transcript startup.
+      expect(
+        rows([makeMessage("user", "Disjoint older page", -200, { id: "disjoint", seq: 0 })]),
+      ).toEqual(["Disjoint older page", ...stoppedRows, "Worker handoff"]);
+
+      // A new pane has never observed this custody ahead of the saved turn.
+      resetChatThreadState("input-order");
+      expect(rows(completed)).toEqual([
+        ...historyText,
+        ...stoppedRows,
+        "New canonical input",
+        "New canonical reply",
+        "Worker handoff",
+      ]);
+    },
+  );
+  it("keeps interleaved tool bursts within each observed input", () => {
+    const rows = visibleRows({
+      runId: "live",
+      messages: [
+        makeMessage("user", "First input", 1, { idempotencyKey: "first:user", seq: 1 }),
+        makeMessage("user", "Second input", 2, { idempotencyKey: "second:user", seq: 2 }),
+      ],
+      toolMessages: Array.from({ length: 4 }, (_, index) => ({
+        role: "assistant",
+        content: `Tool ${index}`,
+        runId: "live",
+        timestamp: 100 + index,
+        openclawToolStreamAfterSendId: index % 2 ? "second" : "first",
+      })),
+    });
+    expect(rows).toEqual(["First input", "Tool 0", "Tool 2", "Second input", "Tool 1", "Tool 3"]);
+  });
+
+  it("bounds missing-run history scans independently of tool-burst length", () => {
+    const lookup = vi.spyOn(causalBoundary, "knownStreamCausalInterval");
+    try {
+      const rows = visibleRows({
+        runId: "live",
+        messages: [makeMessage("user", "Current input", 1, { seq: 1 })],
+        toolMessages: Array.from({ length: 40 }, (_, index) => ({
+          role: "assistant",
+          content: `Tool ${index}`,
+          runId: "live",
+          timestamp: 100 + index,
+        })),
+      });
+      expect(rows).toEqual(["Current input", ...Array.from({ length: 40 }, (_, i) => `Tool ${i}`)]);
+      expect(lookup.mock.calls.length).toBeLessThanOrEqual(3);
+    } finally {
+      lookup.mockRestore();
+    }
+  });
+
+  it("keeps a paged input separate from an unscoped lookup for the same run", () => {
+    const rows = visibleRows({
+      runId: "live",
+      messages: [makeMessage("user", "Current input", 1, { seq: 1 })],
+      toolMessages: Array.from({ length: 4 }, (_, index) => ({
+        role: "assistant",
+        content: `Tool ${index}`,
+        runId: "live",
+        timestamp: 100 + index,
+        ...(index % 2 ? { openclawToolStreamAfterSendId: "paged-input" } : {}),
+      })),
+    });
+    expect(rows).toEqual(["Tool 1", "Tool 3", "Current input", "Tool 0", "Tool 2"]);
+  });
+
   it("keeps parent output around a worker update in the same order live and saved", () => {
     const original = makeMessage("user", "Publish the change", 10, {
       id: "request",
@@ -302,6 +451,52 @@ describe("transcript input order", () => {
       ]);
     },
   );
+
+  it("keeps an accepted steer before younger optimistic steers through confirmation", () => {
+    const runId = "active-run";
+    const original = makeMessage("user", "Original", 1_000, {
+      id: "original",
+      seq: 1,
+      idempotencyKey: `${runId}:user`,
+    });
+    const steer = (name: string, index: number, extra: object = {}) =>
+      makeMessage("user", name, 2_000 + index * 250, {
+        idempotencyKey: `${name}:user`,
+        steerTargetRunId: runId,
+        ...extra,
+      });
+    const props = createInput({
+      messages: [original],
+      queue: [{ ...queuedInput("Steer A", 2_000, "sending"), queueMode: "steer" }],
+      runId,
+      runActive: true,
+      runWorking: true,
+      stream: "",
+    });
+    const rows = () =>
+      buildCachedChatItems({ ...props }).flatMap((item) =>
+        item.kind === "group"
+          ? item.messages.map(({ key, message }) => `${extractTextCached(message)}@${key}`)
+          : [],
+      );
+    const [firstRow, steerA] = rows();
+    expect([firstRow, steerA].map((row) => row?.split("@")[0])).toEqual(["Original", "Steer A"]);
+    // The Gateway accepts A while it waits for a tool; B arrives optimistically after it.
+    const accepted = acceptedInput("Steer A", 10_000);
+    accepted.steerNow = { status: "blocked", tools: ["exec"] };
+    props.pendingInputs = [accepted];
+    props.queue = [];
+    props.messages = [original, steer("Steer B", 1)];
+    const identities = rows();
+    expect(identities).toEqual([firstRow, steerA, expect.stringMatching(/^Steer B@/)]);
+    props.messages = [
+      original,
+      ...["Steer A", "Steer B"].map((name, index) =>
+        steer(name, index, { id: `confirmed-${index}`, seq: 147 + index }),
+      ),
+    ];
+    expect(rows()).toEqual(identities);
+  });
 
   it.each(["waiting-reconnect", "accepted", "reordered"] as const)(
     "keeps an earlier %s input ahead of a new submission through custody",

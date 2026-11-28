@@ -444,7 +444,7 @@ export function createApplicationUpdateOverlays(
     connectedSource = nextConnectedSource;
     if (connectedSourceChanged) {
       updateFailureReporter.invalidate();
-      snapshot = { ...snapshot, updateFailureReportBusy: false };
+      snapshot = { ...snapshot, updateFailureReportBusy: false, updateStatusRefreshing: false };
       if (
         updateAttempt?.requestSent &&
         !runId &&

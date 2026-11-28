@@ -11,10 +11,6 @@ const migrationMessage =
 type SenderPolicyScope = { parent: Record<string, unknown>; path: string };
 type LegacySenderMap = SenderPolicyScope & { policies: Record<string, unknown>; keys: string[] };
 
-const channelSchemas = new Map(
-  GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map(({ channelId, schema }) => [channelId, schema]),
-);
-
 function* channelPolicyScopes(
   value: unknown,
   schema: unknown,
@@ -58,7 +54,8 @@ function* legacySenderMaps(value: unknown): Generator<LegacySenderMap> {
   for (const [channelId, config] of Object.entries(asNullableRecord(raw.channels) ?? {})) {
     for (const scope of channelPolicyScopes(
       config,
-      channelSchemas.get(channelId),
+      GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.findLast((entry) => entry.channelId === channelId)
+        ?.schema,
       `channels.${channelId}`,
     )) {
       scopes.push(scope);

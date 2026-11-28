@@ -209,7 +209,7 @@ export function ChatDashboardMenuContent(inputs: ChatPanelMenuContentProps) {
     });
     return () => inputs.onReady(undefined);
   });
-  return inputs.renderItems(items);
+  return null;
 }
 
 export function ChatPaneLayoutMenuContent(inputs: ChatPanelMenuContentProps) {
@@ -265,5 +265,5 @@ export function ChatPaneLayoutMenuContent(inputs: ChatPanelMenuContentProps) {
     });
     return () => inputs.onReady(undefined);
   });
-  return inputs.renderItems(items);
+  return null;
 }

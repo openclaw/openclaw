@@ -46,7 +46,19 @@ function rejectArgs(args: string[], error: string) {
 }
 
 describe("full-release-validation-at-sha", () => {
-  it("reports patch-inequivalent main FRV tooling without changing Q=C", () => {
+  it("continues candidate dispatch after a tooling comparison fails", () => {
+    const fixture = createDispatchFixture({
+      candidateOwned: true,
+      toolingLagComparisonFailure: true,
+    });
+    const result = fixture.run();
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain("WARNING: candidate tooling lag is unavailable");
+    expect(fixture.dispatches()).toHaveLength(2);
+  });
+
+  it("reports patch-inequivalent main FRV tooling without changing frozen Q", () => {
     const candidateSha = "a".repeat(40);
     const mainSha = "b".repeat(40);
 
@@ -57,7 +69,7 @@ describe("full-release-validation-at-sha", () => {
       ]),
     ).toBe(
       [
-        `WARNING: candidate-owned Q=C tooling ${candidateSha} is 3508 non-merge commit(s) behind main ${mainSha}, with 28162 net changed path(s). Main cannot repair this candidate harness; review and port applicable release fixes before dispatch.`,
+        `WARNING: frozen qualification Q ${candidateSha} is 3508 non-merge commit(s) behind main ${mainSha}, with 28162 net changed path(s). Moving main cannot repair this harness; explicitly select and admit any replacement Q before dispatch.`,
         "Largest changed areas (share of net changed paths):",
         "14.8% extensions/",
         "1.3% scripts/",
@@ -94,79 +106,76 @@ describe("full-release-validation-at-sha", () => {
     expect(treeDiffs).not.toContainEqual(expect.arrayContaining(["--name-only"]));
   });
 
-  it("rejects an unsigned publication candidate before dispatch", () => {
-    const fixture = createDispatchFixture({ candidateOwned: true, candidateSignature: "missing" });
+  it.each<{
+    name: string;
+    options: NonNullable<Parameters<typeof createDispatchFixture>[0]>;
+    tags?: string[];
+    main?: boolean;
+    args?: string[];
+    error?: string;
+  }>([
+    {
+      name: "rejects an unsigned publication candidate before dispatch",
+      options: { candidateSignature: "missing" },
+      error: "requires a valid maintainer signature",
+    },
+    {
+      name: "accepts GitHub web-flow for an exact canonical release-branch merge",
+      options: { candidateAuthorityActor: "web-flow", candidateWebFlowMerge: true },
+    },
+    {
+      name: "rejects GitHub web-flow without one exact canonical release-branch merge",
+      options: { candidateAuthorityActor: "web-flow" },
+      error: "requires one exact merge into a canonical release branch",
+    },
+    {
+      name: "rejects an unsigned candidate in explicit release-tag context",
+      options: { candidateSignature: "missing", includeTargetRef: false },
+      tags: ["v2026.8.1"],
+      args: ["--target-ref", "v2026.8.1"],
+      error: "requires a valid maintainer signature",
+    },
+    {
+      name: "discovers release-tag provenance for a signed SHA-only candidate",
+      options: { includeTargetRef: false },
+      tags: ["v2026.8.1", "v2026.8.1-1"],
+    },
+    {
+      name: "rejects a main-ancestor candidate that is an open same-repository PR head",
+      options: { candidateOpenPrHead: true, includeTargetRef: false },
+      main: true,
+      error: "is an open same-repository PR head",
+    },
+  ])("$name", ({ options, tags = [], main, args = [], error }) => {
+    const fixture = createDispatchFixture({ candidateOwned: true, ...options });
+    for (const tag of tags) {
+      runGit(fixture.checkout, ["tag", tag, fixture.targetSha]);
+    }
+    if (tags.length > 0) {
+      runGit(fixture.checkout, ["push", "origin", ...tags.map((tag) => `refs/tags/${tag}`)]);
+    }
+    if (main) {
+      runGit(fixture.checkout, ["push", "origin", `${fixture.targetSha}:refs/heads/main`]);
+    }
     const result = fixture.run([
+      ...args,
       "--workflow-sha",
       fixture.targetSha,
       "-f",
       "validation_purpose=publish",
       "-f",
-      `publication_selection_json=${JSON.stringify({
-        route: "normal",
-        npmDistTag: "latest",
-        publishOpenclawNpm: true,
-        pluginPublishScope: "all-publishable",
-        plugins: [],
-      })}`,
+      `publication_selection_json=${JSON.stringify(publicationSelectionFixture())}`,
     ]);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("requires a valid maintainer signature");
-    expect(fixture.dispatches()).toEqual([]);
-  });
-
-  it("accepts GitHub web-flow for an exact canonical release-branch merge", () => {
-    const fixture = createDispatchFixture({
-      candidateOwned: true,
-      candidateAuthorityActor: "web-flow",
-      candidateWebFlowMerge: true,
-    });
-    const result = fixture.run([
-      "--workflow-sha",
-      fixture.targetSha,
-      "-f",
-      "validation_purpose=publish",
-      "-f",
-      `publication_selection_json=${JSON.stringify({
-        route: "normal",
-        npmDistTag: "latest",
-        publishOpenclawNpm: true,
-        pluginPublishScope: "all-publishable",
-        plugins: [],
-      })}`,
-    ]);
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain(
-      `Release candidate provenance verified for ${fixture.targetSha}`,
-    );
-    expect(fixture.dispatches()).toHaveLength(2);
-  });
-
-  it("rejects GitHub web-flow without one exact canonical release-branch merge", () => {
-    const fixture = createDispatchFixture({
-      candidateOwned: true,
-      candidateAuthorityActor: "web-flow",
-    });
-    const result = fixture.run([
-      "--workflow-sha",
-      fixture.targetSha,
-      "-f",
-      "validation_purpose=publish",
-      "-f",
-      `publication_selection_json=${JSON.stringify({
-        route: "normal",
-        npmDistTag: "latest",
-        publishOpenclawNpm: true,
-        pluginPublishScope: "all-publishable",
-        plugins: [],
-      })}`,
-    ]);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("requires one exact merge into a canonical release branch");
-    expect(fixture.dispatches()).toEqual([]);
+    expect(result.status, result.stderr).toBe(error ? 1 : 0);
+    if (error) {
+      expect(result.stderr).toContain(error);
+      expect(fixture.dispatches()).toEqual([]);
+    } else {
+      expect(result.stdout).toContain(
+        `Release candidate provenance verified for ${fixture.targetSha}`,
+      );
+      expect(fixture.dispatches()).toHaveLength(2);
+    }
   });
 
   it("preserves main-ancestor trust through the provenance preflight", () => {
@@ -184,106 +193,13 @@ describe("full-release-validation-at-sha", () => {
       "-f",
       "validation_purpose=publish",
       "-f",
-      `publication_selection_json=${JSON.stringify({
-        route: "normal",
-        npmDistTag: "latest",
-        publishOpenclawNpm: true,
-        pluginPublishScope: "all-publishable",
-        plugins: [],
-      })}`,
+      `publication_selection_json=${JSON.stringify(publicationSelectionFixture())}`,
     ]);
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("(main-ancestor)");
     expect(result.stderr).toContain("Admission workflow identity changed");
     expect(result.stderr).not.toContain("requires a valid maintainer signature");
-  });
-
-  it("rejects an unsigned candidate in explicit release-tag context", () => {
-    const fixture = createDispatchFixture({
-      candidateOwned: true,
-      candidateSignature: "missing",
-      includeTargetRef: false,
-    });
-    runGit(fixture.checkout, ["tag", "v2026.8.1", fixture.targetSha]);
-    runGit(fixture.checkout, ["push", "origin", "refs/tags/v2026.8.1"]);
-    const result = fixture.run([
-      "--target-ref",
-      "v2026.8.1",
-      "--workflow-sha",
-      fixture.targetSha,
-      "-f",
-      "validation_purpose=publish",
-      "-f",
-      `publication_selection_json=${JSON.stringify({
-        route: "normal",
-        npmDistTag: "latest",
-        publishOpenclawNpm: true,
-        pluginPublishScope: "all-publishable",
-        plugins: [],
-      })}`,
-    ]);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("requires a valid maintainer signature");
-    expect(fixture.dispatches()).toEqual([]);
-  });
-
-  it("discovers release-tag provenance for a signed SHA-only candidate", () => {
-    const fixture = createDispatchFixture({
-      candidateOwned: true,
-      includeTargetRef: false,
-    });
-    runGit(fixture.checkout, ["tag", "v2026.8.1", fixture.targetSha]);
-    runGit(fixture.checkout, ["tag", "v2026.8.1-1", fixture.targetSha]);
-    runGit(fixture.checkout, ["push", "origin", "refs/tags/v2026.8.1", "refs/tags/v2026.8.1-1"]);
-    const result = fixture.run([
-      "--workflow-sha",
-      fixture.targetSha,
-      "-f",
-      "validation_purpose=publish",
-      "-f",
-      `publication_selection_json=${JSON.stringify({
-        route: "normal",
-        npmDistTag: "latest",
-        publishOpenclawNpm: true,
-        pluginPublishScope: "all-publishable",
-        plugins: [],
-      })}`,
-    ]);
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain(
-      `Release candidate provenance verified for ${fixture.targetSha}`,
-    );
-    expect(fixture.dispatches()).toHaveLength(2);
-  });
-
-  it("rejects a main-ancestor candidate that is an open same-repository PR head", () => {
-    const fixture = createDispatchFixture({
-      candidateOwned: true,
-      candidateOpenPrHead: true,
-      includeTargetRef: false,
-    });
-    runGit(fixture.checkout, ["push", "origin", `${fixture.targetSha}:refs/heads/main`]);
-    const result = fixture.run([
-      "--workflow-sha",
-      fixture.targetSha,
-      "-f",
-      "validation_purpose=publish",
-      "-f",
-      `publication_selection_json=${JSON.stringify({
-        route: "normal",
-        npmDistTag: "latest",
-        publishOpenclawNpm: true,
-        pluginPublishScope: "all-publishable",
-        plugins: [],
-      })}`,
-    ]);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("is an open same-repository PR head");
-    expect(fixture.dispatches()).toEqual([]);
   });
 
   it("rejects a missing purpose before remote creation on supporting tooling", () => {
@@ -312,6 +228,9 @@ describe("full-release-validation-at-sha", () => {
     const reopened = fixture.run(["--reconcile-request", fixture.requestPath()], true);
     expect(reopened.status, reopened.stderr).toBe(0);
     expect(reopened.stdout).toContain("release_profile=stable rerun_group=all soak=true");
+    expect(reopened.stdout).toContain(
+      "WARNING: Cross-revision diagnostics cannot produce candidate-sealed child receipts.",
+    );
     expect(readFileSync(fixture.requestPath())).toEqual(before);
     expect(
       fixture
@@ -392,6 +311,38 @@ describe("full-release-validation-at-sha", () => {
     expect(fixture.calls("POST")).toEqual([]);
     expect(fixture.gitCalls().some((args) => args.includes("update-ref"))).toBe(false);
   });
+
+  it("rescans the active inventory before dispatching when a page changes", () => {
+    const fixture = createDispatchFixture({ activeInventory: "short-once" });
+    const result = fixture.run();
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(
+      fixture.calls("GET").filter((args) => ghField(args, "status") === "requested"),
+    ).toHaveLength(2);
+    expect(fixture.dispatches()).toHaveLength(1);
+  });
+
+  it.each([
+    ["short-always", false, 3, "pagination changed or is incomplete"],
+    ["short-once", true, 2, "Same-concurrency-group Full Release Validation is already active"],
+    ["short-invalid-row", false, 1, "Active run inventory contains invalid or repeated runs"],
+    ["malformed", false, 1, "Active run inventory is incomplete or exceeds its bound"],
+  ] as const)(
+    "refuses %s with incumbent %s before mutation",
+    (activeInventory, activeConcurrencyRun, scans, message) => {
+      const fixture = createDispatchFixture({ activeInventory, activeConcurrencyRun });
+      const result = fixture.run();
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(message);
+      expect(
+        fixture.calls("GET").filter((args) => ghField(args, "status") === "requested"),
+      ).toHaveLength(scans);
+      expect(fixture.calls("POST")).toEqual([]);
+      expect(fixture.gitCalls().some((args) => args.includes("update-ref"))).toBe(false);
+    },
+  );
 
   it("ignores completed workflow history when checking active concurrency", () => {
     const fixture = createDispatchFixture({ completedConcurrencyHistory: 2500 });
@@ -841,6 +792,12 @@ describe("full-release-validation-at-sha", () => {
       input: 'known_flaky_jobs_json=["normalCi:checks-node"]',
       error: "Automatic test retries are disabled",
     },
+    {
+      name: "preflight first",
+      marker: "FULL_RELEASE_PREFLIGHT_FIRST_CONTRACT",
+      input: "preflight_first=true",
+      error: "does not support preflight_first",
+    },
   ])(
     "refuses unsupported $name controls before creating refs or dispatching",
     ({ marker, input, error }) => {
@@ -1173,6 +1130,9 @@ describe("full-release-validation-at-sha", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("release_profile=stable rerun_group=all soak=true");
     expect(result.stdout).toContain("(dry run; not written)");
+    expect(result.stdout).toContain(
+      "WARNING: Cross-revision diagnostics cannot produce candidate-sealed child receipts.",
+    );
     expect(result.stdout).toContain(`Validation SHA fetchable by bare SHA: ${fixture.targetSha}`);
     expect(result.stdout).not.toContain("validation/target-");
     const fetch = fixture
@@ -1644,6 +1604,9 @@ describe("full-release-validation-at-sha", () => {
     ]);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain(`Trusted workflow ref: ${fixture.trustedWorkflowTag}`);
+    expect(result.stdout).toContain(
+      "WARNING: Cross-revision diagnostics cannot produce candidate-sealed child receipts.",
+    );
     expect(fixture.gitCalls()).toContainEqual([
       "ls-remote",
       "--tags",
@@ -1708,23 +1671,42 @@ describe("full-release-validation-at-sha", () => {
     },
   );
 
-  it("fails clearly before dispatch when the target SHA is absent after the named fetch", () => {
-    const fixture = createDispatchFixture();
-    const missingSha = "f".repeat(40);
-    const result = fixture.run(["--sha", missingSha]);
-    expect(result.status).toBe(1);
-    const failedReasons = result.stderr
-      .trim()
-      .split("\n")
-      .filter((line) => line.startsWith("[full-release-validation] FAILED:"));
-    expect(failedReasons).toEqual([
-      `[full-release-validation] FAILED: Target SHA ${missingSha} is not available locally after fetching ${fixture.releaseRef}`,
-    ]);
-    expect(result.stderr.trim().split("\n").at(-1)).toBe(
-      "[full-release-validation] FAILED (exit 1)",
-    );
-    expect(readFileSync(fixture.ghCallsPath, "utf8")).toBe("");
-  });
+  it.each([true, false])(
+    "fails locally for an unprepared target without lazy fetching (named fetch=%s)",
+    (includeTargetRef) => {
+      const fixture = createDispatchFixture({ includeTargetRef });
+      runGit(fixture.origin, ["config", "uploadpack.allowFilter", "true"]);
+      const tree = runGit(fixture.origin, ["rev-parse", `${fixture.targetSha}^{tree}`]);
+      const missingSha = runGit(fixture.origin, [
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit-tree",
+        tree,
+        "-p",
+        fixture.targetSha,
+        "-m",
+        "unprepared target",
+      ]);
+      runGit(fixture.origin, ["update-ref", "refs/heads/unprepared", missingSha]);
+      runGit(fixture.checkout, ["config", "remote.origin.promisor", "true"]);
+      runGit(fixture.checkout, ["config", "remote.origin.partialclonefilter", "blob:none"]);
+      const result = fixture.run(["--sha", missingSha]);
+      expect(result.status).toBe(1);
+      const failedReasons = result.stderr
+        .trim()
+        .split("\n")
+        .filter((line) => line.startsWith("[full-release-validation] FAILED:"));
+      expect(failedReasons).toEqual([
+        `[full-release-validation] FAILED: Target SHA ${missingSha} is not available locally${includeTargetRef ? ` after fetching ${fixture.releaseRef}` : "; pass --target-ref so it can be fetched by name"}`,
+      ]);
+      expect(result.stderr.trim().split("\n").at(-1)).toBe(
+        "[full-release-validation] FAILED (exit 1)",
+      );
+      expect(readFileSync(fixture.ghCallsPath, "utf8")).toBe("");
+    },
+  );
 
   it("supports current and legacy verifier locations in trusted workflow checkouts", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-release-verifier-path-"));

@@ -7,12 +7,23 @@ public enum OpenClawChatPermissionMode: String, Codable, CaseIterable, Hashable,
     case workspace
     case full
 
+    /// Names and summaries match the Control UI permission picker.
     public var displayName: String {
         switch self {
-        case .readOnly: String(localized: "Read-only")
-        case .guarded: String(localized: "Guarded")
-        case .workspace: String(localized: "Workspace")
-        case .full: String(localized: "Full")
+        case .readOnly: String(localized: "Read only")
+        case .guarded: String(localized: "Ask me")
+        case .workspace: String(localized: "Auto-review")
+        case .full: String(localized: "Full access")
+        }
+    }
+
+    public var summary: String {
+        switch self {
+        case .readOnly:
+            String(localized: "Can read files in this session’s workspace. Can’t edit files or run commands.")
+        case .guarded: String(localized: "Asks you before doing anything outside the workspace.")
+        case .workspace: String(localized: "An AI reviewer approves actions outside the workspace.")
+        case .full: String(localized: "Edits files and runs commands anywhere, without review.")
         }
     }
 }
@@ -147,6 +158,7 @@ public struct OpenClawChatComposerCapabilityCatalog: Equatable, Sendable {
     public let sessionSettingsAvailable: Bool
     public let modelMutationAvailable: Bool
     public let effortMutationAvailable: Bool
+    public let verboseMutationAvailable: Bool
     public let webSearchBaseEnabled: Bool
     public let webSearchAvailable: Bool
     public let skills: [OpenClawChatComposerSkill]
@@ -165,6 +177,7 @@ public struct OpenClawChatComposerCapabilityCatalog: Equatable, Sendable {
         sessionSettingsAvailable: Bool = false,
         modelMutationAvailable: Bool = false,
         effortMutationAvailable: Bool = false,
+        verboseMutationAvailable: Bool = false,
         webSearchBaseEnabled: Bool = true,
         webSearchAvailable: Bool = false,
         skills: [OpenClawChatComposerSkill] = [],
@@ -182,6 +195,7 @@ public struct OpenClawChatComposerCapabilityCatalog: Equatable, Sendable {
         self.sessionSettingsAvailable = sessionSettingsAvailable
         self.modelMutationAvailable = modelMutationAvailable
         self.effortMutationAvailable = effortMutationAvailable
+        self.verboseMutationAvailable = verboseMutationAvailable
         self.webSearchBaseEnabled = webSearchBaseEnabled
         self.webSearchAvailable = webSearchAvailable
         self.skills = skills

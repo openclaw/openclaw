@@ -248,6 +248,36 @@ it("leaves an ownerless session without yielded work unchanged", async () => {
   expect(loadSessionEntry(target)).toEqual(before);
 });
 
+it("Stop on an idle parent stops a child paused on sessions_yield", async () => {
+  await seedYieldedParent();
+  emitAgentEvent({
+    runId: childRunId,
+    stream: "lifecycle",
+    data: { phase: "end", yielded: true, endedAt: Date.now() },
+  });
+  await vi.waitFor(() =>
+    expect(subagentRuns.get(childRunId)).toMatchObject({
+      pauseReason: "sessions_yield",
+      execution: { status: "terminal" },
+    }),
+  );
+  const publications = observeChildPublications();
+  const respond = vi.fn();
+  try {
+    await stopSession(parentKey, respond, abortContext());
+    await fixture.settle();
+  } finally {
+    publications.stop();
+  }
+  expectStopResult(respond);
+  const stopped = publications.entries.findLast((entry) => entry !== undefined);
+  expect(stopped).toMatchObject({
+    endedReason: "subagent-killed",
+    execution: { outcome: { status: "error", error: "killed" } },
+  });
+  expect(stopped?.pauseReason).toBeUndefined();
+});
+
 it.each([false, true])(
   "cancels a yielded parent only when queue clearing retires a child wake (pending=%s)",
   async (pendingWake) => {

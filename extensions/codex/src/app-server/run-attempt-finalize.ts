@@ -15,6 +15,7 @@ import {
 } from "./attempt-results.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { buildCodexContinuityCalibration } from "./context-engine-projection.js";
+import { applyCodexAssistantTerminalOutcome } from "./event-projector-assistant-message.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
@@ -32,7 +33,7 @@ import {
   canClearCodexBindingForRecovery,
   clearCodexBindingAfterInvalidImagePayload,
   retireCodexTransportAfterFailure,
-  shouldUseFreshCodexThreadAfterContextEngineOverflow,
+  shouldUseFreshCodexThreadAfterContextOverflow,
 } from "./run-attempt-state.js";
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
@@ -196,8 +197,9 @@ export async function finalizeCodexAttempt(
       );
     }
     if (
+      !params.providerReviewAcknowledgment &&
       resourceState.thread.connectionScope !== "supervision" &&
-      shouldUseFreshCodexThreadAfterContextEngineOverflow({
+      shouldUseFreshCodexThreadAfterContextOverflow({
         error: enrichedPromptError,
         contextEngineActive: Boolean(activeContextEngine),
         thread: resourceState.thread,
@@ -205,7 +207,7 @@ export async function finalizeCodexAttempt(
       canClearBindingForRecovery("clearing a native context after overflow")
     ) {
       embeddedAgentLog.warn(
-        "codex app-server context-engine turn overflowed after resume; clearing thread binding for recovery",
+        "codex app-server context overflow; clearing thread binding for next-turn recovery",
         {
           threadId: resourceState.thread.threadId,
           turnId: activeTurnId,
@@ -221,7 +223,7 @@ export async function finalizeCodexAttempt(
     }
     const refreshedUsageLimitPromptError = await refreshCodexUsageLimitPromptError({
       client: resourceState.client,
-      message: enrichedPromptErrorMessage,
+      promptError: enrichedPromptError,
       timeoutMs: appServer.requestTimeoutMs,
       signal: runAbortController.signal,
     });
@@ -231,7 +233,7 @@ export async function finalizeCodexAttempt(
         authProfileId: startupAuthProfileId,
         rateLimits: refreshedUsageLimitPromptError.rateLimitsForProfile,
       });
-      enrichedPromptError = new CodexUsageLimitPromptError(refreshedUsageLimitPromptError.message);
+      enrichedPromptError = refreshedUsageLimitPromptError.promptError;
     } else if (
       enrichedPromptError instanceof CodexUsageLimitPromptError &&
       state.rateLimitsRevisionBeforeLastTurnStart !== undefined &&
@@ -325,19 +327,7 @@ export async function finalizeCodexAttempt(
         result.currentAttemptAssistant,
         terminalAssistantSource,
       ]) {
-        if (message?.role === "assistant") {
-          const providerRefusal = message.diagnostics?.some(
-            (diagnostic) => diagnostic.type === "provider_refusal",
-          );
-          // The projector owns refusal classification. Preserve it unless a stronger
-          // local abort or prompt failure supersedes this turn's provider outcome.
-          if (!providerRefusal || finalAborted || finalPromptError) {
-            message.stopReason = finalAborted ? "aborted" : finalPromptError ? "error" : "stop";
-            message.errorMessage = finalPromptError
-              ? formatErrorMessage(finalPromptError)
-              : undefined;
-          }
-        }
+        applyCodexAssistantTerminalOutcome(message, finalAborted, finalPromptError);
       }
       return {
         effectiveTimedOut,
@@ -718,7 +708,7 @@ export async function finalizeCodexAttempt(
     }
     emitLifecycleTerminal({
       phase: finalPromptError ? "error" : "end",
-      ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
+      ...(finalPromptError ? { error: finalPromptError } : {}),
       ...(assistantTranscriptIdempotencyKey ? { assistantTranscriptIdempotencyKey } : {}),
       ...buildLifecycleTerminalMeta({
         aborted: finalAborted,

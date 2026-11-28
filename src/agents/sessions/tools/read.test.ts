@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -20,15 +21,7 @@ import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./truncate.js";
 import { createWriteTool } from "./write.js";
 
-const decodeWindowsTextFileBufferMock = vi.hoisted(() =>
-  vi.fn(({ buffer }: { buffer: Buffer }) => buffer.toString("utf8")),
-);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-vi.mock("../../../infra/windows-encoding.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../infra/windows-encoding.js")>()),
-  decodeWindowsTextFileBuffer: decodeWindowsTextFileBufferMock,
-}));
 
 const ONE_PIXEL_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
@@ -168,10 +161,7 @@ console.log("headless-read-ok");`,
     expect(result.stdout).toContain("headless-read-ok");
   });
 
-  beforeEach(() => {
-    decodeWindowsTextFileBufferMock.mockReset();
-    decodeWindowsTextFileBufferMock.mockImplementation(({ buffer }) => buffer.toString("utf8"));
-  });
+  beforeEach(() => {});
 
   it("reads managed inbound media refs as image files", async () => {
     const stateDir = tempDirs.make("openclaw-read-media-");
@@ -340,7 +330,6 @@ console.log("headless-read-ok");`,
       /^Read did not return file contents because it detected a binary document \[.+\]\. Use an available document parser or converter, or convert the file to text, Markdown, or CSV, then read the converted file\.$/,
     );
     expect(result.details.kind).toBe("text");
-    expect(decodeWindowsTextFileBufferMock).not.toHaveBeenCalled();
   });
 
   it("counts filename-resolution notes inside the complete 50 KiB read ceiling", async () => {
@@ -378,6 +367,40 @@ console.log("headless-read-ok");`,
       expect(scoring.mock.contexts).not.toContain(distant);
     } finally {
       scoring.mockRestore();
+    }
+  });
+
+  it("stops scoring beyond the third-best filename while retaining equal-distance ties", async () => {
+    const prefix = "a".repeat(100);
+    const { tempDir, tool } = await fileFixture(`${prefix}.td`, "");
+    const names = ["tc", "tb", "ta"].map((extension) => `${prefix}.${extension}`);
+    const distant = `${"z".repeat(100)}.ts`;
+    await Promise.all(
+      [...names, distant].map((name) => fs.writeFile(path.join(tempDir, name), "")),
+    );
+    const isDistant = (entry: string | { name: string | Buffer }) =>
+      (typeof entry === "string" ? entry : entry.name.toString()) === distant;
+    const readdir = fs.readdir;
+    const directory = vi
+      .spyOn(fs, "readdir")
+      .mockImplementation(async (...args) =>
+        (await readdir(...args)).toSorted(
+          (left, right) => Number(isDistant(left)) - Number(isDistant(right)),
+        ),
+      );
+    syncBuiltinESMExports();
+    const scoring = vi.spyOn(String.prototype, "charCodeAt");
+    try {
+      await expect(executeRead(tool, { path: `${prefix}.ts` })).rejects.toThrow(
+        `Did you mean: ${names.toSorted().join(", ")}?`,
+      );
+      expect(scoring.mock.contexts.filter((value) => value === distant).length).toBeLessThanOrEqual(
+        distant.length * 2,
+      );
+    } finally {
+      scoring.mockRestore();
+      directory.mockRestore();
+      syncBuiltinESMExports();
     }
   });
 
@@ -544,11 +567,9 @@ console.log("headless-read-ok");`,
   });
 
   it("uses the shared Windows decoder for local filesystem reads", async () => {
-    const legacyBytes = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
-    decodeWindowsTextFileBufferMock.mockReturnValueOnce("decoded legacy text");
+    const legacyBytes = Buffer.from("\uFEFFdecoded legacy text", "utf16le");
     const { tool } = await fileFixture("legacy.txt", legacyBytes);
     const result = await executeRead(tool, { path: "legacy.txt" });
-    expect(decodeWindowsTextFileBufferMock).toHaveBeenCalledWith({ buffer: legacyBytes });
     expect(textContent(result)).toBe("decoded legacy text");
   });
 

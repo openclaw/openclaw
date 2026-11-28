@@ -336,6 +336,12 @@ worker-owned state:
 | `approval-handler-runtime`                | `createChannelApprovalNativeRuntimeAdapter`        | `createChannelApprovalNativeRuntimeAdapterAsync`        |
 | `approval-handler-adapter-runtime`        | `createLazyChannelApprovalNativeRuntimeAdapter`    | `createLazyChannelApprovalNativeRuntimeAdapterAsync`    |
 
+When another awaited policy check separates a conversation-binding read from
+execution, use `prepareConversationBindingInspections(refs)` from
+`openclaw/plugin-sdk/conversation-binding-inspection-runtime`. Await preparation,
+then call `inspect()` synchronously immediately before the effect. The prepared
+owner rejects changed bindings; release it with `dispose()` in `finally`.
+
 Await inspection and command authorization before consuming their results. The
 approval factories still return adapters synchronously; their async eligibility
 callbacks are awaited by the host. The original APIs preserve their synchronous
@@ -808,9 +814,16 @@ Use `await statSessionEntry(path, options)` from
 metadata through the worker. `statSessionEntrySync` remains available through
 2026-12-31; passing already prepared transcript statistics to it
 only projects those values and does not query SQLite. `buildSessionEntry`
-also reads durable snapshots in the worker when an `onTranscriptMessage`
-observer is supplied, then invokes the observer on the caller with the original
-messages and timestamps.
+renders SQLite exports in the worker and assembles the complete entry on the
+caller. With an `onTranscriptMessage` observer, the worker also delivers the
+original messages and timestamps in bounded pages. Because this legacy callback
+cannot retract observations, the caller retains those messages until each entry
+succeeds, discards abandoned attempts, and invokes the observer once per message
+in the successful snapshot. Full builders and streaming calls that supply this
+legacy observer may retain the full original message payloads. Memory engines
+that only need pages, the entry hash or provenance use `streamSessionEntry` or
+`streamSessionEntries` without a legacy observer; these deliver about 1 MiB of
+rendered lines at a time and never hold the complete export.
 
 ## Prepare session entry changes
 

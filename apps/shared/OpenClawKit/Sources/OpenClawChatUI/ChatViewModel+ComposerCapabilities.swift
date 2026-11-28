@@ -13,7 +13,7 @@ extension OpenClawChatViewModel {
     }
 
     public func selectVerboseLevel(_ level: String) {
-        guard self.composerEffortMutationAvailable else { return }
+        guard self.composerVerboseMutationAvailable else { return }
         self.performSelectVerboseLevel(level)
     }
 
@@ -55,15 +55,44 @@ extension OpenClawChatViewModel {
     }
 
     var composerModelMutationAvailable: Bool {
-        !self.supportsComposerCapabilities || self.composerCapabilityCatalog.modelMutationAvailable
+        guard !self.isSubmittingDraft || self.newChatDraft?.key != self.sessionKey else { return false }
+        return !self.supportsComposerCapabilities || self.composerCapabilityCatalog.modelMutationAvailable
     }
 
     var composerEffortMutationAvailable: Bool {
-        !self.supportsComposerCapabilities || self.composerCapabilityCatalog.effortMutationAvailable
+        guard !self.isSubmittingDraft || self.newChatDraft?.key != self.sessionKey else { return false }
+        return !self.supportsComposerCapabilities || self.composerCapabilityCatalog.effortMutationAvailable
+    }
+
+    /// Why the phone's effort controls are locked: shown under them in the bar and read as the chip's hint.
+    /// Nil while they can change, including the moment a change saves, so the bar does not grow and shrink
+    /// on every pick. A running reply does not lock them: a change applies from the next message.
+    var composerPhoneEffortLockReason: String? {
+        if !self.composerEffortMutationAvailable {
+            return String(localized: "You don’t have permission to change this.")
+        }
+        return nil
+    }
+
+    /// Whether the effort control has anything to offer: levels to choose, or speed options.
+    var composerOffersEffortChoices: Bool {
+        self.showsThinkingPicker || self.selectedModelSupportsFastMode
+    }
+
+    public var composerVerboseMutationAvailable: Bool {
+        guard !self.isSubmittingDraft || self.newChatDraft?.key != self.sessionKey else { return false }
+        return !self.supportsComposerCapabilities || self.composerCapabilityCatalog.verboseMutationAvailable
     }
 
     var composerCapabilitiesLoading: Bool {
         self.composerCapabilityOwnerMatches && self.composerCapabilityState.phase == .loading
+    }
+
+    /// A patch or reload is in flight. The catalog is empty while it reloads, so a view that stays
+    /// open across a change keeps its last state until this clears.
+    var composerCapabilitiesBusy: Bool {
+        self.composerCapabilityOwnerMatches &&
+            (self.composerCapabilityState.phase == .loading || self.composerCapabilityState.isMutating)
     }
 
     var composerCapabilityMutationDisabled: Bool {
@@ -125,13 +154,13 @@ extension OpenClawChatViewModel {
             return String(localized: "Session capability controls require a newer Gateway.")
         }
         if !self.composerCapabilityCatalog.sessionSettingsCASAvailable {
-            return String(localized: "Session permission controls require a newer Gateway.")
+            return String(localized: "Update the Gateway to change permissions.")
         }
-        if self.composerCapabilityMutationDisabled {
+        if self.composerCapabilityState.isMutating || self.isUpdatingSessionSettings {
             return String(localized: "Saving session settings.")
         }
         if !self.composerCapabilityCatalog.permissionMutationAvailable {
-            return String(localized: "Changing permissions requires operator.write or operator.admin access.")
+            return String(localized: "You need write access to change permissions.")
         }
         return nil
     }
@@ -146,11 +175,11 @@ extension OpenClawChatViewModel {
         if self.composerCapabilityCatalog.toolOverrideMutationRequiresGatewayUpgrade {
             return String(localized: "Session tool controls require a newer Gateway.")
         }
-        if self.composerCapabilityMutationDisabled {
+        if self.composerCapabilityState.isMutating || self.isUpdatingSessionSettings {
             return String(localized: "Saving session settings.")
         }
         if !self.composerCapabilityCatalog.toolOverrideMutationAvailable {
-            return String(localized: "Session tool controls require operator.admin access.")
+            return String(localized: "You need admin access to change tools.")
         }
         return nil
     }
@@ -161,19 +190,12 @@ extension OpenClawChatViewModel {
         }
         if !self.composerCapabilityCatalog.webSearchAvailable {
             return self
-                .composerCapabilityErrorMessage ?? String(localized: "Web Search is unavailable on this Gateway.")
+                .composerCapabilityErrorMessage ?? String(localized: "Web search is unavailable on this Gateway.")
         }
         if !self.composerCapabilityCatalog.webSearchBaseEnabled {
-            return String(localized: "Web Search is disabled in the Gateway configuration.")
+            return String(localized: "Web search is off in the Gateway configuration.")
         }
         return self.composerToolOverrideMutationDisabledReason
-    }
-
-    func composerPermissionDisabledReason(_ mode: OpenClawChatPermissionMode?) -> String? {
-        if mode == .full, !self.composerCapabilityCatalog.canSelectFullPermission {
-            return String(localized: "Full permission requires operator.admin access.")
-        }
-        return self.composerPermissionMutationDisabledReason
     }
 
     func composerSkillDisabledReason(_ skill: OpenClawChatComposerSkill) -> String? {
@@ -279,6 +301,20 @@ extension OpenClawChatViewModel {
         }
     }
 
+    /// Health recovery retries a snapshot that never loaded on a healthy route: one loaded before the
+    /// operator connected has no scopes, and its owner ID need not change on connect. A loaded snapshot
+    /// stays; replacement sockets invalidate it through the reconnect events.
+    func reloadUnsettledComposerCapabilities() {
+        guard self.supportsComposerCapabilities,
+              !self.composerCapabilityOwnerMatches || self.composerCapabilityState.phase != .loaded
+        else { return }
+        Task { [weak self] in
+            // The recovery pass reloads capabilities after its transcript settles.
+            guard let self, self.pendingTransportRecoveryID == nil else { return }
+            await self.loadComposerCapabilities(force: true)
+        }
+    }
+
     func invalidateComposerCapabilities() {
         self.capabilityPatchFailureRevisionsByTarget.removeAll()
         self.capabilityPatchFailureMessagesByTarget.removeAll()
@@ -301,7 +337,7 @@ extension OpenClawChatViewModel {
         guard mode != self.composerPermissionMode else { return }
         self.performComposerCapabilityPatch(
             OpenClawChatSessionSettingsPatch(permissionMode: .some(mode)),
-            notice: String(localized: "New permissions apply to the next run."))
+            notice: Self.permissionsNextRunNotice)
     }
 
     func toggleComposerWebSearch() {
@@ -366,14 +402,26 @@ extension OpenClawChatViewModel {
         guard !self.composerClearToolOverridesDisabled else { return }
         self.performComposerCapabilityPatch(
             OpenClawChatSessionSettingsPatch(toolOverrides: .some(nil)),
-            notice: String(localized: "Tool overrides will be cleared for the next run."))
+            notice: Self.toolOverridesClearedNextRunNotice)
+    }
+
+    static var toolOverridesClearedNextRunNotice: String {
+        String(localized: "Tool overrides will be cleared for the next reply.")
+    }
+
+    static var permissionsNextRunNotice: String {
+        String(localized: "New permissions apply to the next reply.")
+    }
+
+    static var toolChangesNextRunNotice: String {
+        String(localized: "Tool changes apply to the next reply.")
     }
 
     private func patchComposerToolOverrides(_ overrides: OpenClawChatSessionToolOverrides) {
         let normalized = overrides.isEmpty ? nil : overrides
         self.performComposerCapabilityPatch(
             OpenClawChatSessionSettingsPatch(toolOverrides: .some(normalized)),
-            notice: String(localized: "Tool changes apply to the next run."))
+            notice: Self.toolChangesNextRunNotice)
     }
 
     private func performComposerCapabilityPatch(
@@ -385,6 +433,12 @@ extension OpenClawChatViewModel {
               self.composerCapabilityState.phase == .loaded,
               !self.composerCapabilityState.isMutating
         else { return }
+        if self.isNewChatDraft {
+            guard !self.isSubmittingDraft else { return }
+            _ = self.stageNewChatDraftSettings(patch)
+            self.composerCapabilityState.notice = notice
+            return
+        }
         guard let expectedSessionID = self.composerCapabilitySessionID else {
             self.composerCapabilityState.errorMessage = String(
                 localized: "Refresh this thread before changing its capabilities.")

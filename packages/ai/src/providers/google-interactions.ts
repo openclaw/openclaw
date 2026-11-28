@@ -16,6 +16,7 @@ import { resolveProviderContext, PROVIDER_MODEL_INPUT } from "../provider-types.
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import { buildGuardedModelFetch } from "../transports/host-policy.js";
 import { parseJsonPreservingUnsafeIntegers } from "../transports/json-unsafe-integers.js";
+import { prepareFinalModelRequestJson } from "../transports/model-request-body.js";
 import {
   awaitProviderLifecycleCallback,
   failTransportStream,
@@ -129,6 +130,7 @@ export const streamGoogleInteractions: StreamFunction<
         : context;
       const videoSlots: GoogleVideoSlots = new Map();
       let body = buildGoogleInteractionsParams(model, providerContext, options, videoSlots);
+      const finalJson = prepareFinalModelRequestJson(options);
       const nextBody = await awaitProviderLifecycleCallback(
         options?.onPayload ? () => options.onPayload?.(body, model) : undefined,
         options?.signal,
@@ -209,7 +211,7 @@ export const streamGoogleInteractions: StreamFunction<
       const response = await guardedFetch(url, {
         method: "POST",
         headers: omitNullRequestHeaders(headers),
-        body: JSON.stringify(body),
+        body: finalJson ? await finalJson(JSON.stringify(body)) : JSON.stringify(body),
         signal: options?.signal,
       });
       await notifyProviderHttpResponse({ options, response, model });
@@ -480,7 +482,8 @@ export const streamGoogleInteractions: StreamFunction<
         } else if (eventType === "interaction.completed" || eventType === "interaction.complete") {
           sawCompletion = true;
           const interaction = asOptionalRecord(event.interaction) ?? event;
-          const usage = asOptionalRecord(interaction.usage) ?? latestUsage ?? {};
+          const interactionUsage = asOptionalRecord(interaction.usage);
+          const usage = interactionUsage ?? latestUsage ?? {};
           const promptTokens = Number(usage.total_input_tokens ?? 0);
           const cacheRead = Number(usage.total_cached_tokens ?? 0);
           const candidatesTokens = Number(usage.total_output_tokens ?? 0);
@@ -491,19 +494,29 @@ export const streamGoogleInteractions: StreamFunction<
             usage.total_tokens ?? promptTokens + outputTokens + toolUseTokens,
           );
 
+          const measured =
+            typeof usage.total_input_tokens === "number" &&
+            typeof usage.total_output_tokens === "number";
+          // `total_input_tokens` is the measured prompt, cached tokens included; tool-use
+          // prompt tokens are prompt too.
+          const contextPromptTokens = promptTokens + toolUseTokens;
           output.usage = {
-            usageReport: {
-              state:
-                typeof usage.total_input_tokens === "number" &&
-                typeof usage.total_output_tokens === "number"
-                  ? "available"
-                  : "unavailable",
-            },
+            usageReport: { state: measured ? "available" : "unavailable" },
             input: Math.max(0, promptTokens - cacheRead) + toolUseTokens,
             output: outputTokens,
             cacheRead,
             cacheWrite: 0,
             cacheTelemetry: { state: "available" },
+            // Only the completed interaction's own usage measures the whole request; a step's
+            // usage carried forward does not.
+            contextUsage:
+              interactionUsage && measured && promptTokens > 0
+                ? {
+                    state: "available",
+                    promptTokens: contextPromptTokens,
+                    totalTokens: contextPromptTokens + outputTokens,
+                  }
+                : { state: "unavailable" },
             totalTokens,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
           };
@@ -595,6 +608,7 @@ export const streamSimpleGoogleInteractions: StreamFunction<
   return streamGoogleInteractions(model, context, {
     ...base,
     ...(typeof record.topP === "number" ? { topP: record.topP } : {}),
+    ...(typeof record.seed === "number" ? { seed: record.seed } : {}),
     thinking: buildGoogleInteractionsSimpleThinking(model, options),
     ...(toolChoice ? { toolChoice } : {}),
     ...(videoMetadata !== undefined ? { videoMetadata } : {}),

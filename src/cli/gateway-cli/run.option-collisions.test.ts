@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { CONFIG_AUDIT_STORE_LABEL } from "../../config/io.audit.js";
@@ -9,9 +10,17 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
 import type { GatewayServerOptions } from "../../gateway/server-public.js";
 import { createNewerSqliteSchemaVersionError } from "../../infra/sqlite-user-version.js";
+import { findStartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
+import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
+import { OPENCLAW_AGENT_SCHEMA_V25_SQL } from "../../state/openclaw-agent-schema-v25.test-support.js";
 import { OpenClawDatabaseSchemaPreflightError } from "../../state/openclaw-database-preflight.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "../../state/openclaw-state-db-schema-migration-required.js";
+import {
+  encodeOpenClawStateWorkerError,
+  hydrateOpenClawStateWorkerError,
+  retainOpenClawStateWorkerErrorPayload,
+} from "../../state/openclaw-state-worker-error.js";
 import {
   captureEnv,
   deleteTestEnvValue,
@@ -29,7 +38,7 @@ import {
 import {
   failedGatewayRunConfigSnapshot,
   completeGatewayRunSnapshot as completeSnapshot,
-  registerInvalidConfigResetTests,
+  registerGatewayRunConfigGuardTests,
   gatewayRunReadFailures,
   type RuntimeDotEnvLoadResult,
 } from "./run-config.test-support.js";
@@ -193,7 +202,6 @@ vi.mock("../../config/paths.js", async (importOriginal) => ({
   pinRuntimePaths: mocks.pinRuntimePaths,
   resolveConfigPath: () => "/tmp/openclaw-test-missing-config.json",
   resolveStateDir: (env?: NodeJS.ProcessEnv) => env?.OPENCLAW_STATE_DIR ?? "/tmp",
-  resolveGatewayPort: (cfg?: { gateway?: { port?: number } }) => cfg?.gateway?.port ?? 18789,
 }));
 
 vi.mock("../../utils.js", async (importOriginal) => ({
@@ -489,7 +497,7 @@ describe("gateway run option collisions", () => {
     return await prepareGatewayRunBootstrap({ opts: { reset: true }, runtime: defaultRuntime });
   }
 
-  registerInvalidConfigResetTests(configState);
+  registerGatewayRunConfigGuardTests({ ...mocks, configState, runUnconfigured });
   function callArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): unknown {
     const call = mock.mock.calls[index];
     if (!call) {
@@ -498,8 +506,8 @@ describe("gateway run option collisions", () => {
     return call[argIndex];
   }
 
-  function gatewayStartOptions(index = 0) {
-    expect(startGatewayServer.mock.calls[index]?.[0]).toBe(18789);
+  function gatewayStartOptions(index = 0, port = 18789) {
+    expect(startGatewayServer.mock.calls[index]?.[0]).toBe(port);
     return callArg(startGatewayServer, index, 1) as GatewayServerOptions;
   }
 
@@ -888,7 +896,7 @@ describe("gateway run option collisions", () => {
         await runUnconfigured("--dev", "--reset");
 
         expect(ensureDevGatewayConfig).toHaveBeenCalledWith({ reset: true });
-        expect(gatewayStartOptions().ambientEnvTriggers).toBe("suppress");
+        expect(gatewayStartOptions(0, 19001).ambientEnvTriggers).toBe("suppress");
         expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBe("trusted-token");
         expect(loadGlobalRuntimeDotEnvFiles).toHaveBeenCalled();
       },
@@ -1085,6 +1093,67 @@ describe("gateway run option collisions", () => {
       "state database schema migration required (audit-events-v2)",
     );
   });
+
+  it.each(["bootstrap", "server"] as const)(
+    "parks an older agent schema refused during %s after worker transport",
+    async (phase) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-old-agent-schema-"));
+      const pathname = path.join(root, "openclaw-agent.sqlite");
+      try {
+        {
+          using database = new DatabaseSync(pathname);
+          database.exec(OPENCLAW_AGENT_SCHEMA_V25_SQL);
+          database.exec("PRAGMA user_version = 25");
+          database.exec(
+            "INSERT INTO schema_meta VALUES ('primary', 'agent', 25, 'main', '2026.10.9', 1, 1)",
+          );
+        }
+        const original = await fs.readFile(pathname);
+        let refusal: unknown;
+        try {
+          const opened = openOpenClawAgentDatabaseReadOnly({
+            agentId: "main",
+            path: pathname,
+            env: { OPENCLAW_STATE_DIR: root },
+          });
+          if (opened.found) {
+            opened.database.close();
+          }
+        } catch (error) {
+          refusal = error;
+        }
+        expect(refusal).toBeInstanceOf(Error);
+        expect(String(refusal)).toContain("uses schema version 25");
+        const wrapped = new Error("agent startup failed", { cause: refusal });
+        const received = new Error("worker failed");
+        retainOpenClawStateWorkerErrorPayload(
+          received,
+          structuredClone(encodeOpenClawStateWorkerError(wrapped, { includeOrdinary: true })),
+        );
+        const failure = hydrateOpenClawStateWorkerError(received, { includeOrdinary: true });
+        if (phase === "bootstrap") {
+          beforeRun.mockRejectedValueOnce(failure);
+        } else {
+          startGatewayServer.mockRejectedValueOnce(failure);
+        }
+        parkCurrentLaunchAgentForMaintenance.mockResolvedValueOnce(true);
+
+        await expectExit(78);
+
+        expect(parkCurrentLaunchAgentForMaintenance).toHaveBeenCalledOnce();
+        expect(findStartupMaintenanceRequiredError(failure)?.kind).toBe("state-migrations");
+        expect(triageAfterFailure).not.toHaveBeenCalled();
+        expect(startGatewayServer).toHaveBeenCalledTimes(phase === "server" ? 1 : 0);
+        expect(runtimeErrors.join("\n")).toContain("uses schema version 25");
+        expect(runtimeErrors.join("\n")).toMatch(
+          /Stop the service.*then run openclaw doctor --fix, then start it again/s,
+        );
+        expect(await fs.readFile(pathname)).toEqual(original);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each([
     { phase: "server", kind: "state" },

@@ -7,6 +7,7 @@ import {
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import type { AgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
+import { subagentTerminalTransition } from "../completion/subagent-terminal-transition.js";
 import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -24,6 +25,7 @@ import {
 } from "./subagent-registry-persistence.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 /** Admit terminal evidence before transport-specific grace or deadline reconciliation. */
@@ -67,7 +69,7 @@ export async function prepareSubagentTerminalObservation(params: {
     );
     assertCurrent();
     const paused = runs.get(entry.runId);
-    if (paused?.pauseReason === "sessions_yield") {
+    if (isSubagentPausedByYield(paused)) {
       params.clearPending();
       if (!(await params.adoptPaused(paused)) && paused.requesterSettleWake?.pauseNotice) {
         assertCurrent();
@@ -155,31 +157,15 @@ export function createSubagentRegistryCompletionRuntime(config: {
     if (!(await isCurrent())) {
       return;
     }
-    const latest = currentEntry(params);
-    if (latest && typeof latest.execution.endedAt !== "number") {
-      // Keep the captured live result through a refused write. Hydrated history
-      // never reconstructs terminal evidence after a process restart.
-      scheduleSubagentCompletionRetry(params, source, latest);
+    const retry = subagentTerminalTransition.retry(currentEntry(params), params);
+    if (retry.kind === "completion") {
+      scheduleSubagentCompletionRetry(params, source, retry.entry);
       return;
     }
-    if (
-      !latest ||
-      typeof latest.cleanupCompletedAt === "number" ||
-      latest.pauseReason === "sessions_yield"
-    ) {
+    if (retry.kind !== "cleanup") {
       return;
     }
-    if (
-      latest.collect &&
-      latest.collectorCompletion &&
-      params.triggerCleanup &&
-      latest.execution.suppressSessionEffects !== true &&
-      latest.browserCleanupDispatchedAt === undefined
-    ) {
-      // Collector results have no announce tail that can retry terminal resource cleanup.
-      scheduleSubagentCompletionRetry(params, source, latest);
-      return;
-    }
+    const latest = retry.entry;
     const resumeKey = getSubagentRunRuntimeKey(latest);
     const resume = await mutateSubagentRuns(
       [latest.runId],
@@ -190,10 +176,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
             "Subagent cleanup address changed before retry",
           );
         }
-        if (
-          typeof current.cleanupCompletedAt === "number" ||
-          current.pauseReason === "sessions_yield"
-        ) {
+        if (typeof current.cleanupCompletedAt === "number" || isSubagentPausedByYield(current)) {
           return { value: false };
         }
         return {
