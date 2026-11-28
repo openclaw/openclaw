@@ -195,7 +195,9 @@ required to match. Values within a field are alternatives. Column names
 and descriptions help people understand the board; `match` rules decide placement.
 
 Drag a session into another column, or ask the Board agent to move it, to pin
-its placement. Pins remain in effect when session facts change. If a pinned
+its placement. When you drag a tile, it appears in the destination with **Moving…**
+while the Gateway saves the pin. If the move is rejected, the board shows the
+last confirmed placement and the error. Pins remain in effect when session facts change. If a pinned
 column is removed, the board applies its rules again. Tile tooltips distinguish
 **by rule** and **pinned**.
 

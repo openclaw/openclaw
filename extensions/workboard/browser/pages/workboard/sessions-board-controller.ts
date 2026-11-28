@@ -35,7 +35,11 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
   let sessionsLoaded = false;
   let revision: WorkboardSessionsBoardRevision | undefined;
   let error: string | undefined;
-  let busy = false;
+  type Move = Pick<
+    WorkboardSessionsBoardRead["sessions"][number],
+    "key" | "sessionId" | "columnId"
+  >;
+  let writing: { move?: Move } | undefined;
   let draggedKey: string | undefined;
   let dropColumn: string | undefined;
   let peopleFilter = "everyone";
@@ -46,6 +50,7 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
   let restoredBoardId: string | undefined;
   const invalidate = () => {
     generation += 1;
+    writing = undefined;
     pending = undefined;
     revision = undefined;
   };
@@ -187,14 +192,14 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
     }
   };
 
-  const write = async (operation: (id: string, receipt: number) => Promise<void>) => {
-    if (!boardId || !writable() || busy) {
+  const write = async (operation: (id: string, receipt: number) => Promise<void>, move?: Move) => {
+    if (!boardId || !writable() || writing) {
       return;
     }
     const id = boardId;
     invalidate();
     const receipt = generation;
-    busy = true;
+    writing = { move };
     error = undefined;
     notify();
     try {
@@ -211,7 +216,7 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
       }
     } finally {
       if (current(id, receipt)) {
-        busy = false;
+        writing = undefined;
       }
       notify();
     }
@@ -242,7 +247,7 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
       return viewerProfileId;
     },
     selectPeople(value: string) {
-      if (!boardId || !active || busy || value === peopleFilter) {
+      if (!boardId || !active || writing || value === peopleFilter) {
         return;
       }
       peopleFilter = value;
@@ -267,7 +272,10 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
       return Boolean(pending);
     },
     get busy() {
-      return busy;
+      return Boolean(writing);
+    },
+    get pendingMove() {
+      return writing?.move;
     },
     get draggedKey() {
       return draggedKey;
@@ -290,7 +298,6 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
       if (boardId !== nextId || active !== enabled) {
         invalidate();
         attempted = false;
-        busy = false;
         draggedKey = undefined;
         dropColumn = undefined;
         if (boardId !== nextId) {
@@ -321,10 +328,48 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
     },
     read: () => read(),
     loadMore: () => read(true),
-    move: (sessionKey: string, columnId: string) =>
-      write(async (id) => {
-        await host.request("workboard.sessionsBoard.move", { boardId: id, sessionKey, columnId });
-      }),
+    move: (sessionKey: string, columnId: string) => {
+      const row = snapshot?.sessions.find((session) => session.key === sessionKey);
+      if (!row) {
+        return;
+      }
+      return write(
+        async (id, receipt) => {
+          const result = await host.request<WorkboardSessionsBoardRead>(
+            "workboard.sessionsBoard.move",
+            {
+              boardId: id,
+              sessionKey,
+              columnId,
+            },
+          );
+          if (!current(id, receipt) || !snapshot) {
+            return;
+          }
+          // The move returns an unfiltered first page. Only accept placement for the
+          // same visible session; the following scoped read owns membership and facts.
+          const placed = result.sessions.find(
+            (entry) => entry.key === row.key && entry.sessionId === row.sessionId,
+          );
+          if (placed) {
+            snapshot = {
+              ...snapshot,
+              sessions: snapshot.sessions.map((entry) =>
+                entry.key === placed.key && entry.sessionId === placed.sessionId
+                  ? {
+                      ...entry,
+                      columnId: placed.columnId,
+                      source: placed.source,
+                      reason: placed.reason,
+                    }
+                  : entry,
+              ),
+            };
+          }
+        },
+        { key: row.key, sessionId: row.sessionId, columnId },
+      );
+    },
     drag(sessionKey?: string, columnId?: string) {
       draggedKey = sessionKey;
       dropColumn = columnId;
