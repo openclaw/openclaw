@@ -41,6 +41,7 @@ import {
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
 import { SessionIconGraphic } from "./session-icon-glyph-solid.tsx";
+import { SidebarViewBoundary } from "./sidebar-view-boundary.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Popover, type PopoverHandle } from "./solid/popover.tsx";
 import { SessionOwnerAvatar } from "./solid/session-owner-chip.tsx";
@@ -422,15 +423,17 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
       onOpenChange={setPagesMenuOpen}
       ref={(handle) => (pagesMenu = handle)}
     >
-      <SidebarPagesMenu
-        host={host}
-        onNavigate={(entry) => {
-          pagesMenu?.hide();
-          if (entry) {
-            revealDestination(host, entry);
-          }
-        }}
-      />
+      <SidebarViewBoundary>
+        <SidebarPagesMenu
+          host={host}
+          onNavigate={(entry) => {
+            pagesMenu?.hide();
+            if (entry) {
+              revealDestination(host, entry);
+            }
+          }}
+        />
+      </SidebarViewBoundary>
     </Popover>,
   ];
 }
