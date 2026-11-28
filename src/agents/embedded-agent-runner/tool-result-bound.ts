@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { splitExternalContentEnvelope } from "../../security/external-content.js";
+import { findExternalContentFrames } from "../../security/external-content.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
   writePrivateTempFile,
@@ -10,17 +10,23 @@ import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
   resolveToolResultBudget,
+  type ToolResultBudget,
 } from "../tool-result-limits.js";
 import { log } from "./logger.js";
 import {
   estimateMessageChars,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
 } from "./tool-result-char-estimator.js";
-import { estimateToolResultTextChars, isToolResultTextBlock } from "./tool-result-text-budget.js";
 import {
+  estimateToolResultTextChars,
+  isToolResultTextBlock,
+  sliceToolResultTextTailToBudget,
+  sliceToolResultTextToBudget,
+} from "./tool-result-text-budget.js";
+import {
+  formatOmittedCharsNotice,
   getToolResultSpillDetails,
   truncateToolResultMessage,
-  type ToolResultTruncationOptions,
 } from "./tool-result-truncation.js";
 
 // The context guard's weighting of a tool result's visible content.
@@ -34,41 +40,132 @@ const SHAPE: AgentMessage = {
 };
 const contextChars = (content: unknown[]) => estimateMessageChars(SHAPE, content);
 
-const withText = <T extends { content: unknown[] }>(result: T, index: number, text: string): T => ({
-  ...result,
-  content: result.content.map((block, i) =>
-    i === index && isToolResultTextBlock(block) ? { ...block, text } : block,
-  ),
-});
+// Context-guard weight of text: estimateMessageChars weighs tool-result text by this floor.
+const WEIGHTED = { minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE };
+const ELISION = "\n…\n";
 
-const textAt = (content: unknown[], index: number) => {
-  const block = content[index];
-  return isToolResultTextBlock(block) ? block : undefined;
-};
+/** Head and tail of `text` within both remaining budgets, and how many of its chars they keep. */
+function keepEnds(text: string, chars: number, context: number) {
+  const roomChars = chars - estimateToolResultTextChars(ELISION);
+  const roomContext = context - estimateToolResultTextChars(ELISION, WEIGHTED);
+  if (roomChars <= 0 || roomContext <= 0) {
+    return { text: "", kept: 0 };
+  }
+  const half = (slice: typeof sliceToolResultTextToBudget) =>
+    slice(slice(text, Math.floor(roomChars / 2)), Math.floor(roomContext / 2), WEIGHTED);
+  const head = half(sliceToolResultTextToBudget);
+  const tail = half(sliceToolResultTextTailToBudget);
+  return { text: `${head}${ELISION}${tail}`, kept: head.length + tail.length };
+}
 
-/** The one text block, when it is exactly one untrusted-content envelope. */
-function findEnvelope(content: unknown[]) {
-  const texts = content.flatMap((block, index) => (isToolResultTextBlock(block) ? [index] : []));
-  const index = texts.length === 1 ? texts[0]! : -1;
-  const block = textAt(content, index);
-  // A block that mirrors its text in `content` would keep the unwrapped copy there.
-  const parts =
-    block && typeof Reflect.get(block, "content") !== "string"
-      ? splitExternalContentEnvelope(block.text)
-      : undefined;
-  return parts && { index, ...parts };
+/**
+ * Bounds a result whose text carries untrusted-content frames (one per text block, or several
+ * wrapped values inside one JSON block). It fails closed: text and whole frames are kept in order
+ * while they fit; the first piece that does not fit keeps its head and tail (a frame keeps its
+ * warning and both markers, and only its body is cut, or is left out whole when even those do
+ * not fit); everything after it is left out. One trusted notice with the true omitted count
+ * follows the cut, outside every frame, in the block that was cut, so no block is added.
+ */
+function cutFrames<T extends { content: unknown[] }>(
+  result: T,
+  budget: ToolResultBudget,
+  nonText: number,
+  suffix: (omittedChars: number) => string,
+): T {
+  const allText = result.content.reduce<number>(
+    (sum, block) => sum + (isToolResultTextBlock(block) ? block.text.length : 0),
+    0,
+  );
+  const largestNotice = `\n\n${suffix(allText)}`;
+  let chars = budget.maxChars - estimateToolResultTextChars(largestNotice);
+  // Images the share cannot hold at all are dropped by the context guard; text must then fit alone.
+  let context =
+    budget.maxContextChars -
+    (nonText < budget.maxContextChars ? nonText : 0) -
+    estimateToolResultTextChars(largestNotice, WEIGHTED);
+  const take = (text: string) => {
+    const textChars = estimateToolResultTextChars(text);
+    const textContext = estimateToolResultTextChars(text, WEIGHTED);
+    if (textChars > chars || textContext > context) {
+      return false;
+    }
+    chars -= textChars;
+    context -= textContext;
+    return true;
+  };
+  let omitted = 0;
+  let stopped = false;
+  const content = result.content.flatMap((block) => {
+    if (!isToolResultTextBlock(block)) {
+      return [block];
+    }
+    if (stopped) {
+      omitted += block.text.length;
+      return [];
+    }
+    // Text between frames, then each frame as [ends before body, body, ends after body].
+    const pieces: Array<[string, string, string]> = [];
+    let at = 0;
+    for (const frame of findExternalContentFrames(block.text)) {
+      pieces.push(["", block.text.slice(at, frame.start), ""]);
+      pieces.push([
+        block.text.slice(frame.start, frame.bodyStart),
+        block.text.slice(frame.bodyStart, frame.bodyEnd),
+        block.text.slice(frame.bodyEnd, frame.end),
+      ]);
+      at = frame.end;
+    }
+    pieces.push(["", block.text.slice(at), ""]);
+    let kept = "";
+    for (const [open, body, close] of pieces) {
+      if (stopped) {
+        omitted += open.length + body.length + close.length;
+      } else if (take(`${open}${body}${close}`)) {
+        kept += `${open}${body}${close}`;
+      } else {
+        stopped = true;
+        if (take(`${open}${close}`)) {
+          const middle = keepEnds(body, chars, context);
+          take(middle.text);
+          kept += `${open}${middle.text}${close}`;
+          omitted += body.length - middle.kept;
+        } else {
+          omitted += open.length + body.length + close.length;
+        }
+      }
+    }
+    return kept === block.text
+      ? [block]
+      : [{ ...block, text: kept, ...(typeof block.content === "string" ? { content: kept } : {}) }];
+  });
+  if (omitted === 0) {
+    return result;
+  }
+  // The notice goes into the block that was cut: the last text block kept.
+  const index = content.findLastIndex((block) => isToolResultTextBlock(block));
+  const cut = content[index];
+  if (isToolResultTextBlock(cut)) {
+    const notice = sliceToolResultTextToBudget(suffix(omitted), budget.maxChars);
+    const text = cut.text ? `${cut.text}\n\n${notice}` : notice;
+    content[index] = {
+      ...cut,
+      text,
+      ...(typeof cut.content === "string" ? { content: text } : {}),
+    };
+  }
+  return { ...result, content };
 }
 
 /**
  * Bounds a fresh tool result once, before its first send, on every route. The budget is the
  * strictest one the result meets later: the per-result cap and the context guard's weighted
  * share (images and other blocks reserved first), so neither re-cuts a bounded result.
- * Head and tail are kept; an untrusted-content envelope whose frame fits keeps its warning and
- * both markers whole and only its body is cut. The full text goes to a private file (a producer's own file
- * is reused). `spill: false` (a reader that cannot open the file) or a failed write keeps the
- * same cut with a size-only notice. `reservedChars` is the text a route adds when it serializes
- * the bounded result (separators, placeholders for blocks it cannot send), so that route's own
- * cap never cuts a bounded result.
+ * Text without untrusted-content frames keeps head and tail; text with frames is cut by
+ * `cutFrames`, which never leaves untrusted text outside a frame. The full text goes to a
+ * private file (a producer's own file is reused). `spill: false` (a reader that cannot open the
+ * file) or a failed write keeps the same cut with a size-only notice. `reservedChars` is the text
+ * a route adds when it serializes the bounded result (separators, placeholders for blocks it
+ * cannot send), so that route's own cap never cuts a bounded result.
  */
 export async function boundToolResult<T extends { content: unknown[]; details?: unknown }>(
   result: T,
@@ -76,14 +173,11 @@ export async function boundToolResult<T extends { content: unknown[]; details?: 
   spill?: PrivateTempFileOptions | false,
   reservedChars = 0,
 ): Promise<T> {
-  const routeBudget = resolveToolResultBudget(contextWindowTokens) ?? {
+  const budget = resolveToolResultBudget(contextWindowTokens) ?? {
     maxChars: DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
     maxContextChars: Infinity,
   };
-  const budget = {
-    ...routeBudget,
-    maxChars: Math.max(0, routeBudget.maxChars - reservedChars),
-  };
+  budget.maxChars = Math.max(0, budget.maxChars - reservedChars);
   // Fit is judged on the result as sent; only a result that does not fit is cut.
   if (
     truncateToolResultMessage(result, budget.maxChars) === result &&
@@ -91,44 +185,28 @@ export async function boundToolResult<T extends { content: unknown[]; details?: 
   ) {
     return result;
   }
-  const found = findEnvelope(result.content);
-  const frame = found ? `${found.open}${found.close}` : "";
-  const frameChars = estimateToolResultTextChars(frame);
-  const frameContext = found ? contextChars([{ type: "text", text: frame }]) : 0;
   const nonText = contextChars(result.content.filter((block) => !isToolResultTextBlock(block)));
-  // A frame that does not fit beside the other blocks (hostile metadata, or an image that
-  // takes the share) is cut as plain text instead.
-  const envelope =
-    found && frameChars < budget.maxChars && nonText + frameContext < budget.maxContextChars
-      ? found
-      : undefined;
-  const source = envelope ? withText(result, envelope.index, envelope.body) : result;
-  const maxChars = envelope ? budget.maxChars - frameChars : budget.maxChars;
-  const reserved = nonText + (envelope ? frameContext : 0);
-  // One text block keeps head and tail at every budget (a whole-prefix cut loses the end, and
-  // an end marker with it); several blocks keep the truncator's short-record rules.
+  const framed = result.content.some(
+    (block) => isToolResultTextBlock(block) && findExternalContentFrames(block.text).length > 0,
+  );
+  // One text block keeps head and tail at every budget; several blocks keep the truncator's
+  // short-record rules.
   const minKeepChars =
     result.content.filter((block) => isToolResultTextBlock(block)).length === 1 ? 0 : undefined;
-  const cut = (suffix?: ToolResultTruncationOptions["suffix"]) => {
-    const loose = truncateToolResultMessage(source, maxChars, { suffix, minKeepChars });
+  const cut = (suffix: (omittedChars: number) => string = formatOmittedCharsNotice) => {
+    if (framed) {
+      return cutFrames(result, budget, nonText, suffix);
+    }
+    const loose = truncateToolResultMessage(result, budget.maxChars, { suffix, minKeepChars });
     // Images that cannot fit at all stay with the context guard, which drops them.
-    const inner =
-      contextChars(loose.content) + (envelope ? frameContext : 0) <= budget.maxContextChars ||
-      reserved >= budget.maxContextChars
-        ? loose
-        : truncateToolResultMessage(source, Math.min(maxChars, budget.maxContextChars - reserved), {
-            suffix,
-            minKeepChars,
-            minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
-          });
-    if (inner === source) {
-      return result;
-    }
-    if (!envelope) {
-      return inner;
-    }
-    const body = textAt(inner.content, envelope.index)?.text ?? "";
-    return withText(inner, envelope.index, `${envelope.open}${body}${envelope.close}`);
+    return contextChars(loose.content) <= budget.maxContextChars ||
+      nonText >= budget.maxContextChars
+      ? loose
+      : truncateToolResultMessage(
+          result,
+          Math.min(budget.maxChars, budget.maxContextChars - nonText),
+          { suffix, minKeepChars, minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE },
+        );
   };
   const sizeOnly = cut();
   if (sizeOnly === result) {

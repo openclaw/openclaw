@@ -354,30 +354,35 @@ export function wrapExternalContent(content: string, options: WrapExternalConten
 }
 
 /**
- * Splits text that is exactly one `wrapExternalContent` envelope into its frame (warning, start
- * marker, metadata) and body, so a size bound can cut the body and keep both markers.
+ * The `wrapExternalContent` frames inside text, in order: each from its warning (when one
+ * directly precedes it) or start marker through the end marker with the same id. Markers inside
+ * JSON-escaped text (`id=\"…\"`) count too, so wrapped values serialized into one JSON block are
+ * found. A size bound keeps `start..bodyStart` and `bodyEnd..end` whole and cuts only the body.
  */
-export function splitExternalContentEnvelope(
+export function findExternalContentFrames(
   text: string,
-): { open: string; body: string; close: string } | undefined {
-  const start = new RegExp(`<<<${EXTERNAL_CONTENT_START_NAME} id="([a-f0-9]{16})">>>\\n`, "u").exec(
-    text,
+): Array<{ start: number; bodyStart: number; bodyEnd: number; end: number }> {
+  const frames: Array<{ start: number; bodyStart: number; bodyEnd: number; end: number }> = [];
+  const warned = `${EXTERNAL_CONTENT_WARNING}\n\n\n`;
+  const opens = new RegExp(
+    `<<<${EXTERNAL_CONTENT_START_NAME} id=(\\\\*)"([a-f0-9]{16})\\1">>>`,
+    "gu",
   );
-  // Only what wrapExternalContent writes before the start marker.
-  const prefix = start ? text.slice(0, start.index) : undefined;
-  if (!start || (prefix !== "\n" && prefix !== `${EXTERNAL_CONTENT_WARNING}\n\n\n`)) {
-    return undefined;
+  for (const open of text.matchAll(opens)) {
+    const after = open.index + open[0].length;
+    if (open.index < (frames.at(-1)?.end ?? 0)) {
+      continue;
+    }
+    const close = `<<<${EXTERNAL_CONTENT_END_NAME} id=${open[1]}"${open[2]}${open[1]}">>>`;
+    const bodyEnd = text.indexOf(close, after);
+    if (bodyEnd < 0) {
+      continue;
+    }
+    const warning = open.index - warned.length;
+    const start = warning >= 0 && text.startsWith(warned, warning) ? warning : open.index;
+    frames.push({ start, bodyStart: after, bodyEnd, end: bodyEnd + close.length });
   }
-  const close = `\n<<<${EXTERNAL_CONTENT_END_NAME} id="${start[1]}">>>`;
-  const bodyStart = text.indexOf("\n---\n", start.index) + 5;
-  if (bodyStart < 5 || !text.endsWith(close) || bodyStart > text.length - close.length) {
-    return undefined;
-  }
-  return {
-    open: text.slice(0, bodyStart),
-    body: text.slice(bodyStart, text.length - close.length),
-    close,
-  };
+  return frames;
 }
 
 export function buildSafeExternalPrompt(params: {
