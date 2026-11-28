@@ -15,7 +15,9 @@ selects an isolated OpenClaw configuration and state directory.
 ## Common options
 
 - `--url <url>`: Gateway WebSocket URL; defaults to `gateway.remote.url` when configured.
+- `--port <port>`: Local Gateway port; cannot be combined with `--url`.
 - `--token <token>`: Gateway token, if required.
+- `--password <password>`: Gateway password, if required.
 - `--timeout <ms>`: RPC timeout in milliseconds; defaults to `10000`.
 - `--json`: Print the Gateway result as JSON.
 
