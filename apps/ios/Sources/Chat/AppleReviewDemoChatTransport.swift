@@ -559,7 +559,7 @@ actor LocalFixtureChatStore {
         self.fixture = fixture
         self.messages = Self.seedMessages(fixture: fixture)
         self.modelID = fixture.modelID
-        if Self.playsToolRunFixture {
+        if Self.playsToolRunFixture || Self.commandStretchModel != nil {
             self.activeRunID = Self.toolRunID
             self.messages = Self.toolRunSeed()
         }
@@ -636,6 +636,9 @@ actor LocalFixtureChatStore {
                 message["model"] = AnyCodable("gpt-5.4")
                 return AnyCodable(message)
             }
+        }
+        if let stretch = try self.commandStretchHistory(sessionKey: normalizedSessionKey) {
+            (historyWireMessages, startupSnapshot) = stretch
         }
         historyWireMessages += self.importedToolRows
         var historyActivity = try self.importedToolRows.isEmpty ? nil : Self.importedHistoryActivity()

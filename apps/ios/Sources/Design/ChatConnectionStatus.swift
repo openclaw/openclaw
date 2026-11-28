@@ -203,28 +203,33 @@ struct ChatConnectionStrip: ViewModifier {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(GatewayConnectionController.self) private var gatewayController
     @Environment(\.gatewayProblemRecovery) private var recovery
+    @Environment(\.scenePhase) private var scenePhase
     let strip: OpenClawChatStatusStrip
     let input: ChatConnectionStatus.Input
     /// Until the chat has connected once, the app is still making its first connection.
     @State private var hasConnected = false
 
     func body(content: Content) -> some View {
-        content.onChange(of: self.input, initial: true) { _, input in
-            if input.state == .connected { self.hasConnected = true }
-            guard let status = ChatConnectionStatus.resolve(input) else {
+        // A wait spent in the background must not show on the first frame back. Still remember a
+        // successful connection there so the next disconnect uses the reconnect wait.
+        let input = self.scenePhase != .background || self.input.state == .connected ? self.input : nil
+        return content.onChange(of: input, initial: true) { _, input in
+            if input?.state == .connected { self.hasConnected = true }
+            guard let input, let status = ChatConnectionStatus.resolve(input) else {
                 self.strip.clear(ChatConnectionStatus.stripID)
                 return
             }
             // A second for a reconnect; the launch's own connect gets three before the strip says anything.
             let wait: Duration = self.hasConnected ? .seconds(1) : .seconds(3)
-            self.strip.post(status.strip(
+            let message = status.strip(
                 host: self.hostName,
                 waitBeforeShowing: wait,
                 isFirstConnect: !self.hasConnected,
                 recovery: self.recovery)
             { [gatewayController] in
                 _ = await gatewayController.retryGatewayConnection()
-            })
+            }
+            self.strip.post(message, continuingWait: true)
         }
     }
 

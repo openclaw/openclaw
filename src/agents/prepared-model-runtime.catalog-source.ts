@@ -98,9 +98,11 @@ export function preparedProviderCatalogCredentials(
 
 /** Reuse only catalog rows whose provider identity and credentials survived publication. */
 export function prepareRetainedProviderCatalog(
-  params: PreparedModelRuntimeCatalogAccessParams,
+  params: Omit<PreparedModelRuntimeCatalogAccessParams, "seedInventory">,
   normalizeProvider: (provider: string) => string,
   eligibleProviders: readonly string[],
+  // Read once here so persistent catalog callbacks never retain another owner's inventory.
+  seed?: PreparedModelCatalogInventory,
 ) {
   const facts = params.agentFacts;
   const inventoryKey = preparedModelInventoryKey(facts.input);
@@ -112,7 +114,11 @@ export function prepareRetainedProviderCatalog(
   const pluginFingerprint = resolveInstalledManifestRegistryIndexFingerprint(
     params.pluginGeneration.pluginMetadataSnapshot.index,
   );
-  const inventory = params.inventoryOwner.catalogInventory;
+  // A seed proves rows only for the same plugin set; another workspace's plugins could provide
+  // the same provider id with different code, so a different set starts cold.
+  const inventory =
+    params.inventoryOwner.catalogInventory ??
+    (seed?.pluginFingerprint === pluginFingerprint ? seed : undefined);
   // Full acquisition also discovers providers outside eligibleProviders; only a full refresh
   // reacquires them, so every provider whose own identity is unchanged keeps its rows.
   const providerSources = new Map(

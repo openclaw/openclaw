@@ -62,7 +62,8 @@ extension OpenClawChatViewModel {
                 isError: nil,
                 diffStat: nil,
                 activity: calls[toolCallId]?.activity,
-                runID: evt.runId)
+                runID: evt.runId,
+                parentToolCallID: evt.data["parentToolCallId"]?.stringValue)
         } else if phase == "input_delta",
                   var pending = calls[toolCallId],
                   let diff = evt.data["diff"]?.dictionaryValue,

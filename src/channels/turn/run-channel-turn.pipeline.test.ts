@@ -15,7 +15,6 @@ import { dispatchAssembledChannelTurn } from "./lifecycle.js";
 import {
   createCtx,
   createRecordInboundSession,
-  createDispatch,
   createDirectDeliveryDispatch,
   createReplyDispatchReceipt,
   expectDispatched,
@@ -60,7 +59,7 @@ function dispatchTestAssembledTurn(overrides: Partial<AssembledChannelTurn>) {
 }
 function runDelivery(
   delivery: AssembledChannelTurn["delivery"],
-  dispatch = createDispatch(),
+  dispatch: Dispatch,
   overrides: Partial<AssembledChannelTurn> = {},
 ) {
   return dispatchTestAssembledTurn({

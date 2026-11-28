@@ -68,6 +68,7 @@ import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { findAgentEntryIndex, listAgentEntries, pruneAgentConfig } from "./agents.config.js";
 import { moveToTrashResult } from "./cleanup-utils.js";
 import { requireValidConfigForWrite } from "./config-validation.js";
+import { describeHeldAgentStores } from "./doctor-agent-deletion-held.js";
 
 type AgentsDeleteOptions = {
   id: string;
@@ -128,8 +129,8 @@ export async function agentsDeleteCommand(opts: AgentsDeleteOptions) {
   }
   const configured = findAgentEntryIndex(listAgentEntries(cfg), agentId) >= 0;
   // A retired agent (removed from config, still registered) is deleted like a configured one.
-  const retiredDatabasePaths = configured ? [] : await readRegisteredAgentDatabasePaths(agentId);
-  const retired = retiredDatabasePaths.length > 0;
+  const registeredDatabasePaths = await readRegisteredAgentDatabasePaths(agentId);
+  const retired = !configured && registeredDatabasePaths.length > 0;
   let existingJournal = configured ? undefined : await readAgentDeletionJournalAsync(agentId);
   if (!configured && !retired && (!existingJournal || existingJournal.cleanupCompleted)) {
     failAgentsDelete(
@@ -186,24 +187,39 @@ export async function agentsDeleteCommand(opts: AgentsDeleteOptions) {
   }
   const workspaceDir = existingJournal?.workspaceDir ?? resolveAgentWorkspaceDir(cfg, agentId);
   const sessionsDir = existingJournal?.sessionsDir ?? resolveSessionTranscriptsDirForAgent(agentId);
+  // Doctor holds these stores back after deletion history was lost; its restore-first
+  // guidance is shown before the user confirms, and printed when --force skips the prompt.
+  const heldGuidance = await describeHeldAgentStores(cfg, agentId, process.env);
+  const heldNotice =
+    heldGuidance.length > 0
+      ? [
+          `Warning: Doctor holds back ${heldGuidance.length === 1 ? "a store" : "stores"} of agent "${agentId}" because its deletion history was lost. Continuing deletes ${heldGuidance.length === 1 ? "it" : "them"} without restoration:`,
+          ...heldGuidance.map((line) => `  ${line}`),
+        ].join("\n")
+      : undefined;
 
-  if (!opts.force) {
+  if (opts.force) {
+    if (heldNotice) {
+      runtime.error(heldNotice);
+    }
+  } else {
     if (!isTerminalInteractive()) {
       failAgentsDelete("Non-interactive session. Re-run with --force.");
       return;
     }
     const prompter = createClackPrompter();
+    const question = retired
+      ? formatRetiredAgentDeletePrompt(agentId, [
+          agentDir,
+          ...(findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir).length > 0
+            ? []
+            : [workspaceDir]),
+          sessionsDir,
+          ...registeredDatabasePaths,
+        ])
+      : `Delete agent "${agentId}" and prune workspace/state?`;
     const confirmed = await prompter.confirm({
-      message: retired
-        ? formatRetiredAgentDeletePrompt(agentId, [
-            agentDir,
-            ...(findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir).length > 0
-              ? []
-              : [workspaceDir]),
-            sessionsDir,
-            ...retiredDatabasePaths,
-          ])
-        : `Delete agent "${agentId}" and prune workspace/state?`,
+      message: heldNotice ? `${heldNotice}\n${question}` : question,
       initialValue: false,
     });
     if (!confirmed) {
