@@ -1,4 +1,4 @@
-import { parseBuffer, TrackType, type IFileInfo, type IFormat } from "music-metadata";
+import { parseBuffer, type IFileInfo } from "music-metadata";
 import type { MessageReceiptPartKind } from "openclaw/plugin-sdk/channel-outbound";
 import { isVoiceMessageCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
@@ -53,82 +53,6 @@ export { resolveMatrixMentionsForBody } from "./send/formatting.js";
 export { resolveMatrixRoomId } from "./send/targets.js";
 
 type MatrixClientResolveOpts = Parameters<typeof withResolvedMatrixControlClient>[0];
-
-const AIFC_IMA4_BYTES_PER_CHANNEL_PACKET = 34;
-const AIFC_IMA4_FRAMES_PER_PACKET = 64;
-
-function resolveAifcIma4DurationSeconds(buffer: Buffer, sampleRate?: number): number | undefined {
-  if (
-    !sampleRate ||
-    !Number.isFinite(sampleRate) ||
-    buffer.length < 12 ||
-    buffer.toString("ascii", 0, 4) !== "FORM" ||
-    buffer.toString("ascii", 8, 12) !== "AIFC"
-  ) {
-    return undefined;
-  }
-
-  let channels: number | undefined;
-  let declaredFrameCount: number | undefined;
-  let soundDataBytes: number | undefined;
-  for (let offset = 12; offset + 8 <= buffer.length;) {
-    const chunkType = buffer.toString("ascii", offset, offset + 4);
-    const chunkSize = buffer.readUInt32BE(offset + 4);
-    const chunkStart = offset + 8;
-    if (chunkSize > buffer.length - chunkStart) {
-      return undefined;
-    }
-    if (chunkType === "COMM") {
-      if (chunkSize < 22 || buffer.toString("ascii", chunkStart + 18, chunkStart + 22) !== "ima4") {
-        return undefined;
-      }
-      channels = buffer.readUInt16BE(chunkStart);
-      declaredFrameCount = buffer.readUInt32BE(chunkStart + 2);
-    } else if (chunkType === "SSND") {
-      if (chunkSize < 8) {
-        return undefined;
-      }
-      const soundDataOffset = buffer.readUInt32BE(chunkStart);
-      if (soundDataOffset > chunkSize - 8) {
-        return undefined;
-      }
-      soundDataBytes = chunkSize - 8 - soundDataOffset;
-    }
-    offset = chunkStart + chunkSize + (chunkSize & 1);
-  }
-
-  if (!channels || !declaredFrameCount || !soundDataBytes) {
-    return undefined;
-  }
-  const packetSize = channels * AIFC_IMA4_BYTES_PER_CHANNEL_PACKET;
-  if (soundDataBytes % packetSize !== 0) {
-    return undefined;
-  }
-  const packetCount = soundDataBytes / packetSize;
-  if (packetCount !== declaredFrameCount) {
-    return undefined;
-  }
-  // Apple AIFC stores IMA4 packet count in COMM; each packet decodes to 64
-  // sample frames. Other encoders can store decoded frames, so verify SSND first.
-  return (packetCount * AIFC_IMA4_FRAMES_PER_PACKET) / sampleRate;
-}
-
-function resolveMediaPresentationDuration(format: IFormat): number | undefined {
-  const [track] = format.trackInfo;
-  // A lone MP4 AAC track owns the movie timeline, which includes presentation edits.
-  if (
-    format.trackInfo.length === 1 &&
-    track?.type === TrackType.audio &&
-    track.codecId === "mp4a" &&
-    track.codecName === "MPEG-4/AAC" &&
-    format.containerDuration !== undefined &&
-    Number.isFinite(format.containerDuration) &&
-    format.containerDuration > 0
-  ) {
-    return format.containerDuration;
-  }
-  return format.duration;
-}
 
 function resolvePreviousThreadId(previousEvent: unknown): string | undefined {
   const content = asOptionalObjectRecord(asOptionalObjectRecord(previousEvent)?.content);
@@ -265,9 +189,7 @@ export async function sendMessageMatrix(
                 duration: true,
                 skipCovers: true,
               });
-              const durationSeconds =
-                resolveAifcIma4DurationSeconds(media.buffer, metadata.format.sampleRate) ??
-                resolveMediaPresentationDuration(metadata.format);
+              const durationSeconds = metadata.format.containerDuration ?? metadata.format.duration;
               if (typeof durationSeconds === "number" && Number.isFinite(durationSeconds)) {
                 durationMs = Math.max(0, Math.round(durationSeconds * 1000));
               }
