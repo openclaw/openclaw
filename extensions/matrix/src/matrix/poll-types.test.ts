@@ -61,6 +61,7 @@ it("keeps well-formed answers when other entries are malformed", () => {
       answers: [
         null,
         { id: "a1", "m.text": "Yes" },
+        { id: "", "m.text": "dropped" },
         { id: 42, "m.text": "dropped" },
         { id: "bad-text", "m.text": 42 },
       ],
@@ -110,6 +111,44 @@ it("counts only the latest valid response from each sender", () => {
 
   expect(summary?.entries).toEqual(parsedPoll.answers.map((answer) => ({ ...answer, votes: 1 })));
   expect(summary?.totalVotes).toBe(2);
+});
+
+it.each([
+  { name: "an opaque ID with no trimmed match", second: "b ", latest: ["b "] },
+  {
+    name: "canonical IDs with a one-selection cap",
+    second: "answer2",
+    latest: ["answer2", "answer1"],
+  },
+])("counts one voter's latest choice for $name", ({ second, latest }) => {
+  const summary = buildPollResultsSummary({
+    sender: "@alice:example.org",
+    poll: {
+      ...parsedPoll,
+      answers: [
+        { id: "answer1", text: "Pizza" },
+        { id: second, text: "Sushi" },
+      ],
+    },
+    relationEvents: [vote("@bob:example.org", 2, latest), vote("@bob:example.org", 1, ["answer1"])],
+  });
+
+  expect(summary.entries.map((answer) => answer.votes)).toEqual([0, 1]);
+  expect(summary.totalVotes).toBe(1);
+});
+
+it("validates the whole ballot before capping and deduplicating choices", () => {
+  const summary = buildPollResultsSummary({
+    sender: "@alice:example.org",
+    poll: { ...parsedPoll, maxSelections: 2 },
+    relationEvents: [
+      vote("@bob:example.org", 1, ["a1", "a1", "a2"]),
+      vote("@carol:example.org", 2, ["a2", "a2", "missing"]),
+    ],
+  });
+
+  expect(summary.entries.map((entry) => entry.votes)).toEqual([1, 0]);
+  expect(summary.totalVotes).toBe(1);
 });
 
 it.each([

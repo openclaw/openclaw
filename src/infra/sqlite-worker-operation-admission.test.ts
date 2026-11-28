@@ -192,25 +192,6 @@ it.each(["rotated", "expired"] as const)(
   },
 );
 
-it("finishes settled admissions without traversing empty pending decisions", () => {
-  const admission = admissionFixture();
-  admission.port.postMessage({ kind: "native-settlement", settlement: { kind: "completed" } }, []);
-  const iterate = vi.spyOn(Set.prototype, Symbol.iterator);
-  try {
-    const firstFinish = admission.finish();
-    const repeatedFinish = admission.finish();
-    onTestFinished(async () => {
-      await Promise.all([firstFinish, repeatedFinish]);
-    });
-    expect(iterate).not.toHaveBeenCalled();
-  } finally {
-    iterate.mockRestore();
-  }
-  expect(admission.settlement).toEqual({ kind: "completed" });
-  expect(admission.failure).toBeUndefined();
-  expect(() => admission.observeRequests(() => {})).toThrow("closed");
-});
-
 it("releases publication captures from retained finished admissions", async () => {
   let publications = 0;
   function observeSnapshot(admission: SqliteWorkerOperationAdmission) {

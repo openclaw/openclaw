@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   getAdmittedRunDelegatedAuthority,
   prepareSystemAgentRunAdmission,
@@ -55,6 +56,8 @@ async function resolveTools(
   });
 }
 const toolNames = (result: { tools: { name: string }[] }) => result.tools.map(({ name }) => name);
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeEach(() => setRuntimeConfigSnapshot({}));
 
@@ -397,11 +400,8 @@ it("applies sandbox tool denies to sandboxed loopback turns", async () => {
 
 // The Gateway runs a CLI chat's OpenClaw tools, so the session's mode bounds an owner's turn too.
 it("bounds an owner's loopback file tools to the session root of a mode-set session", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mode-root-"));
-  const outside = path.join(
-    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mode-out-")),
-    "x.txt",
-  );
+  const root = tempDirs.make("openclaw-mode-root-");
+  const outside = path.join(tempDirs.make("openclaw-mode-out-"), "x.txt");
   await fs.writeFile(outside, "outside\n");
   const context = { sessionKey: "agent:main:mode-owner", workspaceDir: root, senderIsOwner: true };
   const readOutside = async (sessionPermissionPolicy?: { mode: "read-only"; root: string }) => {

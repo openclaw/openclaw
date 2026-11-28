@@ -10,6 +10,12 @@ export const runtimeConfigTestOwner: {
   exclude: string[];
 };
 
+export const infraTestOwner: {
+  root: string;
+  include: string[];
+  exclude: string[];
+};
+
 export const autoReplyCoreTestInclude: string[];
 export const autoReplyCoreTestExclude: string[];
 export const autoReplyTopLevelReplyTestInclude: string[];

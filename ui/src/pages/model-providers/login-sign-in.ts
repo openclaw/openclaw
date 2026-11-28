@@ -1,6 +1,16 @@
-import type { ModelAuthStatusResult } from "../../api/types.ts";
+import type {
+  ModelAuthStatusProfile,
+  ModelAuthStatusResult,
+  WizardNextResult,
+} from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { canonicalModelAuthProviderId, loadModelAuthStatus } from "../../lib/model-auth.ts";
+import { isWizardNotFoundError } from "../../lib/gateway-errors.ts";
+import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-state.ts";
+import {
+  canonicalModelAuthProviderId,
+  listEffectiveModelAuthProviders,
+  loadModelAuthStatus,
+} from "../../lib/model-auth.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import {
   clearFirstRunActivationReceipt,
@@ -9,11 +19,14 @@ import {
   persistFirstRunActivationReceipt,
   readFirstRunActivationReceipt,
 } from "../model-setup/first-run-activation-receipt.ts";
-import type { ModelSetupWizardRecovery, ModelSetupWizardResult } from "../model-setup/state.ts";
+import type {
+  ModelSetupWizardRecovery,
+  ModelSetupWizardResult,
+  ModelSetupWizardStartMethod,
+} from "../model-setup/state.ts";
 import type {
   ModelSetupWizardCompletion,
   ModelSetupWizardRunner,
-  ModelSetupWizardStartMethod,
 } from "../model-setup/wizard-runner.ts";
 import type { LoginChoice } from "./login-providers.ts";
 
@@ -53,18 +66,46 @@ export function createLoginSignIn(
   const { runner } = host;
   let mode: "auth" | "activate" | "access" = "auth";
   let authProviderId: string | undefined;
+  let authProviderLabel: string | undefined;
   // The last started sign-in, so a typed failure can offer to start it again.
-  let restart: (() => void) | undefined;
+  let lastSignIn: { selectModel: boolean; restart: () => void } | undefined;
   // Who started the running sign-in. Only the same owner resumes it after a reconnect.
   let owner: { recoveryScope: string | null; agentId: string | null } | undefined;
   // The record of the running sign-in, cleared once the Gateway no longer has it.
   let record: FirstRunActivationReceipt | null = null;
   let restoring = false;
+  let resumeAdmission: object | undefined;
+  // Auth status when the running sign-in started, or when this page reopened it; unknown
+  // status never confirms a lost result.
+  let startStatus: ModelAuthStatusResult | null | undefined;
 
   const receiptContext = ({ context, agentId }: LoginScope) => ({
     gateway: context.gateway,
     agentSelection: { state: { selectedId: agentId } },
   });
+
+  /** The provider's usable saved accounts, when its status is known. */
+  function savedProfiles(status: ModelAuthStatusResult | null | undefined) {
+    const entry = status?.providers
+      ? listEffectiveModelAuthProviders(status.providers).find(
+          (provider) => provider.provider === authProviderId,
+        )
+      : undefined;
+    return entry && entry.status !== "missing" && entry.status !== "expired"
+      ? entry.profiles
+      : undefined;
+  }
+
+  /**
+   * Projections such as remaining time change on every read, so only the account and its
+   * expiry tell a new sign-in from the account it started with.
+   */
+  const accountKey = (profile: ModelAuthStatusProfile) =>
+    JSON.stringify([profile.profileId, profile.expiry?.at]);
+
+  function savedAccounts(status: ModelAuthStatusResult | null): string | undefined {
+    return savedProfiles(status)?.map(accountKey).join("\n");
+  }
 
   function own(scope: LoginScope): void {
     owner = {
@@ -87,16 +128,20 @@ export function createLoginSignIn(
       return;
     }
     authProviderId = canonicalModelAuthProviderId(selected.authProvider);
+    authProviderLabel = kind === "secret" ? undefined : selected.groupLabel;
     // Browser and device sign-ins can select a model; a pasted secret only saves. A
     // credential-only sign-in still succeeds when its account offers no usable model.
-    const selectingModel = allowSetup && kind !== "secret";
-    mode = selected.requiresSetup ? (selectingModel ? "activate" : "access") : "auth";
+    const selectModel = allowSetup && kind !== "secret";
+    mode = selected.requiresSetup ? (selectModel ? "activate" : "access") : "auth";
     const { id, label, brandId } = selected;
-    restart = () => {
-      runner.prepareSignIn(kind, label, brandId);
-      void host.run(() =>
-        runner.start(id, "models.authLogin", selectingModel ? { selectModel: true } : {}),
-      );
+    lastSignIn = {
+      selectModel,
+      restart: () => {
+        runner.prepareSignIn(kind, label, brandId);
+        void host.run(() =>
+          runner.start(id, "models.authLogin", selectModel ? { selectModel } : {}),
+        );
+      },
     };
   }
 
@@ -109,9 +154,10 @@ export function createLoginSignIn(
     }
     const scope = page.getScope();
     own(scope);
+    startStatus = scope.authStatus;
     record = persistFirstRunActivationReceipt(receiptContext(scope), {
       kind: intent.kind,
-      wizard: intent.wizard,
+      wizard: { ...intent.wizard, selectModel: lastSignIn?.selectModel },
     });
     return observe(record);
   }
@@ -153,13 +199,30 @@ export function createLoginSignIn(
 
   /** Any error after a resume means the Gateway no longer has the sign-in: forget it. */
   function resume(): void {
+    if (resumeAdmission) {
+      return;
+    }
+    // Admission publishes before the runner clears its suspended state. Claim it
+    // first so those publications cannot enqueue another resume of the same sign-in.
+    const admission = {};
+    resumeAdmission = admission;
+    const release = () => {
+      if (resumeAdmission === admission) {
+        resumeAdmission = undefined;
+      }
+    };
     void host
-      .run(() => runner.resume(), true)
+      .run(() => {
+        const completion = runner.resume();
+        release();
+        return completion;
+      }, true)
       .then(() => {
         if (runner.state.phase === "error" && !runner.hasAdmittedSession) {
           clearFirstRunActivationReceipt(record);
         }
-      });
+      })
+      .finally(release);
   }
 
   /** A sign-in recorded before a reload reopens once this page can continue it. */
@@ -210,7 +273,7 @@ export function createLoginSignIn(
       // The record stays; the next connection or config change tries again.
       return;
     }
-    const allowSetup = host.allowSetup();
+    const allowSetup = recovery.selectModel ?? host.allowSetup();
     const selected = host
       .loginProviders(undefined, authStatus, allowSetup)
       .flatMap((group) => group.choices)
@@ -219,6 +282,9 @@ export function createLoginSignIn(
       adopt(selected, allowSetup);
     }
     own(scope);
+    // A sign-in finished before this read is already in it, so it shows no account; one
+    // finished after it does.
+    startStatus = authStatus;
     record = receipt;
     runner.restore(recovery, observe(receipt), "models.authLogin", {
       label: selected?.label,
@@ -234,9 +300,9 @@ export function createLoginSignIn(
     /** Starts the chosen sign-in. */
     choose(selected: LoginChoice, allowSetup: boolean): void {
       adopt(selected, allowSetup);
-      restart?.();
+      lastSignIn?.restart();
     },
-    restart: () => restart?.(),
+    restart: () => lastSignIn?.restart(),
     get mode() {
       return mode;
     },
@@ -246,6 +312,36 @@ export function createLoginSignIn(
     get authProviderId() {
       return authProviderId;
     },
+    get authProviderLabel() {
+      return authProviderLabel;
+    },
+    /** The email of the account this sign-in added or renewed, once the page's status shows it. */
+    get signedInEmail(): string | undefined {
+      if (!startStatus) {
+        return undefined;
+      }
+      const before = new Set(savedProfiles(startStatus)?.map(accountKey));
+      return savedProfiles(page.getScope().authStatus)?.find(
+        (profile) => !before.has(accountKey(profile)),
+      )?.email;
+    },
+    /**
+     * A sign-in the Gateway no longer has, because its result went to a closed socket, finished
+     * if its provider gained or replaced a usable account since it started.
+     */
+    async readLostSession(error: unknown): Promise<WizardNextResult> {
+      const { context, agentId } = page.getScope();
+      const client = context.gateway.snapshot.client;
+      if (!isWizardNotFoundError(error) || !startStatus || !client || !agentId) {
+        throw error;
+      }
+      invalidateModelAuthStatusRequests(client);
+      const saved = savedAccounts(await loadModelAuthStatus(client, { agentId }).catch(() => null));
+      if (saved === undefined || saved === savedAccounts(startStatus)) {
+        throw error;
+      }
+      return { done: true, status: "done" };
+    },
     /** A running sign-in its owner can still resume survives a connection or agent change. */
     get active(): boolean {
       return owner !== undefined && runner.hasAdmittedSession;
@@ -254,6 +350,8 @@ export function createLoginSignIn(
       owner = undefined;
       mode = "auth";
       authProviderId = undefined;
+      authProviderLabel = undefined;
+      startStatus = undefined;
     },
   };
 }

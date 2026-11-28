@@ -13,6 +13,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MATRIX_INBOUND_DEDUPE_TTL_MS,
@@ -41,7 +42,6 @@ import {
 } from "./src/matrix/crypto-state-store.js";
 import { importInboundDedupeMarkersToIngress } from "./src/matrix/monitor/inbound-dedupe-migration.js";
 import { installMatrixTestRuntime } from "./src/test-runtime.js";
-import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
 const CRYPTO = "matrix-crypto-unsafe-state";
 const SYNC = "matrix-sync-cache-json-to-plugin-state";

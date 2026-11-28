@@ -9,8 +9,8 @@ import {
   type SolidPanelTabStripTab as PanelTabStripTab,
   type PanelTabStripProps,
 } from "./panel-tab-strip-solid.tsx";
-import { panelTabStripCss } from "./panel-tab-strip-styles.ts";
 import sidePanelStyles from "../styles/chat/side-panel.css?inline";
+import panelTabStripCss from "./panel-tab-strip.css?inline";
 
 type RenderedTab = HTMLButtonElement;
 type StripProps = PanelTabStripProps<PanelTabStripTab>;

@@ -116,12 +116,7 @@ async function prepareSandboxWorkspaceSelection(
         assertCurrent: persistentExecution ? undefined : params.assertCurrent,
         stateOwnerPath: guard?.stateOwnerPath,
         assertHost: () => {
-          if (persistentExecution) {
-            guard?.assertHost?.();
-            return;
-          }
-          if (params.admittedRunContext) {
-            operatorAuthority?.assertCurrent();
+          if (persistentExecution || params.admittedRunContext) {
             guard?.assertHost?.();
           } else {
             params.assertCurrent?.();
@@ -199,7 +194,6 @@ async function resolveSandboxContextWithAuthority(
   const assertCallerCurrent = params.assertCurrent;
   const assertCurrent = () => {
     assertCallerCurrent?.();
-    operatorAuthority?.assertCurrent();
     assertStateOwner();
   };
   const ownedParams = { ...params, assertCurrent };

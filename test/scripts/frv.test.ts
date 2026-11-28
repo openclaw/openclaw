@@ -1464,10 +1464,10 @@ describe("FRV continuation preflight", () => {
 
     await expect(
       continueFailed(plan([first, second]), "77", {
-        getReleaseEvidenceClient: () => {
-          downstreamReads += 1;
-          throw new Error("unexpected evidence client");
-        },
+        getReleaseEvidenceClient: () => ({
+          ...createReleaseEvidenceClient(REPOSITORY),
+          getWorkflowSource: () => emptyWaiverSource,
+        }),
         getAttemptJobs: downstreamRead,
         getJobLog: downstreamRead,
         getParentJobs: async () => [
@@ -1525,8 +1525,8 @@ describe("FRV same-parent recovery", () => {
     ["matching current Q grant", true, false, 1, 1, true],
     ["removed current Q grant", false, false, 1, 1, false],
     ["unrelated failure", true, true, 1, 1, false],
-    ["different original attempt", true, false, 2, 2, false],
-    ["later failed attempt", true, false, 1, 2, false],
+    ["different original attempt", true, false, 2, 2, true],
+    ["later failed attempt", true, false, 1, 2, true],
   ])(
     "classifies raw failures with %s only",
     async (_label, granted, unrelated, originalAttempt, effectiveAttempt, passed) => {
@@ -1546,8 +1546,6 @@ describe("FRV same-parent recovery", () => {
         childRole: "normalCi",
         jobName: "synthetic known failure",
         reason: "Synthetic current-Q regression fixture",
-        aggregates: [],
-        evidence: { runId: "101", runAttempt: 1 },
       };
       const result = await inspectContinuation(currentPlan, {
         getReleaseEvidenceClient: () => ({
@@ -2120,6 +2118,90 @@ describe("FRV same-parent recovery", () => {
     },
   );
 
+  it("recovers only the real cancelled execution behind ghost copies and retains original successes", async () => {
+    const scenario = rerunScenario({
+      childSource: [2, "cancelled"],
+      childAfter: [[3, null, "in_progress"]],
+    });
+    const original = {
+      ...job("unaffected", "success"),
+      id: 10,
+      runner_id: 1,
+      runner_name: "runner-1",
+    };
+    const failed = { ...job("test", "failure"), id: 11, runner_id: 2, runner_name: "runner-2" };
+    const cancelled = {
+      ...job("test", "cancelled"),
+      id: 21,
+      runner_id: 3,
+      runner_name: "runner-3",
+      html_url: "https://example.invalid/jobs/21",
+      started_at: "2026-08-22T01:00:00Z",
+      completed_at: "2026-08-22T01:01:00Z",
+    };
+    const ghost = {
+      ...cancelled,
+      id: 22,
+      runner_id: null,
+      runner_name: null,
+      status: "queued",
+      conclusion: null,
+      completed_at: null,
+    };
+    const retry = {
+      ...cancelled,
+      id: 31,
+      status: "in_progress",
+      conclusion: null,
+      completed_at: null,
+    };
+    const rerunJob = vi.fn(scenario.client.rerunJob);
+    const client = {
+      ...scenario.client,
+      rerunJob,
+      getAttemptJobs: async (_runId: string, attempt: number) =>
+        attempt === 1
+          ? [original, failed]
+          : attempt === 2
+            ? [
+                { ...original, id: 20, html_url: "https://example.invalid/jobs/20" },
+                ghost,
+                cancelled,
+                { ...ghost, id: 23 },
+              ]
+            : [{ ...ghost, id: 32 }, retry],
+    };
+    const before = await inspectContinuation(plan([scenario.selected]), client);
+    expect(before.children[0]).toMatchObject({
+      status: "failed",
+      conclusion: "cancelled",
+      jobs: [
+        expect.objectContaining({
+          name: "test",
+          conclusion: "cancelled",
+          acceptedRunAttempt: 2,
+          url: cancelled.html_url,
+        }),
+        expect.objectContaining({
+          name: "unaffected",
+          conclusion: "success",
+          acceptedRunAttempt: 1,
+          url: original.html_url,
+        }),
+      ],
+    });
+    const result = await continueFailed(plan([scenario.selected]), "77", client, {
+      job: "normalCi:test",
+      noFollow: true,
+    });
+    expect(result).toMatchObject({
+      action: "rerun-accepted",
+      reruns: [expect.objectContaining({ jobId: 21, runAttempt: 3 })],
+    });
+    expect(rerunJob).toHaveBeenCalledExactlyOnceWith(21);
+    expect(scenario.counters.posts).toEqual({ child: 1, parent: 0 });
+  });
+
   it.each(["conclusion", "run_id", "run_attempt", "duplicate"])(
     "rejects changed %s job evidence before a targeted POST",
     async (change) => {
@@ -2142,7 +2224,7 @@ describe("FRV same-parent recovery", () => {
       };
       await expect(
         continueFailed(plan([selected]), "77", client, { job: "normalCi:test" }),
-      ).rejects.toThrow("job identity changed");
+      ).rejects.toThrow(change === "duplicate" ? "duplicate job identity" : "job identity changed");
       expect(client.rerunJob).not.toHaveBeenCalled();
     },
   );
@@ -2195,7 +2277,7 @@ describe("FRV same-parent recovery", () => {
               })
             : expect(inspection).rejects.toThrow(
                 outcome === "persists"
-                  ? "duplicate job identity: test; GitHub ghost jobs detected"
+                  ? "duplicate job identity: test; conflicting job identities"
                   : "changed during attempt materialization",
               );
         await Promise.all([result, vi.advanceTimersByTimeAsync(60_000)]);
@@ -2748,7 +2830,7 @@ describe("FRV child rerun", () => {
     [
       "keeps duplicate queued jobs",
       2,
-      "attempt 2 is unsealable and holds duplicate jobs: test; GitHub ghost jobs detected; stop rerunning",
+      "attempt 2 is unsealable and holds duplicate jobs: test; conflicting job identities",
     ],
     ["exposes no jobs", 0, "attempt 2 exposed no jobs"],
   ])("fails after one POST when the new attempt %s", async (_case, copies, message) => {
@@ -3220,7 +3302,7 @@ describe("FRV watch", () => {
     expect(getJobLog).toHaveBeenLastCalledWith(5, expect.anything());
   });
 
-  it("advises a fresh FRV only for duplicate jobs that persist into a final attempt", async () => {
+  it("reports conflicting executions without suggesting a broad rerun", async () => {
     const ci = child("normalCi", "101");
     let polls = 0;
     const duplicateJobs = (status: string) => [
@@ -3256,7 +3338,7 @@ describe("FRV watch", () => {
     const duplicates = messages.filter((message) => message.includes("duplicate jobs"));
     expect(duplicates).toEqual([
       "normalCi run 101 attempt 1 holds duplicate jobs: test; they may still settle; recheck before rerunning",
-      "normalCi run 101 attempt 1 holds duplicate jobs: test; GitHub ghost jobs detected; stop rerunning, cancel that attempt, and start a fresh all-group FRV",
+      "normalCi run 101 attempt 1 holds duplicate jobs: test; conflicting job identities; inspect the exact executions before another targeted retry",
     ]);
   });
 
@@ -3267,7 +3349,7 @@ describe("FRV watch", () => {
     "rerun",
     "recovered",
     "waived",
-    "expired waiver",
+    "wrong-version waiver",
     "removed waiver",
   ])(
     "labels carried-forward blockers once per effective attempt across restarts (%s)",
@@ -3291,15 +3373,14 @@ describe("FRV watch", () => {
             expect(sourcePath).toBe("scripts/lib/release-validation-waivers.json");
             return JSON.stringify({
               schema: "openclaw.release-validation-waivers/v1",
-              waivers: ["waived", "expired waiver"].includes(kind)
+              waivers: ["waived", "wrong-version waiver"].includes(kind)
                 ? [
                     {
                       targetVersion: "2099.1.1",
                       childRole: "normalCi",
                       jobName: "carried failure",
                       reason: "Synthetic Q watcher grant",
-                      aggregates: [],
-                      evidence: { runId: "101", runAttempt: kind === "waived" ? 2 : 1 },
+                      ...(kind === "wrong-version waiver" ? { targetVersion: "2099.1.2" } : {}),
                     },
                   ]
                 : [],
@@ -3309,7 +3390,7 @@ describe("FRV watch", () => {
         getRun: async (runId: string) =>
           runId === "77" ? rootRun(1, null) : runFor(ci, attempt, "failure"),
         getParentJobs: async () => [
-          ...(["waived", "expired waiver", "removed waiver"].includes(kind)
+          ...(["waived", "wrong-version waiver", "removed waiver"].includes(kind)
             ? [{ ...job("Seal release execution plan"), run_attempt: 1 }]
             : []),
           { ...job("Run normal full CI"), id: 5, run_attempt: 1, status: "completed" },

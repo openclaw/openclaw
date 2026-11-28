@@ -85,7 +85,12 @@ export function WorkboardCardView(input: {
   const dragged = createMemo(() => state().draggedCardId === input.card.id);
   const detailOpen = createMemo(() => state().detailCardId === input.card.id);
   const draggable = createMemo(
-    () => action().writable && !action().archived && !state().dispatching && !state().nextCursor,
+    () =>
+      action().writable &&
+      !action().archived &&
+      !action().busy &&
+      !state().dispatching &&
+      !state().nextCursor,
   );
   const alertDescriptionId = createMemo(
     () => `workboard-card-alert-${input.surface}-${input.card.id}`,
@@ -208,6 +213,19 @@ export function WorkboardCardView(input: {
       aria-expanded={widget() || selectionMode() ? undefined : detailOpen() ? "true" : "false"}
       aria-controls={widget() || selectionMode() ? undefined : workboardCardDetailDrawerId}
       draggable={draggable() ? "true" : "false"}
+      onBlur={(event) => {
+        if (event.target !== event.currentTarget || event.relatedTarget || !input.cardRefs) {
+          return;
+        }
+        const previous = event.currentTarget;
+        const id = input.card.id;
+        // A lane change remounts the focused tile. Never pull focus back from another control.
+        requestAnimationFrame(() => {
+          if (!previous.isConnected && document.activeElement === document.body) {
+            input.cardRefs?.get(id)?.focus({ preventScroll: true });
+          }
+        });
+      }}
       onMouseDown={(event) => {
         if (event.button === 0 && event.shiftKey && selectable() && !isCardActionTarget(event)) {
           event.preventDefault();
@@ -235,7 +253,7 @@ export function WorkboardCardView(input: {
         event.preventDefault();
       }}
       onDragStart={(event) => {
-        if (!action().writable || action().archived || state().dispatching || state().nextCursor) {
+        if (!draggable()) {
           event.preventDefault();
           return;
         }

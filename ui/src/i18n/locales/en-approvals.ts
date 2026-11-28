@@ -15,6 +15,8 @@ const enApprovals = {
     runCommand: "Run this command?",
     pluginApprovalNeeded: "Plugin approval needed",
     requestedBySession: "Approval requested by session {session}",
+    requestedDuringTurn: "For {name}’s turn",
+    participantWaiting: "Waiting for the session creator’s approval.",
     pending: "{count} pending",
     morePending: "{count} more pending",
     reviewRequest: "Review approval from {agent}: {command}",

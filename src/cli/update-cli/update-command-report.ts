@@ -10,9 +10,7 @@ import {
   type PreparedUpdateFailureReport,
 } from "../../infra/update-failure-report.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { formatUpdateReportReadHint } from "./report-path.js";
 
 type UpdateFailureAction = "triage" | "report" | "status" | "browser" | "dismiss";
 
@@ -29,28 +27,15 @@ function renderSubmissionResult(
         ? result.message
         : `GitHub issue creation was unavailable: ${result.message}`,
       ...(browserRequested ? [`Prefilled issue: ${result.fallbackUrl}`] : []),
-      `Saved sanitized report: ${result.savedReportPath}`,
-      formatUpdateReportReadHint(result.savedReportPath),
     ];
   }
-  if (result.status === "retryable") {
-    return [result.message];
-  }
-  return [
-    result.message,
-    ...(result.url ? [`Existing issue: ${result.url}`] : []),
-    ...(browserRequested && result.fallbackUrl
-      ? [`Existing prefilled issue: ${result.fallbackUrl}`]
-      : []),
-  ];
+  return [result.message];
 }
 
 /** Offers report as a distinct interactive action; callers retain triage ownership. */
 export async function runInteractiveUpdateFailureAction(params: {
   attemptId: string;
   env: NodeJS.ProcessEnv;
-  error?: string;
-  result?: UpdateRunResult;
   rollbackCompleted?: boolean;
   runtime: Pick<RuntimeEnv, "error" | "log">;
 }): Promise<"triage" | "handled"> {
@@ -80,30 +65,12 @@ export async function runInteractiveUpdateFailureAction(params: {
       return "triage";
     }
     try {
-      const result: UpdateRunResult = params.result ?? {
-        status: "error",
-        mode: "unknown",
-        steps: [],
-        durationMs: 0,
-      };
       if (!prepared) {
-        let recordedRun: ReturnType<typeof getUpdateRun>;
-        try {
-          recordedRun = getUpdateRun(params.attemptId, { env: params.env });
-        } catch {
-          // A missing or locked ledger must not prevent reporting the direct failure.
+        const run = getUpdateRun(params.attemptId, { env: params.env });
+        if (!run) {
+          throw new Error("This failed update attempt is unavailable.");
         }
-        prepared = await prepareUpdateFailureReport(
-          {
-            attemptId: params.attemptId,
-            action: "cli",
-            ...(params.error ? { error: params.error } : {}),
-            result,
-            recordedRun,
-            ...(result.after?.upstreamRef ? { target: result.after.upstreamRef } : {}),
-          },
-          { env: params.env, stateDir },
-        );
+        prepared = await prepareUpdateFailureReport(run, { env: params.env, stateDir });
       }
       params.runtime.log("Sanitized update failure report preview:");
       params.runtime.log(prepared.body);
@@ -122,29 +89,23 @@ export async function runInteractiveUpdateFailureAction(params: {
       }
       // A lost upload response must not retain an earlier browser-retry choice.
       browserAvailable = false;
-      const submitted = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
-        env: params.env,
-        stateDir,
-        ...(action === "browser"
-          ? { publicationMode: "browser" as const }
+      const submitted = await submitUpdateFailureReport(
+        prepared,
+        prepared.previewDigest,
+        action === "browser"
+          ? { publicationMode: "browser" }
           : action === "status"
-            ? { publicationMode: "reconcile" as const }
-            : { allowBrowserFallback: false }),
-      });
+            ? { publicationMode: "reconcile" }
+            : { allowBrowserFallback: false },
+      );
       reportPending = submitted.status === "pending";
       browserAvailable =
         prepared.browserFallback.status === "available" &&
-        (submitted.status === "retryable" ||
-          submitted.status === "fallback" ||
-          (submitted.status === "duplicate" && Boolean(submitted.fallbackUrl)));
+        (submitted.status === "retryable" || submitted.status === "fallback");
       for (const line of renderSubmissionResult(submitted, action === "browser")) {
         params.runtime.log(line);
       }
-      if (
-        submitted.status === "created" ||
-        (submitted.status === "duplicate" && submitted.url) ||
-        (action === "browser" && submitted.fallbackUrl)
-      ) {
+      if (submitted.status === "created" || (action === "browser" && submitted.fallbackUrl)) {
         return "handled";
       }
     } catch (error) {

@@ -36,6 +36,7 @@ import {
   openClawStateDatabaseCache,
   registerOpenClawStateDatabaseAsyncResource,
 } from "./openclaw-state-db-cache.js";
+import { isStatePostgres } from "./openclaw-state-db-engine.js";
 import { canReadWarmNativeSourceIndependently } from "./openclaw-state-db-readonly-reuse.js";
 import { captureOpenClawStateReadSource } from "./openclaw-state-read-worker.js";
 import type {
@@ -328,6 +329,7 @@ export function startOpenClawStateReadOperation(
     }
     if (!snapshot && !independentWarmSource) {
       const currentMetadata =
+        !isStatePostgres() &&
         (command.type === "plugins.metadata.read" ||
           command.type === "config.health.read" ||
           isUpdateRunAdmissionReadCommand(command)) &&

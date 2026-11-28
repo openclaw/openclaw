@@ -77,7 +77,7 @@ async function bound(client = fakeClient()) {
   const g = fakeGateway(client);
   dispose = bindOwnerApproval(g.gateway, vi.fn(), vi.fn(), vi.fn());
   await vi.waitFor(() => expect(held.owners).toHaveLength(1));
-  return { ...g, client, first: held.owners[0]! };
+  return { set: g.set, client, first: held.owners[0]! };
 }
 
 describe("owner approval reader lifetime", () => {

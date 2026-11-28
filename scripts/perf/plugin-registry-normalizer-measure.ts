@@ -15,6 +15,7 @@ import { parseArgs } from "node:util";
 import { normalizePluginsConfigWithResolverCore } from "../../src/plugins/config-normalization-shared.js";
 import { createPluginMetadataSnapshotFixture } from "../../src/plugins/plugin-metadata.test-support.js";
 import { freezeTrustedJsonSnapshot } from "../../src/shared/immutable-data.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -77,12 +78,7 @@ const observer = new PerformanceObserver((list) => {
 });
 try {
   if (mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   } else {
     observer.observe({ entryTypes: ["gc"] });
   }

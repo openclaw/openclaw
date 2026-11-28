@@ -1,0 +1,3 @@
+# Preserve distinct promotion admission, publisher, transport-budget, and artifact-backed pre-upload regressions.
+# Exact 52 lines over the 400-line allowance; pre-upload proof extends the existing reuse table.
+52

@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { getChildLogger } from "../../logging/logger.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
+import { preserveSessionDelegatedOperatorSource } from "./session-entry-lineage.js";
 import { preserveCreationStamp } from "./session-entry-provenance.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -14,13 +15,17 @@ export function applySessionEntryWritePolicy(
   options: {
     allowStoredAliases?: boolean;
     providerReviewMutation?: boolean;
+    shellCallMutation?: boolean;
     profileInvolvement?: SessionEntry["profileInvolvement"];
     previousEntry?: SessionEntry | null;
     consumePendingReset?: boolean;
     preserveVisibility?: boolean;
   },
 ): { entry: SessionEntry; previousEntry: SessionEntry | undefined } {
-  let normalizedEntry = initialEntry;
+  let normalizedEntry = preserveSessionDelegatedOperatorSource(
+    initialEntry,
+    canonicalPreviousEntry,
+  );
   if (
     canonicalPreviousEntry?.sessionId !== normalizedEntry.sessionId ||
     canonicalPreviousEntry.lifecycleRevision !== normalizedEntry.lifecycleRevision ||
@@ -28,6 +33,7 @@ export function applySessionEntryWritePolicy(
     normalizedEntry.incognito
   ) {
     delete normalizedEntry.resumeAfterRestart;
+    delete normalizedEntry.pendingShellCalls;
     delete normalizedEntry.lifecycleRestartScope;
     delete normalizedEntry.mainRestartRecovery;
   } else {
@@ -40,6 +46,31 @@ export function applySessionEntryWritePolicy(
           ? { resumeAfterRestart: canonicalPreviousEntry.resumeAfterRestart }
           : {}),
       };
+    }
+    if (!options.shellCallMutation) {
+      // Whole-row bookkeeping can carry an older list. Only the fenced shell writer
+      // changes it. Normal completion retires it when the terminal run identity matches.
+      const pending = canonicalPreviousEntry.pendingShellCalls;
+      if (
+        pending &&
+        !(normalizedEntry.status === "done" && normalizedEntry.lastRunId === pending.runId)
+      ) {
+        normalizedEntry = { ...normalizedEntry, pendingShellCalls: pending };
+      } else {
+        delete normalizedEntry.pendingShellCalls;
+      }
+    }
+    const sourceRunId = normalizedEntry.resumeAfterRestart?.sourceRunId;
+    const nextRunId = normalizedEntry.lifecycleRunId;
+    if (
+      sourceRunId &&
+      nextRunId &&
+      nextRunId !== canonicalPreviousEntry.lifecycleRunId &&
+      nextRunId !== sourceRunId
+    ) {
+      // Admission has transferred this row to another run. Its shutdown must not recover
+      // receipts or requester authority from a predecessor whose marker clear failed.
+      delete normalizedEntry.resumeAfterRestart;
     }
     if (
       !Object.hasOwn(normalizedEntry, "lifecycleRestartScope") &&

@@ -131,11 +131,9 @@ async function expectRestartWaiting(fixture: ReturnType<typeof startFixture>, at
   );
 }
 
-function readStabilityBundle(fixture: ReturnType<typeof startFixture>, reason?: string) {
+function readStabilityBundle(fixture: ReturnType<typeof startFixture>, reason: string) {
   const directory = path.join(fixture.stateDir, "logs", "stability");
-  const files = fs
-    .readdirSync(directory)
-    .filter((file) => !reason || file.endsWith(`-${reason}.json`));
+  const files = fs.readdirSync(directory).filter((file) => file.endsWith(`-${reason}.json`));
   expect(files).toHaveLength(1);
   return JSON.parse(fs.readFileSync(path.join(directory, files[0]!), "utf8"));
 }

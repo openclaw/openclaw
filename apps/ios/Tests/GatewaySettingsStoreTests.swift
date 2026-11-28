@@ -777,6 +777,27 @@ private func withLastGatewaySnapshot(_ body: () -> Void) async {
         }
     }
 
+    @Test @MainActor func `a reported name upgrades an untouched address but reconnect cannot undo a rename`() async {
+        await withLastGatewaySnapshot {
+            applyKeychain([gatewayRegistryKeychainEntry: nil, lastGatewayKeychainEntry: nil])
+            let entry = GatewaySettingsStore.GatewayRegistryEntry(
+                stableID: "manual|studio.example|8448",
+                kind: .manual,
+                name: "studio.example:8448",
+                host: "studio.example",
+                port: 8448,
+                useTLS: true,
+                lastConnectedAtMs: nil)
+            #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(entry, activate: true))
+            #expect(GatewaySettingsStore.setGatewayName("Studio Mac", stableID: entry.stableID, onlyIfAutomatic: true))
+            #expect(GatewaySettingsStore.activeGatewayEntry()?.name == "Studio Mac")
+            #expect(GatewaySettingsStore.setGatewayName("  Work  ", stableID: entry.stableID))
+            #expect(!GatewaySettingsStore.setGatewayName("Studio Mac", stableID: entry.stableID, onlyIfAutomatic: true))
+            #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(entry, activate: true))
+            #expect(GatewaySettingsStore.activeGatewayEntry()?.name == "Work")
+        }
+    }
+
     @Test @MainActor func `version one registry upgrades focused gateway to connected`() async {
         await withLastGatewaySnapshot {
             applyKeychain([

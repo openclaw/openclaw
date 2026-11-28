@@ -148,7 +148,7 @@ import { startFaceTimeTalkDriver } from "../src/talk-driver.js";
 
 export function startParams(overrides: Record<string, unknown> = {}) {
   return {
-    config: resolveFaceTimeConfig({ ownerHandles: ["caller@example.com"] }),
+    config: resolveFaceTimeConfig({ allowedCallers: ["caller@example.com"] }),
     fullConfig: {} as never,
     runtime: {
       agent: {

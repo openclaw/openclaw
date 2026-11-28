@@ -1,6 +1,12 @@
 import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import {
+  prepareResolvedSessionSend,
+  type ResolvedSessionSendInput,
+} from "../config/sessions/resolved-session-send.js";
 import { dispatchGatewayMethodInProcessRaw } from "../gateway/server-plugins.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+
+class GatewayMethodDispatchForbidden extends Error {}
 
 /** Error envelope returned by in-process Gateway method dispatch. */
 export type GatewayMethodDispatchError = NonNullable<GatewayMethodDispatchResponse["error"]>;
@@ -34,7 +40,7 @@ export async function dispatchGatewayMethod(
     // Gateway methods can mutate/control local runtime state; require the
     // authenticated request scope recorded by the plugin loader contract.
     const pluginLabel = scope?.pluginId ? ` for plugin "${scope.pluginId}"` : "";
-    throw new Error(
+    throw new GatewayMethodDispatchForbidden(
       `Gateway method dispatch is reserved for authenticated plugin HTTP routes or RPC handlers that declare contracts.gatewayMethodDispatch: ["authenticated-request"]${pluginLabel}.`,
     );
   }
@@ -48,4 +54,23 @@ export async function dispatchGatewayMethod(
     ...(options?.expectFinal !== undefined ? { expectFinal: options.expectFinal } : {}),
     ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
   });
+}
+
+/** Submit a message to the physical session returned by catalog resolution in this caller's Gateway scope. */
+export async function sendToResolvedSession(
+  input: ResolvedSessionSendInput,
+): Promise<"accepted" | "forbidden" | "unconfirmed"> {
+  const send = prepareResolvedSessionSend(input);
+  if (!send) {
+    return "unconfirmed";
+  }
+  try {
+    const reply = await dispatchGatewayMethod("chat.send", send.params);
+    if (!reply.ok && reply.error?.code === "FORBIDDEN") {
+      return "forbidden";
+    }
+    return reply.ok && send.acknowledged(reply.payload) ? "accepted" : "unconfirmed";
+  } catch (error) {
+    return error instanceof GatewayMethodDispatchForbidden ? "forbidden" : "unconfirmed";
+  }
 }

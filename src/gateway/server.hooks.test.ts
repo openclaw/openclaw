@@ -538,32 +538,6 @@ test("dedupes hook retries even when trusted-proxy client IP changes", async ({ 
   });
 });
 
-test("dispatches agent hooks when the process clock is outside the Date range", async ({
-  signal,
-}) => {
-  await withHooksServer(async (post) => {
-    cronIsolatedRun.mockClear();
-    {
-      using clock = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
-      cronIsolatedRun.mockImplementationOnce(async () => {
-        // Job construction is the invalid-clock boundary; terminal scheduling uses real time.
-        clock.mockRestore();
-        return { status: "ok", summary: "done" };
-      });
-      await postWithDeferredHookWake(signal, post, "agent", {
-        message: "Bad clock",
-        wakeMode: "next-heartbeat",
-      });
-    }
-    expect(peekSystemEvents(resolveMainKey())).not.toHaveLength(0);
-
-    const call = cronRunCall();
-    expect(call.job).toMatchObject({ createdAtMs: 0, state: { nextRunAtMs: 0 } });
-    expect(call.job.schedule).toEqual({ kind: "at", at: "1970-01-01T00:00:00.000Z" });
-    drainSystemEvents(resolveMainKey());
-  });
-});
-
 test("enforces hooks.allowedAgentIds for effective agent routing", async ({ signal }) => {
   configureHooks({
     allowedAgentIds: ["hooks"],

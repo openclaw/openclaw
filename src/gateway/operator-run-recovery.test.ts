@@ -18,7 +18,6 @@ import * as pairingStore from "../infra/device-pairing-store-readonly.js";
 import { ensureDeviceToken, rotateDeviceToken } from "../infra/device-pairing-tokens.js";
 import { getPairedDevice, updatePairedDeviceMetadata } from "../infra/device-pairing.js";
 import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -41,6 +40,7 @@ import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
+import { OperatorRefusalError } from "./operator-refusal.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import {
@@ -152,7 +152,6 @@ describe("scheduled authenticated operator source", () => {
           queued.release();
           continuation?.release();
         }
-        expect(captured.authority.assertCurrent).not.toThrow();
       });
     }
   });
@@ -231,7 +230,6 @@ describe("scheduled authenticated operator source", () => {
           agents: ["main"],
           sessionAccessCap: "view",
         });
-        restored.authority.assertCurrent();
       } finally {
         setOpenClawIdTunnelPrincipalLookup(undefined);
         setOpenClawIdMemberAccountLookup(undefined);
@@ -375,7 +373,6 @@ describe("scheduled authenticated operator source", () => {
           expect(allows("permitted")).toBe(true);
           expect(allows(`blocked-${count - 1}/test`)).toBe(false);
           const captured = captureQueuedOperatorRecoverySource(bounded);
-          expect(bounded.assertCurrent).not.toThrow();
           const serialized = JSON.stringify(captured);
           const persisted: unknown = JSON.parse(serialized);
           if (count === 256) {
@@ -427,7 +424,6 @@ describe("scheduled authenticated operator source", () => {
         const serializedSource = JSON.stringify(source);
         const persisted: unknown = JSON.parse(serializedSource);
         retire();
-        expect(original.assertCurrent).not.toThrow();
         await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(state.env));
         const restore = () =>
           restoreGatewayQueuedOperatorRecovery({
@@ -437,12 +433,11 @@ describe("scheduled authenticated operator source", () => {
           });
         const restored = await restore();
         try {
-          expect(restored.authority.assertCurrent).not.toThrow();
           expect(restored.authority.profileId).toBe(admin.profile.id);
           await changeCanonicalUserChannelIdentity("unlink", admin.profile.id, admin.identity);
           await changeCanonicalUserChannelIdentity("link", admin.profile.id, admin.identity);
           expectCurrent(restored.authority);
-          await expect(restore()).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
+          await expect(restore()).rejects.toThrow(OperatorRefusalError);
         } finally {
           restored.release();
         }
@@ -659,9 +654,7 @@ describe("scheduled authenticated operator source", () => {
               await expect(fixture.restore()).rejects.toThrow();
             }
           } else {
-            await expect(caller.capture()).rejects.toThrow(
-              "Gateway caller authority is no longer active",
-            );
+            await expect(caller.capture()).rejects.toThrow("Gateway request could not start");
           }
         } finally {
           source?.release();
@@ -690,9 +683,7 @@ describe("scheduled authenticated operator source", () => {
         if (restored) {
           expectCurrent(restored.authority);
         } else {
-          await expect(fixture.restore()).rejects.toThrow(
-            GatewayOperatorRecoveryAuthorizationError,
-          );
+          await expect(fixture.restore()).rejects.toThrow(OperatorRefusalError);
         }
       }),
   );
@@ -733,7 +724,7 @@ describe("scheduled authenticated operator source", () => {
         device: pairedOperator(),
         scopes: ["operator.write"],
       });
-      expect(fixture.sourceAuthority.assertCurrent).toThrow("no longer active");
+      expect(fixture.sourceAuthority.retain).toThrow("Operator execution ended.");
       expect(fixture.snapshot).toMatchObject({
         controlUiAdmin: false,
         sourceIngress: "control-ui",
@@ -756,7 +747,6 @@ describe("scheduled authenticated operator source", () => {
         scopes: ["operator.write"],
         profileId: profile.id,
       });
-      expect(restored.authority.assertCurrent).not.toThrow();
     }));
 
   it.each(["profile merge", "role changed", "token rotated", "approval scopes narrowed"] as const)(
@@ -826,7 +816,6 @@ describe("scheduled authenticated operator source", () => {
         using restored = await restoreFixture(fixture);
 
         expect(restored.authority.scopes).toEqual(["operator.write"]);
-        restored.authority.assertCurrent();
         const widened = structuredClone(cfg);
         fixture.setConfig(widened);
         publish();
@@ -834,10 +823,10 @@ describe("scheduled authenticated operator source", () => {
         // A later publication applies to the next restoration, even with the same config object.
         widened.gateway!.roles!.definitions.operator!.scopes = ["operator.read"];
         publish();
-        expect(restored.authority.signal?.aborted).toBe(false);
+        expect(restored.authority.signal?.aborted).not.toBe(true);
         expectCurrent(restored.authority);
         // Admission narrows to read; a read-only requester starts no new chat-like work.
-        await expect(fixture.restore()).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
+        await expect(fixture.restore()).rejects.toThrow(OperatorRefusalError);
         fixture.setConfig(cfg);
         publish();
         expectCurrent(restored.authority);

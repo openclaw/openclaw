@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { readSessionWatchdogFailure } from "../sessions/session-controller.watchdog-error.js";
 import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
@@ -81,3 +81,21 @@ it.each(["node", "quickjs"] as const)(
     }
   },
 );
+
+it("returns github_publish result guidance to Code Mode guest code", async () => {
+  const harness = createSubscribedCodeModeHarness({ name: "github-guidance", executor: "quickjs" });
+  onTestFinished(harness.dispose);
+  const receipt = { status: "requested", requestId: "synthetic-publication" };
+  vi.spyOn(gateway, "callInProcessGatewayTool").mockResolvedValue(receipt);
+  const sandbox = createSandboxTestContext({ overrides: { workspaceSource: "managed-worktree" } });
+  const tools = [...harness.tools, createGitHubPublishTool({ sandbox })];
+  const exec = applyCodeModeCatalog({ ...harness, tools }).tools.find((t) => t.name === "exec")!;
+  const result = await withGatewayToolCallerIdentity(
+    { agentId: "main", sessionKey: harness.sessionKey },
+    () => exec.execute("publish", { code: "return await github_publish({});", awaitResults: true }),
+  );
+  expect(resultDetails(result)).toMatchObject({
+    status: "completed",
+    value: { ...receipt, next: expect.stringContaining("retain requestId, finish the turn") },
+  });
+});

@@ -8,6 +8,16 @@
 - Requested count: qualified items only; report exhausted search, never pad. Favor concrete current bugs, understood owner, feasible proof. Small-fix request excludes feature/product choices, unclear/broad ownership. Short diff ≠ low risk.
 - Generic shortlists: external contributors first. Exclude broad-access maintainer PRs younger than 14 days unless named/explicit maintainer-work request. Verify uncertain finalist permissions, never every author's full history. Suppress maintainer-authored issues in generic discovery unless scope-relevant.
 
+## Recover a stale PR comparison
+
+If a small PR shows thousands of changed files, record its head SHA, base repository, base branch, and draft status. Resolve the current tip of that branch, including for stacked PRs. Compare the two commits locally with `git diff --name-status --find-renames "$base_sha...$head_sha"`. GitHub's [PR files endpoint](https://docs.github.com/en/rest/pulls/pulls#list-pull-requests-files) returns at most 3,000 files. Keep the incomplete-file check blocked for a genuinely larger diff.
+
+Use this recovery when the PR reports an older base SHA and its file list disagrees with Git, as in the [locale automation PR](https://github.com/openclaw/openclaw/pull/147905).
+
+1. Recheck the head and base branch. With authority to edit the PR, refresh its existing base with `ghx --no-cache api -X PATCH "repos/$repo/pulls/$number" -f "base=$base_branch"`.
+2. Read the PR back and list its files with `ghx --no-cache api --paginate "repos/$repo/pulls/$number/files"`. Verify the head, base branch, and draft status stayed the same. Check the returned base SHA, file count, and paths against the Git comparison. If either commit moved, compare again.
+3. Once the full list agrees, retry only the failed incomplete-list check if workflow execution is authorized for this head. Keep existing review and workflow holds in place.
+
 ## Assignment
 
 - Before deep named-item work: inspect assignees. Another assignment less than six hours old = active ownership; continue only with direction. Older = hint, not veto. Unverifiable time = unknown. Preserve co-assignees; never replace without explicit authority.

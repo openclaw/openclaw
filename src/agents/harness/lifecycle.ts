@@ -19,6 +19,7 @@ import {
   runWithDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import { getUserTurnTranscriptAdmissionOwner } from "../../sessions/user-turn-transcript-admission.js";
 import {
   normalizeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
@@ -363,8 +364,14 @@ export async function runAgentHarnessLifecycleAttempt(
 ): Promise<EmbeddedRunAttemptResult> {
   let result: EmbeddedRunAttemptResult;
   const diagnostics = createAgentHarnessLifecycleDiagnostics(harness, params);
+  // Every harness attempt dispatches through here. Its declaration binds only this attempt:
+  // the first send latches it, and an attempt that never sent clears it when it ends.
+  const transcriptOwner =
+    params.userTurnTranscriptRecorder &&
+    getUserTurnTranscriptAdmissionOwner(params.userTurnTranscriptRecorder);
   try {
     assertAgentHarnessContextEngineSupport(harness, params);
+    transcriptOwner?.declarePromptProjection(harness.promptProjection ?? "external");
     diagnostics.startAgentRun();
     const runAndClassify = async () => {
       diagnostics.setPhase("send");
@@ -403,6 +410,7 @@ export async function runAgentHarnessLifecycleAttempt(
     throw error;
   } finally {
     diagnostics.unsubscribe();
+    transcriptOwner?.declarePromptProjection(undefined);
   }
 
   diagnostics.complete({

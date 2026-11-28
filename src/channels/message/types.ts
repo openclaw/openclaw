@@ -76,6 +76,8 @@ export type MessageReceiptPart = {
   index: number;
   threadId?: string;
   replyToId?: string;
+  /** The sender observed this physical send without a native reply reference. */
+  nativeReplyAbsent?: true;
   raw?: MessageReceiptSourceResult;
 };
 

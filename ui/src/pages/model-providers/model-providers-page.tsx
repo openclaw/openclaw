@@ -87,7 +87,7 @@ export function ModelProvidersContent(props: { controller: ModelProvidersOwner }
             const group = catalogProviders().find((entry) => entry.id === providerId);
             // A provider with one way in starts it; the rest open its method step.
             if (group && current().props.canMutate && !login.busy && !login.enter(group)) {
-              void login.open(group.authProviders, group.id);
+              void login.open(group.authProviders, { select: group.id });
             }
           }}
           discoverDisabled={

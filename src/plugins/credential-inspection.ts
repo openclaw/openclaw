@@ -2,6 +2,7 @@ import type {
   PluginCredentialDescriptor,
   PluginCredentialInspection,
 } from "../../packages/gateway-protocol/src/schema/plugin-credentials.js";
+import type { PluginsInspectResult } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { hasUnresolvedConfigPath, resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
@@ -40,4 +41,22 @@ export function inspectPluginCredentialValue(
   }
   const envVar = descriptor.envVars.find((name) => Boolean(env[name]?.trim()));
   return envVar ? { kind: "environment", envVar } : { kind: "missing" };
+}
+
+export function inspectPluginCredentialPresence(
+  config: OpenClawConfig,
+  descriptor: PluginCredentialDescriptor,
+  env: NodeJS.ProcessEnv,
+): NonNullable<PluginsInspectResult["credentials"]>[number] {
+  const credential = inspectPluginCredentialValue(config, descriptor, env);
+  // Public inspection carries presence. The administrator editor owns values and references.
+  const status =
+    credential.kind === "reference"
+      ? credential.unresolved
+        ? "unresolved"
+        : "configured"
+      : credential.kind === "literal" || credential.kind === "environment"
+        ? "configured"
+        : credential.kind;
+  return { ...descriptor, status };
 }

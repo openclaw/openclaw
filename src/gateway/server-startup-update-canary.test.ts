@@ -10,11 +10,30 @@ import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import type { GatewayServer } from "./server-public.js";
 import { createStartupTestState } from "./server-startup.test-support.js";
 
+const installed = vi.hoisted(() => ({ root: "", buildId: "canary-legacy-trial" }));
+vi.mock("../infra/openclaw-root.js", async (original) => {
+  const actual = await original<typeof import("../infra/openclaw-root.js")>();
+  return {
+    ...actual,
+    resolveOpenClawPackageRootSync: (
+      options: Parameters<typeof actual.resolveOpenClawPackageRootSync>[0],
+    ) =>
+      options?.moduleUrl?.includes("stale-install.")
+        ? installed.root
+        : actual.resolveOpenClawPackageRootSync(options),
+  };
+});
+vi.mock("../version.js", async (original) => ({
+  ...(await original<typeof import("../version.js")>()),
+  resolveRuntimeServiceBuildId: () => installed.buildId,
+}));
+
 let state: Awaited<ReturnType<typeof createStartupTestState>> | undefined;
 let claim: Awaited<ReturnType<typeof acquireTestPortBlock>> | undefined;
 let server: GatewayServer | undefined;
 const pluginId = "canary-startup-fixture";
 let loadedPlugin: { id: string; status: string } | undefined;
+let releaseObserver: (() => void) | undefined;
 const deferredCalls: string[] = [];
 
 function rejectDeferredWork(name: string): never {
@@ -39,6 +58,22 @@ beforeAll(async () => {
     }),
   );
   state.applyEnv();
+  const prefix = state.statePath("git-install");
+  const target = "releases/candidate/openclaw";
+  installed.root = path.join(prefix, target);
+  await fs.mkdir(installed.root, { recursive: true });
+  await fs.symlink(installed.root, path.join(prefix, "openclaw"), "junction");
+  const { VERSION } = await import("../version.js");
+  await state.writeJson("git-install/releases/.trial", {
+    target,
+    previous: "releases/previous/openclaw",
+    version: VERSION,
+    buildId: installed.buildId,
+    createdAt: Date.now(),
+    attempts: 1,
+  });
+  const { registerGatewayInstallationReplacementHandler } = await import("./stale-install.js");
+  releaseObserver = registerGatewayInstallationReplacementHandler(() => {});
   const servingRoot = state.path("serving");
   const credential = path.join(servingRoot, "credentials", "fixture", "token");
   await fs.mkdir(path.dirname(credential), { recursive: true, mode: 0o700 });
@@ -169,19 +204,23 @@ beforeAll(async () => {
 afterAll(() =>
   runQaGatewayFixture(
     async () => server?.close({ reason: "update canary startup proof complete" }),
+    () => releaseObserver?.(),
     () => vi.restoreAllMocks(),
     () => state?.cleanup(),
     () => claim?.release(),
   ),
 );
 
-it("serves candidate readiness without starting normal Gateway maintenance", async () => {
+it("serves candidate readiness without running maintenance or settling a legacy trial", async () => {
   const health = { startupz: { status: "started" }, readyz: { ready: true } };
   for (const [route, body] of Object.entries(health)) {
     const response = await fetch(`http://127.0.0.1:${claim!.port}/${route}`);
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject(body);
   }
+  await expect(
+    fs.readFile(state!.statePath("git-install/releases/.trial"), "utf8").then(JSON.parse),
+  ).resolves.toMatchObject({ buildId: installed.buildId, attempts: 1 });
   expect(loadedPlugin).toMatchObject({ id: pluginId, status: "loaded" });
   expect(deferredCalls).toEqual([]);
   await expect(fs.access(state!.path("provider-executed"))).rejects.toMatchObject({

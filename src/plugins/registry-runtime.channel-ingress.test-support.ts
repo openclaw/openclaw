@@ -86,7 +86,6 @@ export function createRuntimeBuilder(params: {
     api,
     instance,
     buildContext: runtime.inbound.buildContext,
-    ingress: runtime.inbound.ingress,
     resolveIngress: (
       participantId: string,
       overrides?: Parameters<typeof resolveIngressForRuntime>[2],
@@ -124,7 +123,7 @@ export async function resolveIngressForRuntime(
 }
 
 export function contextParams(
-  params: Partial<Pick<ContextParams, "conversation" | "route" | "reply" | "messageId">> & {
+  params: Partial<Pick<ContextParams, "conversation" | "route" | "messageId">> & {
     ingress: ResolvedChannelMessageIngress | readonly ResolvedChannelMessageIngress[];
     channelId?: string;
     senderId?: string;
@@ -138,7 +137,7 @@ export function contextParams(
     sender: { id: params.senderId ?? "person-a" },
     conversation: params.conversation ?? { kind: "direct", id: "dm-1" },
     route: params.route ?? { agentId: "main", routeSessionKey: sessionKey },
-    reply: params.reply ?? { to: "channel-owner:dm-1" },
+    reply: { to: "channel-owner:dm-1" },
     messageId: params.messageId ?? "message-1",
     message: {
       rawBody: "hello",

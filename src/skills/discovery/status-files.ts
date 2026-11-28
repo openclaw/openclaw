@@ -5,8 +5,8 @@ import {
   resolveClawHubSkillStatusLinkSync,
 } from "../lifecycle/clawhub-status.js";
 import { readClawHubSkillsLockfileStatusSync } from "../lifecycle/clawhub-store.js";
-import { resolveSkillKey } from "../loading/frontmatter.js";
 import { resolveSkillSource } from "../loading/source.js";
+import { resolveSkillKey } from "../skill-key.js";
 import type { SkillEntry } from "../types.js";
 import type { WorkspaceSkillStatusFacts } from "./status.types.js";
 

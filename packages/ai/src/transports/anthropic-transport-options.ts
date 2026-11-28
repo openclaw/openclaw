@@ -85,6 +85,7 @@ export function resolveAnthropicTransportOptions(
     signal: options?.signal,
     apiKey,
     cacheRetention: options?.cacheRetention,
+    ...(options?.cachePrewarm ? { cachePrewarm: true as const } : {}),
     sessionId: options?.sessionId,
     headers: options?.headers,
     onPayload: options?.onPayload,

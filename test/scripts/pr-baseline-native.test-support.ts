@@ -130,6 +130,7 @@ export function createBaselineFixture(
   productCount = 16,
   incomingSeverity: "IMPORTANT" | "BLOCKER" = "IMPORTANT",
   seedRepository?: (repo: string) => void,
+  reviewMode: "correction" | "ready" | "incoming" = "correction",
 ) {
   const repo = join(root, "repo");
   const home = join(root, "home");
@@ -299,6 +300,10 @@ if (args[0] === 'api' && args[1] === 'user') {
     area: product[0]!,
     fix: "Repair behavior",
   });
+  if (reviewMode !== "correction") {
+    review.recommendation = "READY FOR /prepare-pr";
+    review.findings = [];
+  }
   writeLocal("review.json", JSON.stringify(review));
   const run = (command: string, args: string[] = [], extra: NodeJS.ProcessEnv = {}) =>
     spawnSync(join(repo, "scripts/pr"), [command, "42", ...args], {
@@ -311,9 +316,16 @@ if (args[0] === 'api' && args[1] === 'user') {
     expect(result.status, result.stdout + result.stderr).toBe(0);
     return result;
   };
-  pass("prepare-correction-init");
-  writeProduct(worktree, product, "corrected\n");
-  commit(worktree, "fix: fixture correction");
+  if (reviewMode === "incoming") {
+    writeLocal("review-context.env", `MERGE_BASE=${base}\n`);
+    pass("review-validate-artifacts");
+  } else {
+    pass(reviewMode === "ready" ? "prepare-init" : "prepare-correction-init");
+  }
+  if (reviewMode === "correction") {
+    writeProduct(worktree, product, "corrected\n");
+    commit(worktree, "fix: fixture correction");
+  }
   const approve = () => {
     pass("prepare-correction-review-init");
     const file = local("correction-review.json");
@@ -325,7 +337,9 @@ if (args[0] === 'api' && args[1] === 'user') {
       "Verified the corrected fixture behavior.";
     writeFileSync(file, JSON.stringify(candidateReview));
   };
-  approve();
+  if (reviewMode === "correction") {
+    approve();
+  }
   const advanceMain = (label: string, changed = product) => {
     writeProduct(repo, changed, `${label}\n`);
     commit(repo, `test: ${label}`);

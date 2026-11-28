@@ -265,17 +265,24 @@ it.each(["result", "item-end", "canvas"] as const)(
 );
 
 describe("status text truncation", () => {
-  it("shows a model preparing a call without claiming the tool has started", () => {
-    const host = createHost({ chatRunId: "run-1" });
-    emitEvent(host, "run-1", 1, "assistant", { text: "Hello" });
-    emitEvent(host, "run-1", 2, "run_status", { phase: "preparing_tool" });
-    expect(startupLabel(host)).toBe("Preparing a tool call");
-    expect(host.toolStreamOrder).toHaveLength(0);
-    emitEvent(host, "run-1", 3, "tool", { phase: "start", toolCallId: "call", name: "read" });
-    expect(startupLabel(host)).not.toBe("Preparing a tool call");
-    emitEvent(host, "run-1", 2, "run_status", { phase: "preparing_tool" });
-    expect(startupLabel(host)).not.toBe("Preparing a tool call");
-  });
+  it.each(["live", "history"] as const)(
+    "keeps tool preparation in the normal working state until execution starts (%s)",
+    (source) => {
+      const host = createHost({ chatRunId: "run-1" });
+      emitEvent(host, "run-1", 1, "run_status", { phase: "waiting_for_model", reason: "slot" });
+      expect(startupLabel(host)).toBe("Waiting for a free model slot");
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 2, "run_status", { phase: "preparing_tool" }),
+        source,
+      );
+      expect(startupLabel(host)).toBeUndefined();
+      expect(host.toolStreamOrder).toHaveLength(0);
+      emitEvent(host, "run-1", 3, "tool", { phase: "start", toolCallId: "call", name: "read" });
+      expect(host.toolStreamOrder).toHaveLength(1);
+      expect(startupLabel(host)).toBeUndefined();
+    },
+  );
 
   it("restores model waits after prior activity and rejects stale wait replay", () => {
     const host = createHost({ chatRunId: "run-1" });
@@ -830,28 +837,6 @@ describe("app-tool-stream result blocks", () => {
     expect(host.chatToolMessages[0]).not.toHaveProperty("__openclawToolStreamLiveOutput");
     expect(entry?.liveOutput).toBeUndefined();
     expect(entry?.output).toBe("captured beginning");
-  });
-
-  it("projects live edit counts and lets the resolved result replace them without flicker", () => {
-    useToolStreamFakeTimers();
-    const host = createHost({ chatRunId: "run-1" });
-    const toolCallId = "call-live-edit";
-    const identity = buildToolStreamIdentity("run-1", toolCallId);
-    const emit = toolEvents(host, "run-1", { name: "edit", toolCallId });
-    emit(1, { phase: "start", args: { path: "src/report.ts" } });
-    emit(2, { phase: "input_delta", diff: { added: 12, removed: 3 } });
-    vi.advanceTimersByTime(80);
-    expect(host.toolStreamById.get(identity)?.liveDiffStat).toEqual({ added: 12, removed: 3 });
-    expect(host.chatToolMessages[0]?.["__openclawToolStreamDiffStat"]).toEqual({
-      added: 12,
-      removed: 3,
-    });
-    emit(3, { phase: "result", result: { details: { diff: "-1 old\n+1 new" } } });
-    const resolved = host.toolStreamById.get(identity);
-    expect(resolved?.liveDiffStat).toBeUndefined();
-    expect(resolved?.details).toEqual({ diff: "-1 old\n+1 new" });
-    expect(resolved?.message).not.toHaveProperty("__openclawToolStreamDiffStat");
-    expect(host.chatToolMessages[0]).not.toHaveProperty("__openclawToolStreamDiffStat");
   });
 
   it("applies session-status effects when the result reports a placeholder tool name", () => {

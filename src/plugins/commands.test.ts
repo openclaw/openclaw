@@ -219,34 +219,6 @@ beforeEach(() => {
           commands: {
             nativeCommandsAutoEnabled: true,
           },
-          bindings: {
-            selfParentConversationByDefault: true,
-            resolveCommandConversation: ({
-              threadId,
-              originatingTo,
-              commandTo,
-              fallbackTo,
-            }: {
-              threadId?: string;
-              originatingTo?: string;
-              commandTo?: string;
-              fallbackTo?: string;
-            }) => {
-              const rawTarget = [commandTo, originatingTo, fallbackTo].find(Boolean)?.trim();
-              if (!rawTarget || rawTarget.startsWith("slash:")) {
-                return null;
-              }
-              const normalized = rawTarget.replace(/^telegram:/i, "");
-              const topicMatch = /^(.*?):topic:(\d+)$/i.exec(normalized);
-              if (topicMatch?.[1]) {
-                return {
-                  conversationId: `${topicMatch[1]}:topic:${threadId ?? topicMatch[2]}`,
-                  parentConversationId: topicMatch[1],
-                };
-              }
-              return { conversationId: normalized };
-            },
-          },
         },
       },
       {
@@ -256,60 +228,6 @@ beforeEach(() => {
           ...createChannelTestPluginBase({ id: "discord", label: "Discord" }),
           commands: {
             nativeCommandsAutoEnabled: true,
-          },
-          bindings: {
-            resolveCommandConversation: ({
-              threadId,
-              threadParentId,
-              originatingTo,
-              commandTo,
-              fallbackTo,
-            }: {
-              threadId?: string;
-              threadParentId?: string;
-              originatingTo?: string;
-              commandTo?: string;
-              fallbackTo?: string;
-            }) => {
-              const rawTarget = [originatingTo, commandTo, fallbackTo].find(Boolean)?.trim();
-              if (!rawTarget || rawTarget.startsWith("slash:")) {
-                return null;
-              }
-              const normalized = rawTarget.replace(/^discord:/i, "");
-              if (/^\d+$/.test(normalized)) {
-                return { conversationId: `user:${normalized}` };
-              }
-              if (threadId) {
-                const baseConversationId =
-                  originatingTo?.trim()?.replace(/^discord:/i, "") ||
-                  commandTo?.trim()?.replace(/^discord:/i, "") ||
-                  fallbackTo?.trim()?.replace(/^discord:/i, "");
-                return {
-                  conversationId: baseConversationId || threadId,
-                  ...(threadParentId ? { parentConversationId: threadParentId } : {}),
-                };
-              }
-              if (normalized.startsWith("channel:") || normalized.startsWith("user:")) {
-                return { conversationId: normalized };
-              }
-              return null;
-            },
-          },
-        },
-      },
-      {
-        pluginId: "signal",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "signal", label: "Signal" }),
-          commands: {
-            nativeCommandsAutoEnabled: true,
-          },
-          bindings: {
-            resolveCommandConversation: ({ senderId }: { senderId?: string }) => {
-              const normalizedSenderId = senderId?.trim();
-              return normalizedSenderId ? { conversationId: `dm:${normalizedSenderId}` } : null;
-            },
           },
         },
       },

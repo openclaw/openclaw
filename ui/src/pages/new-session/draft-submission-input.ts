@@ -15,18 +15,28 @@ import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftStartupResumption } from "./draft-session-startup.ts";
 import type { PendingSessionPlacementRecoveryState } from "./session-placement-recovery-state.ts";
 
-/** Transcript excerpts travel as quoted message text, like chat; only real files upload. */
+/**
+ * Transcript excerpts travel as quoted message text, like chat; only real files upload.
+ * The source session keys follow the quotes, so the new transcript links back to them.
+ */
 function quoteSelectionAttachments(
   submitted: { text: string; mentions?: readonly HumanMention[] },
   attachments: readonly ChatAttachment[],
 ) {
-  const quotes = attachments.flatMap((item) =>
-    item.selectionAnnotation ? [formatChatSelectionQuote(item.selectionAnnotation)] : [],
+  const annotations = attachments.flatMap((item) =>
+    item.selectionAnnotation ? [item.selectionAnnotation] : [],
   );
-  if (!quotes.length) {
+  if (!annotations.length) {
     return submitted;
   }
-  const text = [...quotes, submitted.text].filter(Boolean).join("\n\n");
+  const sources = [...new Set(annotations.map((annotation) => annotation.sessionKey))];
+  const text = [
+    ...annotations.map(formatChatSelectionQuote),
+    `From ${sources.join(", ")}`,
+    submitted.text,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
   const offset = text.length - submitted.text.length;
   return {
     text,
@@ -64,7 +74,12 @@ export function prepareDraftSubmission(
   const message = startup?.params.message ?? (pendingPlacement ? pending.message : submitted.text);
   const mentions = (
     startup ? startup.params.mentions : pendingPlacement ? pending.mentions : submitted.mentions
-  )?.map(({ profileId, start, end }) => ({ profileId, start, end }));
+  )?.map(({ profileId, start, end, access }) => ({
+    profileId,
+    start,
+    end,
+    access,
+  }));
   const attachments = body.attachments.filter((item) => !item.selectionAnnotation);
   if (!startup && !pendingPlacement) {
     const error = attachmentBatchRejection(attachments, context.gateway.snapshot.hello?.policy);
