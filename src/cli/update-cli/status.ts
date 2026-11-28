@@ -670,7 +670,13 @@ async function inspectUpdateStatus(
     defaultRuntime.log("");
   } else {
     for (const set of recoveryStatus.recoverySets) {
-      if (set.status === "incomplete" || set.status === "unreadable" || set.status === "warning") {
+      if (
+        set.status === "incomplete" ||
+        set.status === "unreadable" ||
+        set.status === "foreign" ||
+        set.status === "unverified" ||
+        set.status === "warning"
+      ) {
         defaultRuntime.log(`Update capture: ${set.status}`);
         defaultRuntime.log(safeMessage(set.directory));
       } else {

@@ -8,7 +8,11 @@ export async function readUpdateRecoverySetStatus(readRun?: typeof getUpdateRunA
     const sets = await inspectUpdateRecoveryBackups(readRun);
     return {
       recoverySets: sets.map((set) =>
-        set.status === "incomplete" || set.status === "unreadable" || set.status === "warning"
+        set.status === "incomplete" ||
+        set.status === "unreadable" ||
+        set.status === "foreign" ||
+        set.status === "unverified" ||
+        set.status === "warning"
           ? set
           : {
               runId: set.runId,
