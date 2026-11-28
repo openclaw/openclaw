@@ -24,7 +24,12 @@ import {
 } from "../index.js";
 import { isWorkerTranscriptFrameWithinBudget } from "../worker-transcript-budget.js";
 import { accepts as checkSchema } from "./schema.test-support.js";
+import { validateWorkerExecApprovalParams as validateExecApproval } from "./worker-exec-approval.js";
 import { WorkerGatewayToolResultSchema as GatewayToolResult } from "./worker-gateway-tool.js";
+import {
+  validateWorkerGatewayToolCancelParams as validateGatewayToolCancel,
+  validateWorkerGatewayToolInvokeParams as validateGatewayToolInvoke,
+} from "./worker-gateway-tool.js";
 import {
   WORKER_INFERENCE_MAX_OUTPUT_TOKENS,
   validateWorkerInferenceEventFrame as validateInferenceEvent,
@@ -396,6 +401,141 @@ describe("worker protocol schemas", () => {
         { ...contentEvent, contentIndex: 0, unexpected: true },
       ],
       false,
+    );
+  });
+
+  it("carries provider-issued tool-call IDs longer than the identifier budget", () => {
+    // A Copilot diagnostic run produced a 458-character tool-call ID; provider
+    // IDs are opaque upstream strings, unlike the internal worker identifiers.
+    const longId = "call_1|" + "x".repeat(451);
+    const validateEvent = (value: unknown) =>
+      validateInferenceEvent(inferenceFrame("event", { event: value }));
+    check(
+      validateEvent,
+      { type: "toolcall_start", contentIndex: 0, id: longId, toolName: "probe" },
+      true,
+    );
+    check(
+      validateEvent,
+      { type: "toolcall_start", contentIndex: 0, id: " call-1 ", toolName: "probe" },
+      false,
+    );
+    check(
+      validateCommit,
+      transcriptMessage({
+        role: "assistant" as const,
+        content: [{ type: "toolCall" as const, id: longId, name: "probe", arguments: {} }],
+        api: "responses",
+        provider: "fixture",
+        model: "fixture-model",
+        usage,
+        stopReason: "toolUse" as const,
+        timestamp: 2,
+      }),
+      true,
+    );
+    check(
+      validateCommit,
+      transcriptMessage({
+        role: "toolResult" as const,
+        toolCallId: longId,
+        toolName: "probe",
+        content: [{ type: "text" as const, text: "ok" }],
+        isError: false,
+        timestamp: 3,
+      }),
+      true,
+    );
+    check(
+      validateCommit,
+      transcriptMessage({
+        role: "assistant" as const,
+        content: [
+          {
+            type: "toolCall" as const,
+            id: "call_1|" + "x".repeat(MAX_PAYLOAD_BYTES),
+            name: "probe",
+            arguments: {},
+          },
+        ],
+        api: "responses",
+        provider: "fixture",
+        model: "fixture-model",
+        usage,
+        stopReason: "toolUse" as const,
+        timestamp: 2,
+      }),
+      false,
+    );
+    // The exported runtime validators route through the generated predicates:
+    // the widened consumers must admit the long ID after inference accepted it.
+    check(
+      validateGatewayToolInvoke,
+      {
+        generation: "g-1",
+        toolId: "tool-1",
+        toolCallId: longId,
+        arguments: { value: 1 },
+      },
+      true,
+    );
+    check(validateGatewayToolCancel, { generation: "g-1", toolCallId: longId }, true);
+    check(
+      validateLive,
+      {
+        runEpoch: 2,
+        lastAckedSeq: 0,
+        seq: 1,
+        runId: "r",
+        event: {
+          kind: "tool",
+          payload: {
+            name: "probe",
+            toolCallId: longId,
+            phase: "result",
+            meta: "done",
+            isError: false,
+            result: { ok: true },
+          },
+        },
+      },
+      true,
+    );
+    check(
+      validateLive,
+      {
+        runEpoch: 2,
+        lastAckedSeq: 0,
+        seq: 2,
+        runId: "r",
+        event: {
+          kind: "approval",
+          payload: {
+            kind: "exec",
+            title: "Approve probe",
+            toolCallId: longId,
+            phase: "requested",
+            status: "pending",
+          },
+        },
+      },
+      true,
+    );
+    check(
+      validateExecApproval,
+      {
+        binding: {
+          command: "probe",
+          execCommand: "probe --run",
+          cwd: "/tmp",
+          environment: "a".repeat(64),
+          pty: false,
+        },
+        toolCallId: longId,
+        operation: "request",
+        id: "approval-1",
+      },
+      true,
     );
   });
 
