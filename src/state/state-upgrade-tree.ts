@@ -16,19 +16,11 @@ import {
   prepareSqliteDatabaseDirectory,
 } from "../infra/sqlite-wal-filesystem.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { UPGRADE_PLAN_FILE, type UpgradeOp, type UpgradePlan } from "./state-upgrade-plan.js";
 import { canReadUpgradeFile, readableCompanionBytes } from "./state-upgrade-readability.js";
 
-export type UpgradeOp = {
-  /** Live path to replace, create or retire. */
-  live: string;
-  /** Prepared file to rename into place; absent for `remove`. */
-  next?: string;
-  kind: "replace" | "add" | "remove";
-};
+export type { UpgradeOp, UpgradePlan } from "./state-upgrade-plan.js";
 
-export type UpgradePlan = { appVersion: string; ops: UpgradeOp[] };
-
-const PLAN_FILE = "plan.json";
 const SQLITE_HEADER = Buffer.from("SQLite format 3\0", "latin1");
 // Copies an earlier upgrade or the retired in-place migration left behind.
 const RETIRED_BACKUP_NAME =
@@ -528,21 +520,12 @@ export function companionRemovals(ops: readonly UpgradeOp[]): UpgradeOp[] {
 
 /** Durable intent: once this file exists, the next start rolls the swap forward. */
 export function writePlan(workDir: string, plan: UpgradePlan): void {
-  const file = path.join(workDir, PLAN_FILE);
+  const file = path.join(workDir, UPGRADE_PLAN_FILE);
   const temp = `${file}.tmp`;
   fs.writeFileSync(temp, JSON.stringify(plan), { mode: 0o600 });
   fsyncPath(temp);
   fs.renameSync(temp, file);
   fsyncPath(workDir, true);
-}
-
-export function readPlan(workDir: string): UpgradePlan | undefined {
-  try {
-    // SAFETY: writePlan in this module is the only writer of the plan file.
-    return JSON.parse(fs.readFileSync(path.join(workDir, PLAN_FILE), "utf8")) as UpgradePlan;
-  } catch {
-    return undefined;
-  }
 }
 
 function isSymlinkAt(pathname: string): boolean {

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -8,6 +9,8 @@ import {
   runIsolatedModuleScript,
 } from "../../commands/doctor-config-preflight.process.test-support.js";
 import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
+import { writePlan } from "../../state/state-upgrade-tree.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const runtimeParent = fs.realpathSync(tempDirs.make("openclaw-selection-runtime-"));
@@ -118,6 +121,92 @@ function readResult(result: Awaited<ReturnType<typeof runIsolatedModuleScript>>)
 }
 
 describe("Gateway config selection before migration admission", () => {
+  it("settles a WAL-only commit before the first config snapshot reads the selected state", async () => {
+    const { root, stateDir, configPath, env, options } = createFixture(
+      "openclaw-selection-replay-",
+    );
+    const appVersion = "2026.11.11";
+    const workDir = path.join(stateDir, ".upgrade-2026.11.11-123-456");
+    const live = path.join(stateDir, "state", "openclaw.sqlite");
+    const next = path.join(workDir, "state", "state", "openclaw.sqlite");
+    fs.mkdirSync(path.dirname(live), { recursive: true });
+    fs.mkdirSync(path.dirname(next), { recursive: true });
+    writeJson(configPath, { gateway: { mode: "remote" }, plugins: { enabled: false } });
+
+    // As in the shipped copy-and-swap, only the staged image includes the committed WAL row.
+    const sourcePath = path.join(root, "source.sqlite");
+    {
+      using source = new DatabaseSync(sourcePath);
+      source.exec(OPENCLAW_STATE_SCHEMA_SQL);
+      source.exec(
+        "PRAGMA user_version = 40; PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;",
+      );
+      source.exec("INSERT INTO config_machine_state VALUES ('replay.witness', '\"committed\"', 1)");
+      expect(fs.statSync(sourcePath + "-wal").size).toBeGreaterThan(0);
+      fs.copyFileSync(sourcePath, live);
+      fs.copyFileSync(sourcePath + "-wal", live + "-wal");
+      fs.copyFileSync(sourcePath + "-shm", live + "-shm");
+      source.prepare("VACUUM INTO ?").run(next);
+    }
+    writePlan(workDir, {
+      appVersion,
+      ops: [
+        { kind: "remove", live: live + "-wal" },
+        { kind: "remove", live: live + "-shm" },
+        { kind: "replace", live, next },
+      ],
+    });
+    // Kill point: the previous owner preserved the WAL and retired both companions,
+    // but never renamed the staged main file. Verify the unswapped bytes lack the row.
+    fs.linkSync(live + "-wal", live + "-wal.pre-2026.11.11");
+    fs.rmSync(live + "-wal");
+    fs.rmSync(live + "-shm");
+    {
+      const mainOnly = path.join(root, "main-only.sqlite");
+      fs.copyFileSync(live, mainOnly);
+      using unswapped = new DatabaseSync(mainOnly, { readOnly: true });
+      expect(
+        unswapped
+          .prepare("SELECT value_json FROM config_machine_state WHERE state_key = 'replay.witness'")
+          .get(),
+      ).toBeUndefined();
+    }
+
+    const result = await runIsolatedModuleScript(
+      { ...env, TEST_REPLAY_LIVE_DB: live },
+      `
+      import fs from "node:fs";
+      import { DatabaseSync } from "node:sqlite";
+      let observed;
+      let read = false;
+      const originalRead = fs.readFileSync;
+      // Probe metadata synchronously at the first real authored config read, not
+      // after selection/guard returns (which could hide a too-late recovery).
+      fs.readFileSync = function (filename, ...args) {
+        if (!read && filename === process.env.OPENCLAW_CONFIG_PATH) {
+          read = true;
+          const db = new DatabaseSync(process.env.TEST_REPLAY_LIVE_DB, { readOnly: true });
+          try {
+            observed = db.prepare("SELECT value_json FROM config_machine_state WHERE state_key = 'replay.witness'").get()?.value_json;
+          } finally {
+            db.close();
+          }
+        }
+        return originalRead.call(this, filename, ...args);
+      };
+      const { selectGatewayRunEnvironment } = await import("./src/cli/gateway-cli/pre-bootstrap.ts");
+      const runtime = { log() {}, error: console.error, exit(code) { throw new Error("unexpected exit " + code); } };
+      const selected = await selectGatewayRunEnvironment({ opts: {}, runtime });
+      console.log("__RESULT__" + JSON.stringify({ selected, read, observed }));
+      `,
+      options,
+    );
+    expect(readResult(result)).toEqual({ selected: true, read: true, observed: '"committed"' });
+    expect(fs.existsSync(workDir)).toBe(false);
+    expect(fs.statSync(live + "-wal.pre-2026.11.11").size).toBeGreaterThan(0);
+    expect(fs.existsSync(path.join(stateDir, ".upgraded-2026.11.11.json"))).toBe(false);
+  }, 75_000);
+
   it("accepts a Doctor-repaired escaped reference and refuses later config drift", async () => {
     const { configPath, env, options } = createFixture("openclaw-startup-reference-repair-");
     const apiKey = "$${STARTUP_MEMORY_KEY}";

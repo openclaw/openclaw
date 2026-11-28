@@ -20,6 +20,7 @@ import {
   withArtifactPreservingStateReads,
   withLiveStateReads,
 } from "../../state/artifact-preserving-state-reads.js";
+import { settleInterruptedStateUpgrade } from "../../state/state-upgrade-replay.js";
 import { formatCliCommand } from "../command-format.js";
 import { measureGatewayBootstrapStep, recordGatewayBootstrapStep } from "../startup-trace.js";
 import type { GatewayRunPreBootstrapOptions } from "./future-config-guard.js";
@@ -330,6 +331,11 @@ async function guardGatewayRunSelectedConfig(
       });
       continue;
     }
+    if (params.opts.reset !== true) {
+      await measureGatewayBootstrapStep("cli.environment.state-upgrade-replay", () =>
+        settleInterruptedStateUpgrade(process.env),
+      );
+    }
     const snapshot = await readGuardedGatewayRunConfig(params);
     if (!snapshot) {
       return false;
@@ -621,9 +627,8 @@ export async function prepareGatewayRunBootstrap(params: GatewayRunGuardParams):
   // restores the underlying env snapshot so the selected target's trusted dotenv can replace it.
   await getGatewayRunRuntimeHooks().releaseManagedProxy?.();
   if (!params.opts.reset) {
-    // Outdated state is upgraded by copy and swap before anything reads it. A start
-    // the config guard would refuse stays read-only: the previous package must still
-    // read its state.
+    // Durable swaps were settled before config selection. Only an admitted start
+    // may begin a new copy-and-swap upgrade.
     const { upgradeStateOnGatewayStart } = await import("../../state/state-upgrade-startup.js");
     await measureGatewayBootstrapStep("cli.bootstrap.state-upgrade", () =>
       upgradeStateOnGatewayStart(

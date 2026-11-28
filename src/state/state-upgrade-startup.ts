@@ -5,7 +5,12 @@ import { parseConfigJson5 } from "../config/io.read-helpers.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
+import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db-lifecycle.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
+} from "./openclaw-state-db-cache.js";
+import { settleInterruptedStateUpgrade } from "./state-upgrade-replay.js";
 import {
   explainMachineFailure,
   isStateUpgradePending,
@@ -17,12 +22,13 @@ const log = createSubsystemLogger("state/upgrade");
 /**
  * Upgrade outdated state before any reader admits it, under exclusive state
  * ownership. `admits` is the Gateway start guard, asked with the raw config file;
- * a start it refuses leaves state untouched.
+ * a start it refuses does not begin a new upgrade. Already-durable swaps must finish first.
  */
 export async function upgradeStateOnGatewayStart(
   env: NodeJS.ProcessEnv,
   admits: (start: { configExists: boolean; mode: string | undefined }) => boolean,
 ): Promise<void> {
+  await settleInterruptedStateUpgrade(env);
   const configPath = resolveConfigPath(env, resolveStateDir(env));
   const raw = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : undefined;
   const parsed = raw === undefined ? undefined : parseConfigJson5(raw);
@@ -48,14 +54,15 @@ export async function upgradeStateOnGatewayStart(
     throw explainMachineFailure(error, resolveStateDir(env));
   }
   try {
-    const statePath = path.join(resolveStateDir(env), "state", "openclaw.sqlite");
     await upgradeStateDirectory({
       env,
       log,
+      assertCurrent: lock?.assertCurrent,
       // Selecting the environment read the config, which can leave a worker on a
-      // current shared database; it must reopen the swapped file, not the old one.
+      // database being replaced; all readers must reopen the swapped files.
       beforeSwap: async () => {
-        await closeOpenClawStateDatabaseByPathAsync(statePath);
+        await closeOpenClawStateDatabaseAsync();
+        await closeOpenClawAgentDatabasesAsync();
       },
       // The start would still refuse an invalid config after the upgrade; publish
       // nothing, so the previous package keeps reading its own state (#141451).

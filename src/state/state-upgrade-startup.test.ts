@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import * as processRole from "../infra/database-engine/admission-scope.js";
+import * as gatewayLock from "../infra/gateway-lock.js";
 import { withLiveStateReads } from "./artifact-preserving-state-reads.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import {
@@ -12,7 +13,9 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { settleInterruptedStateUpgrade } from "./state-upgrade-replay.js";
 import { upgradeStateOnGatewayStart } from "./state-upgrade-startup.js";
+import { writePlan } from "./state-upgrade-tree.js";
 
 vi.mock("./state-upgrade-doctor.js", async (original) => ({
   ...(await original<typeof import("./state-upgrade-doctor.js")>()),
@@ -34,6 +37,92 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
     vi.restoreAllMocks();
     cleanup();
   }),
+);
+
+const ignore = () => false;
+
+it("does not take file custody or remove scratch when no durable plan exists", async () => {
+  const stateDir = dirs.make("state-upgrade-no-plan-");
+  const env = { OPENCLAW_STATE_DIR: stateDir };
+  const workDir = path.join(stateDir, ".upgrade-abandoned");
+  fs.mkdirSync(workDir);
+  const temp = path.join(workDir, "plan.json.tmp");
+  fs.writeFileSync(temp, "partial");
+  const acquire = vi.spyOn(gatewayLock, "acquireGatewayLock");
+
+  await expect(settleInterruptedStateUpgrade(env)).resolves.toBeUndefined();
+  expect(acquire).not.toHaveBeenCalled();
+  expect(fs.readFileSync(temp, "utf8")).toBe("partial");
+});
+
+it("settles the authored config before the raw mode guard and is idempotent on reentry", async () => {
+  const stateDir = dirs.make("state-upgrade-config-replay-");
+  const live = path.join(stateDir, "openclaw.json");
+  const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: live };
+  const workDir = path.join(stateDir, ".upgrade-2026.11.11-123-456");
+  fs.mkdirSync(workDir);
+  const next = path.join(workDir, "openclaw.json");
+  const initial = '{"gateway":{"mode":"remote"}}';
+  const settled = '{"gateway":{"mode":"local"}}';
+  fs.writeFileSync(live, initial);
+  fs.writeFileSync(next, settled);
+  writePlan(workDir, { appVersion: "2026.11.11", ops: [{ kind: "replace", live, next }] });
+  const admit = vi.fn(ignore);
+  const acquire = vi.spyOn(gatewayLock, "acquireGatewayLock");
+
+  await upgradeStateOnGatewayStart(env, admit);
+  await upgradeStateOnGatewayStart(env, admit);
+
+  expect(admit).toHaveBeenCalledTimes(2);
+  expect(admit).toHaveBeenNthCalledWith(1, { configExists: true, mode: "local" });
+  expect(admit).toHaveBeenNthCalledWith(2, { configExists: true, mode: "local" });
+  expect(acquire).toHaveBeenCalledExactlyOnceWith({
+    env,
+    databaseAccess: "none",
+    allowInTests: true,
+  });
+  expect(fs.readFileSync(live, "utf8")).toBe(settled);
+  expect(fs.readFileSync(live + ".pre-2026.11.11", "utf8")).toBe(initial);
+  expect(fs.existsSync(workDir)).toBe(false);
+});
+
+it.each(["syntax", "operation", "non-file"])(
+  "retains a %s plan and refuses before the raw config guard",
+  async (kind) => {
+    const stateDir = dirs.make("state-upgrade-invalid-plan-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const workDir = path.join(stateDir, ".upgrade-bad");
+    const plan = path.join(workDir, "plan.json");
+    fs.mkdirSync(workDir);
+    if (kind === "non-file") {
+      fs.mkdirSync(plan);
+    } else {
+      fs.writeFileSync(
+        plan,
+        kind === "syntax"
+          ? "{broken"
+          : JSON.stringify({
+              appVersion: "2026.11.11",
+              ops: [{ kind: "replace", live: stateDir }],
+            }),
+      );
+    }
+    const admit = vi.fn(ignore);
+    await expect(upgradeStateOnGatewayStart(env, admit)).rejects.toThrow(
+      "retained for recovery. Gateway startup refused",
+    );
+    expect(admit).not.toHaveBeenCalled();
+    expect(fs.existsSync(plan)).toBe(true);
+    // Take the real file lock again, proving refusal released custody.
+    const lock = await gatewayLock.acquireGatewayLock({
+      env,
+      databaseAccess: "none",
+      allowInTests: true,
+      timeoutMs: 0,
+    });
+    expect(lock).not.toBeNull();
+    await lock?.release();
+  },
 );
 
 it.each([

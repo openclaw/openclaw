@@ -50,6 +50,11 @@ import {
 } from "./state-upgrade-config.js";
 import { createDoctorChain, type StateUpgradeChain } from "./state-upgrade-doctor.js";
 import {
+  hasInterruptedStateUpgrade,
+  replayInterruptedStateUpgradesUnderLock,
+  UPGRADE_WORK_PREFIX,
+} from "./state-upgrade-replay.js";
+import {
   applyPlan,
   companionRemovals,
   changedShadowFiles,
@@ -61,7 +66,6 @@ import {
   listTreeFiles,
   normalizeSqliteText,
   pruneGenerations,
-  readPlan,
   rewriteSqlitePrefix,
   withRecoveredSource,
   writePlan,
@@ -75,7 +79,6 @@ import {
 
 const UPGRADE_REPORT_SCOPE = "upgrade.report";
 const UPGRADE_PIN_SCOPE = "upgrade.pin";
-const WORK_PREFIX = ".upgrade-";
 
 type DatabaseTarget = { kind: "state" | "agent"; agentId?: string; path: string; version: number };
 
@@ -224,7 +227,7 @@ export function isStateUpgradePending(env: NodeJS.ProcessEnv): boolean {
   const stateDir = path.resolve(resolveStateDir(env));
   return (
     fs.existsSync(stateDir) &&
-    (fs.readdirSync(stateDir).some((entry) => entry.startsWith(WORK_PREFIX)) ||
+    (hasInterruptedStateUpgrade(stateDir) ||
       outdatedDatabases(discoverDatabases(stateDir, env).targets).length > 0)
   );
 }
@@ -344,6 +347,8 @@ export async function upgradeStateDirectory(params: {
   runChain?: StateUpgradeChain;
   /** Release this process's handles on the live files before they are renamed. */
   beforeSwap?: () => Promise<void>;
+  /** Recheck physical ownership immediately before replaying a durable plan. */
+  assertCurrent?: () => void;
   /**
    * Whether this build would start on the upgraded config. A refusal leaves the live
    * tree untouched, so the start's own refusal keeps the previous package's state.
@@ -356,6 +361,12 @@ export async function upgradeStateDirectory(params: {
   if (!fs.existsSync(stateDir)) {
     return { status: "current" };
   }
+  const resumedFiles = await replayInterruptedStateUpgradesUnderLock({
+    stateDir,
+    log: params.log,
+    beforeSwap: params.beforeSwap,
+    assertCurrent: params.assertCurrent,
+  });
   const { config, files: configFiles } = readUpgradeConfig(configPath);
   const excludedRoots = [
     resolveDefaultAgentWorkspaceDir(env),
@@ -381,7 +392,7 @@ export async function upgradeStateDirectory(params: {
   const skip = (absolute: string) => {
     const top = path.relative(stateDir, absolute).split(path.sep)[0] ?? "";
     return (
-      top.startsWith(WORK_PREFIX) ||
+      top.startsWith(UPGRADE_WORK_PREFIX) ||
       excludedRoots.some((dir) => within(absolute, dir)) ||
       // Managed outgoing JSON is still a Doctor input; payloads are not.
       (within(absolute, media) &&
@@ -389,41 +400,21 @@ export async function upgradeStateDirectory(params: {
         !within(absolute, mediaRecords))
     );
   };
-  const resumedFiles = new Set<string>();
-  // A durable plan from an interrupted swap is finished before anything else.
-  let resumed = false;
-  for (const entry of fs.readdirSync(stateDir)) {
-    if (!entry.startsWith(WORK_PREFIX)) {
-      continue;
-    }
-    const dir = path.join(stateDir, entry);
-    const plan = readPlan(dir);
-    if (plan) {
-      // Environment selection may already hold the shared database being replaced.
-      await params.beforeSwap?.();
-      applyPlan(plan);
-      for (const op of plan.ops) {
-        if (!skip(op.live)) {
-          resumedFiles.add(op.live);
-        }
-      }
-      params.log.info(`Finished an interrupted state upgrade to ${plan.appVersion}.`);
-      resumed = true;
-    }
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
   const inventory = discoverDatabases(stateDir, env);
   // Retained/deleting stores belong to their lifecycle owner, not shadow Doctor.
   excludedRoots.push(...inventory.retainedAgentRoots);
   const outdated = outdatedDatabases(inventory.targets);
   if (outdated.length === 0) {
-    if (resumed) {
-      finish(stateDir, undefined, resumedFiles);
+    if (resumedFiles) {
+      finish(stateDir, undefined, new Set([...resumedFiles].filter((file) => !skip(file))));
     }
-    return resumed ? { status: "resumed" } : { status: "current" };
+    return resumedFiles ? { status: "resumed" } : { status: "current" };
   }
   // A per-attempt name keeps a shadow Doctor orphaned by a crash out of the next attempt.
-  const workDir = path.join(stateDir, `${WORK_PREFIX}${VERSION}-${process.pid}-${Date.now()}`);
+  const workDir = path.join(
+    stateDir,
+    `${UPGRADE_WORK_PREFIX}${VERSION}-${process.pid}-${Date.now()}`,
+  );
   const shadowRoot = path.join(workDir, "state");
   const configInside = !path.relative(stateDir, configPath).startsWith("..");
   const shadowConfig = configInside
