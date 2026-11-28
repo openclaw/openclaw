@@ -93,6 +93,47 @@ describe("session ingestion", () => {
     ]);
   });
 
+  it("filters assistant process chatter while preserving durable signals and user text", async () => {
+    const { archiveFile, scan } = await createArchive();
+    const messages = [
+      { role: "assistant", content: "Need commit PR." },
+      { role: "assistant", content: "Now inspect." },
+      {
+        role: "assistant",
+        content: "Oops worktree maybe not created yet due first command still running. poll.",
+      },
+      { role: "assistant", content: "Need commit PR #123" },
+      { role: "assistant", content: "Commit 9f2a3b1 passed CI." },
+      { role: "user", content: "Need commit PR." },
+      { role: "user", content: "Now inspect." },
+    ];
+    const timestamp = "2026-04-05T18:00:00.000Z";
+    await fs.writeFile(
+      archiveFile,
+      messages
+        .map(
+          (message, index) =>
+            JSON.stringify({
+              type: "message",
+              id: `message-${index}`,
+              timestamp,
+              message: { ...message, timestamp },
+            }) + "\n",
+        )
+        .join(""),
+    );
+
+    const result = await scan();
+
+    expect(result.candidates.map((candidate) => candidate.snippet)).toEqual([
+      "Assistant: Need commit PR #123",
+      "Assistant: Commit 9f2a3b1 passed CI.",
+      "User: Need commit PR.",
+      "User: Now inspect.",
+    ]);
+    expect(result.scannedEndIndex).toBe(messages.length);
+  });
+
   it("resumes an append after consuming one snapshot line", async () => {
     const { archiveFile, scan } = await createArchive();
     await fs.writeFile(
