@@ -20,6 +20,7 @@ export type SessionGoalOperation = SessionGoalOperationIdentity &
     | { action: "replace"; goalId: string; expectedRunId: string }
     | {
         action: "resume";
+        expectedStatus?: "blocked";
         goalId: string;
         note?: string;
         preserveBudget?: true;

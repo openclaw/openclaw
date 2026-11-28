@@ -51,6 +51,9 @@ export function operationFingerprint(operation: SessionGoalOperation): string {
       "tokenBudget" in operation ? operation.tokenBudget : null,
       "note" in operation ? operation.note : null,
       ...(operation.action === "resume" && operation.preserveBudget ? ["preserve-budget"] : []),
+      ...(operation.action === "resume" && operation.expectedStatus
+        ? ["expected-status", operation.expectedStatus]
+        : []),
       ...(operation.action === "replace" ? [operation.expectedRunId] : []),
     ]),
   );
@@ -99,6 +102,16 @@ export function applySessionGoalOperation(
       throw new SessionGoalOperationError(
         "goal-rebound",
         "The goal or turn changed before replacement resumed; review its current state.",
+      );
+    }
+    if (
+      operation.action === "resume" &&
+      operation.expectedStatus !== undefined &&
+      entry.goal.status !== operation.expectedStatus
+    ) {
+      throw new SessionGoalOperationError(
+        "goal-rebound",
+        "Goal status changed before Resume; review its current state.",
       );
     }
     if (operation.action === "resume" && operation.preserveBudget) {

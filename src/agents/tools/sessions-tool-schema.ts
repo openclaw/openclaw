@@ -16,6 +16,7 @@ const ACTIONS = [
   "cloud_profiles",
   "patch",
   "stop",
+  "goal_resume",
   "reset",
   "delete",
   "assign_owner",
@@ -63,7 +64,14 @@ const SessionsToolSchema = Type.Object(
     expectedSessionId: Type.Optional(
       Type.String({
         description:
-          "Durable identity returned by sessions_list; rejects a replaced session. Required to archive, restore, snooze, wake or delete another session, and for non-owner rename of another session.",
+          "Durable identity returned by sessions_list; rejects a replaced session. Required for goal_resume, to archive, restore, snooze, wake, or delete another session, and for non-owner rename of another session.",
+      }),
+    ),
+    note: Type.Optional(
+      Type.String({
+        maxLength: 2_000,
+        description:
+          "goal_resume: required explanation of what changed. Does not grant approval for pending actions.",
       }),
     ),
     runId: Type.Optional(
@@ -166,7 +174,8 @@ const SessionsToolSchema = Type.Object(
 export const SessionControlToolSchema = Type.Object(
   {
     user: SessionsToolSchema.properties.user,
-    action: stringEnum(["patch", "stop"]),
+    action: stringEnum(["patch", "stop", "goal_resume"]),
+    note: SessionsToolSchema.properties.note,
     sessionKey: SessionsToolSchema.properties.sessionKey,
     expectedSessionId: SessionsToolSchema.properties.expectedSessionId,
     archived: Type.Optional(
