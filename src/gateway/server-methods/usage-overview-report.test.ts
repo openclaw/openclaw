@@ -5,7 +5,12 @@ import type { SessionUsageEntry } from "../../shared/usage-types.js";
 import { withVisibleUsageOverviewRows } from "./usage-overview-report.js";
 
 it("restores page and selected metadata by agent, keeping the last duplicate and report usage", () => {
-  const usage = createEmptyCostUsageTotals();
+  const totals = { ...createEmptyCostUsageTotals(), totalTokens: 30 };
+  const usage = {
+    ...totals,
+    modelUsage: [{ provider: "measured", model: "measured-model", count: 1, totals }],
+  };
+  const attribution = { modelProvider: "measured", model: "measured-model" };
   const rows: SessionUsageEntry[] = [
     { key: "shared", agentId: "a", label: "Report A", updatedAt: 50, usage },
     { key: "shared", agentId: "b", label: "Report B", updatedAt: 40, usage },
@@ -22,7 +27,14 @@ it("restores page and selected metadata by agent, keeping the last duplicate and
   const visible: SessionUsageEntry[] = [
     { key: "unrequested", agentId: "a", label: "Unrequested", usage: null },
     { key: "shared", agentId: "a", label: "First A", usage: null },
-    { key: "shared", agentId: "b", label: "Visible B", usage: null },
+    {
+      key: "shared",
+      agentId: "b",
+      label: "Visible B",
+      modelProvider: "stored",
+      model: "stored-model",
+      usage: null,
+    },
     { key: "selected", agentId: "a", label: "Visible selected", usage: null },
     { key: "shared", agentId: "a", label: "Last A", usage: null },
   ];
@@ -30,12 +42,19 @@ it("restores page and selected metadata by agent, keeping the last duplicate and
   const restored = withVisibleUsageOverviewRows(slice, visible);
 
   expect(restored.sessions).toEqual([
-    { key: "shared", agentId: "a", label: "Last A", usage },
-    { key: "shared", agentId: "b", label: "Visible B", usage },
-    rows[2],
-    rows[3],
+    { key: "shared", agentId: "a", label: "Last A", ...attribution, usage },
+    {
+      key: "shared",
+      agentId: "b",
+      label: "Visible B",
+      modelProvider: "stored",
+      model: "stored-model",
+      usage,
+    },
+    { ...rows[2], ...attribution },
+    { ...rows[3], ...attribution },
   ]);
   expect(restored.overview.selectedRows).toEqual([
-    { key: "selected", agentId: "a", label: "Visible selected", usage },
+    { key: "selected", agentId: "a", label: "Visible selected", ...attribution, usage },
   ]);
 });
