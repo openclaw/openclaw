@@ -5,17 +5,6 @@ import OpenClawProtocol
 import SwiftUI
 
 struct ChatProTab: View {
-    enum GatewayStatusTone: Equatable {
-        case success
-        case warning
-        case error
-    }
-
-    private struct TranscriptShareItem: Identifiable {
-        let id = UUID()
-        let fileURL: URL
-    }
-
     @Environment(NodeAppModel.self) private var appModel
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -25,22 +14,43 @@ struct ChatProTab: View {
     @AppStorage(ChatPreferences.followUpModeKey) private var followUpMode = ""
     @AppStorage(ChatPreferences.showAssistantTraceKey)
     private var showsAssistantTrace = true
+    @AppStorage(ChatPreferences.showsReasoningKey) private var showsReasoning: Bool?
+    @AppStorage(ChatPreferences.showsToolCallsKey) private var showsToolCalls: Bool?
+    @AppStorage(ChatPreferences.keepsCommentaryKey) private var keepsCommentary = true
     private var chatTraceDisplayOptions: OpenClawChatDisplayOptions {
-        guard self.showsAssistantTrace else { return [] }
-        return self.viewModel?.currentSessionReasoningVisible == true ? .assistantTrace : .toolActivity
+        ChatPreferences.displayOptions(
+            reasoning: self.showsReasoning,
+            toolCalls: self.showsToolCalls,
+            commentary: self.keepsCommentary,
+            legacyTrace: self.showsAssistantTrace,
+            reasoningVisible: self.viewModel?.currentSessionReasoningVisible == true)
     }
 
     private var viewModel: OpenClawChatViewModel? {
         self.appModel.chatPresentation.viewModel
     }
 
-    @State private var transcriptShareItem: TranscriptShareItem?
-    @State private var showsTranscriptExportError = false
     @Environment(\.dismiss) private var dismiss
     @State private var compactToolbarInset: CGFloat = 0
+    @State private var infoVisit: ChatInfoVisit?
+    @State private var checkoutChanges: (read: ChatInfoCheckoutRead, value: ChatInfoCheckoutChanges)?
+
+    private var checkoutRead: ChatInfoCheckoutRead? {
+        guard self.childKey == nil, !self.isMainChat, !self.isGatewayTransitionPending,
+              self.appModel.chatPresentation.ownerID == self.appModel.chatViewModelOwnerID,
+              let model = self.viewModel, !model.isNewChatDraft, let entry = model.currentSessionEntry(),
+              entry.worktree != nil || entry.repository != nil else { return nil }
+        let branch = OpenClawChatInfoPullRequests.checkoutBranch(for: model)
+        guard branch?.additions == nil, branch?.deletions == nil else { return nil }
+        return ChatInfoCheckoutRead(
+            target: model.currentSessionTarget,
+            gatewayID: self.appModel.chatTranscriptCacheGatewayID,
+            presentationID: self.appModel.chatPresentation.presentationID,
+            branch: entry.worktree?.branch ?? entry.repository?["branch"]?.value as? String)
+    }
+
     @State private var showsNewSessionOptions = false
     @State private var speech: OpenClawChatSpeechController?
-    @State private var isGatewayStatusManuallyExpanded = false
     var childKey: String?
     var childName: String?
     let headerSidebarAction: OpenClawSidebarHeaderAction?
@@ -114,6 +124,21 @@ struct ChatProTab: View {
                 }
             }
             .environment(\.openClawChatUsesFloatingComposer, true)
+            .navigationDestination(item: self.$infoVisit) { visit in
+                ChatInfoPage(visit: visit, writesDisabled: self.areSessionActionsDisabled)
+            }
+            .task(id: self.checkoutRead) {
+                self.checkoutChanges = nil
+                guard let read = self.checkoutRead, let changes = await read.changes(in: self.appModel),
+                      !Task.isCancelled else { return }
+                self.checkoutChanges = (read, changes)
+            }
+            .onChange(of: self.viewModel?.currentSessionTarget) { _, target in
+                if let visit = self.infoVisit, target != visit.target { self.infoVisit = nil }
+            }
+            .onChange(of: self.appModel.chatPresentation.presentationID) { _, _ in
+                if let visit = self.infoVisit, self.viewModel !== visit.model { self.infoVisit = nil }
+            }
             .sheet(isPresented: self.$showsNewSessionOptions) {
                 if let viewModel {
                     ScrollView {
@@ -237,7 +262,15 @@ struct ChatProTab: View {
                     \.openClawChatFloatingHeader,
                     self.usesSideToolbar
                         ? AnyView(Color.clear.frame(height: self.compactToolbarInset).allowsHitTesting(false))
-                        : AnyView(self.chatHeader))
+                        : AnyView(self.chatHeader.toastTopBar()))
+                .environment(
+                    \.openClawChatComposerAccessory,
+                    viewModel.isNewChatDraft ? nil : AnyView(
+                        ChatSessionApproval(
+                            sessionKey: viewModel.sessionKey,
+                            agentID: self.appModel.chatAgentId,
+                            agentName: self.agentDisplayName)
+                            .id(viewModel.sessionKey)))
                 .environment(\.openClawChatShowsDisconnectNotice, self.startFirstGatewaySetup != nil)
                 .environment(
                     \.openClawChatNewSessionOptionsPresented,
@@ -250,12 +283,13 @@ struct ChatProTab: View {
                     viewModel.defaultFollowUpMode = OpenClawChatQueueMode(rawValue: mode)
                 }
                 .openClawChatComposerPanels(viewModel: viewModel)
+                .modifier(ChatConnectionStrip(strip: viewModel.statusStrip, input: self.connectionStripInput))
                 .id(presentationID)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
             OpenClawProBackground()
                 .safeAreaBar(edge: .top, spacing: 0) {
-                    if !self.usesSideToolbar { self.chatHeader }
+                    if !self.usesSideToolbar { self.chatHeader.toastTopBar() }
                 }
         }
     }
@@ -290,18 +324,6 @@ struct ChatProTab: View {
         }
         .accessibilityElement(children: .ignore)
         .openClawToolbarGlyphScale()
-    }
-
-    private var gatewayAvatarStatusDot: some View {
-        ZStack {
-            Circle()
-                .fill(Color(uiColor: .systemBackground))
-            Circle()
-                .fill(self.gatewayStatusColor)
-                .padding(2)
-        }
-        .frame(width: 13, height: 13)
-        .accessibilityHidden(true)
     }
 
     private var isMainChat: Bool {
@@ -380,13 +402,32 @@ struct ChatProTab: View {
             self.sessionHeaderText(title: childName, subtitle: self.viewModel?.subagentChatStatus(for: childKey))
         } else if self.viewModel?.isNewChatDraft == true {
             Color.clear.frame(width: 0, height: 0).accessibilityHidden(true)
-        } else if self.isMainChat, !self.usesSideToolbar {
-            self.mainChatIdentity
         } else {
-            self.headerAgentIdentityLabel
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(Text(verbatim: self.headerAgentAccessibilityLabel))
-                .accessibilityIdentifier("chat-agent-identity")
+            Button {
+                guard let viewModel, self.childKey == nil else { return }
+                // Media and Automations load inside the page; opening never waits on the Gateway.
+                self.infoVisit = ChatInfoVisit(
+                    model: viewModel,
+                    kind: self.isMainChat ? .mainProfile : .chat,
+                    agentName: self.agentDisplayName,
+                    badge: self.agentBadge,
+                    avatar: self.agentAvatarImage,
+                    gatewayID: self.appModel.chatTranscriptCacheGatewayID,
+                    agentID: self.currentAgentID,
+                    uncommittedChanges: self.checkoutChanges.flatMap { $0.read == self.checkoutRead ? $0.value : nil })
+            } label: {
+                if self.isMainChat, !self.usesSideToolbar {
+                    self.mainChatIdentity
+                } else {
+                    self.headerAgentIdentityLabel
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(self.viewModel == nil || self.childKey != nil || self.isGatewayTransitionPending ||
+                self.isAttachmentOwnerPinned && self.appModel.chatPresentation.ownerID != self.appModel
+                .chatViewModelOwnerID)
+            .accessibilityLabel(Text(verbatim: self.headerAgentAccessibilityLabel))
+            .accessibilityIdentifier("chat-agent-identity")
         }
     }
 
@@ -422,25 +463,6 @@ struct ChatProTab: View {
         .multilineTextAlignment(.leading)
     }
 
-    private var gatewayStatusIsHealthy: Bool {
-        Self.gatewayStatusTone(state: self.gatewayDisplayState) == .success
-    }
-
-    private var expandedGatewayStatusLabel: some View {
-        Text(Self.gatewayStatusTitle(state: self.gatewayDisplayState))
-            .font(OpenClawType.subheadMedium)
-            .foregroundStyle(.primary)
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
-            .background(self.gatewayStatusColor.opacity(0.12), in: Capsule())
-            .overlay {
-                Capsule()
-                    .stroke(self.gatewayStatusColor.opacity(0.28), lineWidth: 1)
-            }
-    }
-
     private var headerNonMainSession: OpenClawChatSessionEntry? {
         guard let viewModel, let session = viewModel.currentSessionEntry(),
               session.isMain != true,
@@ -451,25 +473,10 @@ struct ChatProTab: View {
         return session
     }
 
-    private var showsExpandedGatewayStatus: Bool {
-        Self.gatewayStatusShouldExpand(
-            state: self.gatewayDisplayState,
-            isManuallyExpanded: self.isGatewayStatusManuallyExpanded)
-    }
-
     /// Use the same title as the sidebar and keep opaque routing keys out of the header.
     private var headerSessionTitle: String? {
         guard let session = headerNonMainSession else { return nil }
         return SessionPresentation.title(session, includesRoutingFallback: false)
-    }
-
-    private var gatewayStatusAccessibilityHint: String {
-        if !self.gatewayStatusIsHealthy {
-            return String(localized: "Opens Settings / Gateway")
-        }
-        return self.isGatewayStatusManuallyExpanded
-            ? String(localized: "Hides the gateway status label")
-            : String(localized: "Shows the full gateway status label")
     }
 
     private var headerProjectName: String? {
@@ -483,8 +490,9 @@ struct ChatProTab: View {
     }
 
     private var voiceAvatarAccessibilityLabel: String {
+        // Talk on: the same phrase the composer's Talk row shows, never the owner's raw status.
         let state = self.appModel.talkMode.isEnabled
-            ? self.appModel.talkMode.statusText
+            ? Self.talkControl(appModel: self.appModel).statusPhrase
             : String(localized: "Voice off")
         return "\(self.agentDisplayName), \(state)"
     }
@@ -496,6 +504,7 @@ struct ChatProTab: View {
             isSpeaking: appModel.talkMode.isSpeaking,
             isGatewayConnected: appModel.talkMode.isGatewayConnected,
             statusText: appModel.talkMode.statusText,
+            phase: appModel.talkMode.chatPhase,
             providerLabel: appModel.talkMode.gatewayTalkProviderLabel,
             levelProvider: {
                 if appModel.talkMode.isSpeaking {
@@ -512,6 +521,8 @@ struct ChatProTab: View {
                     await appModel.talkMode.setMicrophoneMuted(!appModel.talkMode.isMicrophoneMuted)
                 }
             },
+            // The words heard so far, while the person speaks; empty in every other phase.
+            partialTranscript: appModel.talkMode.isListening ? appModel.talkMode.lastTranscript : "",
             inputDevices: self.talkInputDevices,
             selectedInputDeviceID: self.selectedTalkInputDeviceID(appModel: appModel),
             selectInputDevice: { deviceID in
@@ -520,6 +531,11 @@ struct ChatProTab: View {
             cameraFacing: appModel.preferredCameraFacing == .front ? .front : .back,
             flipCamera: {
                 appModel.flipPreferredCameraFacing()
+            },
+            openSettings: {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
             },
             toggle: { sessionKey in
                 appModel.focusChatSession(sessionKey)
@@ -535,7 +551,7 @@ struct ChatProTab: View {
 
     private static func selectedTalkInputDeviceID(appModel: NodeAppModel) -> String? {
         guard let preferredID = appModel.talkMode.preferredInputDeviceID,
-              self.talkInputDevices.contains(where: { $0.id == preferredID })
+              talkInputDevices.contains(where: { $0.id == preferredID })
         else { return nil }
         return preferredID
     }
@@ -568,37 +584,12 @@ struct ChatProTab: View {
         ChatActionsMenu(
             viewModel: self.viewModel,
             isMainChat: self.isMainChat,
+            hasInfoPage: self.childKey == nil && self.viewModel?.isNewChatDraft == false,
             isDisabled: self.areSessionActionsDisabled,
             newChat: {
                 guard !self.areSessionActionsDisabled else { return }
                 self.appModel.requestNewChat()
             })
-    }
-
-    private func exportTranscript() {
-        guard let viewModel else { return }
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OpenClawTranscripts", isDirectory: true)
-        do {
-            let fileURL = try Self.writeTranscript(for: viewModel, in: directory)
-            self.transcriptShareItem = TranscriptShareItem(fileURL: fileURL)
-        } catch {
-            self.showsTranscriptExportError = true
-        }
-    }
-
-    static func writeTranscript(for viewModel: OpenClawChatViewModel, in directory: URL) throws -> URL {
-        let title = viewModel.currentSessionEntry()?.displayName
-        let key = viewModel.sessionKey
-        let filename = ChatTranscriptExporter.filename(sessionTitle: title, sessionKey: key)
-        let markdown = ChatTranscriptExporter.markdown(
-            sessionTitle: title,
-            sessionKey: key,
-            messages: viewModel.messages)
-        let fileURL = directory.appendingPathComponent(filename, isDirectory: false)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try markdown.write(to: fileURL, atomically: true, encoding: .utf8)
-        return fileURL
     }
 
     /// Chat follows the operator session; buildChat reports connected only when it can serve chat.
@@ -634,55 +625,19 @@ struct ChatProTab: View {
         !isAttachmentOwnerPinned || isCaptureInFlight
     }
 
-    private var gatewayAccessibilityLabel: String {
-        "Gateway: \(Self.gatewayStatusTitle(state: self.gatewayDisplayState))"
-    }
-
-    private var gatewayStatusColor: Color {
-        switch Self.gatewayStatusTone(state: self.gatewayDisplayState) {
-        case .success:
-            OpenClawBrand.statusSuccess
-        case .warning:
-            OpenClawBrand.statusWarning
-        case .error:
-            OpenClawBrand.statusError
-        }
-    }
-
-    nonisolated static func gatewayStatusTone(state: GatewayDisplayState) -> GatewayStatusTone {
-        switch state {
-        case .connected:
-            .success
-        case .connecting, .error:
-            .warning
-        case .disconnected:
-            .error
-        }
-    }
-
-    nonisolated static func gatewayStatusShouldExpand(
-        state: GatewayDisplayState,
-        isManuallyExpanded: Bool) -> Bool
-    {
-        isManuallyExpanded || self.gatewayStatusTone(state: state) != .success
-    }
-
-    nonisolated static func gatewayStatusTitle(state: GatewayDisplayState) -> String {
-        switch state {
-        case .connected:
-            "Connected"
-        case .connecting:
-            "Connecting"
-        case .error:
-            "Attention"
-        case .disconnected:
-            "Offline"
-        }
-    }
-
+    /// The strip above the composer says why it can't send, so the field keeps its usual prompt.
     private var messagePlaceholder: String {
         if self.childKey != nil { return String(localized: "Message subagent") }
         return String(format: String(localized: "Message %@"), self.agentDisplayName)
+    }
+
+    private var connectionStripInput: ChatConnectionStatus.Input {
+        ChatConnectionStatus.Input(
+            state: self.gatewayDisplayState,
+            problem: self.appModel.lastGatewayProblem,
+            approvalFailedUnreachable: self.appModel.pendingExecApprovalFailedUnreachable,
+            isFirstSetup: self.startFirstGatewaySetup != nil,
+            isTalkActive: self.appModel.talkMode.isEnabled)
     }
 
     private var canQueueOffline: Bool {
@@ -857,28 +812,6 @@ struct ChatVoiceAvatar<Avatar: View>: View {
                 speechActive: self.talkMode.isUserSpeechDetected)
         }
         return .idle
-    }
-}
-
-@available(iOS 27.1, *)
-private struct ChatToolbarStatusPopover<Status: View>: ViewModifier {
-    @Environment(\.toolbarVerticalEdge) private var verticalEdge
-    @Binding var isExpanded: Bool
-    let status: Status
-
-    func body(content: Content) -> some View {
-        content.popover(isPresented: self.isPresented) {
-            self.status
-                .padding(16)
-                .accessibilityIdentifier("chat-gateway-status-details")
-                .presentationCompactAdaptation(.popover)
-        }
-    }
-
-    private var isPresented: Binding<Bool> {
-        Binding(
-            get: { self.verticalEdge != nil && self.isExpanded },
-            set: { self.isExpanded = $0 })
     }
 }
 

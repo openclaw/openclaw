@@ -1,5 +1,5 @@
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, createSignal, Show } from "solid-js";
+import { createMemo, createSignal, createUniqueId, Show } from "solid-js";
 import { ConfigNode } from "../../components/config-form.node.tsx";
 import { ConfigTierGroups } from "../../components/config-form.render.tsx";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
@@ -105,6 +105,8 @@ export function McpServerEditor(props: {
     return typeof command === "string" ? command : "";
   };
   const commandValue = liveValue<HTMLInputElement>(commandText);
+  const [commandRestored, setCommandRestored] = createSignal(false);
+  const commandErrorId = createUniqueId();
   // One argument per line keeps long paths readable and needs no shell quoting.
   const argsValue = liveValue<HTMLTextAreaElement>(() => {
     const args = value()?.args;
@@ -176,17 +178,26 @@ export function McpServerEditor(props: {
                 <Show when={stdio()}>
                   <SettingsRow
                     title={t("mcpServers.fieldCommand")}
+                    description={
+                      <Show when={commandRestored()}>
+                        <span id={commandErrorId} class="cfg-field__error" role="alert">
+                          {t("mcpServers.commandRequired")}
+                        </span>
+                      </Show>
+                    }
                     control={
                       <input
                         type="text"
                         class="settings-input"
                         aria-label={t("mcpServers.fieldCommand")}
+                        aria-describedby={commandRestored() ? commandErrorId : undefined}
                         spellcheck="false"
                         autocomplete="off"
                         ref={commandValue}
                         disabled={disabled()}
                         onChange={(event) => {
                           const command = event.currentTarget.value.trim();
+                          setCommandRestored(!command);
                           if (command) {
                             props.config.onFormPatch([...path(), "command"], command);
                           } else {

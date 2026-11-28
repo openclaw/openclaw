@@ -176,6 +176,7 @@ struct ChatActivityPill: Equatable, Identifiable {
         case subagents
         case goal
         case progress
+        case pullRequest(String)
     }
 
     /// Neutral ink everywhere; color only marks a problem that needs the person.
@@ -209,6 +210,8 @@ struct ChatActivityPill: Equatable, Identifiable {
     var avatarKeys: [String] = []
     /// The label sweeps while the work it names is running, as the web's `shine`.
     var shimmers = false
+    var pullRequestState: ChatPullRequestState?
+    var checkMark: ChatActivityCheckRow.Kind?
 
     var id: Kind {
         self.kind
@@ -221,6 +224,7 @@ struct ChatActivityInput {
     var goal: OpenClawChatSessionGoal?
     var goalOperationLabel: String?
     var plan: ChatActivityPlan?
+    var pullRequests: OpenClawSessionPullRequestSnapshot?
 }
 
 enum ChatActivityRules {
@@ -239,6 +243,9 @@ enum ChatActivityRules {
         }
         if !input.approvalPending, let plan = input.plan {
             pills.append(self.progress(plan))
+        }
+        if !input.approvalPending, let snapshot = input.pullRequests {
+            pills += self.pullRequestPills(snapshot)
         }
         return pills
     }

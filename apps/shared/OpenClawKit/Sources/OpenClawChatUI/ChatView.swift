@@ -18,6 +18,7 @@ public struct OpenClawChatView: View {
     @Environment(\.openClawChatFloatingHeader) private var floatingHeader
     @Environment(\.openClawChatComposerAccessory) private var composerAccessory
     @Environment(\.openClawChatShowsDisconnectNotice) private var showsDisconnectNotice
+    @Environment(\.openClawToastPresenter) private var toastPresenter
     @Environment(\.openClawChatStatusBarInset) private var statusBarInset
     @Environment(\.openClawChatInteractionsDisabled) private var interactionsDisabled
     @State private var scrollerBottomID = UUID()
@@ -339,10 +340,9 @@ extension OpenClawChatView {
             showsSessionSwitcher: self.showsSessionSwitcher,
             userAccent: self.userAccent,
             composerChrome: self.composerChrome,
-            isComposerEnabled: self.isComposerEnabled
-                && !self.viewModel.isSendingAttachmentDraft,
-            isAttachmentInputEnabled: self.isAttachmentInputEnabled
-                && !self.viewModel.isSendingAttachmentDraft,
+            // The attachments a send took left the composer at the tap; it stays open for the next message.
+            isComposerEnabled: self.isComposerEnabled,
+            isAttachmentInputEnabled: self.isAttachmentInputEnabled,
             messagePlaceholder: self.messagePlaceholder,
             compactMessagePlaceholder: self.compactMessagePlaceholder,
             talkControl: self.talkControl,
@@ -480,7 +480,7 @@ extension OpenClawChatView {
     private func messageList(transcript: TranscriptPresentation) -> some View {
         let hasVisibleContent = !transcript.rows.isEmpty || self.hasVisibleTransientContent
         let notice = hasVisibleContent && !self.viewModel.isLoading && self.visibleEmptyAssistantIntro == nil
-            ? self.activeErrorText : nil
+            ? self.bannerText : nil
         let isWaitingForTranscript = self.showsCleanLoadingPlaceholder(hasVisibleContent: hasVisibleContent)
         return ZStack {
             self.messageListScrollContent(transcript: transcript, hasVisibleContent: hasVisibleContent)
@@ -529,15 +529,18 @@ extension OpenClawChatView {
                 self.jumpToLatestButton
             }
         }
+        .onChange(of: self.viewModel.errorText) { _, text in
+            self.postErrorToast(text, transcriptHasContent: hasVisibleContent)
+        }
         #if os(iOS)
         .modifier(ChatScrollCommandModifier(
-                command: self.$scrollCommand,
-                currentSessionTarget: { self.viewModel.currentSessionTarget },
-                shouldNavigate: { !self.scroll.readingPosition.isTurnRealized($0) }))
+            command: self.$scrollCommand,
+            currentSessionTarget: { self.viewModel.currentSessionTarget },
+            shouldNavigate: { !self.scroll.readingPosition.isTurnRealized($0) }))
         #else
-            .modifier(ChatScrollCommandModifier(
-                command: self.$scrollCommand,
-                currentSessionTarget: { self.viewModel.currentSessionTarget }))
+        .modifier(ChatScrollCommandModifier(
+            command: self.$scrollCommand,
+            currentSessionTarget: { self.viewModel.currentSessionTarget }))
         #endif
         // Ensure the message list claims vertical space on the first layout pass.
         .frame(maxHeight: .infinity, alignment: .top)
@@ -1013,7 +1016,7 @@ extension OpenClawChatView {
                 ChatMessageReactions(viewModel: self.viewModel, message: msg)
             }
             #endif
-            if let outboxState = self.viewModel.outboxState(for: msg.id) {
+            if ChatOutboxStatusLabel.isShownUnderMessages, let outboxState = self.viewModel.outboxState(for: msg.id) {
                 ChatOutboxStatusLabel(state: outboxState, queueMode: self.viewModel.outboxQueueMode(for: msg.id))
                     .padding(.trailing, 8)
             }
@@ -1091,7 +1094,7 @@ extension OpenClawChatView {
                         }
                     }
                 })
-            })
+            }, send: ChatUserSendPresentation(message: msg, viewModel: self.viewModel))
         return bubble
         #else
         return bubble
@@ -1190,7 +1193,7 @@ extension OpenClawChatView {
             searchActive: self.isSearchPresented,
             collapsesWork: self.collapsesCompletedWork,
             streamingTextRunID: self.hasVisibleStreamingAssistantText ? self.viewModel.streamingAssistantRunID : nil,
-            isMessageVisible: { message, _ in self.shouldDisplayMessage(message) })
+            isMessageVisible: self.shouldDisplayMessage)
     }
 
     private var latestVisibleTurnStartID: UUID? {
@@ -1267,6 +1270,23 @@ extension OpenClawChatView {
               self.showsDisconnectNotice || !chatErrorIsDisconnected(error)
         else { return nil }
         return error
+    }
+
+    /// Where an app shows toasts (the iPhone), a failure is a toast and the banner keeps only the
+    /// model's standing sign-in problem, which the composer's Model sign-in row acts on.
+    private var bannerText: String? {
+        guard self.toastPresenter != nil else { return self.activeErrorText }
+        let showsContextualSignIn = self.showsComposer && self.isDesktopLayout && self.composerChrome == .clean
+        return showsContextualSignIn ? nil : self.viewModel.composerModelAvailabilityMessage
+    }
+
+    private func postErrorToast(_ errorText: String?, transcriptHasContent: Bool) {
+        guard let presenter = self.toastPresenter,
+              let text = chatErrorToastText(errorText, transcriptHasContent: transcriptHasContent)
+        else { return }
+        presenter.post(.failure(text))
+        // Cleared so the same failure posts again next time.
+        self.viewModel.errorText = nil
     }
 
     private var hasVisibleStreamingAssistantText: Bool {
@@ -1493,17 +1513,8 @@ extension OpenClawChatView {
     }
     #endif
 
-    private func dismissKeyboardIfNeeded() {
-        #if canImport(UIKit)
-        UIApplication.shared.sendAction(
-            #selector(UIResponder.resignFirstResponder),
-            to: nil,
-            from: nil,
-            for: nil)
-        #endif
-    }
-
-    private func shouldDisplayMessage(_ message: OpenClawChatMessage) -> Bool {
+    private func shouldDisplayMessage(_ message: OpenClawChatMessage, activeRunIDs: Set<String>) -> Bool {
+        if let shown = self.displayOptions.presetVisibility(of: message, activeRunIDs: activeRunIDs) { return shown }
         let primaryText = ChatMessageVisibleText.displayText(
             in: message,
             includeThinking: self.displayOptions.contains(.reasoning))
@@ -1530,16 +1541,8 @@ extension OpenClawChatView {
         return self.displayOptions.contains(.toolActivity) && message.hasDisplayableToolActivity
     }
 
-    @ViewBuilder
     private func copyMessageButton(for message: OpenClawChatMessage) -> some View {
-        let text = ChatMessageVisibleText.copyText(in: message)
-        if !text.isEmpty {
-            Button {
-                ChatPasteboard.copy(text)
-            } label: {
-                chatActionLabel(Text("Copy Message"), systemImage: "doc.on.doc")
-            }
-        }
+        ChatCopyMessageMenuButton(text: ChatMessageVisibleText.copyText(in: message))
     }
 
     #if os(iOS)

@@ -19,6 +19,7 @@ public final class OpenClawChatViewModel {
     #endif
     let sourcePreviewState = ChatSourcePreviewState()
     var reactionState = ChatMessageReactionState()
+    public let statusStrip = OpenClawChatStatusStrip()
 
     public var input: String = "" {
         didSet {
@@ -28,7 +29,10 @@ public final class OpenClawChatViewModel {
     }
 
     var newChatDraft: NewChatDraft?
+    /// Host preference for follow-ups. Explicit per-message choices take precedence.
+    /// Nil preserves the Gateway default.
     public var defaultFollowUpMode: OpenClawChatQueueMode?
+
     public internal(set) var replyTarget: OpenClawChatReplyTarget?
     public let webConversation: OpenClawWebConversation?
     var isApplyingWebSession = false
@@ -94,11 +98,18 @@ public final class OpenClawChatViewModel {
     public internal(set) var isSending = false
     public internal(set) var isSendingAttachmentDraft = false
     public internal(set) var isSubmittingDraft = false
+    /// The user message shown at the Send tap while its send is still checked, prepared and saved.
+    var optimisticSendMessageID: UUID?
+    /// Attachments and preparing tiles that send took. They stay in `attachments`, `preparingAttachments`
+    /// and the stored draft, hidden from the composer, until the send takes them or gives them back.
+    var heldAttachmentIDs: Set<UUID> = []
     private var deferredExternalSessionKey: String?
     private var deferredDeliveryIdentity: DeferredDeliveryIdentity?
     @ObservationIgnored
     var isCreatingSession = false
     var attachmentStagingCount = 0
+    /// iPhone: one tile per picked item, shown until its attachment is staged or the tile is removed.
+    public internal(set) var preparingAttachments: [OpenClawPreparingAttachment] = []
     public private(set) var isAborting = false
     public var errorText: String?
     public var attachments: [OpenClawPendingAttachment] = [] {
@@ -134,8 +145,11 @@ public final class OpenClawChatViewModel {
     var narration = ChatNarration()
     @ObservationIgnored var cliAssistantStream: (runID: String, text: String, sealedPrefix: String)?
     public internal(set) var progressCard: ProgressCard?
+    /// The current chat's PRs as the Gateway last pushed them, with the key they belong to.
+    var sessionPullRequests: (key: String, snapshot: OpenClawSessionPullRequestSnapshot)?
     var activityChildren = ChatActivityChildren()
     var goalActivity = ChatGoalActivity()
+    @ObservationIgnored var pullRequestWatch = ChatPullRequestWatch()
     var progressCardStoreAvailable: Bool?
     var progressCardRefreshAvailable = false
     var progressCardRefreshPending = false
@@ -295,7 +309,7 @@ public final class OpenClawChatViewModel {
     /// Per-message outbox display state; rows without an entry are normal
     /// transcript rows. Observable so bubbles update when flush progresses.
     public internal(set) var outboxStatesByMessageID: [UUID: OpenClawChatOutboxMessageState] = [:]
-    var outboxQueueModesByMessageID: [UUID: OpenClawChatQueueMode] = [:]
+    var outboxSendContextByMessageID: [UUID: (mode: OpenClawChatQueueMode?, waitsForReply: Bool)] = [:]
     @ObservationIgnored
     var outboxCommandIDsByMessageID: [UUID: String] = [:]
     @ObservationIgnored
@@ -434,7 +448,7 @@ public final class OpenClawChatViewModel {
     var capabilityPatchFailureMessagesByTarget: [ModelPatchTarget: String] = [:]
     var confirmedCapabilityToolOverridesByTarget: [ModelPatchTarget: ToolOverridesState] = [:]
     var settingsPatchRevisionsByTarget: [ModelPatchTarget: UInt64] = [:]
-    private var settingsPatchWaitersByTarget: [ModelPatchTarget: [CheckedContinuation<Void, Never>]] = [:]
+    private var settingsPatchWaitersByTarget: [ModelPatchTarget: [UUID: CheckedContinuation<Void, Never>]] = [:]
     @ObservationIgnored
     private var settingsPatchTailsByTarget: [ModelPatchTarget: SettingsPatchTail] = [:]
     var latestThinkingSelectionRequestIDsByTarget: [ModelPatchTarget: UInt64] = [:]
@@ -529,6 +543,7 @@ public final class OpenClawChatViewModel {
         let requestID: UInt64
         let routeLeaseTask: Task<OpenClawChatSessionSettingsRouteLease?, Never>
         let task: Task<Void, Never>
+        let requiredBeforeSend: Task<Void, Never>?
     }
 
     private struct BootstrapContext {
@@ -809,9 +824,14 @@ public final class OpenClawChatViewModel {
               self.canSelectModel(selectionID),
               let request = reserveModelSelection(selectionID)
         else { return }
-        enqueueSessionSettingsPatch(requestID: request.id, target: request.target) { [weak self] routeLease in
+        enqueueSessionSettingsPatch(
+            requestID: request.id,
+            target: request.target,
+            mayFinishAfterSend: true)
+        { [weak self] routeLease in
             // Latest wins: a model that a newer pick replaced before its turn is never sent.
-            guard let self, request.id == self.latestModelSelectionRequestIDsByTarget[request.target] else { return }
+            guard let self,
+                  request.id == self.latestModelSelectionRequestIDsByTarget[request.target] else { return }
             await self.performSelectModel(request, routeLease: routeLease)
         }
     }
@@ -1017,7 +1037,7 @@ extension OpenClawChatViewModel {
                 syncThinkingOptions: true))
         guard self.isCurrentBootstrap(context) else { return }
         guard history.applied else {
-            if let errorDescription = history.errorDescription { self.errorText = errorDescription }
+            if let errorDescription = history.errorDescription { self.reportChatLoadFailure(errorDescription) }
             return
         }
         _ = await branchRefresh
@@ -1205,7 +1225,7 @@ extension OpenClawChatViewModel {
         let requestedAgentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let nextAgentID = encodedAgentID == nil && requestedAgentID?.isEmpty == false ? requestedAgentID : nil
         if let encodedAgentID, let requestedAgentID, encodedAgentID != requestedAgentID {
-            self.errorText = "The selected conversation belongs to another agent. Refresh and try again."
+            self.errorText = String(localized: "Couldn’t open this chat. Refresh and try again.")
             return
         }
         guard next != self.sessionKey || nextAgentID != self.explicitSessionAgentID else {
@@ -1216,7 +1236,7 @@ extension OpenClawChatViewModel {
         }
         let scopedTransport = nextAgentID.flatMap { self.defaultTransport.scoped(toAgentID: $0) }
         if nextAgentID != nil, scopedTransport == nil {
-            self.errorText = "This connection cannot open that agent's conversation. Reconnect and try again."
+            self.errorText = String(localized: "Couldn’t open this chat. Reconnect and try again.")
             return
         }
         if isAttachmentOwnerPinned {
@@ -1335,8 +1355,7 @@ extension OpenClawChatViewModel {
         } catch {
             guard self.isCurrentSession(session) else { return }
             self.isLoading = false
-            self.errorText = error.localizedDescription
-            chatUILogger.error("session reset failed \(error.localizedDescription, privacy: .public)")
+            self.reportFailure(String(localized: "Couldn’t reset this chat."), error, while: "reset chat")
             return
         }
 
@@ -1352,13 +1371,13 @@ extension OpenClawChatViewModel {
     func performCompact() async {
         guard !self.isCompacting else { return }
         guard !self.isSending, !hasBlockingRunActivity, !self.isAborting else {
-            self.errorText = "Wait for the current response before compacting the thread."
+            self.errorText = String(localized: "Wait for the reply to finish before compacting this chat.")
             return
         }
         if let lastCompactAt,
            Date().timeIntervalSince(lastCompactAt) < compactCooldown
         {
-            self.errorText = "Please wait before compacting this thread again."
+            self.errorText = String(localized: "Wait a moment before compacting this chat again.")
             return
         }
 
@@ -1375,7 +1394,7 @@ extension OpenClawChatViewModel {
         } catch {
             guard self.isCurrentSession(session) else { return }
             self.isLoading = false
-            self.errorText = "Unable to compact the thread. Please try again."
+            self.errorText = String(localized: "Couldn’t compact this chat.")
             let nsError = error as NSError
             chatUILogger.error(
                 "compact failed domain=\(nsError.domain, privacy: .public) code=\(nsError.code, privacy: .public)")
@@ -1478,6 +1497,7 @@ extension OpenClawChatViewModel {
     func enqueueSessionSettingsPatch(
         requestID: UInt64,
         target: ModelPatchTarget,
+        mayFinishAfterSend: Bool = false,
         operation: @escaping @MainActor (OpenClawChatSessionSettingsRouteLease?) async -> Void)
     {
         let rosterOwner = self.sidebarData
@@ -1509,7 +1529,8 @@ extension OpenClawChatViewModel {
         self.settingsPatchTailsByTarget[target] = SettingsPatchTail(
             requestID: requestID,
             routeLeaseTask: routeLeaseTask,
-            task: task)
+            task: task,
+            requiredBeforeSend: mayFinishAfterSend ? previousPatchTail?.requiredBeforeSend : task)
     }
 
     private func endSettingsPatch(for target: ModelPatchTarget) {
@@ -1526,19 +1547,28 @@ extension OpenClawChatViewModel {
             self.acceptedVerboseLevelsByTarget.removeValue(forKey: target)
             self.acceptedFastModesByTarget.removeValue(forKey: target)
             self.clearOptimisticSettingsLane(for: target)
-            let waiters = self.settingsPatchWaitersByTarget.removeValue(forKey: target) ?? []
-            for waiter in waiters {
-                waiter.resume()
-            }
+            self.settingsPatchWaitersByTarget.removeValue(forKey: target)?.values.forEach { $0.resume() }
             return
         }
         self.inFlightSettingsPatchCountsByTarget[target] = remaining
     }
 
-    func waitForPendingSessionSettings(for target: ModelPatchTarget) async {
-        guard (self.inFlightSettingsPatchCountsByTarget[target] ?? 0) > 0 else { return }
+    func waitForPendingSessionSettings(for target: ModelPatchTarget, atMost bound: Duration? = nil) async {
+        guard self.inFlightSettingsPatchCountsByTarget[target] != nil else { return }
+        let id = UUID()
+        let timeout = bound.map { bound in
+            Task {
+                try await Task.sleep(for: bound)
+                self.settingsPatchWaitersByTarget[target]?.removeValue(forKey: id)?.resume()
+            }
+        }
         await withCheckedContinuation { continuation in
-            self.settingsPatchWaitersByTarget[target, default: []].append(continuation)
+            self.settingsPatchWaitersByTarget[target, default: [:]][id] = continuation
+        }
+        timeout?.cancel()
+        if bound != nil {
+            // Preferences may settle after a live send. Permission and tool changes may not.
+            await self.settingsPatchTailsByTarget[target]?.requiredBeforeSend?.value
         }
     }
 

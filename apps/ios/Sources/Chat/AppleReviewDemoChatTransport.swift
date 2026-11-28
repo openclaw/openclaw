@@ -130,10 +130,22 @@ struct LocalChatFixture {
         ])
 }
 
-struct LocalFixtureChatTransport: OpenClawChatGoalTransport, OpenClawChildStopTransport {
+struct LocalFixtureChatTransport: OpenClawChatGoalTransport, OpenClawChildStopTransport, ChatPRReaderTransport {
     func prepareChildStop(_ target: OpenClawChildStopTarget) async -> OpenClawChildStopAction? {
         guard ActivityPillsFixture.isEnabled, ActivityPillsFixture.child(forKey: target.key) != nil else { return nil }
         return OpenClawChildStopAction(target: target) { try await self.store.stopChild(target) }
+    }
+
+    func pullRequestOverview(url: String, sessionKey _: String) async throws -> Data? {
+        #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        guard ActivityPillsFixture.isEnabled, let i = args.firstIndex(of: "--pr-reader-fixtures"), i + 1 < args.count,
+              let docs = try JSONSerialization.jsonObject(with: Data(args[i + 1].utf8)) as? [[String: Any]],
+              let doc = docs.first(where: { $0["url"] as? String == url }) else { return nil }
+        return try JSONSerialization.data(withJSONObject: doc)
+        #else
+        return nil
+        #endif
     }
 
     func goalControls() async -> (update: Bool, clear: Bool) {
@@ -143,64 +155,6 @@ struct LocalFixtureChatTransport: OpenClawChatGoalTransport, OpenClawChildStopTr
     func mutateGoal(_ mutation: OpenClawChatGoalMutation) async throws -> Data {
         if ActivityPillsFixture.failsReads { throw OpenClawChatTransportSendError.notDispatched }
         return try await self.store.mutateGoal(mutation)
-    }
-
-    var supportsComposerCapabilities: Bool {
-        true
-    }
-
-    func loadComposerCapabilityCatalog(
-        sessionKey _: String,
-        agentID _: String?) async -> OpenClawChatComposerCapabilityCatalog
-    {
-        OpenClawChatComposerCapabilityCatalog(
-            sessionSettingsAvailable: true,
-            modelMutationAvailable: ScreenshotFixtureMode.modelSignInScenario != "read-only",
-            effortMutationAvailable: true,
-            verboseMutationAvailable: true,
-            webSearchBaseEnabled: true,
-            webSearchAvailable: true,
-            skills: [
-                OpenClawChatComposerSkill(
-                    key: "autoreview",
-                    name: "Auto Review",
-                    baseEnabled: true,
-                    missingDependencies: false,
-                    blocked: false),
-                OpenClawChatComposerSkill(
-                    key: "release",
-                    name: "Release OpenClaw",
-                    baseEnabled: true,
-                    missingDependencies: false,
-                    blocked: false),
-                OpenClawChatComposerSkill(
-                    key: "disabled-fixture",
-                    name: "Disabled Skill",
-                    baseEnabled: false,
-                    missingDependencies: false,
-                    blocked: false),
-            ],
-            connectors: [
-                OpenClawChatComposerConnector(
-                    name: "GitHub",
-                    baseEnabled: true,
-                    tools: [
-                        OpenClawChatComposerTool(name: "search_code", label: "Search code"),
-                        OpenClawChatComposerTool(name: "create_issue", label: "Create issue"),
-                    ]),
-                OpenClawChatComposerConnector(
-                    name: "Linear",
-                    baseEnabled: true,
-                    tools: [
-                        OpenClawChatComposerTool(name: "search_issues", label: "Search issues"),
-                    ]),
-            ],
-            skillsAvailable: true,
-            connectorsAvailable: true,
-            toolAccessAvailable: true,
-            permissionMutationAvailable: true,
-            toolOverrideMutationAvailable: true,
-            canSelectFullPermission: true)
     }
 
     private let fixture: LocalChatFixture
@@ -255,6 +209,21 @@ struct LocalFixtureChatTransport: OpenClawChatGoalTransport, OpenClawChildStopTr
                 liveText: state.liveText) { return child }
         } else if let child = try await ActivityPillsFixture.history(sessionKey: sessionKey) { return child }
         return try await self.store.history(sessionKey: sessionKey)
+    }
+
+    func watchSessionPullRequests(sessionKeys: [String]) async throws -> Bool? {
+        guard ActivityPillsFixture.isEnabled, !ActivityPillsFixture.goalOnly,
+              let key = sessionKeys.first, ActivityPillsFixture.child(forKey: key) == nil else { return nil }
+        let store = self.store
+        Task {
+            // After the view model records the watch, as a Gateway's first push would arrive.
+            try? await Task.sleep(for: .milliseconds(300))
+            await store.publish(.sessionPullRequestsChanged(OpenClawSessionPullRequestsChangedEvent(
+                sessions: [key: ScreenshotFixtureMode.chatInfoEnabled
+                    ? .init(pullRequests: Array(ActivityPillsFixture.pullRequests().pullRequests.prefix(1)))
+                    : ActivityPillsFixture.pullRequests()])))
+        }
+        return true
     }
 
     func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
@@ -402,6 +371,7 @@ struct LocalFixtureChatTransport: OpenClawChatGoalTransport, OpenClawChildStopTr
         idempotencyKey: String,
         attachments _: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
+        if ScreenshotFixtureMode.failsSends { throw ScreenshotFixtureMode.sendTimeoutError }
         if let delay = ScreenshotFixtureMode.replyDelay {
             try await Task.sleep(for: delay)
         }
@@ -589,7 +559,7 @@ actor LocalFixtureChatStore {
         self.fixture = fixture
         self.messages = Self.seedMessages(fixture: fixture)
         self.modelID = fixture.modelID
-        if Self.playsToolRunFixture {
+        if Self.playsToolRunFixture || Self.commandStretchModel != nil {
             self.activeRunID = Self.toolRunID
             self.messages = Self.toolRunSeed()
         }
@@ -666,6 +636,9 @@ actor LocalFixtureChatStore {
                 message["model"] = AnyCodable("gpt-5.4")
                 return AnyCodable(message)
             }
+        }
+        if let stretch = try self.commandStretchHistory(sessionKey: normalizedSessionKey) {
+            (historyWireMessages, startupSnapshot) = stretch
         }
         historyWireMessages += self.importedToolRows
         var historyActivity = try self.importedToolRows.isEmpty ? nil : Self.importedHistoryActivity()
@@ -1010,7 +983,7 @@ actor LocalFixtureChatStore {
             var launchPlan = OpenClawChatSessionEntry(
                 key: ScreenshotFixtureMode.chatSwitchSecondSessionKey,
                 kind: "chat",
-                displayName: "Launch plan",
+                displayName: ScreenshotFixtureMode.chatSwitchSecondSessionTitle,
                 surface: "ios",
                 updatedAt: Date().timeIntervalSince1970 * 1000 - 60000,
                 sessionId: "\(self.fixture.sessionIDPrefix)-launch-plan",
@@ -1023,6 +996,7 @@ actor LocalFixtureChatStore {
                     "microphone tests, backup locations and recording notes for the return journey"
                 launchPlan.spawnedCwd = "/projects/Fieldnotes"
             }
+            ScreenshotFixtureMode.decorateChatInfo(&launchPlan)
             sessions.append(launchPlan)
         }
         return OpenClawChatSessionsListResponse(

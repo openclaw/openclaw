@@ -69,6 +69,9 @@ struct RootTabs: View {
         Self.initialSidebarDestination.settingsRoute
     @State private var selectedSettingsRouteRequestID: Int = 0
     @State private var sidebarModel = RootSidebarModel()
+    @State private var isSearchPresented = false
+    /// What a search result opens once the cover is gone, so a Settings sheet never races its dismissal.
+    @State private var pendingSearchTarget: RootSearchTarget?
     // Embedded Settings rows push onto the sidebar stack; clear it before
     // changing sidebar roots so stale settings detail screens cannot survive.
     @State private var sidebarNavigationPath: [SettingsRoute] = []
@@ -85,8 +88,6 @@ struct RootTabs: View {
     @State private var splitSidebarVisibility: Bool?
     @State private var isSidebarDrawerLayout: Bool = false
     @State private var didResolveSidebarLayout: Bool = false
-    @State private var voiceWakeToastText: String?
-    @State private var toastDismissGate = DelayedActionGate()
     @State private var presentedSheet: PresentedSheet?
     @State private var settingsSheetPath: [SettingsRoute] = []
     @State private var settingsToolQuery = ""
@@ -282,6 +283,14 @@ struct RootTabs: View {
                         // Observation-only content must not cover native accessibility hit targets.
                             .frame(width: 0, height: 0)
                 }
+                .fullScreenCover(isPresented: self.$isSearchPresented, onDismiss: self.openPendingSearchTarget) {
+                    // Search replaces the sidebar while it is open, bottom bar included. A cover owns its
+                    // keyboard inset, which the drawer layers do not pass down.
+                    RootSearchScreen(
+                        sidebarModel: self.sidebarModel,
+                        open: self.openSearchResult,
+                        close: { self.setSearchPresented(false) })
+                }
         }
     }
 
@@ -340,6 +349,7 @@ struct RootTabs: View {
                 selectDestination: self.selectSidebarDestination,
                 selectSession: self.selectSidebarSession,
                 openPagesEditor: self.openSidebarPagesEditor,
+                openSearch: { self.setSearchPresented(true) },
                 drawerFooterBottomInset: drawerSafeAreaInsets.map { $0.bottom + 8 } ?? 0)
         }
         .padding(.top, drawerSafeAreaInsets?.top ?? 0)
@@ -386,6 +396,9 @@ struct RootTabs: View {
                               chat.sessionKey == previous.key else { return }
                         chat.switchSession(to: previous.parent)
                     }
+                    // The strip above the composer offers the same recovery as the top banner.
+                    .environment(\.gatewayProblemRecovery, GatewayProblemRecovery(
+                        perform: { self.handleGatewayProblemPrimaryAction($0, reportsRetryFailure: false) }))
         case let .dashboard(path):
             DashboardPageScreen(
                 path: path,
@@ -398,7 +411,8 @@ struct RootTabs: View {
             CommandSessionsScreen(
                 sidebarModel: self.sidebarModel,
                 headerSidebarAction: self.sidebarHeaderAction,
-                openChat: { self.selectSidebarDestination(.chat) })
+                openChat: { self.selectSidebarDestination(.chat) },
+                openSearch: { self.setSearchPresented(true) })
         case .files:
             AgentWorkspaceFilesTab(headerSidebarAction: self.sidebarHeaderAction)
                 .id(self.selectedSidebarDestination.id)
@@ -508,19 +522,7 @@ struct RootTabs: View {
                 // Stable container so the toast's move/opacity transition animates
                 // when the gateway problem appears or clears outside withAnimation.
                 ZStack(alignment: .top) {
-                    if let liveVoiceStartError = self.appModel.liveVoiceStartError {
-                        // A banner survives onboarding dismissal without racing another modal.
-                        OpenClawNoticeBanner(
-                            icon: "mic.slash",
-                            title: "Unable to Start Live Voice",
-                            message: .verbatim(liveVoiceStartError),
-                            ownerLabel: "Needs attention",
-                            tint: OpenClawBrand.warn,
-                            secondaryActionTitle: "Dismiss",
-                            onSecondaryAction: { self.appModel.liveVoiceStartError = nil })
-                            .padding(.horizontal, 12)
-                            .safeAreaPadding(.top, 10)
-                    } else if let gatewayRetryFailure {
+                    if let gatewayRetryFailure {
                         OpenClawNoticeBanner(
                             icon: "wifi.exclamationmark",
                             title: "Gateway reconnect failed",
@@ -539,18 +541,6 @@ struct RootTabs: View {
                 .animation(self.gatewayToastAnimation, value: self.gatewayRetryFailure)
                 .animation(self.gatewayToastAnimation, value: self.activeGatewayProblemToast)
             }
-            .overlay(alignment: .topLeading) {
-                if let voiceWakeToastText, !voiceWakeToastText.isEmpty {
-                    VoiceWakeToast(command: voiceWakeToastText)
-                        .padding(.leading, 10)
-                        .safeAreaPadding(
-                            .top,
-                            self.activeGatewayProblemToast == nil && self.gatewayRetryFailure == nil
-                                && self.appModel.liveVoiceStartError == nil ? 58 : 132)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                }
-            }
-
             .overlay {
                 // Keep the observer mounted so the first 0 -> 1 capture transition
                 // flashes without treating a later remount as a new capture.
@@ -563,6 +553,12 @@ struct RootTabs: View {
         guard let problem = appModel.gatewayProblemForToast,
               !self.isGatewayToastSwipeDismissed
         else { return nil }
+        // In a chat, the strip above the composer carries the problem and its action; one place, not two.
+        if self.selectedSidebarDestination == .chat, !self.hasNeverHadGateway,
+           ChatConnectionStatus.carries(problem, chatState: GatewayStatusBuilder.buildChat(appModel: self.appModel))
+        {
+            return nil
+        }
         return problem
     }
 
@@ -619,16 +615,11 @@ struct RootTabs: View {
                 guard let newValue else { return }
                 let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { return }
-
-                withAnimation(self.reduceMotion ? .none : .spring(response: 0.25, dampingFraction: 0.85)) {
-                    self.voiceWakeToastText = trimmed
-                }
-
-                self.toastDismissGate.schedule(after: .milliseconds(2300)) {
-                    withAnimation(self.reduceMotion ? .none : .easeOut(duration: 0.25)) {
-                        self.voiceWakeToastText = nil
-                    }
-                }
+                // Shows over any sheet, since the command was heard wherever the person is.
+                self.appModel.toasts.post(OpenClawToast(
+                    String(format: String(localized: "“%@”"), trimmed),
+                    systemImage: "mic.fill",
+                    announcement: String(format: String(localized: "Voice Wake heard “%@”."), trimmed)))
             }
     }
 
@@ -650,10 +641,7 @@ struct RootTabs: View {
             .onChange(of: self.scenePhase) { _, newValue in
                 self.sidebarModel.setSnoozeWakeUpdatesActive(newValue == .active)
                 self.updateIdleTimer()
-                guard newValue == .active else {
-                    self.clearVoiceWakeToast()
-                    return
-                }
+                guard newValue == .active else { return }
                 self.handleLiveVoiceStartRequest()
                 self.maybeRequestLocalNetworkAccess(reason: "scene_active")
                 Task {
@@ -663,13 +651,7 @@ struct RootTabs: View {
             .onDisappear {
                 self.sidebarModel.setSnoozeWakeUpdatesActive(false)
                 UIApplication.shared.isIdleTimerDisabled = false
-                self.clearVoiceWakeToast()
             }
-    }
-
-    private func clearVoiceWakeToast() {
-        self.voiceWakeToastText = nil
-        self.toastDismissGate.cancel()
     }
 
     private func rootGatewayProblemLifecycle(_ content: some View) -> some View {
@@ -781,6 +763,8 @@ struct RootTabs: View {
                             self.presentedSheet = nil
                             self.selectSidebarDestination(destination)
                         },
+                        onTrySkill: self.trySkillAction,
+                        toolQuery: self.settingsToolQuery,
                         gatewaySetupRequest: self.gatewaySetupRequest,
                         onGatewaySetupRequestHandled: self.handleGatewaySetupRequest)
                         .presentationDragIndicator(.visible)
@@ -848,6 +832,36 @@ extension RootTabs {
         }
     }
 
+    /// The cover appears in place, without the sheet slide: search takes the sidebar's spot, it is not a new layer.
+    private func setSearchPresented(_ isPresented: Bool) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            self.isSearchPresented = isPresented
+        }
+    }
+
+    private func openSearchResult(_ target: RootSearchTarget) {
+        self.pendingSearchTarget = target
+        self.setSearchPresented(false)
+    }
+
+    private func openPendingSearchTarget() {
+        guard let target = self.pendingSearchTarget else { return }
+        self.pendingSearchTarget = nil
+        switch target {
+        case let .destination(destination):
+            self.selectSidebarDestination(destination)
+        case let .settings(route, query):
+            self.showSettings(path: [route], toolQuery: query)
+        case .newChat:
+            self.appModel.requestNewChat()
+            self.selectSidebarDestination(.chat)
+        case let .session(session):
+            self.selectSidebarSession(session)
+        }
+    }
+
     private func openSidebarPagesEditor() {
         self.presentedSheet = .sidebarPages
     }
@@ -887,6 +901,16 @@ extension RootTabs {
             isSceneActive: true,
             isOnboardingPresented: self.showOnboarding,
             hasGatewayConfiguration: self.hasExistingGatewayConfig() || self.appModel.gatewayServerName != nil)
+    }
+
+    private var trySkillAction: ((String) -> Void)? {
+        guard let viewModel = self.appModel.chatPresentation.viewModel else { return nil }
+        return { draft in
+            guard self.appModel.chatPresentation.viewModel === viewModel else { return }
+            viewModel.input = viewModel.input.isEmpty ? draft : viewModel.input + "\n\n" + draft
+            self.presentedSheet = nil
+            self.selectSidebarDestination(.chat)
+        }
     }
 
     private func showSettings(path: [SettingsRoute] = [], toolQuery: String = "") {
@@ -965,7 +989,11 @@ extension RootTabs {
             nonRetryableTitle: "Open Settings")
     }
 
-    private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) {
+    /// `reportsRetryFailure` is off for the chat's strip, which keeps showing the problem itself.
+    private func handleGatewayProblemPrimaryAction(
+        _ problem: GatewayConnectionProblem,
+        reportsRetryFailure: Bool = true)
+    {
         if problem.suggestsOnboardingReset {
             // Reset bumps onboarding.requestID, which re-presents the wizard.
             let instanceId = UserDefaults.standard.string(forKey: "node.instanceId") ?? ""
@@ -974,12 +1002,14 @@ extension RootTabs {
             }
         } else if problem.canTrustRotatedCertificate {
             Task { await self.gatewayController.trustRotatedGatewayCertificate(from: problem) }
-        } else if GatewayProblemPrimaryAction.handleProtocolMismatchIfNeeded(problem) {
+        } else if GatewayProblemPrimaryAction.handleProtocolMismatchIfNeeded(problem, toasts: self.appModel.toasts) {
             return
         } else if problem.retryable {
             self.gatewayRetryFailure = nil
             Task {
-                if case let .failed(message) = await self.gatewayController.retryGatewayConnection() {
+                if case let .failed(message) = await self.gatewayController.retryGatewayConnection(),
+                   reportsRetryFailure
+                {
                     self.gatewayRetryFailure = message
                 }
             }

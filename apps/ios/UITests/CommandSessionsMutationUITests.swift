@@ -47,7 +47,9 @@ final class CommandSessionsMutationUITests: XCTestCase {
         XCTAssertTrue(second.exists)
         self.capture("loaded-before-pin", app: app)
         self.pin(first, in: app)
-        let rejection = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Synthetic pin refused"))
+        // The failure is a toast that names the row and offers Try again.
+        let rejection = app.staticTexts.matching(NSPredicate(
+            format: "identifier == %@ AND label BEGINSWITH %@", "Toast.Text", "Couldn’t pin “Synthetic session 1”"))
             .firstMatch
         XCTAssertTrue(rejection.waitForExistence(timeout: 10))
         self.capture("rejected-pin", app: app)
@@ -66,7 +68,7 @@ final class CommandSessionsMutationUITests: XCTestCase {
         // A rejected action must still offer Pin, not an optimistic Unpin.
         self.pin(first, in: app)
         XCTAssertTrue(app.staticTexts["Pinned"].waitForExistence(timeout: 10))
-        XCTAssertTrue(rejection.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(rejection.waitForNonExistence(timeout: 10))
         XCTAssertTrue(first.exists)
         XCTAssertTrue(second.exists)
         self.capture("successful-pin", app: app)

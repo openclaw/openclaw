@@ -91,6 +91,7 @@ export function resetWorkboardConnectionState(host: WorkboardHost) {
     // Keep cached cards visible across disconnects, but require a canonical
     // reload before accepting writes against data that may now be stale.
     state.mutationReadiness = "canonical_reload_required";
+    state.inlinePreviews.clear();
     state.loaded = false;
     state.loadAttempted = false;
   }
@@ -105,6 +106,8 @@ function createDefaultState(): WorkboardUiState {
     mutationReadiness: "ready",
     error: null,
     cards: [],
+    inlinePreviews: new Map(),
+    pendingDrops: new Map(),
     nextCursor: null,
     boards: [],
     statuses: WORKBOARD_STATUSES,

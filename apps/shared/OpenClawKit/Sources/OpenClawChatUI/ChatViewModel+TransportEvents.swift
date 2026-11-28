@@ -57,8 +57,8 @@ extension OpenClawChatViewModel {
             return self.handleAgentEvent(agent)
         case let .sessionReaction(event):
             self.handleSessionReactionEvent(event)
-        case let .progressCardChanged(event):
-            return self.handleProgressCardChanged(event)
+        case .progressCardChanged, .sessionPullRequestsChanged:
+            return self.handleActivityEvent(evt)
         case .questionRequested, .questionResolved:
             return self.handleQuestionEvent(evt)
         case .routeChanged, .reconnected, .seqGap:
@@ -81,6 +81,8 @@ extension OpenClawChatViewModel {
             // Old known-absent state must not authorize legacy plans on the new Gateway.
             self.progressCardStoreAvailable = nil
             self.invalidateProgressCardTarget()
+            // A new connection watches nothing yet; the last snapshot stays until the next push replaces it.
+            self.pullRequestWatch.key = nil
             self.modelAvailabilityIsSessionScoped = false
             self.invalidateComposerCapabilities()
             self.errorText = nil
@@ -644,7 +646,8 @@ extension OpenClawChatViewModel {
 
         guard isTerminal, let terminalRunID else { return nil }
         if chat.state == "error" {
-            self.errorText = chat.errorMessage ?? "Chat failed"
+            chatUILogger.error("chat run failed: \(chat.errorMessage ?? "no message", privacy: .public)")
+            self.errorText = String(localized: "Couldn’t finish the reply.")
         }
         let hapticEvent: OpenClawChatHaptics.Event? = switch chat.state {
         case "final": .runCompleted
@@ -982,18 +985,20 @@ extension OpenClawChatViewModel {
         return stringValue == "true" || stringValue == "yes" || stringValue == "1"
     }
 
+    /// Plain words for the screen; the agent's own error text goes to the log.
     private static func agentLifecycleErrorMessage(_ evt: OpenClawAgentEventPayload, aborted: Bool) -> String {
         if aborted {
-            return "Run aborted"
+            return String(localized: "The reply was stopped.")
         }
         for key in ["error", "message"] {
             if let message = evt.data[key]?.value as? String,
                !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             {
-                return message
+                chatUILogger.error("agent run failed: \(message, privacy: .public)")
+                break
             }
         }
-        return "Chat failed"
+        return String(localized: "Couldn’t finish the reply.")
     }
 
     func finishPendingRunAfterTerminalOkSendAck(_ response: OpenClawChatSendResponse) {
@@ -1005,7 +1010,7 @@ extension OpenClawChatViewModel {
         guard response.status == "timeout" || response.status == "error" else { return false }
         self.removePendingLocalUserEcho(for: response.runId)
         self.clearStreamingActivity()
-        self.errorText = "Chat failed before the run started; try again."
+        self.errorText = String(localized: "Couldn’t send your message.")
         self.retirePendingRun(response.runId, hapticEvent: .runFailed)
         self.logDiagnostic(
             "chat.ui send terminal ack sessionKey=\(self.sessionKey) "
@@ -1052,7 +1057,8 @@ extension OpenClawChatViewModel {
             {
                 return false
             }
-            self.errorText = message
+            chatUILogger.error("chat run failed: \(message, privacy: .public)")
+            self.errorText = String(localized: "Couldn’t finish the reply.")
             self.retirePendingRun(runId, hapticEvent: .runFailed)
             self.clearStreamingActivity()
             return false

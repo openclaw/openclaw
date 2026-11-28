@@ -114,6 +114,7 @@ final class IOSChatViewModelOwner {
             },
             diagnosticsLog: { message in GatewayDiagnostics.log(message) })
         if let previousPresentation { viewModel.inheritTranscriptPresentation(from: previousPresentation) }
+        viewModel.statusStrip.toasts = appModel.toasts
         self.viewModel = viewModel
         if let draft { viewModel.input = draft }
         self.hydratedComposerModel = draft != nil ? viewModel.composerModelResolver() : nil
