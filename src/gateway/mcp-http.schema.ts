@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { logWarn } from "../logger.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { mergeLiteralSchemas } from "../shared/json-schema-literals.js";
 import type { resolveGatewayScopedTools } from "./tool-resolution.js";
 
@@ -15,6 +16,8 @@ export type McpToolSchemaEntry = {
   name: string;
   description: string | undefined;
   inputSchema: Record<string, unknown>;
+  /** Upstream per-tool loading hint, forwarded so Claude Code can keep it upfront under tool search. */
+  _meta?: { "anthropic/alwaysLoad": true };
 };
 
 export function readMcpLoopbackToolName(tool: McpLoopbackTool): string | undefined {
@@ -151,6 +154,9 @@ export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry
       name,
       description: typeof tool.description === "string" ? tool.description : undefined,
       inputSchema: raw,
+      ...(getPluginToolMeta(tool)?.mcp?.alwaysLoad
+        ? { _meta: { "anthropic/alwaysLoad": true as const } }
+        : {}),
     };
   });
 }

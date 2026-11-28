@@ -143,16 +143,20 @@ function canonicalizeBundleMcpConfigForResume(config: BundleMcpConfig): BundleMc
   // hashing so resume compatibility tracks config shape, not ephemeral ports.
   // ToolSearch deferral only flips Claude's upfront-loading hint for the same
   // tools, and the prompt hash carries discovery, so keep stored bindings' value.
+  // The loopback leaves the hint unset when a listed tool brings its own hint.
   const canonical = mapMcpServers(config, (server, name) => {
     const canonicalServer = canonicalizeSystemAgentTurnStateForResume(server);
     if (name !== "openclaw") {
       return canonicalServer;
     }
     const { url, alwaysLoad } = canonicalServer;
+    const loopbackUrl = typeof url === "string" ? normalizeOpenClawLoopbackUrl(url) : undefined;
     return {
       ...canonicalServer,
-      ...(typeof url === "string" ? { url: normalizeOpenClawLoopbackUrl(url) } : {}),
-      ...(alwaysLoad === undefined ? {} : { alwaysLoad: true }),
+      ...(loopbackUrl === undefined ? {} : { url: loopbackUrl }),
+      ...(alwaysLoad !== undefined || (loopbackUrl !== undefined && loopbackUrl !== url)
+        ? { alwaysLoad: true }
+        : {}),
     };
   });
   return {

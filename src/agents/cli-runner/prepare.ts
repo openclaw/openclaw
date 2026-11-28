@@ -29,6 +29,7 @@ import type {
   CliBackendPromptContext,
 } from "../../plugins/cli-backend.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID,
   isSubagentSessionKey,
@@ -989,6 +990,9 @@ async function prepareCliRunContextWithinReadFence(
     const rawLoopbackServerConfig = mcpLoopbackRuntime
       ? createMcpLoopbackServerConfig(mcpLoopbackRuntime.port, {
           deferTools: Boolean(params.cliToolAvailability?.discovery?.length),
+          perToolLoadingHints: projectedTools.some(
+            (tool) => getPluginToolMeta(tool)?.mcp?.alwaysLoad === true,
+          ),
         })
       : undefined;
     const loopbackServerConfig =

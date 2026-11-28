@@ -31,6 +31,7 @@ export function mcpCatalogToolsSignature(tools: readonly McpCatalogTool[]): stri
       tool.inputSchema,
       tool.uiResourceUri ?? "",
       tool.uiVisibility ?? null,
+      tool.alwaysLoad === true,
     ]),
   );
 }
