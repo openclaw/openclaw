@@ -321,9 +321,9 @@ describe("OpenClaw configured-model planner", () => {
             type: "object",
             properties: {
               reply: { type: "string" },
-              command: { type: "string" },
+              command: { type: ["string", "null"] },
             },
-            required: ["reply"],
+            required: ["reply", "command"],
             additionalProperties: false,
           },
         },
