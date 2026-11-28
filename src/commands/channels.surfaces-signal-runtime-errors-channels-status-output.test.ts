@@ -134,6 +134,16 @@ const cases: {
     }),
     contains: [/disconnected/i],
   },
+  {
+    name: "emoji-safe partial warnings",
+    payload: { warnings: [`${"w".repeat(499)}😀ZZEND`] },
+    verify: (lines) => {
+      const warning = lines.find((line) => line.includes("w".repeat(20))) ?? "";
+      expect(warning).toBe(`- ${"w".repeat(499)}`);
+      expect(warning).not.toContain("ZZEND");
+      expect(warning).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+    },
+  },
 ];
 it.each(cases)("renders $name in channel status", ({ payload, contains = [], verify }) => {
   const lines = formatGatewayChannelsStatusLines(payload);
