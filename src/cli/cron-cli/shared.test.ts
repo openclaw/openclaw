@@ -182,6 +182,21 @@ it.each`
   ${"auto-disabled after schedule errors"} | ${disabled("schedule-errors", 3)}                                                                                                                                                                                                         | ${["disabled (schedule)"]}             | ${[]}                                                             | ${undefined} | ${undefined}
 `("renders $name", expectRendering);
 
+it("keeps stream argument boundaries visible in the schedule", () => {
+  const render = (command: string[]) =>
+    renderJob(makeJob({ schedule: { kind: "stream", command } }));
+  const single = render(["cat", "a b"]);
+  const split = render(["cat", "a", "b"]);
+  for (const lines of [single.show, single.list]) {
+    expectText(lines, 'stream ["cat","a b"]');
+  }
+  for (const lines of [split.show, split.list]) {
+    expectText(lines, "stream cat a b");
+  }
+  const escaped = ["cat", 'a"b', "line\nbreak", "a\\b"];
+  expectText(render(escaped).show, `schedule: stream ${JSON.stringify(escaped)}`);
+});
+
 it("sanitizes, truncates and aligns names and session targets by terminal width", () => {
   const prefix20 = "x".repeat(20);
   const injectedMarker = "cron-table-injection";
