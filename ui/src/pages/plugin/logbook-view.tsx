@@ -89,21 +89,24 @@ function StatusChips(props: { status: LogbookStatusPayload; capturePending: bool
           <Show
             when={!props.status.nodeName && device().length > 20}
             fallback={
-              <StatusChip kind="device" title={t("logbook.status.nodeHelp")}>
+              <span class="logbook__chip logbook__device" title={t("logbook.status.nodeHelp")}>
                 <Icon name="monitor" />
                 <span>{device()}</span>
-              </StatusChip>
+              </span>
             }
           >
             <details class="logbook__device-details">
-              <summary class="logbook__chip logbook__chip--device" title={device()}>
+              <summary
+                class="logbook__chip logbook__device settings-disclosure__summary"
+                title={device()}
+              >
                 <Icon name="monitor" />
                 <span>
                   {device().slice(0, 8)}…{device().slice(-8)}
                 </span>
                 <Icon name="chevronDown" />
               </summary>
-              <code>{device()}</code>
+              <code style={{ display: "block", padding: "4px 9px" }}>{device()}</code>
             </details>
           </Show>
         )}

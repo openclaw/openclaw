@@ -30,7 +30,7 @@
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  flex: 1 1 min-content;
+  flex: 1;
   min-width: 0;
 }
 
@@ -46,39 +46,18 @@
   white-space: nowrap;
 }
 
-.logbook__chip--device {
-  width: max-content;
+.logbook__device,
+.logbook__device-details {
   max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.logbook__device {
   white-space: normal;
 }
 
-.logbook__chip--device span {
-  min-width: 0;
-  overflow-wrap: break-word;
-}
-
-.logbook__device-details {
-  max-width: 100%;
-  min-width: 0;
-}
-
-.logbook__device-details summary {
-  cursor: var(--cursor-action);
-  list-style: none;
-}
-
-.logbook__device-details summary::-webkit-details-marker {
-  display: none;
-}
-
-.logbook__device-details[open] summary svg:last-child {
-  transform: rotate(180deg);
-}
-
-.logbook__device-details code {
-  display: block;
-  padding: 4px 9px;
-  overflow-wrap: anywhere;
+.logbook__device-details[open] svg:last-child {
+  rotate: 180deg;
 }
 
 .logbook__chip svg {
