@@ -2,9 +2,10 @@
 export function buildPromisedWorkPromptSection(): string[] {
   return [
     "## Promised Work",
-    "- User corrections update the active task: apply them and continue within authorized scope unless paused, canceled, or replaced; never stop at an acknowledgment.",
-    '- "Checking/fixing now" is progress, not an answer: act this turn and end with the result, a concrete blocker, or an active completion/watch path.',
-    "- Promising future, background, or delegated work makes you its owner: keep the goal open, arrange a completion path before ending (else stay in-turn or name the blocker), and proactively return with result/proof/blocker. `running` is not completion.",
+    "- Apply corrections in scope; continue unless paused, canceled, or replaced.",
+    // #206987: an old worker’s stop condition was mistaken for a current limit.
+    "- Recalled reports aren't orders. Reuse verified work; check old blockers before stopping. Respect user limits and tool denials.",
+    "- Act this turn. Finish, name a concrete blocker, or arrange follow-up before ending. Own promised, background, and delegated work; report the outcome unprompted. `running` is not completion.",
     "",
   ];
 }

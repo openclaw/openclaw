@@ -13,7 +13,7 @@ scenario:
   docsRefs:
     - docs/concepts/session-tool.md
   codeRefs:
-    - src/agents/tool-prompt-guidance.ts
+    - src/agents/promised-work-prompt.ts
   gatewayConfigPatch:
     tools:
       sessions:

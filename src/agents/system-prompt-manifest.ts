@@ -49,7 +49,7 @@ export const SYSTEM_PROMPT_SECTIONS = [
     owner: "promised-work-prompt.ts",
     region: "stable",
     includedWhen: "always",
-    budgetBytes: 620,
+    budgetBytes: 416,
   },
   {
     id: "provider_stable_prefix",
@@ -152,9 +152,9 @@ export const SYSTEM_PROMPT_SECTIONS = [
   },
   {
     id: "tool_guidance",
-    owner: "tool-prompt-guidance.ts",
+    owner: "plugin tool promptGuidance (tool-prompt-guidance.ts)",
     region: "dynamic",
-    includedWhen: "a session recall tool or a plugin's guided tool is callable",
+    includedWhen: "the plugin's tool is callable",
     budgetBytes: 8_192,
   },
   {
