@@ -748,9 +748,8 @@ In Codex V1, `resume_agent` can find a worker even when `send_input` reports
 app-server address or credentials can give the same chat a new native parent
 thread. Check the parent's history and confirm what the worker finished,
 including any file changes or remote writes. If the outcome is unclear, don't
-resend the task. If the earlier work is settled and a different worker is
-acceptable, use `spawn_agent` with `fork_context: false` for the next task.
-Pass only the confirmed results it needs.
+resend the task. If the earlier work is settled, start the next task with
+`sessions_spawn` and pass only the confirmed results it needs.
 
 For Codex V1 follow-ups, the parent binding keeps a successful submission receipt until OpenClaw
 records the matching turn as an assignment. This allows recovery after a yield or restart.
@@ -772,12 +771,15 @@ is still being recovered or repeated identical results make a receipt ambiguous,
 OpenClaw preserves the later pending delivery instead of risking a lost result;
 this can cause an additional continuation.
 
-Codex owns native subagent execution and controls. Follow up through the parent
-session, which can use Codex's native collaboration tools. For an admitted native
+Codex owns native subagent execution and controls. Threads that OpenClaw starts
+or resumes have native multi-agent turned off, so new delegation uses
+`sessions_spawn`. Native children that exist already (from a thread Codex started
+itself, or from before this change) are still observed. For an admitted native
 assignment, OpenClaw's harness observes the child and routes results after the
 parent yields. The native foreground parent already receives completion messages, so OpenClaw does not
-send another continuation for a result it has consumed. Explicit OpenClaw or ACP
-delegation continues to use `sessions_spawn`. Stored submission and result
+send another continuation for a result it has consumed. After a cold resume, an
+OpenClaw parent cannot send more input to an earlier native child; start the
+next task with `sessions_spawn`. Stored submission and result
 receipts are recovery evidence, not permission to adopt a child or deliver to a
 replacement parent.
 

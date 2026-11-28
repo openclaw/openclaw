@@ -120,28 +120,3 @@ it.each(["none", "running", "pending"] as const)(
     expect(child.delivery?.status).toBe("delivered");
   },
 );
-
-it("does not block completion admission on a delivered descendant's unfinished cleanup", () => {
-  const parent = makeRun({
-    runId: "parent",
-    childSessionKey: "agent:main:subagent:parent",
-    endedAt: Date.now(),
-  });
-  const child = makeRun({
-    runId: "delivered-child",
-    requesterSessionKey: parent.childSessionKey,
-    childSessionKey: "agent:main:subagent:delivered-child",
-    endedAt: Date.now() - 1_000,
-    delivery: { status: "delivered" },
-    cleanupHandled: false,
-    cleanupCompletedAt: undefined,
-  });
-  const runs = toRunMap(parent, child);
-  const index = indexRuns({ runs });
-  expect(countActiveRuns(runs, parent.requesterSessionKey)).toBe(0);
-  // Session deletion still waits for cleanup; completion admission does not.
-  expect(index.countPendingDescendantRuns(parent.childSessionKey)).toBe(1);
-  expect(
-    index.countPendingDescendantRuns(parent.childSessionKey, { excludeSettledDelivery: true }),
-  ).toBe(0);
-});

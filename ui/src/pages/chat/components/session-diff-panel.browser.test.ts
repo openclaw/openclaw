@@ -550,16 +550,20 @@ describe.runIf(browserMode)("Review layout", () => {
       ),
     );
     const surface = panel.querySelector<HTMLElement>(".session-diff-menu__surface")!;
-    const bounds = surface.getBoundingClientRect();
-    expect(bounds.top).toBeGreaterThanOrEqual(0);
-    expect(bounds.left).toBeGreaterThanOrEqual(0);
-    expect(bounds.bottom).toBeLessThanOrEqual(window.innerHeight);
-    expect(bounds.right).toBeLessThanOrEqual(window.innerWidth);
+    const menuBounds = surface.getBoundingClientRect();
+    expect(menuBounds.top).toBeGreaterThanOrEqual(0);
+    expect(menuBounds.left).toBeGreaterThanOrEqual(0);
+    expect(menuBounds.bottom).toBeLessThanOrEqual(window.innerHeight);
+    expect(menuBounds.right).toBeLessThanOrEqual(window.innerWidth);
+    const baseRef =
+      "release/regional-calibration-and-extended-verification-for-portable-monitoring-stations";
+    const headRef =
+      "feature/field-survey/regional-calibration/portable-monitoring-stations/verify-observation-receipts-before-autumn-deployment";
     pending.resolve({
       sessionKey: "main",
       root,
-      branch,
-      baseRef: "main",
+      branch: headRef,
+      baseRef,
       additions: 1,
       deletions: 0,
       files: [{ path: "added.ts", status: "added", additions: 1, deletions: 0 }],
@@ -570,6 +574,22 @@ describe.runIf(browserMode)("Review layout", () => {
     await waitForSolid(() => expect(panel.querySelector("openclaw-session-diff-menu")).toBeNull());
     expect(document.activeElement).toBe(view);
     expect(view.style.getPropertyValue("anchor-name")).toBe(tooltipAnchor);
+    const refs = Array.from(
+      panel.querySelectorAll<HTMLElement>(".session-diff-mobile__branch > span > *"),
+    );
+    expect(refs.map((ref) => ref.textContent)).toEqual([baseRef, headRef]);
+    for (const ref of refs) {
+      expect(ref.title).toBe(ref.textContent);
+      const text = ref.querySelector("bdi")!.firstChild!;
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      expect(new Set(Array.from(range.getClientRects(), (rect) => rect.top)).size).toBe(1);
+      range.setStart(text, text.textContent!.lastIndexOf("-") + 1);
+      const rect = range.getBoundingClientRect();
+      const bounds = ref.getBoundingClientRect();
+      expect(rect.left).toBeGreaterThanOrEqual(bounds.left - 1);
+      expect(rect.right).toBeLessThanOrEqual(bounds.right + 1);
+    }
     await userEvent.click(view);
     await waitForSolid(() =>
       expect(panel.querySelector(".session-diff-menu__surface")?.matches(":popover-open")).toBe(
