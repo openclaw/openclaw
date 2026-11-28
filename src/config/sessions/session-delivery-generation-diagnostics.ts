@@ -146,6 +146,8 @@ export function createLeaseDiagnostics(readState: () => State) {
     unavailable(
       branch: BranchTag,
       error: unknown = new SessionDeliveryGenerationUnavailableError(),
+      /** Kind names of the active mutations a `delivery-mutation` refusal observed. */
+      mutationKinds?: readonly string[],
     ) {
       if (!emitted) {
         emitted = true;
@@ -163,6 +165,7 @@ export function createLeaseDiagnostics(readState: () => State) {
             flip: observedFlip,
             producer: "unknown",
             relation: "observed-invalidation-call-chain",
+            ...(mutationKinds ? { mutationKinds } : {}),
           };
           if (Buffer.byteLength(JSON.stringify(record)) > 1024) {
             record.flip = { kind: record.flip.kind, captured: false, notCapturedReason: "budget" };
