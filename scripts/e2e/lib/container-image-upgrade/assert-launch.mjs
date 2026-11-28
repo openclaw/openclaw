@@ -37,7 +37,7 @@ if (containerPath) {
       "Refused activation started a Gateway listener",
     );
     assert(
-      log.includes("metadata schema version 18 does not match 19"),
+      log.includes("Agent schema markers disagree for"),
       "Missing concrete retained-state refusal diagnostic",
     );
   } else if (phase === "stopped") {

@@ -30,7 +30,7 @@ import { getOpenClawStatePredecessorSchema } from "./openclaw-state-schema-runti
 import { upgradeStateDirectory } from "./state-upgrade.js";
 
 const dirs: string[] = [];
-const locks: Array<GatewayLockHandle | undefined> = [];
+const locks: Array<GatewayLockHandle | null> = [];
 afterEach(async () => {
   for (const lock of locks.splice(0)) {
     await lock?.release();
