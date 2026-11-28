@@ -138,6 +138,10 @@ export const validateWorktreesListParams = createProtocolValidator(
   S.WorktreesListParamsSchema,
   Checks.isWorktreesListParams,
 );
+export const validateWorktreesSessionOwnersParams = createProtocolValidator(
+  S.WorktreesSessionOwnersParamsSchema,
+  Checks.isWorktreesSessionOwnersParams,
+);
 export const validateBoardGetParams = createProtocolValidator(
   S.BoardGetParamsSchema,
   Checks.isBoardGetParams,

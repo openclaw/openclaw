@@ -1228,7 +1228,7 @@ openclaw worktrees recover-removal <id> --snapshot <oid> [--json]
 openclaw worktrees retire-snapshot <id> --expected-ref <ref> --expected-oid <oid> --removed-at <milliseconds> --retained-ref <ref> --retained-oid <oid> [--json]
 ```
 
-The Control UI **Worktrees** page under Settings provides creation with a base-branch picker, ordinary removal and restoration, and garbage collection. It shows each worktree's owner (manual, Workboard, or the owning session with a link into its chat), and offers a force retry when a removal reports a failed snapshot.
+In the Control UI, **Sessions → Worktrees** lets you create, remove, restore, and clean up worktrees. It shows whether each checkout is owned by a session or by Workboard, or was created manually. Session links show the conversation’s name when it’s available. The name can appear after the list loads without delaying worktree actions. If removing a worktree fails to save a snapshot, you can retry with force.
 
 In **Worktrees → New worktree**, choose a repository from existing managed-worktree records or enter another path. **Base branch** offers discovered branches and custom branch, tag, or commit references. Changing repositories clears the previous branch selection and its suggestions; choosing either field does not create a checkout until you click **Create**.
 
@@ -1310,18 +1310,19 @@ their specific input error and exit with code 1 before cleanup or removal.
 
 ## Gateway methods
 
-| Method                     | Purpose                                                                      |
-| -------------------------- | ---------------------------------------------------------------------------- |
-| `worktrees.list`           | List active and restorable worktree records.                                 |
-| `worktrees.branches`       | List local and remote branches of a repository for base-ref pickers.         |
-| `worktrees.create`         | Create or reuse a named managed worktree.                                    |
-| `worktrees.remove`         | Snapshot and remove a worktree. Forced removals report `snapshotError`.      |
-| `worktrees.restore`        | Restore a snapshot, or a fresh recorded branch/base when no snapshot exists. |
-| `worktrees.gc`             | Queue cleanup and read progress.                                             |
-| `worktrees.recoverRemoval` | Complete an interrupted removal from the exact pending snapshot.             |
-| `worktrees.retireSnapshot` | Retire one redundant snapshot with exact retained-source guards.             |
+| Method                     | Purpose                                                                                |
+| -------------------------- | -------------------------------------------------------------------------------------- |
+| `worktrees.list`           | List active and restorable worktree records.                                           |
+| `worktrees.sessionOwners`  | Resolve titles and preferred chat or dashboard views for up to 128 exact session keys. |
+| `worktrees.branches`       | List local and remote branches of a repository for base-ref pickers.                   |
+| `worktrees.create`         | Create or reuse a named managed worktree.                                              |
+| `worktrees.remove`         | Snapshot and remove a worktree. Forced removals report `snapshotError`.                |
+| `worktrees.restore`        | Restore a snapshot, or a fresh recorded branch/base when no snapshot exists.           |
+| `worktrees.gc`             | Queue cleanup and read progress.                                                       |
+| `worktrees.recoverRemoval` | Complete an interrupted removal from the exact pending snapshot.                       |
+| `worktrees.retireSnapshot` | Retire one redundant snapshot with exact retained-source guards.                       |
 
-`worktrees.list` requires `operator.write` because it returns every session's worktree paths, repository roots, and branches. `worktrees.create` and `worktrees.branches` require `operator.write` for configured agent workspaces and registered projects; arbitrary host paths still require `operator.admin`. All creation disables repository Git hooks; write-scoped creation also skips `.openclaw/worktree-setup.sh`. Removing and garbage-collecting worktrees remain admin-only. Restoring is admin-only, except that a caller with `operator.sessions.write` may restore the worktree of a conversation they started. Branch listing reads existing refs only and never fetches. Unchanged inventories are reused after checking checkout, ref, configuration, and object-storage metadata, including repositories with large pack directories; changed metadata refreshes the inventory. Remote-only branches come back remote-qualified (`origin/feature-a`) so every returned name resolves as a base ref. New Session can also request a typed repository status from this method; a plain directory or unavailable checkout returns no branches instead of forcing the UI to infer Git capability from an error string.
+`worktrees.list` requires `operator.write` because it returns every session's worktree paths, repository roots, and branches. `worktrees.sessionOwners` also requires `operator.write`, omits incognito sessions, and returns only sessions the caller can read. `worktrees.create` and `worktrees.branches` require `operator.write` for configured agent workspaces and registered projects; arbitrary host paths still require `operator.admin`. All creation disables repository Git hooks; write-scoped creation also skips `.openclaw/worktree-setup.sh`. Removing and garbage-collecting worktrees remain admin-only. Restoring is admin-only, except that a caller with `operator.sessions.write` may restore the worktree of a conversation they started. Branch listing reads existing refs only and never fetches. Unchanged inventories are reused after checking checkout, ref, configuration, and object-storage metadata, including repositories with large pack directories; changed metadata refreshes the inventory. Remote-only branches come back remote-qualified (`origin/feature-a`) so every returned name resolves as a base ref. New Session can also request a typed repository status from this method; a plain directory or unavailable checkout returns no branches instead of forcing the UI to infer Git capability from an error string.
 
 Owner-routed requests require `operator.admin` and the corresponding
 [capability](/gateway/protocol/versioning#local-state-owner-routing). Their wire
