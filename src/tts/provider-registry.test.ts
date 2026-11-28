@@ -92,6 +92,19 @@ describe("speech provider registry", () => {
     expect(await resolveTtsProviderAsync(config, "/unused", registry, {})).toBe("fallback");
   });
 
+  it("reports an unknown provider id as unresolved instead of echoing it back", () => {
+    // Regression for #206619: canonicalizeSpeechProviderId used to return the normalized
+    // input verbatim when no provider matched, so a caller checking `if (!canonicalized)`
+    // (e.g. `openclaw infer tts set-provider --local`) could never detect an unknown id.
+    const registry = createSpeechProviderRegistry({
+      getProvider: (id) => [provider("mock")].find((entry) => entry.id === id),
+      listProviders: () => [provider("mock")],
+    });
+
+    expect(registry.canonicalizeSpeechProviderId("mock")).toBe("mock");
+    expect(registry.canonicalizeSpeechProviderId("unknown-provider")).toBeUndefined();
+  });
+
   it("canonicalizes a voice-model alias omitted from the supplied inventory", () => {
     const inventory = [provider("openai")];
     const cfg = {

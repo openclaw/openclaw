@@ -101,9 +101,14 @@ export function resolveExplicitTtsOverrides(
   const prepared = prepareExplicitTtsOverrides(params);
   const { cfg, providerInput, modelId, voiceId, config } = prepared;
   const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
-  const selectedProvider =
-    canonicalizeSpeechProviderId(providerInput, cfg) ??
-    (modelId || voiceId ? resolveTtsProvider(config, prefsPath) : undefined);
+  // Only fall back to the active provider when none was named explicitly; an explicit but
+  // unresolvable providerInput must reach the "Unknown TTS provider" check below rather than
+  // silently resolving to a different provider than the one requested.
+  const selectedProvider = providerInput
+    ? canonicalizeSpeechProviderId(providerInput, cfg)
+    : modelId || voiceId
+      ? resolveTtsProvider(config, prefsPath)
+      : undefined;
   return resolveExplicitTtsOverridesForProvider(prepared, selectedProvider);
 }
 
@@ -112,14 +117,17 @@ export async function resolveExplicitTtsOverridesAsync(
 ): Promise<TtsDirectiveOverrides> {
   const prepared = prepareExplicitTtsOverrides(params);
   const { cfg, providerInput, modelId, voiceId, config } = prepared;
-  const selectedProvider =
-    canonicalizeSpeechProviderId(providerInput, cfg) ??
-    (modelId || voiceId
+  // Only fall back to the active provider when none was named explicitly; an explicit but
+  // unresolvable providerInput must reach the "Unknown TTS provider" check below rather than
+  // silently resolving to a different provider than the one requested.
+  const selectedProvider = providerInput
+    ? canonicalizeSpeechProviderId(providerInput, cfg)
+    : modelId || voiceId
       ? await resolveTtsProviderAsync(
           config,
           params.prefsPath ?? (await resolveTtsPrefsPathAsync(config)),
         )
-      : undefined);
+      : undefined;
   return resolveExplicitTtsOverridesForProvider(prepared, selectedProvider);
 }
 

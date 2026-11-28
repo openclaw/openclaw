@@ -175,14 +175,17 @@ describe("TTS runtime native voice-note routing", () => {
         provider: "mock",
         providerOverrides: { mock: { voice: "voice-id" } },
       });
+      // Regression for #206619: canonicalizeSpeechProviderId used to echo back an
+      // unrecognized id instead of reporting a miss, which both skipped this file's own
+      // `providerInput && !selectedProvider` rejection below and, once a model or voice
+      // override triggered the active-provider fallback, let an explicit-but-unknown
+      // provider silently resolve to a different provider instead of being rejected.
       await expect(
         resolveExplicitTtsOverridesAsync({ cfg, provider: " UNKNOWN " }),
-      ).resolves.toEqual({
-        provider: "unknown",
-      });
+      ).rejects.toThrow('Unknown TTS provider "UNKNOWN".');
       await expect(
         resolveExplicitTtsOverridesAsync({ cfg, provider: "unknown", voiceId: "voice-id" }),
-      ).rejects.toThrow("speech provider unknown is not registered");
+      ).rejects.toThrow('Unknown TTS provider "unknown".');
       expect(preparePreferences).not.toHaveBeenCalled();
     } finally {
       preparePreferences.mockRestore();

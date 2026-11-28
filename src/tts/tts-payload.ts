@@ -49,10 +49,12 @@ export async function listSpeechVoices(params: {
 }): Promise<SpeechVoiceOption[]> {
   assertSpeechRuntimeAvailable();
   const cfg = params.cfg ? selectLiveRuntimeConfig(params.cfg) : undefined;
-  const provider = canonicalizeSpeechProviderId(params.provider, cfg);
-  if (!provider) {
+  if (!params.provider) {
     throw new Error("speech provider id is required");
   }
+  // An unrecognized id falls through to the registration check below, which reports it
+  // by name instead of this function claiming no id was given at all.
+  const provider = canonicalizeSpeechProviderId(params.provider, cfg) ?? params.provider;
   const config = params.config ?? (cfg ? resolveTtsConfig(cfg) : undefined);
   if (!config) {
     throw new Error(`speech provider ${provider} requires cfg or resolved config`);
