@@ -112,7 +112,12 @@ export function prepareRetainedProviderCatalog(
   const pluginFingerprint = resolveInstalledManifestRegistryIndexFingerprint(
     params.pluginGeneration.pluginMetadataSnapshot.index,
   );
-  const inventory = params.inventoryOwner.catalogInventory;
+  // A seed proves rows only for the same plugin set; another workspace's plugins could provide
+  // the same provider id with different code, so a different set starts cold.
+  const seed = params.seedInventory;
+  const inventory =
+    params.inventoryOwner.catalogInventory ??
+    (seed?.pluginFingerprint === pluginFingerprint ? seed : undefined);
   // Full acquisition also discovers providers outside eligibleProviders; only a full refresh
   // reacquires them, so every provider whose own identity is unchanged keeps its rows.
   const providerSources = new Map(
