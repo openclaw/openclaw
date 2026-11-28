@@ -32,7 +32,10 @@ export function readSessionRowFacts(params: {
     workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;
     workerPlacementRunnerAvailabilityReader?: WorkerPlacementRunnerAvailabilityReader;
     workerPlacementRuntimeInstallReader?: WorkerPlacementRuntimeInstallReader;
-    workerEnvironmentService?: Pick<WorkerEnvironmentServiceContract, "get" | "readMachineShape">;
+    workerEnvironmentService?: Pick<
+      WorkerEnvironmentServiceContract,
+      "get" | "readMachineShape" | "readStartStatus"
+    >;
   };
   placementFactsReader?: SessionRowPlacementFactsReader;
   activitySummaryEnabled?: boolean;
@@ -180,8 +183,8 @@ export function readSessionRowFacts(params: {
         ? context.workerPlacementRuntimeInstallReader?.version()
         : undefined;
       const startStatus =
-        placement?.state === "provisioning" && placement.environmentId
-          ? context.workerEnvironmentService?.get(placement.environmentId)?.startStatus
+        placement?.state === "provisioning" && environment
+          ? context.workerEnvironmentService?.readStartStatus(environment)
           : undefined;
       if (
         presented &&

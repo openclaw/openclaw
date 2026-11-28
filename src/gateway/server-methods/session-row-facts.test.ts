@@ -15,6 +15,7 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as agentDatabaseReadOnly from "../../state/openclaw-agent-db-readonly.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
 import * as stateDatabase from "../../state/openclaw-state-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
@@ -33,7 +34,11 @@ import {
   createWorkerPlacementRuntimeInstallReader,
 } from "../worker-environments/placement-projector.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
-import { seedAttachedPlacementEnvironment } from "../worker-environments/placement-test-fixtures.js";
+import {
+  seedAttachedPlacementEnvironment,
+  writePlacementEnvironmentFixture,
+} from "../worker-environments/placement-test-fixtures.js";
+import { workerEnvironmentProjections } from "../worker-environments/store-projection.js";
 import { createWorkerEnvironmentStore } from "../worker-environments/store.js";
 import { readSessionRowFacts } from "./session-placement-read-projection.js";
 
@@ -176,6 +181,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
           : undefined;
       },
       readMachineShape: () => machine,
+      readStartStatus: () => startStatus,
     };
     let runnerAvailable = true;
     let disk = {
@@ -419,6 +425,107 @@ it("refreshes selected placement/environment facts by revision and reuses them w
     }
   });
 });
+
+it.each([
+  { case: "a cold spawn before its environment is in the snapshot", seedEnvironment: false },
+  { case: "an environment already in the snapshot", seedEnvironment: true },
+])(
+  "presents a provisioning row while its environment write is committing: $case",
+  async ({ seedEnvironment }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const identity = sessionIdentity("row-pending-environment");
+      replaceSessionEntrySync(identity, { sessionId: identity.sessionId, updatedAt: 1 });
+      const database = openOpenClawStateDatabase();
+      const placements = createWorkerSessionPlacementStore({ database });
+      const environmentStore = await createWorkerEnvironmentStore({ database });
+      if (seedEnvironment) {
+        writePlacementEnvironmentFixture(database, {
+          environmentId: "pending-environment",
+          state: "provisioning",
+          ownerEpoch: 3,
+          attachedSessionIds: [],
+          leaseId: null,
+          providerId: DEVICE_WORKER_PROVIDER_ID,
+          profileId: "desktop",
+        });
+      }
+      const placement = await placements.startDispatch(identity);
+      await placements.transition({
+        sessionId: identity.sessionId,
+        from: placement.state,
+        expectedGeneration: placement.generation,
+        to: "provisioning",
+        patch: { environmentId: "pending-environment" },
+      });
+      const startStatus: WorkerEnvironmentStartStatus = { mode: "snapshot", phase: "saving" };
+      const context = {
+        workerEnvironmentService: {
+          get(environmentId: string) {
+            const record = environmentStore.get(environmentId);
+            return record
+              ? {
+                  ...record,
+                  desktopAvailable: false,
+                  desktopApps: [],
+                  tunnelStatus: "stopped" as const,
+                }
+              : undefined;
+          },
+          readMachineShape: () => undefined,
+          readStartStatus: () => startStatus,
+        },
+      };
+      const preparedPlacements = createSessionRowPlacementProjection(placements, () => undefined);
+      preparedPlacements.register(identity.sessionId);
+      await preparedPlacements.prepare();
+      const facts = readSessionRowFacts({
+        cfg: {},
+        target: {
+          key: identity.sessionKey,
+          agentId: identity.agentId,
+          storeTarget: {
+            agentId: "main",
+            storePath: openOpenClawAgentDatabase({ agentId: "main" }).path,
+          },
+        },
+        entry: loadSessionEntryReadOnly(identity)!,
+        context,
+        placementFactsReader: preparedPlacements,
+        databaseFacts: { hasBoard: false },
+      });
+      const projection = workerEnvironmentProjections.acquire(() =>
+        requireOpenClawStateDatabaseIdentity(database),
+      );
+      const commit = {};
+      projection.fence(
+        [
+          {
+            environmentId: "pending-environment",
+            environmentAuthority: "unknown",
+            credentialAuthority: "unknown",
+            transferAuthority: "unknown",
+            attachmentAuthority: "unknown",
+          },
+        ],
+        commit,
+      );
+      try {
+        expect(() => environmentStore.get("pending-environment")).toThrow("unsettled mutation");
+        const row = facts.present().placement;
+        expect(row).toMatchObject({ state: "provisioning", environmentId: "pending-environment" });
+        if (seedEnvironment) {
+          expect(row).toMatchObject({ startStatus });
+        } else {
+          expect(row).not.toHaveProperty("startStatus");
+        }
+      } finally {
+        projection.release(commit);
+        preparedPlacements.dispose();
+      }
+    });
+  },
+);
 
 it("prepares board membership and recap freshness from the physical target and reuses them without SQLite", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

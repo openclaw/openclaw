@@ -200,6 +200,7 @@ export const workerService = (overrides: Partial<TestWorkerService> = {}) => ({
   get: vi.fn(() => undefined),
   inventoryVersion: vi.fn(() => 0),
   readMachineShape: () => undefined,
+  readStartStatus: () => undefined,
   machineShapeVersion: () => 0,
   supportsExecutionMode: vi.fn(() => false),
   listMachineOptions: vi.fn(async () => undefined),

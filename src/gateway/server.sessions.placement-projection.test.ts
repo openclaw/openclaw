@@ -97,6 +97,7 @@ function placementContext(
             }
           : undefined,
       readMachineShape: () => undefined,
+      readStartStatus: () => undefined,
       machineShapeVersion: () => 0,
       inventoryVersion: () => 0,
     },
@@ -177,6 +178,7 @@ test.each([
       workerEnvironmentService: {
         get: getEnvironment,
         readMachineShape: () => identity.machine,
+        readStartStatus: () => undefined,
         machineShapeVersion: () => 0,
         inventoryVersion: () => 0,
       },
@@ -373,6 +375,7 @@ test.each([
       workerEnvironmentService: {
         get: () => undefined,
         readMachineShape: () => undefined,
+        readStartStatus: () => undefined,
       },
     };
     const projection = await createSessionRowProjection({
