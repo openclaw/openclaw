@@ -196,7 +196,7 @@ async function getThroughProxy(
   };
 }
 
-async function startStreamingProxyOrigin(responseBodyBytes: number) {
+async function startStreamingProxyOrigin(responseBodyBytes: number, holdOpen = false) {
   const state = {
     closedResponses: 0,
     finishedResponses: 0,
@@ -210,8 +210,9 @@ async function startStreamingProxyOrigin(responseBodyBytes: number) {
       return;
     }
 
+    // Keep one byte unsent in abort cases, regardless of how much TCP buffering accepts.
     res.writeHead(200, {
-      "content-length": responseBodyBytes,
+      "content-length": responseBodyBytes + (holdOpen ? 1 : 0),
       "content-type": "text/plain; charset=utf-8",
     });
     const body = Readable.from(
@@ -230,7 +231,7 @@ async function startStreamingProxyOrigin(responseBodyBytes: number) {
       state.finishedResponses++;
     });
 
-    body.pipe(res);
+    body.pipe(res, { end: !holdOpen });
   });
 
   return {
@@ -397,8 +398,7 @@ describe("startDebugProxyServer", () => {
   it.each([false, true])(
     "closes upstream and captures one error on downstream abort (reset=%s)",
     async (abortWithReset) => {
-      const responseBodyBytes = 16 * 1024 * 1024;
-      const origin = await startStreamingProxyOrigin(responseBodyBytes);
+      const origin = await startStreamingProxyOrigin(64 * 1024, true);
       const { proxy, events, captured } = await startProxy();
 
       // Start the async reader before the bounded abort assertions measure cleanup.
