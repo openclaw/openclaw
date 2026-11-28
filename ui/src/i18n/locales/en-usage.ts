@@ -166,7 +166,8 @@ const enUsage = {
       toolCalls: "Tool calls",
       toolsUsed: "tools used",
       errors: "Errors",
-      errorsHint: "Total message and tool errors in range.",
+      errorsHint:
+        "Counts tool-result errors and assistant messages stopped for error, abort, or timeout in this range. Attempts that fail before a message is recorded are excluded.",
       toolResults: "tool results",
       avgTokens: "Avg tokens / msg",
       avgCost: "Avg cost / msg",
@@ -181,7 +182,8 @@ const enUsage = {
       tokensPerMinute: "tok/min",
       perMinute: "/ min",
       errorRate: "Error rate",
-      errorHint: "Errors ÷ total messages.",
+      errorHint:
+        "Recorded tool-result errors and assistant messages stopped for error, abort, or timeout ÷ total messages. Failed attempts with no recorded message are not included.",
       avgSession: "avg session",
       cacheHitRate: "Cache hit rate",
       cacheHint: "Cache reads ÷ (input + cache reads + cache writes).",
