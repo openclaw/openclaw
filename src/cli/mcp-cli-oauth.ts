@@ -57,7 +57,8 @@ export function registerMcpOAuthCommands(mcp: Command, { loadServer, fail }: Mcp
           });
           if (result.status === "redirect") {
             defaultRuntime.log(terminalText`Open this URL to authorize "${name}":`);
-            defaultRuntime.log(result.authorizationUrl);
+            // Straight to stdout, as in the offline flow below: redaction masks a JWT client_id.
+            defaultRuntime.writeStdout(result.authorizationUrl);
             defaultRuntime.log(
               "After the page says you're connected, the next MCP call can use this account.",
             );
@@ -193,7 +194,9 @@ async function loginMcpServer(
       }
     }
     defaultRuntime.log(`Open this URL to authorize "${name}":`);
-    defaultRuntime.log(session.authorizationUrl);
+    // Straight to stdout: console redaction masks token-shaped query values, and a provider
+    // can issue one as the client_id (a JWT), which leaves a link that opens nothing.
+    defaultRuntime.writeStdout(session.authorizationUrl);
     if (callbackServer) {
       defaultRuntime.log("Waiting for the browser to return to OpenClaw...");
       defaultRuntime.log(

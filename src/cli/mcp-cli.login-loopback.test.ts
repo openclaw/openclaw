@@ -2,6 +2,7 @@ import { createServer } from "node:net";
 import type { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../config/home-env.test-harness.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { getFreePort } from "../test-utils/ports.js";
 import {
   cleanupMcpCliTestState,
@@ -44,8 +45,9 @@ const login = () => program.parseAsync(["mcp", "login", "docs"], { from: "user" 
 const expectLogged = (text: string) =>
   expect(mocks.runtime.log).toHaveBeenCalledWith(expect.stringContaining(text));
 
-function mockRedirectFlow(redirectUrl: string): void {
+function mockRedirectFlow(redirectUrl: string): string {
   const authorizationUrl = new URL("https://auth.example.com/authorize");
+  authorizationUrl.searchParams.set("client_id", "eyJhbGciOiJIUzI1.eyJ0eXAiOiJj.c2lnbmF0dXJl");
   authorizationUrl.searchParams.set("redirect_uri", redirectUrl);
   authorizationUrl.searchParams.set("state", "state-1234567890");
   mocks.startMcpOAuthAuthorization.mockResolvedValue({
@@ -55,6 +57,7 @@ function mockRedirectFlow(redirectUrl: string): void {
     state: "state-1234567890",
   });
   mocks.completeMcpOAuthAuthorization.mockResolvedValue("authorized");
+  return authorizationUrl.toString();
 }
 
 describe("mcp login loopback callback", () => {
@@ -118,9 +121,12 @@ describe("mcp login loopback callback", () => {
       });
       const address = blocker.address();
       const port = typeof address === "object" && address ? address.port : 0;
-      mockRedirectFlow(`http://127.0.0.1:${port}/oauth/callback`);
+      const url = mockRedirectFlow(`http://127.0.0.1:${port}/oauth/callback`);
 
       await login();
+      // Console redaction masks a JWT client id, so the URL must bypass it to stay usable.
+      expect(redactSensitiveText(url)).not.toBe(url);
+      expect(mocks.runtime.writeStdout).toHaveBeenCalledWith(url);
       expectLogged("Could not start");
       expectLogged("--code");
       expect(mocks.completeMcpOAuthAuthorization).not.toHaveBeenCalled();
