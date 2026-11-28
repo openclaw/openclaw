@@ -565,6 +565,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/attempt.code-mode-continuation.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.configured-mcp-lifecycle.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.exec-review-transcript.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt-final-system-prompt.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.settled-turn-finalization-context.test.ts",
   "src/agents/mcp-oauth-provider.read.test.ts",
   "src/agents/mcp-oauth-store.test.ts",
