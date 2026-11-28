@@ -25,9 +25,16 @@ struct ChatProTab: View {
     @AppStorage(ChatPreferences.followUpModeKey) private var followUpMode = ""
     @AppStorage(ChatPreferences.showAssistantTraceKey)
     private var showsAssistantTrace = true
+    @AppStorage(ChatPreferences.showsReasoningKey) private var showsReasoning: Bool?
+    @AppStorage(ChatPreferences.showsToolCallsKey) private var showsToolCalls: Bool?
+    @AppStorage(ChatPreferences.keepsCommentaryKey) private var keepsCommentary = true
     private var chatTraceDisplayOptions: OpenClawChatDisplayOptions {
-        guard self.showsAssistantTrace else { return [] }
-        return self.viewModel?.currentSessionReasoningVisible == true ? .assistantTrace : .toolActivity
+        ChatPreferences.displayOptions(
+            reasoning: self.showsReasoning,
+            toolCalls: self.showsToolCalls,
+            commentary: self.keepsCommentary,
+            legacyTrace: self.showsAssistantTrace,
+            reasoningVisible: self.viewModel?.currentSessionReasoningVisible == true)
     }
 
     private var viewModel: OpenClawChatViewModel? {

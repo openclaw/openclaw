@@ -1189,7 +1189,7 @@ extension OpenClawChatView {
             searchActive: self.isSearchPresented,
             collapsesWork: self.collapsesCompletedWork,
             streamingTextRunID: self.hasVisibleStreamingAssistantText ? self.viewModel.streamingAssistantRunID : nil,
-            isMessageVisible: { message, _ in self.shouldDisplayMessage(message) })
+            isMessageVisible: self.shouldDisplayMessage)
     }
 
     private var latestVisibleTurnStartID: UUID? {
@@ -1492,17 +1492,8 @@ extension OpenClawChatView {
     }
     #endif
 
-    private func dismissKeyboardIfNeeded() {
-        #if canImport(UIKit)
-        UIApplication.shared.sendAction(
-            #selector(UIResponder.resignFirstResponder),
-            to: nil,
-            from: nil,
-            for: nil)
-        #endif
-    }
-
-    private func shouldDisplayMessage(_ message: OpenClawChatMessage) -> Bool {
+    private func shouldDisplayMessage(_ message: OpenClawChatMessage, activeRunIDs: Set<String>) -> Bool {
+        if let shown = self.displayOptions.presetVisibility(of: message, activeRunIDs: activeRunIDs) { return shown }
         let primaryText = ChatMessageVisibleText.displayText(
             in: message,
             includeThinking: self.displayOptions.contains(.reasoning))
