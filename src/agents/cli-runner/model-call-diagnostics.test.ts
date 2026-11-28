@@ -14,7 +14,6 @@ const CONTENT_LIMIT_BYTES = 128 * 1024;
 function createContext(): PreparedCliRunContext {
   return {
     backendResolved: { id: "claude-cli", modelProvider: "anthropic" },
-    contextWindowInfo: undefined,
     normalizedModel: "claude-test",
     params: {
       config: {
