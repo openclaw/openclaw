@@ -1,6 +1,8 @@
 import { expect, it } from "vitest";
 import type { CronJob } from "../api/types.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { pickerValue as readPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import {
@@ -15,6 +17,7 @@ import {
   editAutomation,
   openAutomationActivity,
 } from "./cron-fixtures.test-support.ts";
+import { captureUiProof } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron select values mocked Gateway E2E",
@@ -44,6 +47,48 @@ function cronResponses(jobs: CronJob[], snapshotRevision: string, enabled = true
 }
 
 suite.define(() => {
+  it("shows a held conversation name without requesting it or changing the saved target", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const key = "agent:main:dashboard:synthetic-garden-planning";
+      const name = "Garden planning";
+      const job = gardenJob({ sessionTarget: `session:${key}` });
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...cronSidebarFeatureMethods, "sessions.describe"],
+        sessions: [createControlUiSessionRow(key, name, Date.now())],
+        methodResponses: { ...cronResponses([job], "garden-target"), "cron.update": job },
+      });
+      await page.goto(suite.server.baseUrl + "cron");
+      await expect
+        .poll(() =>
+          evaluateControlUiContext(
+            page,
+            ({ sessions }, targetKey) =>
+              sessions.state.result?.sessions.some((row) => row.key === targetKey),
+            key,
+          ),
+        )
+        .toBe(true);
+      const listsBefore = (await gateway.getRequests("sessions.list")).length;
+      await editAutomation(page, job.id);
+      const target = page.locator("#cron-session-target");
+      await target.click();
+      const option = page.locator('[role="option"][aria-selected="true"]');
+      expect(await option.getAttribute("data-value")).toBe(job.sessionTarget);
+      await captureUiProof(suite, page, "automation-editor.png");
+      expect(await option.textContent()).toBe(name);
+      await option.click();
+      await page.locator("#cron-name").fill("Garden handoff");
+      await page.locator('[data-test-id="cron-submit"]').click();
+      const request = await gateway.waitForRequest("cron.update");
+      expect(request.params).toMatchObject({
+        id: job.id,
+        patch: { name: "Garden handoff", sessionTarget: job.sessionTarget },
+      });
+      expect(await gateway.getRequests("sessions.describe")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.list")).toHaveLength(listsBefore);
+    });
+  });
+
   it("keeps Daily editable and saves the selected whole-hour window", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const job = gardenJob({
