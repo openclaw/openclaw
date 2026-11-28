@@ -161,6 +161,10 @@ function hasProviderAuthEnvCredential(
   });
 }
 
+function needsRuntimeCatalog(discovery: string | undefined): boolean {
+  return discovery === "runtime" || discovery === "refreshable";
+}
+
 function prepareManifestCatalogDiscovery(
   pluginRecords: readonly PluginManifestRecord[],
   config: OpenClawConfig,
@@ -174,28 +178,36 @@ function prepareManifestCatalogDiscovery(
     runtimeManifestCatalogProviders.set(pluginId, providerIds);
   };
   for (const plugin of pluginRecords) {
-    if (!plugin.modelCatalog) {
+    const catalog = plugin.modelCatalog;
+    if (!catalog) {
       continue;
     }
     const ownedProviders = new Set(
       plugin.providers.map((provider) => normalizeProviderId(provider)),
     );
-    for (const [provider, discovery] of Object.entries(plugin.modelCatalog.discovery ?? {})) {
-      if (
-        (discovery === "runtime" || discovery === "refreshable") &&
-        ownedProviders.has(normalizeProviderId(provider))
-      ) {
+    for (const [provider, discovery] of Object.entries(catalog.discovery ?? {})) {
+      if (needsRuntimeCatalog(discovery) && ownedProviders.has(normalizeProviderId(provider))) {
         requireRuntimeProvider(plugin.id, provider);
       }
     }
-    if (!plugin.modelCatalog.providers) {
+    const required = runtimeManifestCatalogProviders.get(plugin.id);
+    // The planner uses canonical discovery keys. Already-required runtime owners consume
+    // no manifest or remote rows here; mixed catalogs and other owner types still need planning.
+    if (
+      !catalog.providers ||
+      (required &&
+        Object.keys(catalog.providers).every((key) => {
+          const id = normalizeProviderId(key);
+          return required.has(id) && needsRuntimeCatalog(catalog.discovery?.[id]);
+        }))
+    ) {
       continue;
     }
     // Static rows and runtime coverage must come from the same effective catalog.
     const plan = planEffectiveModelCatalogRows({ registry: { plugins: [plugin] }, config });
     const authScopes = getProviderOwnerIndex({ plugins: [plugin], diagnostics: [] }).authScopes;
     for (const entry of plan.entries) {
-      if (entry.discovery === "runtime" || entry.discovery === "refreshable") {
+      if (needsRuntimeCatalog(entry.discovery)) {
         requireRuntimeProvider(plugin.id, entry.provider);
         continue;
       }

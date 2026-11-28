@@ -273,6 +273,56 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     },
   );
 
+  it.each(["provider", "decision provider"] as const)(
+    "plans rows only when a %s still needs runtime coverage",
+    (owner) => {
+      const manifest = createManifestPlugin("fixture");
+      if (owner === "provider") {
+        manifest.providers.push("sibling");
+      } else {
+        manifest.contracts = { decisionProviders: ["sibling"] };
+      }
+      const sibling = manifestProvider("sibling-model");
+      const readModels = vi.fn(() => sibling.models);
+      manifest.modelCatalog = {
+        providers: {
+          fixture: manifestProvider("fixture-model"),
+          sibling: {
+            ...sibling,
+            get models() {
+              return readModels();
+            },
+          },
+        },
+        discovery: { fixture: "runtime", sibling: "refreshable" },
+      };
+      mockManifestPlugins([manifest]);
+      const entry = createProvider("fixture", "catalog");
+      mocks.loadSource.mockReturnValue(entry);
+      const siblingProvider = createProvider("sibling", "catalog");
+      mocks.resolvePluginProvidersCore.mockReturnValue([siblingProvider]);
+
+      expect(discoverProviders({}).map(({ id }) => id)).toEqual(["fixture", "sibling"]);
+      expect(runtimePluginIds()).toEqual(["fixture"]);
+      expect(mocks.resolvePluginProvidersCore.mock.calls[0]?.[0]?.registryScope).toBeUndefined();
+      expect(readModels.mock.calls.length > 0).toBe(owner === "decision provider");
+    },
+  );
+
+  it("keeps authored rows when the normalized provider has no runtime mode", () => {
+    const plugin = catalogManifest(
+      "fixture",
+      { Fixture: manifestProvider("authored") },
+      {
+        Fixture: "runtime",
+      },
+    );
+    mockManifestPlugins([plugin]);
+    expect(discoverProviders({ discoveryEntriesOnly: true }).map(({ id }) => id)).toEqual([
+      "fixture",
+    ]);
+  });
+
   it("keeps unscoped discovery bounded for mixed live and static-only entries", () => {
     const codexEntryProvider = createProvider("codex", "catalog");
     const deepseekEntryProvider = createProvider("deepseek", "static");
