@@ -7,7 +7,7 @@ import Swabble
 @MainActor
 @available(macOS 26.0, *)
 struct TranscribeCommand: CLICommand {
-    @Argument(help: "Path to audio/video file") var inputFile: String = ""
+    @Argument(help: "Path to audio/video file") var inputFile: String
     @Option(name: .long("locale"), help: "Locale identifier", parsing: .singleValue) var locale: String = Locale.current
         .identifier
     @Flag(help: "Censor etiquette-sensitive content") var censor: Bool = false

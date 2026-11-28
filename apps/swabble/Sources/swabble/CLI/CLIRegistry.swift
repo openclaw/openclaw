@@ -68,37 +68,72 @@ enum CLIRegistry {
         ]
     }
 
+    private static var root: Entry {
+        .group("swabble", "Speech hook daemon", self.entries)
+    }
+
+    private static func entry(at path: ArraySlice<String>) -> Entry? {
+        var entry = self.root
+        for name in path {
+            guard case let .group(_, _, children) = entry,
+                  let next = children.first(where: { $0.name == name }) else { return nil }
+            entry = next
+        }
+        return entry
+    }
+
     static var descriptors: [CommandDescriptor] {
-        [CommandDescriptor(
-            name: "swabble",
-            abstract: "Speech hook daemon",
+        let root = self.root.descriptor
+        return [CommandDescriptor(
+            name: root.name,
+            abstract: root.abstract,
             discussion: "Local wake-word → SpeechTranscriber → hook",
-            signature: CommandSignature().withStandardRuntimeFlags(),
-            subcommands: self.entries.map(\.descriptor))]
+            signature: root.signature.withStandardRuntimeFlags(),
+            subcommands: root.subcommands)]
+    }
+
+    static func help(for arguments: ArraySlice<String>) -> String? {
+        guard let flag = arguments.last, flag == "--help" || flag == "-h",
+              let entry = self.entry(at: arguments.dropLast()) else { return nil }
+        let usage = ([self.root.name] + arguments.dropLast()).joined(separator: " ")
+        let type: any CLICommand.Type
+        switch entry {
+        case let .group(_, abstract, children):
+            let commands = children.map { "  \($0.name)  \($0.descriptor.abstract)" }
+            return (["Usage: \(usage) <command>", abstract, "", "Commands:"] + commands +
+                ["", "Use \(usage) <command> --help for command details."]).joined(separator: "\n")
+        case let .command(command): type = command
+        }
+        // Show the options each command consumes, not the parser's unused runtime flags.
+        let signature = CommandSignature.describe(type.init()).flattened()
+        let positional = signature.arguments.map { $0.isOptional ? "[\($0.label)]" : "<\($0.label)>" }
+        var lines = [
+            "Usage: " + ([usage] + positional + ["[options]"]).joined(separator: " "),
+            type.commandDescription.abstract,
+        ]
+        if !signature.arguments.isEmpty {
+            lines += ["", "Arguments:"] + signature.arguments.map { "  \($0.label)  \($0.help ?? "")" }
+        }
+        func spellings(_ names: [CommanderName]) -> String {
+            names.compactMap { name -> String? in
+                switch name {
+                case let .long(value): "--\(value)"
+                case let .short(value): "-\(value)"
+                case .aliasLong, .aliasShort: nil
+                }
+            }.joined(separator: ", ")
+        }
+        lines += ["", "Options:"] + signature.options.map { "  \(spellings($0.names)) <value>  \($0.help ?? "")" }
+        lines += signature.flags.map { "  \(spellings($0.names))  \($0.help ?? "")" }
+        lines.append("  -h, --help  Show command help")
+        return lines.joined(separator: "\n")
     }
 
     static func run(parsed: ParsedValues, path: [String]) async throws {
-        let type = try self.resolve(path.dropFirst(), entries: self.entries, parent: "swabble")
+        guard case let .command(type) = self.entry(at: path.dropFirst()) else {
+            throw CommanderProgramError.missingSubcommand(command: path.joined(separator: " "))
+        }
         var command = type.init(parsed: parsed)
         try await command.run()
-    }
-
-    private static func resolve(
-        _ path: ArraySlice<String>,
-        entries: [Entry],
-        parent: String) throws -> any CLICommand.Type
-    {
-        guard let name = path.first else {
-            throw CommanderProgramError.missingSubcommand(command: parent)
-        }
-        guard let entry = entries.first(where: { $0.name == name }) else {
-            throw CommanderProgramError.unknownSubcommand(command: parent, name: name)
-        }
-        switch entry {
-        case let .command(type):
-            return type
-        case let .group(name, _, children):
-            return try self.resolve(path.dropFirst(), entries: children, parent: name)
-        }
     }
 }

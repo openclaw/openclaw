@@ -4,6 +4,34 @@ import XCTest
 
 @available(macOS 26.0, *)
 final class CLIProcessTests: XCTestCase {
+    func testHelpWorksAtRootGroupAndLeafWithoutRunningTheCommand() throws {
+        let executable = Bundle(for: Self.self).bundleURL.deletingLastPathComponent()
+            .appendingPathComponent("swabble")
+        let cases = [
+            (["--help"], ["Usage: swabble", "transcribe", "mic"]),
+            (["mic", "-h"], ["Usage: swabble mic", "list", "set"]),
+            (["transcribe", "--help"], ["Usage: swabble transcribe <inputFile>", "--format", "--output", "txt|srt"]),
+            (["health", "--help"], ["Usage: swabble health"]),
+        ]
+        for (arguments, expected) in cases {
+            let process = Process()
+            process.executableURL = executable
+            process.arguments = arguments
+            let output = Pipe()
+            process.standardOutput = output
+            process.standardError = FileHandle.nullDevice
+            process.standardInput = FileHandle.nullDevice
+            try process.run()
+            let text = try XCTUnwrap(String(bytes: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8))
+            process.waitUntilExit()
+            XCTAssertEqual(process.terminationStatus, 0, arguments.joined(separator: " "))
+            for fragment in expected {
+                XCTAssertTrue(text.contains(fragment), "Missing \(fragment) for \(arguments)")
+            }
+            XCTAssertFalse(text.split(separator: "\n").contains("ok"), "Help must not run the health command")
+        }
+    }
+
     func testExecutableDispatchPreservesOptionsAndCommandErrors() throws {
         let executable = Bundle(for: Self.self).bundleURL.deletingLastPathComponent()
             .appendingPathComponent("swabble")
