@@ -1,0 +1,188 @@
+{
+  "method": "Isolated real CLI and Gateway; synthetic credentials against a loopback provider. Read-only SQLite inspection. Named switch used separate provider routes. No external OAuth or billing.",
+  "checks": "Two regressions red on main. Head: 53/53 tests passed, core typecheck, runtime build and touched-file lint/format passed. Lease cbx_8ce56c5ef00e released.",
+  "main": {
+    "sha": "2e9b5d5a632f3638b4d8eb30e1b6815929ab9546",
+    "rows": [
+      {
+        "case": "named-before-switch",
+        "job": "cbca3b50-e980-4ccc-9613-2a908202f515",
+        "run": "cron-request.cfbef04c-e3ab-412d-89e3-aabff48dc2ac",
+        "status": "ok",
+        "savedAccount": null,
+        "taskRequests": 1,
+        "accounts": [
+          "config-key"
+        ],
+        "refusal": false,
+        "receipt": "https://crabbox.openclaw.ai/portal/runs/run_c9e3eb665bd4f8a5c5e8c4602dd5dd47"
+      },
+      {
+        "case": "named-existing-after-switch",
+        "job": "cbca3b50-e980-4ccc-9613-2a908202f515",
+        "run": "cron-request.dfd80712-a3b8-4ee9-979a-226fd986b57d",
+        "status": "error",
+        "savedAccount": null,
+        "taskRequests": 0,
+        "accounts": [],
+        "refusal": true,
+        "receipt": "https://crabbox.openclaw.ai/portal/runs/run_c9e3eb665bd4f8a5c5e8c4602dd5dd47"
+      },
+      {
+        "case": "named-created-after-switch",
+        "job": "6bb7eb00-2139-4fbe-8f26-63fda21ce867",
+        "run": "cron-request.75ef43ec-50fc-4d1c-83a0-f5aa53314e4c",
+        "status": "ok",
+        "savedAccount": "proof:work",
+        "taskRequests": 1,
+        "accounts": [
+          "stored"
+        ],
+        "refusal": false,
+        "receipt": "https://crabbox.openclaw.ai/portal/runs/run_c9e3eb665bd4f8a5c5e8c4602dd5dd47"
+      },
+      {
+        "case": "named-explicit-repair",
+        "job": "cbca3b50-e980-4ccc-9613-2a908202f515",
+        "run": "cron-request.46d73418-126f-48fc-8995-92d2a31ab55c",
+        "status": "ok",
+        "savedAccount": "proof:work",
+        "taskRequests": 1,
+        "accounts": [
+          "stored"
+        ],
+        "refusal": false,
+        "receipt": "https://crabbox.openclaw.ai/portal/runs/run_c9e3eb665bd4f8a5c5e8c4602dd5dd47"
+      },
+      {
+        "case": "literal-main-prompt",
+        "job": "d3680e68-f094-4f9b-b3ff-7968082cdf5c",
+        "run": "cron-request.316b7018-f606-40ee-8695-909761bb0633",
+        "status": "error",
+        "savedAccount": null,
+        "taskRequests": 0,
+        "accounts": [],
+        "refusal": true,
+        "receipt": "https://crabbox.openclaw.ai/portal/runs/run_7d9013781ca0165234e24349eb15c1b2"
+      },
+      {
+        "case": "unchanged-reminder",
+        "job": "d4bd1f7a-1fb8-4e8b-92ab-4974186ce4a8",
+        "run": "cron-request.2dcfb106-9cfd-4015-a951-3616e308d657",
+        "status": "ok",
+        "savedAccount": null,
+        "taskRequests": 1,
+        "accounts": [
+          "stored"
+        ],
+        "refusal": false,
+        "receipt": "https://crabbox.openclaw.ai/portal/runs/run_7d9013781ca0165234e24349eb15c1b2"
+      },
+      {
+        "case": "converted-reminder",
+        "job": "d4bd1f7a-1fb8-4e8b-92ab-4974186ce4a8",
+        "run": "cron-request.d01f88a9-0ad0-448e-a6ad-c5e8710b3d6e",
+        "status": "error",
+        "savedAccount": null,
+        "taskRequests": 0,
+        "accounts": [],
+        "refusal": true,
+        "receipt": "https://crabbox.openclaw.ai/portal/runs/run_7d9013781ca0165234e24349eb15c1b2"
+      }
+    ]
+  },
+  "head": {
+    "sha": "cd7e166257221d6b0f2addf381ac84254c4f8a23",
+    "rows": [
+      {
+        "case": "named-before-switch",
+        "job": "c926ffc7-cf8e-4c40-b6dc-1d6c5bce6ad8",
+        "run": "cron-request.91959ecf-6bb9-4e02-a696-2b3fafd7f738",
+        "status": "ok",
+        "savedAccount": null,
+        "taskRequests": 1,
+        "accounts": [
+          "config-key"
+        ],
+        "refusal": false,
+        "receipt": "https://crabbox.openclaw.ai/portal/runs/run_88c70eb9768852851c6d03407a98305e"
+      },
+      {
+        "case": "named-existing-after-switch",
+        "job": "c926ffc7-cf8e-4c40-b6dc-1d6c5bce6ad8",
+        "run": "cron-request.8926cc55-fb96-42a2-a52a-9dfaa7d3ac42",
+        "status": "error",
+        "savedAccount": null,
+        "taskRequests": 0,
+        "accounts": [],
+        "refusal": true,
+        "receipt": "https://crabbox.openclaw.ai/portal/runs/run_88c70eb9768852851c6d03407a98305e"
+      },
+      {
+        "case": "named-created-after-switch",
+        "job": "c76453ed-9454-4553-8f8d-af8d86adc18f",
+        "run": "cron-request.01b63e6e-2a7b-4e56-9cde-6024cee4fef4",
+        "status": "ok",
+        "savedAccount": "proof:work",
+        "taskRequests": 1,
+        "accounts": [
+          "stored"
+        ],
+        "refusal": false,
+        "receipt": "https://crabbox.openclaw.ai/portal/runs/run_88c70eb9768852851c6d03407a98305e"
+      },
+      {
+        "case": "named-explicit-repair",
+        "job": "c926ffc7-cf8e-4c40-b6dc-1d6c5bce6ad8",
+        "run": "cron-request.22f180f5-6af5-4acd-b64e-e060b4ba293a",
+        "status": "ok",
+        "savedAccount": "proof:work",
+        "taskRequests": 1,
+        "accounts": [
+          "stored"
+        ],
+        "refusal": false,
+        "receipt": "https://crabbox.openclaw.ai/portal/runs/run_88c70eb9768852851c6d03407a98305e"
+      },
+      {
+        "case": "literal-main-prompt",
+        "job": "a742bb75-6715-4923-b945-1cb454c26c75",
+        "run": "cron-request.ca2ee121-9a7a-4265-bb26-01d1a908c93d",
+        "status": "ok",
+        "savedAccount": "proof:work",
+        "taskRequests": 1,
+        "accounts": [
+          "stored"
+        ],
+        "refusal": false,
+        "receipt": "https://crabbox.openclaw.ai/portal/runs/run_88c70eb9768852851c6d03407a98305e"
+      },
+      {
+        "case": "unchanged-reminder",
+        "job": "67a71e2b-c279-4204-a89d-36b97704c44f",
+        "run": "cron-request.a00b9ff8-91f4-4b55-a613-dd316117a2d7",
+        "status": "ok",
+        "savedAccount": null,
+        "taskRequests": 1,
+        "accounts": [
+          "stored"
+        ],
+        "refusal": false,
+        "receipt": "https://crabbox.openclaw.ai/portal/runs/run_88c70eb9768852851c6d03407a98305e"
+      },
+      {
+        "case": "converted-reminder",
+        "job": "67a71e2b-c279-4204-a89d-36b97704c44f",
+        "run": "cron-request.5677a12c-a153-48df-bd5a-1f5cb1242962",
+        "status": "ok",
+        "savedAccount": "proof:work",
+        "taskRequests": 1,
+        "accounts": [
+          "stored"
+        ],
+        "refusal": false,
+        "receipt": "https://crabbox.openclaw.ai/portal/runs/run_88c70eb9768852851c6d03407a98305e"
+      }
+    ]
+  }
+}
