@@ -46,7 +46,22 @@
   white-space: nowrap;
 }
 
+.logbook__device,
+.logbook__device-details {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.logbook__device {
+  white-space: normal;
+}
+
+.logbook__device-details[open] svg:last-child {
+  rotate: 180deg;
+}
+
 .logbook__chip svg {
+  flex: none;
   width: 12px;
   height: 12px;
 }

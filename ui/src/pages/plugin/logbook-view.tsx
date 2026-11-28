@@ -85,9 +85,31 @@ function StatusChips(props: { status: LogbookStatusPayload; capturePending: bool
               : t("logbook.status.disabled")}
       </StatusChip>
       <Show when={props.status.nodeName || props.status.nodeId}>
-        <StatusChip title={t("logbook.status.nodeHelp")}>
-          <Icon name="monitor" /> {props.status.nodeName ?? props.status.nodeId}
-        </StatusChip>
+        {(device) => (
+          <Show
+            when={!props.status.nodeName && device().length > 20}
+            fallback={
+              <span class="logbook__chip logbook__device" title={t("logbook.status.nodeHelp")}>
+                <Icon name="monitor" />
+                <span>{device()}</span>
+              </span>
+            }
+          >
+            <details class="logbook__device-details">
+              <summary
+                class="logbook__chip logbook__device settings-disclosure__summary"
+                title={device()}
+              >
+                <Icon name="monitor" />
+                <span>
+                  {device().slice(0, 8)}…{device().slice(-8)}
+                </span>
+                <Icon name="chevronDown" />
+              </summary>
+              <code style={{ display: "block", padding: "4px 9px" }}>{device()}</code>
+            </details>
+          </Show>
+        )}
       </Show>
       <Show when={props.status.pendingFrames > 0}>
         <StatusChip title={t("logbook.status.pendingHelp")}>
