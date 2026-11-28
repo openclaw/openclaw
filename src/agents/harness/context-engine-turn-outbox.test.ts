@@ -62,6 +62,7 @@ import {
 
 const tempDirs = useSessionStoreTempDirs(afterEach, "openclaw-context-outbox-");
 const runtimeContext = {
+  senderId: "ou_sender",
   provider: "anthropic",
   modelId: "claude-sonnet-4-6",
   tokenBudget: 180_000,
@@ -216,7 +217,10 @@ describe("context-engine turn outbox", () => {
           sessionIdUsed: target.sessionId,
           sessionKey: target.sessionKey,
           sessionFile: target.storePath,
-          runtimeContext: { promptCache: runtimeContext.promptCache },
+          runtimeContext: {
+            promptCache: runtimeContext.promptCache,
+            senderId: runtimeContext.senderId,
+          },
           turnCandidate: {
             admission,
             terminalEntryId: appended.entryId,
@@ -237,7 +241,10 @@ describe("context-engine turn outbox", () => {
           message,
         ]);
         const { promptCache } = runtimeContext;
-        expect(commitTurn.mock.calls[0]![0].runtimeContext).toMatchObject({ promptCache });
+        expect(commitTurn.mock.calls[0]![0].runtimeContext).toMatchObject({
+          promptCache,
+          senderId: "ou_sender",
+        });
         expect(warn).not.toHaveBeenCalled();
       } else {
         expect(commitTurn).not.toHaveBeenCalled();
