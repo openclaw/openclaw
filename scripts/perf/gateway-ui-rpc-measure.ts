@@ -44,7 +44,6 @@ import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 const controlUiCapabilities = [
   "agent-kind",
   "approvals",
-  "task-suggestions",
   "terminal-offset-seq",
   "terminal-session-metadata",
   "terminal-upload-path-style",

@@ -49,7 +49,7 @@ resume the work before selecting a user. Cron retains its own authority rules.
 | `subagents`          | List or cancel background work in this session tree                         |
 | `session_status`     | Show a `/status`-style card and optionally set a per-session model override |
 
-These tools are still subject to the active tool profile and allow/deny policy. `tools.profile: "coding"` includes the full session orchestration set. `tools.profile: "messaging"` includes session self-service, discovery, recall, cross-session messaging, external-conversation tools, and the complete spawn lifecycle (`sessions_spawn`, `sessions_yield`, and `subagents`). The UI-only task-suggestion tools `suggest_task` and `dismiss_task` remain coding-profile tools.
+These tools are still subject to the active tool profile and allow/deny policy. `tools.profile: "coding"` includes the full session orchestration set. `tools.profile: "messaging"` includes session self-service, discovery, recall, cross-session messaging, external-conversation tools, and the complete spawn lifecycle (`sessions_spawn`, `sessions_yield`, and `subagents`). The task-suggestion tools `suggest_task` and `dismiss_task` require a client that supports task suggestions, such as the Gateway-backed TUI, and remain in the coding profile.
 
 Group, provider, sandbox, and per-agent policies can still remove those tools after the profile stage. Use `/tools` from the affected session to inspect the effective tool list.
 
@@ -118,7 +118,7 @@ creation and renaming. Tool policy still applies.
 Use `sessions_spawn` for actual delegated helpers. Hidden children are the default;
 `visible: true` remains available for deliberately supervised child work the user
 needs to revisit or steer. Use `suggest_task` for proactive, unrequested follow-up
-proposals: it records a card and starts nothing until accepted. An explicit request
+proposals: it records a suggestion and starts nothing until accepted. An explicit request
 to start work is not a suggestion request.
 
 ## Listing and reading sessions

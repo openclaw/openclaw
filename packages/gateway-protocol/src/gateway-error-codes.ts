@@ -22,4 +22,3 @@ export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
 // Leaf readers can use one discriminant without retaining the complete detail registry.
 export const WIZARD_NOT_FOUND_ERROR_CODE = "WIZARD_NOT_FOUND";
 export const SETUP_ADMISSION_BUSY_ERROR_CODE = "SETUP_ADMISSION_BUSY";
-export const TASK_WORKTREE_SOURCE_REQUIRED_ERROR_CODE = "TASK_WORKTREE_SOURCE_REQUIRED";

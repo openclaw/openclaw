@@ -216,7 +216,6 @@ async function connectClient(options: ControlUiDriverSetup, index: number) {
       caps: [
         "agent-kind",
         "approvals",
-        "task-suggestions",
         "terminal-offset-seq",
         "terminal-session-metadata",
         "terminal-upload-path-style",
