@@ -186,5 +186,8 @@ describe("queued delivery evidence", () => {
       },
     };
     expect(getAutomaticDeliveryEvidence(partial).mayHaveSent).toBe(true);
+    partial.deliveryStatus.status = "failed";
+    partial.deliveryStatus.payloadOutcomes.shift();
+    expect(getAutomaticDeliveryEvidence(partial).mayHaveSent).toBe(true);
   });
 });
