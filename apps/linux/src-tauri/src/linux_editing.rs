@@ -45,15 +45,22 @@ pub(crate) const INITIALIZATION_SCRIPT: &str = r#"(() => {
       if (event.defaultPrevented || event.isComposing) return;
       if (!event.ctrlKey || event.metaKey || event.altKey) return;
       const key = typeof event.key === "string" ? event.key.toLowerCase() : "";
-      const isZ = key === "z" || event.code === "KeyZ";
-      const isY = key === "y" || event.code === "KeyY";
-      const isUndo = isZ && !event.shiftKey;
-      const isRedo = (isZ && event.shiftKey) || (isY && !event.shiftKey);
-      if (!isUndo && !isRedo) return;
+      let command = null;
+      if (key === "z") {
+        command = event.shiftKey ? "redo" : "undo";
+      } else if (key === "y") {
+        command = event.shiftKey ? null : "redo";
+      } else if (!/^[\x20-\x7e]$/.test(key)) {
+        if (event.code === "KeyZ") {
+          command = event.shiftKey ? "redo" : "undo";
+        } else if (event.code === "KeyY" && !event.shiftKey) {
+          command = "redo";
+        }
+      }
+      if (!command) return;
       if (!activeEditable()) return;
 
       event.preventDefault();
-      const command = isRedo ? "redo" : "undo";
       let handled = false;
       try {
         handled = typeof document.execCommand === "function" && document.execCommand(command);
@@ -203,11 +210,55 @@ if (JSON.stringify(execCalls) !== JSON.stringify(["undo", "redo", "redo"])) {
   throw new Error(`unexpected execCalls: ${JSON.stringify(execCalls)}`);
 }
 
-// 2. Non-Latin layout (e.g., Cyrillic key with physical KeyZ) still triggers undo.
+// 2. Non-Latin layout (e.g., Cyrillic key with physical KeyZ/KeyY) still triggers undo/redo.
 execCalls.length = 0;
 ev = dispatch({ key: "я", code: "KeyZ" });
 if (!ev.defaultPrevented || execCalls[0] !== "undo") {
   throw new Error("physical KeyZ fallback failed");
+}
+execCalls.length = 0;
+ev = dispatch({ key: "н", code: "KeyY" });
+if (!ev.defaultPrevented || execCalls[0] !== "redo") {
+  throw new Error("physical KeyY fallback failed");
+}
+
+// 2b. QWERTZ layout: logical key wins over physical key code.
+// On QWERTZ, Ctrl+Z sends key="z", code="KeyY" (must undo, not redo),
+// Ctrl+Shift+Z sends key="Z", code="KeyY", shiftKey=true (must redo),
+// and Ctrl+Y sends key="y", code="KeyZ" (must redo, not undo).
+execCalls.length = 0;
+ev = dispatch({ key: "z", code: "KeyY", shiftKey: false });
+if (!ev.defaultPrevented || execCalls[0] !== "undo") {
+  throw new Error(`QWERTZ Ctrl+Z expected undo, got ${JSON.stringify(execCalls)}`);
+}
+execCalls.length = 0;
+ev = dispatch({ key: "Z", code: "KeyY", shiftKey: true });
+if (!ev.defaultPrevented || execCalls[0] !== "redo") {
+  throw new Error(`QWERTZ Ctrl+Shift+Z expected redo, got ${JSON.stringify(execCalls)}`);
+}
+execCalls.length = 0;
+ev = dispatch({ key: "y", code: "KeyZ", shiftKey: false });
+if (!ev.defaultPrevented || execCalls[0] !== "redo") {
+  throw new Error(`QWERTZ Ctrl+Y expected redo, got ${JSON.stringify(execCalls)}`);
+}
+
+// 2c. Other Latin layouts (e.g., AZERTY Ctrl+W or Dvorak Ctrl+; on physical KeyZ) must not misfire.
+for (const sample of [
+  { key: "w", code: "KeyZ", shiftKey: false },
+  { key: ";", code: "KeyZ", shiftKey: false },
+]) {
+  execCalls.length = 0;
+  ev = dispatch(sample);
+  if (ev.defaultPrevented || execCalls.length !== 0) {
+    throw new Error(`ASCII ${sample.key} on physical KeyZ should be ignored, got ${JSON.stringify(execCalls)}`);
+  }
+}
+
+// 2d. Ctrl+Shift+Y should not trigger undo or redo.
+execCalls.length = 0;
+ev = dispatch({ key: "Y", code: "KeyY", shiftKey: true });
+if (ev.defaultPrevented || execCalls.length !== 0) {
+  throw new Error(`Ctrl+Shift+Y should be ignored, got ${JSON.stringify(execCalls)}`);
 }
 
 // 3. Custom editor (e.g., CodeMirror) already prevented default -> no double undo.
