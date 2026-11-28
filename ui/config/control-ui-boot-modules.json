@@ -740,6 +740,7 @@
   "ui/src/lib/chat/composer-draft-changes.ts",
   "ui/src/lib/chat/composer-draft-store-codec.ts",
   "ui/src/lib/chat/composer-draft-store.runtime.ts",
+  "ui/src/lib/chat/composer-spans.ts",
   "ui/src/lib/chat/control-ui-database.runtime.ts",
   "ui/src/lib/chat/current-user-identity.ts",
   "ui/src/lib/chat/daybreak-access-program.ts",
