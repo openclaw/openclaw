@@ -143,7 +143,7 @@ suite.define(() => {
       .click();
     const details = page.getByRole("dialog", { name: "Request details", exact: true });
     await details.getByText("/usr/bin/echo", { exact: true }).waitFor();
-    expect(await gateway.getRequests("exec.approval.resolve")).toHaveLength(0);
+    expect(await gateway.getRequests("approval.resolve")).toHaveLength(0);
     await page.keyboard.press("Escape");
     await details.waitFor({ state: "hidden" });
 
@@ -183,14 +183,14 @@ suite.define(() => {
     await expect
       .poll(() => modal.locator(".exec-approval-title").textContent())
       .toContain("Review navigation updated");
-    expect(await gateway.getRequests("exec.approval.resolve")).toHaveLength(0);
-    await gateway.deferNext("exec.approval.resolve", { id: "approval-other" });
+    expect(await gateway.getRequests("approval.resolve")).toHaveLength(0);
+    await gateway.deferNext("approval.resolve", { id: "approval-other" });
     const allow = modal.getByRole("button", { name: "Allow once", exact: true });
     await allow.click();
-    const decision = await gateway.waitForRequest("exec.approval.resolve");
-    expect(decision.params).toEqual({ id: "approval-other", decision: "allow-once" });
+    const decision = await gateway.waitForRequest("approval.resolve");
+    expect(decision.params).toEqual({ id: "approval-other", kind: "exec", decision: "allow-once" });
     await expect.poll(() => allow.isDisabled()).toBe(true);
-    await gateway.resolveDeferred("exec.approval.resolve");
+    await gateway.resolveDeferred("approval.resolve");
     await expect.poll(() => modal.getAttribute("data-approval-id")).toBe("approval-inline");
     await expect.poll(() => modal.getByRole("button", { name: /echo other/ }).count()).toBe(0);
     expect(await modal.locator(".exec-approval-source").count()).toBe(0);

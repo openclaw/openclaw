@@ -13,6 +13,7 @@ import {
   participationApprovalTurnActor,
 } from "../exec-approval-participation.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
+import { canAccessOperatorApproval } from "../operator-approval-authorization.js";
 import type { OperatorApprovalRecord } from "../operator-approval-store.types.js";
 import { operatorSessionCap, resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import { prepareSessionCreatorProfile } from "../session-creator.js";
@@ -320,6 +321,15 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
   // Legacy adapters retain exact requester connection/device authority.
   if (requestedByDeviceId) {
     return requestedByDeviceId === clientDeviceId;
+  }
+  if (
+    !params.resolving &&
+    canAccessOperatorApproval({
+      client: params.client,
+      binding: { reviewerDeviceIds: params.record.approvalReviewerDeviceIds },
+    })
+  ) {
+    return true;
   }
   const requestedByConnId = normalizeNullableString(params.record.requestedByConnId);
   if (requestedByConnId) {

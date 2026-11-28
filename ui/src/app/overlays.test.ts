@@ -189,8 +189,9 @@ describe("application approval overlays", () => {
     harness.update({ sessionKey: "another-session" });
     expectQueue(overlays, "participation");
     await overlays.decideApproval("allow-once", "participation");
-    expect(request).toHaveBeenCalledWith("exec.approval.resolve", {
+    expect(request).toHaveBeenCalledWith("approval.resolve", {
       id: "participation",
+      kind: "exec",
       decision: "allow-once",
     });
     expectQueue(overlays);
@@ -214,16 +215,17 @@ describe("application approval overlays", () => {
       request: { command: "pwd", turnActor: { id: "participant", label: "Pat" } },
     };
     await overlays.decideApproval("deny", projected.id, projected);
-    expect(request).not.toHaveBeenCalledWith("exec.approval.resolve", expect.anything());
+    expect(request).not.toHaveBeenCalledWith("approval.resolve", expect.anything());
     await overlays.decideApproval("deny", projected.id, { ...projected, canDecide: true });
-    expect(request).toHaveBeenCalledWith("exec.approval.resolve", {
+    expect(request).toHaveBeenCalledWith("approval.resolve", {
       id: projected.id,
+      kind: "exec",
       decision: "deny",
     });
     const broad = fixture(request, ["operator.approvals"]);
     request.mockClear();
     await broad.overlays.decideApproval("deny", projected.id, { ...projected, canDecide: false });
-    expect(request).not.toHaveBeenCalledWith("exec.approval.resolve", expect.anything());
+    expect(request).not.toHaveBeenCalledWith("approval.resolve", expect.anything());
   });
 
   it("leaves approval authority and presentation untouched by live tool output", async () => {
@@ -383,8 +385,9 @@ describe("application approval overlays", () => {
       await overlays.decideApproval("allow-once", "remote-request");
       await flushMicrotasks();
       expectQueue(overlays);
-      expect(request).toHaveBeenCalledWith("exec.approval.resolve", {
+      expect(request).toHaveBeenCalledWith("approval.resolve", {
         id: "remote-request",
+        kind: "exec",
         decision: "allow-once",
       });
       expect(request.mock.calls.filter(([method]) => method === "node.list")).toHaveLength(
@@ -431,7 +434,7 @@ describe("application approval overlays", () => {
         harness.setScopes(["operator.read"]);
         expectQueue(overlays);
         await overlays.decideApproval("allow-once", "protected-first");
-        expect(request).not.toHaveBeenCalledWith("exec.approval.resolve", expect.anything());
+        expect(request).not.toHaveBeenCalledWith("approval.resolve", expect.anything());
         harness.setScopes(["operator.admin"]);
       } else {
         harness.update({ phase: "stopped" });
@@ -551,7 +554,7 @@ describe("application approval overlays", () => {
     harness.replaceSnapshotWithoutPublishing(change);
     await overlays.decideApproval("allow-once", "stale");
     expectError(overlays, "stale", error);
-    expect(request.mock.calls.some(([method]) => method === "exec.approval.resolve")).toBe(false);
+    expect(request.mock.calls.some(([method]) => method === "approval.resolve")).toBe(false);
   });
 
   it.each(["read", "write"])(
@@ -662,7 +665,7 @@ describe("application approval overlays", () => {
       .mockRejectedValueOnce(new Error("gateway unavailable"))
       .mockResolvedValue({ ok: true });
     const request = vi.fn<RequestFn>((method) =>
-      method === "exec.approval.resolve" ? resolve() : Promise.resolve([]),
+      method === "approval.resolve" ? resolve() : Promise.resolve([]),
     );
     const { overlays } = fixture(request);
     const projectedApproval = {
@@ -681,7 +684,7 @@ describe("application approval overlays", () => {
   });
 
   it("keeps A's failure visible after deciding B successfully", async () => {
-    const { request, first, second } = pendingRequests("exec.approval.resolve");
+    const { request, first, second } = pendingRequests("approval.resolve");
     const { harness, overlays } = fixture(request);
 
     harness.emitApproval("approval-a", 1_000);

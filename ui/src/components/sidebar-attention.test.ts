@@ -591,7 +591,7 @@ describe("sidebar attention refresh ownership", () => {
   ])("restores approval focus only within the initiating panel ($name)", async ({ reopen }) => {
     const resolution = deferred<unknown>();
     const request = respond({
-      "exec.approval.resolve": () => resolution.promise,
+      "approval.resolve": () => resolution.promise,
       "update.status": { sentinel: null, updateAvailable: null },
       "cron.list": cronResponse(),
       "exec.approval.list": [],
@@ -612,8 +612,9 @@ describe("sidebar attention refresh ownership", () => {
       await waitForFast(() => expect(element.querySelector(decisionSelector)).not.toBeNull());
       element.querySelector<HTMLButtonElement>(decisionSelector)!.click();
       expect(decideApproval).toHaveBeenCalledExactlyOnceWith("allow-once", "selected");
-      expect(request).toHaveBeenCalledWith("exec.approval.resolve", {
+      expect(request).toHaveBeenCalledWith("approval.resolve", {
         id: "selected",
+        kind: "exec",
         decision: "allow-once",
       });
       await waitForFast(() =>

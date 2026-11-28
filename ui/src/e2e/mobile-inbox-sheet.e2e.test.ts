@@ -100,7 +100,7 @@ suite.define(() => {
         await openInbox();
         await panel.locator('[data-approval-id="mobile-approval"] a').click();
         await expectClosed();
-        expect(await gateway.getRequests("exec.approval.resolve")).toHaveLength(0);
+        expect(await gateway.getRequests("approval.resolve")).toHaveLength(0);
         await openInbox();
         await panel.locator(".sidebar-issues-panel__more").click();
         await panel.getByRole("menuitem", { name: "Notification settings" }).click();
