@@ -89,12 +89,44 @@ suite.define(() => {
       await page.goto(new URL("/cron?new", suite.server.baseUrl).toString());
       await chooseScheduleKind(page, "event");
       await gateway.waitForRequest("config.get");
+      const setup = page.getByRole("heading", { name: "Trigger setup" });
+      await setup.waitFor();
+      expect(await page.locator("#cron-event-arguments").count()).toBe(0);
       await page
         .getByText("No enabled MCP servers yet. Add one in Settings → MCP.", { exact: true })
         .waitFor();
       expect(await gateway.getRequests("cron.add")).toHaveLength(0);
     });
   });
+  it("reveals subscription arguments once an event is selected", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "mcp.events.list", "mcp-events.status"],
+        methodResponses: {
+          "config.get": configSnapshot(config, "mcp-config"),
+          "cron.list": cronList([], "event-setup"),
+          "cron.runs": cronRuns([]),
+          "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
+          "mcp.events.list": {
+            serverName: "deployments",
+            events: [{ name: "release.ready", inputSchema: { type: "object" } }],
+          },
+        },
+      });
+      await page.goto(new URL("/cron?new", suite.server.baseUrl).toString());
+      await chooseScheduleKind(page, "event");
+      const setup = page.locator('[data-test-id="cron-event-source"]');
+      await setup.locator("#cron-event-server").click();
+      await page.getByRole("option", { name: "deployments", exact: true }).click();
+      expect(await setup.locator("#cron-event-arguments").count()).toBe(0);
+      await setup.locator("#cron-event-name").click();
+      await page.getByRole("option", { name: "release.ready", exact: true }).click();
+      const args = setup.locator("#cron-event-arguments");
+      await args.fill("not JSON");
+      await setup.getByRole("alert").filter({ hasText: "Enter a valid JSON object" }).waitFor();
+    });
+  });
+
   it("does not suggest adding MCP servers before configuration answers", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {

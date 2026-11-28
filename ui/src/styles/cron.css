@@ -790,6 +790,39 @@
   border-color: var(--danger);
 }
 
+.cron-event-source__message,
+.cron-event-source__schema,
+.cron-event-source__footer {
+  margin: 0;
+  padding: 0 16px 12px;
+}
+
+.cron-event-source__message:only-child {
+  padding-block-start: 12px;
+}
+
+.cron-event-source__footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted-strong);
+  font-size: var(--text-xs);
+}
+
+.cron-event-source__schema {
+  color: var(--muted-strong);
+  font-size: var(--text-sm);
+}
+
+.cron-event-source__schema pre {
+  overflow: auto;
+}
+
+.cron-event-source__plugin {
+  overflow-wrap: anywhere;
+}
+
 .cron-schedule-summary {
   display: flex;
   flex-wrap: wrap;

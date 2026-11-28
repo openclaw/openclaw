@@ -207,7 +207,9 @@ const enCron = {
       repeatOnce: "Once",
       repeatOnExit: "On exit",
       repeatStream: "Stream source",
-      onExitHelp: "Runs when a watched command exits. The schedule cannot be edited here.",
+      onExitHelp: "Runs when a watched command exits. You can’t change the command here.",
+      onExitDeleteHelp: "Remove this automation after its task runs successfully.",
+      streamSourceHelp: "Runs from a watched command’s output. You can’t change the command here.",
       every: "Every",
       at: "At",
       cronOption: "Cron",
@@ -288,9 +290,12 @@ const enCron = {
       advancedConditions: "Conditions",
       advancedTiming: "Timing",
       advancedResults: "Results",
+      triggerSetup: "Trigger setup",
       conditionTrigger: "Check a condition first",
       conditionTriggerHelp:
         "Before each scheduled run, a script checks something without using the model. The task runs only when it says so.",
+      streamConditionHelp:
+        "Check each batch of stream output with a script. The task only runs when the script says so.",
       triggerConfigured: "Trigger configured",
       triggerScript: "Trigger script",
       triggerScriptHelp:
@@ -429,8 +434,9 @@ const enCron = {
       catalogLimit:
         "The event catalog exceeds the supported size. Narrow the server catalog and refresh.",
       summary: "When {name} arrives from {server}",
+      pluginSource: "Source plugin",
       readOnlySource:
-        "The {source} event source is managed by its plugin. Its schedule is preserved when saving.",
+        "The plugin manages what starts this automation. You can’t change the source here.",
       subscription: "Subscription",
       pending: "Waiting for subscription status. Refresh to check activation.",
       paused: "Paused — events won’t start this automation.",

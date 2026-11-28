@@ -188,6 +188,35 @@ describe("cron view editor", () => {
     expect(prompt.getAttribute("aria-describedby")).toContain("cron-error-payloadText");
   });
 
+  it("keeps cleanup with the process exit source, outside Advanced", async () => {
+    const container = await renderEditor({ scheduleKind: "on-exit" });
+    const setup = getElement(container, testId("cron-process-trigger"), HTMLElement);
+    const advanced = getElement(container, ".cron-advanced", HTMLDetailsElement);
+    expect(findToggleByLabel(setup, "Delete after it runs")).not.toBeNull();
+    expect(findToggleByLabel(advanced, "Delete after it runs")).toBeNull();
+  });
+
+  it("keeps a stream condition with its source, outside Advanced", async () => {
+    const onFormChange = vi.fn();
+    const container = await renderEditor(
+      { scheduleKind: "stream", triggerEnabled: true },
+      {
+        status: { enabled: true, triggersEnabled: true, jobs: 1 },
+        onFormChange,
+        fieldErrors: { triggerScript: "cron.errors.triggerScriptRequired" },
+      },
+    );
+    const setup = getElement(container, testId("cron-process-trigger"), HTMLElement);
+    const script = getElement(setup, "#cron-trigger-script", HTMLTextAreaElement);
+    expect(script.getAttribute("aria-invalid")).toBe("true");
+    script.value = "return json({ fire: true });";
+    script.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onFormChange).toHaveBeenCalledWith({ triggerScript: script.value });
+    const advanced = getElement(container, ".cron-advanced", HTMLDetailsElement);
+    expect(advanced.open).toBe(false);
+    expect(advanced.querySelector("#cron-trigger-script")).toBeNull();
+  });
+
   it("waits for scheduler status before presenting trigger capability", async () => {
     const pending = await renderEditor({}, { status: null });
     expect(findToggleByLabel(pending, "Check a condition first")).toBeNull();
