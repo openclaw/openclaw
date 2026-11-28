@@ -575,6 +575,8 @@ public actor GatewayChannelActor {
         let clientDisplayName = options.clientDisplayName ?? InstanceIdentity.displayName
         let role = options.role
         let protocols = self.supportedProtocols
+        try options.validatePersonalSignInRequest(
+            token: self.token, bootstrapToken: self.bootstrapToken, password: self.password)
         let identity = try Self.loadDeviceIdentityForConnect(
             includeDeviceIdentity: options.includeDeviceIdentity,
             profile: options.deviceIdentityProfile)
@@ -989,6 +991,8 @@ extension GatewayChannelActor {
         }
         let payloadData = try self.encoder.encode(payload)
         let ok = try decoder.decode(HelloOk.self, from: payloadData)
+        try options.validatePersonalSignInHello(
+            method: ok.auth["method"]?.stringValue, recoveryScope: ok.auth["recoveryScope"]?.stringValue)
         if let tick = ok.policy["tickIntervalMs"]?.doubleValue {
             self.tickIntervalMs = tick
         }
@@ -1034,7 +1038,9 @@ extension GatewayChannelActor {
                 }
             }
         }
-        self.acceptedHTTPBearer = (connectionGeneration, selectedAuth.httpResourceBearer(hello: ok, role: role))
+        self.acceptedHTTPBearer = options.requiredAuthMethod == nil
+            ? (connectionGeneration, selectedAuth.httpResourceBearer(hello: ok, role: role))
+            : nil
         self.lastTick = Date()
         // Keep arbitrary push/lifecycle callbacks off the connect critical path.
         // Clients needing immediate hello state get a dedicated short admission.

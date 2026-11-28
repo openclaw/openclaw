@@ -18,7 +18,8 @@ struct SessionDashboardScreen: View {
         let webContentIdentity = AuthenticatedControlUI.webContentIdentity(
             config: config,
             storedOperatorToken: storedOperatorToken,
-            authorizationRevision: authorization?.revision)
+            authorizationRevision: authorization?.revision,
+            authorityGeneration: self.appModel.operatorAuthorityGeneration)
         let url = Self.dashboardURL(config: config, sessionKey: self.sessionKey, agentId: self.agentId)
         let accessCookieAdmission = AuthenticatedControlUI.dashboardAccessCookieAdmission(
             url: url,

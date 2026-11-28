@@ -13,6 +13,11 @@ import { formatConnectionError, formatConnectionErrorSummary } from "../lib/conn
 import { listen } from "../lib/reactive/listener.ts";
 import { generateUUID } from "../lib/uuid.ts";
 
+export type NativeGatewayHelloExpectation = {
+  method: "tailscale";
+  recoveryScope: string;
+};
+
 export type NativeGatewayAuthorization = {
   client: ConnectParams["client"];
   scopes: string[];
@@ -21,6 +26,8 @@ export type NativeGatewayAuthorization = {
     | { token: string; deviceToken?: never; password?: never }
     | { password: string; token?: never; deviceToken?: never }
     | { deviceToken?: never; token?: never; password?: never };
+  expectedHelloAuth?: NativeGatewayHelloExpectation;
+  expectedGatewayId?: string;
   device: NonNullable<ConnectParams["device"]>;
 };
 
@@ -53,7 +60,7 @@ function readNativeCredential(value: unknown): NativeGatewayAuthorization["auth"
   // Preserve the accepted native method. In particular, role-configured Gateways
   // distinguish shared-owner token/password auth from device-token authentication.
   if (!isRecord(value)) {
-    throw new Error("The app returned an invalid Gateway credential. Reconnect in the app.");
+    throw new Error(t("runtimeErrors.nativeCredential"));
   }
   const keys = Object.keys(value);
   // Ingress-authenticated sessions sign device proof without a reusable Gateway credential.
@@ -89,9 +96,12 @@ function readAuthorization(
   const mode = normalizeGatewayClientMode(
     typeof client.mode === "string" ? client.mode : undefined,
   );
+  const expectedGatewayId = result.expectedGatewayId;
   if (
     !id ||
     !mode ||
+    (expectedGatewayId !== undefined &&
+      (typeof expectedGatewayId !== "string" || !expectedGatewayId.trim())) ||
     typeof client.version !== "string" ||
     typeof client.platform !== "string" ||
     !isStringArray(result.scopes) ||
@@ -103,6 +113,20 @@ function readAuthorization(
   ) {
     throw new Error(t("runtimeErrors.nativeAuthorization"));
   }
+  const nativeAuth = readNativeCredential(result.auth);
+  let expectedHelloAuth: NativeGatewayAuthorization["expectedHelloAuth"];
+  if (result.requiredAuthMethod !== undefined || result.expectedRecoveryScope !== undefined) {
+    const recoveryScope = result.expectedRecoveryScope;
+    if (
+      Object.keys(nativeAuth).length !== 0 ||
+      result.requiredAuthMethod !== "tailscale" ||
+      typeof recoveryScope !== "string" ||
+      recoveryScope.trim().length === 0
+    ) {
+      throw new Error(t("runtimeErrors.nativeCredential"));
+    }
+    expectedHelloAuth = { method: "tailscale", recoveryScope };
+  }
   return {
     client: {
       id,
@@ -113,7 +137,9 @@ function readAuthorization(
       ...(typeof client.instanceId === "string" ? { instanceId: client.instanceId } : {}),
     },
     scopes: result.scopes,
-    auth: readNativeCredential(result.auth),
+    auth: nativeAuth,
+    ...(expectedHelloAuth ? { expectedHelloAuth } : {}),
+    ...(expectedGatewayId !== undefined ? { expectedGatewayId } : {}),
     device: {
       id: device.id,
       publicKey: device.publicKey,
@@ -271,10 +297,11 @@ export function createNativeGatewayConnectAuth(
         DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS / 2,
       );
       pending.set(request.id, (reply) => {
+        if (typeof reply.error === "string") {
+          finish(new NativeGatewayAuthUnavailableError(reply.error));
+          return;
+        }
         try {
-          if (typeof reply.error === "string") {
-            throw new NativeGatewayAuthUnavailableError(reply.error);
-          }
           finish(undefined, readAuthorization(reply.result, request));
         } catch (error) {
           finish(error instanceof Error ? error : new Error(formatConnectionErrorSummary(error)));

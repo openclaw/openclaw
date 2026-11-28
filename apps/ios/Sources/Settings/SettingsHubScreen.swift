@@ -362,7 +362,8 @@ struct EmbeddedDashboardContent: View {
         let webContentIdentity = AuthenticatedControlUI.webContentIdentity(
             config: self.config,
             storedOperatorToken: storedOperatorToken,
-            authorizationRevision: authorization?.revision)
+            authorizationRevision: authorization?.revision,
+            authorityGeneration: self.appModel.operatorAuthorityGeneration)
         Group {
             if let httpErrorStatus = self.embedCompatibility?.httpErrorStatus {
                 self.httpErrorView(statusCode: httpErrorStatus)
