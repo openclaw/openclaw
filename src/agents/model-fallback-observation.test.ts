@@ -18,7 +18,7 @@ let testSequence = 0;
 const primary = { provider: "modelstudio", model: "glm-5" };
 const fallback = { provider: "minimax", model: "MiniMax-M2.7-highspeed" };
 
-function logFailure(overrides: Partial<ModelFallbackDecisionParams> = {}) {
+function logFailure(overrides: Partial<ModelFallbackDecisionParams>) {
   return logModelFallbackDecision({
     decision: "candidate_failed",
     runId: "run-1",
