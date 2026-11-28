@@ -219,7 +219,7 @@ describe("skills workshop cli", () => {
         await runCli(undo!.split(" ").slice(1));
         expect(mocks.restoreWorkshopSkill).toHaveBeenCalledWith(context, {
           name: "release-notes",
-          versionId: undefined,
+          versionId: change.versionId,
         });
       }
     },
