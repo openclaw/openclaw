@@ -3,7 +3,6 @@ import type { ProviderPrepareDynamicModelContext } from "openclaw/plugin-sdk/plu
 import {
   coerceSecretRef,
   ensureAuthProfileStoreAsync,
-  findNormalizedProviderValue,
   listProfilesForProvider,
   normalizeOptionalSecretInput,
   resolveAuthProfileOrder,
@@ -74,20 +73,15 @@ export async function resolveFirstGithubToken(params: {
     return { githubToken: resolved.value?.trim() || githubToken };
   }
 
-  const explicitProfileOrder =
-    findNormalizedProviderValue(authStore.order, PROVIDER_ID) ??
-    findNormalizedProviderValue(params.config?.auth?.order, PROVIDER_ID);
-  // Preserve discovery's existing first-profile default; authored order alone
-  // delegates eligibility and cooldown handling to the canonical auth owner.
+  // Discovery must use the same eligibility and account order as inference.
+  // An abandoned setup profile must not hide a later usable saved sign-in.
   const profileId = requestedProfileId
     ? profileIds.find((candidate) => candidate === requestedProfileId)
-    : explicitProfileOrder === undefined
-      ? profileIds[0]
-      : resolveAuthProfileOrder({
-          cfg: params.config,
-          store: authStore,
-          provider: PROVIDER_ID,
-        })[0];
+    : resolveAuthProfileOrder({
+        cfg: params.config,
+        store: authStore,
+        provider: PROVIDER_ID,
+      })[0];
   const profile = profileId ? authStore.profiles[profileId] : undefined;
   if (profile?.type === "oauth") {
     const formatted = formatGithubCopilotApiKey(profile);
