@@ -266,49 +266,45 @@ export const startSubagentAnnounceCleanupFlow = (
         return;
       }
       if (cleanup === "delete" && (await prepareChildSessionEffects())) {
-        const { sessionId, lifecycleRevision } = entry.childSessionIdentity ?? {};
         const currentSession = await loadSessionEntryByKey(
           entry.childSessionKey,
           resolveSubagentChildAgentId(entry),
         );
-        const canDelete = await prepareChildSessionEffects();
-        if (canDelete && !currentSession) {
-          await suppressChildSessionEffects();
-        } else if (
-          canDelete &&
-          resolveSubagentChildAuthority(entry, currentSession).status !== "verified"
-        ) {
-          // Without both lifecycle identities, key-only deletion could remove
-          // a successor that reused this child session after cleanup yielded.
-          await suppressChildSessionEffects();
-        } else if (canDelete && sessionId && lifecycleRevision) {
-          // This durable boundary prevents a late yield from reviving a run
-          // after deletion may already have reached the gateway.
-          await commit((draft) => {
-            draft.deleteCleanupDispatchedAt ??= Date.now();
-          });
-          const sessionCleanup = await deleteSubagentSessionForCleanup({
-            callGateway: params.callGateway,
-            gatewayBinding: { resolveGatewayContext: getGatewayContextResolver(entry) },
-            isCurrent: childSessionEffectsAllowed,
-            prepareCurrent: prepareChildSessionEffects,
-            childSessionKey: entry.childSessionKey,
-            childAgentId: resolveSubagentChildAgentId(entry),
-            spawnMode: entry.spawnMode,
-            expectedSessionId: sessionId,
-            expectedLifecycleRevision: lifecycleRevision,
-            onError: (error) =>
-              params.warn("sessions.delete failed during subagent cleanup", {
-                error: buildSafeLifecycleErrorMeta(error),
-                runId,
-                childSessionKey: entry.childSessionKey,
-              }),
-          });
-          if (sessionCleanup === "failed") {
-            throw new Error("subagent session cleanup did not complete");
-          }
-          if (sessionCleanup === "changed") {
+        if (await prepareChildSessionEffects()) {
+          const childAuthority = resolveSubagentChildAuthority(entry, currentSession ?? null);
+          if (childAuthority.status !== "verified") {
+            // Without both lifecycle identities, key-only deletion could remove
+            // a successor that reused this child session after cleanup yielded.
             await suppressChildSessionEffects();
+          } else {
+            // This durable boundary prevents a late yield from reviving a run
+            // after deletion may already have reached the gateway.
+            await commit((draft) => {
+              draft.deleteCleanupDispatchedAt ??= Date.now();
+            });
+            const sessionCleanup = await deleteSubagentSessionForCleanup({
+              callGateway: params.callGateway,
+              gatewayBinding: { resolveGatewayContext: getGatewayContextResolver(entry) },
+              isCurrent: childSessionEffectsAllowed,
+              prepareCurrent: prepareChildSessionEffects,
+              childSessionKey: entry.childSessionKey,
+              childAgentId: childAuthority.childAgentId,
+              spawnMode: entry.spawnMode,
+              expectedSessionId: childAuthority.sessionIdentity.sessionId,
+              expectedLifecycleRevision: childAuthority.sessionIdentity.lifecycleRevision,
+              onError: (error) =>
+                params.warn("sessions.delete failed during subagent cleanup", {
+                  error: buildSafeLifecycleErrorMeta(error),
+                  runId,
+                  childSessionKey: entry.childSessionKey,
+                }),
+            });
+            if (sessionCleanup === "failed") {
+              throw new Error("subagent session cleanup did not complete");
+            }
+            if (sessionCleanup === "changed") {
+              await suppressChildSessionEffects();
+            }
           }
         }
       }

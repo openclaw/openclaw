@@ -274,6 +274,15 @@ export const WorkerRuntimeContextMessageSchema = Type.Union([
     details: closedObject({
       kind: Type.Enum(["prompt-update", "runtime-context"]),
       turnScoped: Type.Boolean(),
+      replay: Type.Optional(Type.Literal("append")),
+      dataRanges: Type.Optional(
+        Type.Array(
+          closedObject({
+            start: Type.Integer({ minimum: 0 }),
+            end: Type.Integer({ minimum: 1 }),
+          }),
+        ),
+      ),
     }),
   }),
 ]);

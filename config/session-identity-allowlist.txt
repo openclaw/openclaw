@@ -443,7 +443,7 @@ src/agents/subagents/registry/subagent-control-kill-runtime.ts	2
 src/agents/subagents/registry/subagent-control-kill-scope.ts	3
 src/agents/subagents/registry/subagent-control-kill-settlement.ts	1
 src/agents/subagents/registry/subagent-control-kill.ts	7
-src/agents/subagents/registry/subagent-control-scope.ts	4
+src/agents/subagents/registry/subagent-control-scope.ts	2
 src/agents/subagents/registry/subagent-control-session.ts	6
 src/agents/subagents/registry/subagent-controller-inputs.ts	2
 src/agents/subagents/registry/subagent-controller-read.ts	3
@@ -455,7 +455,6 @@ src/agents/subagents/registry/subagent-registry-helpers.ts	13
 src/agents/subagents/registry/subagent-registry-lifecycle-announce-cleanup.ts	5
 src/agents/subagents/registry/subagent-registry-lifecycle-bookkeeping.ts	1
 src/agents/subagents/registry/subagent-registry-lifecycle-cleanup.ts	5
-src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	2
 src/agents/subagents/registry/subagent-registry-lifecycle-finalize-cleanup.ts	1
 src/agents/subagents/registry/subagent-registry-lifecycle-persistence.ts	3
 src/agents/subagents/registry/subagent-registry-lifecycle-wake.ts	2
@@ -465,9 +464,9 @@ src/agents/subagents/registry/subagent-registry-persistence.ts	2
 src/agents/subagents/registry/subagent-registry-public-api.ts	3
 src/agents/subagents/registry/subagent-registry-queries.ts	4
 src/agents/subagents/registry/subagent-registry-read.ts	8
-src/agents/subagents/registry/subagent-registry-requester-claim.ts	6
+src/agents/subagents/registry/subagent-registry-requester-claim.ts	2
 src/agents/subagents/registry/subagent-registry-requester-wake-mutation.ts	1
-src/agents/subagents/registry/subagent-registry-requester-yield.ts	18
+src/agents/subagents/registry/subagent-registry-requester-yield.ts	6
 src/agents/subagents/registry/subagent-registry-run-launch.ts	14
 src/agents/subagents/registry/subagent-registry-run-manager.ts	8
 src/agents/subagents/registry/subagent-registry-run-pause.ts	1
@@ -480,6 +479,7 @@ src/agents/subagents/registry/subagent-registry-typing.ts	1
 src/agents/subagents/registry/subagent-registry.mocks.shared.ts	1
 src/agents/subagents/registry/subagent-registry.ts	1
 src/agents/subagents/registry/subagent-requester-settle-identity.ts	6
+src/agents/subagents/registry/subagent-requester-turn-custody.ts	2
 src/agents/subagents/registry/subagent-run-generation.ts	7
 src/agents/subagents/registry/subagent-session-cleanup.ts	8
 src/agents/subagents/registry/subagent-session-read-scope.ts	8

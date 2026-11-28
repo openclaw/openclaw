@@ -69,6 +69,7 @@ it("classifies loaded legacy owners as legacy and reports nothing when no owner 
 
 it("prefers the current registry's owner over process and standalone facts", () => {
   setStandaloneMemoryOwner({ pluginId: "knowledge", native: false });
+  setActivePluginRegistry(registryWith("knowledge", legacyCapability));
 
   expect(
     withPluginRuntimeRegistryScope(registryWith("knowledge", nativeCapability), () =>

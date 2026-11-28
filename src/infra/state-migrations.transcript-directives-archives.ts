@@ -81,6 +81,8 @@ type ArchiveMigrationOptions = {
 type ArchiveMigrationResult = {
   rewrittenArchives: number;
   warnings: string[];
+  /** Verification only: whether the writing pass would change a row, file or receipt, or warn. */
+  pending?: boolean;
 };
 
 type ArchiveRowPlan = {
@@ -352,6 +354,10 @@ export async function migrateCanonicalTranscriptArchives(
     );
   };
   const checkpoint = params.verifyOnly ? undefined : params.writeCursor;
+  // The writing pass first recovers a committed publication journal.
+  let verifyPending =
+    params.verifyOnly === true &&
+    readTranscriptArchiveRecoveryJournal(params.database) !== undefined;
   let missingCopies = 0;
   const missingCopyExamples: string[] = [];
   while (true) {
@@ -371,7 +377,9 @@ export async function migrateCanonicalTranscriptArchives(
         write("historical-transcript-archive.complete", () => checkpoint({ phase: "complete" }));
       }
       const verificationReceipt = [...observed].toSorted().join("\n");
-      if (verificationKey && !params.verifyOnly && verificationReceipt !== previousVerification) {
+      const receiptDrift =
+        verificationKey !== undefined && verificationReceipt !== previousVerification;
+      if (verificationKey && receiptDrift && !params.verifyOnly) {
         write("transcript-archive-verification.record", () => {
           const now = Date.now();
           executeSqliteQuerySync(
@@ -397,6 +405,7 @@ export async function migrateCanonicalTranscriptArchives(
       }
       return {
         rewrittenArchives,
+        ...(params.verifyOnly ? { pending: verifyPending || receiptDrift } : {}),
         warnings: [
           ...new Set([
             ...recoveryWarnings,
@@ -481,6 +490,8 @@ export async function migrateCanonicalTranscriptArchives(
       const filesCurrent = batch.map((planned) => {
         current = planned;
         if (params.verifyOnly && planned.changed) {
+          // The writing pass rewrites this blob and its file.
+          verifyPending = true;
           return false;
         }
         const archivePath = transcriptArchivePathFor(archiveDirectory, planned.archiveName);
@@ -502,6 +513,8 @@ export async function migrateCanonicalTranscriptArchives(
           });
         }
         if (!fileCurrent) {
+          // A differing copy is republished; a missing one is reported on every pass.
+          verifyPending = true;
           missingCopies += 1;
           if (missingCopyExamples.length < MIGRATION_WARNING_EXAMPLE_LIMIT) {
             missingCopyExamples.push(`Missing canonical transcript archive copy: ${archivePath}`);

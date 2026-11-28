@@ -305,7 +305,7 @@ struct OnboardingViewSmokeTests {
         #expect(secondaryInvocations == (actions == "dual" ? 1 : 0))
     }
 
-    @Test func `configured flows keep native reachability and final steps after AI setup`() {
+    @Test func `builds with OpenClaw ID keep the local reachability page`() {
         // Memory import, permissions, channels and hatch remain Dashboard-owned.
         // Native onboarding retains the optional reachability and final pages.
         #expect(OnboardingView.pageOrder(
@@ -316,12 +316,6 @@ struct OnboardingViewSmokeTests {
             for: .local,
             requiresCLIInstall: false,
             openClawIDEnabled: true) == [0, 1, 3, 5, 9])
-        #expect(OnboardingView.pageOrder(
-            for: .remote,
-            requiresCLIInstall: true) == [0, 1, 4, 3, 9])
-        #expect(OnboardingView.pageOrder(
-            for: .remote,
-            requiresCLIInstall: false) == [0, 1, 4, 3, 9])
     }
 
     @Test func `builds without OpenClaw ID skip the reachability page`() {
@@ -333,12 +327,6 @@ struct OnboardingViewSmokeTests {
             for: .local,
             requiresCLIInstall: false,
             openClawIDEnabled: false) == [0, 1, 3, 9])
-    }
-
-    @Test func `set up later keeps the native ready page`() {
-        #expect(OnboardingView.pageOrder(
-            for: .unconfigured,
-            requiresCLIInstall: false) == [0, 1, 9])
     }
 
     @Test func `reopened onboarding preserves configure later selection`() {

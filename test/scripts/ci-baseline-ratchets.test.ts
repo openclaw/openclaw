@@ -41,6 +41,7 @@ it.each([false, true])(
       ["check:assertion-safety", "--base", "exact-base", "--no-merge-base"],
       ["check:database-dialect-ratchet", "--base", "exact-base", "--no-merge-base"],
       ["check:session-identity-ratchet", "--base", "exact-base", "--no-merge-base"],
+      ["check:provider-branching-ratchet", "--base", "exact-base", "--no-merge-base"],
       ["check:runtime-process-lifecycle", "--base", "exact-base", "--no-merge-base"],
       ["check:test-timeout-race-ratchet", "--base", "exact-base", "--no-merge-base"],
       ["check:test-mock-exports", "--base", "exact-base", "--no-merge-base"],

@@ -359,6 +359,12 @@ and explicit pin names still count. Its per-file allowlist may only shrink.
 After removing counted sites, run the checker with `--prune` and verify again
 without pruning.
 
+`pnpm check:provider-branching-ratchet` rejects growth in request and history
+branches keyed on a provider id, model id, API name or URL in `src/agents`,
+`packages/ai`, `packages/llm-core` and the provider replay helpers. Declare the
+behavior as model compat in the owning plugin instead. Its per-file allowlist
+may only shrink; after removing branches, run the checker with `--prune`.
+
 <a id="test-line-budget" />
 
 `pnpm check:test-lines-ratchet` measures this change's net test-line delta

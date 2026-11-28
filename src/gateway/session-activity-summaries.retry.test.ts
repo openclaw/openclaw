@@ -17,6 +17,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { seedUnindexedTranscriptForTest } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { assignSessionOwnerInWorker } from "../config/sessions/session-metadata-write.async.js";
 import { isSessionTranscriptIndexReconcileRunning } from "../config/sessions/session-transcript-reconcile.js";
 import * as transcriptWatermark from "../config/sessions/session-transcript-watermark.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -25,6 +26,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -179,6 +181,48 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     await testState.cleanup();
+  });
+
+  it("makes no model attempt or retry for an owner whose role allows only the main model", async () => {
+    // A production team's default role allowed main-chat models and refused every utility model.
+    const profile = await ensureCanonicalUserProfileForEmail("recap-owner@example.test");
+    const member = {
+      agents: "*" as const,
+      scopes: ["operator.read" as const, "operator.write" as const],
+      sessions: { others: "none" as const },
+      modelPolicy: { allow: ["test/main"] },
+    };
+    cfg = {
+      agents: { defaults: { model: "test/main", utilityModel: "test/utility" } },
+      gateway: { roles: { default: "member", definitions: { member } } },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const target = await addSession(1);
+    await assignSessionOwnerInWorker(scope(target), {
+      expectedSessionId: scope(target).sessionId,
+      owner: { type: "human", id: profile.id },
+      assignedBy: { type: "system", id: "gateway" },
+    });
+    let armed = 0;
+    const time = await restartWithClock(() => (armed += 1));
+    // Each round outlives the old 120 s retry, which re-ran the refusal on main.
+    for (let round = 0; round < 4; round += 1) {
+      await appendMessage(
+        target,
+        `work-${round}`,
+        round ? `work-${round - 1}` : "message-1",
+        "More.",
+      );
+      const work = new AsyncWorkScope();
+      await work.track(() => ensureRecap(target));
+      await work.drain();
+      expect(view(target)).toMatchObject({ state: "unavailable" });
+      await time.advanceBy(130_000);
+    }
+    expect({ attempts: complete.mock.calls.length, retries: armed }).toEqual({
+      attempts: 0,
+      retries: 0,
+    });
   });
 
   it("refreshes a recap after an in-process append without a post-write watermark read", async ({

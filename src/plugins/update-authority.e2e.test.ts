@@ -204,7 +204,7 @@ describe("plugin update publication authority", () => {
         await useUpdateControl(state);
 
         for (const revoke of [true, false]) {
-          await withUpdater(state, true, async (fence) => {
+          await withUpdater(state, async (fence) => {
             let consented = false;
             let publicationProbeReached = false;
             let publishedProjectsAtRevocation: string[] | undefined;
