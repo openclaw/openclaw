@@ -146,6 +146,34 @@ it("omits tool result bodies while preserving summarized tool arguments", async 
   expect(prompt).toContain(toolCommand);
 });
 
+it("accepts a second assessment when the model echoes the previous digest", async () => {
+  const firstAssessment = {
+    headline: "Checking the fix",
+    assessment: "Tests are passing.",
+    health: "on-track",
+    planProgress: { completed: 2, total: 3 },
+  };
+  const completeModel = vi.fn(async ({ prompt }: { prompt: string }) => {
+    const { previousDigest } = JSON.parse(prompt) as {
+      previousDigest: typeof firstAssessment | null;
+    };
+    return modelMessage(previousDigest ?? firstAssessment);
+  });
+  const harness = createHarness({ completeModel });
+  await startAndAddToolNotes(harness.observer);
+  await advance(12_000);
+  expectBroadcast(harness, { ...firstAssessment, revision: 1 });
+
+  await addToolNotes(harness);
+  await advance(12_000);
+  expectBroadcast(harness, { ...firstAssessment, revision: 2 });
+  expect(completeModel).toHaveBeenCalledTimes(2);
+  const secondRequest = JSON.parse(completeModel.mock.calls[1]?.[0].prompt ?? "{}") as {
+    previousDigest?: unknown;
+  };
+  expect(secondRequest.previousDigest).toEqual(firstAssessment);
+});
+
 it("coalesces live completions and cancels in-flight work for the terminal digest", async ({
   signal,
 }) => {
