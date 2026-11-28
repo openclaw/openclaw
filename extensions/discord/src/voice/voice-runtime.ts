@@ -165,14 +165,26 @@ export class DiscordVoiceManager {
       getTranscripts: this.getTranscripts,
       membership: this.membership,
       onLeaveFollowState: (guildId) => this.following.clearFollowedGuild(guildId),
-      onSessionStopped: (entry, reason) => {
+      onSessionStopped: (entry, reason, selfStopped) => {
         const lifecycle = this.guildLifecycles.get(entry.guildId);
-        if (lifecycle?.status === "active" && lifecycle.instance === entry) {
-          this.guildLifecycles.set(entry.guildId, {
-            status: "stopped",
-            generation: lifecycle.generation,
-            reason,
-          });
+        if (lifecycle?.status !== "active" || lifecycle.instance !== entry) {
+          return;
+        }
+        this.guildLifecycles.set(entry.guildId, {
+          status: "stopped",
+          generation: lifecycle.generation,
+          reason,
+        });
+        if (!selfStopped || this.destroyed) {
+          return;
+        }
+        const autoJoin = this.resolveAutoJoinTarget(entry.guildId);
+        const rejoin = autoJoin?.channelId === entry.channelId;
+        logger.warn(
+          `discord voice: session ended guild=${entry.guildId} channel=${entry.channelId}: ${reason}${rejoin ? "; rejoining autoJoin channel" : ""}`,
+        );
+        if (rejoin) {
+          void this.enqueueAutoJoin(autoJoin);
         }
       },
       receive: this.receive,

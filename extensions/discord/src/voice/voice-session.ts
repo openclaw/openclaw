@@ -64,7 +64,8 @@ export class DiscordVoiceSessions {
       discordConfig: DiscordAccountConfig;
       membership: DiscordVoiceMembershipTracker;
       onLeaveFollowState: (guildId: string) => void;
-      onSessionStopped: (entry: VoiceSessionEntry, reason: string) => void;
+      /** `selfStopped` means the voice transport ended on its own, not by a leave or stop. */
+      onSessionStopped: (entry: VoiceSessionEntry, reason: string, selfStopped: boolean) => void;
       receive: DiscordVoiceReceive;
       sessions: Map<string, VoiceSessionEntry>;
     },
@@ -300,6 +301,7 @@ export class DiscordVoiceSessions {
     const stopEntry = (
       reason: string,
       disposition: "abort" | "text-fallback" = "abort",
+      selfStopped = false,
     ): void | Promise<void> => {
       if (entry.sessionLifecycle.status === "stopped") {
         return stopCompletion;
@@ -329,7 +331,7 @@ export class DiscordVoiceSessions {
       const audioCompletion = this.stopTransport(guildId, audio);
       stopCompletion = Promise.allSettled([realtimeCompletion, audioCompletion]).then(() => {
         entry.conversations.close();
-        this.params.onSessionStopped(entry, reason);
+        this.params.onSessionStopped(entry, reason, selfStopped);
       });
       const completion = stopCompletion;
       this.pendingStops.add(completion);
@@ -386,7 +388,7 @@ export class DiscordVoiceSessions {
       }
     };
     const destroyedHandler = () => {
-      void stopEntry("audio worker stopped", "text-fallback");
+      void stopEntry("voice connection or audio worker stopped", "text-fallback", true);
     };
     audio.on("stopped", destroyedHandler);
     if (!entry.captureOnly && isDiscordRealtimeVoiceMode(voiceMode)) {
