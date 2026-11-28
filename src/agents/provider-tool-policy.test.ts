@@ -26,6 +26,21 @@ describe("provider tool policy", () => {
     });
   });
 
+  it("selects the bedrock policy when amazon-bedrock is also configured", () => {
+    const entry = resolveProviderToolPolicyEntry({
+      byProvider: {
+        "amazon-bedrock": { profile: "alias" },
+        bedrock: { profile: "canonical" },
+      },
+      modelProvider: "bedrock",
+    });
+
+    expect(entry).toEqual({
+      key: "bedrock",
+      policy: { profile: "canonical" },
+    });
+  });
+
   it("keeps slash-containing model ids inside the selected provider", () => {
     expect(
       resolveProviderToolPolicy({
