@@ -104,6 +104,55 @@ describe.each(transports)("guarded $api SSE liveness integration", (transport) =
   ];
   afterEach(() => vi.useRealTimers());
 
+  it.for(["\r\n\n", "\n\r\n", "\n\r", "\r\n\r"])(
+    "filters empty events after mixed line endings %j",
+    async (ending, { signal }) => {
+      const server = await reserveTestPortListener({
+        offsets: [0],
+        signal,
+        createListener: () =>
+          createServer((request, response) => {
+            request.resume();
+            response.writeHead(200, { "content-type": "text/event-stream" });
+            response.end(
+              transport.initialEvent.replace(/\n\n$/, ending) +
+                "event: ping\n\n" +
+                transport.finalEvent +
+                "data: [DONE]\n\n",
+            );
+          }),
+      });
+      const abort = new AbortController();
+      try {
+        const model = makeProviderModelFixture({
+          id: "keepalive-model",
+          provider: "openrouter",
+          api: transport.api,
+          baseUrl: `http://127.0.0.1:${server.claim.port}/v1`,
+        });
+        const stream = await transport.createStream()(
+          model,
+          { messages: [{ role: "user", content: "reply", timestamp: 1 }] },
+          { apiKey: "synthetic-test-key", maxRetries: 0, signal: abort.signal },
+        );
+        const result = await withinTest(stream.result(), signal);
+        expect(result.stopReason).toBe("stop");
+        expect(result.content).toEqual([
+          expect.objectContaining({ type: "text", text: "still connected" }),
+        ]);
+      } finally {
+        abort.abort();
+        await closeProviderTransportDispatcherPool();
+        server.listener.closeAllConnections();
+        try {
+          await server.releaseListener();
+        } finally {
+          await server.claim.release();
+        }
+      }
+    },
+  );
+
   it.for(scenarios)("$name", async (scenario, { signal }) => {
     const responseReady = createDeferred<ServerResponse>();
     const peerClosed = createDeferred();
