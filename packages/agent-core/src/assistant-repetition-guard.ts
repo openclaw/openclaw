@@ -1,4 +1,5 @@
 import { REPETITIVE_OUTPUT_ERROR_CODE, type AssistantMessage } from "@openclaw/llm-core";
+import { readAssistantThinkingAppend } from "@openclaw/llm-core/event-stream";
 import { REPETITIVE_OUTPUT_ERROR_MESSAGE } from "./errors.js";
 import { RepetitionWatch } from "./repetition-guard.js";
 
@@ -25,12 +26,21 @@ export class AssistantRepetitionGuard {
         continue;
       }
       let state = this.blocks.get(index);
-      const knownAppend = append && append.offset === (state?.text.length ?? 0);
-      if (!state || (!knownAppend && !text.startsWith(state.text))) {
+      // Transport-owned thinking appends prove the prefix without rescanning it.
+      const appended =
+        append && append.offset === (state?.text.length ?? 0)
+          ? append.delta
+          : state && block?.type === "thinking"
+            ? readAssistantThinkingAppend(block, state.text)
+            : undefined;
+      if (
+        !state ||
+        (appended === undefined && text !== state.text && !text.startsWith(state.text))
+      ) {
         state = { watch: new RepetitionWatch(), text: "" };
         this.blocks.set(index, state);
       }
-      const stopped = state.watch.feed(knownAppend ? append.delta : text.slice(state.text.length));
+      const stopped = state.watch.feed(appended ?? text.slice(state.text.length));
       state.text = text;
       if (stopped) {
         // A server-side checkpoint could replay the discarded block even with clean visible text.

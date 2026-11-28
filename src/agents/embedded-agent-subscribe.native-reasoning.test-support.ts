@@ -14,9 +14,11 @@ export const NATIVE_REASONING_BENCH_PREFIX = "REASONING_BENCH:";
 export async function measureNativeReasoningSubscription(
   options: { signal?: AbortSignal; runId?: string } = {},
 ) {
-  const chunks = Array.from({ length: 4096 }, (_, index) =>
-    (index === 0 ? NATIVE_REASONING_BENCH_PREFIX : "").padEnd(64, "x"),
-  );
+  // Exercise long, non-repetitive reasoning so the guard does not stop the stream.
+  const chunks = Array.from({ length: 4096 }, (_, index) => {
+    const prefix = index === 0 ? NATIVE_REASONING_BENCH_PREFIX : "";
+    return `${prefix}Reasoning fixture record ${index}`.padEnd(63, " ") + "\n";
+  });
   const model = makeProviderModelFixture({
     id: "reasoning-fixture",
     api: "openai-completions",
@@ -34,10 +36,6 @@ export async function measureNativeReasoningSubscription(
   });
   const acknowledgments = chunks.map(() => createDeferredCore());
   const release = () => acknowledgments.forEach((acknowledgment) => acknowledgment.resolve());
-  options.signal?.addEventListener("abort", release, { once: true });
-  if (options.signal?.aborted) {
-    release();
-  }
   const frame = (
     delta: { role?: "assistant"; reasoning_content?: string },
     finish_reason: "stop" | null = null,
@@ -48,12 +46,22 @@ export async function measureNativeReasoningSubscription(
     model: model.id,
     choices: [{ index: 0, delta, finish_reason }],
   });
-  async function* wire() {
-    for (const [index, text] of chunks.entries()) {
-      yield frame({ role: "assistant", reasoning_content: text });
-      await acknowledgments[index]!.promise;
+  async function* wire(signal?: AbortSignal) {
+    signal?.addEventListener("abort", release, { once: true });
+    try {
+      for (const [index, text] of chunks.entries()) {
+        if (signal?.aborted) {
+          return;
+        }
+        yield frame({ role: "assistant", reasoning_content: text });
+        await acknowledgments[index]!.promise;
+      }
+      if (!signal?.aborted) {
+        yield frame({}, "stop");
+      }
+    } finally {
+      signal?.removeEventListener("abort", release);
     }
-    yield frame({}, "stop");
   }
   const { session, emit } = createStubSessionHarness();
   const runId = options.runId ?? "native-reasoning-work-fixture";
@@ -94,7 +102,7 @@ export async function measureNativeReasoningSubscription(
       },
       options.signal,
       (_model, _context, streamOptions) => {
-        producing = processCompletionsStream(wire(), output, model, stream, {
+        producing = processCompletionsStream(wire(streamOptions?.signal), output, model, stream, {
           signal: streamOptions?.signal,
         }).then(
           () => {
@@ -120,7 +128,6 @@ export async function measureNativeReasoningSubscription(
       deltaMatches: observed.delta === expected.trim(),
     };
   } finally {
-    options.signal?.removeEventListener("abort", release);
     release();
     unsubscribe();
     subscription.unsubscribe();
