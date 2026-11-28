@@ -323,12 +323,6 @@ function BuiltinCategoryChips(props: PluginCatalogResultsProps): JSX.Element {
 function CategoryChips(props: PluginCatalogResultsProps): JSX.Element {
   const recordedError = createMemo(() => props.categoriesError);
   const { ready, receipt } = createCatalogRead(() => props.reads.categories, recordedError);
-  const sourceCategories = createMemo(() => props.categories);
-  const categories = createMemo(() =>
-    sourceCategories()
-      .filter((category) => category.slug !== "other")
-      .toSorted((left, right) => left.order - right.order),
-  );
   return (
     <Loading
       on={[recordedError(), receipt().promise]}
@@ -359,11 +353,11 @@ function CategoryChips(props: PluginCatalogResultsProps): JSX.Element {
       >
         <CatalogDiscoveryChips
           label={t("pluginsPage.categoriesLabel")}
-          revision={ready() ? categories() : undefined}
+          revision={ready() ? props.categories : undefined}
         >
           <BuiltinCategoryChips {...props} />
           {ready() && (
-            <For each={categories()} keyed={(item) => item.slug}>
+            <For each={props.categories} keyed={(item) => item.slug}>
               {(item) => (
                 <CatalogDiscoveryChip
                   active={props.category === item().slug}
@@ -487,15 +481,9 @@ function RawResults(props: CatalogResultsState): JSX.Element {
 
 function GroupedCatalog(props: CatalogResultsState & { loading?: boolean }): JSX.Element {
   const items = createMemo(() => props.listed);
-  const sourceCategories = createMemo(() => props.categories);
-  const categories = createMemo(() =>
-    sourceCategories()
-      .filter((category) => category.slug !== "other")
-      .toSorted((left, right) => left.order - right.order),
-  );
   const hasCategoryItems = createMemo(() =>
     items().some((plugin) =>
-      categories().some((category) => plugin.catalog.categories.includes(category.slug)),
+      props.categories.some((category) => plugin.catalog.categories.includes(category.slug)),
     ),
   );
   const hasAnySection = () =>
@@ -521,7 +509,7 @@ function GroupedCatalog(props: CatalogResultsState & { loading?: boolean }): JSX
               />
             )}
           </For>
-          <For each={categories()} keyed={(category) => category.slug}>
+          <For each={props.categories} keyed={(category) => category.slug}>
             {(category) => (
               <CatalogSection
                 id={category().slug}
@@ -544,6 +532,12 @@ function GroupedCatalog(props: CatalogResultsState & { loading?: boolean }): JSX
 }
 
 export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JSX.Element {
+  const sourceCategories = createMemo(() => props.categories);
+  const visibleCategories = createMemo(() =>
+    sourceCategories()
+      .filter((category) => category.slug !== "other")
+      .toSorted((left, right) => left.order - right.order),
+  );
   const inventory = createMemo(() => props.inventory);
   const installedByCatalogId = createMemo(() => indexInstalledCatalog(inventory()));
   const recordedError = createMemo(() => props.error);
@@ -615,7 +609,7 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
       </CatalogDiscoverySearch>
       {/* First results enter below the settled categories; later reads keep their own boundaries. */}
       <Reveal collapsed>
-        <CategoryChips {...props} />
+        <CategoryChips {...props} categories={visibleCategories()} />
         {connected() && props.remoteError
           ? renderError(props.remoteError, props.onRetry, true)
           : undefined}
@@ -636,6 +630,7 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
               {grouped() ? (
                 <GroupedCatalog
                   {...props}
+                  categories={visibleCategories()}
                   installedByCatalogId={installedByCatalogId()}
                   listed={listed()}
                   trending={trending()}
@@ -672,6 +667,7 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
             ) : grouped() ? (
               <GroupedCatalog
                 {...props}
+                categories={visibleCategories()}
                 installedByCatalogId={installedByCatalogId()}
                 listed={listed()}
                 trending={trending()}
