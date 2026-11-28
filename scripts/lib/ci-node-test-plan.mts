@@ -5487,7 +5487,13 @@ function createCompactNodeTestShardBundles(
         parallel,
       });
     };
-    const bins = packNodeTestGroups(anchorGroups, canShareCompactJob, true);
+    // On hosted overflow, pack stronger runner anchors first so small groups
+    // can fill compatible capacity instead of opening their own bins.
+    const orderedAnchors =
+      prioritizeSerialGateway && options.runnerBackend === "github"
+        ? anchorGroups.toSorted((a, b) => runnerRank(b) - runnerRank(a))
+        : anchorGroups;
+    const bins = packNodeTestGroups(orderedAnchors, canShareCompactJob, true);
     if (options.runnerBackend === "github") {
       for (const bin of bins) {
         bin.sort((a, b) => runnerRank(b) - runnerRank(a));
