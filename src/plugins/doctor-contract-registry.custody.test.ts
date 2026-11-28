@@ -17,7 +17,7 @@ import { writeArtifacts } from "./public-surface.test-support.js";
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 function fixture() {
   const rootDir = dirs.make("doctor-source-custody-");
-  const { source, input, inventory } = createDoctorGenerationFixture(rootDir, "custody");
+  const { input, inventory } = createDoctorGenerationFixture(rootDir, "custody");
   const actions = path.join(rootDir, "actions.mjs");
   writeArtifacts(rootDir, {
     "package.json": { type: "module" },
@@ -44,7 +44,7 @@ function fixture() {
     await preparePluginDoctorContractModules({ inventory: declared });
     return listPluginDoctorStateMigrationEntries({ inventory: declared })[0]!.migration;
   };
-  return { rootDir, source, actions, input, load };
+  return { rootDir, actions, input, load };
 }
 
 it.each(["plain", "overlapping package", "native companion", "external dependency junctions"])(
