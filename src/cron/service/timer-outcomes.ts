@@ -1,4 +1,3 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { buildProviderReauthCommand } from "../../agents/failover-error.js";
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
@@ -8,6 +7,7 @@ import { resolvePacedNextRunAtMs } from "../pacing.js";
 import { isPluginCommandCronJob } from "../plugin-command-schedule.js";
 import { normalizeCronRunDiagnostics, summarizeCronRunDiagnostics } from "../run-diagnostics.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
+import { buildAccountPauseNotice } from "../scheduled-occurrence.js";
 import type { CronRunFinalizationOutcome } from "../store/runtime-worker.types.js";
 import type { CronJob, CronRunStatus, CronStoredJob, CronTriggerEvalOutcome } from "../types.js";
 import {
@@ -44,19 +44,6 @@ import {
 
 type CronScheduleOwnership = "current" | "stale";
 type CronTriggerOwnership = "current" | "stale";
-
-// The refusal in automation history names the account; the notice names only the steps.
-function retiredAccountPauseText(job: CronStoredJob): string {
-  const name = truncateUtf16Safe((job.name || job.id).replace(/\s+/g, " ").trim(), 120);
-  const signIn = job.inferenceBinding
-    ? buildProviderReauthCommand(job.inferenceBinding.provider)
-    : undefined;
-  return [
-    `⚠️ Automation "${name}" was paused: the account it runs on was removed, signed out or replaced since the automation recorded it.`,
-    `Sign in again if needed${signIn ? ` (\`${signIn}\`)` : ""}, then record the account with \`openclaw automations edit ${job.id} --model <provider/model>@<profileId>\` (list accounts: \`openclaw gateway call models.authStatus\`). To use a key in the environment or provider config instead: \`openclaw automations edit ${job.id} --model <provider/model>\`.`,
-    `Then run \`openclaw automations enable ${job.id}\`.`,
-  ].join("\n");
-}
 
 /** Checks both the admitted schedule and edits that may have returned to its original value. */
 function resolveCronRunScheduleOwnership(params: {
@@ -316,7 +303,10 @@ export function applyJobResult(
                 }
               : notice,
           text: retiredAccount
-            ? retiredAccountPauseText(job)
+            ? buildAccountPauseNotice(
+                job,
+                job.inferenceBinding && buildProviderReauthCommand(job.inferenceBinding.provider),
+              )
             : (result.error ?? "Automation paused: its parent conversation is unavailable."),
         });
       }
