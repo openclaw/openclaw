@@ -125,11 +125,13 @@ openclaw browser system-profiles
 openclaw browser system-profiles --browser brave
 openclaw browser import-profile --browser chrome --system Default --into imported
 openclaw browser import-profile --system "Profile 1" --into work --domains google.com,youtube.com
-openclaw browser create-profile --name work --color "#FF5A36"
+openclaw browser create-profile --name work
 openclaw browser create-profile --name chrome-live --driver existing-session
 openclaw browser create-profile --name remote --cdp-url https://browser-host.example.com
 openclaw browser delete-profile --name work
 ```
+
+The `create-profile` command uses OpenClaw's default profile color, including when you pass the legacy `--color` option.
 
 Use a specific profile with `--browser-profile <name>` on any subcommand, for example `openclaw browser --browser-profile work tabs`.
 

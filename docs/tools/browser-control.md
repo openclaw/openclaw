@@ -316,7 +316,7 @@ openclaw browser close abcd1234
 
 ```bash
 openclaw browser profiles
-openclaw browser create-profile --name research --color "#0066CC"
+openclaw browser create-profile --name research
 openclaw browser create-profile --name attach --driver existing-session --cdp-url http://127.0.0.1:9222
 openclaw browser delete-profile --name research
 ```
