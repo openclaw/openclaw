@@ -97,7 +97,7 @@ export function parseCronNoOutputTimeoutOption(opts: Record<string, unknown>): n
     (typeof opts.outputTimeoutSeconds === "string" || typeof opts.outputTimeoutSeconds === "number"
       ? opts.outputTimeoutSeconds
       : undefined);
-  return parseCronIntegerOption(raw, "--no-output-timeout-seconds");
+  return parseCronIntegerOption(raw, "--no-output-timeout-seconds", "non-negative");
 }
 
 export function parseCronCommandEnv(values: unknown): Record<string, string> | undefined {
