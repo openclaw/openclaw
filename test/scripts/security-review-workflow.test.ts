@@ -166,6 +166,7 @@ describe("security review workflow trust boundaries", () => {
     expect(workflow.jobs.review?.concurrency).toEqual({
       group: "security-review-${{ matrix.head }}",
       "cancel-in-progress": false,
+      queue: "max",
     });
     expect(workflow.jobs.review?.strategy).toEqual({
       "fail-fast": false,
