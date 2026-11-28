@@ -20,14 +20,12 @@ function fail(
 ) {
   callGateway.mockRejectedValueOnce(new GatewayClientRequestError({ code, message, details }));
 }
-function expectBounded(result: Result, details?: Record<string, unknown>) {
+function expectBounded(result: Result, details: Record<string, unknown>) {
   expect(Buffer.byteLength(json(result.details), "utf8")).toBeLessThanOrEqual(3_840);
-  if (details) {
-    expect(result).toMatchObject({
-      details,
-      content: [{ type: "text", text: json(result.details) }],
-    });
-  }
+  expect(result).toMatchObject({
+    details,
+    content: [{ type: "text", text: json(result.details) }],
+  });
 }
 function expectFailure(result: Result, details: Record<string, unknown>) {
   expect(result).toMatchObject({ isError: true });
