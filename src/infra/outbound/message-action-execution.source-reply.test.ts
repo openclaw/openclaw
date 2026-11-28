@@ -20,7 +20,7 @@ vi.mock("../../tts/tts.runtime.js", () => ({
 
 function registerTextPlugin(
   id: string,
-  overrides: Partial<ChannelPlugin> = {},
+  overrides: Partial<ChannelPlugin>,
   accountIds = ["default"],
 ) {
   const plugin: ChannelPlugin = {
@@ -49,7 +49,7 @@ function registerSlackTextPlugin(accountIds = ["default"]) {
 type ActionInput = Parameters<typeof runMessageAction>[0];
 function sourceInput(
   toolContext: ChannelThreadingToolContext,
-  input: Partial<ActionInput> = {},
+  input: Partial<ActionInput>,
 ): ActionInput {
   return {
     cfg: {},
@@ -72,7 +72,7 @@ const slackSourceContext = {
   currentChannelId: "channel:C123",
 };
 
-function runSlackSourceReply(input: Partial<ActionInput> = {}) {
+function runSlackSourceReply(input: Partial<ActionInput>) {
   return runMessageAction(
     sourceInput(slackSourceContext, {
       cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
