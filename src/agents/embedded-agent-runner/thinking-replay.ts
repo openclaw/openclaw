@@ -2,7 +2,7 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "../runtime/index.js";
 import { isThinkingLikeBlock } from "../thinking-block.js";
-import { isAssistantMessageWithContent } from "../thinking-signatures.js";
+import { isAssistantMessageWithContent, unsignProgressUpdateText } from "../thinking-signatures.js";
 
 type AssistantContentBlock = Extract<AgentMessage, { role: "assistant" }>["content"][number];
 
@@ -19,6 +19,8 @@ export type ThinkingReplayAdapter<T, B> = {
   thinking(block: B): boolean;
   signature(block: B): boolean;
   toolCall(block: B): boolean;
+  /** Visible text that replays as signed thinking loses its signature with the thinking. */
+  unsign?(block: B): B;
   replace(message: T, content: B[], placeholder: string): T;
 };
 
@@ -44,13 +46,14 @@ export function transformThinkingReplay<T, B>(
       return message;
     }
     const content = adapter.content(message)!;
-    const filtered = content.filter(
-      (block) =>
-        !adapter.thinking(block) ||
-        (operation === "invalid-signatures" && adapter.signature(block)),
-    );
+    const filtered = content.flatMap((block) => {
+      if (adapter.thinking(block)) {
+        return operation === "invalid-signatures" && adapter.signature(block) ? [block] : [];
+      }
+      return operation === "invalid-signatures" ? [block] : [adapter.unsign?.(block) ?? block];
+    });
     const next =
-      filtered.length === content.length
+      filtered.length === content.length && filtered.every((block, i) => block === content[i])
         ? message
         : adapter.replace(message, filtered, OMITTED_ASSISTANT_REASONING_TEXT);
     touched ||= next !== message;
@@ -81,6 +84,7 @@ const thinkingArrayAdapter: ThinkingReplayAdapter<AgentMessage, AssistantContent
   thinking: isThinkingLikeBlock,
   signature: hasReplayableThinkingSignature,
   toolCall: isToolCallBlock,
+  unsign: unsignProgressUpdateText,
   replace: (message, content, placeholder) =>
     message.role === "assistant"
       ? {

@@ -36,6 +36,7 @@ import {
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeXhighEffort,
 } from "../providers/anthropic-model-contract.js";
+import { readAnthropicProgressUpdateSignature } from "../providers/anthropic-progress-update.js";
 import { ANTHROPIC_SERVER_SIDE_FALLBACKS } from "../providers/anthropic-server-fallback.js";
 import {
   applyAnthropicThinkingBindingControls,
@@ -311,7 +312,18 @@ export async function buildAnthropicRequest(
       let omittedThinking = false;
       for (const block of msg.content) {
         if (block.type === "text") {
-          if (block.text.trim().length > 0) {
+          const progressUpdateSignature = readAnthropicProgressUpdateSignature(block.textSignature);
+          if (
+            progressUpdateSignature &&
+            (replayThinkingEnabled || i === activeToolTurnAssistantIndex)
+          ) {
+            // Shown as text, but Anthropic expects its signed thinking block back unchanged.
+            blocks.push({
+              type: "thinking",
+              thinking: block.text,
+              signature: progressUpdateSignature,
+            });
+          } else if (block.text.trim().length > 0) {
             blocks.push({
               type: "text",
               text: sanitizeTransportPayloadText(block.text),

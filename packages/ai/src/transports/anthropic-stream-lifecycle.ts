@@ -1,7 +1,4 @@
-import type {
-  MessageCreateParams,
-  MessageCreateParamsStreaming,
-} from "@anthropic-ai/sdk/resources/messages.js";
+import type { MessageCreateParams } from "@anthropic-ai/sdk/resources/messages.js";
 import type { AssistantMessageEvent, Context, MaybePromise, Model } from "@openclaw/llm-core";
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import {
@@ -18,6 +15,7 @@ import {
   raiseClaudeCodeVersionFloor,
   readRequiredClaudeCodeVersion,
 } from "../providers/anthropic-model-contract.js";
+import { toAnthropicProgressUpdateText } from "../providers/anthropic-progress-update.js";
 import { applyAnthropicRefusal } from "../providers/anthropic-refusal.js";
 import {
   applyAnthropicFallbackBoundary,
@@ -41,6 +39,7 @@ import {
   type ToolArgumentPreviewSchedule,
 } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
+import { assertAnthropicPrewarmable, anthropicMessageEvents } from "./anthropic-cache-prewarm.js";
 import {
   createCompactionCapture,
   isAnthropicReplayRejection,
@@ -97,33 +96,6 @@ type SentAnthropicRequest = {
   events: AsyncIterable<object> | Iterable<object>;
   maxTokens: number;
 };
-
-/**
- * Anthropic answers `max_tokens: 0` only without streaming, and refuses it when the request
- * implies output: budget thinking, a forced tool, or structured output. Changing any of those
- * would change the cached prefix, so a prewarm keeps the request and refuses instead.
- */
-function assertAnthropicPrewarmable(body: MessageCreateParamsStreaming): void {
-  const toolChoice = body.tool_choice?.type;
-  if (body.thinking?.type === "enabled") {
-    throw new Error("Anthropic cache prewarm is not available with budget thinking.");
-  }
-  if (toolChoice === "any" || toolChoice === "tool") {
-    throw new Error("Anthropic cache prewarm is not available with a forced tool choice.");
-  }
-  if (body.output_config?.format) {
-    throw new Error("Anthropic cache prewarm is not available with structured output.");
-  }
-}
-
-/** A non-streamed message as the stream events the reducer already reads. */
-function anthropicMessageEvents(message: Record<string, unknown>): object[] {
-  return [
-    { type: "message_start", message: { ...message, content: [] } },
-    { type: "message_delta", delta: { stop_reason: message.stop_reason }, usage: message.usage },
-    { type: "message_stop" },
-  ];
-}
 
 /** Entry points retain their SDK/fetch adapters; request and terminal ownership is shared. */
 export async function runAnthropicStreamLifecycle(params: {
@@ -613,8 +585,16 @@ export async function runAnthropicStreamLifecycle(params: {
             if (block.type === "thinking" && pendingSignature !== undefined) {
               block.thinkingSignature = pendingSignature;
             }
+            const progressUpdate =
+              block.type === "thinking" ? toAnthropicProgressUpdateText(block) : undefined;
             if (block.type === "toolCall") {
               sealedToolCalls.push({ block, contentIndex: index });
+            } else if (progressUpdate) {
+              // Only the completed signature identifies a progress update, so its
+              // streamed thinking deltas are re-emitted as the visible text block.
+              blocks[index] = progressUpdate;
+              emitContentStart("text", index, progressUpdate.text);
+              emitContentEnd(progressUpdate, index);
             } else {
               emitContentEnd(block, index);
             }
