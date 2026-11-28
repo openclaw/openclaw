@@ -13,6 +13,7 @@ import {
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
 import {
+  createNotAttemptedOAuthRefreshError,
   createOAuthRefreshError,
   createOAuthRefreshResponseError,
   readOAuthRefreshErrorReason,
@@ -195,10 +196,15 @@ async function requestXaiOAuthRefresh(
   const maxChallengeAttempts = 3;
   for (let attempt = 1; attempt <= maxChallengeAttempts; attempt++) {
     let result: Awaited<ReturnType<typeof fetchXaiOAuth>>;
+    let responseSeen = false;
     try {
       result = await fetchXaiOAuth(
         endpoint,
-        {},
+        {
+          onResponse: () => {
+            responseSeen = true;
+          },
+        },
         {
           grant_type: "refresh_token",
           client_id: XAI_OAUTH_CLIENT_ID,
@@ -206,6 +212,14 @@ async function requestXaiOAuthRefresh(
         },
       );
     } catch (cause) {
+      // A response of any kind means the provider may have consumed the rotating
+      // grant; only a provably undispatched failure preserves it.
+      if (!responseSeen) {
+        const notAttempted = createNotAttemptedOAuthRefreshError("xAI OAuth refresh", cause);
+        if (notAttempted) {
+          throw notAttempted;
+        }
+      }
       // No headers does not mean the server did not consume a rotating grant.
       throw unknownRefreshError("transport failed", "token-response", cause);
     }

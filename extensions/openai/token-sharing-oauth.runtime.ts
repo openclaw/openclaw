@@ -5,6 +5,7 @@ import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth-result";
 import { startProviderOAuthLoopbackCallbackServer } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
+  createNotAttemptedOAuthRefreshError,
   createOAuthRefreshError,
   createOAuthRefreshResponseError,
   generateOAuthState,
@@ -45,77 +46,99 @@ type LoginOwner = Pick<ProviderAuthContext, "signal" | "assertCurrent">;
 async function requestJson(url: string, owner: LoginOwner, body?: URLSearchParams) {
   owner.signal?.throwIfAborted();
   owner.assertCurrent?.();
-  return await withOpenAIOAuthResponse(
-    {
-      url,
-      policy: { hostnameAllowlist: ["auth.openai.com"] },
-      mode: "trusted_env_proxy",
-      requireHttps: true,
-      maxRedirects: 0,
-      capture: false,
-      timeoutMs: 30_000,
-      signal: owner.signal,
-      beforeRequest: owner.assertCurrent,
-      auditContext: "openai-token-sharing-oauth",
-      ...(body
-        ? {
-            init: {
-              method: "POST",
-              headers: { "Content-Type": "application/x-www-form-urlencoded" },
-              body,
-            },
-          }
-        : {}),
-    },
-    async (response) => {
-      const bytes = await readResponseWithLimit(response, MAX_RESPONSE_BYTES);
-      owner.signal?.throwIfAborted();
-      owner.assertCurrent?.();
-      let json: Record<string, unknown> | undefined;
-      try {
-        json = asOptionalRecord(
-          JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)),
-        );
-      } catch {
-        // Provider bodies can contain credentials: report bounded status, never the body.
-      }
-      if (
-        body?.get("grant_type") === "refresh_token" &&
-        (!response.ok || json?.error !== undefined)
-      ) {
-        const failure = createOAuthRefreshResponseError(
-          "ChatGPT token-sharing refresh",
-          response.status,
-          json,
-        );
-        if (json?.error === "invalid_grant") {
-          failure.message =
-            "ChatGPT connection expired or was revoked. Sign in again to reconnect.";
+  // Only refresh attempts own a refresh claim; login/JWKS transport failures
+  // must never be mistaken for a preserved grant.
+  const isRefresh = body?.get("grant_type") === "refresh_token";
+  let responseSeen = false;
+  try {
+    return await withOpenAIOAuthResponse(
+      {
+        url,
+        policy: { hostnameAllowlist: ["auth.openai.com"] },
+        mode: "trusted_env_proxy",
+        requireHttps: true,
+        maxRedirects: 0,
+        capture: false,
+        timeoutMs: 30_000,
+        signal: owner.signal,
+        beforeRequest: owner.assertCurrent,
+        onResponse: () => {
+          responseSeen = true;
+        },
+        auditContext: "openai-token-sharing-oauth",
+        ...(body
+          ? {
+              init: {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body,
+              },
+            }
+          : {}),
+      },
+      async (response) => {
+        const bytes = await readResponseWithLimit(response, MAX_RESPONSE_BYTES);
+        owner.signal?.throwIfAborted();
+        owner.assertCurrent?.();
+        let json: Record<string, unknown> | undefined;
+        try {
+          json = asOptionalRecord(
+            JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)),
+          );
+        } catch {
+          // Provider bodies can contain credentials: report bounded status, never the body.
         }
-        throw failure;
-      }
-      if (!response.ok) {
-        const invalidGrant = json?.error === "invalid_grant";
-        throw Object.assign(
-          new Error(
-            invalidGrant
-              ? "ChatGPT connection expired or was revoked. Sign in again to reconnect."
-              : `ChatGPT authentication request failed (HTTP ${response.status}). Retry sign-in later.`,
-          ),
-          {
-            oauthRefreshFailure: {
-              status: response.status,
-              ...(invalidGrant ? { reason: "invalid_grant", errorType: "invalid_grant" } : {}),
+        if (
+          body?.get("grant_type") === "refresh_token" &&
+          (!response.ok || json?.error !== undefined)
+        ) {
+          const failure = createOAuthRefreshResponseError(
+            "ChatGPT token-sharing refresh",
+            response.status,
+            json,
+          );
+          if (json?.error === "invalid_grant") {
+            failure.message =
+              "ChatGPT connection expired or was revoked. Sign in again to reconnect.";
+          }
+          throw failure;
+        }
+        if (!response.ok) {
+          const invalidGrant = json?.error === "invalid_grant";
+          throw Object.assign(
+            new Error(
+              invalidGrant
+                ? "ChatGPT connection expired or was revoked. Sign in again to reconnect."
+                : `ChatGPT authentication request failed (HTTP ${response.status}). Retry sign-in later.`,
+            ),
+            {
+              oauthRefreshFailure: {
+                status: response.status,
+                ...(invalidGrant ? { reason: "invalid_grant", errorType: "invalid_grant" } : {}),
+              },
             },
-          },
-        );
+          );
+        }
+        if (!json) {
+          throw new Error("ChatGPT authentication returned an invalid response.");
+        }
+        return json;
+      },
+    );
+  } catch (error) {
+    // A response of any kind means the provider may have consumed the rotating
+    // grant; only a provably undispatched refresh failure preserves it.
+    if (isRefresh && !responseSeen) {
+      const notAttempted = createNotAttemptedOAuthRefreshError(
+        "ChatGPT token-sharing refresh",
+        error,
+      );
+      if (notAttempted) {
+        throw notAttempted;
       }
-      if (!json) {
-        throw new Error("ChatGPT authentication returned an invalid response.");
-      }
-      return json;
-    },
-  );
+    }
+    throw error;
+  }
 }
 
 async function verifyIdentity(
