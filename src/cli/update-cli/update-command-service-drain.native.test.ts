@@ -47,7 +47,7 @@ vi.mock("node:fs", async (importOriginal) => {
     // A unified cgroup hierarchy, as on current systemd hosts.
     statfsSync: ((dir: string) =>
       dir === "/sys/fs/cgroup"
-        ? { ...actual.statfsSync("/"), type: 0x63677270 }
+        ? Object.assign(actual.statfsSync("/"), { type: 0x63677270 })
         : actual.statfsSync(dir)) as typeof actual.statfsSync,
   };
   return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };

@@ -24,13 +24,13 @@ function cgroupTree(mounts: Record<string, number>, files: Record<string, string
   vi.spyOn(fs, "statfsSync").mockImplementation(((dir: string) => {
     const relative = path.relative(root, dir);
     const type = mounts[relative === "" ? "." : relative];
-    return type === undefined ? statfs(dir) : { ...statfs(root), type };
+    return type === undefined ? statfs(dir) : Object.assign(statfs(root), { type });
   }) as typeof fs.statfsSync);
   return root;
 }
 
 describe("systemd unit cgroup emptiness", () => {
-  it.each([
+  it.each<{ name: string; mounts: Record<string, number>; base: string }>([
     { name: "unified", mounts: { ".": CGROUP2 }, base: "" },
     { name: "hybrid", mounts: { unified: CGROUP2 }, base: "unified" },
   ])("reads the unit's population on a $name hierarchy", ({ mounts, base }) => {

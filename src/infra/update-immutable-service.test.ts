@@ -173,7 +173,7 @@ describe("immutable activation service", () => {
     const statfs = fsSync.statfsSync;
     vi.spyOn(fsSync, "statfsSync").mockImplementation(((dir: string) =>
       dir === "/sys/fs/cgroup"
-        ? { ...statfs("/"), type: 0x63677270 }
+        ? Object.assign(statfs("/"), { type: 0x63677270 })
         : statfs(dir)) as typeof fsSync.statfsSync);
     const read = fsSync.readFileSync;
     vi.spyOn(fsSync, "readFileSync").mockImplementation((file, ...args) => {
