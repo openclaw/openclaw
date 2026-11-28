@@ -265,6 +265,7 @@ test("handles auth, wake, and agent flows", async ({ signal }) => {
         delivery: { accountId: "work" },
       },
     });
+    expect(call.job.deleteAfterRun).toBe(true);
     expect(call.executionIdentity).toEqual({
       ingress: { kind: "webhook", boundary: "gateway.hooks.agent", state: "present" },
     });
@@ -485,6 +486,7 @@ test("enforces templated vs static mapping session keys on /hooks/<mapping>", as
         payload: { externalContentSource: "gmail" },
       },
     });
+    expect(staticCall.job.deleteAfterRun).toBe(false);
     drainSystemEvents(resolveMainKey());
   });
 });
@@ -725,7 +727,10 @@ test.each([
     config: { allowRequestSessionKey: true, allowedSessionKeyPrefixes: ["hook:"] },
     payload: { sessionKey: "hook:mode:42" },
     variants: [{ sessionMode: "isolated" }, { sessionMode: "persistent" }],
-    jobs: [{ sessionTarget: "isolated" }, { sessionTarget: "session:hook:mode:42" }],
+    jobs: [
+      { sessionTarget: "isolated", deleteAfterRun: true },
+      { sessionTarget: "session:hook:mode:42", deleteAfterRun: false },
+    ],
   },
   {
     scope: "account-id",

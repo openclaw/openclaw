@@ -313,6 +313,8 @@ export function createGatewayHookDispatcher(params: {
       updatedAtMs: nowMs,
       schedule: { kind: "at", at: resolveTimestampMsToIsoString(nowMs) },
       sessionTarget: value.sessionMode === "persistent" ? `session:${sessionKey}` : "isolated",
+      // Transient hook jobs are never stored, so cron retention misses their cron:<jobId> sessions.
+      deleteAfterRun: value.sessionMode !== "persistent",
       wakeMode: "now",
       payload: {
         kind: "agentTurn",
