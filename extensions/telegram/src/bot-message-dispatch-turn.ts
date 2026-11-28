@@ -409,7 +409,7 @@ function createTelegramDispatchReplyOptions(
         ctx.provider,
         ctx.model,
       );
-      onModelSelected(ctx);
+      onModelSelected?.(ctx);
     },
   };
 }
