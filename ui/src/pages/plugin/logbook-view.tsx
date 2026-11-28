@@ -183,17 +183,19 @@ function LogbookCard(props: {
           {props.formatClock(props.card.endMs, props.timeZone)}
         </span>
         <span class="logbook-card__stripe" aria-hidden="true" />
-        <span class="logbook-card__heading">
-          <span class="logbook-card__title">{props.card.title}</span>
-          <span class="logbook-card__summary">{props.card.summary}</span>
-        </span>
-        <span class="logbook-card__meta">
-          <span class="logbook-card__category">{props.card.category}</span>
-          <Show when={props.card.appPrimary}>
-            <span class="logbook-card__app">{props.card.appPrimary}</span>
-          </Show>
-          <span class="logbook-card__duration">
-            {formatDurationCompact(props.card.endMs - props.card.startMs) ?? "0s"}
+        <span class="logbook-card__content">
+          <span class="logbook-card__heading">
+            <span class="logbook-card__title">{props.card.title}</span>
+            <span class="logbook-card__summary">{props.card.summary}</span>
+          </span>
+          <span class="logbook-card__meta">
+            <span class="logbook-card__category">{props.card.category}</span>
+            <Show when={props.card.appPrimary}>
+              <span class="logbook-card__app">{props.card.appPrimary}</span>
+            </Show>
+            <span class="logbook-card__duration">
+              {formatDurationCompact(props.card.endMs - props.card.startMs) ?? "0s"}
+            </span>
           </span>
         </span>
       </button>
