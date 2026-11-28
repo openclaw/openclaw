@@ -28,6 +28,7 @@ import {
 } from "../infra/scratch-cleanup.js";
 import {
   isGatewayWorkAdmissionClosed,
+  onGatewaySuspendAdmissionChange,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { prepareScratchMaintenanceTargets } from "./scratch-maintenance-custody.js";
@@ -97,19 +98,22 @@ export function startWorktreeMaintenance(params: {
       );
     }
   };
-  const pause = (delayMs: number) =>
+  const pause = (delayMs: number, signal: AbortSignal) =>
     new Promise<void>((resolve, reject) => {
-      const abort = () =>
-        reject(toErrorObject(scheduler.signal.reason, "Worktree cleanup canceled"));
-      scheduler.signal.addEventListener("abort", abort, { once: true });
-      scheduler.schedule({
+      signal.throwIfAborted();
+      const abort = () => {
+        job.cancel();
+        reject(toErrorObject(signal.reason, "Worktree cleanup canceled"));
+      };
+      const job = scheduler.schedule({
         id: `maintenance:worktrees:resume:${randomUUID()}`,
         delayMs,
         run: () => {
-          scheduler.signal.removeEventListener("abort", abort);
+          signal.removeEventListener("abort", abort);
           resolve();
         },
       });
+      signal.addEventListener("abort", abort, { once: true });
     });
   const warmPending = new Map<
     string,
@@ -216,7 +220,19 @@ export function startWorktreeMaintenance(params: {
         error: null,
       };
       receipt = current;
+      // Suspension closes admission only while it inspects work, so a sweep paused
+      // for pacing or host pressure would never notice. It yields when a suspension
+      // starts; the next pass resumes the backlog. The guard reports the yield too, so
+      // gc ends the pass instead of recording the interrupted wait as a failed removal.
+      // A removal past its wait finishes first: it has pinned its recovery ref, and
+      // stopping it would strand it.
+      const yielded = new AbortController();
+      const signal = AbortSignal.any([scheduler.signal, yielded.signal]);
+      let removing = false;
       const assertCurrent = () => {
+        if (!removing) {
+          yielded.signal.throwIfAborted();
+        }
         assertActive();
         const nextConfig = params.getRuntimeConfig();
         const publication = getRuntimeConfigSnapshotMetadata();
@@ -234,23 +250,30 @@ export function startWorktreeMaintenance(params: {
           id: "maintenance:worktrees:run",
           delayMs: 0,
           run: () => {
+            const stopYielding = onGatewaySuspendAdmissionChange((phase) => {
+              if (phase !== "accepting") {
+                yielded.abort(new Error("Worktree cleanup yielded to Gateway suspension"));
+              }
+            });
             current.state = "running";
             current.startedAt = scheduler.now();
             let batchStartedAt = scheduler.now();
             let batchItems = 0;
             const beforeRemoval = async () => {
+              removing = false;
               assertCurrent();
               if (scheduler.now() < nextRemovalAt) {
-                await pause(nextRemovalAt - scheduler.now());
+                await pause(nextRemovalAt - scheduler.now(), signal);
               }
               while (await hasIoPressure()) {
                 assertCurrent();
-                await pause(PRESSURE_BACKOFF_MS);
+                await pause(PRESSURE_BACKOFF_MS, signal);
               }
               assertCurrent();
               nextRemovalAt = scheduler.now() + REMOVAL_INTERVAL_MS;
               batchStartedAt = scheduler.now();
               batchItems = 0;
+              removing = true;
             };
             // The scheduler already detaches this job and joins its tracked cleanup.
             // Preserve that work scope when admitting the maintenance root.
@@ -275,11 +298,11 @@ export function startWorktreeMaintenance(params: {
                       now: scheduler.now(),
                       assertCurrent: assertScratchCurrent,
                       pause: async (milliseconds) => {
-                        await pause(milliseconds);
+                        await pause(milliseconds, signal);
                         scratchPressure = await hasIoPressure();
                       },
                       cursor: scratchCursor,
-                      signal: scheduler.signal,
+                      signal,
                       onProgress: (progress) => {
                         current.scratch = progress;
                       },
@@ -312,23 +335,25 @@ export function startWorktreeMaintenance(params: {
                   },
                   beforeTemplateRemoval: beforeRemoval,
                   checkpoint: async (progress) => {
+                    removing = false;
                     Object.assign(current, progress);
                     assertCurrent();
                     if (++batchItems < 8 && scheduler.now() - batchStartedAt < 5_000) {
                       return;
                     }
-                    await pause(1_000);
+                    await pause(1_000, signal);
                     assertCurrent();
                     batchItems = 0;
                     batchStartedAt = scheduler.now();
                   },
                 });
+                removing = false;
                 assertCurrent();
                 // Archive wakes reclaim checkouts; the hourly job owns the global CAS scan.
                 if (manifestSweepPending) {
                   manifestSweepPending = false;
                   try {
-                    await sweepLocalWorkspaceManifests({ signal: scheduler.signal, assertCurrent });
+                    await sweepLocalWorkspaceManifests({ signal, assertCurrent });
                   } catch (error) {
                     manifestSweepPending = true;
                     throw error;
@@ -342,16 +367,20 @@ export function startWorktreeMaintenance(params: {
                 current.state = "completed";
               },
               "runtime:worktree-cleanup",
-              scheduler.signal,
+              signal,
             )
               .catch((error: unknown) => {
                 current.state = "failed";
                 current.error = error instanceof Error ? error.message : String(error);
-                params.onError(current.error);
+                if (!yielded.signal.aborted) {
+                  params.onError(current.error);
+                }
               })
               .finally(() => {
+                stopYielding();
                 current.completedAt = scheduler.now();
-                if (archivePending && isActive()) {
+                // A yielded pass leaves archives to the next pass, so a retried suspension finds it idle.
+                if (archivePending && !yielded.signal.aborted && isActive()) {
                   archivePending = false;
                   owner.request();
                 }
