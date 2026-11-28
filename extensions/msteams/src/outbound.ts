@@ -26,7 +26,7 @@ import {
 } from "../runtime-api.js";
 import { resolveDefaultMSTeamsAccountId, resolveMSTeamsAccountConfig } from "./accounts.js";
 import { msteamsOutboundConfig, resolveMSTeamsEffectiveTextChunkLimit } from "./outbound-config.js";
-import { buildMSTeamsPresentationCard } from "./presentation.js";
+import { buildMSTeamsPresentationCard, hasOnlyFallbackMSTeamsCharts } from "./presentation.js";
 import { sendAdaptiveCardMSTeams, sendMessageMSTeams, sendPollMSTeams } from "./send.js";
 
 type MSTeamsSendConfig = Parameters<typeof sendMessageMSTeams>[0]["cfg"];
@@ -164,8 +164,13 @@ async function sendMSTeamsOutbound(
 
 export const msteamsOutbound: ChannelOutboundAdapter = {
   ...msteamsOutboundConfig,
-  renderPresentation: ({ payload, presentation }) => {
-    if (payload.mediaUrl || payload.mediaUrls?.length) {
+  renderPresentation: ({ payload, presentation, sourcePresentation }) => {
+    if (
+      payload.mediaUrl ||
+      payload.mediaUrls?.length ||
+      (payload.presentationTextMode === "fallback" &&
+        hasOnlyFallbackMSTeamsCharts(sourcePresentation ?? presentation))
+    ) {
       return null;
     }
     const card = buildMSTeamsPresentationCard({

@@ -33,6 +33,7 @@ export async function renderPresentationForDelivery(
     capabilities: handler.presentationCapabilities,
   });
   const textIsFallback = payload.presentationTextMode === "fallback";
+  const authoredFallbackText = textIsFallback && payload.text?.trim() ? payload.text : undefined;
   const countDataBlocks = (blocks: readonly MessagePresentationBlock[]) =>
     blocks.filter((block) => block.type === "table" || block.type === "chart").length;
   const hasInteractiveBlocks = presentation.blocks.some(
@@ -42,8 +43,7 @@ export async function renderPresentationForDelivery(
   // remains, the producer's authored fallback text beats generic block
   // flattening; skip the channel renderer so that text survives verbatim.
   if (
-    textIsFallback &&
-    payload.text?.trim() &&
+    authoredFallbackText &&
     !hasInteractiveBlocks &&
     countDataBlocks(presentation.blocks) > 0 &&
     countDataBlocks(adaptedPresentation.blocks) === 0
@@ -64,11 +64,11 @@ export async function renderPresentationForDelivery(
   // Native controls may be clipped or split; plain fallback must retain authored labels.
   return {
     ...withoutPresentation(payload),
-    text: textIsFallback
-      ? (payload.text ?? renderMessagePresentationFallbackText({ presentation }))
-      : renderMessagePresentationFallbackText({
-          text: payload.text,
-          presentation,
-        }),
+    text:
+      authoredFallbackText ??
+      renderMessagePresentationFallbackText({
+        text: textIsFallback ? undefined : payload.text,
+        presentation,
+      }),
   };
 }

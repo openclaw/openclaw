@@ -39,7 +39,7 @@ import {
   sendMSTeamsMessages,
 } from "./messenger.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
-import { MSTEAMS_PRESENTATION_CAPABILITIES } from "./presentation.js";
+import { hasOnlyFallbackMSTeamsCharts, MSTEAMS_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import { createTeamsReplyStreamController } from "./reply-stream-controller.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
@@ -353,7 +353,13 @@ export function createMSTeamsReplyDispatcher(params: {
         const fallbackPayload = await renderPresentationForDelivery(
           {
             presentationCapabilities: MSTEAMS_PRESENTATION_CAPABILITIES,
-            renderPresentation: (adapted) => {
+            renderPresentation: (adapted, sourcePresentation) => {
+              if (
+                adapted.presentationTextMode === "fallback" &&
+                hasOnlyFallbackMSTeamsCharts(sourcePresentation ?? adapted.presentation)
+              ) {
+                return null;
+              }
               nativePayload = adapted;
               return adapted;
             },
