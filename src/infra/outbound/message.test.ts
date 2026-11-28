@@ -81,7 +81,7 @@ function expectDeliveryCallFields(expected: Record<string, unknown> = {}) {
 }
 
 describe("sendMessage", () => {
-  const send = (params: Partial<Parameters<typeof sendMessage>[0]> = {}) =>
+  const send = (params: Partial<Parameters<typeof sendMessage>[0]>) =>
     sendMessage({ cfg: {}, channel: "forum", to: "123456", content: "hi", ...params });
   const expectDirectResult = (
     result: Awaited<ReturnType<typeof sendMessage>>,
