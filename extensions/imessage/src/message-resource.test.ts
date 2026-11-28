@@ -136,11 +136,13 @@ describe("iMessage provider resource binding", () => {
       };
       const eventId = "51c9568a-f631-4b6f-a64d-c9a190b9f8fb";
       const result = await send(eventId, "implicit");
+      expect(request).toHaveBeenCalledTimes(1);
       expect(request).toHaveBeenCalledWith(
         "send",
-        expect.not.objectContaining({ reply_to: expect.anything() }),
+        expect.objectContaining({ chat_id: 1, text: "synthetic announcement" }),
         expect.anything(),
       );
+      expect(request.mock.calls[0]?.[1]).not.toHaveProperty("reply_to");
       expect(result.receipt?.replyToId).toBeUndefined();
       request.mockClear();
       await expect(send(eventId, "explicit")).rejects.toThrow("does not belong");
