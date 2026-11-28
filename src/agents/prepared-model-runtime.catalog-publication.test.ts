@@ -435,7 +435,6 @@ describe("catalog publication session rows", () => {
       const rotated = rotationProfile(kind, true);
       if (kind === "oauth") {
         // Rotation preserves this account's identity; there is no discovery to await.
-        const before = rows.materializedCount;
         const workerCalls = mocks.runPreparedModelCatalogWorker.mock.calls.length;
         persistProfile(rotated);
         const owner = await currentOwner();
@@ -445,6 +444,12 @@ describe("catalog publication session rows", () => {
         expect(
           getPreparedModelFullCatalogAuth(retained)?.authStore.profiles["custom:synthetic"],
         ).toEqual(rotated);
+        expect(retained.entries).toMatchObject([model]);
+        // Settle the owner handoff before measuring steady-state row reuse.
+        await settleCatalog();
+        expect((await list()).sessions).toEqual(initial.sessions);
+        const before = rows.materializedCount;
+        await owner.loadFullModelCatalog!({ changedOnly: true });
         await settleCatalog();
         expect((await list()).sessions).toEqual(initial.sessions);
         expect(rows.dirtyRowCount).toBe(0);
