@@ -203,6 +203,16 @@ describe("channels plugin presentation metadata", () => {
 });
 
 describe("channels setup access", () => {
+  it("shows the empty state only after status confirms there are no configured channels", () => {
+    const props = createProps(null);
+    const container = renderHub(props);
+    expect(container.querySelector(".channels-empty")).toBeNull();
+
+    props.channels.channelsSnapshot = channelSnapshot({});
+    renderChannelView(ChannelsView, props, container);
+    expect(container.querySelector(".channels-empty")).not.toBeNull();
+  });
+
   it("keeps unconfigured recommended channels available after one channel is configured", () => {
     const props = channelProps(
       { slack: { configured: true } },
