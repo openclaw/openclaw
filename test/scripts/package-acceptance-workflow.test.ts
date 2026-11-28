@@ -16107,7 +16107,14 @@ ${operation} plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
   });
 
   it("documents checked extended-stable dispatch instead of a raw-SHA workflow ref", () => {
-    const releaseCi = readFileSync(".agents/skills/release-openclaw-ci/SKILL.md", "utf8");
+    const readSkillDocs = (skillRoot: string) =>
+      listDirectoryTreeStrictSync(skillRoot)
+        .map((walkEntry) => walkEntry.relativePath)
+        .filter((name) => name.endsWith(".md"))
+        .toSorted()
+        .map((name) => readFileSync(`${skillRoot}/${name}`, "utf8"))
+        .join("\n");
+    const releaseCi = readSkillDocs(".agents/skills/release-openclaw-ci");
     // The CI page is an index over docs/ci/**. Read the whole tree so this
     // assertion follows the content instead of a single file path. The walk is
     // recursive because docs/ci pages are themselves split into subdirectories
@@ -16130,7 +16137,7 @@ ${operation} plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
         .toSorted()
         .map((name) => readFileSync(`docs/reference/full-release-validation/${name}`, "utf8")),
     ].join("\n");
-    const liveUpdater = readFileSync(".agents/skills/openclaw-live-updater/SKILL.md", "utf8");
+    const liveUpdater = readSkillDocs(".agents/skills/openclaw-live-updater");
 
     const canonicalExtendedStableDispatch = [
       'VALIDATION_SHA="<exact-candidate-sha>"',
