@@ -81,6 +81,7 @@ export type GitHubPublicationTranscriptReport = {
   sessionKey: string;
   agentId: string;
   result: SessionGitHubPublicationResult;
+  reusedExistingPullRequest?: true;
   /** Task custody remains source-bound; the initiating transcript is recorded durably. */
   origin?: GitHubPublicationOrigin;
   /** Initiating run, recovered from task origin when present. */

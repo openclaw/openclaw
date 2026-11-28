@@ -1,4 +1,3 @@
-import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { appendSessionTranscriptReport } from "../config/sessions/session-accessor.js";
@@ -21,7 +20,10 @@ import type { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils.
 
 const GITHUB_PUBLICATION_RESPONSE_PREFIX = "github-publication:";
 
-function formatGitHubPublicationResult(result: SessionGitHubPublicationResult): string {
+function formatGitHubPublicationResult({
+  result,
+  reusedExistingPullRequest,
+}: GitHubPublicationTranscriptReport): string {
   const publisher = result.publisher;
   const source =
     publisher?.source === "personal"
@@ -32,7 +34,10 @@ function formatGitHubPublicationResult(result: SessionGitHubPublicationResult): 
   const acting = publisher ? ` Using @${publisher.login} (${source}).` : "";
   switch (result.status) {
     case "published":
-      return `Published ${result.repository} branch ${result.branch}: ${result.url}${acting}`;
+      if (reusedExistingPullRequest) {
+        return `Reused the existing pull request for ${result.repository} branch ${result.branch}: ${result.url}. No new commit was pushed or CI run triggered by this request.${acting}`;
+      }
+      return `Pull request for ${result.repository} branch ${result.branch}: ${result.url}${acting}`;
     case "failed":
       return `${result.message} ${result.nextAction}${acting}`;
     case "publishing":
@@ -123,7 +128,7 @@ export async function reportGitHubPublicationTranscript(
       message: attachSessionTranscriptRunId(
         {
           role: "assistant",
-          content: [{ type: "text", text: formatGitHubPublicationResult(params.result) }],
+          content: [{ type: "text", text: formatGitHubPublicationResult(params) }],
           api: "openai-responses",
           provider: "openclaw",
           model: "gateway-publication",
