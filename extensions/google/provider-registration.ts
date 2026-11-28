@@ -16,10 +16,10 @@ import {
 } from "./provider-models.js";
 import {
   isOfficialGoogleAiStudioBaseUrl,
-  isGoogleVertexBaseUrl,
   normalizeGoogleProviderConfig,
   resolveGoogleFastModeSupport,
   resolveGoogleGenerativeAiTransport,
+  usesGoogleVertexTransport,
 } from "./provider-policy.js";
 
 const loadGenerativeAiStream = createLazyRuntimeSurface(
@@ -130,11 +130,7 @@ export function buildGoogleProvider(): ProviderPlugin {
         ctx,
       }),
     createStreamFn: ({ model }) => {
-      if (
-        model.api === "google-vertex" ||
-        (model.api === "google-generative-ai" &&
-          (model.provider === "google-vertex" || isGoogleVertexBaseUrl(model.baseUrl)))
-      ) {
+      if (usesGoogleVertexTransport(model)) {
         return async (...args) => (await loadVertexStream())(...args);
       }
       if (model.api === "google-generative-ai") {

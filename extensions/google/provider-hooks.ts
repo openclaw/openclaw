@@ -11,12 +11,19 @@ import {
   isGoogleVertexBaseUrl,
   resolveGoogleServiceTier,
   resolveGoogleThinkingProfile,
+  usesGoogleVertexTransport,
 } from "./provider-policy.js";
 import { sanitizeGoogleThinkingPayload } from "./thinking-api.js";
 
 export const GOOGLE_GEMINI_PROVIDER_HOOKS = {
   ...buildProviderReplayFamilyHooks({
     family: "google-gemini",
+    usesAppendOnlyRuntimeContext: (ctx) =>
+      usesGoogleVertexTransport({
+        api: ctx.model?.api ?? ctx.modelApi,
+        provider: ctx.model?.provider ?? ctx.provider,
+        baseUrl: ctx.model?.baseUrl,
+      }),
   }),
   ...buildProviderToolCompatFamilyHooks("gemini"),
   resolveThinkingProfile: resolveGoogleThinkingProfile,

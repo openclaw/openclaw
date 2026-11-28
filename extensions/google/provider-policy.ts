@@ -46,6 +46,19 @@ type GoogleProviderConfigLike = GoogleApiCarrier & {
 
 const GOOGLE_MODEL_ID_PROVIDERS = new Set(["google", "google-gemini-cli", "google-vertex"]);
 
+/** Match the actual stream route, including older configurations that name the Gemini API. */
+export function usesGoogleVertexTransport(model: {
+  api?: string | null;
+  provider: string;
+  baseUrl?: string;
+}): boolean {
+  return (
+    model.api === "google-vertex" ||
+    (model.api === "google-generative-ai" &&
+      (model.provider === "google-vertex" || isGoogleVertexBaseUrl(model.baseUrl)))
+  );
+}
+
 export function resolveGoogleGenerativeAiTransport<TApi extends string | null | undefined>(params: {
   provider?: string;
   api: TApi;
