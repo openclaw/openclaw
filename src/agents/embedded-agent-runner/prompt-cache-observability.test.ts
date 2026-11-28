@@ -209,7 +209,7 @@ describe("prompt cache observability", () => {
   });
 
   it("records whether the session's last request carried a cache key, with or without usage", () => {
-    const identity = { sessionId: scopedKey("last-cache-key") };
+    const identity = { sessionId: scopedKey("last-cache-key"), sessionKey: "agent:main:cache-key" };
     const send = (payload: Record<string, unknown>, modelApi = "openai-completions") => {
       beginOpenAIObservation({ ...identity, modelApi });
       const { encoded: _encoded, ...fingerprint } = prepareProviderPrompt({
@@ -221,9 +221,9 @@ describe("prompt cache observability", () => {
         ...identity,
         providerPrompt: { scopeDigest: "scope", ...fingerprint },
       });
-      return readLastPromptCacheKeyFact(identity.sessionId);
+      return readLastPromptCacheKeyFact(identity.sessionKey);
     };
-    expect(readLastPromptCacheKeyFact(identity.sessionId)).toBeUndefined();
+    expect(readLastPromptCacheKeyFact(identity.sessionKey)).toBeUndefined();
     expect(send({ model: "gpt-5.4", messages: [] })).toEqual({
       provider: "openai",
       modelId: "gpt-5.4",

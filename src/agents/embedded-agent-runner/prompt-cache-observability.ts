@@ -117,12 +117,13 @@ export function clearPromptCacheObservations(sessionId?: string): void {
 }
 registerSessionResourceCleanup(clearPromptCacheObservations);
 
-/** The session's most recent recorded request: its route and whether it carried a cache key. */
-export function readLastPromptCacheKeyFact(sessionId: string) {
+/** The chat's most recent recorded request: its route and whether it carried a cache key. */
+export function readLastPromptCacheKeyFact(sessionKey: string) {
+  const chat = sessionKey.trim();
   let last: PromptCacheTracker | undefined;
   // Insertion order is request order: each new request re-inserts its tracker.
   for (const tracker of trackers.values()) {
-    if (tracker.sessionId === sessionId) {
+    if (tracker.sessionKey === chat) {
       last = tracker;
     }
   }

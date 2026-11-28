@@ -674,8 +674,10 @@ describe("prepared status", () => {
     ["a keyless request to another model", "gpt-5.4-mini", {}, false],
   ] as const)("names the cache key only after %s", async (_, modelId, fields, shown) => {
     const sessionId = `status-cache-key-${modelId}-${shown}`;
+    const sessionKey = `agent:main:${sessionId}`;
     beginPromptCacheObservation({
       sessionId,
+      sessionKey,
       provider: "openai",
       modelId,
       modelApi: "openai-completions",
@@ -690,10 +692,16 @@ describe("prepared status", () => {
     });
     completePromptCacheObservation({
       sessionId,
+      sessionKey,
       providerPrompt: { scopeDigest: "scope", ...fingerprint },
     });
     const text = await buildStatusText(
-      params({ sessionEntry: entry({ sessionId }), provider: "openai", model: "gpt-5.4" }),
+      params({
+        sessionKey,
+        sessionEntry: entry({ sessionId }),
+        provider: "openai",
+        model: "gpt-5.4",
+      }),
     );
     expect(text.includes("cache key: not sent")).toBe(shown);
   });

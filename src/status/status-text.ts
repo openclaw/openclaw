@@ -262,9 +262,7 @@ export async function buildStatusReplyParts(
   });
   // The run's own record of its last request, never a second rule: only an OpenAI-style
   // request to the selected model that went out without prompt_cache_key is named.
-  const lastCacheKeyFact = sessionEntry?.sessionId
-    ? readLastPromptCacheKeyFact(sessionEntry.sessionId)
-    : undefined;
+  const lastCacheKeyFact = sessionKey ? readLastPromptCacheKeyFact(sessionKey) : undefined;
   const selectedCacheKey =
     lastCacheKeyFact &&
     !lastCacheKeyFact.cacheKeyPresent &&
