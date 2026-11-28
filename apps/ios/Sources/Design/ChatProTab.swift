@@ -464,7 +464,7 @@ struct ChatProTab: View {
     }
 
     private var headerNonMainSession: OpenClawChatSessionEntry? {
-        guard let viewModel, let session = viewModel.currentSessionEntry(),
+        guard let viewModel, let session = viewModel.activeSessionEntry(),
               session.isMain != true,
               !OpenClawChatSessionKey.matchesIncludingDefaultMainAlias(
                   viewModel.sessionKey,

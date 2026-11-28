@@ -101,6 +101,11 @@ extension OpenClawChatViewModel {
             })
     }
 
+    /// The open chat's row, including one the capped roster leaves out, such as an older chat.
+    public func activeSessionEntry() -> OpenClawChatSessionEntry? {
+        self.currentSessionEntry() ?? self.retainedActiveSession
+    }
+
     /// Session opt-in; hosts also apply their local trace preference.
     public var currentSessionReasoningVisible: Bool {
         (self.currentSessionEntry() ?? self.retainedActiveSession)?.reasoningLevel == "on"

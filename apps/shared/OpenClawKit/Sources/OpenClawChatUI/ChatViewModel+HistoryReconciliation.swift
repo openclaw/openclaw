@@ -873,7 +873,7 @@ extension OpenClawChatViewModel {
         guard self.canApplyHistory(request) else { return false }
         // A retained/cache-painted transcript is display, not evidence against a fresh empty page.
         let preservingOptimisticLocalMessages = preservingOptimisticLocalMessages && !self.isShowingCachedTranscript
-        self.applyHistoryReasoningLevel(payload.sessionInfo?.reasoningLevel)
+        self.applyHistorySessionInfo(payload)
         let replacingCanonicalHistory = replacingCanonicalHistory || request.replacingCanonicalHistory
         let isDelta = payload.kind == "delta"
         guard request.deltaCursor == self.historyDeltaCursor else { return false }
@@ -1040,13 +1040,23 @@ extension OpenClawChatViewModel {
         return true
     }
 
-    private func applyHistoryReasoningLevel(_ reasoningLevel: String?) {
-        guard let reasoningLevel else { return }
+    private func applyHistorySessionInfo(_ payload: OpenClawChatHistoryPayload) {
+        let reasoningLevel = payload.sessionInfo?.reasoningLevel
         if let key = self.currentSessionEntry()?.key,
            let index = self.sessions.firstIndex(where: { $0.key == key })
         {
-            self.sessions[index].reasoningLevel = reasoningLevel
-        } else {
+            if let reasoningLevel { self.sessions[index].reasoningLevel = reasoningLevel }
+            return
+        }
+        // An older chat can sit outside the capped roster; its history row still carries the title and project.
+        if var row = payload.sessionRow,
+           self.matchesCurrentSessionKey(incoming: row.key, current: self.sessionKey),
+           (row.updatedAt ?? 0) >= (self.retainedActiveSession?.updatedAt ?? 0)
+        {
+            row.agentId = OpenClawChatSessionKey.agentID(from: row.key) ?? row.agentId
+            row.reasoningLevel = reasoningLevel ?? self.retainedActiveSession?.reasoningLevel
+            self.retainedActiveSession = row
+        } else if let reasoningLevel {
             var entry = self.retainedActiveSession ?? OpenClawChatSessionEntry(key: self.sessionKey)
             entry.reasoningLevel = reasoningLevel
             self.retainedActiveSession = entry

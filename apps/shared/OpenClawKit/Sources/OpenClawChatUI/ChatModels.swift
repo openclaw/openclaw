@@ -1023,6 +1023,8 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
     public let messages: [AnyCodable]?
     public let thinkingLevel: String?
     public let sessionInfo: OpenClawChatSessionInfo?
+    /// The same `sessionInfo` object read as a full row, so a chat outside the capped roster keeps its title.
+    public let sessionRow: OpenClawChatSessionEntry?
     public let inFlightRun: OpenClawChatInFlightRun?
     public let inputConsumptions: [InputConsumption]?
     public let activity: [OpenClawChatHistoryActivity]?
@@ -1051,6 +1053,7 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
         self.messages = messages
         self.thinkingLevel = thinkingLevel
         self.sessionInfo = sessionInfo
+        self.sessionRow = nil
         self.inFlightRun = inFlightRun
         self.inputConsumptions = inputConsumptions
         self.activity = activity
@@ -1072,6 +1075,7 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
         self.messages = try values.decodeIfPresent([AnyCodable].self, forKey: .messages)
         self.thinkingLevel = try values.decodeIfPresent(String.self, forKey: .thinkingLevel)
         self.sessionInfo = try values.decodeIfPresent(OpenClawChatSessionInfo.self, forKey: .sessionInfo)
+        self.sessionRow = try? values.decodeIfPresent(OpenClawChatSessionEntry.self, forKey: .sessionInfo)
         self.inFlightRun = try values.decodeIfPresent(OpenClawChatInFlightRun.self, forKey: .inFlightRun)
         self.inputConsumptions = try values.decodeIfPresent([InputConsumption].self, forKey: .inputConsumptions)
         self.activity = try values.decodeIfPresent([OpenClawChatHistoryActivity].self, forKey: .activity)
@@ -1079,6 +1083,11 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
         self.olderCursor = ChatPayloadDecoding.trimmedNonEmptyString(
             try? values.decode(String.self, forKey: .olderCursor))
         self.hasMore = try? values.decode(Bool.self, forKey: .hasMore)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionKey, sessionId, messages, thinkingLevel, sessionInfo, inFlightRun, inputConsumptions
+        case activity, kind, deltaCursor, olderCursor, hasMore
     }
 }
 
