@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { acquireFileLock } from "@openclaw/fs-safe/file-lock";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir, resolveConfigPath } from "../config/paths.js";
 import { syncDirectoryIfSupported } from "../infra/directory-durability.js";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -130,10 +132,7 @@ export async function createTrialPending(
   return trial;
 }
 
-function ownerDead(lock: UpdateLock): boolean {
-  if (Date.now() >= lock.startedAt + lock.deadlineMs) {
-    return true;
-  }
+function ownerDead(lock: Pick<UpdateLock, "pid">): boolean {
   try {
     process.kill(lock.pid, 0);
     return false;
@@ -150,52 +149,69 @@ export async function readUpdateLock(
 }
 
 export async function acquireUpdateLock(
-  input: Pick<UpdateLock, "runId" | "pid" | "deadlineMs">,
+  input: Pick<UpdateLock, "runId" | "deadlineMs">,
   prefix = resolvePrefix(),
-): Promise<
-  | { acquired: true; lock: UpdateLock; previous?: UpdateLock }
-  | { acquired: false; lock: UpdateLock }
-> {
+): Promise<UpdateLockAcquisition> {
+  return takeUpdateLock(input, prefix);
+}
+
+type UpdateLockAcquisition =
+  | { acquired: true; lock: UpdateLock; release: () => Promise<void> }
+  | { acquired: false; lock: UpdateLock };
+
+async function takeUpdateLock(
+  input: Pick<UpdateLock, "runId" | "deadlineMs">,
+  prefix: string,
+  expected?: UpdateLock,
+): Promise<UpdateLockAcquisition> {
   const file = path.join(prefix, "releases", ".update.lock");
   await fs.mkdir(path.dirname(file), { recursive: true });
-  const lock: UpdateLock = { ...input, startedAt: Date.now() };
-  // Publish fully written bytes with an exclusive hard link: contenders never read an empty lock.
-  const temporary = `${file}.${process.pid}-${randomUUID()}`;
-  const handle = await fs.open(temporary, "wx", 0o600);
+  const lock: UpdateLock = { ...input, pid: process.pid, startedAt: Date.now() };
+  const canReclaim = (payload: unknown) => {
+    const incumbent = asNullableRecord(payload);
+    return Boolean(
+      incumbent &&
+      typeof incumbent.pid === "number" &&
+      (!expected ||
+        (incumbent.runId === expected.runId &&
+          incumbent.pid === expected.pid &&
+          incumbent.startedAt === expected.startedAt &&
+          incumbent.deadlineMs === expected.deadlineMs)) &&
+      ownerDead({ pid: incumbent.pid }),
+    );
+  };
   try {
-    await handle.writeFile(JSON.stringify(lock));
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  let previous: UpdateLock | undefined;
-  try {
-    for (;;) {
-      try {
-        await fs.link(temporary, file);
-        return { acquired: true, lock, ...(previous ? { previous } : {}) };
-      } catch (error) {
-        if (!hasErrnoCode(error, "EEXIST")) {
-          throw error;
-        }
-        const incumbent = await readUpdateLock(prefix);
-        if (!incumbent) {
-          continue;
-        }
-        if (!incumbent.dead) {
-          return { acquired: false, lock: incumbent };
-        }
-        previous = incumbent;
-        await fs.rm(file, { force: true });
+    // Budget expiry cannot evict a live preparer. The provider serializes dead-owner
+    // reclamation and binds release to this acquisition, preserving any successor.
+    const held = await acquireFileLock(file, {
+      managerKey: "openclaw.update.prepare",
+      lockPath: file,
+      payload: () => lock,
+      retry: { retries: 0 },
+      staleRecovery: "remove-if-unchanged",
+      shouldReclaim: ({ payload }) => canReclaim(payload),
+      shouldRemoveStaleLock: ({ payload }) => canReclaim(payload),
+      // Gateway readiness must still find an interrupted preparer's run after exit.
+      retainOnExit: true,
+    });
+    return { acquired: true, lock, release: () => held.release() };
+  } catch (error) {
+    if (hasErrnoCode(error, "file_lock_timeout") || hasErrnoCode(error, "file_lock_stale")) {
+      const incumbent = await readUpdateLock(prefix);
+      if (incumbent) {
+        return { acquired: false, lock: incumbent };
       }
     }
-  } finally {
-    await fs.rm(temporary, { force: true });
+    throw error;
   }
 }
 
-export async function releaseUpdateLock(prefix = resolvePrefix()): Promise<void> {
-  await fs.rm(path.join(prefix, "releases", ".update.lock"), { force: true });
+/** A stale readiness observation may retire only that dead owner, never its successor. */
+export async function retireDeadUpdateLock(expected: UpdateLock, prefix = resolvePrefix()) {
+  const held = await takeUpdateLock({ runId: expected.runId, deadlineMs: 0 }, prefix, expected);
+  if (held.acquired) {
+    await held.release();
+  }
 }
 
 export async function switchLink(target: string, prefix = resolvePrefix()): Promise<void> {

@@ -27,6 +27,7 @@ import {
   finishUpdateRunAsync,
   recordUpdateRunStepAsync,
 } from "../infra/update-run-write.async.js";
+import * as updateWrites from "../infra/update-run-write.async.js";
 import type * as ProcessExec from "../process/exec.js";
 import type { SpawnResult } from "../process/exec.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -42,7 +43,6 @@ import { VERSION } from "../version.js";
 import { announceReady } from "./gateway-trial.js";
 import * as trialStore from "./store.js";
 import {
-  acquireUpdateLock,
   allocateStaging,
   createTrialPending,
   publishStaging,
@@ -52,6 +52,7 @@ import {
   switchLink,
   writeTrial,
   type Trial,
+  type UpdateLock,
 } from "./store.js";
 
 const notices = vi.hoisted(() => [] as Array<{ runId: string; kind: string; status: string }>);
@@ -117,6 +118,20 @@ vi.mock("../gateway/update-run-watcher.js", async (importOriginal) => ({
 }));
 
 const directories: string[] = [];
+// These records model another process's custody, not a native handle held by this test.
+async function seedPreparationLock(input: Omit<UpdateLock, "startedAt">) {
+  const file = path.join(resolvePrefix(), "releases", ".update.lock");
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, JSON.stringify({ ...input, startedAt: Date.now() }));
+}
+
+async function seedDeadPreparationLock(runId: string) {
+  const owner = spawn(process.execPath, ["-e", "process.exit(0)"], { stdio: "ignore" });
+  await once(owner, "exit");
+  expect(owner.pid).toBeTypeOf("number");
+  await seedPreparationLock({ runId, pid: owner.pid!, deadlineMs: 60_000 });
+}
+
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_LAUNCHER_IPC", "");
 });
@@ -272,13 +287,14 @@ it.each(["succeeded", "rolled-back"] as const)(
       },
     };
     await writeTrial(trial);
-    await acquireUpdateLock({ runId: run.runId, pid: process.pid, deadlineMs: 0 });
+    await seedDeadPreparationLock(run.runId);
     const work = new AsyncWorkScope();
     const dispose = registerGatewayInstallationReplacementHandler(() => {});
     try {
       await work.run(() =>
         logGatewayReady({ getReadiness: createPreparedReadinessFixture(), log: { info: vi.fn() } }),
       );
+      expect(await readUpdateLock()).toBeNull();
     } finally {
       dispose();
     }
@@ -396,7 +412,7 @@ it.each(["acknowledgement", "disconnect"] as const)(
 );
 
 it.each(["pending", "trial", "restoring"] as const)(
-  "leaves a %s trial running when its preparation lock expires",
+  "leaves a %s trial running after its preparer exits",
   async (phase) => {
     const state = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trial-"));
     directories.push(state);
@@ -414,7 +430,8 @@ it.each(["pending", "trial", "restoring"] as const)(
       attempts: 1,
       createdAt: Date.now(),
     });
-    await acquireUpdateLock({ runId: run.runId, pid: process.pid, deadlineMs: 0 });
+    await seedDeadPreparationLock(run.runId);
+    expect(await readUpdateLock()).toMatchObject({ runId: run.runId, dead: true });
     await announceReady(null);
     expect(await getUpdateRunAsync(run.runId)).toMatchObject({ status: "running" });
     expect(await readTrial()).toMatchObject({ runId: run.runId, phase });
@@ -518,7 +535,7 @@ it.each(["dead", "same-pid", "own-live", "live"] as const)(
         owner.kill("SIGKILL");
         await exited;
       }
-      await acquireUpdateLock({
+      await seedPreparationLock({
         runId: run.runId,
         pid: ownerState === "same-pid" || ownerState === "own-live" ? process.pid : owner.pid!,
         deadlineMs: ownerState === "same-pid" ? Number.MAX_SAFE_INTEGER : 60_000,
@@ -559,6 +576,36 @@ it.each(["dead", "same-pid", "own-live", "live"] as const)(
     }
   },
 );
+
+it("preserves a new preparer while settling a previously observed dead run", async () => {
+  const state = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trial-"));
+  directories.push(state);
+  vi.stubEnv("OPENCLAW_STATE_DIR", state);
+  openOpenClawStateDatabase({ env: process.env });
+  const stale = await createUpdateRunAsync({ trigger: "cli" });
+  const successor = await createUpdateRunAsync({ trigger: "cli" });
+  await seedDeadPreparationLock(stale.runId);
+  const finish = updateWrites.finishUpdateRunAsync;
+  vi.spyOn(updateWrites, "finishUpdateRunAsync").mockImplementation(async (runId, ...args) => {
+    const result = await finish(runId, ...args);
+    if (runId === stale.runId) {
+      // Another process publishes custody while the Gateway joins the old row's settlement.
+      await seedPreparationLock({ runId: successor.runId, pid: process.pid, deadlineMs: 60_000 });
+    }
+    return result;
+  });
+  await announceReady(null);
+  expect(await getUpdateRunAsync(stale.runId)).toMatchObject({
+    status: "failed",
+    reason: "interrupted",
+  });
+  expect(await getUpdateRunAsync(successor.runId)).toMatchObject({ status: "running" });
+  expect(await readUpdateLock()).toMatchObject({
+    runId: successor.runId,
+    pid: process.pid,
+    dead: false,
+  });
+});
 
 it.each(["warning", "error"] as const)(
   "keeps a committed update successful while background inspections report %s",
