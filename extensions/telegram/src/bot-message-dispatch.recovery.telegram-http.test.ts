@@ -2,13 +2,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { collectReplyMediaEntries } from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   PluginHookReplyPayloadSendingEvent,
   PluginHookReplyPayloadSendingResult,
 } from "openclaw/plugin-sdk/core";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { readQueuedDeliveryEntriesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createPendingFinalFixture,
+  readQueuedDeliveryEntriesForTest,
+  startGatewayLifecycleForTest,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   buildReplyPayloads,
   createReplyToModeFilterForChannel,
@@ -158,6 +163,95 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
       expect(http.texts()).toEqual([recoveredAnswer]);
     }
   });
+
+  it.each(["delivered", "refused"] as const)(
+    "sends one failure notice after both reply responses are lost (%s lifecycle notice)",
+    async (noticeDelivery) => {
+      const context = http.createContext();
+      const scope = {
+        agentId: context.route.agentId,
+        sessionKey: context.route.sessionKey,
+        storePath: http.state.path("sessions.json"),
+      };
+      const route = { channel: "telegram", accountId: context.route.accountId };
+      const target = { ...route, to: String(context.chatId) };
+      const fixture = createPendingFinalFixture(
+        scope.storePath,
+        "unconfirmed-final",
+        scope.sessionKey,
+        {
+          text: recoveredAnswer,
+          context: target,
+          now: Date.now(),
+        },
+      );
+      const entry = {
+        ...fixture.entry,
+        status: "done" as const,
+        delivery: { kind: "external" as const, route, context: target, origin: {} },
+      };
+      await patchSessionEntry({ ...scope, fallbackEntry: entry, update: () => entry });
+      const manager = SessionManager.open(
+        { ...scope, sessionId: entry.sessionId },
+        http.state.workspaceDir,
+      );
+      manager.appendMessage(user("Answer with the requested files."));
+      const notice = "I couldn’t confirm whether my previous reply reached this chat";
+      http.respondToCall = (call) => {
+        if (call.method !== "sendMessage") {
+          return;
+        }
+        if (call.fields.text === recoveredAnswer) {
+          throw Object.assign(new Error("socket closed after request"), { code: "ECONNRESET" });
+        }
+        if (noticeDelivery === "refused" && String(call.fields.text).startsWith(notice)) {
+          return {
+            error_code: 400,
+            description: "Bad Request: group chat was upgraded to a supergroup chat",
+          };
+        }
+      };
+      let cfg: OpenClawConfig = {};
+      const lifecycle = await startGatewayLifecycleForTest(() => cfg);
+      try {
+        await dispatchProgressTurn(
+          async () => {
+            manager.appendMessage(assistant(recoveredAnswer));
+            manager.flushPendingPersistence();
+          },
+          {
+            context,
+            mode: "off",
+            toolProgress: false,
+            finalReply: setReplyPayloadMetadata(
+              { text: recoveredAnswer },
+              {
+                pendingFinalDeliveryCompletion: fixture.completion,
+              },
+            ),
+            onDispatch: (runtimeConfig) => {
+              cfg = runtimeConfig;
+            },
+            allowErrors: true,
+          },
+        );
+        const attempted = http.callsFor("sendMessage").map((call) => call.fields.text);
+        expect(attempted.slice(0, 3)).toEqual([
+          recoveredAnswer,
+          recoveredAnswer,
+          expect.stringContaining(notice),
+        ]);
+        expect(readQueuedDeliveryEntriesForTest(http.state.stateDir)).toEqual([]);
+        expect(sentTexts()).toEqual([
+          noticeDelivery === "delivered"
+            ? expect.stringContaining(notice)
+            : "I couldn't deliver my reply because of a network problem. Please ask again.",
+        ]);
+      } finally {
+        lifecycle.close();
+      }
+    },
+  );
 
   it("replays the saved final through durable custody after its own HTTP deadline", async () => {
     const { manager, dispatch } = await transcriptCase("deadline-transcript-final");

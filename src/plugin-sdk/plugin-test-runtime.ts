@@ -78,6 +78,23 @@ export async function createTestPluginGatewayRuntime(params: {
   };
 }
 
+/** Registers the Gateway's real lifecycle sender for plugin transport fixtures. */
+export async function startGatewayLifecycleForTest(getConfig: () => OpenClawConfig) {
+  const [{ createGatewayInstanceRuntime }, { createGatewayMethodRegistry }, { createContext }] =
+    await Promise.all([
+      import("../gateway/server-instance-runtime.js"),
+      import("../gateway/methods/registry.js"),
+      import("../gateway/server-plugin-in-process-dispatch.test-support.js"),
+    ]);
+  const context = createContext([], getConfig);
+  const registry = createGatewayMethodRegistry([]);
+  return createGatewayInstanceRuntime({
+    getContext: () => context,
+    getMethodRegistry: () => registry,
+    isDispatchAvailable: () => true,
+  });
+}
+
 type AgentHarnessHostTestAttempt = Omit<
   Parameters<
     typeof import("../agents/harness/host-capability.js").createAgentHarnessHostCapabilities
@@ -380,7 +397,10 @@ export type { PluginHookRegistration } from "../plugins/hook-types.js";
 export type { RuntimeEnv } from "../runtime.js";
 export type { MockFn } from "../test-utils/vitest-mock-fn.js";
 export { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
-export { readQueuedEntries as readQueuedDeliveryEntriesForTest } from "../infra/outbound/delivery-queue.test-helpers.js";
+export {
+  createPendingFinalFixture,
+  readQueuedEntries as readQueuedDeliveryEntriesForTest,
+} from "../infra/outbound/delivery-queue.test-helpers.js";
 export {
   registerProviderPlugin,
   registerProviderPlugins,

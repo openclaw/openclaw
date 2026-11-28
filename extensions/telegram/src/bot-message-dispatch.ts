@@ -363,10 +363,11 @@ export const dispatchTelegramMessage = async (
     turn.previewLifecycle.observeFailure(
       isChannelPartialDeliveryError(err) ? err.deliveryResult : undefined,
     );
-    // A flood-refused final that the delivery queue still holds is not a turn failure:
-    // recovery owns its resend, so it must not trigger the "something went wrong" fallback.
-    if (turn.finalHandoff === "delivery-queue" && err === turn.finalDeliveryError) {
+    // The exact final failure is already owned by the reply queue or lifecycle notice.
+    if (err === turn.finalDeliveryError && turn.finalHandoff === "delivery-queue") {
       logVerbose(`telegram: final reply queued for recovery after flood refusal: ${String(err)}`);
+    } else if (err === turn.finalDeliveryError && turn.finalHandoff === "failure-notice") {
+      logVerbose(`telegram: lifecycle owns the final delivery failure notice: ${String(err)}`);
     } else {
       turn.dispatchError = err;
       runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));

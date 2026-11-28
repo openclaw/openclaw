@@ -76,6 +76,8 @@ type DurableInboundReplyDeliveryResult =
        * Custody is not a delivery guarantee: replays are bounded and can still fail.
        */
       retainedForRecovery?: true;
+      /** The exact terminal notice was delivered or is owned by the retry queue. */
+      failureNoticeHandled?: true;
     };
 
 function resolveDurableInboundReplyToId(
@@ -276,13 +278,15 @@ async function deliverAdmittedInboundReply(
   if (send.status === "failed") {
     const provenNotSent =
       !durableMessageBatchMayHaveReachedRecipient(send) && isProvenDeliveryNotSentError(send.error);
+    const outboundError = isOutboundDeliveryError(send.error) ? send.error : undefined;
     return {
       status: "failed" as const,
       error: send.error,
       ...(provenNotSent ? { sentBeforeError: false } : {}),
-      ...(provenNotSent && isOutboundDeliveryError(send.error) && send.error.queueCustody === "held"
+      ...(provenNotSent && outboundError?.queueCustody === "held"
         ? { retainedForRecovery: true as const }
         : {}),
+      ...(outboundError?.failureNoticeHandled ? { failureNoticeHandled: true as const } : {}),
     };
   }
   const content =

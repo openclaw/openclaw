@@ -12,7 +12,7 @@ export async function settleFailedQueuedDeliveryCompletion(
   settlement: DeliveryFailureSettlement,
   stateDir: string | undefined,
   stateContext: DeliveryQueueStateContext,
-): Promise<void> {
+): Promise<boolean> {
   const completion = await settleDurableDelivery(
     deliveryCompletion,
     settlement.outcome === "failed" && settlement.rejectionError !== undefined
@@ -24,11 +24,12 @@ export async function settleFailedQueuedDeliveryCompletion(
   if (completion.state === "unknown" && deliveryCompletion.kind === "pending-final") {
     // Persisted failure custody prevents answer replay. Hand its existing notice
     // debt to the lifecycle sender before compacting this recovery checkpoint.
-    await deliverPendingDeliveryNotice(
+    return await deliverPendingDeliveryNotice(
       deliveryCompletion.sessionKey,
       deliveryCompletion.storePath,
       deliveryCompletion.agentId,
       deliveryCompletion.intentId,
     );
   }
+  return false;
 }

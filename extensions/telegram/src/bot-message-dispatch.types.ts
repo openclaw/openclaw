@@ -186,6 +186,6 @@ export type TelegramDispatchTurn = TelegramDispatchTurnConfig &
      * or the delivery queue holds a flood-refused final and resends it. Either way the
      * turn must not send a failure fallback or ask the user to resend.
      */
-    finalHandoff?: "progress-continuation" | "delivery-queue";
+    finalHandoff?: "progress-continuation" | "delivery-queue" | "failure-notice";
     dispatchError?: unknown;
   };
