@@ -752,6 +752,7 @@ it("prompts when a provider exposes multiple non-OAuth login methods", async () 
 
   expect(select).toHaveBeenCalledWith({
     message: "Auth method for Anthropic",
+    searchable: true,
     options: [
       { value: "api-key", label: "Anthropic API Key", hint: undefined },
       { value: "cli", label: "Claude CLI", hint: undefined },
@@ -951,52 +952,14 @@ it("rejects unknown auth methods before a forced login can purge profiles", asyn
   expectNoCalls(mocks.removeProviderAuthProfilesWithLock, runOauthAuth, runApiKeyAuth);
 });
 
-it("orders searchable providers and signs in with the selected provider ID", async () => {
-  const select = vi.fn().mockResolvedValue("beta-first");
-  usePrompter(select);
-  const otherRun = vi.fn<ProviderPlugin["auth"][number]["run"]>().mockResolvedValue({ profiles: [] });
-  const providers = [
-    ["zeta", "Zeta"],
-    ["xai", "xAI"],
-    ["beta-second", "Beta"],
-    ["alpha", "Alpha"],
-    ["openai", "OpenAI"],
-    ["beta-first", "Beta"],
-  ] as const;
-  mocks.resolvePluginProvidersCore.mockReturnValue(
-    providers.map(([id, label]) =>
-      createProvider(id, label, [
-        { id: "oauth", label: "OAuth", kind: "oauth", run: id === "beta-first" ? runProviderAuth : otherRun },
-      ]),
-    ),
-  );
-
-  await loginCommand({});
-
-  expect(select).toHaveBeenCalledOnce();
-  expect(select).toHaveBeenCalledWith({
-    message: "Select a provider",
-    searchable: true,
-    options: [
-      { value: "openai", label: "OpenAI", hint: undefined },
-      { value: "xai", label: "xAI", hint: undefined },
-      { value: "alpha", label: "Alpha", hint: undefined },
-      { value: "beta-first", label: "Beta", hint: undefined },
-      { value: "beta-second", label: "Beta", hint: undefined },
-      { value: "zeta", label: "Zeta", hint: undefined },
-    ],
-  });
-  expect(runProviderAuth).toHaveBeenCalledOnce();
-  expect(otherRun).not.toHaveBeenCalled();
-});
-
-it("opens the provider picker when a CLI backend has no provider auth method", async () => {
+it("opens an ordered searchable provider picker when a CLI backend has no auth method", async () => {
   const prompter = usePrompter(vi.fn(async () => "openai"));
   mocks.isCliProvider.mockImplementation((provider: string) => provider === "claude-cli");
   const openaiProvider = createProvider("openai", "OpenAI Codex");
+  const alpha = createProvider("alpha", "Alpha", [{ ...openaiProvider.auth[0]!, run: vi.fn() }]);
   mocks.resolvePluginProvidersCore.mockImplementation(
     (params: ResolvePluginProvidersCall | undefined) =>
-      params?.providerRefs?.includes("claude-cli") ? [] : [openaiProvider],
+      params?.providerRefs?.includes("claude-cli") ? [] : [alpha, openaiProvider],
   );
 
   await loginCommand({ provider: "claude-cli" });
@@ -1005,18 +968,15 @@ it("opens the provider picker when a CLI backend has no provider auth method", a
     'Provider "claude-cli" uses its own CLI login. Select a provider with an OpenClaw auth flow.',
     "Provider auth",
   );
-  expect(prompter.select).toHaveBeenCalledWith(
-    expect.objectContaining({ message: "Select a provider", searchable: true }),
-  );
+  expect(prompter.select.mock.calls[0]?.[0]).toMatchObject({
+    message: "Select a provider",
+    searchable: true,
+    options: [{ value: "openai" }, { value: "alpha" }],
+  });
   expect(runProviderAuth).toHaveBeenCalledOnce();
-  expect(mocks.resolvePluginProvidersCore).toHaveBeenNthCalledWith(
-    1,
-    expect.objectContaining({ providerRefs: ["claude-cli"] }),
-  );
-  expect(mocks.resolvePluginProvidersCore).toHaveBeenNthCalledWith(
-    2,
-    expect.not.objectContaining({ providerRefs: expect.anything() }),
-  );
+  expect(
+    mocks.resolvePluginProvidersCore.mock.calls.map(([params]) => params?.providerRefs),
+  ).toEqual([["claude-cli"], undefined]);
 });
 
 it("writes pasted Anthropic setup-tokens to the selected profile", async () => {

@@ -151,9 +151,30 @@ it("offers searchable sign-in choices in label order across plugin discovery gro
 
 it("keeps preferred providers together with their method priorities and descriptions", async () => {
   const openaiChoices = [
-    ["api-key", "openai-api-key", "OpenAI API Key", "Use your OpenAI API key directly", 5],
-    ["siwc", "openai-token-sharing", "Sign in with ChatGPT", "Use your ChatGPT plan for eligible Responses API requests", 0],
-    ["oauth", "openai", "Codex login", "Sign in with your ChatGPT account using a one-time code", -10],
+    [
+      "api-key",
+      "openai-api-key",
+      "OpenAI API Key",
+      "Use your OpenAI API key directly",
+      5,
+      undefined,
+    ],
+    [
+      "siwc",
+      "openai-token-sharing",
+      "Sign in with ChatGPT",
+      "Use your ChatGPT plan for eligible Responses API requests",
+      0,
+      "oauth",
+    ],
+    [
+      "oauth",
+      "openai",
+      "Codex login",
+      "Sign in with your ChatGPT account using a one-time code",
+      -10,
+      "device-code",
+    ],
   ] as const;
   const otherProviders = [
     ["zeta", "Zeta"],
@@ -174,20 +195,22 @@ it("keeps preferred providers together with their method priorities and descript
       groupLabel: label,
       appGuidedSecret: true as const,
     })),
-    ...openaiChoices.map(([methodId, choiceId, choiceLabel, choiceHint, assistantPriority]) => ({
-      pluginId: "openai",
-      providerId: "openai",
-      methodId,
-      choiceId,
-      choiceLabel,
-      choiceHint,
-      assistantPriority,
-      groupId: "openai",
-      groupLabel: "OpenAI",
-      ...(methodId === "api-key"
-        ? { appGuidedSecret: true as const }
-        : { appGuidedAuth: methodId === "oauth" ? ("device-code" as const) : ("oauth" as const), credentialOnly: true }),
-    })),
+    ...openaiChoices.map(
+      ([methodId, choiceId, choiceLabel, choiceHint, assistantPriority, appGuidedAuth]) => ({
+        pluginId: "openai",
+        providerId: "openai",
+        methodId,
+        choiceId,
+        choiceLabel,
+        choiceHint,
+        assistantPriority,
+        groupId: "openai",
+        groupLabel: "OpenAI",
+        appGuidedAuth,
+        appGuidedSecret: appGuidedAuth ? undefined : (true as const),
+        credentialOnly: appGuidedAuth ? (true as const) : undefined,
+      }),
+    ),
   ]);
   prompts.select.mockResolvedValueOnce("openai/openai-token-sharing");
 
