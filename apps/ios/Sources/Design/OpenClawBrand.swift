@@ -75,11 +75,6 @@ enum OpenClawBrand {
     static let uiWarn = adaptiveUIColor(light: (146, 64, 14), dark: (245, 158, 11))
     static let uiDanger = OpenClawIOSBrand.danger
     static let uiInfo = adaptiveUIColor(light: (29, 78, 216), dark: (96, 165, 250))
-    // Carapace status foreground tokens. Keep these separate from the broader
-    // app feedback palette so compact state indicators match the web system.
-    static let uiStatusSuccess = adaptiveUIColor(light: (22, 163, 74), dark: (34, 197, 94))
-    static let uiStatusWarning = adaptiveUIColor(light: (217, 119, 6), dark: (251, 191, 36))
-    static let uiStatusError = adaptiveUIColor(light: (220, 38, 38), dark: (239, 68, 68))
 
     static let accent = Color(uiColor: Self.uiAccent)
     static let accentFill = Color(uiColor: Self.uiAccentFill)
@@ -100,14 +95,6 @@ enum OpenClawBrand {
     static let danger = Color(uiColor: Self.uiDanger)
     static let ok = Color(uiColor: Self.uiOK)
     static let warn = Color(uiColor: Self.uiWarn)
-    static let info = Color(uiColor: Self.uiInfo)
-    static let statusSuccess = Color(uiColor: Self.uiStatusSuccess)
-    static let statusWarning = Color(uiColor: Self.uiStatusWarning)
-    static let statusError = Color(uiColor: Self.uiStatusError)
-    // Keep provider colors aligned with the Control UI brand tokens.
-    static let providerOpenAI = Color(red: 16 / 255.0, green: 163 / 255.0, blue: 127 / 255.0)
-    static let providerAnthropic = Color(red: 217 / 255.0, green: 119 / 255.0, blue: 87 / 255.0)
-    static let providerGoogle = Color(red: 66 / 255.0, green: 133 / 255.0, blue: 244 / 255.0)
     static let activationCanvas = canvas
     static let activationSurface = surfaceRaised
     static let activationInsetSurface = surfaceMuted

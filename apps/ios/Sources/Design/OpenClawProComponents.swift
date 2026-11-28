@@ -11,7 +11,6 @@ enum OpenClawProMetric {
 
 enum OpenClawRadius {
     static let xs: CGFloat = 8
-    static let sm: CGFloat = 10
     static let md: CGFloat = 12
 }
 
@@ -107,10 +106,6 @@ extension View {
                 .buttonStyle(.glass)
                 .tint(tint)
         }
-    }
-
-    func openClawGlassSurface() -> some View {
-        self.glassEffect(.regular, in: .rect(cornerRadius: OpenClawProMetric.controlRadius))
     }
 }
 
@@ -567,33 +562,5 @@ struct OpenClawProMark: View {
             .frame(width: self.size, height: self.size)
             .shadow(color: OpenClawBrand.accent.opacity(0.18), radius: self.shadowRadius, y: self.shadowRadius / 3)
             .accessibilityLabel("OpenClaw")
-    }
-}
-
-struct OpenClawGatewayCompactPill: View {
-    @Environment(NodeAppModel.self) private var appModel
-
-    var body: some View {
-        let presentation = GatewayStatusBuilder.build(appModel: self.appModel).statusPresentation
-        OpenClawStatusBadge(label: .verbatim(presentation.title), tone: presentation.tone)
-            .accessibilityLabel(
-                String(
-                    format: String(localized: "Gateway %@"),
-                    presentation.title))
-    }
-}
-
-extension GatewayDisplayState {
-    var statusPresentation: (title: String, tone: OpenClawStatusTone) {
-        switch self {
-        case .connected:
-            (String(localized: "Online"), .ok)
-        case .connecting:
-            (String(localized: "Connecting"), .accent)
-        case .error:
-            (String(localized: "Attention"), .warn)
-        case .disconnected:
-            (String(localized: "Offline"), .muted)
-        }
     }
 }
