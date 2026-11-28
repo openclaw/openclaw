@@ -28,6 +28,11 @@ final class ModelSignInFixture {
     private var signedIn: Set<String> = ScreenshotFixtureMode.modelSignInScenario == "signed-in"
         ? ["openai", "anthropic", "google", "xai", "openrouter"] : ["openai", "anthropic"]
     private var expired: Set<String> = ScreenshotFixtureMode.modelSignInScenario == "signed-in" ? [] : ["google"]
+    private var removedDetailProfiles: Set<String> = []
+    private var isProviderDetail: Bool {
+        self.scenario == "provider-detail" || self.scenario == "provider-detail-actions"
+    }
+
     private var sessions: [String: (login: Login, stage: Int)] = [:]
     private var current = true
     private var statusRequests = 0
@@ -45,6 +50,9 @@ final class ModelSignInFixture {
     func context(agentID: String) -> OpenClawChatModelSignInContext {
         OpenClawChatModelSignInContext(
             agentID: agentID,
+            canRemoveSignIn: self.isProviderDetail,
+            canSetAPIKey: self.isProviderDetail,
+            canCheckConnection: self.isProviderDetail,
             request: { method, params in try await self.request(method, params) },
             isCurrent: { self.current })
     }
@@ -65,6 +73,12 @@ final class ModelSignInFixture {
                 try await Task.sleep(for: .seconds(600))
             }
             return try JSONSerialization.data(withJSONObject: self.status())
+        case "models.probe" where self.isProviderDetail:
+            return Data(#"{"status":"ok"}"#.utf8)
+        case "models.authSetApiKey" where self.isProviderDetail:
+            guard params["provider"]?.stringValue == "clawrouter", params["apiKey"]?.stringValue == "fixture-key"
+            else { throw CancellationError() }
+            return Data(#"{"provider":"clawrouter","profileId":"clawrouter:default"}"#.utf8)
         case "models.authLogin":
             guard let id = params["sessionId"]?.stringValue,
                   let login = Login(rawValue: params["authChoice"]?.stringValue ?? "")
@@ -82,6 +96,13 @@ final class ModelSignInFixture {
         case "wizard.cancel":
             if let id = params["sessionId"]?.stringValue { self.sessions[id] = nil }
             return Data(#"{"status":"cancelled"}"#.utf8)
+        case "models.authLogout" where self.isProviderDetail:
+            guard params["provider"]?.stringValue == "anthropic",
+                  let ids = params["profileIds"]?.value as? [AnyCodable],
+                  ids.map(\.stringValue) == ["anthropic:default"],
+                  params["revoke"] == nil else { throw CancellationError() }
+            self.removedDetailProfiles.insert("anthropic:default")
+            return Data(#"{"provider":"anthropic","removedProfiles":["anthropic:default"],"abortedRunIds":[]}"#.utf8)
         case "models.authLogout":
             try await Task.sleep(for: .milliseconds(ScreenshotFixtureMode.modelSignInAnswerMilliseconds + 300))
             if let provider = params["provider"]?.stringValue {
@@ -223,6 +244,56 @@ final class ModelSignInFixture {
     private func status() -> [String: Any] {
         if self.scenario == "no-accounts" {
             return ["ts": 1, "providers": [], "providerCapabilities": []]
+        }
+        if self.isProviderDetail {
+            var profiles: [[String: Any]] = []
+            if !self.removedDetailProfiles.contains("anthropic:default") {
+                profiles.append([
+                    "profileId": "anthropic:default",
+                    "type": "token",
+                    "status": "static",
+                    "logoutSupported": true,
+                ])
+            }
+            var capabilities: [[String: Any]] = [["provider": "clawrouter", "apiKeySupported": true]]
+            if self.scenario == "provider-detail-actions" {
+                capabilities.append([
+                    "provider": "anthropic",
+                    "loginOptions": [[
+                        "id": Login.anthropicBrowser.rawValue,
+                        "kind": "oauth",
+                        "label": "Claude account",
+                    ]],
+                ])
+                if self.renewed.contains("anthropic") {
+                    profiles.append([
+                        "profileId": "anthropic:second",
+                        "type": "oauth",
+                        "status": "ok",
+                        "displayName": "Work account",
+                    ])
+                }
+            }
+            return ["providers": [
+                [
+                    "provider": "clawrouter",
+                    "displayName": "ClawRouter",
+                    "status": "static",
+                    "profiles": [["profileId": "clawrouter:default", "type": "api_key", "status": "static"]],
+                ],
+                [
+                    "provider": "claude-cli",
+                    "displayName": "Claude",
+                    "status": "ok",
+                    "nativeAuth": ["kind": "subscription", "plan": "Max"],
+                ],
+                [
+                    "provider": "anthropic",
+                    "displayName": "Claude",
+                    "status": profiles.isEmpty ? "missing" : "ok",
+                    "profiles": profiles,
+                ],
+            ], "providerCapabilities": capabilities]
         }
         let now = Date().timeIntervalSince1970 * 1000
         let soon = now + 2 * 86_400_000

@@ -11,12 +11,6 @@ enum ChatModelPickerRoute: Hashable {
     case effort
 }
 
-enum ChatModelAccountsPolicy {
-    /// Sign out removes saved provider credentials and is proven only on the fixture, so it stays hidden
-    /// until Victor decides to offer it. The code and its unit tests stay in place.
-    static let offersSignOut = false
-}
-
 /// The sign-in flow of one model sheet. It takes the connection the first time the accounts page opens and
 /// keeps it, with any sign-in in progress, while the person moves between the accounts and a provider.
 @MainActor
@@ -133,7 +127,7 @@ private struct ChatModelAccountRow: View {
             HStack(spacing: 12) {
                 ChatProviderMark(providerID: self.account.id)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(verbatim: self.account.name)
+                    Text(verbatim: self.account.displayTitle)
                         .font(OpenClawChatTypography.settingsBody)
                         .foregroundStyle(Color.primary)
                     if let notice = self.account.notice {
@@ -179,6 +173,15 @@ struct ChatModelAccountPage: View {
         }
         .navigationTitle(Text(verbatim: self.title))
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 8) {
+                    ChatProviderMark(providerID: self.accountID)
+                    Text(verbatim: self.title).font(OpenClawChatTypography.settingsBody.weight(.semibold))
+                }
+                .accessibilityAddTraits(.isHeader)
+            }
+        }
         .accessibilityIdentifier("model-auth-account")
         .task { await self.owner.open(self.viewModel) }
     }
@@ -187,7 +190,7 @@ struct ChatModelAccountPage: View {
         if case let .ready(model) = self.owner.phase, let status = model.authStatus,
            let account = ChatModelAccountGroups(status: status).account(self.accountID)
         {
-            return account.name
+            return account.displayTitle
         }
         return self.viewModel.modelPickerCatalog().providers.first { $0.id == self.accountID }?.displayName
             ?? ChatModelPickerStore.providerDisplayName(self.accountID)
@@ -203,7 +206,9 @@ struct ChatModelAccountPage: View {
                 ChatModelAccountsMessageSection(text: problem, retry: { await model.reload() })
             }
             if let account = groups.account(self.accountID) {
-                ChatModelAccountSections(model: model, account: account, onNeedsRoom: self.onNeedsRoom)
+                ChatModelAccountSections(
+                    model: model, account: account, viewModel: self.viewModel, onNeedsRoom: self.onNeedsRoom)
+                    .id(account.id)
             } else {
                 ChatModelAccountsMessageSection(text: ChatModelAccountsCopy.noOptions(self.title))
             }
@@ -220,12 +225,13 @@ struct ChatModelAccountPage: View {
 private struct ChatModelAccountSections: View {
     let model: ChatModelSignInModel
     let account: ChatModelAccount
+    let viewModel: OpenClawChatViewModel
     let onNeedsRoom: () -> Void
-    @State private var confirmsSignOut = false
 
     var body: some View {
-        if self.account.isSignedIn {
-            self.facts
+        ChatProviderAccountFacts(account: self.account, model: self.model)
+        if self.runningStep == nil {
+            ChatProviderAccountActions(model: self.model, account: self.account, onNeedsRoom: self.onNeedsRoom)
         }
         if let step = self.runningStep {
             ChatModelSignInStepSection(
@@ -236,11 +242,11 @@ private struct ChatModelAccountSections: View {
         } else if !self.account.options.isEmpty {
             // Every way the server offers stays reachable, as in the old sheet's single list.
             self.options
-        } else if !self.account.isSignedIn {
+        } else if !self.account.isSignedIn, !(self.account.supportsAPIKey && self.model.canSetAPIKey) {
             ChatModelAccountsMessageSection(text: ChatModelAccountsCopy.noOptions(self.account.name))
         }
-        if ChatModelAccountsPolicy.offersSignOut, self.account.isSignedIn, !self.account.removableProfileIDs.isEmpty {
-            self.signOut
+        if self.runningStep == nil {
+            ChatProviderCatalogSection(accountID: self.account.id, viewModel: self.viewModel)
         }
     }
 
@@ -250,28 +256,6 @@ private struct ChatModelAccountSections: View {
               self.model.sessionID != nil
         else { return nil }
         return self.model.step ?? WizardStep.starting
-    }
-
-    @ViewBuilder
-    private var facts: some View {
-        let rows = ChatModelAccountsCopy.facts(self.account)
-        if !rows.isEmpty {
-            Section {
-                ForEach(rows, id: \.self) { row in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(verbatim: row.title).font(OpenClawChatTypography.settingsBody)
-                        if let detail = row.detail {
-                            Text(verbatim: detail)
-                                .font(OpenClawChatTypography.settingsFootnote)
-                                .foregroundStyle(row.isProblem
-                                    ? AnyShapeStyle(OpenClawChatTheme.warning)
-                                    : AnyShapeStyle(.secondary))
-                        }
-                    }
-                    .accessibilityElement(children: .combine)
-                }
-            }
-        }
     }
 
     private var options: some View {
@@ -298,11 +282,14 @@ private struct ChatModelAccountSections: View {
                     .overlay(alignment: .trailing) {
                         if self.model.busy, self.model.attempt == option {
                             ProgressView().frame(width: ChatModelSignInMetrics.accessory)
+                        } else {
+                            Image(systemName: "arrow.forward").font(.footnote).foregroundStyle(.secondary)
+                                .accessibilityHidden(true)
                         }
                     }
                     .contentShape(Rectangle())
                 }
-                .disabled(self.model.busy || self.model.sessionID != nil)
+                .disabled(!self.model.canStartSignIn || self.model.busy || self.model.sessionID != nil)
                 .accessibilityIdentifier("model-auth-option-\(option.id)")
             }
         } header: {
@@ -310,6 +297,15 @@ private struct ChatModelAccountSections: View {
                 : self.account.notice == nil ? ChatModelAccountsCopy.signInOptions : ChatModelAccountsCopy.signInAgain)
                 .font(OpenClawChatTypography.settingsSectionHeader)
         } footer: {
+            if !self.model.canStartSignIn {
+                Text("You need administrator access to sign in from here.")
+                    .font(OpenClawChatTypography.settingsFootnote)
+            } else if self.account.isSignedIn,
+                      self.account.options.contains(where: { $0.kind == "oauth" || $0.kind == "device-code" })
+            {
+                Text("Sign in again, or choose another account on the provider’s sign-in page.")
+                    .font(OpenClawChatTypography.settingsFootnote)
+            }
             if let problem, let attempt {
                 ChatModelSignInProblem(text: problem) {
                     if self.model.outcome == .endedStatusUnknown {
@@ -320,47 +316,6 @@ private struct ChatModelAccountSections: View {
                 }
             }
         }
-    }
-
-    private var signOut: some View {
-        Section {
-            Button(role: .destructive) {
-                self.confirmsSignOut = true
-            } label: {
-                Text(ChatModelAccountsCopy.signOut)
-                    .font(OpenClawChatTypography.settingsBody)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.trailing, ChatModelSignInMetrics.accessory)
-                    .overlay(alignment: .trailing) {
-                        if self.model.signingOut == self.account.id {
-                            ProgressView().frame(width: ChatModelSignInMetrics.accessory)
-                        }
-                    }
-            }
-            .disabled(self.model.busy || self.model.sessionID != nil)
-            .accessibilityIdentifier("model-auth-sign-out")
-            .confirmationDialog(
-                Text(verbatim: ChatModelAccountsCopy.signOutTitle(self.account.name)),
-                isPresented: self.$confirmsSignOut,
-                titleVisibility: .visible)
-            {
-                Button(role: .destructive) {
-                    Task { await self.signOutNow() }
-                } label: {
-                    Text(ChatModelAccountsCopy.signOut).font(OpenClawChatTypography.settingsBody)
-                }
-            } message: {
-                Text(verbatim: ChatModelAccountsCopy.signOutMessage(self.account.name))
-            }
-        } footer: {
-            if self.model.outcome == .signOutFailed {
-                ChatModelSignInProblem(text: ChatModelAccountsCopy.signOutFailed) { await self.signOutNow() }
-            }
-        }
-    }
-
-    private func signOutNow() async {
-        await self.model.signOut(provider: self.account.id, profileIDs: self.account.removableProfileIDs)
     }
 }
 
@@ -708,14 +663,6 @@ enum ChatModelAccountsCopy {
             provider)
     }
 
-    static func signOutTitle(_ provider: String) -> String {
-        String(format: String(localized: "Sign out of %@?"), provider)
-    }
-
-    static func signOutMessage(_ provider: String) -> String {
-        String(format: String(localized: "%@ models won’t work until you sign in again."), provider)
-    }
-
     static func notice(_ notice: ChatModelAccount.Notice) -> String {
         switch notice {
         case let .expiresSoon(date?):
@@ -759,55 +706,6 @@ enum ChatModelAccountsCopy {
         case .stopped: String(localized: "Sign-in stopped. Check the connection.")
         case .cancelUnconfirmed: String(localized: "Couldn’t cancel.")
         default: nil
-        }
-    }
-
-    struct Fact: Hashable {
-        let title: String
-        let detail: String?
-        let isProblem: Bool
-    }
-
-    /// What the server reports about a signed-in account: who, how, and what is wrong with it if anything.
-    static func facts(_ account: ChatModelAccount) -> [Fact] {
-        var facts = account.profiles.map { profile in
-            let title = profile.email?.trimmedNonEmpty ?? profile.displayName?.trimmedNonEmpty
-                ?? Self.profileKind(profile.type)
-            let notice: ChatModelAccount.Notice? = switch profile.status {
-            case "expiring": .expiring(at: profile.expiry.map { Date(timeIntervalSince1970: $0.at / 1000) })
-            case "expired": .expired
-            default: nil
-            }
-            return Fact(title: title, detail: notice.map(Self.notice), isProblem: notice.map(Self.isProblem) ?? false)
-        }
-        // The provider's own notice goes on the first row unless a sign-in below already says it.
-        let notice = facts.contains { $0.detail != nil } ? nil : account.notice
-        if facts.isEmpty {
-            let title: String? = switch account.source {
-            case .settingsKey: String(localized: "API key in OpenClaw settings")
-            case .environmentKey: String(localized: "API key from the environment")
-            case .providerApp: String(localized: "Signed in with the provider’s app")
-            // Nothing to say about an account that works: no row. A plan or a notice needs one to sit on.
-            case nil: account.plan == nil && notice == nil ? nil : String(localized: "Account")
-            }
-            if let title { facts.append(Fact(title: title, detail: account.plan, isProblem: false)) }
-        } else if let plan = account.plan {
-            facts.append(Fact(title: plan, detail: nil, isProblem: false))
-        }
-        if let notice {
-            let first = facts.removeFirst()
-            facts.insert(
-                Fact(title: first.title, detail: Self.notice(notice), isProblem: Self.isProblem(notice)),
-                at: 0)
-        }
-        return facts
-    }
-
-    private static func profileKind(_ type: String?) -> String {
-        switch type {
-        case "api_key": String(localized: "API key")
-        case "token": String(localized: "Access token")
-        default: String(localized: "Account")
         }
     }
 
