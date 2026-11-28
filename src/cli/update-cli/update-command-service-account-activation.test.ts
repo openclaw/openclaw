@@ -16,6 +16,7 @@ const native = vi.hoisted(() => ({
   scheduled: [] as string[][],
   plan: undefined as ServiceAccountExecution | undefined,
   stopIgnored: false,
+  scheduleFails: false,
 }));
 // Unit selection and account resolution have their own tests in the admission suite.
 vi.mock("./update-command-admit-service-account.js", async (importOriginal) => ({
@@ -54,7 +55,7 @@ vi.mock("../../process/exec.js", async (importOriginal) => {
     runCommandWithTimeout: async (argv: string[], options: unknown) => {
       if (argv[0] === "/usr/bin/systemd-run") {
         native.scheduled.push(argv);
-        return { code: 0, stdout: "", stderr: "" };
+        return { code: native.scheduleFails ? 1 : 0, stdout: "", stderr: "" };
       }
       return actual.runCommandWithTimeout(argv, options as never);
     },
@@ -134,6 +135,7 @@ beforeEach(() => {
   native.scheduled = [];
   native.plan = undefined;
   native.stopIgnored = false;
+  native.scheduleFails = false;
   root = dirs.make("service-account-release-");
   fs.mkdirSync(path.join(root, "dist"));
   fs.writeFileSync(path.join(root, "dist", "index.js"), "setInterval(() => {}, 1000);\n");
@@ -209,6 +211,23 @@ describe("system service update as the unit's account", () => {
     // The transient unit's argv carries no environment values, only the handoff path.
     expect(JSON.stringify(native.scheduled)).not.toContain("unit-only-value");
   });
+
+  it.runIf(process.platform === "linux")(
+    "keeps the backup when the settle step cannot be scheduled",
+    async () => {
+      installAccount({ migrate: ok("migrated"), health: [0, "{}"], finish: ok("finished") });
+      native.scheduleFails = true;
+
+      const result = await activate();
+
+      expect(result).toMatchObject({ status: "updated" });
+      expect(result.status === "updated" && result.warnings[0]).toContain(
+        "the update backup is kept",
+      );
+      // Retiring the backup now would leave no rollback if the updater later restores the package.
+      expect(calls()).toEqual(["migrate", "health"]);
+    },
+  );
 
   it("keeps the unit stopped and the backup when the account cannot restore", async () => {
     installAccount({ migrate: [1, ""], restore: [1, ok("restored")[1]] });

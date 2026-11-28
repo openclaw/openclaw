@@ -581,6 +581,18 @@ describe("candidate admission run as the unit's account", () => {
       blocker: "the unit's effective environment could not be read",
     },
     {
+      name: "this update selects the service's config itself",
+      setup: () => vi.stubEnv("OPENCLAW_CONFIG_PATH", "/var/lib/openclaw/.openclaw/openclaw.json"),
+      blocker:
+        "this update selects the service's state or config itself, so the installed updater would write it as root; run the update again without OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH or other state selectors",
+    },
+    {
+      name: "this update selects a directory inside the service's state",
+      setup: () => vi.stubEnv("OPENCLAW_STATE_DIR", "/var/lib/openclaw/.openclaw/nested"),
+      blocker:
+        "this update selects the service's state or config itself, so the installed updater would write it as root; run the update again without OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH or other state selectors",
+    },
+    {
       name: "sandboxing hides the unit's state",
       setup: () =>
         systemd.readAsRoot.mockResolvedValue(serviceCommand({ stateIdentityUnverified: true })),

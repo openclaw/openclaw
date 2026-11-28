@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { resolveStateDir } from "../../config/paths.js";
+import { resolveConfigPath, resolveStateDir } from "../../config/paths.js";
 import { isBunRuntime, isNodeRuntime } from "../../daemon/runtime-binary.js";
 import {
   findSystemdServiceAccountMismatch,
@@ -14,6 +14,7 @@ import {
   readSystemdServiceExecStartAsRoot,
 } from "../../daemon/systemd-service-files.js";
 import { readSystemdAccount, readSystemdAccountHome } from "../../daemon/systemd-state-identity.js";
+import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import type { UpdateAdmissionContext } from "../../infra/update-admission-contract.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { buildParseArgv } from "../argv.js";
@@ -187,13 +188,25 @@ async function resolveServiceAccountExecution(
   if (profile.profile) {
     applyCliProfileEnv({ profile: profile.profile, env: unitEnv, homedir: () => home });
   }
-  // An installed updater that selects the unit's state itself writes its snapshot, log and
-  // report there as root before any candidate step runs; only plain sudo keeps them out.
-  const unitState = path.resolve(resolveStateDir(unitEnv, () => home));
-  if (unitState === path.resolve(resolveStateDir(env))) {
+  // An installed updater that selects the unit's state or config itself writes its snapshot,
+  // log and report there, and its own Doctor repairs them, as root; only plain sudo keeps
+  // them out. Compare canonical paths so aliases and nesting are caught too.
+  const canonical = (target: string) => resolvePathViaExistingAncestorSync(path.resolve(target));
+  const within = (inner: string, outer: string) =>
+    inner === outer || inner.startsWith(outer.endsWith(path.sep) ? outer : outer + path.sep);
+  const unitState = canonical(resolveStateDir(unitEnv, () => home));
+  const unitConfig = canonical(resolveConfigPath(unitEnv, undefined, () => home));
+  const callerState = canonical(resolveStateDir(env));
+  const callerConfig = canonical(resolveConfigPath(env));
+  if (
+    within(unitState, callerState) ||
+    within(callerState, unitState) ||
+    unitConfig === callerConfig ||
+    within(callerConfig, unitState)
+  ) {
     return {
       blocker:
-        "this update selects the service's state itself, so the installed updater would write it as root; run the update again without OPENCLAW_STATE_DIR or other state selectors",
+        "this update selects the service's state or config itself, so the installed updater would write it as root; run the update again without OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH or other state selectors",
     };
   }
   return {

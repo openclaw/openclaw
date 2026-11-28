@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseKeyValueOutput } from "../../daemon/runtime-parse.js";
+import { resolveServiceEntrypointIndex } from "../../daemon/service-layout.js";
 import type { SystemdServiceIdentity } from "../../daemon/service-types.js";
 import { execSystemctl } from "../../daemon/systemd-exec.js";
 import { startSystemdService, stopSystemdService } from "../../daemon/systemd-lifecycle.js";
@@ -195,9 +196,12 @@ async function servesCandidate(pid: number, root: string, candidateVersion: stri
     return false;
   }
   try {
-    const argv = (await fs.readFile(`/proc/${pid}/cmdline`, "utf8")).split("\0");
+    const argv = (await fs.readFile(`/proc/${pid}/cmdline`, "utf8")).split("\0").filter(Boolean);
     const realRoot = await fs.realpath(root);
-    const entry = argv[1] ? await fs.realpath(argv[1]).catch(() => "") : "";
+    // Runtime options such as --max-old-space-size come before the entry script.
+    const index = resolveServiceEntrypointIndex(argv);
+    const script = index === undefined ? undefined : argv[index];
+    const entry = script ? await fs.realpath(script).catch(() => "") : "";
     return (
       entry.startsWith(realRoot + path.sep) &&
       (await readPackageVersion(realRoot, { maxBytes: 1024 * 1024 })) === candidateVersion
@@ -354,20 +358,11 @@ async function activateSystemServiceAsAccount(
       handoffOwned = false;
       return { status: "updated", unitName, account, notServingMs, settleUnit, warnings: [] };
     }
-    // Without the transient unit, record the run now; a later package restore by the
-    // installed updater would then find no backup to restore.
-    const finished = await asAccount(
-      ["update", "finish", "--backup-root", backupRoot],
-      10 * 60_000,
-    );
-    const warnings =
-      finished?.termination === "exit" &&
-      finished.code === 0 &&
-      readAccountStatus(finished.stdout) === "finished"
-        ? []
-        : [
-            `${unitName} serves ${options.candidateVersion}, but ${account}'s update record and backup cleanup did not finish; run update finish as ${account} with --backup-root ${backupRoot}.`,
-          ];
+    // Without the transient unit the package is not final yet: keep the backup and leave
+    // recording the run to the operator, who can see whether the update was kept.
+    const warnings = [
+      `${unitName} serves ${options.candidateVersion}, but the step that records this update for ${account} could not be scheduled; the update backup is kept. Once this update has finished, run update finish as ${account} with --backup-root ${backupRoot}.`,
+    ];
     return { status: "updated", unitName, account, notServingMs, warnings };
   } finally {
     if (handoffOwned) {
