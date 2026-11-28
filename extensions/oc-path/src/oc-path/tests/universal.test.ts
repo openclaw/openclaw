@@ -129,6 +129,8 @@ describe("setOcPath", () => {
     [parseJsonc('{"k":true}'), "oc://config/k", "maybe", "parse-error"],
     [parseJsonl('{"event":"start"}\n'), "oc://log/L1", "not json", "parse-error"],
     [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/+name", "y", "type-mismatch"],
+    [parseMd('---\n"name": x\n---\n'), "oc://X.md/[frontmatter]/+name", "y", "type-mismatch"],
+    [parseMd("---\n'name': x\n---\n"), "oc://X.md/[frontmatter]/+name", "y", "type-mismatch"],
     [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/+9name", "y", "not-writable"],
     [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/+name.dot", "y", "not-writable"],
     [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/+café", "y", "not-writable"],
