@@ -6,8 +6,10 @@ import path from "node:path";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { inspect } from "node:util";
+import type { WAMessage } from "baileys";
 import { DEFAULT_CONNECTION_CONFIG } from "baileys/lib/Defaults/index.js";
 import { getWAUploadToServer } from "baileys/lib/Utils/messages-media.js";
+import { generateWAMessage } from "baileys/lib/Utils/messages.js";
 import {
   acquireTestPortBlock,
   PROXY_FIXTURE_CERTIFICATE,
@@ -16,6 +18,7 @@ import {
 } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockBaileys } from "../../../test/mocks/baileys.js";
+import { createWebSendApi } from "./inbound/send-api.js";
 import { createWaSocket } from "./session.js";
 import * as baileys from "./session.runtime.js";
 
@@ -40,6 +43,8 @@ g3jJFhhV9i6pH+3gQ6cRDnXzQuqhRANCAAR3Gq4w66O4uoei8K86L+rKXx1+qiGn
 JpXo7VbUJEtrv25TRC/HDefe6k0RuxRFpw/newYpnqvF9CsFOvmqvABQ
 -----END ${privateKeyLabel}-----`;
 
+const AGENT_IDLE_TIMEOUT_MS = 200;
+const SLOW_UPLOAD_RESPONSE_MS = 600;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const suiteTempDirs = useAutoCleanupTempDirTracker(afterAll);
 const mediaBytes = Buffer.from("WhatsApp upload boundary fixture\n");
@@ -71,6 +76,7 @@ describe("WhatsApp session media upload", () => {
   const agents = new Set<NonNullable<SocketOptions["agent"]>>();
   let originalCas: string[];
   let originPort: number;
+  let slowOriginPort: number;
   let plainOriginPort: number;
   let redirectUrl: string | undefined;
   let httpProxyUrl: string;
@@ -176,6 +182,22 @@ describe("WhatsApp session media upload", () => {
         (request, response) => receiveUpload(request, response, redirectUrl),
       ),
     );
+    // WhatsApp answers only after the whole body arrives; on a slow uplink that can be many
+    // seconds after the client has written its last byte into the socket buffer.
+    slowOriginPort = await listen(
+      https.createServer(
+        { key: PROXY_FIXTURE_KEY, cert: PROXY_FIXTURE_CERTIFICATE },
+        (req, res) => {
+          req.resume();
+          req.on("end", () => {
+            setTimeout(() => {
+              res.writeHead(200, { "content-type": "application/json", connection: "close" });
+              res.end(JSON.stringify(receipt));
+            }, SLOW_UPLOAD_RESPONSE_MS);
+          });
+        },
+      ),
+    );
     plainOriginPort = await listen(
       http.createServer((request, response) => receiveUpload(request, response)),
     );
@@ -238,9 +260,13 @@ describe("WhatsApp session media upload", () => {
     return { options, filePath };
   }
 
-  async function upload(session: Awaited<ReturnType<typeof createUploadSession>>, host: string) {
-    const warnings: unknown[][] = [];
-    const uploadMedia = getWAUploadToServer(
+  function createUploader(
+    session: Awaited<ReturnType<typeof createUploadSession>>,
+    host: string,
+    port: number,
+    warnings: unknown[][],
+  ) {
+    return getWAUploadToServer(
       {
         ...DEFAULT_CONNECTION_CONFIG,
         ...session.options,
@@ -253,9 +279,18 @@ describe("WhatsApp session media upload", () => {
         auth: "fixture-auth",
         ttl: 60,
         fetchDate: new Date(0),
-        hosts: [{ hostname: `${host}:${originPort}`, maxContentLengthBytes: 1024 }],
+        hosts: [{ hostname: `${host}:${port}`, maxContentLengthBytes: 1024 }],
       }),
     );
+  }
+
+  async function upload(
+    session: Awaited<ReturnType<typeof createUploadSession>>,
+    host: string,
+    { port = originPort }: { port?: number } = {},
+  ) {
+    const warnings: unknown[][] = [];
+    const uploadMedia = createUploader(session, host, port, warnings);
     try {
       const result = await uploadMedia(session.filePath, {
         mediaType: "image",
@@ -305,6 +340,54 @@ describe("WhatsApp session media upload", () => {
         { host: `127.0.0.1:${originPort}`, body: mediaBytes },
       ]);
       expect(proxyRequests).toEqual([`127.0.0.1:${originPort}`, `127.0.0.1:${originPort}`]);
+    }
+  });
+
+  it("sends media over a slow uplink past Node's default agent idle timeout", async () => {
+    // Without a proxy, Baileys uploads through https.globalAgent, whose sockets time out after
+    // 5s idle (Node >= 19). Shorten that idle timeout so the slow-uplink case runs quickly.
+    const nodeIdleTimeout = https.globalAgent.options.timeout;
+    https.globalAgent.options.timeout = AGENT_IDLE_TIMEOUT_MS;
+    try {
+      const session = await createUploadSession();
+      expect(session.options.fetchAgent).toBeUndefined();
+      // Without an upload timeout, the idle socket is aborted before the slow origin answers.
+      await expect(upload(session, "127.0.0.1", { port: slowOriginPort })).rejects.toThrow(
+        /Upload timeout/,
+      );
+      const warnings: unknown[][] = [];
+      const uploadMedia = createUploader(session, "127.0.0.1", slowOriginPort, warnings);
+      const sent: WAMessage[] = [];
+      const api = createWebSendApi({
+        defaultAccountId: "default",
+        sock: {
+          // Same option merge as Baileys' socket sendMessage: send options over its uploader.
+          sendMessage: async (jid, content, options) => {
+            const message = await generateWAMessage(jid, content, {
+              logger: DEFAULT_CONNECTION_CONFIG.logger,
+              userJid: "15550000000@s.whatsapp.net",
+              upload: uploadMedia,
+              messageId: "fixture-message",
+              ...options,
+            });
+            sent.push(message);
+            return message;
+          },
+          sendPresenceUpdate: async () => undefined,
+        },
+      });
+      try {
+        await api.sendMessage("+15551234567", "report", mediaBytes, "application/pdf");
+      } catch (cause) {
+        throw new Error(`Baileys upload diagnostics: ${inspect(warnings)}`, { cause });
+      }
+      expect(sent[0]?.message?.documentMessage).toMatchObject({
+        url: receipt.url,
+        directPath: receipt.direct_path,
+        caption: "report",
+      });
+    } finally {
+      https.globalAgent.options.timeout = nodeIdleTimeout;
     }
   });
 

@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "openclaw/plugin-sdk/media-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createWebSendApi } from "./inbound/send-api.js";
+import { createWebSendApi, WHATSAPP_MEDIA_UPLOAD_TIMEOUT_MS } from "./inbound/send-api.js";
 import { createAcceptedWhatsAppSendResult } from "./inbound/send-result.test-helper.js";
 import type { ActiveWebListener } from "./inbound/types.js";
 import { sendMessageWhatsApp } from "./send.js";
@@ -129,6 +129,7 @@ it.each(["ogg", "m4a"])("delivers %s voice and caption in one activity scope", a
         ptt: true,
         mimetype: "audio/ogg; codecs=opus",
       },
+      { mediaUploadTimeoutMs: WHATSAPP_MEDIA_UPLOAD_TIMEOUT_MS },
     ],
     ["1555@s.whatsapp.net", { text: caption }],
   ]);
