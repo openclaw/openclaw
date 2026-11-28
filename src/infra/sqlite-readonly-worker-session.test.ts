@@ -156,6 +156,24 @@ it("does not mark a runnable runtime unavailable after an ordinary worker abort"
   expect(readChildRuntimeViability().available).toBe(true);
 });
 
+it("preserves a filename split across stderr chunks when a running worker exits", async () => {
+  const { session, child } = createSession();
+  const mode = "state-sqlite-populated";
+  const first = session.run("/fixture/first.sqlite", { mode });
+  reply(child, { ok: true, hasExistingData: true });
+  await expect(first).resolves.toBe(true);
+
+  const pathname = "/fixture/查询🧭.sqlite";
+  const diagnostic = Buffer.from(`could not read ${pathname}\n`);
+  const split = diagnostic.indexOf(Buffer.from("🧭")) + 2;
+  const result = session.run(pathname, { mode });
+  child.stderr.emit("data", diagnostic.subarray(0, split));
+  child.stderr.emit("data", diagnostic.subarray(split));
+  child.emit("close", 8, null);
+
+  await expect(result).rejects.toThrow(`could not read ${pathname}`);
+});
+
 it("reuses its child after a well-formed staging refusal", async () => {
   const mode = "staging-create";
   const { session, child, readBudget } = createSession();
