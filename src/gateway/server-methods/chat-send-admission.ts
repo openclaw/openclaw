@@ -198,6 +198,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   let gatewayWorkAdmission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
   let localGoalAdmission = false;
   let localInputAdmission = false;
+  let commitInitialInput = false;
   let runtimeGoal: "local" | "worker" | undefined;
   let initialSessionEntry: InternalSessionEntry | undefined;
   let admittedSessionEntry: InternalSessionEntry | undefined;
@@ -399,21 +400,19 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         const placement = preparedPlacement?.facts.current();
         const acpMeta = acp?.meta ?? null;
         runtimeGoal = resolveRuntimeGoalAdmission(params, latestSession, placement, acpMeta);
-        localInputAdmission =
+        const localInput =
           !runtimeGoal &&
-          isLocalChatInputAdmission(
-            params,
-            latestSession,
-            initialSessionEntry,
-            placement,
-            acpMeta,
-          ) &&
+          isLocalChatInputAdmission(params, latestSession, initialSessionEntry, placement, acpMeta);
+        const idleForInput =
+          (localInput || params.sessionCreate === true) &&
           expectedActiveReplyOperation === undefined &&
           resolveProjectedAgentRunProgressState({
             agentId,
             sessionId: admittedSessionId,
             sessionKeys: [sessionKey],
           }) === undefined;
+        localInputAdmission = localInput && idleForInput;
+        commitInitialInput = params.sessionCreate === true && idleForInput;
         localGoalAdmission = Boolean(request.goalOperation && localInputAdmission);
         if (request.goalOperation && !localGoalAdmission && !runtimeGoal) {
           throw new SessionGoalOperationError(
@@ -716,6 +715,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         }),
       localGoalAdmission,
       localInputAdmission,
+      commitInitialInput,
       runtimeGoal,
       setDiscardAbandonedPreparedMedia: setDiscardPreparedMedia,
     },

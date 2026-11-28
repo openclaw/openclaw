@@ -39,6 +39,7 @@ export async function prepareAndAdmitChatSend(
   >,
   onAdmissionOwned?: () => Promise<boolean>,
   options?: {
+    sessionCreate?: boolean;
     trustedSystemInput?: boolean;
     activeSteer?: { runId: string; profileId: string };
     isDirectExternalUser?: boolean;
@@ -173,6 +174,7 @@ export async function prepareAndAdmitChatSend(
   const admitted = await admitChatSend({
     ...preparation,
     session,
+    sessionCreate: options?.sessionCreate,
     onAdmissionOwned,
     hasCurrentClientAuthority,
     sessionMutationAuthorization,

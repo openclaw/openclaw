@@ -15,6 +15,7 @@ export type ChatSendPreAdmissionParams = {
 };
 
 export type ChatSendAdmissionParams = ChatSendPreAdmissionParams & {
+  sessionCreate?: boolean;
   diagnostics?: ChatSendDiagnostics;
   session: PreparedChatSendSession;
   sessionMutationAuthorization?: SessionMutationAuthorization;

@@ -14,7 +14,7 @@ import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/sessi
 import * as sessionInputActors from "../config/sessions/session-input-actor.js";
 import { listSessionPendingInputs } from "../config/sessions/session-pending-input-history.js";
 import { recordSessionParticipantInWorker } from "../config/sessions/session-sharing-store.async.js";
-import { clearAgentRunContext } from "../infra/agent-run-registry.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { readLoggingConfig } from "../logging/config.js";
@@ -209,6 +209,25 @@ async function expectUncommittedInput(
   ]);
   return scope;
 }
+
+test("queues a create message on an active key without replacing its writer", async () => {
+  const fixture = await inputFixture("agent:main:dashboard:active-create");
+  const runId = "original-writer";
+  try {
+    const { sessionId } = await fixture.create();
+    await accepted(fixture.send("First message", runId), { status: "started" });
+    expect(fixture.read().activeWriterRunId).toBe(runId);
+    registerAgentRunContext(runId, { ...fixture.target, sessionId, projectSessionActive: true });
+    await fixture.create({ message: "Follow up" }, true);
+    expect(fixture.read().activeWriterRunId).toBe(runId);
+    expect(await listSessionPendingInputs({ ...fixture.target, sessionId })).toMatchObject({
+      items: [{ state: "queued", message: { content: "Follow up" } }],
+    });
+  } finally {
+    await fixture.drain();
+    fixture.ws.close();
+  }
+});
 
 test("persists and dispatches concurrent Gateway inputs while participant writes queue", async () => {
   dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
