@@ -313,7 +313,10 @@ it.each(["binary", "JSON"] as const)("caps active %s frames and terminates once"
   }
   await vi.waitFor(() => expect(terminate).toHaveBeenCalledOnce());
   expect(session.isConnected()).toBe(false);
-  expectError(onError, /send buffer exceeded/);
+  expect(onError).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ message: expect.stringMatching(/send buffer exceeded/) }),
+    "terminal",
+  );
   if (kind === "binary") {
     session.sendAudio(Buffer.from([2]));
     expect(terminate).toHaveBeenCalledOnce();
@@ -502,6 +505,7 @@ it.each(["failed handshake", "stable reset"] as const)("reconnect lifecycle: %s"
     await vi.waitFor(() =>
       expect(onError).toHaveBeenCalledWith(
         expect.objectContaining({ message: "test realtime transcription reconnect limit reached" }),
+        "terminal",
       ),
     );
     expect(connections).toHaveLength(3);
