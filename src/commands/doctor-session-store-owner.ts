@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { CONFIG_BACKUP_COUNT } from "../config/backup-rotation.js";
 import { getRecord } from "../config/legacy.shared.js";
 import { isSameAuthoredSessionStoreConfig } from "../config/sessions/session-store-config.js";
@@ -86,7 +87,9 @@ export async function prepareSessionStoreOwnerRecovery(params: {
       );
       break;
     }
-    const restoreCommand = formatCliCommand(`openclaw config set ${OWNER_KEY} ${owner.trim()}`);
+    const restoreCommand = formatCliCommand(
+      `openclaw config set ${OWNER_KEY} ${quoteCliArg(JSON.stringify(owner.trim()))} --strict-json`,
+    );
     const accepted = await params.prompter?.confirmRuntimeRepair({
       message: sanitizeDoctorNote(
         `Restore ${OWNER_KEY}=${JSON.stringify(owner)} from ${backupPath}? Its removal may have been intentional.`,
