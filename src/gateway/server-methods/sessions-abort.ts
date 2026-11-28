@@ -27,6 +27,7 @@ import { captureSessionTarget } from "../../sessions/session-controller.lifecycl
 import {
   getRpcSourceIdentity,
   getRpcSourceLifecycleGeneration,
+  getRpcSourceStartedAt,
   getRpcSourceForGateway,
   listRpcSourceEntries,
   listRpcSourceEntriesForTarget,
@@ -35,6 +36,7 @@ import {
   captureSessionControllerStop,
   stopSession,
 } from "../../sessions/session-controller.stop.js";
+import { buildAbortedAgentPayload } from "../agent-turn/agent-dedupe.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { waitForChatAbortTerminalPersistence } from "../chat-abort-lifecycle-internal.js";
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
@@ -546,7 +548,8 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
             const embeddedOnly = firstAbortedRunId !== null && !preAbortRuns.has(firstAbortedRunId);
             if (firstAbortedRunId && !workerOnly && !embeddedOnly) {
               const endedAt = Date.now();
-              const runKind = preAbortRuns.get(firstAbortedRunId)?.adapter.kind;
+              const abortedRun = preAbortRuns.get(firstAbortedRunId);
+              const runKind = abortedRun?.adapter.kind;
               const dedupePrefix = runKind === "agent" ? "agent" : "chat";
               const dedupeKey = `${dedupePrefix}:${firstAbortedRunId}`;
               // Nested cancellation can yield after the old controller ends. A new
@@ -561,13 +564,23 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
                 entry: {
                   ts: endedAt,
                   ok: true,
-                  payload: {
-                    status: "timeout",
-                    runId: firstAbortedRunId,
-                    agentId: targetAgentId,
-                    stopReason: "rpc",
-                    endedAt,
-                  },
+                  payload:
+                    runKind === "agent" &&
+                    abortedRun &&
+                    getRpcSourceStartedAt(abortedRun) === undefined
+                      ? {
+                          ...buildAbortedAgentPayload(firstAbortedRunId, "rpc", {
+                            agentId: targetAgentId,
+                          }),
+                          endedAt,
+                        }
+                      : {
+                          status: "timeout",
+                          runId: firstAbortedRunId,
+                          agentId: targetAgentId,
+                          stopReason: "rpc",
+                          endedAt,
+                        },
                 },
               });
             }

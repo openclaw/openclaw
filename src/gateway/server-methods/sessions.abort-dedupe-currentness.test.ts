@@ -237,6 +237,26 @@ it.each([
   },
 );
 
+it("sessions.abort preserves queue metadata for an undispatched agent receipt", async () => {
+  const { scope, runId, key, context, register } = await abortTarget("queued-abort-receipt");
+  const registration = register({ kind: "agent" });
+  registration.initializeTiming();
+  const respond = vi.fn<RespondFn>();
+  try {
+    await stopSession(scope.sessionKey, respond, context, { runId }, null);
+    expectStopped(respond, runId);
+    expect(context.dedupe.get(key)?.payload).toMatchObject({
+      runId,
+      status: "timeout",
+      stopReason: "rpc",
+      timeoutPhase: "queue",
+      providerStarted: false,
+    });
+  } finally {
+    registration.cleanup();
+  }
+});
+
 it.each(["unchanged", "successor"] as const)(
   "sessions.abort preserves the %s receipt after committed partial persistence",
   async (mode) => {
@@ -325,6 +345,8 @@ it.each(["unchanged", "successor"] as const)(
           status: "timeout",
           stopReason: "rpc",
         });
+        expect(context.dedupe.get(key)?.payload).not.toHaveProperty("timeoutPhase");
+        expect(context.dedupe.get(key)?.payload).not.toHaveProperty("providerStarted");
       }
     } finally {
       release.resolve();
