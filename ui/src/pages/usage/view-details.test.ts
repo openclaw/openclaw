@@ -108,12 +108,14 @@ function mount(
   {
     start = null,
     end = null,
+    mode = "per-turn",
     breakdownMode = "total",
     filters = {},
     ...errors
   }: {
     start?: number | null;
     end?: number | null;
+    mode?: UsageProps["detail"]["timeSeriesMode"];
     breakdownMode?: "total" | "by-type";
     filters?: Partial<
       Pick<UsageProps["filters"], "startDate" | "endDate" | "selectedDays" | "timeZone">
@@ -148,7 +150,7 @@ function mount(
           ...defaults.detail,
           timeSeries: { points },
           timeSeriesStatus: status(errors.timeSeries),
-          timeSeriesMode: "per-turn",
+          timeSeriesMode: mode,
           timeSeriesBreakdownMode: breakdownMode,
           get timeSeriesCursorStart() {
             return cursor().start;
@@ -286,6 +288,7 @@ it("keeps interval header totals on the timeline's selected days", () => {
     {
       start,
       end,
+      mode: "cumulative",
       filters: {
         startDate: "2026-05-13",
         endDate: "2026-05-15",
@@ -302,8 +305,10 @@ it("keeps interval header totals on the timeline's selected days", () => {
     },
   );
 
-  expect(container.querySelectorAll(".ts-bar")).toHaveLength(2);
-  expectText(container, ".timeseries-summary", "$0.30");
+  expect(
+    [...container.querySelectorAll(".ts-bar")].map((bar) => bar.getAttribute("aria-label")),
+  ).toEqual([expect.stringContaining("100 tokens"), expect.stringContaining("300 tokens")]);
+  expectText(container, ".timeseries-summary", "300", "$0.30");
   expectText(container, ".session-detail-stats", "300 tokens", "$0.30");
   expect(summary(container)).toMatchObject([{ value: "2" }, { value: "2" }, {}, {}]);
   const reset = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
@@ -312,6 +317,7 @@ it("keeps interval header totals on the timeline's selected days", () => {
   reset?.click();
   flush();
   expect(container.querySelector(".session-summary-value")?.textContent).toBe("10");
+  expectText(container, ".timeseries-summary", "2 msgs", "300", "$0.30");
 });
 
 it("aggregates selected tokens while counting actual loaded message roles", () => {
