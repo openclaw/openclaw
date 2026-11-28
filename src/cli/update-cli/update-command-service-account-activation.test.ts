@@ -18,6 +18,7 @@ const native = vi.hoisted(() => ({
   plan: undefined as ServiceAccountExecution | undefined,
   stopIgnored: false,
   scheduleFails: false,
+  cgroupPopulated: false,
 }));
 // Unit selection and account resolution have their own tests in the admission suite.
 vi.mock("./update-command-admit-service-account.js", async (importOriginal) => ({
@@ -45,9 +46,14 @@ vi.mock("../../daemon/systemd-exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/systemd-exec.js")>()),
   execSystemctl: async () => ({
     code: 0,
-    stdout: `ActiveState=${native.unit.active}\nMainPID=${native.unit.pid}\n`,
+    stdout: `ActiveState=${native.unit.active}\nMainPID=${native.unit.pid}\nControlGroup=${native.unit.active === "active" ? "/system.slice/openclaw-gateway.service" : ""}\n`,
     stderr: "",
   }),
+}));
+vi.mock("../../daemon/systemd-cgroup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/systemd-cgroup.js")>()),
+  isSystemdControlGroupEmpty: (controlGroup: string) =>
+    controlGroup === "/system.slice/openclaw-gateway.service" && !native.cgroupPopulated,
 }));
 vi.mock("../../process/exec.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../process/exec.js")>();
@@ -119,7 +125,11 @@ const scheduledScripts = () => native.scheduled.map((argv) => argv[argv.indexOf(
 const scheduledPayloads = () =>
   native.scheduled.map((argv) => JSON.parse(argv.at(-1) ?? "null") as Record<string, unknown>);
 
-const ok = (status: string): [number, string] => [0, `${JSON.stringify({ status })}\n`];
+// Like the real commands: Doctor output first, then the result as indented JSON.
+const ok = (status: string): [number, string] => [
+  0,
+  `Doctor: maintenance finish\n{ "status": "not-this-one" }\n${JSON.stringify({ status, receipt: "/x" }, undefined, 2)}\n`,
+];
 
 async function activate(budgetMs = 2_000) {
   const result = await updateSystemServiceAsAccount({
@@ -140,6 +150,7 @@ beforeEach(() => {
   native.plan = undefined;
   native.stopIgnored = false;
   native.scheduleFails = false;
+  native.cgroupPopulated = false;
   root = dirs.make("service-account-release-");
   fs.mkdirSync(path.join(root, "dist"));
   fs.writeFileSync(path.join(root, "dist", "index.js"), "setInterval(() => {}, 1000);\n");
@@ -264,6 +275,17 @@ describe("system service update as the unit's account", () => {
 
     expect(result).toMatchObject({ status: "failed", stateRestored: false });
     expect(result.status === "failed" && result.message).toContain("nothing was migrated");
+    expect(calls()).toEqual([]);
+  });
+
+  it("keeps the state when processes survive in the stopped unit's cgroup", async () => {
+    // systemd reports the unit inactive, but KillMode= left a process behind.
+    native.cgroupPopulated = true;
+    installAccount({ migrate: ok("migrated"), restore: ok("restored") });
+
+    const result = await activate();
+
+    expect(result).toMatchObject({ status: "failed", stateRestored: false });
     expect(calls()).toEqual([]);
   });
 

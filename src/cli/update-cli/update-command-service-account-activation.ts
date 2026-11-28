@@ -5,6 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { parseKeyValueOutput } from "../../daemon/runtime-parse.js";
 import { resolveServiceEntrypointIndex } from "../../daemon/service-layout.js";
 import type { SystemdServiceIdentity } from "../../daemon/service-types.js";
+import { isSystemdControlGroupEmpty } from "../../daemon/systemd-cgroup.js";
 import { execSystemctl } from "../../daemon/systemd-exec.js";
 import { startSystemdService, stopSystemdService } from "../../daemon/systemd-lifecycle.js";
 import { captureSystemdServiceIdentity } from "../../daemon/systemd-service-identity.js";
@@ -95,8 +96,16 @@ const settle = () => {
   }
   log("the installed updater restored " + version + "; restoring " + p.account + "'s state");
   systemctl("stop", p.unit);
-  for (let i = 0; i < 90 && !["inactive", "failed"].includes(active()); i++) spawnSync("/bin/sleep", ["1"]);
-  if (!["inactive", "failed"].includes(active())) { log(p.unit + " did not stop; state not restored, backup kept at " + p.backupRoot); return; }
+  // Stopped means inactive with an empty cgroup; KillMode= can leave processes behind.
+  const emptyCgroup = () => {
+    const cg = p.controlGroup;
+    if (typeof cg !== "string" || !cg.startsWith("/") || cg.split("/").slice(1).some((part) => !part || part === "." || part === "..")) return false;
+    try { return /^populated 0$/m.test(fs.readFileSync("/sys/fs/cgroup" + p.controlGroup + "/cgroup.events", "utf8")); }
+    catch (error) { return error && error.code === "ENOENT"; }
+  };
+  const stopped = () => ["inactive", "failed"].includes(active()) && emptyCgroup();
+  for (let i = 0; i < 90 && !stopped(); i++) spawnSync("/bin/sleep", ["1"]);
+  if (!stopped()) { log(p.unit + " did not stop; state not restored, backup kept at " + p.backupRoot); return; }
   if (asAccount("restored", "update", "restore", "--backup-root", p.backupRoot)) systemctl("start", p.unit);
   else log("restore did not confirm; " + p.unit + " left stopped, backup kept at " + p.backupRoot);
 };
@@ -117,7 +126,7 @@ async function scheduleSettle(
   mode: "settle" | "start",
   execution: ServiceAccountExecution,
   handoff: ServiceAccountHandoff,
-  params: { root: string; candidateVersion: string; backupRoot: string },
+  params: { root: string; candidateVersion: string; backupRoot: string; controlGroup: string },
 ): Promise<string | undefined> {
   const unit = `openclaw-update-settle-${randomUUID()}.service`;
   const payload = {
@@ -132,6 +141,7 @@ async function scheduleSettle(
     envFile: handoff.envFile,
     handoffDir: handoff.directory,
     backupRoot: params.backupRoot,
+    controlGroup: params.controlGroup,
     loader: SERVICE_ACCOUNT_ENV_LOADER,
     path: SERVICE_ACCOUNT_LAUNCH_PATH,
   };
@@ -154,11 +164,19 @@ async function scheduleSettle(
   return result?.code === 0 ? unit : undefined;
 }
 
-/** The account's JSON line is untrusted: only a bounded status word is read from it. */
+/**
+ * The account's result is untrusted: the command prints Doctor output first and its result
+ * last, as an indented JSON object. Only that final object is parsed, from bounded output,
+ * and only a short status word is read from it.
+ */
 function readAccountStatus(stdout: Buffer): string | undefined {
-  const lines = stdout.toString("utf8").trim().split("\n");
+  const text = stdout.toString("utf8");
+  const at = text.startsWith("{") ? 0 : text.lastIndexOf("\n{") + 1;
+  if (at <= 0 && !text.startsWith("{")) {
+    return undefined;
+  }
   try {
-    const value: unknown = JSON.parse(lines.at(-1) ?? "");
+    const value: unknown = JSON.parse(text.slice(at));
     const status =
       value && typeof value === "object" && "status" in value ? value.status : undefined;
     return typeof status === "string" && /^[a-z-]{1,32}$/u.test(status) ? status : undefined;
@@ -169,7 +187,7 @@ function readAccountStatus(stdout: Buffer): string | undefined {
 
 async function readUnit(unitName: string) {
   const result = await execSystemctl(
-    ["--system", "show", unitName, "--property=ActiveState,MainPID"],
+    ["--system", "show", unitName, "--property=ActiveState,MainPID,ControlGroup"],
     undefined,
     5_000,
   );
@@ -178,6 +196,7 @@ async function readUnit(unitName: string) {
     ok: result.code === 0,
     active: properties.activestate ?? "",
     pid: Number(properties.mainpid ?? 0),
+    controlGroup: properties.controlgroup ?? "",
   };
 }
 
@@ -277,13 +296,30 @@ async function activateSystemServiceAsAccount(
       await (action === "start" ? startSystemdService(args) : stopSystemdService(args));
     };
     // Restoring is only safe with no Gateway writing; an unproven stop keeps the backup.
+    // Restoring is only safe with no Gateway writing: systemd must report the unit stopped and
+    // its cgroup empty, since KillMode= can leave processes behind. The cgroup is the one the
+    // running unit had; without it a stop is not confirmed and the backup is kept.
+    let controlGroup = "";
     const stopConfirmed = async () => {
+      const running = await readUnit(unitName);
+      if (running.ok && running.controlGroup) {
+        controlGroup = running.controlGroup;
+      }
       await control("stop").catch((error: unknown) => {
         options.warn(`${unitName} stop request failed: ${formatErrorMessage(error)}`);
       });
       return await waitForUnit(
         unitName,
-        (unit) => unit.active === "inactive" || unit.active === "failed",
+        (unit) => {
+          if (unit.active !== "inactive" && unit.active !== "failed") {
+            return false;
+          }
+          try {
+            return Boolean(controlGroup) && isSystemdControlGroupEmpty(controlGroup);
+          } catch {
+            return false;
+          }
+        },
         STOP_TIMEOUT_MS,
       );
     };
@@ -313,6 +349,7 @@ async function activateSystemServiceAsAccount(
         root: options.root,
         candidateVersion: options.candidateVersion,
         backupRoot,
+        controlGroup,
       });
       handoffOwned = settleUnit === undefined;
       return failed(
@@ -364,6 +401,7 @@ async function activateSystemServiceAsAccount(
       root: options.root,
       candidateVersion: options.candidateVersion,
       backupRoot,
+      controlGroup,
     });
     if (settleUnit) {
       handoffOwned = false;

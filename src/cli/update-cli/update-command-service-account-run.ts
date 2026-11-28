@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { serviceAccountArgv } from "../../daemon/systemd-service-account-command.js";
@@ -34,11 +33,21 @@ export type ServiceAccountHandoff = {
   remove: () => Promise<void>;
 };
 
+const HANDOFF_PARENT = "/tmp";
+
 export async function createServiceAccountHandoff(
   execution: ServiceAccountExecution,
   env: Record<string, string> = {},
 ): Promise<ServiceAccountHandoff> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-handoff-"));
+  // Not os.tmpdir(): an updater's temp directory is often private to root, and the account
+  // must be able to traverse to the file. /tmp must be root's sticky directory, so nobody
+  // else can rename the directory created in it.
+  const parentPath = await fs.realpath(HANDOFF_PARENT);
+  const parent = await fs.lstat(parentPath);
+  if (!parent.isDirectory() || parent.uid !== 0 || (parent.mode & 0o1000) === 0) {
+    throw new Error(`${HANDOFF_PARENT} is not a root-owned sticky directory.`);
+  }
+  const directory = await fs.mkdtemp(path.join(parentPath, "openclaw-update-handoff-"));
   const remove = () => fs.rm(directory, { recursive: true, force: true });
   const write = async (name: string, contents: string) => {
     const file = path.join(directory, name);

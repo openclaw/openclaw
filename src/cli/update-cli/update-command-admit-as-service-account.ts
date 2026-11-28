@@ -67,8 +67,16 @@ export async function admitAsServiceAccount(
     await handoff.remove();
   }
   if (result.termination !== "exit" || (result.code !== 0 && result.code !== 3)) {
+    // Diagnostic only: the account's last stderr line, printable characters, bounded.
+    const reason = result.stderr
+      .toString("utf8")
+      .trim()
+      .split("\n")
+      .at(-1)
+      ?.replace(/[^\x20-\x7e]/gu, "")
+      .slice(0, 160);
     return refuse(
-      result.termination === "exit" ? `exit ${result.code}` : `admission ${result.termination}`,
+      `${result.termination === "exit" ? `exit ${result.code}` : `admission ${result.termination}`}${reason ? `: ${reason}` : ""}`,
     );
   }
   let value: unknown;
