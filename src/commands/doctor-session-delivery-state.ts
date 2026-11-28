@@ -24,11 +24,15 @@ import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
 } from "../infra/sqlite-worker-identity.js";
-import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
+import {
+  findStartupMaintenanceRequiredError,
+  StartupMaintenanceRequiredError,
+} from "../infra/startup-maintenance-required.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import {
   createLegacyStateMigrationStepReceipt,
   DoctorStateMigrationRefusalError,
+  PENDING_STATE_MIGRATION_REFUSAL_CODE,
 } from "../infra/state-migrations.messages.js";
 import { AgentDatabaseMaintenanceRequiredError } from "../state/openclaw-agent-db-maintenance-authority.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "../state/openclaw-agent-db-migration-required.js";
@@ -399,6 +403,10 @@ export async function repairLegacySessionEntryStates(params: {
     });
   } catch (error) {
     const endpoints = [{ kind: "owner" as const, id: "session-entry-state" }];
+    // A required schema/media migration is routine work for `--fix`, not a failed repair.
+    const maintenance = findStartupMaintenanceRequiredError(error);
+    const pendingMigration = Boolean(maintenance && maintenance.kind !== "newer-schema");
+    const message = formatErrorMessage(error);
     throw new DoctorStateMigrationRefusalError([
       createLegacyStateMigrationStepReceipt(
         {
@@ -408,8 +416,11 @@ export async function repairLegacySessionEntryStates(params: {
           target: endpoints,
           requiredness: "required",
           reversibility: "checkpoint-required",
+          ...(pendingMigration
+            ? { refusal: { code: PENDING_STATE_MIGRATION_REFUSAL_CODE, message } }
+            : {}),
         },
-        { changes: [], warnings: [formatErrorMessage(error)] },
+        { changes: [], warnings: [message] },
       ),
     ]);
   }
