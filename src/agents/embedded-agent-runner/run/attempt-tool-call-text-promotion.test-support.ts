@@ -11,13 +11,13 @@ export const messageContent = (message: unknown) => record(message, "message").c
 export const collectPromotionEvents = async (stream: FakeWrappedStream) =>
   (await collectStreamEvents(stream)).map((event) => record(event, "event"));
 
-export const assistantMessage = (content: unknown[] = []) => ({
+export const assistantMessage = (content: unknown[]) => ({
   role: "assistant",
   content,
   stopReason: "stop",
 });
 
-export const commandText = (command = "pwd", marker = "[tool:exec]") =>
+export const commandText = (command: string, marker = "[tool:exec]") =>
   `${marker}\n<parameter=command>\n${command}\n</parameter>\n</function>`;
 
 export async function wrapPromotionStream(baseFn: () => FakeWrappedStream, toolName = "exec") {
