@@ -162,6 +162,7 @@ describe("release docs mirrors", () => {
     const input = [
       '# A release\n\n## Messaging\n\n<AccordionGroup>\n<Accordion title="Keep **this** wording">\n',
       "Exact prose: [install](/install/node#help), [relative](../guide.md), [section](#source).\n",
+      "### Nested section\n",
       '<details class="release-source-toggle">\n<summary>Sources and complete change list</summary>\n',
       preserved[0] + "\n",
       preserved[1] + "\n",
@@ -175,6 +176,7 @@ describe("release docs mirrors", () => {
     for (const text of [
       ...preserved,
       "##### Keep **this** wording",
+      "###### Nested section",
       "###### Sources and complete change list",
       "![original alt](https://docs.openclaw.ai/images/example.png)",
       "[install](https://docs.openclaw.ai/install/node#help)",
