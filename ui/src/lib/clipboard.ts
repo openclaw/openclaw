@@ -12,12 +12,20 @@ export function beginClipboardCopy(): number {
   return ++clipboardWriteAttempt;
 }
 
+/**
+ * Copies text, or text still being fetched. A promise is handed to the browser while the user
+ * gesture is live, so Safari and Chrome accept the write after an async read; reject it to
+ * abort the copy without touching the clipboard.
+ */
 export async function copyToClipboard(
-  text: string,
+  pending: string | Promise<string>,
   shouldFallback?: () => boolean,
 ): Promise<boolean> {
   const attempt = beginClipboardCopy();
-  if (!text) {
+  // The clipboard is shared across controls. A newer copy or a retired caller cancels a
+  // delayed transport before it can overwrite the user's selection.
+  const retired = () => attempt !== clipboardWriteAttempt || shouldFallback?.() === false;
+  if (pending === "") {
     return false;
   }
   // Copy controls can lose focus when disabled while the async transport settles.
@@ -27,6 +35,24 @@ export async function copyToClipboard(
       : registryFor(document).stack.findLast(
           (entry) => entry.open && entry.contains(document.activeElement),
         );
+  if (
+    typeof pending !== "string" &&
+    navigator.clipboard?.write &&
+    typeof ClipboardItem === "function"
+  ) {
+    try {
+      const blob = pending.then((value) => new Blob([value], { type: "text/plain" }));
+      void blob.catch(() => undefined);
+      await navigator.clipboard.write([new ClipboardItem({ "text/plain": blob })]);
+      return true;
+    } catch {
+      // Rejected text, denied permission, or no ClipboardItem promise support: retry below.
+    }
+  }
+  const text = typeof pending === "string" ? pending : await pending.catch(() => "");
+  if (!text || (typeof pending !== "string" && retired())) {
+    return false;
+  }
   if (navigator.clipboard?.writeText) {
     try {
       await navigator.clipboard.writeText(text);
@@ -36,9 +62,7 @@ export async function copyToClipboard(
       // fall through to the execCommand path before giving up.
     }
   }
-  // The clipboard is shared across controls. A newer copy or a retired caller
-  // cancels this second transport before it can overwrite the user's selection.
-  if (attempt !== clipboardWriteAttempt || (shouldFallback && !shouldFallback())) {
+  if (retired()) {
     return false;
   }
   return copyWithExecCommand(

@@ -97,7 +97,7 @@ it.each([false, true])(
 
     await run(preview ? "copy-session-preview-link" : "copy-session-link");
 
-    const href = vi.mocked(copyToClipboard).mock.calls.at(-1)?.[0];
+    const href = await vi.mocked(copyToClipboard).mock.calls.at(-1)?.[0];
     expect(new URL(href ?? "").origin).toBe(
       preview ? "https://gateway.example.test" : "https://studio-k7x2q.claws.example.test",
     );
@@ -162,7 +162,7 @@ it.each([null, "leaf-3"])(
       { ...historyQuery, limit: 1000, offset: 1 },
       { ...historyQuery, limit: 1, offset: 0 },
     ]);
-    const copied = vi.mocked(copyToClipboard).mock.calls[0]?.[0] ?? "";
+    const copied = (await vi.mocked(copyToClipboard).mock.calls[0]?.[0]) ?? "";
     expect(copyToClipboard).toHaveBeenCalledWith(
       expect.stringContaining("First response"),
       expect.any(Function),
@@ -193,7 +193,7 @@ it.each(["operator.read", "operator.sessions.read", "operator.sessions.write"])(
       ]),
     );
     await copy();
-    const copied = vi.mocked(copyToClipboard).mock.calls[0]?.[0] ?? "";
+    const copied = (await vi.mocked(copyToClipboard).mock.calls[0]?.[0]) ?? "";
     expect(copied).toContain("Visible response");
     expect(copied).toContain("NO_REPLY");
     expect(copied).not.toMatch(/HEARTBEAT_OK|transcript repair|## You/);
