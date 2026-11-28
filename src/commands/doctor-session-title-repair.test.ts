@@ -253,3 +253,62 @@ it("does not commit after Doctor maintenance authority expires", async () => {
     });
   });
 });
+
+it.each([
+  ["a missing title", undefined, "Find the cause"],
+  ["a stored NUL title", "Stored\0title", "Stored title"],
+  ["a NUL-only title", "\0 \0", undefined],
+  ["a valid manual title", "  Manual title  ", "  Manual title  "],
+] as const)(
+  "repairs %s without changing canonical messages",
+  async (_name, displayName, expected) => {
+    await withSession(
+      async (params) => {
+        await sessionAccessor.patchSessionEntryCore(params, () => ({ displayName }), {
+          preserveActivity: true,
+        });
+        const before = sessionAccessor.loadSessionEntry(params);
+        const transcript = sessionAccessor.readSessionTranscriptMessageEventPage(params, {
+          maxMessages: 10,
+          offset: 0,
+        });
+        await repairLegacySessionTitles({ cfg, env: process.env, apply: false });
+        expect(sessionAccessor.loadSessionEntry(params)).toEqual(before);
+        await repair();
+        expect(sessionAccessor.loadSessionEntry(params)).toMatchObject({
+          updatedAt: 12,
+          lastActivityAt: 11,
+          lastInteractionAt: 10,
+        });
+        expect(sessionAccessor.loadSessionEntry(params)?.displayName).toBe(expected);
+        await repair();
+        // Clearing an unusable name restores the existing missing-title behavior.
+        expect(sessionAccessor.loadSessionEntry(params)?.displayName).toBe(
+          expected ?? "Find the cause",
+        );
+        expect(
+          sessionAccessor.readSessionTranscriptMessageEventPage(params, {
+            maxMessages: 10,
+            offset: 0,
+          }),
+        ).toEqual(transcript);
+      },
+      [user("Find\0the cause")],
+    );
+  },
+);
+
+it("preserves a title renamed after the repair scan", async () => {
+  await withSession(async (params) => {
+    const patch = sessionAccessor.patchSessionEntryCore;
+    await patch(params, () => ({ displayName: "Stored\0title" }), { preserveActivity: true });
+    vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockImplementationOnce(
+      async (scope, update, options) => {
+        await patch(scope, () => ({ displayName: "Operator rename" }), { preserveActivity: true });
+        return patch(scope, update, options);
+      },
+    );
+    await repair();
+    expect(sessionAccessor.loadSessionEntry(params)?.displayName).toBe("Operator rename");
+  });
+});

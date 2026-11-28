@@ -66,7 +66,7 @@ function readLegacySessionTitle(
   }
 }
 
-/** Derive missing historical titles while Doctor owns session maintenance. */
+/** Repair missing or NUL-bearing historical titles while Doctor owns maintenance. */
 export async function repairLegacySessionTitles(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -103,7 +103,7 @@ export async function repairLegacySessionTitles(params: {
       agentId: target.agentId,
       path: target.sqlitePath,
       run: () => {
-        const sessions: Array<{ sessionKey: string; sessionId: string }> = [];
+        const sessions: Array<{ sessionKey: string; sessionId: string; displayName?: string }> = [];
         scanDoctorSessionEntriesTolerant(
           scope,
           ({ entry, sessionKey, recoveredFromProjections }) => {
@@ -114,9 +114,13 @@ export async function repairLegacySessionTitles(params: {
               !isIncognitoSessionKey(sessionKey) &&
               // Spawn owns child labels; its first user message is a runtime task envelope.
               !isSubagentSessionKey(sessionKey) &&
-              !hasExplicitSessionName(entry)
+              (!hasExplicitSessionName(entry) || entry.displayName?.includes("\0"))
             ) {
-              sessions.push({ sessionKey, sessionId: entry.sessionId });
+              sessions.push({
+                sessionKey,
+                sessionId: entry.sessionId,
+                displayName: entry.displayName,
+              });
             }
           },
         );
@@ -126,14 +130,18 @@ export async function repairLegacySessionTitles(params: {
     if (!scan.ok) {
       continue;
     }
-    for (const { sessionKey, sessionId } of scan.value) {
+    for (const { sessionKey, sessionId, displayName } of scan.value) {
       if (params.apply) {
         assertRepairAuthority();
       }
       try {
         const session = { ...scope, sessionKey, sessionId };
-        const title = readLegacySessionTitle(session);
-        if (!title) {
+        const containsNul = displayName?.includes("\0") === true;
+        // Normalize the stored title itself; never replace a manual name from transcript text.
+        const title = containsNul
+          ? displayName?.replaceAll("\0", " ").replace(/\s+/g, " ").trim() || undefined
+          : readLegacySessionTitle(session);
+        if (!containsNul && !title) {
           continue;
         }
         report.found++;
@@ -141,14 +149,26 @@ export async function repairLegacySessionTitles(params: {
           continue;
         }
         // Offline Doctor owns these stores; concurrent title changes are best effort.
-        await patchSessionEntryCore(session, () => ({ displayName: title }), {
-          preserveActivity: true,
-          skipMaintenance: true,
-          assertCommitAllowed: assertRepairAuthority,
-          onCommitted: () => {
-            report.repaired++;
+        await patchSessionEntryCore(
+          session,
+          (current) => {
+            if (
+              current.displayName !== displayName ||
+              (!containsNul && hasExplicitSessionName(current))
+            ) {
+              return null;
+            }
+            return { displayName: title };
           },
-        });
+          {
+            preserveActivity: true,
+            skipMaintenance: true,
+            assertCommitAllowed: assertRepairAuthority,
+            onCommitted: () => {
+              report.repaired++;
+            },
+          },
+        );
         assertRepairAuthority();
       } catch (error) {
         if (params.apply) {

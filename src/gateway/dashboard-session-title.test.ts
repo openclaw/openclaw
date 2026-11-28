@@ -474,6 +474,8 @@ function textAttachment(text: string): ChatAttachment {
 describe("deriveGoalSessionTitle", () => {
   it.each([
     ["/new", undefined],
+    ["Find\0the\0cause", "Find the cause"],
+    ["\0 \0", undefined],
     [
       "Hey. Investigate why heartbeat failed overnight.",
       "Investigate why heartbeat failed overnight.",
