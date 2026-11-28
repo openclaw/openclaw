@@ -216,6 +216,18 @@ export async function terminateCodexAppServerDescendants(
   }
   let resumeRootOnUnwind = true;
   try {
+    if (process.platform === "linux") {
+      // Stop the children we already identified before the next full /proc scan.
+      // Quiescence still requires a fresh tree to discover forks and confirm stops.
+      for (const descendant of initialDescendants) {
+        if (
+          !isStoppedState(descendant.state) &&
+          (await signalSameProcess(descendant, "SIGSTOP", budget))
+        ) {
+          stoppedDescendants.set(identityKey(descendant), descendant);
+        }
+      }
+    }
     const descendants = await quiesceDescendants(
       root,
       initialDescendants,
