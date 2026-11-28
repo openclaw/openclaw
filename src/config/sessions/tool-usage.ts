@@ -53,14 +53,25 @@ function withDatabase<T>(
   );
 }
 
-async function write<Key extends UsageOperation>(
+/**
+ * Runs one usage operation in a write admission. `create` lets a live agent's
+ * write create its store; without it a missing store yields undefined.
+ */
+async function runUsageOperation<Key extends UsageOperation>(
   options: OpenClawAgentDatabaseOptions,
   assertCurrent: () => void,
   type: Key,
   input: AgentDatabaseOperations[Key]["input"],
-): Promise<AgentDatabaseOperations[Key]["output"]> {
+  create: boolean,
+): Promise<{ value: AgentDatabaseOperations[Key]["output"] } | undefined> {
   assertCurrent();
-  const captured = captureOpenClawAgentDatabaseExecutionAsync(options, {}, "inherit").then(
+  // Creation authority and prepare go together; the store refuses a creating
+  // capture that never prepares.
+  const captured = captureOpenClawAgentDatabaseExecutionAsync(
+    options,
+    {},
+    create ? "inherit" : undefined,
+  ).then(
     (execution) => ok(execution),
     (error: unknown) => err<never, unknown>(error),
   );
@@ -72,14 +83,12 @@ async function write<Key extends UsageOperation>(
         throw acquired.error;
       }
       const execution = acquired.value;
-      await execution.prepare(source);
-      const result = await execution.runExisting(source, async (worker) => ({
+      if (create) {
+        await execution.prepare(source);
+      }
+      return await execution.runExisting(source, async (worker) => ({
         value: await worker.execute({ type, input }),
       }));
-      if (!result) {
-        throw new Error("Tool usage database disappeared before write");
-      }
-      return result.value;
     });
   } finally {
     const acquired = await captured;
@@ -87,6 +96,19 @@ async function write<Key extends UsageOperation>(
       await acquired.value.release();
     }
   }
+}
+
+async function write<Key extends UsageOperation>(
+  options: OpenClawAgentDatabaseOptions,
+  assertCurrent: () => void,
+  type: Key,
+  input: AgentDatabaseOperations[Key]["input"],
+): Promise<AgentDatabaseOperations[Key]["output"]> {
+  const result = await runUsageOperation(options, assertCurrent, type, input, true);
+  if (!result) {
+    throw new Error("Tool usage database disappeared before write");
+  }
+  return result.value;
 }
 
 export function readAgentToolUsageStatus(
@@ -253,11 +275,14 @@ export async function pruneRegisteredAgentToolUsage(input: {
     ) {
       continue;
     }
-    await write(
+    // Retention only maintains existing stores: an operator may have removed a retired
+    // agent's directory while its registration stays (#205927), so never create one here.
+    await runUsageOperation(
       { agentId: entry.agentId, path: entry.path, env },
       input.assertCurrent,
       "toolUsage.prune",
       { now: input.now },
+      false,
     );
   }
 }

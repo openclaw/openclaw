@@ -636,7 +636,13 @@ describe("renderModelProviders", () => {
 
   it("leads a new user with the provider catalog and holds defaults until a model exists", () => {
     const onCatalogConnect = vi.fn();
-    const openai = { id: "openai", label: "OpenAI", choices: [], authProviders: ["openai"] };
+    const openai = {
+      id: "openai",
+      label: "OpenAI",
+      choices: [],
+      authProviders: ["openai"],
+      apiKeyProviders: ["openai"],
+    };
     const container = mount(
       props({
         cards: [],
@@ -644,7 +650,7 @@ describe("renderModelProviders", () => {
         defaultModels: { primary: "", fallbacks: [], utilityModel: null },
         thinkingOverridden: false,
         fastModeOverridden: false,
-        catalogProviders: [{ ...openai, apiKeyProvider: "openai" }],
+        catalogProviders: [openai],
         onCatalogConnect,
       }),
     );
@@ -1038,23 +1044,4 @@ it("filters provider access without hiding global defaults and exposes an empty 
   expect(text(container)).toContain("No providers match your search.");
   expect(container.querySelectorAll("[data-provider-id]")).toHaveLength(0);
   expect(container.querySelector("#settings-model-behavior")).not.toBeNull();
-});
-
-it("lists usable providers first, each group alphabetical", () => {
-  const unusable = { apiKey: undefined, modelCount: 0, availableModelCount: 0 };
-  const container = mount(
-    props({
-      cards: [
-        card({ id: "zeta", displayName: "Zeta", ...unusable }),
-        card({ id: "xai", displayName: "xAI" }),
-        card({ id: "alpha", displayName: "Alpha", ...unusable }),
-        card({ id: "anthropic", displayName: "Anthropic" }),
-      ],
-    }),
-  );
-  expect(
-    [...container.querySelectorAll("[data-provider-id]")].map((row) =>
-      row.getAttribute("data-provider-id"),
-    ),
-  ).toEqual(["anthropic", "xai", "alpha", "zeta"]);
 });

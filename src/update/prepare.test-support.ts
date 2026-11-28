@@ -7,6 +7,7 @@ import { afterEach, beforeEach, vi } from "vitest";
 import * as openclawRoot from "../infra/openclaw-root.js";
 import { closeDefaultRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
+import type { CheckReleaseResult } from "./check-release.js";
 
 const exec = promisify(execFile);
 export let root: string;
@@ -37,7 +38,7 @@ beforeEach(async () => {
   for (const key of ["container", "DOCKER_CONTAINER", "OPENCLAW_CONTAINER", "IN_NIX_SHELL"]) {
     vi.stubEnv(key, "");
   }
-  // Every update reclaims earlier updaters' runtimes; keep that scan inside this fixture.
+  // Lease coordination stays inside this fixture, away from other local updates.
   const tmp = path.join(root, "tmp");
   await fs.mkdir(tmp);
   for (const key of ["TMPDIR", "TMP", "TEMP"]) {
@@ -56,7 +57,7 @@ afterEach(async () => {
 export async function repository(
   failBuild = false,
   engine = ">=1",
-  releaseAware = false,
+  releaseAware: boolean | CheckReleaseResult = false,
   schemaVersions?: OpenClawSchemaVersions,
   pluginCommand = "console.log(JSON.stringify({status:'ok',changed:false,warnings:[],sync:{warnings:[],errors:[]},npm:{outcomes:[]}}));",
   version = "2026.11.21",
@@ -84,12 +85,13 @@ export async function repository(
     await fs.mkdir(path.join(source, "src", "update"), { recursive: true });
     await fs.writeFile(path.join(source, "src", "update", "check-release.ts"), "");
   }
+  const check = typeof releaseAware === "object" ? releaseAware : { ok: true, surfaces: [] };
   await fs.writeFile(
     path.join(source, "openclaw.mjs"),
     `import { spawnSync } from 'node:child_process';
     import fs from 'node:fs';
     if (process.argv[3] === 'check-release') {
-      ${releaseAware ? "console.log(JSON.stringify({ok:true,surfaces:[]}));" : "throw new Error('unsupported command');"}
+      ${releaseAware ? `console.log(JSON.stringify(${JSON.stringify(check)})); process.exitCode = ${check.ok ? 0 : 1};` : "throw new Error('unsupported command');"}
     } else { ${pluginCommand} }`,
   );
   await fs.writeFile(

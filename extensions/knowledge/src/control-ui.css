@@ -1843,7 +1843,7 @@
   color: var(--muted-strong, var(--muted));
   font-weight: 500;
 }
-.knowledge-source-meta .knowledge-save-status[data-change="New"] {
+.knowledge-source-meta .knowledge-save-status[data-change="created"] {
   color: var(--accent);
 }
 .knowledge-disclosure-label {
@@ -1936,6 +1936,7 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
 }
 .knowledge-excerpt-label strong {
   letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 .knowledge-source-unavailable {
   border: 1px solid var(--warn, var(--border));
@@ -2247,17 +2248,28 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
 .knowledge-activity-summary > .knowledge-icon[data-change="withdrawn"] {
   color: var(--muted);
 }
+.knowledge-versions {
+  container: knowledge-versions / inline-size;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) auto auto;
+  column-gap: 12px;
+}
+.knowledge-versions > * {
+  grid-column: 1 / -1;
+}
 .knowledge-version {
   display: grid;
-  grid-template-columns: 48px minmax(0, 1fr) auto auto;
+  grid-template-columns: subgrid;
   align-items: center;
   gap: 12px;
-  margin: 6px 0;
+  margin: 3px 0;
   padding: 8px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md, 8px);
 }
 .knowledge-page .knowledge-version > button {
+  min-height: 32px;
+  justify-content: start;
   padding: 0;
   border: 0;
   background: transparent;
@@ -2266,6 +2278,7 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
   white-space: normal;
 }
 .knowledge-version > code {
+  min-width: 48px;
   color: var(--muted);
   font-size: 11px;
 }
@@ -2309,15 +2322,21 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
   margin-left: 0;
   white-space: nowrap;
 }
-@media (max-width: 650px) {
+@container knowledge-versions (max-width: 650px) {
   .knowledge-version {
-    grid-template-columns: 48px minmax(0, 1fr);
+    grid-template-columns: 48px minmax(0, 1fr) auto;
+    row-gap: 4px;
   }
-  .knowledge-version > small,
-  .knowledge-version > .knowledge-chip {
+  .knowledge-version > button {
+    grid-column: 2 / -1;
+  }
+  .knowledge-version > small {
     grid-column: 2;
-    justify-self: start;
+    white-space: normal;
+    text-wrap: balance;
   }
+}
+@media (max-width: 650px) {
   .knowledge-browse-connection {
     display: flex;
     flex-wrap: wrap;
@@ -2973,6 +2992,7 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
 
 /* Conversation-owned Knowledge activity: shared host dock, plugin-owned content. */
 .knowledge-session-panel {
+  max-width: none;
   padding: 18px;
   height: 100%;
   overflow: auto;

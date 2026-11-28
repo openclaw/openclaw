@@ -30,11 +30,12 @@ import {
 import { hasErrnoCode } from "./errno.js";
 import { acquireFileLockSync } from "./file-lock-manager.js";
 import {
-  classifyGatewayLockProcessNamespace,
   describeGatewayLockHolder,
   GATEWAY_OWNER_HEARTBEAT_STALE_MS,
+  LEGACY_GATEWAY_OWNER_LEASE_TTL_MS,
   GatewayLockNamespaceError,
   type GatewayLockRole,
+  type GatewayLockIdentity,
   type LockPayload,
   LockPayloadSchema,
   parseGatewayLockPayload,
@@ -44,6 +45,7 @@ import {
   readGatewayLockProcessCmdline,
   readGatewayLockProcessStartTime,
 } from "./gateway-lock-process.js";
+import { classifyGatewayLockProcessNamespace } from "./gateway-lock-recovery-namespace.js";
 import { drainGatewayLockResources } from "./gateway-lock-release.js";
 import {
   acquireGatewayOwnerLease,
@@ -109,28 +111,7 @@ export type GatewayLockOptions = {
 export const GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS = 5 * 60_000;
 const log = createSubsystemLogger("gateway");
 
-export type GatewayLockIdentity = {
-  pid: number;
-  ownerId?: string;
-  cronOwnerProjection?: "dynamic-default-v1";
-  createdAt: string;
-  port: number;
-  startTime?: number;
-};
-
-export function isSameGatewayLockIdentity(
-  previous: GatewayLockIdentity,
-  current: GatewayLockIdentity,
-): boolean {
-  if (previous.ownerId && current.ownerId) {
-    return previous.ownerId === current.ownerId;
-  }
-  return (
-    previous.pid === current.pid &&
-    previous.createdAt === current.createdAt &&
-    previous.startTime === current.startTime
-  );
-}
+export { type GatewayLockIdentity, isSameGatewayLockIdentity } from "./gateway-lock-payload.js";
 
 export class GatewayLockError extends Error {
   constructor(
@@ -162,6 +143,7 @@ function resolveGatewayOwnerStatusSync(
     deadlineMs?: number;
     signal?: AbortSignal;
     lockPath?: string;
+    databasePath?: string;
   } = {},
 ): LockOwnerStatus {
   const remainingTimeoutMs = () => {
@@ -174,7 +156,7 @@ function resolveGatewayOwnerStatusSync(
     return Math.max(1, Math.min(CMDLINE_EXEC_TIMEOUT_MS, Math.ceil(remaining)));
   };
   remainingTimeoutMs();
-  const namespace = classifyGatewayLockProcessNamespace(payload, opts.lockPath);
+  const namespace = classifyGatewayLockProcessNamespace(payload, opts.lockPath, opts.databasePath);
   if (namespace !== "same") {
     return namespace;
   }
@@ -342,9 +324,11 @@ async function readVerifiedGatewayLockIdentity(
   ) {
     return undefined;
   }
+  const stateDir = resolveStateDir(opts.env ?? process.env);
+  const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
   if (
     opts.requireInspection &&
-    classifyGatewayLockProcessNamespace(payload, lockPath) === "unknown"
+    classifyGatewayLockProcessNamespace(payload, lockPath, databasePath) === "unknown"
   ) {
     const error = new GatewayLockNamespaceError(payload, lockPath);
     throw new GatewayLockError(error.message, error);
@@ -353,7 +337,13 @@ async function readVerifiedGatewayLockIdentity(
     payload.pid,
     payload,
     opts.platform ?? process.platform,
-    { trustUnknownCmdlineOwner: false, deadlineMs, signal: opts.signal, lockPath },
+    {
+      trustUnknownCmdlineOwner: false,
+      deadlineMs,
+      signal: opts.signal,
+      lockPath,
+      databasePath,
+    },
   );
   assertActive();
   // Discovery may omit an unverifiable owner; mutation preflight must preserve unknown.
@@ -403,18 +393,23 @@ async function assertHistoricalLockOwnerStopped(
   if (!payload) {
     return;
   }
-  if (classifyGatewayLockProcessNamespace(payload, lockPath) === "unknown") {
+  const databasePath = path.join(paths.stateDir, "state", "openclaw.sqlite");
+  if (classifyGatewayLockProcessNamespace(payload, lockPath, databasePath) === "unknown") {
     throw new GatewayLockNamespaceError(payload, lockPath);
   }
   const owner = await resolveGatewayOwnerStatus(
     payload.pid,
     payload,
     opts.platform ?? process.platform,
-    { trustUnknownCmdlineOwner: false, lockPath },
+    {
+      trustUnknownCmdlineOwner: false,
+      lockPath,
+      databasePath,
+    },
   );
   if (owner !== "dead") {
     throw new GatewayStateOwnerContentionError(
-      path.join(paths.stateDir, "state", "openclaw.sqlite"),
+      databasePath,
       undefined,
       describeGatewayLockHolder(payload, lockPath, owner === "alive" ? "live" : "unknown"),
       { pid: payload.pid, role: payload.role, stateOwnerKind: payload.stateOwnerKind },
@@ -437,12 +432,13 @@ export async function acquireGatewayLock(
   const startedAt = now();
   const heartbeatWaitMs = GATEWAY_OWNER_HEARTBEAT_STALE_MS + 5_000;
   const heartbeatDeadlineMs = startedAt + heartbeatWaitMs;
+  const legacyLeaseDeadlineMs = startedAt + LEGACY_GATEWAY_OWNER_LEASE_TTL_MS + 5_000;
   const timeoutMs = resolveTimerTimeoutMs(
     opts.timeoutMs,
     role === "gateway"
       ? GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS
       : role === "sqlite-maintenance"
-        ? heartbeatWaitMs
+        ? LEGACY_GATEWAY_OWNER_LEASE_TTL_MS + 5_000
         : 0,
     0,
   );
@@ -563,7 +559,11 @@ export async function acquireGatewayLock(
             (role === "gateway" || role === "sqlite-maintenance")
           ) {
             // A crashed foreign owner's heartbeat goes stale within this wait.
-            const remaining = Math.min(deadlineMs, heartbeatDeadlineMs) - now();
+            const remaining =
+              Math.min(
+                deadlineMs,
+                error.legacyLease ? legacyLeaseDeadlineMs : heartbeatDeadlineMs,
+              ) - now();
             const age = error.heartbeatAgeMs;
             if (remaining <= 0) {
               return false;
@@ -665,6 +665,7 @@ export async function acquireGatewayLock(
         holder !== undefined &&
         resolveGatewayOwnerStatusSync(holder.pid, holder, opts.platform ?? process.platform, {
           lockPath: paths.stateLockPath,
+          databasePath,
         }) === "dead"
       );
     };

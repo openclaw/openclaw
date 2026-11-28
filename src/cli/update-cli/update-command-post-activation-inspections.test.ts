@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { updateRunReportInputFromResult } from "../../infra/update-run-report.js";
+import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
@@ -23,7 +23,6 @@ async function inspectFixture(
   script: string,
   selectors: string[],
   result: Partial<UpdateRunResult> = {},
-  checkIds?: string[],
 ) {
   const root = tempDirs.make(label);
   await fs.mkdir(path.join(root, "dist"));
@@ -31,7 +30,6 @@ async function inspectFixture(
   return runPostActivationInspections({
     root,
     gatewayReady: true,
-    checkIds,
     nodeRunner: process.execPath,
     result: updateResult({
       durationMs: 0,
@@ -53,8 +51,6 @@ it.each(["none", "info", "warning"] as const)(
       findings: ${severity === "none" ? "[]" : `[{ checkId: "core/doctor/hooks-model", severity: ${JSON.stringify(severity)}, message: "Review hooks.", target: ${JSON.stringify(target)} }]`}
     })); process.exitCode = ${severity === "none" ? 0 : 1};`,
       ["core/doctor/hooks-model"],
-      { steps: [] },
-      ["core/doctor/hooks-model"],
     );
     expect(observed.status).toBe("ok");
     if (severity !== "none") {
@@ -70,9 +66,9 @@ it.each(["none", "info", "warning"] as const)(
       );
     } else {
       expect(observed.steps.at(-1)?.warnings).toEqual([]);
-      const projected = updateRunReportInputFromResult(observed);
-      expect(projected.steps).not.toContainEqual(expect.objectContaining({ status: "failed" }));
-      expect(projected.steps).not.toContainEqual(
+      const steps = observed.steps.flatMap(updateRunStepsFromResultStep);
+      expect(steps).not.toContainEqual(expect.objectContaining({ status: "failed" }));
+      expect(steps).not.toContainEqual(
         expect.objectContaining({ step: expect.stringMatching(/^warning:/) }),
       );
     }

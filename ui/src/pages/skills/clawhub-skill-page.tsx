@@ -6,6 +6,7 @@ import { formatDateMs } from "../../lib/format.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { PluginReadmeWell } from "../plugins/detail-shell.tsx";
+import { MiddleTruncated } from "../plugins/middle-truncated.tsx";
 import { renderPluginOfficialBadge } from "../plugins/plugin-card.tsx";
 import { MarkdownContent } from "./skill-markdown.tsx";
 import {
@@ -17,6 +18,15 @@ import {
 import { SkillPageAbsent, SkillPageShell } from "./skill-page-shell.tsx";
 import { SkillTile, installedReference } from "./skill-status.tsx";
 import type { SkillsProps } from "./view-types.ts";
+
+function RegistryLabel(props: { value: string }) {
+  const cut = () => {
+    const end = Math.max(0, props.value.length - 12);
+    const boundary = Math.max(props.value.lastIndexOf("-", end), props.value.lastIndexOf(" ", end));
+    return boundary >= Math.max(0, end - 6) ? boundary + 1 : end;
+  };
+  return <MiddleTruncated head={props.value.slice(0, cut())} tail={props.value.slice(cut())} />;
+}
 
 export function ClawHubSkillPage(props: { view: SkillsProps; installLocked: boolean }) {
   const reference = createMemo(() => props.view.state.clawhubDetailRef);
@@ -106,6 +116,7 @@ export function ClawHubSkillPage(props: { view: SkillsProps; installLocked: bool
             <SkillPageShell
               view={props.view}
               name={name()}
+              headingContent={<RegistryLabel value={name()} />}
               icon={
                 <SkillTile
                   class={[
@@ -120,12 +131,24 @@ export function ClawHubSkillPage(props: { view: SkillsProps; installLocked: bool
                   <Show when={skill().isOfficial}>{renderPluginOfficialBadge()}</Show>
                   <Show when={detail()?.owner}>
                     {(owner) => (
-                      <>
-                        <Show when={owner().displayName}>
-                          {(value) => <strong>{value()}</strong>}
-                        </Show>
+                      <details class="skill-page__publisher">
+                        <summary
+                          title={
+                            owner().handle
+                              ? "@" + owner().handle
+                              : (owner().displayName ?? undefined)
+                          }
+                        >
+                          <RegistryLabel
+                            value={
+                              owner().handle ? "@" + owner().handle : (owner().displayName ?? "")
+                            }
+                          />
+                        </summary>
+                        <span>{name()}</span>
+                        <strong>{owner().displayName}</strong>
                         <Show when={owner().handle}>{(handle) => <span>@{handle()}</span>}</Show>
-                      </>
+                      </details>
                     )}
                   </Show>
                 </Show>

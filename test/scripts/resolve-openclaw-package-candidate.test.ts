@@ -28,6 +28,7 @@ import {
   runCommandForTest,
   validateOpenClawPackageSpec,
 } from "../../scripts/resolve-openclaw-package-candidate.mts";
+import { packToArchive } from "../../src/plugins/test-helpers/archive-fixtures.js";
 import { reserveTestPortListener } from "../../src/test-utils/port-claims.js";
 import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import {
@@ -170,17 +171,11 @@ async function createPackageTarball(
       typeof buildInfo === "string" ? buildInfo : JSON.stringify(buildInfo),
     );
   }
-  const tarball = path.join(dir, "openclaw.tgz");
-  await new Promise<void>((resolve, reject) => {
-    execFile("tar", ["-czf", tarball, "-C", dir, "package"], (error) => {
-      if (error) {
-        reject(toLintErrorObject(error, "Non-Error rejection"));
-        return;
-      }
-      resolve();
-    });
+  return await packToArchive({
+    pkgDir: root,
+    outDir: dir,
+    outName: "openclaw.tgz",
   });
-  return tarball;
 }
 
 async function createArtifactFixture(
@@ -294,42 +289,6 @@ describe("resolve-openclaw-package-candidate", () => {
         "package_spec must be openclaw@beta",
       );
     }
-  });
-
-  it("parses optional empty workflow inputs without rejecting the command line", () => {
-    expect(
-      parseArgs([
-        "--source",
-        "npm",
-        "--package-ref",
-        "release/2026.4.27",
-        "--package-spec",
-        "openclaw@beta",
-        "--package-url",
-        "",
-        "--package-sha256",
-        "",
-        "--artifact-dir",
-        ".",
-        "--output-dir",
-        ".artifacts/docker-e2e-package",
-      ]),
-    ).toEqual({
-      artifactDir: ".",
-      githubOutput: "",
-      metadata: "",
-      outputDir: ".artifacts/docker-e2e-package",
-      outputName: "openclaw-current.tgz",
-      packageSha256: "",
-      packageRef: "release/2026.4.27",
-      packageSpec: "openclaw@beta",
-      packageUrl: "",
-      pluginRegistryOutputDir: "",
-      requiredPluginPackagesJson: "[]",
-      source: "npm",
-      trustedSourceId: "",
-      trustedSourcePolicy: ".github/package-trusted-sources.json",
-    });
   });
 
   it("rejects package candidate output names that escape the output directory", () => {

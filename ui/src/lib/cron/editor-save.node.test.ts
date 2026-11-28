@@ -13,7 +13,7 @@ import type { CronJob } from "../../api/types.ts";
 import { invalidateStaleDeliveryRoute } from "../../pages/cron/delivery-conversations.ts";
 import { createCronJob, cronJobsListResponse } from "../../test-helpers/cron.ts";
 import { createMethodRequest, createStateWithRequest } from "./cron.test-support.ts";
-import { cronTimezoneFields } from "./form.ts";
+import { normalizeCronFormState } from "./form.ts";
 import { addCronJob, cancelCronEdit, startCronEdit } from "./index.ts";
 import type { CronFormState, CronState } from "./types.ts";
 
@@ -142,7 +142,8 @@ describe("automation save editor ownership", () => {
     expect(stored.schedule).toEqual(schedule);
     expect(stored.activeHours).toEqual(activeHours); // Missing timezone still means the configured user timezone.
 
-    Object.assign(state.cronForm, cronTimezoneFields("America/Toronto", "cron", readJob()));
+    const change = { cronTz: "America/Toronto" };
+    state.cronForm = normalizeCronFormState({ ...state.cronForm, ...change }, change, readJob());
     await saveAndReopen(state, readJob);
     expect(stored.schedule).toEqual({ ...schedule, tz: "America/Toronto" });
     expect(stored.activeHours).toEqual({ ...activeHours, timezone: "America/Toronto" });

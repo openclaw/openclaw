@@ -24,7 +24,6 @@ import { getPath, setPathExistingStrict } from "../secrets/path-utils.js";
 import { resolveSecretRefValue } from "../secrets/resolve.js";
 import { collectConfigAssignments } from "../secrets/runtime-config-collectors.js";
 import { createResolverContext } from "../secrets/runtime-shared.js";
-import { resolveRuntimeWebTools } from "../secrets/runtime-web-tools.js";
 import { assertExpectedResolvedSecretValue } from "../secrets/secret-value.js";
 import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
@@ -162,6 +161,8 @@ async function resolveCommandSecretRefsLocally(
       /^plugins\.entries\.[^.]+\.config\.(webSearch|webFetch)\.apiKey$/.test(target.path),
     )
   ) {
+    // Model-only commands do not need web-provider discovery or its runtime helpers.
+    const { resolveRuntimeWebTools } = await import("../secrets/runtime-web-tools.js");
     try {
       await resolveRuntimeWebTools({
         sourceConfig,

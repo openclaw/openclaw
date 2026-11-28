@@ -1740,7 +1740,7 @@
   }
 
   .cron-page[data-view="edit"] .cron-advanced__summary,
-  .cron-page[data-view="edit"] openclaw-cron-scratch-editor summary {
+  .cron-page[data-view="edit"] openclaw-cron-scratch-editor .settings-section__heading {
     display: inline-flex;
     align-items: center;
     gap: 8px;
@@ -1755,7 +1755,9 @@
     list-style: none;
   }
 
-  .cron-page[data-view="edit"] openclaw-cron-scratch-editor summary::-webkit-details-marker {
+  .cron-page[data-view="edit"]
+    openclaw-cron-scratch-editor
+    .settings-section__heading::-webkit-details-marker {
     display: none;
   }
 

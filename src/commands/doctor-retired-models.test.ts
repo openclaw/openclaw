@@ -18,7 +18,10 @@ import {
   writeSession,
 } from "./doctor-model-repair.test-support.js";
 import { createRetiredModelFixture } from "./doctor-retired-models.test-support.js";
-import { repairCronCodexModelRefsAfterConfigWrite } from "./doctor/cron/legacy-repair.js";
+import {
+  hasCronCodexModelRefsAfterConfigWriteWork,
+  repairCronCodexModelRefsAfterConfigWrite,
+} from "./doctor/cron/legacy-repair.js";
 import { maybeRepairCodexSessionRoutes } from "./doctor/shared/codex-route-session-repair.js";
 import { collectBlockedLegacyOpenAICodexProviderPlan } from "./doctor/shared/legacy-config-migrations.runtime.models.codex.js";
 import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
@@ -242,13 +245,18 @@ it("repairs persisted cron primary and fallbacks in the existing post-config-wri
     state: { autoDisabled: { reason: "consecutive-failures", atMs: 1, consecutiveErrors: 10 } },
   });
   await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
-  await repairCronCodexModelRefsAfterConfigWrite({ migrateCodexModelRefs: true, cfg });
+  const migrateOnly = { migrateCodexModelRefs: true, cfg };
+  const retire = { ...migrateOnly, repairRetiredModelRefs: true };
+  // Each read-only check agrees with the repair it precedes, and leaves the rows alone.
+  const fresh = await loadCronJobsStore(storePath);
+  await expect(hasCronCodexModelRefsAfterConfigWriteWork(migrateOnly)).resolves.toBe(true);
+  expect(await loadCronJobsStore(storePath)).toEqual(fresh);
+  await repairCronCodexModelRefsAfterConfigWrite(migrateOnly);
   expect((await loadCronJobsStore(storePath)).jobs[0]?.payload).toEqual(job.payload);
-  const result = await repairCronCodexModelRefsAfterConfigWrite({
-    migrateCodexModelRefs: true,
-    cfg,
-    repairRetiredModelRefs: true,
-  });
+  await expect(hasCronCodexModelRefsAfterConfigWriteWork(migrateOnly)).resolves.toBe(false);
+  await expect(hasCronCodexModelRefsAfterConfigWriteWork(retire)).resolves.toBe(true);
+  const result = await repairCronCodexModelRefsAfterConfigWrite(retire);
+  await expect(hasCronCodexModelRefsAfterConfigWriteWork(retire)).resolves.toBe(false);
   const saved = (await loadCronJobsStore(storePath)).jobs[0]!;
   expect(saved.payload).toEqual({
     kind: "agentTurn",

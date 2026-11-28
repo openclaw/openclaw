@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, createStore, createUniqueId, onSettled } from "solid-js";
+import type { GatewaySessionRow } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
@@ -67,6 +68,14 @@ function groupFor(row: SubagentsPanelRow): Group {
       : (endedWithoutFinishing(row.session) ?? "done");
 }
 
+/** What a paused subagent waits on; undefined when it is not paused or waits on children. */
+export function pausedSubagentStatus(row: GatewaySessionRow): string | undefined {
+  const background = Boolean(row.backgroundProcessCount);
+  return row.subagentRunState === "paused" && (background || !row.hasActiveSubagentRun)
+    ? t(`chat.handoffSessionStatus.${background ? "background" : "paused"}`)
+    : undefined;
+}
+
 function DesktopRow(props: {
   row: SubagentsPanelRow;
   branch?: { hasChildren: boolean; rails: readonly number[] };
@@ -132,29 +141,44 @@ function DesktopRow(props: {
           <span class="subagents-desktop__name">
             <SubagentListName name={name()} />
           </span>
-          <Show when={group() !== "done"}>
+          <Show when={group() !== "done" || props.row.modelLabel}>
             <span class="subagents-desktop__status">
-              <Show
-                when={group() === "active"}
-                fallback={
-                  group() === "waiting"
-                    ? props.row.session.status === "queued"
-                      ? t("common.queued")
-                      : t("chat.subagentsPanel.desktopWaiting")
-                    : groupLabel(group())
-                }
-              >
-                <span class="subagents-desktop__working text-shimmer">
-                  {t("chat.subagentsPanel.desktopWorking")}
-                </span>{" "}
-                <Show
-                  when={props.row.session.runtimeMs != null || props.row.session.startedAt != null}
-                >
-                  <span>
-                    {t("chat.subagentsPanel.desktopFor")} {props.renderElapsed(props.row)}
-                  </span>
-                </Show>
+              <Show when={group() !== "done"}>
+                <span>
+                  <Show
+                    when={group() === "active"}
+                    fallback={
+                      group() === "waiting"
+                        ? props.row.session.status === "queued"
+                          ? t("common.queued")
+                          : (pausedSubagentStatus(props.row.session) ??
+                            t("chat.subagentsPanel.desktopWaiting"))
+                        : groupLabel(group())
+                    }
+                  >
+                    <span class="subagents-desktop__working text-shimmer">
+                      {t("chat.subagentsPanel.desktopWorking")}
+                    </span>{" "}
+                    <Show
+                      when={
+                        props.row.session.runtimeMs != null || props.row.session.startedAt != null
+                      }
+                    >
+                      <span>
+                        {t("chat.subagentsPanel.desktopFor")} {props.renderElapsed(props.row)}
+                      </span>
+                    </Show>
+                  </Show>
+                </span>
               </Show>
+              {props.row.modelLabel && (
+                <>
+                  {group() !== "done" && <span aria-hidden="true">·</span>}
+                  <span class="chat-subagents__model" title={props.row.modelLabel}>
+                    {props.row.modelLabel}
+                  </span>
+                </>
+              )}
             </span>
           </Show>
           <span class="sr-only">{metadata()}</span>

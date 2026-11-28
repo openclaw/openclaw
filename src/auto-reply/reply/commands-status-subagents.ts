@@ -12,7 +12,7 @@ const WAIT_LABELS = new Map([
   ["children", "child tasks"],
 ]);
 
-function formatExecutionObservation(observation: SubagentExecutionObservation): string {
+export function formatExecutionObservation(observation: SubagentExecutionObservation): string {
   switch (observation.state) {
     case "running": {
       const tool = sanitizeRunStatusText(observation.currentTool?.name, { maxChars: 60 });

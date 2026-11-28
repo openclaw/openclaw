@@ -358,16 +358,16 @@ suite.define(() => {
       const { default: _default, ...roles } = config.gateway.roles;
       const gateway = await openRoles(page, undefined, "?role=collaborator", {
         config: { gateway: { roles: roles as typeof config.gateway.roles } },
-      });
-      // Without a default role, a saved assignment is not yet anyone's effective role.
-      await gateway.setMethodResponse("users.list", {
-        profiles: [
-          {
-            ...profile("p-sam", "Sam Ortiz", "collaborator", "assigned"),
-            effectiveRole: undefined,
-            roleSource: undefined,
-          },
-        ],
+        // Without a default role, a saved assignment is not yet anyone's effective role.
+        usersList: {
+          profiles: [
+            {
+              ...profile("p-sam", "Sam Ortiz", "collaborator", "assigned"),
+              effectiveRole: undefined,
+              roleSource: undefined,
+            },
+          ],
+        },
       });
       await page.getByText("What this role allows").waitFor();
       await page.getByRole("button", { name: "Delete", exact: true }).click();

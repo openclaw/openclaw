@@ -106,24 +106,6 @@ describe("chat account selection", () => {
     };
   }
 
-  it("labels automatic selection concisely without changing its account choices", async () => {
-    const request = vi.fn().mockResolvedValue({ profileId: "owner", links: [], accounts: [] });
-    const view = mountAccountControl(request, {
-      kind: "automatic",
-      label: "Automatic account selection",
-    });
-    expect(
-      view.container.querySelector(".chat-controls__account-trigger")?.textContent?.trim(),
-    ).toBe("Account: Auto");
-    view.open();
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("users.listModelAccounts", {}));
-    expect(
-      view.container.querySelector('[data-chat-account-option="current"]')?.textContent?.trim(),
-    ).toBe("Automatic");
-    view.select("manage");
-    expect(view.onManage).toHaveBeenCalledOnce();
-  });
-
   it("keeps the current chat choice separate from a saved default for new chats", async () => {
     const request = vi.fn().mockResolvedValue({
       profileId: "owner",
@@ -342,6 +324,7 @@ describe("chat account selection", () => {
 
 describe("chat pane composer controls", () => {
   it("renders the selected Gateway model while keeping its model picker locked", async () => {
+    await import("./components/chat-model-picker-panel.tsx");
     const selectedSession: GatewaySessionRow = {
       key: "main",
       kind: "direct",

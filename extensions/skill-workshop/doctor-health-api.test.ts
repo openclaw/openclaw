@@ -36,17 +36,22 @@ describe("skill-workshop/tool-policy", () => {
       fixHint: `Add ${prefix}tools.alsoAllow: ["skill_workshop"].`,
     });
 
-  it.each<[OpenClawConfig["plugins"], string]>([
-    [{ allow: ["diffs"] }, "plugins.allow"],
-    [{ enabled: false }, "plugins.enabled"],
-  ])("warns when %o keeps the skill-workshop plugin off", async (plugins, path) => {
-    expect(await detect({ plugins })).toEqual([
-      expect.objectContaining({ severity: "warning", path }),
-    ]);
-    expect(await detect({ plugins: { allow: ["diffs", "skill-workshop"] } })).toEqual([]);
+  it.each<OpenClawConfig["plugins"]>([
+    { allow: ["discord"] },
+    { deny: ["skill-workshop"] },
+    { enabled: false },
+  ])("reports nothing when %o keeps the skill-workshop plugin off", async (plugins) => {
+    // No Workshop entry: the default autonomous mode must not imply the operator wants it.
+    expect(await detect({ plugins, tools: { profile: "messaging" } })).toEqual([]);
+  });
+
+  it("keeps reporting when the allowlist includes the skill-workshop plugin", async () => {
     expect(
-      await detect(workshopPluginConfig({ autonomous: { mode: "off" } }, { plugins })),
-    ).toEqual([]);
+      await detect({
+        plugins: { allow: ["discord", "skill-workshop"] },
+        tools: { profile: "messaging" },
+      }),
+    ).toEqual([warning()]);
   });
 
   it("warns when autonomous capture is enabled but policy hides its tool", async () => {
@@ -73,6 +78,15 @@ describe("skill-workshop/tool-policy", () => {
       { checks: [workshopCheck] },
     );
     expect(result.findings).toEqual([warning("agents.entries.helper.", "helper")]);
+  });
+
+  it("does not warn when the skill-workshop plugin entry is disabled", async () => {
+    await expect(
+      detect({
+        plugins: { entries: { "skill-workshop": { enabled: false } } },
+        tools: { allow: ["read"] },
+      }),
+    ).resolves.toEqual([]);
   });
 
   it("does not warn when autonomous capture is disabled", async () => {

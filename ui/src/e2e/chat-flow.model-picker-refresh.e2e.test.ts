@@ -260,6 +260,7 @@ suite.define(() => {
             { type: "toolCall", name: "read", id: runId, arguments: { path: "retry.yaml" } },
           ],
           stopReason: "toolUse",
+          phase: "commentary",
           provider,
           model: id,
           __openclaw: { runId },

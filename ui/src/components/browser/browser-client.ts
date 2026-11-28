@@ -9,6 +9,7 @@ import { t } from "../../i18n/index.ts";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { readBlobAsDataUrl } from "../../lib/blob-data-url.ts";
 import { browserInspectScript } from "./browser-inspect-script.ts";
+import { browserRouteParams, browserSessionTabScope } from "./browser-session-tab-list.ts";
 import {
   readBrowserTabTarget,
   type BrowserRoute,
@@ -128,7 +129,7 @@ type BrowserRequestEnvelope = {
 /**
  * Marks a request as the person deliberately using the page (click, key, text, scroll,
  * history, navigation). The Gateway shows the agent recent use and keeps a takeover alive
- * from these only; automatic panel requests (viewport fit, page metrics) stay unmarked.
+ * from these only. Automatic panel requests may explicitly mark themselves as passive.
  */
 const OPERATOR_INPUT = { operatorInput: true };
 
@@ -138,12 +139,6 @@ function withoutBrowserTarget(value: unknown): Record<string, unknown> {
     delete result[key];
   }
   return result;
-}
-
-export function browserRequestReferencedTabs(
-  tabs: readonly BrowserTabTarget[],
-): BrowserTabTarget[] {
-  return tabs.slice(-64);
 }
 
 /** Bind every browser operation to one route and one live panel scope. */
@@ -183,22 +178,16 @@ export function bindBrowserRequestClient(
         : route || dashboard || session
           ? {
               ...envelope,
-              ...(route
-                ? {
-                    target: route.target,
-                    ...(route.target === "node" ? { node: route.node } : {}),
-                    query: { ...asRecord(envelope?.query), profile: route.profile },
-                  }
-                : {}),
+              ...browserRouteParams(route, asRecord(envelope?.query)),
               ...(dashboard ? { dashboard } : {}),
               ...(session
                 ? {
-                    tabScope: {
-                      sessionKey: session.sessionKey,
-                      ...(envelope?.method === "GET" && envelope.path === "/tabs"
-                        ? { referencedTabs: browserRequestReferencedTabs(session.referencedTabs) }
-                        : {}),
-                    },
+                    tabScope: browserSessionTabScope(
+                      session.sessionKey,
+                      envelope?.method === "GET" && envelope.path === "/tabs"
+                        ? session.referencedTabs
+                        : undefined,
+                    ),
                   }
                 : {}),
             }
@@ -223,12 +212,12 @@ function browserRequest<T>(
 function browserAction(
   client: BrowserRequestClient,
   body: Record<string, unknown>,
-  operatorInput = false,
+  operatorInput?: boolean,
 ) {
   return browserRequest(client, {
     method: "POST",
     path: "/act",
-    ...(operatorInput ? { query: OPERATOR_INPUT } : {}),
+    ...(operatorInput === undefined ? {} : { query: { operatorInput } }),
     body,
   });
 }
@@ -257,8 +246,9 @@ function normalizeTab(value: unknown): BrowserPanelTab | null {
   };
 }
 
-export async function listBrowserTabs(client: BrowserRequestClient) {
-  const result = asRecord(await browserRequest(client, { method: "GET", path: "/tabs" }));
+export async function listBrowserTabs(client: BrowserRequestClient, prepared?: Promise<unknown>) {
+  const request = () => browserRequest(client, { method: "GET", path: "/tabs" });
+  const result = asRecord(await (prepared ? prepared.catch(request) : request()));
   const tabs = Array.isArray(result?.tabs)
     ? result.tabs.flatMap((tab) => normalizeTab(tab) ?? [])
     : [];
@@ -288,8 +278,11 @@ export async function requestBrowserOperatorControl(
   return { available: result.available, controlled: result.controlled, byYou: result.byYou };
 }
 
-export async function startBrowser(client: BrowserRequestClient): Promise<void> {
-  await browserRequest(client, { method: "POST", path: "/start", body: {} });
+export async function startBrowser(
+  client: BrowserRequestClient,
+  path: "/start" | "/prewarm" = "/start",
+): Promise<void> {
+  await browserRequest(client, { method: "POST", path, body: {} });
 }
 
 export async function openBrowserTab(
@@ -399,6 +392,7 @@ export async function captureBrowserScreenshot(client: BrowserRequestClient, tar
     await browserRequest(client, {
       method: "POST",
       path: "/screenshot",
+      query: { operatorInput: false },
       body: { targetId, type: "png" },
     }),
   );
@@ -501,18 +495,22 @@ export async function resizeBrowserViewport(
   client: BrowserRequestClient,
   params: { targetId: string; width: number; height: number },
 ) {
-  await browserAction(client, {
-    kind: "resize",
-    targetId: params.targetId,
-    width: Math.round(params.width),
-    height: Math.round(params.height),
-  });
+  await browserAction(
+    client,
+    {
+      kind: "resize",
+      targetId: params.targetId,
+      width: Math.round(params.width),
+      height: Math.round(params.height),
+    },
+    false,
+  );
 }
 
 async function evaluateInBrowser<T>(
   client: BrowserRequestClient,
   params: { targetId: string; fn: string },
-  operatorInput = false,
+  operatorInput?: boolean,
 ): Promise<T | null> {
   const result = asRecord(
     await browserAction(
@@ -603,10 +601,14 @@ export async function goBrowserHistory(
 
 export async function readBrowserPageMetrics(client: BrowserRequestClient, targetId: string) {
   const result = asRecord(
-    await evaluateInBrowser(client, {
-      targetId,
-      fn: "() => ({ cssWidth: window.innerWidth, cssHeight: window.innerHeight, title: document.title, url: location.href })",
-    }),
+    await evaluateInBrowser(
+      client,
+      {
+        targetId,
+        fn: "() => ({ cssWidth: window.innerWidth, cssHeight: window.innerHeight, title: document.title, url: location.href })",
+      },
+      false,
+    ),
   );
   const cssWidth = asFiniteNumber(result?.cssWidth);
   const cssHeight = asFiniteNumber(result?.cssHeight);

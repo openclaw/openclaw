@@ -164,18 +164,20 @@ type NativePluginFixture = {
   rpcSourceTesting: typeof rpcSourceTesting;
 };
 
-export async function withNativePlugin(
+let activeNativeFixture: Promise<void> | undefined;
+
+export function withNativePlugin(
   run: (fixture: NativePluginFixture) => Promise<void>,
   options: {
     model?: string;
     nativeEffects?: boolean;
     operatorScopes?: string[];
-    onConsult?: () => void;
+    onConsult?: (completion: Promise<unknown>) => void;
     consultScope?: GatewayContextResolver;
     configure?: (config: OpenClawConfig) => void;
   } = {},
 ): Promise<void> {
-  await withOpenClawTestState(
+  activeNativeFixture = withOpenClawTestState(
     { layout: "state-only", prefix: "talk-native-control-", env: { OPENAI_API_KEY: undefined } },
     async (state) => {
       const realtimeConfig: TalkRealtimeConfig = {
@@ -258,12 +260,13 @@ export async function withNativePlugin(
                   if (original) {
                     request.runAgentConsult = Object.assign(
                       (...args: Parameters<typeof original>) => {
-                        options.onConsult?.();
-                        return options.consultScope
+                        const completion = options.consultScope
                           ? withPluginRuntimeGatewayContextResolver(options.consultScope, () =>
                               original(...args),
                             )
                           : original(...args);
+                        options.onConsult?.(completion);
+                        return completion;
                       },
                       original,
                     );
@@ -363,8 +366,10 @@ export async function withNativePlugin(
     },
   ).finally(() => {
     // Fresh state reuses SESSION_ID only after the previous fixture's work has drained.
+    activeNativeFixture = undefined;
     clearPromptCacheObservations(SESSION_ID);
   });
+  return activeNativeFixture;
 }
 
 export async function connectNativeSession(
@@ -698,8 +703,13 @@ export function installNativePluginTestHooks() {
       .mockRejectedValue(new Error("Unexpected model invocation"));
   });
 
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    vi.restoreAllMocks();
+  afterEach(async () => {
+    try {
+      // Vitest can stop awaiting the test before its fixture restores the state directory.
+      await activeNativeFixture;
+    } finally {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
   });
 }

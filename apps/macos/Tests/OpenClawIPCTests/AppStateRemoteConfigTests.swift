@@ -584,7 +584,10 @@ struct AppStateRemoteConfigTests {
             let root = OpenClawConfigFile.loadDict()
             let expectedHost = interruption == "cancel" || interruption == "observed-file-round-trip" ? "previous" :
                 canPromote ? "delayed" : "newer"
-            #expect(GatewayRemoteConfig.resolveUrlString(root: root) == "wss://\(expectedHost).example:443")
+            let expectedURL = interruption == "selection"
+                ? "wss://newer.example"
+                : "wss://\(expectedHost).example:443"
+            #expect(GatewayRemoteConfig.resolveUrlString(root: root) == expectedURL)
             #expect(GatewayRemoteConfig.resolveTokenString(root: root) == "\(expectedHost)-token")
             if interruption != "cancel", interruption != "selection" {
                 #expect((root["agents"] as? [String: [String: String]])?["defaults"]?["workspace"] ==

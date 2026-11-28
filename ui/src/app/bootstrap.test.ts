@@ -247,7 +247,7 @@ describe("bootstrapApplication", () => {
     });
     expect(request).not.toHaveBeenCalled();
     expect(replaceRoute).toHaveBeenCalledOnce();
-    expect(replaceRoute).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
+    expect(replaceRoute).toHaveBeenCalledWith("model-providers", { search: "?firstRun=1" });
   });
 
   it("does not replace a user route with the deferred default chat location", async () => {

@@ -187,7 +187,7 @@ export function isReadOnlyCronPayload(payload: CronPayload | null): boolean {
   return payload?.kind === "command" || payload?.kind === "script";
 }
 
-export function cronTimezoneFields(
+function cronTimezoneFields(
   value: string,
   kind: CronFormState["scheduleKind"],
   source?: CronJob | null,

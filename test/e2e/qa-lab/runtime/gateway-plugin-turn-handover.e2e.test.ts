@@ -216,10 +216,12 @@ it.for(scenarios)(
               }
               const outputs = body.input.filter((item) => item.type === "function_call_output");
               for (const output of outputs.slice(steps.length)) {
+                assert(output.output, "missing tool output");
+                const payload = output.output.replace(/\n\[System note: You called .*\]$/u, "");
                 steps.push({
                   step: steps.length + 1,
                   atMs: Date.now() - startedAt,
-                  ...(JSON.parse(output.output ?? "{}") as Pick<Step, "plugin" | "generation">),
+                  ...(JSON.parse(payload) as Pick<Step, "plugin" | "generation">),
                 });
                 // The bundled tool is fast; slow its steps so the reload lands mid-turn.
                 if (bundled) {

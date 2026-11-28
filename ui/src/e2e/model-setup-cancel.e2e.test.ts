@@ -19,6 +19,7 @@ import {
   setupRpc as rpc,
   wizardNotFound,
 } from "./model-setup-fixtures.test-support.ts";
+import { installSetupGateway } from "./model-setup.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI first-run wizard cancellation ownership",
@@ -44,7 +45,8 @@ async function openFirstRunWithBackNavigation(page: Page): Promise<void> {
   await evaluateControlUiContext(page, (application) => {
     application.navigate("model-setup", { search: "?firstRun=1" });
   });
-  await page.waitForURL((url) => url.pathname === "/settings/model-setup");
+  await page.waitForURL((url) => url.pathname === "/settings/model-providers");
+  await page.locator("[data-models-login-discover]").click();
 }
 
 async function cancelAndLeave(page: Page, gateway: Awaited<ReturnType<typeof installMockGateway>>) {
@@ -59,7 +61,7 @@ async function cancelAndLeave(page: Page, gateway: Awaited<ReturnType<typeof ins
   await gateway.waitForRequest(rpc.cancel);
   expect(await page.locator("openclaw-modal-dialog").count()).toBe(1);
   await page.goBack();
-  await expectCount(page.locator("openclaw-model-setup-page"), 0);
+  await expectCount(page.locator("[data-models-catalog]"), 0);
   return { signIn, readReceipt };
 }
 
@@ -70,7 +72,7 @@ suite.define(() => {
       await suite.withPage(
         setupContext({ viewport: { width: 1280, height: 800 } }),
         async ({ page }) => {
-          const gateway = await installMockGateway(page, {
+          const gateway = await installSetupGateway(page, {
             featureMethods: [rpc.detect, rpc.activate, rpc.next, rpc.cancel, "openclaw.chat"],
             methodResponses: {
               [rpc.detect]: {
@@ -126,7 +128,7 @@ suite.define(() => {
           });
           const dialog = page.locator("openclaw-modal-dialog");
           await dialog.getByRole("heading", { name: "Review model setup" }).waitFor();
-          expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
+          expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
           expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
           await button(dialog, "Continue").click();
           await dialog.getByText("Apply the reviewed changes?", { exact: true }).waitFor();
@@ -154,7 +156,7 @@ suite.define(() => {
             await expect
               .poll(() => page.evaluate((key) => localStorage.getItem(key), receiptKey))
               .toBeNull();
-            expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
+            expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
             expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
             expect(await page.locator(".model-setup-success").count()).toBe(0);
           }
@@ -182,7 +184,7 @@ suite.define(() => {
       await suite.withPage(
         setupContext({ viewport: { width: 1280, height: 800 } }),
         async ({ page }) => {
-          const gateway = await installMockGateway(page, gatewayOptions);
+          const gateway = await installSetupGateway(page, gatewayOptions);
           const { signIn, readReceipt } = await cancelAndLeave(page, gateway);
           expect(await readReceipt()).not.toBeNull();
           if (acknowledgement === "before return") {
@@ -191,7 +193,7 @@ suite.define(() => {
             await gateway.deferNext(rpc.next);
           }
           await page.goForward();
-          await signIn.waitFor();
+          await page.locator("[data-models-catalog]").waitFor();
           if (acknowledgement === "after return") {
             await page.getByText("Complete provider sign-in").waitFor();
             await gateway.resolveDeferred(rpc.cancel);
@@ -201,6 +203,7 @@ suite.define(() => {
           }
 
           await expect.poll(readReceipt).toBeNull();
+          await page.locator("[data-models-login-discover]").click();
           await signIn.click();
           await page.getByText("Complete provider sign-in").waitFor();
           if (acknowledgement === "during resume") {
@@ -210,24 +213,23 @@ suite.define(() => {
             expect(await readReceipt()).toBe(replacementReceipt);
           }
           await expectRequestCounts(gateway, { [rpc.auth]: 2, [rpc.cancel]: 1, [rpc.activate]: 0 });
-          expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
+          expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
         },
       );
     },
   );
   it("preserves a replacement tab's receipt when the old page confirms cancellation", async () => {
     await suite.withPage(setupContext(), async ({ page, context }) => {
-      const gateway = await installMockGateway(page, gatewayOptions);
+      const gateway = await installSetupGateway(page, gatewayOptions);
       const { readReceipt } = await cancelAndLeave(page, gateway);
       const previousReceipt = await readReceipt();
 
       const replacement = await context.newPage();
-      const nextGateway = await installMockGateway(replacement, {
+      const nextGateway = await installSetupGateway(replacement, {
         ...gatewayOptions,
         methodResponses: { ...gatewayOptions.methodResponses, [rpc.next]: wizardNotFound },
       });
       await replacement.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
-      await replacement.locator('[data-auth-choice="provider-login"] button').waitFor();
       await button(replacement.locator("openclaw-modal-dialog"), "Close").click();
       expect((await nextGateway.getRequests(rpc.next)).map((request) => request.params)).toEqual([
         { sessionId: JSON.parse(previousReceipt!).wizard.sessionId },
@@ -237,6 +239,7 @@ suite.define(() => {
         .poll(() => replacement.evaluate((key) => localStorage.getItem(key), receiptKey))
         .toBeNull();
       await nextGateway.setMethodResponse(rpc.next, gatewayOptions.methodResponses[rpc.next]);
+      await replacement.locator("[data-models-login-discover]").click();
       await replacement.locator('[data-auth-choice="provider-login"] button').click();
       await replacement.getByText("Complete provider sign-in").waitFor();
       const receipt = await replacement.evaluate((key) => localStorage.getItem(key), receiptKey);
@@ -244,14 +247,14 @@ suite.define(() => {
       expect(receipt).not.toBe(previousReceipt);
       await gateway.resolveDeferred(rpc.cancel);
       await page.goForward();
-      await page.locator('[data-auth-choice="provider-login"] button').waitFor();
+      await page.locator("[data-models-catalog]").waitFor();
       expect(await replacement.evaluate((key) => localStorage.getItem(key), receiptKey)).toBe(
         receipt,
       );
       await replacement.getByText("Complete provider sign-in").waitFor();
       await expectRequestCounts(nextGateway, { [rpc.auth]: 1, [rpc.cancel]: 0 });
-      expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
-      expect(new URL(replacement.url()).pathname).toBe("/settings/model-setup");
+      expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
+      expect(new URL(replacement.url()).pathname).toBe("/settings/model-providers");
     });
   });
 });

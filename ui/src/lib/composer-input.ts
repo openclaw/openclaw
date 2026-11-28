@@ -6,6 +6,7 @@ export type ComposerEditorBridge = {
   coordsAtPos: (
     position: number,
   ) => { left: number; right: number; top: number; bottom: number } | null;
+  isAtomicRange: (from: number, to: number) => boolean;
   sync: () => void;
   requestSync: () => void;
   focus: (options?: FocusOptions) => void;
@@ -16,6 +17,12 @@ export type ComposerEditorBridge = {
   /** Step the editor's own history back, restoring mention identities with the text. */
   undo: () => void;
 };
+const activations = new WeakMap<HTMLTextAreaElement, () => void>();
+/** Native fields still need to admit rich layout after an owner restores a draft. */
+export function registerComposerActivation(input: HTMLTextAreaElement, activate: () => void) {
+  activations.set(input, activate);
+  return () => activations.delete(input);
+}
 const editors = new WeakMap<HTMLTextAreaElement, ComposerEditorBridge>();
 export function registerComposerEditor(input: HTMLTextAreaElement, editor: ComposerEditorBridge) {
   editors.set(input, editor);
@@ -32,7 +39,12 @@ export function composerInputFocusElement(input: HTMLTextAreaElement): HTMLEleme
 }
 /** For controlled-value writers; the editor reconciles after the current commit. */
 export function syncComposerInput(input: HTMLTextAreaElement) {
-  editors.get(input)?.requestSync();
+  const editor = editors.get(input);
+  if (editor) {
+    editor.requestSync();
+  } else {
+    activations.get(input)?.();
+  }
 }
 export function focusComposerInput(
   input: HTMLTextAreaElement | null | undefined,

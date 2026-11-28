@@ -41,6 +41,7 @@ import { resolveSandboxHostPathViaExistingAncestor } from "./sandbox/host-paths.
 import type { SandboxContext } from "./sandbox/types.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
 import { createLsTool, type LsOperations } from "./sessions/tools/ls.js";
+import { resolveOwnSpillFile, type SpillOwner } from "./sessions/tools/private-temp-file.js";
 import { createReadTool } from "./sessions/tools/read.js";
 import type { ReadToolDetails } from "./sessions/tools/tool-contracts.js";
 import { SANDBOX_SUBAGENT_ATTACHMENTS_MOUNT } from "./subagents/subagent-attachment-paths.js";
@@ -179,6 +180,7 @@ function wrapWorkspaceSkillRead(
 
 type CoreCodingToolsOptions = {
   abortSignal?: AbortSignal;
+  spillOwner?: SpillOwner;
   attachmentReadRoot?: string;
   codingRoot: string;
   containmentRoot: string;
@@ -208,6 +210,7 @@ type CoreCodingToolsOptions = {
 
 /** Materialize only the core file and shell families selected by the runtime owner. */
 export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgentTool[] {
+  const spillOwner = options.spillOwner;
   const sandbox = options.sandbox;
   const sandboxRoot = sandbox?.workspaceDir;
   const sandboxFsBridge = sandbox?.fsBridge;
@@ -364,6 +367,9 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
                 allowLinkedWorktrees: !options.strictWorkspaceRoot,
                 resolutionCwd: options.codingRoot,
                 normalizeGuardedPathParams: true,
+                ownFile: spillOwner
+                  ? (filePath) => resolveOwnSpillFile(spillOwner, filePath)
+                  : undefined,
               },
         )
       : read;

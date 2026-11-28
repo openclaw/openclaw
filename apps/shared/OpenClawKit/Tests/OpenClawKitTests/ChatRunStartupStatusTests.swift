@@ -236,6 +236,62 @@ struct ChatRunStartupTransportTests {
         #expect(model.runStartupStatus == nil)
     }
 
+    #if os(iOS)
+    @Test func `live reasoning clears a reported startup phase`() throws {
+        let model = self.model()
+        defer { model.clearPendingRuns() }
+        try self.agent(
+            #"{"runId":"r","seq":1,"stream":"run_status","data":{"phase":"starting_model"}}"#, model: model)
+        try self.agent(#"{"runId":"other","seq":2,"stream":"thinking","data":{"delta":"Checking"}}"#, model: model)
+        try self.agent(#"{"runId":"r","seq":3,"stream":"thinking","data":{"phase":"persisted"}}"#, model: model)
+        #expect(model.runStartupStatus == "Waiting for a response…")
+        try self.agent(#"{"runId":"r","seq":4,"stream":"thinking","data":{"progressTokens":10}}"#, model: model)
+        #expect(model.runStartupStatus == nil)
+    }
+    #endif
+
+    #if os(iOS)
+    @Test func `a plain turn shows its phases, then Thinking for reasoning, then nothing under the answer`() throws {
+        let model = self.model()
+        defer { model.clearPendingRuns() }
+        // Before the Gateway reports anything, the claw shows alone: no “Thinking” ahead of the phases.
+        #expect(model.runWorkingLabel == nil)
+        var labels: [String?] = []
+        for phase in ["preparing_workspace", "preparing_context", "starting_model"] {
+            try self.agent(
+                #"{"runId":"r","seq":\#(labels.count + 1),"stream":"run_status","data":{"phase":"\#(phase)"}}"#,
+                model: model)
+            labels.append(model.runWorkingLabel)
+        }
+        #expect(labels == ["Preparing workspace…", "Preparing this turn…", "Waiting for a response…"])
+        try self.agent(#"{"runId":"r","seq":4,"stream":"thinking","data":{"delta":"Checking"}}"#, model: model)
+        #expect(model.runWorkingLabel == "Thinking")
+        try self.agent(#"{"runId":"r","seq":5,"stream":"assistant","data":{"text":"Oi"}}"#, model: model)
+        #expect(model.runWorkingLabel == nil)
+        // A chat delta has no agent sequence and keeps the answer state.
+        let delta = #"{"role":"assistant","content":[{"type":"text","text":"Oi, Victor."}]}"#
+        try self.chat(#"{"runId":"r","sessionKey":"main","state":"delta","message":\#(delta)}"#, model: model)
+        #expect(model.runWorkingLabel == nil)
+        #expect(model.runStartup?.seq == 5)
+    }
+
+    @Test func `between tool calls the line says Thinking until answer text arrives`() throws {
+        let model = self.model()
+        defer { model.clearPendingRuns() }
+        try self.agent(#"{"runId":"r","seq":1,"stream":"assistant","data":{"text":"Let me look."}}"#, model: model)
+        #expect(model.runWorkingLabel == nil)
+        try self.agent(
+            #"{"runId":"r","seq":2,"stream":"tool","data":{"phase":"start","name":"read","toolCallId":"t"}}"#,
+            model: model)
+        try self.agent(
+            #"{"runId":"r","seq":3,"stream":"tool","data":{"phase":"result","name":"read","toolCallId":"t"}}"#,
+            model: model)
+        #expect(model.runWorkingLabel == "Thinking")
+        try self.agent(#"{"runId":"r","seq":4,"stream":"assistant","data":{"text":"Found it."}}"#, model: model)
+        #expect(model.runWorkingLabel == nil)
+    }
+    #endif
+
     private func agent(_ json: String, model: OpenClawChatViewModel) throws {
         try model.handleTransportEvent(.agent(JSONDecoder().decode(
             OpenClawAgentEventPayload.self, from: Data(json.utf8))))

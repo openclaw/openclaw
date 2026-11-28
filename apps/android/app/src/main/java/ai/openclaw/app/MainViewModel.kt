@@ -4,6 +4,7 @@ import ai.openclaw.app.chat.ChatActiveRunPresentation
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatController
+import ai.openclaw.app.chat.ChatHistoryPaging
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
@@ -683,6 +684,10 @@ class MainViewModel internal constructor(
   val chatTranscriptAnchor: StateFlow<ChatTranscriptAnchorState?> =
     runtimeState(initial = null) { it.chat.transcriptAnchor }
   val chatHistoryLoading: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.historyLoading }
+  internal val chatHistoryPaging: StateFlow<ChatHistoryPaging> = runtimeState(initial = ChatHistoryPaging()) { it.chat.historyPaging }
+
+  internal fun loadChatHistoryPage(older: Boolean) = ensureRuntime().chat.loadHistoryPage(older)
+
   internal val chatSessionCreating: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.isCreatingSession }
   val chatError: StateFlow<String?> = runtimeState(initial = null) { it.chat.errorText }
   val chatHealthOk: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.healthOk }
@@ -695,7 +700,6 @@ class MainViewModel internal constructor(
   val chatPendingSessionSettingsKeys: StateFlow<Set<String>> =
     runtimeState(initial = emptySet()) { it.chat.pendingSessionSettingsKeys }
   internal val chatStreamingAssistant: StateFlow<ChatController.StreamingAssistant?> = runtimeState(initial = null) { it.chat.streamingAssistant }
-  val chatStreamingAssistantText: StateFlow<String?> = runtimeState(initial = null) { it.chat.streamingAssistantText }
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chat.pendingToolCalls }
   val chatToolActivities: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chat.toolActivities }
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = runtimeState(initial = emptyList()) { it.chat.questions }
@@ -1268,9 +1272,12 @@ class MainViewModel internal constructor(
     launchGatewayConnectionOperation { runtime, isCurrent -> runtime.refreshGatewayConnection(isCurrent, manualTlsTrust = true) }
   }
 
-  fun startGatewayDiscovery() {
-    queueRuntimeStartup()
-  }
+  fun loadGatewaySettings(): Unit = queueRuntimeStartup()
+
+  fun startGatewayDiscovery(): Job =
+    viewModelScope.launch(Dispatchers.Default) {
+      ensureRuntime().discoverGateways()
+    }
 
   fun connect(endpoint: GatewayEndpoint) {
     launchGatewayConnectionOperation { runtime, isCurrent -> runtime.connectSwitchingGateway(endpoint, isCurrent = isCurrent) }

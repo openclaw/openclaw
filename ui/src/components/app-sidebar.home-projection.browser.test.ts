@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
+import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { patchSettings } from "../app/settings.ts";
 import {
   mountRoster,
@@ -329,6 +330,125 @@ it("loads and opens a child named by a saved parent outside the sidebar list", a
     "chat",
     expect.objectContaining({ pathname: "/chat/main/described-child" }),
   );
+});
+
+function pinRow(key: string, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
+  return { key, sessionId: key, agentId: "main", kind: "direct", ...fields };
+}
+
+it("recovers an off-window pinned child using Gateway involvement membership", async () => {
+  const parent = "agent:main:saved-parent";
+  const child = pinRow("agent:main:participated-child", {
+    label: "Participated child",
+    spawnedBy: parent,
+  });
+  const sibling = pinRow("agent:main:unrelated-child", { spawnedBy: parent });
+  const rail = pinRow("agent:main:shortcut", { childSessions: ["agent:main:off-window"] });
+  const leaf = pinRow("agent:main:leaf");
+  const covered = pinRow("agent:main:covered", { childSessions: ["agent:main:covered-child"] });
+  const { sidebar, sessions, result } = await mountRoster(
+    undefined,
+    [rail, leaf, covered, pinRow("agent:main:covered-child", { spawnedBy: covered.key })],
+    undefined,
+    [pinRow(parent, { childSessions: [child.key, sibling.key] })],
+    [],
+    [child, sibling],
+  );
+  const filtered = Promise.withResolvers<SessionsListResult>();
+  const list = sessions.list.getMockImplementation()!;
+  sessions.list.mockImplementation((query) =>
+    query?.spawnedBy === parent && query.involvingMe ? filtered.promise : list(query),
+  );
+  sidebar.sidebarEntries = [
+    `session:${parent}`,
+    `session-rail:${rail.key}`,
+    `session:${leaf.key}`,
+    `session:${covered.key}`,
+  ];
+
+  const pins = ".sidebar-recent-sessions--pinned";
+  const toggle = () =>
+    sidebar.querySelector<HTMLButtonElement>(`${pins} [data-child-session-toggle="${parent}"]`);
+  const childRow = (key: string) => sidebar.querySelector(`${pins} [data-session-key="${key}"]`);
+  await vi.waitFor(() => expect(toggle()).not.toBeNull());
+  toggle()!.click();
+  await vi.waitFor(() => expect(childRow(sibling.key)).not.toBeNull());
+
+  await selectFilter(sidebar, "involving-me");
+  await settleRoster(sidebar);
+  expect(childRow(sibling.key)).toBeNull();
+  expect(toggle()).toBeNull();
+  filtered.resolve({ ...result, sessions: [child], count: 1 });
+
+  await vi.waitFor(() => expect(toggle()).not.toBeNull());
+  if (toggle()!.getAttribute("aria-expanded") === "false") {
+    toggle()!.click();
+  }
+  await vi.waitFor(() => expect(childRow(child.key)?.textContent).toContain("Participated child"));
+  expect(childRow(sibling.key)).toBeNull();
+  expect(
+    sessions.list.mock.calls.flatMap(([query]) =>
+      query?.involvingMe && query.spawnedBy ? [query.spawnedBy] : [],
+    ),
+  ).toEqual([parent]);
+});
+
+it("uses the accepted roster, not the chip window, for a pin's child membership", async () => {
+  const parent = "agent:main:project";
+  const admitted = pinRow("agent:main:participated-child", { spawnedBy: parent });
+  const unrelated = pinRow("agent:main:unrelated-child", { spawnedBy: parent });
+  const root = pinRow(parent, { childSessions: [admitted.key, unrelated.key] });
+  const { sidebar, sessions, result } = await mountRoster(
+    undefined,
+    [unrelated],
+    undefined,
+    [root],
+    [],
+    [admitted, unrelated],
+  );
+  // The off-page parent is described separately. The chip window still has the other child.
+  vi.spyOn(sidebar.sessionData, "resultForAgent").mockReturnValue(result);
+  const list = sessions.list.getMockImplementation()!;
+  sessions.list.mockImplementation((query) =>
+    query?.involvingMe && query.archivedFilter === "all"
+      ? Promise.resolve({ ...result, sessions: [admitted] })
+      : query?.involvingMe && query.spawnedBy
+        ? Promise.resolve({ ...result, count: 0, sessions: [] })
+        : list(query),
+  );
+  patchSettings({ sidebarAgentsMode: "roster" });
+  sidebar.sidebarEntries = [`session:${parent}`];
+  await settleRoster(sidebar);
+  await selectFilter(sidebar, "involving-me");
+  const pins = sidebar.querySelector(".sidebar-recent-sessions--pinned")!;
+  const toggle = await vi.waitFor(() =>
+    expectDefined(
+      pins.querySelector<HTMLButtonElement>(`[data-child-session-toggle="${parent}"]`),
+      "saved parent disclosure",
+    ),
+  );
+  if (toggle.getAttribute("aria-expanded") === "false") {
+    toggle.click();
+  }
+  await vi.waitFor(() =>
+    expect(pins.querySelector(`[data-session-key="${admitted.key}"]`)).not.toBeNull(),
+  );
+  expect(pins.querySelector(`[data-session-key="${unrelated.key}"]`)).toBeNull();
+});
+
+it("shows a saved pin's real name on New session when the previous selection is off-page", async () => {
+  const key = "agent:main:dashboard:release-planning";
+  const { sidebar } = await mountRoster(undefined, [], undefined, [
+    pinRow(key, { label: "Release planning" }),
+  ]);
+  patchSettings({ sidebarAgentsMode: "chip" });
+  sidebar.sessionKey = key;
+  sidebar.activeRouteId = "new-session";
+  sidebar.sidebarEntries = [`session:${key}`];
+  const link = () =>
+    sidebar.querySelector(`[data-session-section="pinned"] [data-session-key="${key}"] a`);
+  await vi.waitFor(() => expect(link()?.textContent).toContain("Release planning"));
+  expect(link()?.hasAttribute("aria-busy")).toBe(false);
 });
 
 it("keeps a descriptor-only pin navigable without inventing a child row", async () => {

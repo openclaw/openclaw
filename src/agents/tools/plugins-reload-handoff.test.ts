@@ -340,7 +340,6 @@ it.for([
   "cancelled",
   "replaced",
   "system",
-  "non-owner",
   "operator-owner",
 ] as const)(
   "preserves authenticated plugin execution across reload handoff: %s",
@@ -445,7 +444,7 @@ it.for([
           scenario === "system"
             ? undefined
             : createOperatorClient(
-                scenario === "non-owner" || scenario === "operator-owner"
+                scenario === "operator-owner"
                   ? { profileName: `reload-${scenario}`, scopes: ["operator.admin"] }
                   : { profileId: GATEWAY_OWNER_PROFILE_ID, scopes: ["operator.admin"] },
               );
@@ -453,7 +452,7 @@ it.for([
           client.internal = {
             authenticatedOperator: true,
             operatorRoleActor:
-              scenario === "non-owner" || scenario === "operator-owner"
+              scenario === "operator-owner"
                 ? { kind: "operator", profileId: client.authenticatedUserProfile!.profileId }
                 : { kind: "system" },
             operatorAccessAuthority: {
@@ -462,7 +461,7 @@ it.for([
             },
           };
         }
-        const isOwner = scenario !== "system" && scenario !== "non-owner";
+        const isOwner = scenario !== "system";
         const invalidated = scenario === "cancelled" || scenario === "replaced";
         runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
           const admittedRunContext = await startEmbeddedTurn(params, "resumed owner admission");
@@ -575,11 +574,11 @@ it.for([
             expect(readOperatorToolGatewayAuthority()?.operatorRunAuthority?.profileId).toBe(
               client?.authenticatedUserProfile?.profileId,
             );
-            // Only the yielding turn's owner decision plus a live operator source grants owner tools.
+            // The live operator source's admitted grant decides owner tools; the flag alone grants none.
             const tool = createPluginsTool({
               sessionId,
               runId: "reload-source",
-              senderIsOwner: isOwner || scenario === "system",
+              senderIsOwner: true,
               onYield: () => {
                 operation.completeWithAfterClearBarrier(cleanup.promise);
               },

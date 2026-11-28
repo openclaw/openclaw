@@ -11,6 +11,7 @@ import { createUpdateRun, getUpdateRun } from "../infra/update-run-ledger.js";
 import type { UpdateRecoveryRecord } from "../infra/update-run-recovery-schema.js";
 import * as recoveryStore from "../infra/update-run-recovery-store.js";
 import { updateRunWarningMessages } from "../infra/update-run-step.js";
+import { closeDefaultRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
@@ -35,7 +36,10 @@ import {
   markRetainedManagedNpmInstall,
   resolveRetainedManagedNpmInstallMarkerPath,
 } from "./managed-npm-retention.js";
+import { preparePluginSourceSnapshot } from "./plugin-generation-worker.js";
 import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
+import { acquirePluginSourceSnapshot } from "./plugin-source-snapshot-artifact.js";
+import { collectInstalledPluginSourceSnapshots } from "./plugin-source-snapshot-collection.js";
 import type { PluginSourceSnapshotDescriptor } from "./plugin-source-snapshot.types.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
@@ -180,15 +184,10 @@ it.each([false, true])(
   },
 );
 
-it("retains unpublished snapshot cleanup authority until pending rollback settles", async () => {
+it("collects unpublished snapshots without retiring an unrelated saved cohort", async () => {
   await withOpenClawTestState(
     { label: "cohort-unpublished-snapshot", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
     async (state) => {
-      const { preparePluginSourceSnapshot } = await import("./plugin-generation-worker.js");
-      const { collectInstalledPluginSourceSnapshots } =
-        await import("./plugin-source-snapshot-collection.js");
-      const { closeDefaultRetainedNativeWorkerSource } =
-        await import("../infra/worker-native-lifecycle.js");
       const f = await fixture(state);
       const snapshot = await preparePluginSourceSnapshot({
         stateDir: state.stateDir,
@@ -204,14 +203,14 @@ it("retains unpublished snapshot cleanup authority until pending rollback settle
           buildResolutionDigest: "build-resolution",
         });
         await snapshot.disposeAsync();
-        f.begin();
+        const pair = f.begin();
         await collectInstalledPluginSourceSnapshots(state.stateDir, [descriptor]);
-        expect(fs.existsSync(descriptor.artifact.path)).toBe(true);
-        expect(
-          (await readPersistedInstalledPluginIndex({ env: state.env }))?.retiredSourceSnapshots,
-        ).toContainEqual({ ...descriptor, installedRevision: 0 });
-        await f.settle();
         expect(fs.existsSync(descriptor.artifact.path)).toBe(false);
+        expect(
+          (await readPersistedInstalledPluginIndex({ env: state.env }))?.retiredSourceSnapshots ??
+            [],
+        ).not.toContainEqual({ ...descriptor, installedRevision: 0 });
+        expect(recoveryStore.loadPluginCohortRecovery(f.runId, { env: state.env })).toEqual(pair);
       } finally {
         await snapshot.disposeAsync();
         await closeDefaultRetainedNativeWorkerSource();
@@ -272,7 +271,32 @@ it.each(["records", "same-record", "successor"] as const)(
           ...descriptor(f.latest, 3),
           installedRevision: current.revision,
         };
-        const originalDescriptor = descriptor(mode === "same-record" ? f.latest : f.original, 1);
+        let originalDescriptor = descriptor(mode === "same-record" ? f.latest : f.original, 1);
+        if (mode === "records") {
+          const snapshot = await preparePluginSourceSnapshot({
+            stateDir: state.stateDir,
+            rootDir: f.original.packageDir,
+          });
+          try {
+            f.original.record.sourceSnapshotDigests = {
+              fixture: {
+                contentDigest: snapshot.contentDigest,
+                dependencyClosureDigest: snapshot.dependencyClosureDigest,
+              },
+            };
+            originalDescriptor = {
+              ...(await snapshot.publish({
+                installRecordHash: recordHash(f.original.record),
+                contentDigest: snapshot.contentDigest,
+                dependencyClosureDigest: snapshot.dependencyClosureDigest,
+                buildResolutionDigest: "build-resolution",
+              })),
+              installedRevision: 1,
+            };
+          } finally {
+            await snapshot.disposeAsync();
+          }
+        }
         const metadata = (
           installed: typeof f.original,
           sourceSnapshot: PluginSourceSnapshotDescriptor,
@@ -326,9 +350,19 @@ it.each(["records", "same-record", "successor"] as const)(
                   ],
                 },
               ];
-        expect(await recoveryStore.canCollectPluginSourceSnapshots({ env: state.env })).toBe(true);
         f.begin();
-        expect(await recoveryStore.canCollectPluginSourceSnapshots({ env: state.env })).toBe(false);
+        if (mode === "records") {
+          await withPluginCohortConfigCapture(
+            {
+              runId: f.runId,
+              installKey: f.cohort.installKey,
+              env: state.env,
+              assertCurrent: () => fence.assertCurrent(),
+            },
+            () => collectInstalledPluginSourceSnapshots(state.stateDir),
+          );
+          expect(fs.existsSync(originalDescriptor.artifact.path)).toBe(true);
+        }
         if (mode === "successor") {
           await refreshPersistedInstalledPluginIndexWithReceipt({
             reason: "source-changed",
@@ -367,9 +401,20 @@ it.each(["records", "same-record", "successor"] as const)(
               (plugin) => plugin.pluginId === "fixture",
             )?.sourceSnapshot,
           ).toEqual(originalDescriptor);
-          expect(await recoveryStore.canCollectPluginSourceSnapshots({ env: state.env })).toBe(
-            true,
-          );
+          if (mode === "records") {
+            const reader = await acquirePluginSourceSnapshot({
+              stateDir: state.stateDir,
+              descriptor: originalDescriptor,
+              assertCurrent: () => fence.assertCurrent(),
+            });
+            try {
+              expect(
+                JSON.parse(fs.readFileSync(path.join(reader.rootDir, "package.json"), "utf8")),
+              ).toMatchObject({ version: "1.0.0" });
+            } finally {
+              reader.release();
+            }
+          }
         }
       },
     );

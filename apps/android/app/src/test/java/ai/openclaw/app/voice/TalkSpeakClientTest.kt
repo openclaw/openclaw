@@ -1,7 +1,8 @@
 package ai.openclaw.app.voice
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayErrorDetails
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.RpcResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -18,7 +19,7 @@ class TalkSpeakClientTest {
         TalkSpeakClient(
           requestDetailed = { method, paramsJson, timeoutMs ->
             request = Triple(method, paramsJson, timeoutMs)
-            GatewaySession.RpcResult(ok = false, payloadJson = null, error = null)
+            RpcResult(ok = false, payloadJson = null, error = null)
           },
         )
       val parsed =
@@ -47,11 +48,11 @@ class TalkSpeakClientTest {
       val client =
         TalkSpeakClient(
           requestDetailed = { _, _, _ ->
-            GatewaySession.RpcResult(
+            RpcResult(
               ok = false,
               payloadJson = null,
               error =
-                GatewaySession.ErrorShape(
+                ErrorShape(
                   code = "UNAVAILABLE",
                   message = "talk unavailable",
                   details =
@@ -76,11 +77,11 @@ class TalkSpeakClientTest {
       val client =
         TalkSpeakClient(
           requestDetailed = { _, _, _ ->
-            GatewaySession.RpcResult(
+            RpcResult(
               ok = false,
               payloadJson = null,
               error =
-                GatewaySession.ErrorShape(
+                ErrorShape(
                   code = "UNAVAILABLE",
                   message = "provider failed",
                   details =
@@ -105,11 +106,11 @@ class TalkSpeakClientTest {
       val client =
         TalkSpeakClient(
           requestDetailed = { _, _, _ ->
-            GatewaySession.RpcResult(
+            RpcResult(
               ok = false,
               payloadJson = null,
               error =
-                GatewaySession.ErrorShape(
+                ErrorShape(
                   code = "INVALID_REQUEST",
                   message = "unknown method: talk.speak",
                   details = null,

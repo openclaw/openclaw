@@ -272,6 +272,7 @@ export function createSessionCapability(
 
   const groups = createSessionGroupCatalog({
     connection,
+    notify: notifySubscribers,
     snapshot: () => gateway.snapshot,
     readState: () => state,
     publish,
@@ -679,6 +680,7 @@ export function createSessionCapability(
     archiveVisibility: mutations.archiveVisibility,
     beginArchive: mutations.beginArchive,
     assignOwner: mutations.assignOwner,
+    setInvolvement: mutations.setInvolvement,
     retireModelOverride: mutations.retireModelOverride,
     think: thinkingClaims.get,
     settingsPreview: mutations.settingsPreview,
@@ -706,6 +708,9 @@ export function createSessionCapability(
     deletionState: deletions.deletionState,
     reset: mutations.reset,
     groupsLoad: groups.load,
+    get pendingSectionOrder() {
+      return groups.pendingSectionOrder;
+    },
     groupsStatus: groups.status,
     groupsInvalidate: groups.invalidate,
     groupsPut: groups.put,
