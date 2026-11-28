@@ -143,7 +143,10 @@ describe("Template Add", () => {
       await toast.updateComplete;
       const { find, request, context, replace, publishEvent, addSelector } = createAddSurface(
         surface,
-        { templatesEnabled: true },
+        {
+          templatesEnabled: true,
+          detailPackageName: surface === "detail" ? "workflow-operator" : undefined,
+        },
       );
       await waitForSolid(() => expect(find(addSelector)).toHaveProperty("disabled", false));
       const original = request.getMockImplementation()!;
@@ -475,9 +478,11 @@ describe("Template Add", () => {
     );
   });
 
-  it("asks again after a cancelled ClawHub trust warning", async () => {
+  it("asks again after a cancelled ClawHub trust warning on a publisher-qualified link", async () => {
+    const storedPackageName = "workflow-operator";
     const { detail, request, navigate } = createDetail({
       templatesEnabled: true,
+      detailPackageName: storedPackageName,
       riskConsentRequired: true,
       clawHubTrustWarning: "Review this release before adding it.",
     });
@@ -495,9 +500,10 @@ describe("Template Add", () => {
     add()?.click();
     await vi.waitFor(() => expect(detail.querySelector(".templates-trust-warning")).not.toBeNull());
     // Cancelling acknowledged nothing: the second request is as unacknowledged as the first.
+    const expectedAdd = { ...chatAdd, source: { ...source, packageName: storedPackageName } };
     expect(calls(request, "templates.add.apply").map(([, params]) => params)).toEqual([
-      chatAdd,
-      chatAdd,
+      expectedAdd,
+      expectedAdd,
     ]);
 
     detail
@@ -505,7 +511,7 @@ describe("Template Add", () => {
       ?.click();
     await vi.waitFor(() => expect(calls(request, "templates.add.apply")).toHaveLength(3));
     expect(calls(request, "templates.add.apply")[2]![1]).toEqual({
-      ...chatAdd,
+      ...expectedAdd,
       acknowledgeClawHubRisk: true,
     });
     expect(navigate.mock.calls.filter(([route]) => route === "chat")).toHaveLength(3);

@@ -3,6 +3,7 @@ import type {
   TemplatePluginAcknowledgement,
   TemplateSkillAcknowledgement,
 } from "@openclaw/gateway-protocol";
+import { matchesClawHubTemplateRef } from "../../../../src/shared/clawhub-template-ref.ts";
 import type {
   ClawHubTemplateCatalogDetail,
   ClawHubTemplateCatalogEntry,
@@ -80,7 +81,7 @@ export async function readTemplateDetail(
   const detail = result.detail;
   if (
     !isPublicEntry(detail) ||
-    detail.packageName !== source.packageName ||
+    !matchesClawHubTemplateRef(source.packageName, detail.packageName, detail.ownerHandle) ||
     (source.version !== undefined && detail.version !== source.version) ||
     !detail.agentId ||
     !detail.contents ||

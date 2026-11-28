@@ -1,4 +1,5 @@
 import { action, createMemo, createOptimistic, createSignal, onSettled, Show } from "solid-js";
+import { matchesClawHubTemplateRef } from "../../../../src/shared/clawhub-template-ref.ts";
 import { pathForTemplateCatalogEntry } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { FilePreviewModal } from "../../components/file-preview-modal.tsx";
@@ -242,7 +243,11 @@ class TemplatesCatalogModel {
 
   /** The Gateway undid an Add and returned the user here; false when another Template is shown. */
   showAddFailure(failure: TemplateAddFailure): boolean {
-    const viewing = this.props.initialPackageName === failure.entry.packageName;
+    const viewing = matchesClawHubTemplateRef(
+      this.props.initialPackageName,
+      failure.entry.packageName,
+      failure.entry.ownerHandle,
+    );
     if (this.disposed || (this.props.initialPackageName && !viewing)) {
       return false;
     }

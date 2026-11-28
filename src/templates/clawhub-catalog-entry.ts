@@ -1,9 +1,10 @@
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import { resolveClawHubImageUrl } from "../infra/clawhub-client.js";
 import type { ClawHubPackageDetail, ClawHubPackageListItem } from "../infra/clawhub-packages.js";
+import { matchesClawHubTemplateRef } from "../shared/clawhub-template-ref.js";
 import type { ClawHubTemplateCatalogEntry } from "./clawhub-catalog-types.js";
 import { ClawHubSourceError } from "./clawhub-source-artifact.js";
-import { clawHubTemplateRef, isCanonicalClawHubPackageName } from "./schema-portability.js";
+import { isCanonicalClawHubPackageName } from "./schema-portability.js";
 
 type PublicTemplatePackage = ClawHubPackageListItem & { channel: "official" | "community" };
 type OwnedTemplatePackage = PublicTemplatePackage & { ownerHandle: string };
@@ -47,7 +48,7 @@ export function requirePublicTemplatePackage(
   if (
     !isPublicTemplatePackage(pkg) ||
     !matchesTemplatePublisher(pkg.name, ownerHandle) ||
-    (pkg.name !== requestedName && clawHubTemplateRef(pkg.name, ownerHandle) !== requestedName) ||
+    !matchesClawHubTemplateRef(requestedName, pkg.name, ownerHandle) ||
     (pkg.ownerHandle !== undefined && pkg.ownerHandle !== null && pkg.ownerHandle !== ownerHandle)
   ) {
     throw new ClawHubSourceError(
