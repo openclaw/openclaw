@@ -211,13 +211,15 @@ it.skipIf(process.platform === "win32" || process.platform === "android")(
     const file = path.basename(logPath);
     const stderr = captureStderr();
     const targetPreparation = fileLogTransport.prepareTarget(file, true, { options: { stateDir } });
-    vi.stubEnv("HOME", home);
+    vi.stubEnv("HOME", `${home}/`);
     try {
       fs.chmodSync(home, 0o775);
       fileLogTransport.enqueue({ ...entry(file, "dropped\n"), targetPreparation });
       await fileLogTransport.flush();
       const [warning] = warningLines(stderr);
-      expect(warning).toContain("records dropped");
+      expect(warning).toContain(
+        `log directory unavailable; records dropped (file=${file}): Directory $HOME is writable by group or others and has no sticky bit.`,
+      );
       expect(warning).toContain('chmod go-w "$HOME"');
       expect(warning).toContain('chmod +t "$HOME"');
       expect(warning).not.toContain(home);

@@ -88,10 +88,11 @@ function assertSafeTempAncestors(
       (stat.mode & 0o1000) === 0 &&
       !trustedAncestor
     ) {
-      const isHome = directory === process.env.HOME;
+      const home = process.env.HOME;
+      const isHome = home && directory === (home.replace(/\/+$/, "") || "/");
       const quoted = isHome ? '"$HOME"' : `'${directory.replaceAll("'", "'\\''")}'`;
       throw new Error(
-        `Temp workspace ancestor ${isHome ? "$HOME" : JSON.stringify(directory)} is group/world writable without sticky protection; have its owner run chmod go-w ${quoted} for a private directory or chmod +t ${quoted} for a shared temp directory.`,
+        `Directory ${isHome ? "$HOME" : JSON.stringify(directory)} is writable by group or others and has no sticky bit. Have its owner run chmod go-w ${quoted} for a private directory or chmod +t ${quoted} for a shared temp directory.`,
       );
     }
     if (path.dirname(directory) === directory) {
@@ -138,11 +139,13 @@ export function resolvePreferredOpenClawTmpDir(
     );
     return fallbackRoot;
   } catch (error) {
-    const reason =
-      error instanceof Error && rejected instanceof Error && error.message === rejected.message
-        ? error.message
-        : `Default root: ${String(rejected)} State fallback ${JSON.stringify(stateDir)}: ${String(error)}`;
-    throw new Error(`No safe OpenClaw temp root is available. ${reason}`, { cause: error });
+    if (error instanceof Error && rejected instanceof Error && error.message === rejected.message) {
+      throw error;
+    }
+    throw new Error(
+      `No safe directory is available. Preferred directory: ${String(rejected)} State fallback ${JSON.stringify(stateDir)}: ${String(error)}`,
+      { cause: error },
+    );
   }
 }
 
