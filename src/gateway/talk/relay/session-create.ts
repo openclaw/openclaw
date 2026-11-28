@@ -241,6 +241,7 @@ export function createTalkRealtimeRelaySession(
     capabilities: params.capabilities,
     cfg: params.cfg,
     agentId: relayAgentId,
+    usageSessionKey: canonicalKey,
     providerConfig: params.providerConfig,
     audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
     instructions: params.instructions,

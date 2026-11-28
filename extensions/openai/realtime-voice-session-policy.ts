@@ -167,6 +167,7 @@ export type RealtimeEvent = {
     status?: string;
     status_details?: unknown;
     output?: unknown[];
+    usage?: unknown;
   };
   error?: unknown;
 };

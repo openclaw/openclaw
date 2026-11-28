@@ -352,6 +352,7 @@ export function buildOpenAIRealtimeVoiceProvider(
                     onClearAudio: () => undefined,
                     onEvent: gatewayControl.onEvent,
                     onResponseDone: gatewayControl.onResponseDone,
+                    onUsage: gatewayControl.onUsage,
                     onTranscript: gatewayControl.onTranscript,
                     onToolCall: gatewayControl.onToolCall,
                     onReady: gatewayControl.onReady,

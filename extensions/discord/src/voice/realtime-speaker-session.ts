@@ -228,6 +228,7 @@ export class DiscordRealtimeSpeakerSession {
       capabilities,
       cfg: this.params.cfg,
       agentId: this.params.entry.route.agentId,
+      usageSessionKey: this.params.entry.route.sessionKey,
       providerConfig: resolved.providerConfig,
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
       instructions,

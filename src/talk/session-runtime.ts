@@ -14,6 +14,7 @@ import type {
   RealtimeVoiceToolCallEvent,
 } from "./provider-types.js";
 import { resolveRealtimeVoiceBargeIn } from "./realtime-session-policy.js";
+import { recordRealtimeVoiceUsage } from "./realtime-voice-usage.js";
 
 export type RealtimeVoiceAudioSink = {
   isOpen?: () => boolean;
@@ -54,6 +55,8 @@ export type RealtimeVoiceBridgeSessionParams = Omit<
   triggerGreetingOnReady?: boolean;
   /** Admit a host-requested response before the provider can complete it synchronously. */
   onResponseRequest?: () => void;
+  /** Session whose usage and cost reports include the provider's billed realtime responses. */
+  usageSessionKey?: string;
   onToolCall?: (
     event: RealtimeVoiceToolCallEvent,
     session: RealtimeVoiceBridgeSession,
@@ -308,6 +311,18 @@ export function createRealtimeVoiceBridgeSession(
       : {}),
     onEvent: params.onEvent,
     onResponseDone: params.onResponseDone,
+    // Billed after close too, so usage is never gated on admission.
+    onUsage: (usage) => {
+      if (params.usageSessionKey) {
+        void recordRealtimeVoiceUsage({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          sessionKey: params.usageSessionKey,
+          usage,
+        });
+      }
+      params.onUsage?.(usage);
+    },
     onToolCall: (event) => {
       if (!bridgeRef.current || !isAdmitting()) {
         return;

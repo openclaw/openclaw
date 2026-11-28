@@ -1,7 +1,12 @@
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
-import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
+import {
+  deriveContextPromptTokens,
+  hasNonzeroUsage,
+  isBillingOnlyUsageRecord,
+  normalizeUsage,
+} from "../../agents/usage.js";
 import {
   SQLITE_USAGE_TAIL_MAX_EVENTS,
   type SessionTranscriptAccountingOptions,
@@ -67,7 +72,8 @@ function readTranscriptAccountingSnapshot(
     const messageRecord = asOptionalRecord(record.message);
     // SAFETY: Stored message payloads use the AgentMessage serialization contract.
     const message = messageRecord as AgentMessage | undefined;
-    if (scanUsage) {
+    // Billing-only rows are neither a context anchor nor trailing context.
+    if (scanUsage && !isBillingOnlyUsageRecord(messageRecord)) {
       const rawUsage = messageRecord?.usage ?? record.usage;
       const usageFields = asOptionalRecord(rawUsage);
       if (

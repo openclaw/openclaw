@@ -40,6 +40,8 @@ import {
   type InternalRealtimeVoiceBrowserSessionCreateRequest,
 } from "../../../talk/provider-internal.js";
 import { resolveConfiguredRealtimeVoiceProviderAsync } from "../../../talk/provider-resolver.js";
+import type { RealtimeVoiceUsageReport } from "../../../talk/provider-types.js";
+import { recordRealtimeVoiceUsage } from "../../../talk/realtime-voice-usage.js";
 import { resolveSandboxedSessionCreation } from "../../operator-session-run.js";
 import { readGatewayRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
 import type { GatewayRequestHandler } from "../../server-methods/types.js";
@@ -406,6 +408,13 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
       const gatewayControl = ownsProvider
         ? {
             ...gatewayControlOwner.control,
+            onUsage: (usage: RealtimeVoiceUsageReport) =>
+              void recordRealtimeVoiceUsage({
+                cfg: runtimeConfig,
+                agentId,
+                sessionKey: target.canonicalKey,
+                usage,
+              }),
             onReady: () => {
               try {
                 gatewayControlOwner.assertOpen();
