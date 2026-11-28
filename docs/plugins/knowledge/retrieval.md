@@ -11,15 +11,15 @@ sidebarTitle: "Retrieval and dates"
 Keyword search, exact identity lookup, and date queries. Part of the
 [Knowledge plugin](/plugins/knowledge) guide.
 
-Knowledge has no embeddings, remote search services, query expansion, answer
-synthesis, or regex search. `knowledge_records` is the exhaustive inventory;
-ranked search never proves that an inventory is complete.
+Knowledge has no embeddings, remote search services, answer synthesis, or regex
+search. `knowledge_records` is the exhaustive inventory; ranked search never
+proves that an inventory is complete.
 
 ## Query contract
 
 | Operation or input            | Meaning                                                                              |
 | ----------------------------- | ------------------------------------------------------------------------------------ |
-| `knowledge_grep({query})`     | FTS5/BM25 over title, aliases, and body; every word token must match                 |
+| `knowledge_grep({query})`     | Search title, aliases, and body for all words first; see fallback below              |
 | `mode: "any"`                 | Any word token may match                                                             |
 | `mode: "phrase"`              | Word tokens in order and adjacent within one field                                   |
 | `knowledge_lookup({query})`   | Exact ID, full title, or alias; returns `found`, `ambiguous`, or `missing`           |
@@ -30,13 +30,22 @@ ranked search never proves that an inventory is complete.
 
 Queries accept 1–64 word tokens within 500 characters. Punctuation separates
 tokens; `OR`, `NOT`, column syntax, and quotes are not executed as FTS syntax.
-Matching is case-insensitive. Decomposed diacritics fold away in any script, so
-decomposed `άλφα` and unaccented `αλφα` match alike. Precomposed letters with
+Matching is case-insensitive. Some accents fold as well: decomposed Greek
+`άλφα` and unaccented `αλφα` match alike. Precomposed letters with
 diacritics fold to their base letters across the Latin script, including Latin
 Extended-A (`cafe` matches `café`, and `c` matches `č`): an unaccented query
-does not reach a composed accented word in other scripts. There is no stemming,
-prefix search, or language-specific segmentation, so unsegmented CJK substrings
-may not match.
+does not reach a composed accented word in other scripts.
+
+In runs containing Han, kana, Thai, Lao, or Khmer text, search uses dictionary
+word breaks. For example, `東京` can match inside `明日東京で会います`. This is
+not substring search: a fragment of a dictionary compound can still miss.
+An unspaced query term such as `明日大阪` keeps its parts adjacent and in order,
+including in `all` and `any` modes. To search for the words independently,
+separate them: `明日 大阪` matches either word in `any` mode or both words in any
+order in `all` mode.
+Thai, Lao, and Khmer marks and decomposed kana voicing signs stay part of the
+word in the temporary index; Thai `ข้าว` (rice) is not `ข่าว` (news).
+
 Canonically equivalent Unicode spellings (composed NFC and decomposed NFD, e.g.
 Greek `άλφα`) retrieve the same records: in `all` and `any` modes each word
 matches its original spelling plus both canonical forms, so a partially
@@ -55,6 +64,26 @@ Defaults cover all active saved records. Invalid and duplicate IDs, withdrawn
 records, and records whose structured dependencies, endpoints, or entities are
 unavailable are excluded in every mode. Authored prose without declared
 dependencies cannot be redacted automatically.
+
+### Fallback when all words miss
+
+When no literal match exists, including in eligible superseded wording, a
+query with no explicit mode can try **one** adjustment:
+
+- For a question starting with `what is/are`, `where is/are`, or Portuguese
+  `onde está/estão`, remove the two opening words and require all remaining
+  words literally. A successful search reports `matchStrategy: "question-terms"`.
+- Otherwise, try specific whole-word forms for each term, still requiring
+  every term. Examples include `decisão → decisões`, `combinar → combinámos`,
+  `canción → canciones`, `printing → printed`, and `서울 → 서울에서`.
+  A successful search reports `matchStrategy: "word-forms"`. These forms are directional,
+  not a general stemmer or a way to distinguish word senses.
+
+The shared `memory.search` response describes the adjustment in its `warning`
+field alongside any coverage notice.
+
+Explicit `all`, `any`, and `phrase` searches never use these adjustments. A
+query such as `orchid refunds` does not return a page about orchids alone.
 
 ### Superseded wording
 
@@ -127,7 +156,10 @@ index update before results can be returned.
   operation instead of returning an empty or partial search.
 - Validation issues set `coverage.complete: false`.
 
-There is no background indexing worker.
+A search whose eligible text needs dictionary breaks also builds a temporary
+corpus for that query. Even an unfiltered search can therefore pay the cost of
+segmenting and indexing all eligible records again. The persistent tables keep
+their original text and format. There is no background indexing worker.
 
 ### What is rebuildable
 

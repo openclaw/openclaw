@@ -7,7 +7,7 @@ import { expect, it, vi } from "vitest";
 import { stringify } from "yaml";
 import { contract } from "./contract.js";
 import { SqliteIdentityStore } from "./identity-store.js";
-import { keywordExpression, keywordSearch, verifyKeywordIndex } from "./retrieval.js";
+import { keywordSearch, verifyKeywordIndex } from "./retrieval.js";
 import { createKnowledgeService } from "./service.js";
 import { KnowledgeStorage } from "./storage.js";
 import {
@@ -126,6 +126,65 @@ it("UI and tool share FTS title/alias/body retrieval, literal modes and stable c
   expect(await f.total({ query: "body distinctive", mode: "phrase" })).toBe(0);
   expect(await f.total({ query: "flower", tag: "wrong" })).toBe(0);
   expect(await f.total({ query: "flower", tag: "botany", kind: "page", type: "note" })).toBe(1);
+});
+
+it("dictionary breaks preserve original snippet coordinates and term adjacency", async () => {
+  const f = await fixture();
+  const prefix = "今天去了图书馆。".repeat(85) + "🌿\n";
+  const body = prefix + "明日大阪に行きます。";
+  await f.put("osaka_trip", "Trip", body);
+  await f.put("separate_words", "Trip", "大阪 別 明日");
+  const r = await f.service.grep({ query: "明日大阪", mode: "all" }, f.owner);
+  expect(ids(r)).toEqual(["osaka_trip"]);
+  const h = r.hits[0]!;
+  expect(h.snippet.start).toBe(prefix.length - 100);
+  expect(h.snippet.text).toBe(body.slice(h.snippet.start, h.snippet.end));
+  expect(h.citation.hash).toBe(
+    (await f.service.record_detail({ id: "osaka_trip" }, f.owner)).record!.hash,
+  );
+  expect(await f.total({ query: "阪に", mode: "any" })).toBe(0);
+  await f.put("news_note", "Press", "ฉันติดตามข่าวทุกวัน");
+  await f.put("rice_note", "Lunch", "ฉันกินข้าวทุกวัน");
+  expect(ids(await f.service.grep({ query: "ข้าว", mode: "phrase" }, f.owner))).toEqual([
+    "rice_note",
+  ]);
+});
+
+it("only a default-mode miss expands forms or removes a question prefix; history counts before paging", async () => {
+  const f = await fixture();
+  await f.put("past_plan", "Plans", "Revisámos as previsões de março.");
+  const hit = await f.agent.grep({ query: "previsão" }, f.owner);
+  expect(hit.hits.map((h: { id: string }) => h.id)).toEqual(["past_plan"]);
+  expect(hit.matchStrategy).toBe("word-forms");
+  expect(ids(await f.service.grep({ query: "revisar" }, f.owner))).toEqual(["past_plan"]);
+  await f.put(
+    "station_note",
+    "Station",
+    "Tickets were printed. 부산에서 만나요. Las canciones son nuevas.",
+  );
+  await f.put("seoul_note", "Weather", "서울에서".normalize("NFD"));
+  expect(ids(await f.service.grep({ query: "서울" }, f.owner))).toEqual(["seoul_note"]);
+  for (const query of ["printing", "부산", "canción"]) {
+    const found = await f.service.grep({ query }, f.owner);
+    expect(ids(found), query).toEqual(["station_note"]);
+    expect(found.matchStrategy).toBe("word-forms");
+  }
+  expect((await f.agent.grep({ query: "Onde estão as previsões?" }, f.owner)).matchStrategy).toBe(
+    "question-terms",
+  );
+  expect(await f.total({ query: "onde estão as previsões fiscais" })).toBe(0);
+  // Isolate the two relaxations: a retained word must not silently inflect.
+  expect(await f.total({ query: "Onde está previsão?" })).toBe(0);
+  for (const mode of ["all", "phrase", "any"] as const) {
+    expect(await f.total({ query: "revisar", mode })).toBe(0);
+  }
+  await f.put("old_plan", "Earlier", "previsão", superseded("now_plan"));
+  await f.put("now_plan", "Current", "New wording.");
+  const exact = await f.service.grep({ query: "previsão" }, f.owner);
+  expect(ids(exact)).toEqual(["now_plan"]);
+  expect(exact.hits[0]!.via?.id).toBe("old_plan");
+  expect(exact.matchStrategy).toBeUndefined();
+  expect((await f.service.grep({ query: "previsão", offset: 1 }, f.owner)).hits).toEqual([]);
 });
 
 it("exact ID/name/alias lookup normalizes names, exposes ambiguity and never selects arbitrarily", async () => {
@@ -361,7 +420,7 @@ it("FTS operators are literal words, malformed/oversized input is rejected, Unic
   await f.put("unicode_record", "Café project", "alpha OR beta 東京");
   expect(await f.total({ query: "cafe" })).toBe(1);
   expect(await f.total({ query: "東京" })).toBe(1);
-  expect(keywordExpression({ query: "alpha OR beta" })).toBe('"alpha" AND "OR" AND "beta"');
+  expect(await f.total({ query: "missing OR beta" })).toBe(0);
   for (const query of ["", "   ", "***", "a ".repeat(65), "a".repeat(501)]) {
     await expect(f.service.grep({ query }, f.owner)).rejects.toThrow(/input|tokens/);
   }
