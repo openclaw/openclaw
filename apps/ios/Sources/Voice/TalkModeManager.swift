@@ -1677,6 +1677,10 @@ final class TalkModeManager {
             deactivateAudioSession()
             let msg = error.localizedDescription
             GatewayDiagnostics.log("talk speech: restart failed error=\(msg)")
+            self.setStatus(
+                String(localized: "Talk stopped listening. Turn Talk off and on to try again."),
+                phase: .idle,
+                watchPresentation: .localized("Talk stopped listening. Turn Talk off and on to try again."))
         }
     }
 
