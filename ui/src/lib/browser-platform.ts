@@ -8,7 +8,7 @@ export function isIosBrowserPlatform(): boolean {
 }
 
 /**
- * Mobile composers keep Return for editing, including tablets with hardware keyboards.
+ * Mobile software keyboards keep Return for editing.
  * Android browsers masking as Linux desktops are indistinguishable from touch PCs;
  * do not use touch or viewport heuristics that would change desktop shortcuts.
  */
@@ -16,9 +16,15 @@ export function isMobileBrowserPlatform(): boolean {
   return isIosBrowserPlatform() || /Android/u.test(globalThis.navigator.userAgent);
 }
 
-/** Keep native mobile editing, without allowing ancestor shortcuts to submit Return. */
+/** Keep software Return native, without letting ancestor shortcuts submit it. */
 export function keepMobileReturnNative(event: KeyboardEvent): boolean {
   if (event.key !== "Enter" || !isMobileBrowserPlatform()) {
+    return false;
+  }
+  // iOS supplies a physical key code for hardware Return. Decide per event so
+  // using a Magic Keyboard never turns a later on-screen Return into Send.
+  // Missing/unknown codes stay native; Android software keyboards may supply codes.
+  if (isIosBrowserPlatform() && (event.code === "Enter" || event.code === "NumpadEnter")) {
     return false;
   }
   event.stopPropagation();

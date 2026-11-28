@@ -99,12 +99,37 @@ describe("cold command palette input custody", () => {
         expect(state.mode()).toBe("search");
         compose(input, true);
         await vi.advanceTimersByTimeAsync(20);
+        input.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
       }
       expect(state.mode()).toBe("compose");
       keydown(input, { ctrlKey: true });
       expect(state.captureHandoff()()).toMatchObject({ value: input.value, submitRequested: true });
     },
   );
+
+  it("keeps iPad IME-confirming hardware Enter native while the palette loads", async () => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue("iPad");
+    const { state, input } = await mountLoader();
+    compose(input);
+    type(input, "Summarize these planning notes in a new background task.");
+    const end = new CompositionEvent("compositionend", { bubbles: true });
+    input.dispatchEvent(end);
+    await vi.advanceTimersByTimeAsync(20);
+    const enter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      code: "Enter",
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(enter, "timeStamp", { value: end.timeStamp + 1 });
+    input.dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(false);
+    expect(state.submitRequested()).toBe(false);
+    input.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
+    keydown(input, { code: "Enter", metaKey: true });
+    expect(state.submitRequested()).toBe(true);
+  });
 
   it("never queues a mobile session submit while the palette loads", async () => {
     vi.spyOn(navigator, "userAgent", "get").mockReturnValue("iPhone");
