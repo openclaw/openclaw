@@ -168,11 +168,15 @@ suite.define(() => {
           await waitForControlUiGatewayReady(page);
           expect(
             await evaluateControlUiContext(page, (app) =>
-              app.gateway.snapshot.hello?.auth?.scopes?.toSorted(),
+              app.gateway.snapshot.hello?.auth?.scopes?.toSorted((left, right) =>
+                left.localeCompare(right),
+              ),
             ),
           ).toEqual(
             // Admin covers the browser’s full requested scope set; the reader stays narrowly scoped.
-            (person.role === "owner" ? CONTROL_UI_OPERATOR_SCOPES : person.scopes).toSorted(),
+            (person.role === "owner" ? CONTROL_UI_OPERATOR_SCOPES : person.scopes).toSorted(
+              (left, right) => left.localeCompare(right),
+            ),
           );
           if (index === 0) {
             await rpc(page, "sessions.create", { key: homeKey, label: "Home release notes" });
