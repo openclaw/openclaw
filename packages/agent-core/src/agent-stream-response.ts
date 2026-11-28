@@ -426,7 +426,7 @@ export async function streamAgentResponse(
             case "toolcall_delta":
             case "toolcall_end":
               if (partialMessage) {
-                // A delta event is an append, even when the provider also sends a mutated snapshot.
+                // Deltas, not the shared snapshot, give the repetition guard its offsets.
                 const delta =
                   event.type === "text_delta" || event.type === "thinking_delta"
                     ? event.delta

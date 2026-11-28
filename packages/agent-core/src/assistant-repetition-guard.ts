@@ -2,9 +2,15 @@ import { REPETITIVE_OUTPUT_ERROR_CODE, type AssistantMessage } from "@openclaw/l
 import { REPETITIVE_OUTPUT_ERROR_MESSAGE } from "./errors.js";
 import { RepetitionWatch } from "./repetition-guard.js";
 
-/** Tracks each text/reasoning block once, including providers that only emit final snapshots. */
+/**
+ * Tracks each text/reasoning block once, including providers that only emit final snapshots.
+ * A delta takes its offset from the stream and reads only the snapshot's length: a queued
+ * event's snapshot can already hold later chunks, and reading the content of a growing string
+ * flattens it, O(block) per delta. Events without a delta verify the snapshot once in full.
+ */
 export class AssistantRepetitionGuard {
-  private blocks = new Map<number, { watch: RepetitionWatch; text: string }>();
+  // `seen`: the block text the watch has seen. `deltaEnd`: block offset after the last delta.
+  private blocks = new Map<number, { watch: RepetitionWatch; seen: string; deltaEnd: number }>();
 
   check(
     message: AssistantMessage,
@@ -25,15 +31,28 @@ export class AssistantRepetitionGuard {
         continue;
       }
       let state = this.blocks.get(index);
-      // Length alone proves an append; a same-length snapshot correction is accepted as stale history.
-      const knownAppend =
-        delta !== undefined && text.length === (state?.text.length ?? 0) + delta.length;
-      if (!state || (!knownAppend && !text.startsWith(state.text))) {
-        state = { watch: new RepetitionWatch(), text: "" };
-        this.blocks.set(index, state);
+      let fresh: string | undefined;
+      if (state && text.length >= state.seen.length) {
+        if (delta !== undefined) {
+          const offset = state.deltaEnd;
+          state.deltaEnd += delta.length;
+          fresh = delta.slice(Math.max(0, state.seen.length - offset));
+        } else if (text.startsWith(state.seen)) {
+          fresh = text.slice(state.seen.length);
+        }
       }
-      const stopped = state.watch.feed(knownAppend ? delta : text.slice(state.text.length));
-      state.text = text;
+      if (fresh === undefined) {
+        // New block, or the snapshot rewrote what the watch saw: watch the snapshot from the start.
+        state = {
+          watch: new RepetitionWatch(),
+          seen: "",
+          deltaEnd: state ? text.length : (delta?.length ?? 0),
+        };
+        this.blocks.set(index, state);
+        fresh = text;
+      }
+      state.seen += fresh;
+      const stopped = state.watch.feed(fresh);
       if (stopped) {
         // A server-side checkpoint could replay the discarded block even with clean visible text.
         return {
