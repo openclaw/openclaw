@@ -29,6 +29,27 @@ function dispatches(fixture: ReturnType<typeof createDispatchFixture>) {
 }
 
 describe("candidate-owned full release dispatch entry point", () => {
+  it("warns in the dispatch preview when ordinary reuse does not enable pinned recovery", () => {
+    const f = createDispatchFixture({ candidateOwned: true });
+    const result = f.run([
+      "--dry-run",
+      "-f",
+      "validation_purpose=publish",
+      "-f",
+      "publication_selection_json=" + JSON.stringify(publicationSelectionFixture()),
+      "-f",
+      "reuse_evidence=true",
+      "-f",
+      "rerun_group=all",
+    ]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain(
+      "Pinned recovery unavailable: no publication_artifact_source_json",
+    );
+    expect(result.stderr).toContain("reuse_evidence alone");
+    expect(dispatches(f)).toEqual([]);
+  });
+
   it("rejects an invalid frozen mock before dispatch unless the local preflight is skipped", () => {
     const f = createDispatchFixture({
       candidateOwned: true,
@@ -74,6 +95,7 @@ describe("candidate-owned full release dispatch entry point", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(dispatches(f)).toEqual([P, Q]);
     const repairedP = runGit(f.origin, ["rev-parse", "refs/heads/main"]);
+    expect(result.stderr).not.toContain("Pinned recovery unavailable");
     expect(repairedP).not.toBe(f.workflowSha);
     const retained = f.record();
     expect(retained.admission.workflowSha).toBe(repairedP);

@@ -2526,6 +2526,17 @@ async function main() {
   console.log(`Trusted workflow ref: ${args.trustedWorkflowRef}`);
   console.log(`Temporary workflow ref: ${branch}`);
 
+  if (
+    candidateOwned &&
+    publicationIntent.validationPurpose === "publish" &&
+    selection.inputs.rerun_group === "all" &&
+    !args.inputs.publication_artifact_source_json
+  ) {
+    console.warn(
+      "Pinned recovery unavailable: no publication_artifact_source_json selected. Ordinary reuse_evidence alone does not retain publication bytes for --prepare-recovery.",
+    );
+  }
+
   await executeFrozenDispatch({
     args,
     record,
