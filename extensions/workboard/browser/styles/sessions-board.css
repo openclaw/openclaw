@@ -303,14 +303,7 @@ button.workboard-heading__scope-name {
     padding: 0;
     border: 0;
     border-radius: var(--radius-sm);
-    background: transparent;
     box-shadow: none;
-    color: var(--muted);
-  }
-
-  > button.btn--icon:hover {
-    background: var(--bg-hover);
-    color: var(--text);
   }
 
   > button.btn--icon svg {

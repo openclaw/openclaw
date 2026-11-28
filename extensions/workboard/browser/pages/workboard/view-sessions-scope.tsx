@@ -1,7 +1,7 @@
 /** @jsxImportSource @solidjs/web */
 import type { ProjectsListResult, SessionsGroupsListResult } from "@openclaw/gateway-protocol";
 import type { WorkboardSessionsBoardSpec } from "@openclaw/workboard-contract";
-import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { SelectPicker } from "../../components/host-components.tsx";
 import { icons } from "../../components/icons.tsx";
@@ -43,11 +43,11 @@ export function sessionsScopeForSave(scope: SessionsBoardScope): SessionsBoardSc
   return title ? { ...rest, titleContains: title } : rest;
 }
 
-function sessionsScopeSummary(scope: SessionsBoardScope): string {
+function sessionsScopeSummary(scope: SessionsBoardScope, projectName: string): string {
   const picked = scope.includeSessionKeys;
   return [
     scope.group === undefined ? "" : scope.group || t("workboard.sessionsBoard.scope.noGroup"),
-    scope.projectId ?? "",
+    projectName,
     scope.titleContains ? `“${scope.titleContains}”` : "",
     !picked
       ? ""
@@ -62,11 +62,40 @@ function sessionsScopeSummary(scope: SessionsBoardScope): string {
 /** The open board's saved filters under its title; editors open the board settings. */
 export function SessionsScopeHeading(props: {
   scope: SessionsBoardScope | undefined;
+  client: GatewayBrowserClient | null;
   canEdit: boolean;
   onEdit: () => void;
 }) {
-  const summary = () =>
-    props.scope && hasSessionsScopeFilters(props.scope) ? sessionsScopeSummary(props.scope) : "";
+  // Saved scopes hold project ids; show the project's name like the editor does.
+  const [projectNames, setProjectNames] = createSignal<ReadonlyMap<string, string>>(new Map());
+  createEffect(
+    () => (props.scope?.projectId ? props.client : null),
+    (client) => {
+      if (!client) {
+        return;
+      }
+      let live = true;
+      void client.request<ProjectsListResult>("projects.list", {}).then(
+        ({ projects }) => {
+          if (live) {
+            setProjectNames(new Map(projects.map(({ id, displayName }) => [id, displayName])));
+          }
+        },
+        () => {}, // The saved id remains readable if the project list is unavailable.
+      );
+      return () => {
+        live = false;
+      };
+    },
+  );
+  const summary = () => {
+    const scope = props.scope;
+    if (!scope || !hasSessionsScopeFilters(scope)) {
+      return "";
+    }
+    const projectId = scope.projectId ?? "";
+    return sessionsScopeSummary(scope, projectNames().get(projectId) ?? projectId);
+  };
   return (
     <Show when={summary()}>
       <div class="workboard-heading__scope">
@@ -316,7 +345,7 @@ export function SessionsScopeEditor(props: {
                         <li class="workboard-sessions-scope__chip" title={key}>
                           <span>{label()}</span>
                           <button
-                            class="btn btn--icon"
+                            class="btn btn--icon btn--ghost"
                             type="button"
                             aria-label={t("workboard.sessionsBoard.scope.removeSession", {
                               name: label(),

@@ -366,6 +366,10 @@ export function createWorkboardPage(
       }
       return [...choices].map(([key, label]) => ({ key, label }));
     };
+    const liveClient = () => {
+      void presentation()?.revision;
+      return host.connection.connected ? host : null;
+    };
     function PageHeading() {
       const board = () => presentation()?.selectedBoard;
       // The open board's read carries the newest saved scope; the board list may lag it.
@@ -417,6 +421,7 @@ export function createWorkboardPage(
           <Show when={board()?.kind === "sessions"}>
             <SessionsScopeHeading
               scope={boardScope()}
+              client={liveClient()}
               canEdit={Boolean(presentation()?.workboardProps.canWrite)}
               onEdit={() => {
                 const selected = board();
@@ -466,10 +471,6 @@ export function createWorkboardPage(
       );
     }
     function Page() {
-      const liveClient = () => {
-        void presentation()?.revision;
-        return host.connection.connected ? host : null;
-      };
       const canWrite = () => {
         void presentation()?.revision;
         return (

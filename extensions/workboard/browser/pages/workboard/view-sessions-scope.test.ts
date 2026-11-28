@@ -311,8 +311,9 @@ it.each([
   },
   {
     name: "filtered",
-    scope: { group: "Design", titleContains: "retry" },
-    summary: "Design · “retry”",
+    scope: { group: "Design", projectId: "openclaw", titleContains: "retry" },
+    // The saved project id reads as the project's name.
+    summary: "Design · OpenClaw · “retry”",
     message: "No sessions match this board’s filters.",
     action: "Edit filters",
   },
