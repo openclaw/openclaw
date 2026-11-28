@@ -144,7 +144,7 @@ struct ChatImageViewerThumbnail: UIViewRepresentable {
     /// The bubble's corner, so the thumbnail and its reserved box share one outline.
     static let cornerRadius: CGFloat = 16
 
-    let image: UIImage
+    let image: UIImage?
     let artifactId: String
     /// Fill the proposed box (the transcript's reserved box) instead of the image's own aspect.
     var fillsProposal = false
@@ -169,11 +169,10 @@ struct ChatImageViewerThumbnail: UIViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UIImageView, context: Context) -> CGSize? {
-        let size = self.image.size
-        guard size.width > 0, size.height > 0 else { return .zero }
         if self.fillsProposal, let width = proposal.width, let height = proposal.height {
             return CGSize(width: width, height: height)
         }
+        guard let size = self.image?.size, size.width > 0, size.height > 0 else { return .zero }
         let width = proposal.width ?? size.width
         let height = proposal.height ?? size.height
         let scale = min(width / size.width, height / size.height)
@@ -284,6 +283,8 @@ final class ChatImageViewerController: UIViewController,
     UIPageViewControllerDataSource, UIPageViewControllerDelegate
 {
     typealias Load = @MainActor @Sendable (String) async throws -> OpenClawChatLoadedMedia?
+    /// A small rendition for the row of thumbnails, for pages the opener holds no pixels for.
+    typealias StripLoad = @MainActor @Sendable (String) async -> UIImage?
 
     private let items: [ChatImageViewerItem]
     private let load: Load
@@ -296,6 +297,10 @@ final class ChatImageViewerController: UIViewController,
     private var filmstrip: UIHostingController<ChatImageViewerFilmstrip>?
     /// Pixels the opener already holds (a draft's staged photos), keyed like the items.
     private let providedThumbnails: [String: UIImage]
+    fileprivate let usesReducedThumbnails: Bool
+    private let stripLoad: StripLoad?
+    private var loadedStripThumbnails: [String: UIImage] = [:]
+    private var stripTask: Task<Void, Never>?
     private var pages: [Int: ChatImageViewerPageController] = [:]
     private(set) var currentIndex: Int
     /// The text view that had the keyboard when the viewer opened.
@@ -305,12 +310,15 @@ final class ChatImageViewerController: UIViewController,
     static func present(
         items: [ChatImageViewerItem],
         artifactId: String,
-        thumbnail: UIImage,
+        thumbnail: UIImage?,
         thumbnails: [String: UIImage] = [:],
+        usesReducedThumbnails: Bool = false,
+        zoomSourceID: String? = nil,
+        stripLoad: StripLoad? = nil,
         load: @escaping Load)
     {
         guard let index = items.firstIndex(where: { $0.artifactId == artifactId }),
-              let source = ChatImageViewerSources.view(for: artifactId),
+              let source = ChatImageViewerSources.view(for: zoomSourceID ?? artifactId),
               // Transcript rows can live in detached hosting controllers; present from the window.
               var presenter = source.window?.rootViewController
         else { return }
@@ -318,7 +326,13 @@ final class ChatImageViewerController: UIViewController,
             presenter = presented
         }
         let viewer = ChatImageViewerController(
-            items: items, index: index, thumbnail: thumbnail, thumbnails: thumbnails, load: load)
+            items: items,
+            index: index,
+            thumbnail: thumbnail,
+            thumbnails: thumbnails,
+            usesReducedThumbnails: usesReducedThumbnails,
+            stripLoad: stripLoad,
+            load: load)
         // The keyboard would cover the image: put it away for the viewer and bring it back, with the
         // same cursor, once the viewer closes.
         if let responder = ChatFirstResponder.current(), responder.resignFirstResponder() {
@@ -343,7 +357,7 @@ final class ChatImageViewerController: UIViewController,
         options.dimmingColor = .clear
         viewer.preferredTransition = .zoom(options: options) { context in
             guard let viewer = context.zoomedViewController as? ChatImageViewerController else { return nil }
-            return ChatImageViewerSources.view(for: viewer.currentItem.artifactId)
+            return ChatImageViewerSources.view(for: zoomSourceID ?? viewer.currentItem.artifactId)
         }
         presenter.present(viewer, animated: true)
     }
@@ -351,14 +365,18 @@ final class ChatImageViewerController: UIViewController,
     init(
         items: [ChatImageViewerItem],
         index: Int,
-        thumbnail: UIImage,
+        thumbnail: UIImage?,
         thumbnails: [String: UIImage] = [:],
+        usesReducedThumbnails: Bool = false,
+        stripLoad: StripLoad? = nil,
         load: @escaping Load)
     {
         self.items = items
+        self.stripLoad = stripLoad
         self.load = load
         self.currentIndex = index
         self.providedThumbnails = thumbnails
+        self.usesReducedThumbnails = usesReducedThumbnails
         super.init(nibName: nil, bundle: nil)
         self.pages[index] = ChatImageViewerPageController(
             item: items[index],
@@ -423,6 +441,7 @@ final class ChatImageViewerController: UIViewController,
         super.viewDidLoad()
         self.view.backgroundColor = OpenClawChatTheme.canvasUIColor.withAlphaComponent(0)
         self.view.accessibilityViewIsModal = true
+        self.loadStripThumbnails()
 
         self.addChild(self.pager)
         self.pager.view.frame = self.view.bounds
@@ -595,14 +614,37 @@ final class ChatImageViewerController: UIViewController,
         }
     }
 
-    /// The row's thumbnails come from pixels already in hand, never a request of their own: a page's
-    /// image, the opener's, or the transcript's memory and on-screen thumbnails.
+    deinit {
+        self.stripTask?.cancel()
+    }
+
+    /// Fills the row of thumbnails in order, one small rendition at a time, so a stack's later
+    /// pages are recognizable before they are visited.
+    private func loadStripThumbnails() {
+        guard let stripLoad, ChatImageViewerFilmstrip.isShown(count: self.items.count) else { return }
+        let ids = self.items.map(\.artifactId)
+        self.stripTask = Task { [weak self] in
+            for id in ids {
+                guard !Task.isCancelled, self?.stripThumbnail(for: id) == nil else { continue }
+                guard let image = await stripLoad(id), !Task.isCancelled else { continue }
+                self?.loadedStripThumbnails[id] = image
+                self?.updateStrip()
+            }
+        }
+    }
+
+    private func stripThumbnail(for id: String) -> UIImage? {
+        self.providedThumbnails[id] ?? self.loadedStripThumbnails[id]
+            ?? ChatMediaImageMemory.image(for: id) ?? ChatImageViewerSources.view(for: id)?.image
+    }
+
+    /// The row's thumbnails: a page's image, the opener's, a small rendition fetched for the row, or
+    /// the transcript's memory and on-screen thumbnails.
     private func updateStrip() {
         guard ChatImageViewerFilmstrip.isShown(count: self.items.count) else { return }
         self.chrome.strip = self.items.indices.map { index in
             let id = self.items[index].artifactId
-            return self.pages[index]?.image ?? self.providedThumbnails[id]
-                ?? ChatMediaImageMemory.image(for: id) ?? ChatImageViewerSources.view(for: id)?.image
+            return self.pages[index]?.image ?? self.stripThumbnail(for: id)
         }
         self.chrome.stripIndex = self.currentIndex
     }
@@ -634,7 +676,8 @@ final class ChatImageViewerController: UIViewController,
             position: ChatImageViewerItem.positionText(index: index, count: self.items.count),
             // The transcript's memory holds every image it decoded, on screen or not.
             thumbnail: ChatMediaImageMemory.image(for: item.artifactId)
-                ?? ChatImageViewerSources.view(for: item.artifactId)?.image,
+                ?? ChatImageViewerSources.view(for: item.artifactId)?.image
+                ?? self.loadedStripThumbnails[item.artifactId],
             load: self.load,
             host: self)
         page.obstructedInsets = self.obstructedInsets
@@ -777,7 +820,7 @@ final class ChatImageViewerPageController: UIViewController {
     }
 
     private func loadFullImageIfNeeded() {
-        if let image = self.image,
+        if let image = self.image, self.item.pixelSize != nil || self.host?.usesReducedThumbnails != true,
            ChatImageViewerItem.thumbnailIsFullResolution(
                thumbnailPixelSize: CGSize(
                    width: image.size.width * image.scale,

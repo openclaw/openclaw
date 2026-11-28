@@ -634,6 +634,37 @@ ChatPRReaderTransport {
         return await self.sourceResourceLoader?.loadFavicon(host: host, ifCurrentRoute: route)
     }
 
+    func loadImageThumbnail(sessionKey: String, artifactId: String) async throws -> OpenClawChatMediaData? {
+        if let source = OpenClawChatInboundMedia.canonicalSource(artifactId) {
+            guard let route = await gateway.currentRoute() else { return nil }
+            let target = self.sessionTarget(for: sessionKey)
+            return await self.sourceResourceLoader?.loadInboundImage(
+                source,
+                original: false,
+                compactThumbnail: true,
+                sessionKey: target.sessionKey,
+                agentID: target.agentID,
+                ifCurrentRoute: route)
+        }
+        guard OpenClawChatMediaKind.image.acceptsManagedArtifactID(artifactId), let mediaArtifactLoader,
+              let route = await gateway.currentRoute(),
+              let gatewayID = await gateway.currentGatewayID(ifCurrentRoute: route)
+        else { return nil }
+        let target = self.sessionTarget(for: sessionKey)
+        let request = OpenClawChatGatewayRequests.artifactDownload(
+            sessionKey: target.sessionKey,
+            agentID: target.agentID,
+            artifactId: artifactId,
+            previewWidth: IOSMediaArtifactLoader.tilePreviewWidth)
+        let bytes = try await gateway.request(request, ifCurrentRoute: route)
+        let response = try await GatewayPayloadDecoding.decode(ArtifactsDownloadResult.self, from: bytes)
+        guard response.artifact.id == artifactId,
+              await self.gateway.currentRoute() == route else { throw CancellationError() }
+        let data = try await mediaArtifactLoader.tileThumbnail(from: response, expectedGatewayID: gatewayID)
+        guard await self.gateway.currentRoute() == route else { throw CancellationError() }
+        return OpenClawChatMediaData(data: data, mimeType: "image/webp")
+    }
+
     func loadMediaArtifact(
         sessionKey: String,
         artifactId: String,

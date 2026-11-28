@@ -50,11 +50,14 @@ actor IOSSourceResourceLoader {
     func loadInboundImage(
         _ source: String,
         original: Bool,
+        compactThumbnail: Bool = false,
         sessionKey: String,
         agentID: String?,
         ifCurrentRoute route: GatewayNodeSessionRoute) async -> OpenClawChatMediaData?
     {
-        let buildURL = original ? OpenClawChatInboundMedia.originalURL : OpenClawChatInboundMedia.thumbnailURL
+        let previewURL = compactThumbnail ? OpenClawChatInboundMedia.tileThumbnailURL : OpenClawChatInboundMedia
+            .thumbnailURL
+        let buildURL = original ? OpenClawChatInboundMedia.originalURL : previewURL
         guard let connection = await connectionProvider(),
               let context = await self.loadContext(ifCurrentRoute: route),
               let url = buildURL(source, context, sessionKey, agentID),

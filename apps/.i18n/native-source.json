@@ -193,6 +193,8 @@
     {"path":"apps/macos/Sources/OpenClaw/QuickChatModelMenu.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.4238f1cc6d590fc1","source":"Model"},
     {"path":"apps/macos/Sources/OpenClaw/QuickChatModelMenu.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.bc4027207f6213e0","source":"Session default"},
     {"path":"apps/macos/Sources/OpenClaw/QuickChatModelMenu.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.11910b82859672bc","source":"Unavailable"},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessagePhotoStack.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.148f954439022da5","source":"%lld images"},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessagePhotoStack.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.8201fb1f40190c2a","source":"Opens the image full screen."},
     {"path":"apps/macos/Sources/OpenClaw/RemotePortTunnel.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.0feb96c6b97603af","source":"ssh tunnel did not open local port \\(localPort)"},
     {"path":"apps/macos/Sources/OpenClaw/RemotePortTunnel.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.be7659f8a10f9d50","source":"ssh tunnel exited before listening"},
     {"path":"apps/macos/Sources/OpenClaw/RemotePortTunnel.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.ff79eaa959381dfb","source":"ssh tunnel failed: \\(stderr)"},

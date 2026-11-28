@@ -139,10 +139,12 @@ public enum OpenClawChatGatewayRequests {
     public static func artifactDownload(
         sessionKey: String,
         agentID: String?,
-        artifactId: String) -> OpenClawChatGatewayRequest
+        artifactId: String,
+        previewWidth: Int? = nil) -> OpenClawChatGatewayRequest
     {
         var params = self.sessionParams(sessionKey: sessionKey, agentID: agentID, key: "sessionKey")
         params["artifactId"] = AnyCodable(artifactId)
+        if let previewWidth { params["previewWidth"] = AnyCodable(previewWidth) }
         return OpenClawChatGatewayRequest(
             method: "artifacts.download",
             params: params,
