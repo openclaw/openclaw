@@ -1,8 +1,11 @@
 import { fork } from "node:child_process";
 import { on, once } from "node:events";
+import { writeFileSync } from "node:fs";
+import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
@@ -61,6 +64,65 @@ it("reports output when the claim exits before readiness", async () => {
     expect.objectContaining({ type: "failed", code: 7, stderr: "route denied\n" }),
   );
 });
+
+const directories = useAutoCleanupTempDirTracker(afterEach);
+
+it.for(["stdout", "stderr"] as const)(
+  "preserves a character split across %s writes in the failure report",
+  async (stream, { signal }) => {
+    const directory = directories.make("openclaw-route-output-");
+    const releaseName = "continue";
+    const childScript = [
+      'import { watch } from "node:fs";',
+      "const [directory, stream, releaseName] = process.argv.slice(1);",
+      'const glyph = Buffer.from("🧭");',
+      "const release = new Promise((resolve) => {",
+      "  const watcher = watch(directory, (_event, name) => {",
+      "    if (name === releaseName) { watcher.close(); resolve(); }",
+      "  });",
+      "});",
+      'process[stream].write(Buffer.concat([Buffer.from("Press Ctrl+C to exit.\\nroute /"), glyph.subarray(0, 2)]));',
+      "await release;",
+      'process[stream].write(Buffer.concat([glyph.subarray(2), Buffer.from(" failed\\n")]));',
+      "process.exitCode = 7;",
+    ].join("\n");
+    const messages: TailscaleRouteOwnerMessage[] = [];
+    const owner = runTailscaleRouteOwner(
+      {
+        argv: [
+          process.execPath,
+          "--input-type=module",
+          "-e",
+          childScript,
+          directory,
+          stream,
+          releaseName,
+        ],
+      },
+      (message) => {
+        messages.push(message);
+        if (message.type === "ready") {
+          // The route owner has consumed the first write before the child sends the rest.
+          writeFileSync(path.join(directory, releaseName), "");
+        }
+      },
+    );
+    signal.addEventListener("abort", owner.stop, { once: true });
+    try {
+      await expect(owner.exited).resolves.toMatchObject({ code: 7, stopping: false });
+      expect(messages).toContainEqual(
+        expect.objectContaining({
+          type: "failed",
+          [stream]: "Press Ctrl+C to exit.\nroute /🧭 failed\n",
+        }),
+      );
+    } finally {
+      signal.removeEventListener("abort", owner.stop);
+      owner.stop();
+      await owner.exited;
+    }
+  },
+);
 
 it.runIf(process.platform !== "win32").for([
   { waitForReady: false, interrupt: false },

@@ -19,8 +19,8 @@ const execFileAsync = promisify(execFile);
 
 type RouteOwnerStart = { argv: string[] };
 
-function appendBounded(current: string, chunk: Buffer | string): string {
-  const next = current + chunk.toString();
+function appendBounded(current: string, chunk: string): string {
+  const next = current + chunk;
   return next.length <= OUTPUT_LIMIT ? next : next.slice(next.length - OUTPUT_LIMIT);
 }
 
@@ -141,7 +141,7 @@ export function runTailscaleRouteOwner(
     }
   });
   for (const stream of ["stdout", "stderr"] as const) {
-    child[stream]?.on("data", (chunk: Buffer) => {
+    child[stream]?.setEncoding("utf8").on("data", (chunk: string) => {
       output[stream] = appendBounded(output[stream], chunk);
       if (!ready && output[stream].includes(READY_MARKER)) {
         ready = true;
