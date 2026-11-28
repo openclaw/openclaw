@@ -344,9 +344,9 @@ test.each(["generator error", "delayed title"])(
         );
         expect(loadSessionEntry(target)?.worktree?.branch).toBe(branch);
       } else {
-        await vi.waitFor(() =>
-          expect(loadSessionEntry(target)?.displayName).toMatch(/^[a-z]+-[a-z]+$/),
-        );
+        // The failed retry saves no title; clients show the first message instead.
+        await vi.waitFor(() => expect(titleMocks.generate).toHaveBeenCalledTimes(2));
+        await vi.waitFor(() => expect(loadSessionEntry(target)?.displayName).toBeUndefined());
       }
       expect(loadSessionEntry(target)?.worktree?.branch).toBe(branch);
       expect(titleMocks.generate).toHaveBeenCalledTimes(delayed ? 1 : 2);

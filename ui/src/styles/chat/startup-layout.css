@@ -463,6 +463,11 @@ div.chat-thread:where(.chat-thread--annotations) {
   }
 }
 
+/* Only the desktop session menu is next to the title. Keep its space while naming. */
+.chat-pane__header-leading:has(.session-title-placeholder) .chat-header-session-menu__trigger {
+  visibility: hidden;
+}
+
 /* Desktop composition; mobile keeps its own presenter and touch targets. */
 .chat-pane__header:not(.chat-pane__header--mobile) {
   /* Every control in the desktop header row is 28px (--rail-header-action-size)
