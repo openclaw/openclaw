@@ -3,25 +3,11 @@ import {
   isFailoverError,
   readDirectErrorCode,
 } from "../agents/failover/error.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  CRON_INFERENCE_ACCOUNT_RETIRED_CODE,
+  isCronAccountRefusalBypassed,
+} from "./inference-binding.js";
 import type { CronRunOutcome } from "./types.js";
-
-/** Code on the refusal for an automation whose recorded account was removed, signed out or replaced. */
-export const CRON_INFERENCE_ACCOUNT_RETIRED_CODE = "CRON_INFERENCE_ACCOUNT_RETIRED";
-
-// Refusals whose run also gave a candidate on another provider its own credentials. Kept across
-// bundled chunks by identity, like other refusal facts.
-const bypassedAccountRefusals = resolveGlobalSingleton(
-  Symbol.for("openclaw.cronBypassedAccountRefusals"),
-  () => new WeakSet<object>(),
-);
-
-/** The run reached a fallback on another provider, so the recorded account was not its only path. */
-export function markCronAccountRefusalBypassed(refusal: unknown): void {
-  if (refusal instanceof Error) {
-    bypassedAccountRefusals.add(refusal);
-  }
-}
 
 /**
  * True when the run's only way to execute was its recorded account, and that account is gone or
@@ -39,9 +25,7 @@ function isRetiredAccountRefusal(error: unknown): boolean {
   const refusal = findErrorProperty(error, (candidate) =>
     readDirectErrorCode(candidate) === CRON_INFERENCE_ACCOUNT_RETIRED_CODE ? candidate : undefined,
   );
-  return (
-    refusal !== undefined && !(refusal instanceof Error && bypassedAccountRefusals.has(refusal))
-  );
+  return refusal !== undefined && !isCronAccountRefusalBypassed(refusal);
 }
 
 /** Classifies deterministic setup refusals that no retry of the same job can change. */

@@ -4,6 +4,8 @@ import {
   bindOperatorModelExecution,
   type PreparedAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
+import { resolveAgentDir } from "../agents/agent-scope.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../agents/model-selection-config.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -15,6 +17,11 @@ import { composeSessionSourceAssertion } from "../config/sessions/session-source
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { CronInferenceBinding } from "../cron/inference-binding.js";
+import {
+  acquireCronInferenceAuthorization,
+  captureCronInferenceBinding,
+} from "../cron/inference-binding.runtime.js";
 import {
   decodePluginCommandSchedule,
   resolvePluginCommandScheduleBinding,
@@ -59,6 +66,7 @@ export type ScheduledPluginCommandDispatch = (
   dispatch: commandRuntime.PluginCommandDispatch,
   context: commandRuntime.PluginCommandDispatchContext & {
     abortSignal: AbortSignal;
+    inferenceBinding?: CronInferenceBinding;
   },
 ) => Promise<PluginCommandResult>;
 
@@ -248,6 +256,7 @@ export async function runPluginCommandScheduledTurn(params: {
       isActive: () => active && !request.abortSignal?.aborted,
     });
     let restored: RestoredGatewayOperatorAuthority | undefined;
+    let inference: Awaited<ReturnType<typeof acquireCronInferenceAuthorization>> | undefined;
     let modelLease: ReturnType<typeof bindOperatorModelExecution>;
     let admission: ReturnType<typeof prepareCronRunAdmission> | undefined;
     try {
@@ -291,12 +300,45 @@ export async function runPluginCommandScheduledTurn(params: {
       const operatorAuthority = restored.authority;
       const assertCurrent = composeSessionSourceAssertion([assertParent], (assertSources) => {
         assertSources();
+        inference?.assertCurrent();
         modelLease?.assertCurrent();
       });
       assertCurrent();
       const model = resolveSessionModelRef(cfg, entry, schedule.parent.agentId);
       modelLease = bindOperatorModelExecution(operatorAuthority, model);
       assertCurrent();
+      if (job.inferenceBinding) {
+        if (!model) {
+          throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+        }
+        if (job.inferenceBinding.provider !== model.provider) {
+          throw new Error("Scheduled plugin command provider route changed.");
+        }
+        inference = await acquireCronInferenceAuthorization({
+          binding: job.inferenceBinding,
+          cfg,
+          agentDir: resolveAgentDir(cfg, schedule.parent.agentId),
+        });
+        assertCurrent();
+        await inference.revalidate();
+        assertCurrent();
+        const route = await captureCronInferenceBinding({
+          cfg,
+          agentId: schedule.parent.agentId,
+          sessionEntry: entry,
+          model: model.provider + "/" + model.model + "@" + job.inferenceBinding.profileId,
+        });
+        assertCurrent();
+        if (
+          !route ||
+          route.provider !== job.inferenceBinding.provider ||
+          route.profileId !== job.inferenceBinding.profileId ||
+          route.authorizationId !== job.inferenceBinding.authorizationId ||
+          route.authRequirement !== job.inferenceBinding.authRequirement
+        ) {
+          throw new Error("Scheduled plugin command inference route or account changed.");
+        }
+      }
       const signals = [request.abortSignal, operatorAuthority.signal, modelLease?.signal].filter(
         (signal): signal is AbortSignal => Boolean(signal),
       );
@@ -475,10 +517,12 @@ export async function runPluginCommandScheduledTurn(params: {
                     assertOwnerCurrent: assertTurn,
                     gatewayClientScopes: [...operatorAuthority.scopes],
                     ...parent,
+                    authProfileId: job.inferenceBinding?.profileId,
                     commandBody,
                     config: cfg,
                     runtimeContext: { createSubagents },
                     abortSignal: signal,
+                    inferenceBinding: job.inferenceBinding,
                   }),
                   signal,
                 ),
@@ -539,6 +583,7 @@ export async function runPluginCommandScheduledTurn(params: {
         await admission?.finish();
       } finally {
         modelLease?.release();
+        inference?.dispose();
         restored?.release();
         currentSession.release();
       }

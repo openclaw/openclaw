@@ -31,6 +31,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-writable.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
+import { captureCronInferenceBinding } from "../../cron/inference-binding.runtime.js";
 import { TEST_SCHEDULED_TURN } from "../../cron/scheduled-occurrence.test-support.js";
 import { runCronSessionTurn } from "../../cron/session-run.js";
 import type { CronStoredJob } from "../../cron/types.js";
@@ -422,6 +423,16 @@ it.for([
             },
           });
         }
+        const inferenceBinding = boundAccount
+          ? expectDefined(
+              await captureCronInferenceBinding({
+                cfg: config,
+                agentId: "main",
+                model: "mock-openai/gpt-5.6-sol@mock-openai:conversation",
+              }),
+              "scheduled inference binding",
+            )
+          : undefined;
         const missingDestinationProfileId = boundAccount
           ? `personal:${ensureProfileForEmail("destination@example.test").id}:${randomUUID()}`
           : undefined;
@@ -556,7 +567,6 @@ it.for([
             ...(gmail ? { externalContentSource: "gmail" as const } : {}),
             ...(locked ? { fallbacks: ["mock-openai/gpt-5.6-sol"] } : {}),
             ...(explicitScheduledModel ? { model: `${scheduledProvider}/gpt-5.6-sol` } : {}),
-            ...(boundAccount ? { model: "mock-openai/gpt-5.6-sol@mock-openai:conversation" } : {}),
             ...(scenario === "scheduled-model-malformed" ? { model: "openai/" } : {}),
           };
           completion = enqueueSessionEventForHost("Background exec completed", {
@@ -580,6 +590,7 @@ it.for([
                       wakeMode: "now",
                       payload,
                     }),
+                    inferenceBinding,
                   },
                   operatorAuthority,
                   assertCurrent: () => {

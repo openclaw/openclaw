@@ -386,16 +386,17 @@ describe("buildScheduledExecutionContext scopes", () => {
   });
 
   it("records the inference account the job stored", () => {
-    expect(
-      ready(
-        parentLinked({
-          payload: { kind: "agentTurn", message: "Run", model: "openai/gpt-4.1@openai:p" },
-        }),
-        facts(),
-      ).inference,
-    ).toMatchObject({
-      kind: "pinned",
+    const binding = {
+      version: 1,
+      provider: "openai",
       profileId: "openai:p",
+      authorizationId: "auth",
+      authRequirement: "api-key",
+      source: "auto",
+    } as const;
+    expect(ready(parentLinked({ inferenceBinding: binding }), facts()).inference).toEqual({
+      kind: "bound",
+      binding,
     });
     expect(
       ready(parentLinked({ runtimeAuthorityRecoveryRequired: true }), facts()).inference,

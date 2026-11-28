@@ -21,6 +21,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
+import { captureCronInferenceBinding } from "./inference-binding.runtime.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent/run.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
 import { loadCronJobsStore, saveCronJobsStore } from "./store.js";
@@ -201,65 +202,6 @@ afterEach(async () => {
   configureAiTransportHost(originalTransportHost);
 });
 
-it("keeps the originally selected credential until the operator reselects or clears the profile", async () => {
-  await withAuthState("cron-model-pin-lifetime", async (state) => {
-    const { CronService } = await import("./service.js");
-    const { createNoopLogger } = await import("./service.test-harness.js");
-    const { createTestGatewayScheduler } = await import("../test-utils/gateway-scheduler-clock.js");
-    const reportsAgentDir = state.agentDir("reports");
-    await writeConfig(state, {
-      agents: {
-        defaults: { model: "openai/gpt-4.1" },
-        entries: { main: { agentDir: state.agentDir() }, reports: { agentDir: reportsAgentDir } },
-      },
-    });
-    const storePath = state.statePath("cron", "jobs.json");
-    const cron = new CronService({
-      scheduler: createTestGatewayScheduler(),
-      storePath,
-      cronEnabled: false,
-      defaultAgentId: "main",
-      log: createNoopLogger(),
-      enqueueSystemEvent() {},
-      runIsolatedAgentJob: async () => ({ status: "ok" }),
-    });
-    const input = {
-      ...storedJob("pin-lifetime"),
-      declarationKey: "weekly-report",
-      payload: {
-        kind: "agentTurn" as const,
-        message: "Report.",
-        model: `openai/gpt-4.1@${platformId}`,
-      },
-    };
-    const savedLifetime = async () =>
-      (await loadCronJobsStore(storePath)).jobs[0]?.modelAuthProfileAuthorizationId;
-    try {
-      await persistAuthProfileBatch({ profiles: [keyProfile(platformId, platformKey)] });
-      await cron.add(input);
-      const original = await savedLifetime();
-      expect(original).toEqual(expect.any(String));
-      await removeAuthProfilesAcrossOwnerStores({ profileIds: [platformId] });
-      await persistAuthProfileBatch({
-        agentDir: reportsAgentDir,
-        profiles: [keyProfile(platformId, "synthetic-replacement")],
-      });
-      await cron.add(input);
-      await cron.update(input.id, { agentId: "reports" });
-      expect(await savedLifetime()).toBe(original);
-      await cron.update(input.id, { payload: { kind: "agentTurn", model: input.payload.model } });
-      const replacement = await savedLifetime();
-      expect(replacement).toEqual(expect.any(String));
-      expect(replacement).not.toBe(original);
-      await cron.update(input.id, { payload: { kind: "agentTurn", model: null } });
-      expect(await savedLifetime()).toBeUndefined();
-    } finally {
-      cron.stop();
-      await cron.waitForIdle();
-    }
-  });
-});
-
 it.each(["API key", "OAuth", "scheduled-model OAuth"] as const)(
   "keeps the selected %s account across fresh runs and default changes",
   async (mode) => {
@@ -343,15 +285,22 @@ it.each(["API key", "OAuth", "scheduled-model OAuth"] as const)(
       });
       const originalConfig = config("gpt-4.1");
       await writeConfig(state, originalConfig);
-      const base = storedJob("real-auth-continuity");
-      const job: CronStoredJob = {
-        ...base,
-        payload: {
-          kind: "agentTurn",
-          message: "Reply with the account continuity result.",
-          lightContext: true,
-          model: `openai/gpt-4.1@${profileId}`,
+      const binding = await captureCronInferenceBinding({
+        cfg: originalConfig,
+        agentId: "main",
+        sessionEntry: {
+          sessionId: "creator",
+          updatedAt: 1,
+          modelProvider: "openai",
+          model: "gpt-4.1",
+          authProfileOverride: scheduledModel ? other : profileId,
+          authProfileOverrideSource: "auto",
         },
+      });
+      expect(binding).toMatchObject({ profileId, source: scheduledModel ? "user" : "auto" });
+      const job: CronStoredJob = {
+        ...storedJob("real-auth-continuity"),
+        inferenceBinding: binding ?? undefined,
       };
       const storePath = state.statePath("cron", "jobs.json");
       await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
@@ -374,7 +323,7 @@ it.each(["API key", "OAuth", "scheduled-model OAuth"] as const)(
           clearRuntimeAuthProfileStoreSnapshots();
           await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
           const reloaded = (await loadCronJobsStore(storePath)).jobs[0];
-          expect(reloaded?.payload).toEqual(job.payload);
+          expect(reloaded?.inferenceBinding).toEqual(binding);
           if (!reloaded) {
             throw new Error("Persisted automation missing");
           }
@@ -388,9 +337,9 @@ it.each(["API key", "OAuth", "scheduled-model OAuth"] as const)(
         }
         expect(new Set(sessionIds).size).toBe(2);
         expect(requests).toEqual(
-          modelIds.map(() => ({
+          modelIds.map((model) => ({
             url: `${baseUrl}/responses`,
-            model: "gpt-4.1",
+            model,
             authorization: `Bearer ${credential}`,
             account: profileId === subscriptionId ? "synthetic-account" : null,
           })),
@@ -402,9 +351,15 @@ it.each(["API key", "OAuth", "scheduled-model OAuth"] as const)(
   },
 );
 
-it.each(["configured key", "live stored account", "revocation"] as const)(
+it.each([
+  ["configured key", "Bearer synthetic-config-key"],
+  // An unpinned job selects its account like an interactive turn (#202699).
+  ["unrecorded stored account", `Bearer ${platformKey}`],
+  ["replacement", undefined],
+  ["revocation", undefined],
+] as const)(
   "enforces %s before provider HTTP through the real runner",
-  async (kind) => {
+  async (kind, authorization) => {
     await withAuthState("cron-legacy-account", async (state) => {
       const openaiUrl = "https://api.openai.com/v1";
       const requests: Array<{ url: string; authorization: string | null }> = [];
@@ -438,20 +393,30 @@ it.each(["configured key", "live stored account", "revocation"] as const)(
       }
       await writeConfig(state, cfg);
       const job = storedJob("legacy-account");
-      if (kind === "revocation" && job.payload.kind === "agentTurn") {
-        job.payload.model = `openai/gpt-4.1@${platformId}`;
+      if (kind === "replacement" || kind === "revocation") {
+        job.inferenceBinding =
+          (await captureCronInferenceBinding({
+            cfg,
+            agentId: "main",
+            model: `openai/gpt-4.1@${platformId}`,
+          })) ?? undefined;
+        expect(job.inferenceBinding).toMatchObject({ profileId: platformId, source: "user" });
       }
       const storePath = state.statePath("cron", "jobs.json");
       await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
-      if (kind === "revocation") {
+      if (kind === "replacement") {
+        await persistAuthProfileBatch({
+          profiles: [keyProfile(platformId, "synthetic-replacement-key")],
+        });
+      } else if (kind === "revocation") {
         expect(await removeAuthProfilesAcrossOwnerStores({ profileIds: [platformId] })).toBe(true);
       }
       clearRuntimeAuthProfileStoreSnapshots();
       const reloaded = (await loadCronJobsStore(storePath)).jobs[0]!;
-      expect(reloaded.payload).toEqual(job.payload);
+      expect(reloaded.inferenceBinding).toEqual(job.inferenceBinding);
       try {
         const result = await runStoredTurn(cfg, reloaded);
-        if (kind === "revocation") {
+        if (kind === "replacement" || kind === "revocation") {
           // The changed account is never adopted: no openai request is sent with any key.
           // Only its provider is refused; the configured local fallback still serves the run.
           expect(result.status, result.error).toBe("ok");
@@ -459,12 +424,7 @@ it.each(["configured key", "live stored account", "revocation"] as const)(
           expect(requests.length).toBeGreaterThan(0);
         } else {
           expect(result.status, result.error).toBe("ok");
-          expect(requests).toEqual([
-            {
-              url: `${openaiUrl}/responses`,
-              authorization: `Bearer ${kind === "configured key" ? "synthetic-config-key" : platformKey}`,
-            },
-          ]);
+          expect(requests).toEqual([{ url: `${openaiUrl}/responses`, authorization }]);
         }
       } finally {
         await resetPreparedModelRuntimeSnapshotsForTest();
@@ -477,7 +437,7 @@ it.each([
   { label: "refreshable control", refresh: "synthetic-refresh" },
   { label: "access-only", refresh: undefined },
 ])(
-  "pins then executes $label OAuth through Gateway, SQLite and HTTP 180757",
+  "adopts then executes $label OAuth through Gateway, SQLite and HTTP 180757",
   async ({ refresh }) => {
     await withAuthState("cron-adoption-http-180757", async (state) => {
       const requests: Array<{ authorization: string | undefined; url: string | undefined }> = [];
@@ -581,7 +541,7 @@ it.each([
           delivery: { mode: "none" },
         });
         const [before] = (await loadCronJobsStore(storePath)).jobs;
-        expect(before?.payload).not.toHaveProperty("model");
+        expect(before?.inferenceBinding).toBeUndefined();
         expect(before).toBeDefined();
         cfg.models!.providers!.openai!.api = "openai-chatgpt-responses";
         delete cfg.models!.providers!.openai!.apiKey;
@@ -618,7 +578,10 @@ it.each([
         await closeOpenClawStateDatabaseAsync();
         cron = makeCron();
         const [reloaded] = (await loadCronJobsStore(storePath)).jobs;
-        expect(reloaded?.payload).toMatchObject({ model: `openai/gpt-4.1@${subscriptionId}` });
+        expect(reloaded?.inferenceBinding).toMatchObject({
+          profileId: subscriptionId,
+          source: "user",
+        });
         await expect(cron.run(before!.id, "force")).resolves.toEqual({ ok: true, ran: true });
         expect(finished).toHaveLength(1);
         expect(finished[0]?.status, finished[0]?.error).toBe("ok");

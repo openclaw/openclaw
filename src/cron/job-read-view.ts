@@ -71,7 +71,6 @@ export function cronJobDefinitionFromReadView(
   const {
     effectiveAgentId: _effectiveAgentId,
     configRevision: _configRevision,
-    inferenceAccountPauseReason: _inferenceAccountPauseReason,
     reauthorizationRequired: _reauthorizationRequired,
     streamExecutionHost: _streamExecutionHost,
     payloadSource: _payloadSource,

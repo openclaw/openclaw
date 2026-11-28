@@ -1,8 +1,4 @@
 import http from "node:http";
-import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles/store-runtime.js";
-import { markAuthProfileFailure } from "../agents/auth-profiles/usage.js";
-import { connectUserModelAccount } from "../state/user-model-accounts.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
 
 /** Loopback OpenAI-Responses providers for scheduled cross-provider fallback tests. */
 
@@ -92,20 +88,4 @@ export function apiKeyProfile(profileId: string, key: string) {
       key,
     },
   };
-}
-
-export async function connectPersonalAccountWithDisabledSharedAccount(agentDir: string) {
-  await markAuthProfileFailure({
-    agentDir,
-    store: await ensureAuthProfileStoreAsync(agentDir),
-    profileId: "openai:primary",
-    reason: "auth_permanent",
-  });
-  const ownerProfileId = ensureProfileForEmail("alice@example.test").id;
-  const { authProfileId } = connectUserModelAccount({
-    ownerProfileId,
-    credential: { type: "api_key", provider: "openai", key: "key-personal" },
-    assertCurrent() {},
-  });
-  return { authProfileId, ownerProfileId };
 }

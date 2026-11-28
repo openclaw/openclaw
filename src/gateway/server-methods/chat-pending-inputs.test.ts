@@ -146,46 +146,54 @@ describe("pending input read boundary", () => {
     }),
   );
 
-  it("refuses to publish a terminal run newer than its queue snapshot", () =>
+  it.each([
+    { page: "full", transitions: 1 },
+    { page: "delta", transitions: 1 },
+    { page: "full", transitions: 2 },
+  ])("keeps $page history consistent (run changes = $transitions)", ({ page, transitions }) =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       const scope = await createScope("stale-terminal-queue");
-      await patchSessionEntryCore(scope, () => ({ status: "done", lastRunId: "previous-run" }));
       const context = await createHistoryReadContext();
+      const request = historyRpc(context, scope.sessionKey);
+      const client = queueObservationClient(page === "delta");
       await using inputs = pendingInputs(scope);
+      await appendTranscriptMessage(scope, { message: { role: "user", content: "First turn" } });
+      const params =
+        page === "delta"
+          ? { cursor: historyPayload(await request("chat.history", {}, { client })).deltaCursor }
+          : {};
       const readPendingInputs = pendingHistory.readChatPendingInputs;
-      const barrier = vi
-        .spyOn(pendingHistory, "readChatPendingInputs")
-        .mockImplementationOnce(async (...args) => {
-          const page = await readPendingInputs(...args);
-          await inputs.stage("followup");
-          await patchSessionEntryCore(scope, () => ({ status: "done", lastRunId: "newer-run" }));
-          return page;
+      using barrier = vi.spyOn(pendingHistory, "readChatPendingInputs");
+      for (let run = 1; run <= transitions; run++) {
+        barrier.mockImplementationOnce(async (...args) => {
+          const pending = await readPendingInputs(...args);
+          await inputs.stage(`followup-${run}`);
+          await appendTranscriptMessage(scope, {
+            message: { role: "assistant", content: `Finished turn ${run}` },
+          });
+          await patchSessionEntryCore(scope, () => ({ status: "done", lastRunId: `run-${run}` }));
+          return pending;
         });
-      try {
-        const respond = await historyRpc(context, scope.sessionKey)(
-          "chat.history",
-          {},
-          { client: queueObservationClient(false) },
-        );
-        expect(respond).toHaveBeenCalledExactlyOnceWith(
+      }
+      const response = await request("chat.history", params, { client });
+      if (transitions === 2) {
+        expect(response).toHaveBeenCalledExactlyOnceWith(
           false,
           undefined,
-          expect.objectContaining({ code: "UNAVAILABLE" }),
+          expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
         );
-        expect(
-          (
-            await read(
-              context,
-              { sessionKey: scope.sessionKey },
-              "chat.history",
-              queueObservationClient(true),
-            )
-          ).pendingInputs,
-        ).toMatchObject({ hasQueuedInput: true, total: 1 });
-      } finally {
-        barrier.mockRestore();
+      } else {
+        const reply = expect.objectContaining({ content: "Finished turn 1" });
+        expect(historyPayload(response)).toMatchObject({
+          ...(page === "delta"
+            ? { kind: "delta", messages: [{ message: reply }] }
+            : { messages: expect.arrayContaining([reply]) }),
+          sessionInfo: { status: "done", lastRunId: "run-1" },
+          pendingInputs: { items: [{ runId: "followup-1", state: "queued" }] },
+        });
       }
-    }));
+    }),
+  );
 
   it("preserves the legacy pending shape and revision without the new capability", () =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {

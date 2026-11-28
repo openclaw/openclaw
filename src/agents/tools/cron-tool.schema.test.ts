@@ -182,16 +182,12 @@ describe("cron model schema regressions", () => {
       type: "object",
       description: expect.stringContaining("false disables"),
     });
-    for (const key of ["job.agentId", "job.sessionKey"]) {
+    for (const key of ["job.agentId", "job.sessionKey", "job.payload.model"]) {
       expect(propertyAt(projected, key)).toMatchObject({
         type: "string",
         description: expect.stringMatching(/null to clear/i),
       });
     }
-    expect(propertyAt(projected, "job.payload.model")).toMatchObject({
-      type: "string",
-      description: expect.stringContaining("null clears the override"),
-    });
     expect(propertyAt(projected, "job.payload.toolsAllow")).toMatchObject({ type: "array" });
     expect(JSON.stringify(projected)).not.toMatch(/"type"\s*:\s*\[|"not"\s*:\s*\{/);
   });

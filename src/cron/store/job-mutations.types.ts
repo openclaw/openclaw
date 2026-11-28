@@ -17,6 +17,7 @@ type CronJobMutationOptions = Pick<
   | "keepDeclarationFor"
   | "systemOwned"
   | "createdActor"
+  | "inferenceBinding"
   | "sourceConversation"
   | "operatorSource"
   | "operatorSourceExecutionRevision"
@@ -26,8 +27,6 @@ type CronJobMutationOptions = Pick<
 > & {
   scheduledToolPolicy?: CronScheduledToolPolicy | null;
   bindSourceConversation?: NonNullable<CronStoredJob["sourceConversation"]>;
-  modelAuthProfileAuthorizationId?: string | null;
-  nativeModelProfileReselected?: true;
   captured: boolean;
   runtimeAuthority?: CronRuntimeAuthority;
 };

@@ -252,11 +252,7 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    work, and sends the result notice. Restored files alone do not prove that the
    previous Gateway is serving. Startup does not infer a failed update from PID
    reuse or uptime.
-7. After the result is recorded, the serving release runs advisory Doctor inspections
-   in the background. The same update details receive their results without a page
-   reload. Only warning and error findings add advice; inspections do not delay
-   completion, fail the update, or trigger rollback.
-8. Every Gateway boot updates installed plugins in the background after core
+7. Every Gateway boot updates installed plugins in the background after core
    readiness, then reloads changed plugins through the existing runtime lifecycle.
    A pending trial defers this work. The first plugin result and next command appear
    in matching update details while that plugin step is unsettled; later boots do
@@ -328,13 +324,11 @@ physical ownership, before config guards or database inspection. Only this
 historical replay can finish planned replacements; new upgrades never write plans
 or create copied trees.
 
-Before any floor-raising step or saved automation account conversion, boot publishes
-the complete recovery manifest at
+Before any floor-raising step, boot publishes the complete recovery manifest at
 `<prefix>/releases/<target-release-id>/.restore`, keeping the existing
 `{v:1,runId,files:[{live,preimage}]}` format. Paths are absolute; a null preimage
-means remove that file on rollback. The manifest includes database preimages for
-raised reader floors and for the shared database when it contains saved
-automation accounts to convert. SQLite images are independent clones or
+means remove that file on rollback. Only databases whose derived minimum reader
+floor rises receive database preimages. SQLite images are independent clones or
 byte copies, never hard links to a database that will be mutated in place. Their
 `.pre-<build-generation>` names remain discoverable by existing launchers.
 A raised-floor database can roll back only through its recorded image.
@@ -384,9 +378,8 @@ retain their session history.
 The selected target owns its prepared release directory and `.restore` record,
 so a retry from an older preparer cannot reuse another release's receipt.
 Images and the initial complete manifest are durable before live mutation.
-Retries reuse the original images. A trial records an empty database restore
-plan when it has no floor-raising step and no saved automation accounts to
-convert.
+Retries reuse original images rather than re-imaging changed state. A trial
+with no floor-raising step records an empty database restore plan.
 
 Legacy imports initially declare prospective new stores with null preimages.
 After successful import and native close, before normal runtime starts, boot
@@ -575,7 +568,7 @@ the original history entry unchanged with the healthy release still selected.
 
 The Gateway preserves existing repair acknowledgments, unrelated failures, and
 recovery records. It needs one matching publication receipt before it can record
-success and run advisory Doctor inspections. If the older
+success. If the older
 updater exits because it can't read the migrated schema, its exit status still
 reflects that refusal.
 
@@ -743,7 +736,7 @@ On Gateway startup, older supported database schemas advance through their
 canonical migration owners on the live databases under exclusive custody. Boot
 does not copy configuration into a private tree, run a Doctor chain, or publish
 replacement database files. Existing configuration reading and normalization
-stay with their canonical owners; advisory Doctor inspections run after readiness.
+stay with their canonical owners.
 
 If an earlier upgrade already broke a scheduled job, run `openclaw doctor --fix`.
 While the applied upgrade receipt remains, Doctor can verify the saved account at
@@ -1065,12 +1058,11 @@ update failures retain the final consistency reason code and attempt count in
 must contain this diagnostic change. Snapshot checks and retry limits are unchanged;
 the reason identifies the failed check, not the writer or underlying cause.
 
-Candidate Doctor preserves same-conversation automation continuations when adopting
-a stored inference account. It carries forward the original authenticated source
-only when its old executable revision still matches, then binds that source and
-existing standing-grant references to the restricted definition. It also records
-a determinable host-managed account and its explicitly selected Codex runtime;
-native-owned and model-locked sessions remain unchanged. Stale captures
+Candidate Doctor preserves same-conversation automation continuations when it
+restores a recorded inference account after a state upgrade. It carries forward the
+original authenticated source only when its old executable revision still matches,
+then binds that source and existing standing-grant references to the restored
+definition. Native-owned and model-locked sessions remain unchanged. Stale captures
 stay stale; runtime authorization, conversation identity and revocation checks
 remain required. The candidate must contain this repair.
 
@@ -1872,9 +1864,9 @@ openclaw update
 ### Host prerequisites
 
 Before preparing a release, the updater checks that Node satisfies the target's
-requirements, required tools are available (Git and pnpm for source builds, npm
-for packages), and the install and state filesystems have room for the release
-and any required raised-floor preimages. Refusals name what to install or free.
+requirements, required tools are available (Git for source builds, npm for
+packages), and the installation filesystem has at least 1.4 GB free.
+Refusals name what to install or free.
 
 On macOS, if the updater selects `/usr/bin/git` and there is no active
 developer directory, run `xcode-select --install` to install the Command Line

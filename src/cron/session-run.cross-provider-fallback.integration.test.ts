@@ -6,7 +6,6 @@ import {
 import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-manager-api.js";
 import { bindSessionMcpRuntimeTestScheduler } from "../agents/agent-bundle-mcp-manager.test-support.js";
-import { captureAuthProfileAuthorization } from "../agents/auth-profiles/authorization.js";
 import {
   removeAuthProfilesAcrossOwnerStores,
   setAuthProfileOrder,
@@ -23,7 +22,6 @@ import { resetSessionControllerStateForTest } from "../sessions/session-lifecycl
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   apiKeyProfile,
-  connectPersonalAccountWithDisabledSharedAccount,
   completedSse,
   listenLoopbackProvider,
   loopbackModelRuntime,
@@ -31,6 +29,7 @@ import {
   QUOTA_EXHAUSTED_BODY,
 } from "./cross-provider-fallback.test-support.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
+import { captureCronInferenceBinding } from "./inference-binding.runtime.js";
 import { resolveCronRunErrorReason } from "./run-error-reason.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
 import type { DeferredCronNotifications } from "./service/state.js";
@@ -67,10 +66,7 @@ type FallbackRun = {
 };
 
 async function runSessionFallback(
-  params: {
-    primary: "live" | "removed" | "replaced" | "personal";
-    backup?: "answers" | "fails" | "none";
-  },
+  params: { primary: "live" | "removed" | "replaced"; backup?: "answers" | "fails" | "none" },
   check: (run: FallbackRun) => void | Promise<void>,
 ) {
   await withOpenClawTestState(
@@ -158,21 +154,12 @@ async function runSessionFallback(
             sessionStartedAt: Date.now(),
           },
         );
-        const personal =
-          params.primary === "personal"
-            ? await connectPersonalAccountWithDisabledSharedAccount(state.agentDir())
-            : undefined;
-        const selectedProfileId = personal?.authProfileId ?? "openai:primary";
-        const model = `openai/gpt-4.1@${selectedProfileId}`;
-        const captured = await captureAuthProfileAuthorization({
-          cfg,
-          agentDir: state.agentDir(),
-          profileId: selectedProfileId,
-          assertCurrent() {},
-        });
-        const modelAuthProfileAuthorizationId = captured.authorizationId;
-        captured.dispose();
-        if (params.primary === "removed" || params.primary === "replaced") {
+        const model = "openai/gpt-4.1@openai:primary";
+        const binding = await captureCronInferenceBinding({ cfg, agentId: "main", model });
+        if (!binding) {
+          throw new Error("Expected a recorded primary account");
+        }
+        if (params.primary !== "live") {
           expect(
             await removeAuthProfilesAcrossOwnerStores({ profileIds: ["openai:primary"] }),
           ).toBe(true);
@@ -200,8 +187,7 @@ async function runSessionFallback(
             delivery: { mode: "none" },
             payload: { kind: "agentTurn", message: "Reply.", model },
           }),
-          ...(personal ? { ownerProfileId: personal.ownerProfileId } : {}),
-          modelAuthProfileAuthorizationId,
+          inferenceBinding: binding,
         };
         const result = await runCronSessionTurn({
           occurrence: TEST_SCHEDULED_OCCURRENCE,
@@ -225,16 +211,12 @@ async function runSessionFallback(
   );
 }
 
-it.each([
-  ["live", ["Bearer key-primary"]],
-  ["removed", []],
-  ["personal", ["Bearer key-personal"]],
-] as const)(
+it.each(["live", "removed"] as const)(
   "a session-target job fails over to another provider's live account (%s)",
-  async (primary, expectedPrimary) => {
+  async (primary) => {
     await runSessionFallback({ primary }, ({ hits, result }) => {
       // A removed recorded account refuses only its own candidate; it is never replaced.
-      expect(hits.primary).toEqual(expectedPrimary);
+      expect(hits.primary).toEqual(primary === "live" ? ["Bearer key-primary"] : []);
       expect(result.status, result.error).toBe("ok");
       expect(result.errorClassification).toBeUndefined();
       expect(hits.backup).toEqual(["Bearer key-backup-other"]);

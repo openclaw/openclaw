@@ -19,10 +19,6 @@ import {
   resolveConfiguredSessionStoreTargets,
 } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  hasLegacyCronInferenceAccountJson,
-  legacyCronAccountTextPatterns,
-} from "../cron/legacy-inference-account.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { readEngineAnchorIdentity } from "../infra/database-engine/physical-store-inspection.js";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -82,7 +78,6 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-schema-versions.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   readStateSchemaContentVersionRow,
   readStateSchemaMinReader,
@@ -96,7 +91,6 @@ export type DatabaseTarget = {
   version: number;
   minReader: number;
   engine: "sqlite" | "postgres";
-  pendingCronAccountMigration?: true;
   postgres?: { namespace: string; physicalBytes: number };
 };
 
@@ -170,20 +164,6 @@ export async function discoverDatabases(
                 ]),
                 retainedIds: new Set(readRetainedAgentDeletionIds(db)),
                 registered: readAgentDatabasePreflightTargets(db, pathname),
-                pendingCronAccountMigration:
-                  tableExists(db, "cron_jobs") &&
-                  /* sqlite-allow-raw -- Inspect old cron rows before the current schema can be admitted. */
-                  db
-                    .prepare(
-                      `SELECT job_json FROM cron_jobs
-                       WHERE job_json LIKE ? ESCAPE '!' OR job_json LIKE ? ESCAPE '!'
-                         OR job_json LIKE ? ESCAPE '!'`,
-                    )
-                    .all(...legacyCronAccountTextPatterns)
-                    .some(
-                      ({ job_json }) =>
-                        typeof job_json === "string" && hasLegacyCronInferenceAccountJson(job_json),
-                    ),
               }
             : undefined,
       };
@@ -226,7 +206,6 @@ export async function discoverDatabases(
         version: physical.version,
         minReader: physical.minReader,
         engine,
-        ...(physical.pendingCronAccountMigration ? { pendingCronAccountMigration: true } : {}),
         postgres: { namespace: physical.namespace, physicalBytes: physical.physicalBytes },
       });
     } else {
@@ -237,7 +216,6 @@ export async function discoverDatabases(
         version: image.version,
         minReader: image.minReader,
         engine,
-        ...(image.state?.pendingCronAccountMigration ? { pendingCronAccountMigration: true } : {}),
       });
     }
   };
@@ -427,22 +405,18 @@ export function outdatedDatabases(targets: readonly DatabaseTarget[]): DatabaseT
   return targets.filter((target) => target.version > 0 && target.version < expectedVersion(target));
 }
 
-/** Keep rollback classification with the database inventory. */
-export function raisesReaderFloor(target: DatabaseTarget): boolean {
-  const supported = expectedVersion(target);
-  // v44 and v45 add only nullable columns. Revisit this range when a later step raises the floor.
-  const additive =
-    target.kind === "agent" &&
-    target.version >= AGENT_MEMBER_ACCESS_SCHEMA_VERSION - 1 &&
-    supported <= AGENT_ARCHIVE_UNDO_SCHEMA_VERSION &&
-    getAgentMemberAccessMinReader() < AGENT_MEMBER_ACCESS_SCHEMA_VERSION;
-  return target.version < supported && !additive && supported > target.minReader;
-}
-
-export function restoreRequiredDatabases(targets: readonly DatabaseTarget[]): DatabaseTarget[] {
-  return targets.filter(
-    (target) => target.pendingCronAccountMigration || raisesReaderFloor(target),
-  );
+/** Only a raised reader floor needs a rollback image. Keep classification with inventory. */
+export function floorRaisingDatabases(targets: readonly DatabaseTarget[]): DatabaseTarget[] {
+  return targets.filter((target) => {
+    const supported = expectedVersion(target);
+    // v44 and v45 add only nullable columns. Revisit this range when a later step raises the floor.
+    const additive =
+      target.kind === "agent" &&
+      target.version >= AGENT_MEMBER_ACCESS_SCHEMA_VERSION - 1 &&
+      supported <= AGENT_ARCHIVE_UNDO_SCHEMA_VERSION &&
+      getAgentMemberAccessMinReader() < AGENT_MEMBER_ACCESS_SCHEMA_VERSION;
+    return target.version < supported && !additive && supported > target.minReader;
+  });
 }
 
 /** The resident launcher still restores build-named images through its frozen scan. */
@@ -450,13 +424,13 @@ export function stateUpgradeRefusal(
   { targets }: StateUpgradeInventory,
   stateDir: string,
 ): string | undefined {
-  const protectedTargets = restoreRequiredDatabases(targets);
+  const protectedTargets = floorRaisingDatabases(targets);
   if (protectedTargets.length === 0) {
     return undefined;
   }
   for (const target of protectedTargets) {
     if (!isUpgradeRestorePath(stateDir, target.path)) {
-      return `The release trial cannot restore database ${target.path} after migration. Move it to a real directory inside ${stateDir}, at most four directories deep and outside git-install, npm, node_modules, tmp and logs. For an agent use agents/<agent-id>/agent/openclaw-agent.sqlite, without backup or companion suffixes, and update its registration/configuration. Replace symlinked or separately mounted directories with local directories before retrying openclaw update.`;
+      return `The release trial cannot restore database ${target.path} after raising its reader floor. Move it to a real directory inside ${stateDir}, at most four directories deep and outside git-install, npm, node_modules, tmp and logs. For an agent use agents/<agent-id>/agent/openclaw-agent.sqlite, without backup or companion suffixes, and update its registration/configuration. Replace symlinked or separately mounted directories with local directories before retrying openclaw update.`;
     }
   }
   return undefined;
@@ -483,7 +457,7 @@ export async function preflightStateUpgrade(
   if (refusal) {
     throw new Error(refusal);
   }
-  const protectedTargets = restoreRequiredDatabases(inventory.targets);
+  const protectedTargets = floorRaisingDatabases(inventory.targets);
   const postgres = protectedTargets.filter((target) => target.engine === "postgres");
   if (postgres.length > 0) {
     await preflightPostgresUpgrade(

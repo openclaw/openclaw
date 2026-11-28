@@ -298,7 +298,8 @@ export function applyJobResult(
         deferredNotifications: opts.replay ? [] : opts.deferredNotifications,
         reason: "account-unavailable",
         enabledAtAdmission: previousScheduleState.enabled,
-        signInCommand: result.provider && buildProviderReauthCommand(result.provider),
+        signInCommand:
+          job.inferenceBinding && buildProviderReauthCommand(job.inferenceBinding.provider),
       });
     }
     // The notice belongs to the pause, sent once while the job was still enabled.
@@ -341,9 +342,7 @@ export function applyJobResult(
       result.status === "error" &&
       result.errorClassification?.kind === "permanent" &&
       (isPluginCommandCronJob(job) || job.operatorSource) &&
-      // Missing account configuration does not revoke the job creator's authority, and a gone
-      // account pauses through its own notice below.
-      result.failureNotificationDetail?.kind !== "inference-account-unrecorded" &&
+      // A gone account pauses through its own notice below.
       result.failureNotificationDetail?.kind !== "inference-account-retired"
     ) {
       // A permanent error here means a retired plugin or a refused operator source:

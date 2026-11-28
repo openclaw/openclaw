@@ -9,7 +9,6 @@ import { AutomationLastMeaningfulResultSchema } from "../../packages/gateway-pro
 import { CyberAccessProgramSchema } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
 import { assertCronActiveHours } from "./active-hours.js";
-import { hasLegacyCronInferenceAccount } from "./legacy-inference-account.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { decodePluginCommandSchedule } from "./plugin-command-schedule.js";
 import { PLUGIN_COMMAND_SCHEDULE_MESSAGE } from "./plugin-command-schedule.types.js";
@@ -78,7 +77,6 @@ type InvalidPersistedCronJobReason =
   | "invalid-state"
   | "invalid-plugin-command"
   | "invalid-execution-policy"
-  | "inference-account-needs-doctor"
   | "unsatisfiable-schedule"
   | "invalid-trigger"
   | "missing-payload"
@@ -88,10 +86,6 @@ type InvalidPersistedCronJobReason =
 export function getInvalidPersistedCronJobReason(
   candidate: Record<string, unknown>,
 ): InvalidPersistedCronJobReason | null {
-  // Leave pending accounts to the offline repair.
-  if (hasLegacyCronInferenceAccount(candidate)) {
-    return "inference-account-needs-doctor";
-  }
   const id = candidate.id;
   if (typeof id !== "string" || !id.trim()) {
     return "missing-id";

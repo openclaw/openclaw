@@ -1,22 +1,23 @@
-import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
-import { readSessionEntriesFromStoreInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { resolveCronAgentSessionKey } from "../../../cron/isolated-agent/session-key.js";
-import { prepareCronSession } from "../../../cron/isolated-agent/session.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
+import { prepareCronSession } from "./isolated-agent/session.js";
 import {
   isDetachedCronSessionTarget,
   resolveCronSessionTargetSessionKey,
-} from "../../../cron/session-target.js";
-import type { CronStoredJob } from "../../../cron/types.js";
+} from "./session-target.js";
+import type { CronStoredJob } from "./types.js";
 
 /** Read the same carried preferences and native resume identity as a scheduled run. */
 export async function prepareCronInferenceDiagnosticSession(params: {
   cfg: OpenClawConfig;
   agentId: string;
-  runtimePinned: boolean;
+  signal?: AbortSignal;
   job: Pick<CronStoredJob, "id" | "sessionTarget" | "sessionKey">;
 }) {
-  const { cfg, agentId, job } = params;
+  const { cfg, agentId, job, signal } = params;
+  signal?.throwIfAborted();
   const targetKey = resolveCronSessionTargetSessionKey(job.sessionTarget);
   const sessionKey = resolveCronAgentSessionKey({
     cfg,
@@ -30,6 +31,7 @@ export async function prepareCronInferenceDiagnosticSession(params: {
       sessionKeys: [sessionKey],
       storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
     });
+    signal?.throwIfAborted();
     const entry = read.entries[0]?.entry;
     if (entry) {
       return { sessionEntry: entry, initialSessionEntry: entry, isNewSession: false };
@@ -46,7 +48,6 @@ export async function prepareCronInferenceDiagnosticSession(params: {
         : undefined,
     forceNew: isDetachedCronSessionTarget(job.sessionTarget),
     exactRunSession: true,
-    inferenceRuntimePinned: params.runtimePinned,
     nowMs: Date.now(),
   });
 }

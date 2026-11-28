@@ -16,7 +16,6 @@ import JSON5 from "json5";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { tryResolveAmbientOwnerAgentId } from "../../src/agents/agent-scope-config.js";
 import { resolveAgentConfig } from "../../src/agents/agent-scope.js";
-import { splitTrailingAuthProfile } from "../../src/agents/model-ref-profile.js";
 import { isCliProvider } from "../../src/agents/model-selection-cli.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../src/agents/session-runtime-compat.js";
 import { resolveEffectiveAgentRuntime } from "../../src/agents/thinking-runtime.js";
@@ -52,7 +51,6 @@ import {
   resolveCronModelSelectionOwner,
 } from "../../src/cron/isolated-agent/model-selection.js";
 import { resolveCarriedCronModelSelection } from "../../src/cron/isolated-agent/session-carried-model.js";
-import { resolveCronModelPin } from "../../src/cron/run-inference.js";
 import { resolveCronSessionTargetSessionKey } from "../../src/cron/session-target.js";
 import { resolveCronRunToolsAllow } from "../../src/cron/tools-allow.js";
 import type { CronStoredJob } from "../../src/cron/types.js";
@@ -144,7 +142,7 @@ export async function replayInferenceRuntimes(
   cfg: OpenClawConfig,
   readRow: (sessionKey: string) => SessionEntry | undefined,
 ): Promise<ReplayInference> {
-  const binding = resolveCronModelPin(job, cfg, agentId);
+  const binding = job.inferenceBinding;
   if (!binding || job.payload.kind !== "agentTurn") {
     return undefined;
   }
@@ -351,7 +349,6 @@ function anonymizePayload(payload: CronStoredJob["payload"]): CronStoredJob["pay
       : {}),
   };
   if (payload.kind === "agentTurn") {
-    const model = payload.model ? splitTrailingAuthProfile(payload.model) : undefined;
     return {
       kind: "agentTurn",
       message: "fixture",
@@ -359,12 +356,6 @@ function anonymizePayload(payload: CronStoredJob["payload"]): CronStoredJob["pay
       ...(tools.toolsAllow ? { toolsAllow: anonymizeAgentToolsAllow(tools.toolsAllow) } : {}),
       ...(payload.externalContentSource
         ? { externalContentSource: payload.externalContentSource }
-        : {}),
-      ...(model?.profile
-        ? {
-            model: "provider/model@provider:profile",
-            ...(payload.modelRuntime ? { modelRuntime: "runtime-1" } : {}),
-          }
         : {}),
     };
   }
@@ -375,27 +366,6 @@ function anonymizePayload(payload: CronStoredJob["payload"]): CronStoredJob["pay
     return { kind: "systemEvent", text: "fixture", ...tools };
   }
   return { kind: "command", argv: ["true"] };
-}
-
-function anonymizeInferenceRuntimes(
-  job: CronStoredJob,
-  runtimes: ScheduledInferenceRuntimeFacts,
-): ScheduledInferenceRuntimeFacts {
-  const { models } = runtimes;
-  return {
-    legacy:
-      job.payload.kind === "agentTurn" && job.payload.modelRuntime === runtimes.legacy
-        ? "runtime-1"
-        : "runtime-2",
-    ...(models
-      ? {
-          models: {
-            legacy: "model-1",
-            context: models.legacy === models.context ? "model-1" : "model-2",
-          },
-        }
-      : {}),
-  };
 }
 
 /**
@@ -501,6 +471,15 @@ export function anonymize(job: CronStoredJob, agentId: string, index: number): C
                   },
                 }
               : {}),
+          },
+        }
+      : {}),
+    ...(job.inferenceBinding
+      ? {
+          inferenceBinding: {
+            ...job.inferenceBinding,
+            profileId: "provider:profile",
+            authorizationId: "authorization",
           },
         }
       : {}),
@@ -643,23 +622,20 @@ async function main() {
       if (args.emitFixtures) {
         const fixtureJob = anonymize(job, agentId, fixtures.size + 1);
         const fixtureParentRow = anonymizeParentRow(parentRow, job);
-        const fixtureRuntimes = inferenceRuntimes
-          ? anonymizeInferenceRuntimes(job, inferenceRuntimes)
-          : undefined;
         const shapeKey = JSON.stringify({
           ...fixtureJob,
           id: "",
           name: "",
           parentRow: fixtureParentRow,
           owner,
-          inferenceRuntimes: fixtureRuntimes,
+          inferenceRuntimes,
         });
         if (![...fixtures.keys()].includes(shapeKey)) {
           fixtures.set(shapeKey, {
             job: fixtureJob,
             ...(fixtureParentRow ? { parentRow: fixtureParentRow } : {}),
             ...(owner !== undefined ? { owner } : {}),
-            ...(fixtureRuntimes ? { inferenceRuntimes: fixtureRuntimes } : {}),
+            ...(inferenceRuntimes ? { inferenceRuntimes } : {}),
           });
         }
       }

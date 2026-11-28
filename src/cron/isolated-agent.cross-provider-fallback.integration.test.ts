@@ -19,12 +19,12 @@ import {
 import {
   apiKeyProfile,
   completedSse,
-  connectPersonalAccountWithDisabledSharedAccount,
   listenLoopbackProvider,
   loopbackModelRuntime,
   loopbackProviderConfig,
   QUOTA_EXHAUSTED_BODY,
 } from "./cross-provider-fallback.test-support.js";
+import { captureCronInferenceBinding } from "./inference-binding.runtime.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent/run.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
 import { loadCronJobsStore, saveCronJobsStore } from "./store.js";
@@ -119,7 +119,7 @@ function withFallbackFixture(run: (fixture: Fixture) => Promise<void>) {
             await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
             clearRuntimeAuthProfileStoreSnapshots();
             const [reloaded] = (await loadCronJobsStore(storePath)).jobs;
-            expect(reloaded?.payload).toEqual(job.payload);
+            expect(reloaded?.inferenceBinding).toEqual(job.inferenceBinding);
             return reloaded!;
           },
           async run(job) {
@@ -148,10 +148,18 @@ function withFallbackFixture(run: (fixture: Fixture) => Promise<void>) {
 
 /** A job exactly as 2026.10.10 and 2026.11.2 store it: one recorded account, no fallback state. */
 async function boundJob(
-  _cfg: OpenClawConfig,
+  cfg: OpenClawConfig,
   id: string,
   payload: Partial<CronStoredJob["payload"]> = { model: "openai/gpt-4.1@openai:primary" },
 ): Promise<CronStoredJob> {
+  const binding = await captureCronInferenceBinding({
+    cfg,
+    agentId: "main",
+    model: "openai/gpt-4.1@openai:primary",
+  });
+  if (!binding) {
+    throw new Error("Expected a recorded primary account");
+  }
   return {
     id,
     name: id,
@@ -165,6 +173,7 @@ async function boundJob(
     delivery: { mode: "none" },
     payload: { kind: "agentTurn", message: "Reply.", lightContext: true, ...payload },
     state: {},
+    inferenceBinding: binding,
   } as CronStoredJob;
 }
 
@@ -176,17 +185,12 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-it("tries the pinned personal account before failing over to the backup provider's live account", async () => {
+it("fails over to another provider's live account when the primary is out of quota", async () => {
   await withFallbackFixture(async ({ cfg, hits, reload, run, state }) => {
-    const { authProfileId } = await connectPersonalAccountWithDisabledSharedAccount(
-      state.agentDir(),
-    );
-    const job = await reload(
-      await boundJob(cfg, "xprov", { model: `openai/gpt-4.1@${authProfileId}` }),
-    );
+    const job = await reload(await boundJob(cfg, "xprov"));
+    expect(job.inferenceBinding).toMatchObject({ provider: "openai", profileId: "openai:primary" });
     const first = await run(job);
     expect(first.status, first.error).toBe("ok");
-    expect(hits.primary).toEqual(["Bearer key-personal"]);
     expect(first.summary).toContain("served by backup provider");
     // The fallback follows that provider's live account order, like an interactive run.
     await setAuthProfileOrder({
@@ -198,26 +202,30 @@ it("tries the pinned personal account before failing over to the backup provider
     expect(second.status, second.error).toBe("ok");
     // The quota failure puts the primary account in cooldown, so the second run may skip it;
     // it never sends another account's credential to the primary provider.
-    expect(hits.primary.every((auth) => auth === "Bearer key-personal")).toBe(true);
+    expect(hits.primary.every((auth) => auth === "Bearer key-primary")).toBe(true);
     expect(hits.backup).toEqual(["Bearer key-backup", "Bearer key-backup-other"]);
     // Nothing new is recorded; the binding is exactly what the job stored.
-    expect((await reload(job)).payload).toEqual(job.payload);
+    expect((await reload(job)).inferenceBinding).toEqual(job.inferenceBinding);
   });
 });
 
-it.each(["removed", "signed out"] as const)(
+it.each(["replaced", "removed", "signed out"] as const)(
   "still fails over when the recorded account was %s",
   async (change) => {
     await withFallbackFixture(async ({ cfg, hits, reload, run, setPrimary }) => {
       const job = await reload(await boundJob(cfg, `primary-${change}`));
-      expect(await removeAuthProfilesAcrossOwnerStores({ profileIds: ["openai:primary"] })).toBe(
-        true,
-      );
-      if (change === "signed out") {
-        // `openclaw models auth logout` also drops the profile from config; the fallback must
-        // not inherit the gone account as its own selection.
-        delete cfg.auth!.profiles!["openai:primary"];
-        setRuntimeConfigSnapshot(cfg);
+      if (change === "replaced") {
+        await persistAuthProfileBatch({ profiles: [apiKeyProfile("openai:primary", "key-new")] });
+      } else {
+        expect(await removeAuthProfilesAcrossOwnerStores({ profileIds: ["openai:primary"] })).toBe(
+          true,
+        );
+        if (change === "signed out") {
+          // `openclaw models auth logout` also drops the profile from config; the fallback must
+          // not inherit the gone account as its own selection.
+          delete cfg.auth!.profiles!["openai:primary"];
+          setRuntimeConfigSnapshot(cfg);
+        }
       }
       // A healthy primary would still be refused: the job never adopts a changed account.
       setPrimary("ok");
@@ -256,21 +264,5 @@ it("keeps the recorded provider on its recorded account", async () => {
     const result = await run(job);
     expect(result.status, result.error).toBe("ok");
     expect(hits.primary).toEqual(["Bearer key-primary"]);
-  });
-});
-
-it("uses its healthy personal account when the shared primary account is disabled", async () => {
-  await withFallbackFixture(async ({ cfg, state, hits, reload, run, setPrimary }) => {
-    const { authProfileId, ownerProfileId } = await connectPersonalAccountWithDisabledSharedAccount(
-      state.agentDir(),
-    );
-    const job = await reload({
-      ...(await boundJob(cfg, "personal-primary", { model: `openai/gpt-4.1@${authProfileId}` })),
-      ownerProfileId,
-    });
-    setPrimary("ok");
-    const result = await run(job);
-    expect(result.status, result.error).toBe("ok");
-    expect(hits).toEqual({ primary: ["Bearer key-personal"], backup: [] });
   });
 });

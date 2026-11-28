@@ -6,10 +6,6 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { Selectable } from "kysely";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
-import {
-  applyCronInferenceModelPin,
-  type CronInferenceBindingConversion,
-} from "../cron/legacy-inference-account.js";
 import { resolveCronOperatorExecutionRevision } from "../cron/service/jobs-tool-policy.js";
 import { resolveCronJobGrantDefinitionRevision } from "../cron/store/job-config-codec.js";
 import { importLegacyCronMemberSources } from "../cron/store/member-source-role-import.js";
@@ -100,13 +96,13 @@ function decodeDefinitionGeneration(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 ? value : null;
 }
 
-/** Preserve derivative references when offline Doctor converts the same account to an authored model pin. */
+/** Preserve derivative references when offline Doctor only narrows a legacy job to an account. */
 export function migrateCronInferenceStandingGrantReferences(
   db: EngineConnection,
   previous: CronStoredJob,
   next: CronStoredJob,
   generation: number,
-  conversion: CronInferenceBindingConversion,
+  verifiedPreviousAuthorizationId?: string,
 ): void {
   const maintenance = getOpenClawDatabaseMaintenanceScope();
   if (!maintenance?.ownsSchemaMaintenance) {
@@ -115,34 +111,36 @@ export function migrateCronInferenceStandingGrantReferences(
     );
   }
   maintenance.assertAdmission();
-  const { binding: inferenceBinding } = conversion;
-  const expected = {
-    ...previous,
-    payload: applyCronInferenceModelPin(previous.payload, conversion),
-    modelAuthProfileAuthorizationId: conversion.authorizationId,
-  };
+  const { inferenceBinding, ...unchanged } = next;
   const source = previous.operatorSource;
   if (
-    source?.executionRevision ===
-      resolveCronOperatorExecutionRevision(previous, { inferenceBinding }) &&
+    source?.executionRevision === resolveCronOperatorExecutionRevision(previous) &&
     isDeepStrictEqual(next.operatorSource, {
       ...source,
       executionRevision: resolveCronOperatorExecutionRevision(next),
     })
   ) {
     // Doctor may update only the derivative revision, never the captured authority.
-    expected.operatorSource = next.operatorSource;
+    unchanged.operatorSource = source;
   }
   if (
-    next.payload.kind !== "agentTurn" ||
-    !next.payload.model?.startsWith(inferenceBinding.provider + "/") ||
-    !next.payload.model.endsWith("@" + inferenceBinding.profileId) ||
-    next.payload.modelRuntime !== inferenceBinding.runtime ||
-    !isDeepStrictEqual(next, expected)
+    !inferenceBinding ||
+    !isDeepStrictEqual(
+      previous,
+      verifiedPreviousAuthorizationId === undefined
+        ? unchanged
+        : {
+            ...unchanged,
+            inferenceBinding: {
+              ...inferenceBinding,
+              authorizationId: verifiedPreviousAuthorizationId,
+            },
+          },
+    )
   ) {
     throw new Error("Cron inference migration must preserve the entire approved job definition.");
   }
-  migrateCronStandingGrantReferences(db, previous, next, generation, { inferenceBinding });
+  migrateCronStandingGrantReferences(db, previous, next, generation);
 }
 
 /** A live import may change only the already captured member's explicit role representation. */
@@ -167,7 +165,6 @@ function migrateCronStandingGrantReferences(
   previous: CronStoredJob,
   next: CronStoredJob,
   generation: number,
-  legacy?: { inferenceBinding: unknown },
 ): void {
   if (!tableExists(db, STANDING_GRANT_TABLE) || !tableExists(db, STANDING_GRANT_GENERATION_TABLE)) {
     return;
@@ -181,7 +178,7 @@ function migrateCronStandingGrantReferences(
       .updateTable(STANDING_GRANT_TABLE)
       .set({ job_config_revision: resolveCronJobConfigRevision(next) })
       .where("cron_job_id", "=", previous.id)
-      .where("job_config_revision", "=", resolveCronJobConfigRevision(previous, legacy))
+      .where("job_config_revision", "=", resolveCronJobConfigRevision(previous))
       .where("revoked_at_ms", "is", null)
       .where((eb) => eb.or([eb("expires_at_ms", "is", null), eb("expires_at_ms", ">", Date.now())]))
       .where(

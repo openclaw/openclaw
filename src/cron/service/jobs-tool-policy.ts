@@ -74,10 +74,7 @@ export function cronJobMessageActionAuthorityInputsEqual(
 }
 
 /** Binds native requester authority to executable inputs using the canonical storage projection. */
-export function resolveCronRequesterExecutionRevision(
-  job: CronStoredJob,
-  legacy?: { inferenceBinding: unknown },
-): string {
+export function resolveCronRequesterExecutionRevision(job: CronStoredJob): string {
   const {
     operatorSource: _operatorSource,
     streamOperatorSource: _streamOperatorSource,
@@ -85,19 +82,16 @@ export function resolveCronRequesterExecutionRevision(
     displayName: _displayName,
     createdActor: _createdActor,
     ownerProfileId: _ownerProfileId,
-    ownerReauthorizationRequired: _ownerReauthorizationRequired,
+    ownerTransferPending: _ownerTransferPending,
     toolsAllowProvenance: _toolsAllowProvenance,
     ...executableJob
   } = job;
-  return resolveCronJobConfigRevision(executableJob, legacy);
+  return resolveCronJobConfigRevision(executableJob);
 }
 
 /** Runtime auto-disable writes enabled into job_json without rebinding the owner's source. */
-export function resolveCronOperatorExecutionRevision(
-  job: CronStoredJob,
-  legacy?: { inferenceBinding: unknown },
-): string {
-  return resolveCronRequesterExecutionRevision({ ...job, enabled: true }, legacy);
+export function resolveCronOperatorExecutionRevision(job: CronStoredJob): string {
+  return resolveCronRequesterExecutionRevision({ ...job, enabled: true });
 }
 
 /** Executable edits cannot borrow the previous creator's authenticated source. */

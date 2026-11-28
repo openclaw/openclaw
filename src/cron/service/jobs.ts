@@ -50,7 +50,6 @@ import { mergeCronPayload } from "./payload-merge.js";
 type DeliveryValidationOptions = { configuredChannels?: readonly string[] };
 
 function resetJobFailureState(job: CronStoredJob): void {
-  delete job.inferenceAccountPauseReason;
   delete job.state.autoDisabled;
   job.state.consecutiveErrors = 0;
   job.state.scheduleErrorCount = 0;

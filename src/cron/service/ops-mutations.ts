@@ -2,9 +2,6 @@ import crypto from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { AgentDeletionCommitUncertainError } from "../../agents/agent-lifecycle-registry.js";
-import { resolveBundledCliBackendAuthPolicy } from "../../agents/cli-runner/cli-backend-auth-policy.js";
-import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import {
   type CronActiveJobMarker,
@@ -22,7 +19,7 @@ import { removeCronJobBaseSession } from "../session-reaper.js";
 import { removeStaleCronJobFamilyRowsByKey } from "../store.js";
 import type { CronJobMutation } from "../store/job-mutations.types.js";
 import { systemOwnedDeclarationKeyNamespace } from "../system-owned-declaration.js";
-import type { CronJobCreate, CronJobPatch, CronStoredJob } from "../types.js";
+import type { CronJobCreate, CronJobPatch } from "../types.js";
 import { declarativeFields } from "./jobs-declarative.js";
 import { persistUpdatedJob } from "./jobs-mutation-persistence.js";
 import { findJobOrThrow } from "./jobs-scheduling.js";
@@ -60,106 +57,6 @@ import {
   prepareCronJobMutation,
   warnIfDisabled,
 } from "./store.js";
-
-/** A native login has no stored credential ID. Verify its model and runtime on explicit reselection. */
-async function selectsNativeModelProfile(
-  modelRef: string,
-  modelRuntime: string | null | undefined,
-  agentId: string,
-  profileId: string,
-): Promise<boolean> {
-  const { getRuntimeConfig } = await import("../../config/io.js");
-  const { resolveDefaultModelForAgent } = await import("../../agents/model-selection-config.js");
-  const { resolveModelRefWithConfiguredAliases } =
-    await import("../../agents/model-selection-shared.js");
-  const { resolveCliRuntimeExecutionProvider } =
-    await import("../../agents/model-runtime-aliases.js");
-  const cfg = getRuntimeConfig();
-  const defaultProvider =
-    resolveDefaultModelForAgent({ cfg, agentId })?.provider ?? DEFAULT_PROVIDER;
-  const selected = resolveModelRefWithConfiguredAliases({
-    cfg,
-    agentId,
-    raw: modelRef,
-    defaultProvider,
-  });
-  if (!selected) {
-    return false;
-  }
-  const { provider, model: modelId } = selected.ref;
-  const runtime = resolveCliRuntimeExecutionProvider(
-    { cfg, agentId, provider, modelId, authProfileId: profileId },
-    modelRuntime ? { policy: { id: modelRuntime } } : undefined,
-  );
-  return Boolean(
-    runtime &&
-    resolveBundledCliBackendAuthPolicy(runtime)?.nativeAuthProfileIds?.includes(profileId),
-  );
-}
-
-/** Capture the selected credential before the worker commits the definition for any writer. */
-async function prepareModelProfileAuthorization(
-  mutation: Exclude<CronJobMutation, { kind: "remove" }>,
-  job: CronStoredJob,
-  previous: CronStoredJob | undefined,
-  source: ReturnType<typeof captureCronJobMutationSource>,
-) {
-  const selectedProfile = (entry: CronStoredJob | undefined) =>
-    !entry?.runtimeAuthority && entry?.payload.kind === "agentTurn"
-      ? splitTrailingAuthProfile(entry.payload.model ?? "").profile
-      : undefined;
-  const profileId = selectedProfile(job);
-  const authoredModel =
-    mutation.kind === "update" && mutation.patch.payload && "model" in mutation.patch.payload
-      ? mutation.patch.payload.model
-      : undefined;
-  if (
-    !profileId ||
-    resolveBundledCliBackendAuthPolicy("claude-cli")?.nativeAuthProfileIds?.includes(profileId)
-  ) {
-    if (
-      profileId &&
-      typeof authoredModel === "string" &&
-      previous?.ownerReauthorizationRequired &&
-      job.payload.kind === "agentTurn" &&
-      (await selectsNativeModelProfile(
-        authoredModel,
-        job.payload.modelRuntime,
-        resolveCronJobEffectiveAgentId(job, source.defaultAgentId),
-        profileId,
-      ))
-    ) {
-      mutation.options.nativeModelProfileReselected = true;
-    }
-    if (previous?.modelAuthProfileAuthorizationId !== undefined) {
-      mutation.options.modelAuthProfileAuthorizationId = null;
-      delete job.modelAuthProfileAuthorizationId;
-    }
-    return;
-  }
-  if (typeof authoredModel !== "string" && selectedProfile(previous) === profileId) {
-    // Changing the agent or redeclaring the same pin cannot adopt a replacement credential.
-    return;
-  }
-  const agentId = resolveCronJobEffectiveAgentId(job, source.defaultAgentId);
-  const { getRuntimeConfig } = await import("../../config/io.js");
-  const { resolveAgentDir } = await import("../../agents/agent-scope.js");
-  const { captureAuthProfileAuthorization } =
-    await import("../../agents/auth-profiles/authorization.js");
-  const cfg = getRuntimeConfig();
-  const authorization = await captureAuthProfileAuthorization({
-    cfg,
-    agentDir: resolveAgentDir(cfg, agentId),
-    profileId,
-    assertCurrent: () => source.assertCurrent(),
-  });
-  try {
-    mutation.options.modelAuthProfileAuthorizationId = authorization.authorizationId;
-    job.modelAuthProfileAuthorizationId = authorization.authorizationId;
-  } finally {
-    authorization.dispose();
-  }
-}
 
 const RETRY_ADD_AFTER_SESSION_CLEANUP = new Error("retry add after session cleanup");
 
@@ -246,6 +143,7 @@ export async function add(
         keepDeclarationFor: opts?.keepDeclarationFor,
         systemOwned: opts?.systemOwned,
         createdActor: opts?.createdActor,
+        inferenceBinding: opts?.inferenceBinding,
         sourceConversation: opts?.sourceConversation,
         operatorSource: opts?.operatorSource,
         skillLibrarySelections: opts?.skillLibrarySelections,
@@ -280,7 +178,6 @@ export async function add(
         explicitlyMutatesToolsAllow: normalizedInput.payload.toolsAllow !== undefined,
       });
     }
-    await prepareModelProfileAuthorization(mutation, job, existing, source);
     plan.updated =
       existing !== undefined &&
       !isDeepStrictEqual(
@@ -396,6 +293,7 @@ async function updateLoadedJob(params: {
       streamOperatorSource: opts?.streamOperatorSource,
       operatorSource: opts?.operatorSource,
       operatorSourceExecutionRevision: opts?.operatorSourceExecutionRevision,
+      inferenceBinding: opts?.inferenceBinding,
       scheduledToolPolicy: opts?.scheduledToolPolicy,
       toolsAllowProvenance: opts?.toolsAllowProvenance,
       toolsAllowExecTarget: opts?.toolsAllowExecTarget,
@@ -423,7 +321,6 @@ async function updateLoadedJob(params: {
         patch.payload !== undefined && Object.hasOwn(patch.payload, "toolsAllow"),
     });
   }
-  await prepareModelProfileAuthorization(mutation, nextJob, previousJob, source);
   source.assertCurrent();
   return await persistUpdatedJob({
     state,

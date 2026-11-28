@@ -258,10 +258,13 @@ describe("ordinary session event execution", () => {
     async ({ runtime, revoke }) => {
       const automation = createScheduledAutomation();
       const authRequirement = runtime === "cli" ? ("subscription" as const) : ("api-key" as const);
-      automation.job.payload = {
-        kind: "agentTurn",
-        message: "Run",
-        model: `${runtime === "cli" ? "claude-cli" : "anthropic"}/test@scheduled-profile`,
+      automation.job.inferenceBinding = {
+        version: 1,
+        provider: runtime === "cli" ? "claude-cli" : "anthropic",
+        profileId: "scheduled-profile",
+        authorizationId: "a".repeat(64),
+        authRequirement,
+        source: "auto",
       };
       const followupRun = createFollowupRun({
         scheduledAutomation: automation,
@@ -295,7 +298,6 @@ describe("ordinary session event execution", () => {
         runtimeSessionEntry: (entry) => entry,
         assertCandidate,
         assertCurrent: () => assertCurrent(),
-        usesNativeCliAccount: () => false,
         resolveCliAuthProfile: vi.fn(async () => "scheduled-profile"),
         dispose,
       });
@@ -348,10 +350,13 @@ describe("ordinary session event execution", () => {
 
   it("lets a cross-provider CLI fallback select its own account, not the recorded one", async () => {
     const automation = createScheduledAutomation();
-    automation.job.payload = {
-      kind: "agentTurn",
-      message: "Run",
-      model: `openai/test@openai:primary`,
+    automation.job.inferenceBinding = {
+      version: 1,
+      provider: "openai",
+      profileId: "openai:primary",
+      authorizationId: "a".repeat(64),
+      authRequirement: "api-key",
+      source: "user",
     };
     // Admission selects the recorded account for the run; the CLI fallback is on another provider.
     const followupRun = createFollowupRun({
@@ -369,7 +374,6 @@ describe("ordinary session event execution", () => {
       runtimeSessionEntry: (entry) => entry,
       assertCandidate: vi.fn(),
       assertCurrent: vi.fn(),
-      usesNativeCliAccount: () => false,
       resolveCliAuthProfile: async (provider, _recorded, live) => {
         expect(provider).toBe("claude-cli");
         return await live();
@@ -393,11 +397,14 @@ describe("ordinary session event execution", () => {
 
   it("resolves a session job's candidates on its captured runtime, not the row's override", async () => {
     const automation = createScheduledAutomation();
-    automation.job.payload = {
-      kind: "agentTurn",
-      message: "Run",
-      model: `anthropic/test@scheduled-profile`,
-      modelRuntime: "openclaw",
+    automation.job.inferenceBinding = {
+      version: 1,
+      provider: "anthropic",
+      profileId: "scheduled-profile",
+      authorizationId: "a".repeat(64),
+      authRequirement: "api-key",
+      source: "auto",
+      runtime: "openclaw",
     };
     const followupRun = createFollowupRun({ scheduledAutomation: automation });
     const rowEntry = { sessionId: "row", updatedAt: 1, agentRuntimeOverride: "claude-cli" };
@@ -413,7 +420,6 @@ describe("ordinary session event execution", () => {
       runtimeSessionEntry,
       assertCandidate,
       assertCurrent: vi.fn(),
-      usesNativeCliAccount: () => false,
       resolveCliAuthProfile: vi.fn(async () => "scheduled-profile"),
       dispose: vi.fn(),
     });

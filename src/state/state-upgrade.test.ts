@@ -7,7 +7,6 @@ import { load as loadSqliteVec } from "sqlite-vec";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import { noteSessionTranscriptHealth } from "../commands/doctor-session-transcripts.js";
-import * as cronAccountMigration from "../commands/doctor/cron/inference-binding-migration.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadCronJobsStore, saveCronJobsStore } from "../cron/store.js";
@@ -57,9 +56,9 @@ afterEach(async () => {
   }
 });
 
-it("leaves an unpinned automation on normal account selection during boot", async () => {
+it("keeps a legacy automation unbound when a stored account becomes available", async () => {
   await withOpenClawTestState(
-    { label: "boot-cron-account-selection", env: { OPENAI_API_KEY: undefined } },
+    { label: "boot-cron-adoption", env: { OPENAI_API_KEY: undefined } },
     async (state) => {
       const cfg: OpenClawConfig = {
         agents: {
@@ -98,13 +97,9 @@ it("leaves an unpinned automation on normal account selection during boot", asyn
           },
         ],
       });
-      const [before] = (await loadCronJobsStore(storePath)).jobs;
-      const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Offline proof"));
-      const repair = vi.spyOn(cronAccountMigration, "maybeRepairCronInferenceBindings");
+      const before = (await loadCronJobsStore(storePath)).jobs[0];
       await upgradeStateOnGatewayStart(state.env, () => true);
-      expect((await loadCronJobsStore(storePath)).jobs).toEqual([before]);
-      expect(repair).not.toHaveBeenCalled();
-      expect(fetch).not.toHaveBeenCalled();
+      expect((await loadCronJobsStore(storePath)).jobs[0]).toEqual(before);
     },
   );
 });

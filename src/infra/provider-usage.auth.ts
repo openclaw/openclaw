@@ -1,3 +1,5 @@
+import { collectConfiguredModelRefValues } from "@openclaw/model-catalog-core/configured-model-refs";
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   dedupeProfileIds,
@@ -9,6 +11,7 @@ import {
   resolveAuthProfileOrder,
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
+import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { resolveUsableCustomProviderApiKey } from "../agents/model-auth.js";
@@ -216,6 +219,19 @@ function isUsageProviderManifestEligible(params: {
   });
 }
 
+/** Runtime and model-ref provider ids that config routes agent turns through. */
+function collectConfiguredCliRuntimeIds(cfg: OpenClawConfig): ReadonlySet<string> {
+  const ids = new Set(normalizeProviderIds(collectConfiguredAgentHarnessRuntimes(cfg)));
+  // Legacy `<backend>/<model>` refs select the backend by provider prefix.
+  for (const ref of collectConfiguredModelRefValues(cfg)) {
+    const parsed = parseModelCatalogRef(ref);
+    if (parsed) {
+      ids.add(normalizeProviderId(parsed.provider));
+    }
+  }
+  return ids;
+}
+
 async function resolveOAuthToken(params: {
   state: UsageAuthState;
   provider: string;
@@ -319,6 +335,7 @@ export async function resolveProviderAuths(params: {
     params.getStore !== undefined ||
     (await hasAnyAuthProfileStoreSourceAsync(params.agentDir));
   const auths: ProviderAuth[] = [];
+  let configuredCliRuntimeIds: ReadonlySet<string> | undefined;
 
   for (const provider of params.providers) {
     params.signal?.throwIfAborted();
@@ -326,6 +343,9 @@ export async function resolveProviderAuths(params: {
       const directCredentialState = { ...stateBase, allowAuthProfileStore: false };
       const providerIds = new Set(normalizeProviderIds([provider]));
       const providerIdSet = new Set(providerIds);
+      // A configured CLI backend owns its login outside OpenClaw, so it is a
+      // credential source for its plugin's usage hook even with no env or profile.
+      const configuredCliBackends: string[] = [];
       try {
         const snapshot = loadManifestMetadataSnapshot({
           config: directCredentialState.cfg,
@@ -341,6 +361,13 @@ export async function resolveProviderAuths(params: {
           }
           for (const providerId of pluginProviderIds) {
             providerIds.add(providerId);
+          }
+          const cliBackendIds = normalizeProviderIds(plugin.cliBackends ?? []);
+          if (cliBackendIds.length > 0) {
+            const configured = (configuredCliRuntimeIds ??= collectConfiguredCliRuntimeIds(
+              directCredentialState.cfg,
+            ));
+            configuredCliBackends.push(...cliBackendIds.filter((id) => configured.has(id)));
           }
         }
       } catch {
@@ -432,7 +459,7 @@ export async function resolveProviderAuths(params: {
         ...authProfileSourceState,
         allowAuthProfileStore,
       };
-      if (allowAuthProfileStore) {
+      if (allowAuthProfileStore || configuredCliBackends.length > 0) {
         // Legacy callbacks are synchronous, so capture the caller-owned store before invocation.
         if (state.getStore) {
           await resolveUsageAuthStore(state);
@@ -447,6 +474,7 @@ export async function resolveProviderAuths(params: {
             agentDir: state.agentDir,
             env: state.env,
             provider,
+            configuredCliBackends,
             // Provider-owned hooks may route API keys to a different billing endpoint
             // even when generic fallback for this usage provider remains OAuth-only.
             resolveApiKeyFromConfigAndStore: (options) =>

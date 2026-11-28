@@ -430,16 +430,11 @@ final class OpenClawSnapshotUITests: XCTestCase {
         ]
         app.launch()
         self.app = app
-        let gatewayBar = app.navigationBars["Gateway"]
-        guard gatewayBar.waitForExistence(timeout: 8) else {
+        let connection = app.staticTexts["Settings.Title.gateway"]
+        guard connection.waitForExistence(timeout: 8) else {
             self.recordHeaderHierarchy(app)
-            XCTFail("Gateway settings did not open")
+            XCTFail("Connection settings did not open")
             return
-        }
-        let statusBarHeight = gatewayBar.frame.minY - app.frame.minY
-        if statusBarHeight > 0 {
-            app.coordinate(withNormalizedOffset: .zero)
-                .withOffset(CGVector(dx: 20, dy: statusBarHeight / 2)).tap()
         }
         self.tapLabeled("Connection details", in: app)
         XCTAssertTrue(app.navigationBars["Connection details"].waitForExistence(timeout: 5))
@@ -452,7 +447,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         }
         host.tap()
         host.typeText("headers.example.com")
-        self.dismissKeyboard(in: app)
         self.tapLabeled("Custom Headers", in: app)
         let name = app.textFields["Header name"]
         guard name.waitForExistence(timeout: 6) else {
@@ -480,7 +474,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(value.waitForExistence(timeout: 4))
         value.tap()
         value.typeText("synthetic-value")
-        self.dismissKeyboard(in: app)
+        self.reveal(add, in: app)
         XCTAssertTrue(add.isEnabled)
         add.tap()
         XCTAssertTrue(app.staticTexts[validName].waitForExistence(timeout: 6))
@@ -517,17 +511,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         }
         self.recordHeaderHierarchy(app)
         XCTFail("Could not tap \(label)")
-    }
-
-    private func dismissKeyboard(in app: XCUIApplication) {
-        guard app.keyboards.firstMatch.waitForExistence(timeout: 2) else { return }
-        let bar = app.navigationBars.firstMatch
-        if bar.exists {
-            bar.tap()
-        }
-        if app.keyboards.firstMatch.exists {
-            app.swipeDown()
-        }
     }
 
     private func recordHeaderHierarchy(_ app: XCUIApplication) {
@@ -753,18 +736,21 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(composer.waitForExistence(timeout: 8))
 
         try self.openChatGatewaySettings()
-        let gateway = app.navigationBars["Gateway"]
-        XCTAssertTrue(gateway.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["RootTabs.Sidebar.Show"].isHittable)
-        XCTAssertFalse(gateway.buttons["BackButton"].exists)
-        self.attachScreenshot(named: "chat-gateway-root")
+        let connection = app.navigationBars.containing(.staticText, identifier: "Settings.Title.gateway").firstMatch
+        XCTAssertTrue(connection.waitForExistence(timeout: 5))
+        let back = connection.buttons["BackButton"]
+        XCTAssertTrue(back.isHittable)
+        self.attachScreenshot(named: "chat-connection-settings")
 
-        try self.selectSidebarDestination("Settings")
+        back.tap()
         let settings = app.descendants(matching: .any)["SettingsHub.Native"]
         XCTAssertTrue(settings.waitForExistence(timeout: 5))
-        XCTAssertTrue(gateway.waitForNonExistence(timeout: 5))
-        try self.openSidebarWithSlowEdgeDrag()
-        try self.selectSidebarDestination("Home")
+        XCTAssertTrue(connection.waitForNonExistence(timeout: 5))
+        app.buttons["SettingsHub.Close"].tap()
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 5))
+        let hideSidebar = app.buttons["RootTabs.Sidebar.Hide"]
+        self.waitForHittable(true, of: hideSidebar)
+        hideSidebar.tap()
         self.waitForHittable(true, of: composer)
     }
 
@@ -1158,14 +1144,10 @@ extension OpenClawSnapshotUITests {
         func openOfflineSettings(appearance: String?) throws -> XCUIApplication {
             self.launchApp(for: Self.settingsFallbackTarget, appearance: appearance, screenshotMode: false)
             let app = try XCTUnwrap(self.app)
-            let onboardingClose = app.buttons["Close"]
-            if onboardingClose.waitForExistence(timeout: 3) {
-                onboardingClose.tap()
-                XCTAssertTrue(onboardingClose.waitForNonExistence(timeout: 5))
-            }
-            // A previously onboarded device without a saved Gateway opens Connection first.
-            if app.navigationBars["Gateway"].exists {
-                try self.selectSidebarDestination("Settings")
+            // A previously onboarded device without a saved connection opens its details first.
+            let connection = app.navigationBars.containing(.staticText, identifier: "Settings.Title.gateway").firstMatch
+            if connection.exists {
+                connection.buttons["BackButton"].tap()
             }
             let settings = app.descendants(matching: .any)["SettingsHub.Native"]
             XCTAssertTrue(settings.waitForExistence(timeout: 8))

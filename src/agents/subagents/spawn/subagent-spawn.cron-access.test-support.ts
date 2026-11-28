@@ -4,6 +4,7 @@ import { expect, onTestFinished } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../../config/config.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { admitScheduledOccurrence } from "../../../cron/execution-context-admission.js";
+import { captureCronInferenceBinding } from "../../../cron/inference-binding.runtime.js";
 import { runCronIsolatedAgentTurn } from "../../../cron/isolated-agent/run.js";
 import { CronService } from "../../../cron/service.js";
 import { createNoopLogger } from "../../../cron/service.test-harness.js";
@@ -110,6 +111,11 @@ export async function runCronAccessLifecycle({
     cron.stop();
     await cron.waitForIdle();
   });
+  const binding = await captureCronInferenceBinding({
+    cfg: bound.cfg,
+    agentId: "main",
+    model: `openai/${modelId}@openai:default`,
+  });
   const job = await cron.add(
     {
       name: "Access boundary proof",
@@ -121,12 +127,12 @@ export async function runCronAccessLifecycle({
       payload: {
         kind: "agentTurn",
         message: "bounded review",
-        model: `openai/${modelId}@openai:default`,
+        model: `openai/${modelId}`,
       },
       delivery: { mode: "none" },
       cyberAccessProgram: program,
     },
-    { operatorSource },
+    { inferenceBinding: binding, operatorSource },
   );
   context.cron = cron;
   if (adapter === "cron-session") {

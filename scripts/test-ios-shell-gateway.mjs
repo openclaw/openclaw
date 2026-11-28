@@ -55,6 +55,7 @@ const workspacePreviewText = {
 const sessionMutationMode = process.argv.includes("--session-mutations");
 let sessionListRejected = false;
 let pinRejected = true;
+let railShortcuts = [];
 const port = Number(process.argv.find((arg) => arg.startsWith("--port="))?.slice(7) ?? 19876);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) {
   throw new Error("Fixture port must be an unprivileged TCP port");
@@ -215,7 +216,7 @@ const methods = [
   ...(workspacePreviewMode && !workspacePaginationMode
     ? ["agents.workspace.list", "agents.workspace.get"]
     : []),
-  ...(sessionMutationMode ? ["sessions.patch"] : []),
+  ...(sessionMutationMode ? ["users.prefs.get", "users.prefs.set"] : []),
   ...(attachmentMode ? ["artifacts.download"] : []),
 ];
 
@@ -461,7 +462,6 @@ wss.on("connection", (ws) => {
       artifactId: params.artifactId,
       ...(guestModelPolicy ? { key: params.key } : {}),
       ...(workspacePreviewMode ? { path: params.path, phase: workspacePreviewPhase } : {}),
-      ...(sessionMutationMode ? { key: params.key, pinned: params.pinned } : {}),
     });
     notifyAttachmentReadyWaiters();
     const reply = (payload) =>
@@ -890,20 +890,30 @@ wss.on("connection", (ws) => {
         notifyPolicyWaiters();
         break;
       }
-      case "sessions.patch":
-        if (sessionMutationMode) {
-          const session = sessions.find((entry) => entry.key === params.key);
-          if (!session || typeof params.pinned !== "boolean") {
-            fail("Unexpected synthetic session patch");
-          } else if (pinRejected) {
-            pinRejected = false;
-            fail("Synthetic pin refused");
-          } else {
-            session.pinned = params.pinned;
-            reply({ ok: true });
-          }
-          break;
+      case "users.prefs.get":
+        if (!sessionMutationMode || !params.keys?.includes("ui.railShortcuts")) {
+          fail("Unexpected synthetic preference read");
+        } else {
+          reply({ status: "ok", entries: { "ui.railShortcuts": railShortcuts } });
         }
+        break;
+      case "users.prefs.set": {
+        const entries = params.entries?.["ui.railShortcuts"];
+        const expected = params.expectedEntries?.["ui.railShortcuts"];
+        if (!sessionMutationMode || !Array.isArray(entries)) {
+          fail("Unexpected synthetic preference write");
+        } else if (JSON.stringify(expected) !== JSON.stringify(railShortcuts)) {
+          reply({ status: "conflict" });
+        } else if (pinRejected) {
+          pinRejected = false;
+          fail("Synthetic pin refused");
+        } else {
+          railShortcuts = entries;
+          reply({ status: "ok" });
+        }
+        break;
+      }
+      case "sessions.patch":
         if (!guestModelPolicy) {
           fail(`Unsupported synthetic method: ${req.method}`);
           break;

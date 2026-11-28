@@ -10,10 +10,8 @@ import {
 import { AuthProfileAuthorizationError } from "../../agents/auth-profiles/authorization-contract.js";
 import type { RestartRecoveryOperatorSource } from "../../gateway/operator-run-recovery-source.codec.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import {
-  CRON_INFERENCE_ACCOUNT_RETIRED_CODE,
-  resolveCronConfigurationRefusal,
-} from "../configuration-refusal.js";
+import { resolveCronConfigurationRefusal } from "../configuration-refusal.js";
+import { CRON_INFERENCE_ACCOUNT_RETIRED_CODE } from "../inference-binding.js";
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import * as schedule from "../schedule.js";
 import { cronScriptFailureMetadata } from "../script-failure.js";

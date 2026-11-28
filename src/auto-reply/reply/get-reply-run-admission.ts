@@ -12,7 +12,6 @@ import {
 } from "../../config/sessions/paths.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { resolveCronModelPin } from "../../cron/run-inference.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { replyRunInterruptTargetOperation } from "../../sessions/session-controller.contracts.js";
@@ -381,10 +380,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         )
       : undefined;
   const resolveRuntimeAuthProfile = async () => {
-    const job = opts?.scheduledAutomation?.job;
-    const pin = job && resolveCronModelPin(job, cfg, agentId);
-    if (pin?.provider === provider) {
-      return { authProfileId: pin.profileId, authProfileIdSource: "user" as const };
+    const binding = opts?.scheduledAutomation?.job.inferenceBinding;
+    if (binding) {
+      return { authProfileId: binding.profileId, authProfileIdSource: binding.source };
     }
     if (
       useFastReplyRuntime &&

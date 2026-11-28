@@ -53,7 +53,6 @@ export function normalizeCronCommandArgv(value: unknown): string[] | undefined {
 function hasAgentTurnOnlyPayloadHint(payload: UnknownRecord): boolean {
   return (
     "model" in payload ||
-    "modelRuntime" in payload ||
     "fallbacks" in payload ||
     "thinking" in payload ||
     "timeoutSeconds" in payload ||
@@ -84,7 +83,7 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
   if (typeof next.script === "string") {
     next.script = next.script.trim();
   }
-  for (const field of ["model", "modelRuntime", "thinking"] as const) {
+  for (const field of ["model", "thinking"] as const) {
     // Model/thinking nulls clear stored overrides.
     if (field in next && next[field] !== null) {
       const value = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next[field]);

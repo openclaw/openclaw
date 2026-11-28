@@ -15,6 +15,7 @@ import type { TemplateCronGateway } from "./cron.js";
 type TemplateCronCreatorCapture = CronAddOptions & {
   assertInferenceSelectionCurrent?: () => void;
   disposeOperatorSource?: () => void;
+  disposeInferenceAuthorization?: () => void;
 };
 
 /** Both transports use the ordinary scheduler owner, with the same declaration and commit guards. */
@@ -78,6 +79,7 @@ export function createTemplateCronGateway(
         );
       } finally {
         creator?.disposeOperatorSource?.();
+        creator?.disposeInferenceAuthorization?.();
       }
     },
     get: async (id) => {

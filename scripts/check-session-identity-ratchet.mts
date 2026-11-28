@@ -51,15 +51,10 @@ const EXCLUDE = [
 ].map((glob) => `:(exclude,glob)**/${glob}`);
 
 /** Counts each pin name, id compare and inference refusal on one line. */
-export function countSessionIdentityPins(line: string, sourcePath?: string) {
-  // These run IDs identify a release trial and its rollback receipt, outside the session store.
-  const source =
-    sourcePath === "src/state/state-upgrade.ts"
-      ? line.replace(/(?<![\w$.])restore\.existing\.runId\s*===\s*restore\.runId(?![\w$.])/gu, " ")
-      : line;
+export function countSessionIdentityPins(line: string) {
   // Type and presence checks do not compare identities. Remove only their
   // operator so adjacent real comparisons and explicit pin names still count.
-  const comparisons = source
+  const comparisons = line
     .replace(TYPEOF_COMPARISON, "$1 $2")
     .replace(
       /(?<![\w$.])(?:undefined|null)\s*[!=]==|[!=]==\s*(?:undefined|null)(?=\s*(?:$|[),;:?]|&&|\|\|))/gu,
@@ -68,10 +63,8 @@ export function countSessionIdentityPins(line: string, sourcePath?: string) {
   return PATTERNS.reduce((sum, pattern) => sum + (comparisons.match(pattern)?.length ?? 0), 0);
 }
 
-function countSource(source: string, sourcePath: string) {
-  return source
-    .split("\n")
-    .reduce((sum, line) => sum + countSessionIdentityPins(line, sourcePath), 0);
+function countSource(source: string) {
+  return source.split("\n").reduce((sum, line) => sum + countSessionIdentityPins(line), 0);
 }
 
 function collectCurrent(root: string, staged: boolean) {
@@ -105,7 +98,7 @@ function collectCurrent(root: string, staged: boolean) {
     if (separator <= 0 || OWNER.test(file)) {
       continue;
     }
-    const found = countSessionIdentityPins(row.slice(separator + 1), file);
+    const found = countSessionIdentityPins(row.slice(separator + 1));
     if (found > 0) {
       counts.set(file, (counts.get(file) ?? 0) + found);
     }
@@ -133,7 +126,6 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
               maxBuffer: 256 * 1024 * 1024,
               stdio: ["ignore", "pipe", "ignore"],
             }),
-            filePath,
           ),
     messages: {
       increaseTitle: "Session identity pins exceed the per-file allowlist:",

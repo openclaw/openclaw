@@ -1365,18 +1365,7 @@
                           "type": "null"
                         }
                       ],
-                      "description": "Model override. Append @profile to pin the billing account; null clears the override"
-                    },
-                    "modelRuntime": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ],
-                      "description": "Runtime to use for a pinned model account, or null to clear"
+                      "description": "Model override, or null to clear"
                     },
                     "script": {
                       "description": "Headless code-mode script",

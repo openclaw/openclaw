@@ -2,7 +2,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-manager-api.js";
 import { bindSessionMcpRuntimeTestScheduler } from "../agents/agent-bundle-mcp-manager.test-support.js";
-import { captureAuthProfileAuthorization } from "../agents/auth-profiles/authorization.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
@@ -20,6 +19,7 @@ import {
   loopbackProviderConfig,
 } from "./cross-provider-fallback.test-support.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
+import { captureCronInferenceBinding } from "./inference-binding.runtime.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent/run.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
 import { runCronSessionTurn } from "./session-run.js";
@@ -107,14 +107,10 @@ it.each(["session-target", "isolated"] as const)(
           setRuntimeConfigSnapshot(cfg);
           clearRuntimeAuthProfileStoreSnapshots();
           const model = "openai/gpt-4.1@openai:main";
-          const captured = await captureAuthProfileAuthorization({
-            cfg,
-            agentDir: state.agentDir(),
-            profileId: "openai:main",
-            assertCurrent() {},
-          });
-          const modelAuthProfileAuthorizationId = captured.authorizationId;
-          captured.dispose();
+          const binding = await captureCronInferenceBinding({ cfg, agentId: "main", model });
+          if (!binding) {
+            throw new Error("Expected a recorded account");
+          }
           const job: CronStoredJob = {
             ...makeCronJob({
               id: `rate-limited-${path}`,
@@ -125,7 +121,7 @@ it.each(["session-target", "isolated"] as const)(
               delivery: { mode: "none" },
               payload: { kind: "agentTurn", message: "Reply.", model },
             }),
-            modelAuthProfileAuthorizationId,
+            inferenceBinding: binding,
           };
           const startedAt = Date.now();
           let result;

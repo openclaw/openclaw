@@ -40,16 +40,14 @@ export function prepareCronQuarantineRegistration(params: {
 }): CronQuarantineRegistration {
   const storeKey = params.storePath;
   const scope = cronQuarantineScope(storeKey);
-  const records = params.entries
-    .filter((entry) => entry.reason !== "inference-account-needs-doctor")
-    .map((entry) => {
-      const quarantinedAtMs = "quarantinedAtMs" in entry ? entry.quarantinedAtMs : params.nowMs;
-      return prepareSqliteAuditRecord(scope, {
-        key: cronQuarantineEntryKey(entry),
-        value: { ...entry, quarantinedAtMs },
-        createdAt: quarantinedAtMs,
-      });
+  const records = params.entries.map((entry) => {
+    const quarantinedAtMs = "quarantinedAtMs" in entry ? entry.quarantinedAtMs : params.nowMs;
+    return prepareSqliteAuditRecord(scope, {
+      key: cronQuarantineEntryKey(entry),
+      value: { ...entry, quarantinedAtMs },
+      createdAt: quarantinedAtMs,
     });
+  });
   return { storeKey, records };
 }
 

@@ -140,14 +140,9 @@ it.each([
   },
 );
 
-it.each([
-  { admits: true, pendingCronAccount: false, olderRestore: false },
-  { admits: false, pendingCronAccount: false, olderRestore: false },
-  { admits: true, pendingCronAccount: true, olderRestore: false },
-  { admits: true, pendingCronAccount: true, olderRestore: true },
-])(
-  "publishes the trial plan for a current schema (admitted=$admits, pending cron account=$pendingCronAccount, older restore=$olderRestore)",
-  async ({ admits, pendingCronAccount, olderRestore }) => {
+it.each([true, false])(
+  "publishes an empty no-upgrade trial plan only for an admitted start (%s)",
+  async (admits) => {
     const stateDir = dirs.make("state-upgrade-empty-restore-");
     const env = {
       OPENCLAW_STATE_DIR: stateDir,
@@ -158,27 +153,6 @@ it.each([
     fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, '{"gateway":{"mode":"local"}}');
     fs.mkdirSync(path.join(stateDir, "state"));
     const file = path.join(stateDir, "state", "openclaw.sqlite");
-    const legacyJob = {
-      id: "legacy-job",
-      name: "Legacy job",
-      enabled: true,
-      createdAtMs: 1,
-      updatedAtMs: 1,
-      agentId: "main",
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      delivery: { mode: "none" },
-      payload: { kind: "agentTurn", message: "Fixture" },
-      inferenceBinding: {
-        version: 1,
-        provider: "openai",
-        profileId: "openai:retired",
-        authorizationId: "a".repeat(64),
-        authRequirement: "api-key",
-        source: "auto",
-      },
-    };
     {
       using db = new DatabaseSync(file);
       db.exec(OPENCLAW_STATE_SCHEMA_SQL);
@@ -189,12 +163,6 @@ it.each([
       runSqliteImmediateTransactionSync(db, () =>
         bindFreshClientCredentialStore(db, { env, path: file }),
       );
-      if (pendingCronAccount) {
-        db.prepare(
-          `INSERT INTO cron_jobs (store_key, job_id, name, enabled, payload_kind, job_json, updated_at)
-           VALUES ('cron-default', ?, ?, 1, 'agentTurn', ?, 1)`,
-        ).run(legacyJob.id, legacyJob.name, JSON.stringify(legacyJob));
-      }
     }
     const original = fs.readFileSync(file);
     const target = path.join("releases", "empty-release", "openclaw");
@@ -210,55 +178,8 @@ it.each([
       resolvePrefix(env),
     );
     await writeTrial({ ...pending, phase: "trial" }, resolvePrefix(env));
-    const manifest = path.join(resolvePrefix(env), "releases", "empty-release", ".restore");
-    const currentJob = olderRestore ? { ...legacyJob, name: "Current legacy job" } : legacyJob;
-    if (olderRestore) {
-      await upgradeStateOnGatewayStart(env, () => true);
-      using live = new DatabaseSync(file);
-      live
-        .prepare("UPDATE cron_jobs SET name = ?, enabled = 1, job_json = ?")
-        .run(currentJob.name, JSON.stringify(currentJob));
-      await writeTrial({ ...pending, phase: "trial", runId: "next-trial" }, resolvePrefix(env));
-    }
     await upgradeStateOnGatewayStart(env, () => admits);
-    if (pendingCronAccount) {
-      const { inferenceBinding: _legacyBinding, ...definition } = currentJob;
-      using migrated = new DatabaseSync(file, { readOnly: true });
-      expect(migrated.prepare("SELECT job_json FROM cron_jobs").get()?.job_json).toBe(
-        JSON.stringify({
-          ...definition,
-          enabled: false,
-          inferenceAccountPauseReason:
-            "Paused because the current model no longer matches the saved account’s provider. Review its model and account before enabling it.",
-        }),
-      );
-      const restore = JSON.parse(fs.readFileSync(manifest, "utf8"));
-      const preimage = restore.files.find(
-        (entry: { live: string }) => entry.live === file,
-      )?.preimage;
-      expect(preimage).toEqual(expect.any(String));
-      using previous = new DatabaseSync(preimage, { readOnly: true });
-      expect(previous.prepare("SELECT job_json FROM cron_jobs").get()?.job_json).toBe(
-        JSON.stringify(legacyJob),
-      );
-      const backups = fs
-        .readdirSync(path.dirname(file))
-        .filter((name) => name.startsWith("openclaw.sqlite.pre-"));
-      if (olderRestore) {
-        const doctorBackup = backups.find((name) => name !== path.basename(preimage));
-        expect(backups).toHaveLength(2);
-        expect(doctorBackup).toBeDefined();
-        using fresh = new DatabaseSync(path.join(path.dirname(file), doctorBackup!), {
-          readOnly: true,
-        });
-        expect(fresh.prepare("SELECT job_json FROM cron_jobs").get()?.job_json).toBe(
-          JSON.stringify(currentJob),
-        );
-      } else {
-        expect(backups).toEqual([path.basename(preimage)]);
-      }
-      return;
-    }
+    const manifest = path.join(resolvePrefix(env), "releases", "empty-release", ".restore");
     if (admits) {
       expect(JSON.parse(fs.readFileSync(manifest, "utf8"))).toEqual({
         v: 1,

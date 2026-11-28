@@ -3,10 +3,6 @@ import path from "node:path";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  hasLegacyCronInferenceAccountJson,
-  legacyCronAccountTextPatterns,
-} from "../cron/legacy-inference-account.js";
 import { getScopedDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { readBackupEngineImage } from "../infra/database-engine/physical-store-inspection.js";
 import { readBackupEngine } from "../infra/database-engine/physical-store.js";
@@ -361,14 +357,12 @@ export async function inspectPostgresUpgradeInWorker(params: {
     const physicalBytes = Number(size.rows[0]!.physical_bytes);
     const retainedAgentIds: string[] = [];
     const registeredAgentDatabases: { agentId: string; path: string }[] = [];
-    let pendingCronAccountMigration = false;
     if (family === "state") {
       const present = await client.query(
-        "SELECT to_regclass($1) IS NOT NULL AS present, to_regclass($2) IS NOT NULL AS registered, to_regclass($3) IS NOT NULL AS cron",
+        "SELECT to_regclass($1) IS NOT NULL AS present, to_regclass($2) IS NOT NULL AS registered",
         [
           `${quote(anchor.namespace)}.agent_deletion_journal`,
           `${quote(anchor.namespace)}.agent_databases`,
-          `${quote(anchor.namespace)}.cron_jobs`,
         ],
       );
       if (present.rows[0]?.present) {
@@ -385,17 +379,6 @@ export async function inspectPostgresUpgradeInWorker(params: {
           ...registered.rows.map((row) => ({ agentId: row.agent_id, path: row.path })),
         );
       }
-      if (present.rows[0]?.cron) {
-        const candidates = await client.query<{ job_json: string }>(
-          `SELECT job_json FROM ${quote(anchor.namespace)}.cron_jobs
-           WHERE job_json LIKE $1 ESCAPE '!' OR job_json LIKE $2 ESCAPE '!'
-             OR job_json LIKE $3 ESCAPE '!'`,
-          [...legacyCronAccountTextPatterns],
-        );
-        pendingCronAccountMigration = candidates.rows.some(({ job_json }) =>
-          hasLegacyCronInferenceAccountJson(job_json),
-        );
-      }
     }
     return {
       ...anchor,
@@ -405,7 +388,6 @@ export async function inspectPostgresUpgradeInWorker(params: {
       physicalBytes,
       retainedAgentIds,
       registeredAgentDatabases,
-      pendingCronAccountMigration,
     };
   });
 }
@@ -537,7 +519,6 @@ export type PostgresUpgradeInspection = {
   physicalBytes: number;
   retainedAgentIds: string[];
   registeredAgentDatabases: { agentId: string; path: string }[];
-  pendingCronAccountMigration: boolean;
 };
 type PostgresUpgradeClone = Parameters<typeof clonePostgresUpgradeInWorker>[0];
 type PostgresUpgradeRetirement = Parameters<typeof retirePostgresUpgradeInWorker>[0];

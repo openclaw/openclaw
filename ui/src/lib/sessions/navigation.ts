@@ -302,6 +302,7 @@ export function resolveSessionNavigation(input: SessionNavigationInput) {
     selectedAgentId,
     defaultAgentId,
     selectedSession: activeSession,
+    routeOnlyRow: selectedSession ? undefined : activeSession,
     visibleSessions,
     activeRowKey: activeRow?.key ?? null,
   };

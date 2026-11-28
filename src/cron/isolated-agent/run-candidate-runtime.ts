@@ -1,27 +1,22 @@
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
-import { resolveCronModelPin, resolveCronRuntimeSessionEntry } from "../run-inference.js";
+import { resolveCronRuntimeSessionEntry } from "../inference-binding.js";
 import { resolveCronCandidateExecution } from "./candidate-execution.js";
 import { isCliProvider } from "./run-execution.runtime.js";
 import type { CronRunExecutionParams } from "./run-execution.types.js";
 import { resolveEffectiveAgentRuntime } from "./run.runtime.js";
 
-/** Resolves a candidate's runtime override from the job's pinned runtime or its cron session. */
+/** Resolves a candidate's runtime override from the job's captured runtime or its cron session. */
 export function createCronRuntimeOverrideResolver(
-  params: Pick<
-    CronRunExecutionParams,
-    "cfgWithAgentDefaults" | "cronSession" | "job" | "trigger" | "agentId"
-  >,
+  params: Pick<CronRunExecutionParams, "cfgWithAgentDefaults" | "cronSession" | "job">,
 ) {
-  const modelPin = resolveCronModelPin(
-    params.job,
-    params.cfgWithAgentDefaults,
-    params.agentId,
-    params.trigger,
-  );
   return (provider: string) =>
     resolveSessionRuntimeOverrideForProvider({
       provider,
-      entry: resolveCronRuntimeSessionEntry(modelPin, params.cronSession.sessionEntry, provider),
+      entry: resolveCronRuntimeSessionEntry(
+        params.job.inferenceBinding,
+        params.cronSession.sessionEntry,
+        provider,
+      ),
       cfg: params.cfgWithAgentDefaults,
     });
 }
@@ -30,15 +25,9 @@ export function createCronRuntimeOverrideResolver(
 export function createCronCandidateExecutionResolver(
   params: Pick<
     CronRunExecutionParams,
-    "cfgWithAgentDefaults" | "agentId" | "runSessionKey" | "cronSession" | "job" | "trigger"
+    "cfgWithAgentDefaults" | "agentId" | "runSessionKey" | "cronSession" | "job"
   >,
 ) {
-  const modelPin = resolveCronModelPin(
-    params.job,
-    params.cfgWithAgentDefaults,
-    params.agentId,
-    params.trigger,
-  );
   return (provider: string, model: string, sessionRuntimeOverride: string | undefined) =>
     resolveCronCandidateExecution(
       {
@@ -48,9 +37,9 @@ export function createCronCandidateExecutionResolver(
         model,
         sessionRuntimeOverride,
         sessionKey: params.runSessionKey,
-        // A pinned runtime stands in for the override copied into the cron session entry.
+        // A captured runtime stands in for the override copied into the cron session entry.
         sessionEntry: resolveCronRuntimeSessionEntry(
-          modelPin,
+          params.job.inferenceBinding,
           params.cronSession.sessionEntry,
           provider,
         ),

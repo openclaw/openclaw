@@ -1,7 +1,10 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import * as lancedb from "@lancedb/lancedb";
 import { expectDefined } from "@openclaw/normalization-core";
+import { listDirectoryTreeStrict } from "openclaw/plugin-sdk/file-access-runtime";
 import type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
@@ -201,6 +204,47 @@ test("keeps literal $ patterns in home when expanding a tilde dbPath", async () 
   await expect(scopeMigration.detectLegacyState(params)).resolves.toMatchObject({
     preview: [expect.stringContaining(dollarDbPath)],
   });
+});
+
+async function snapshotTree(root: string): Promise<Record<string, string>> {
+  const tree: Record<string, string> = {};
+  for (const { relativePath, dirent } of await listDirectoryTreeStrict(root)) {
+    const entryPath = path.join(root, relativePath);
+    const stat = await fs.lstat(entryPath);
+    tree[relativePath] = dirent.isFile()
+      ? `${stat.size}:${stat.mtimeMs}:${createHash("sha256")
+          .update(await fs.readFile(entryPath))
+          .digest("hex")}`
+      : `dir:${stat.mtimeMs}`;
+  }
+  tree["."] = `dir:${(await fs.lstat(root)).mtimeMs}`;
+  return tree;
+}
+
+// `doctor --lint --all` runs every detector against the user's real store.
+test("detection leaves an explicit dbPath byte-identical", async () => {
+  await createLegacyTable(getDbPath(), [
+    { id: "legacy-envelope", text: "Sender (untrusted metadata): Alex\nI prefer tea" },
+  ]);
+  const before = await snapshotTree(getDbPath());
+  const params = migrationParams();
+  for (const migration of stateMigrations) {
+    await expect(migration.detectLegacyState(params)).resolves.toMatchObject({
+      preview: [expect.stringContaining(getDbPath())],
+    });
+  }
+  expect(await snapshotTree(getDbPath())).toEqual(before);
+});
+
+test("detection does not create a missing dbPath", async () => {
+  for (const dbPath of [getDbPath(), pathToFileURL(getDbPath()).href]) {
+    for (const migration of stateMigrations) {
+      await expect(migration.detectLegacyState(migrationParams(undefined, dbPath))).resolves.toBe(
+        null,
+      );
+    }
+  }
+  await expect(fs.access(getDbPath())).rejects.toThrow();
 });
 
 test("deletes only structurally complete legacy envelope rows", async () => {

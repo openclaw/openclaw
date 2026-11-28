@@ -1,268 +1,201 @@
-import { isDeepStrictEqual } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { existsSync } from "node:fs";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveAgentConfig,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   tryResolveAmbientOwnerAgentId,
 } from "../../../agents/agent-scope.js";
-import type { AuthProfileAuthorization } from "../../../agents/auth-profiles/authorization-contract.js";
+import {
+  type AuthProfileAuthorization,
+  AuthProfileAuthorizationError,
+} from "../../../agents/auth-profiles/authorization-contract.js";
 import { captureAuthProfileAuthorization } from "../../../agents/auth-profiles/authorization.js";
-import { loadAuthProfileStoreForRuntimeAsync } from "../../../agents/auth-profiles/store-runtime.js";
-import { resolveProviderModelAuthPolicy } from "../../../agents/model-auth-policy.js";
-import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
+import { resolveAuthProfileDatabasePath } from "../../../agents/auth-profiles/sqlite.js";
+import { quoteCliArg } from "../../../cli/quote-cli-arg.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { captureRuntimeConfig } from "../../../config/runtime-source-projection.js";
-import { resolveSessionModelOverrideSource } from "../../../config/sessions/model-override-provenance.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
+import { prepareSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
-import { resolveCronModelSelection } from "../../../cron/isolated-agent/model-selection.js";
-import { resolveCronPreflightCandidates } from "../../../cron/isolated-agent/run-fallback-policy.js";
 import {
-  hasLegacyCronInferenceAccount,
-  isLegacyCronInferenceBinding,
-} from "../../../cron/legacy-inference-account.js";
+  normalizeCronInferenceBinding,
+  type CronInferenceBinding,
+} from "../../../cron/inference-binding.js";
+import { prepareCronInferenceDiagnosticSession } from "../../../cron/inference-diagnostics.js";
+import { resolveCronModelSelection } from "../../../cron/isolated-agent/model-selection.js";
 import { normalizeCronJobCreate } from "../../../cron/normalize.js";
-import { getInvalidPersistedCronJobReason } from "../../../cron/persisted-shape.js";
-import { decodeStoredCronJobConfig } from "../../../cron/store/job-config-codec.js";
+import { isInvalidCronSessionTargetIdError } from "../../../cron/session-target.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { prepareArtifactPreservingSqliteRead } from "../../../infra/sqlite-snapshot-source.js";
 import type { PluginDoctorCronJob } from "../../../plugins/doctor-contract-module.js";
 import { prepareProviderModelPolicySurfaces } from "../../../plugins/provider-model-routes.js";
+import { isArtifactPreservingStateRead } from "../../../state/artifact-preserving-state-reads.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { readAppliedUpgradeShadowRoots } from "../../../state/state-upgrade-receipts.js";
-import { prepareCronInferenceDiagnosticSession } from "./inference-session.js";
-import {
-  inspectCronJobsForDoctor,
-  repairCronInferenceBindingsForDoctor,
-  type CronInferenceBindingRepair,
-} from "./store-repair.js";
+import { isUserModelAuthProfileId } from "../../../state/user-model-account-id.js";
+import { inspectCronJobsForDoctor, repairCronInferenceBindingsForDoctor } from "./store-repair.js";
 
-class CronInferenceMigrationPause extends Error {}
-
+/** Restore a recorded account's authorization after a state upgrade; unbound jobs select live. */
 export async function maybeRepairCronInferenceBindings(params: {
   cfg: OpenClawConfig;
   shouldRepair: boolean;
   env?: NodeJS.ProcessEnv;
-  trialBackupPath?: string;
-}): Promise<{ changes: string[]; notices: string[]; warnings: string[] }> {
+}): Promise<{ changes: string[]; warnings: string[] }> {
   const env = params.env ?? process.env;
-  const changes: CronInferenceBindingRepair[] = [];
-  const descriptions: string[] = [];
-  const notices: string[] = [];
-  const paused: string[] = [];
+  const warnings: string[] = [];
   const retained: AuthProfileAuthorization[] = [];
+  const changes: Array<{
+    job: PluginDoctorCronJob;
+    binding: CronInferenceBinding;
+    previousAuthorizationId?: string;
+  }> = [];
+  const descriptions: string[] = [];
+  const capturedConfigs = new Map<OpenClawConfig, OpenClawConfig>();
+  const inspectedAgents = new Set<string>();
+  const captureConfig = (config: OpenClawConfig): OpenClawConfig => {
+    let captured = capturedConfigs.get(config);
+    if (!captured) {
+      captured = captureRuntimeConfig(config);
+      capturedConfigs.set(config, captured);
+    }
+    return captured;
+  };
   try {
-    const inventory = await inspectCronJobsForDoctor({ env });
-    const labelFor = ({ definition, id }: PluginDoctorCronJob) =>
-      `${typeof definition?.name === "string" ? definition.name : id} (${id})`;
-    for (const job of inventory.jobs) {
-      const reason = job.definition?.inferenceAccountPauseReason;
-      if (job.definition?.enabled === false && typeof reason === "string") {
-        notices.push(`Automation ${labelFor(job)}: ${reason}`);
-      }
-    }
-    const pending = inventory.jobs.filter(
-      ({ definition }) => definition && hasLegacyCronInferenceAccount(definition),
-    );
-    if (pending.length === 0) {
-      return { changes: [], notices, warnings: [] };
-    }
-    if (!params.shouldRepair) {
-      return {
-        changes: [],
-        notices,
-        warnings: pending.map(
-          (job) =>
-            `Automation ${labelFor(job)}: run openclaw doctor --fix to move the saved account to the model selection.`,
-        ),
-      };
-    }
     const maintenance = getOpenClawDatabaseMaintenanceScope();
-    if (!maintenance?.ownsSchemaMaintenance) {
-      throw new Error("Automation account migration requires offline Doctor maintenance.");
+    if (params.shouldRepair && !maintenance?.ownsSchemaMaintenance) {
+      throw new Error("Inference account migration requires offline Doctor maintenance.");
     }
+    const inventory = await inspectCronJobsForDoctor({ env });
     await prepareProviderModelPolicySurfaces();
-    const shadowRoots = readAppliedUpgradeShadowRoots(resolveStateDir(env));
-    const cfg = captureRuntimeConfig(params.cfg);
-    for (const stored of pending) {
-      const { inferenceBinding: binding, ownerTransferPending, ...definition } = stored.definition!;
-      const label = labelFor(stored);
-      let pausedDefinition = definition;
-      let authorization: AuthProfileAuthorization | undefined;
+    let shadowRoots: string[] | undefined;
+    for (const stored of inventory.jobs) {
+      const definition = stored.definition;
+      if (
+        !definition ||
+        stored.invalidReason ||
+        (definition.inferenceBinding !== undefined && !params.shouldRepair) ||
+        definition.runtimeAuthority !== undefined ||
+        definition.runtimeAuthorityRecoveryRequired
+      ) {
+        continue;
+      }
+      let verifyingSavedAccount = false;
+      let modelRef: string | undefined;
+      let listAccountsCommand = "openclaw models auth list";
+      const label = `${normalizeOptionalString(definition.name) ?? stored.id} (${stored.id})`;
       try {
-        if (ownerTransferPending !== undefined) {
-          pausedDefinition = { ...definition, ownerReauthorizationRequired: true };
-          throw new CronInferenceMigrationPause(
-            "its owner changed and the new owner needs to choose the account",
+        // Malformed legacy rows must not abandon adoption for unrelated jobs or partitions.
+        // Normalize only resolver input; the committed definition retains every authored field.
+        const job = normalizeCronJobCreate(definition);
+        if (!job || job.payload.kind !== "agentTurn" || job.sessionTarget === "main") {
+          continue;
+        }
+        const previous = normalizeCronInferenceBinding(definition.inferenceBinding);
+        // An unbound job selects its account live, like an interactive turn; only a recorded
+        // account can need its authorization restored after a state upgrade.
+        if (!previous || isUserModelAuthProfileId(previous.profileId)) {
+          continue;
+        }
+        modelRef = job.payload.model;
+        const agentId = tryResolveCronJobEffectiveAgentId(
+          job,
+          tryResolveAmbientOwnerAgentId(params.cfg),
+        );
+        if (!agentId || !resolveAgentConfig(params.cfg, agentId)) {
+          throw new Error("Select the job's execution agent before adopting an inference account.");
+        }
+        listAccountsCommand += ` --agent ${quoteCliArg(agentId)}`;
+        // Resolve legacy ownership before capturing; matching provider loads share this generation.
+        // Account selection and authorization still use each job's own agent and session.
+        const config = captureConfig(params.cfg);
+        // The inspection owner retains one image for sessions, auth and catalogs across jobs.
+        if (isArtifactPreservingStateRead("agent") && !inspectedAgents.has(agentId)) {
+          const sessionTarget = await prepareSqliteTargetFromSessionStorePath(
+            resolveSessionStorePathCore(config.session?.store, { agentId, env }),
+            { agentId, env },
           );
-        }
-        if (!isLegacyCronInferenceBinding(binding)) {
-          throw new CronInferenceMigrationPause("its saved account is incomplete");
-        }
-        if (
-          isRecord(definition.payload) &&
-          definition.payload.kind === "accessAgentTurn" &&
-          getInvalidPersistedCronJobReason(definition)
-        ) {
-          throw new CronInferenceMigrationPause("its stored Access job definition is invalid");
-        }
-        const input = normalizeCronJobCreate(decodeStoredCronJobConfig(definition));
-        const job = input && { ...input, id: stored.id, createdAtMs: 0, updatedAtMs: 0, state: {} };
-        if (
-          job?.payload.kind !== "agentTurn" ||
-          job.sessionTarget === "main" ||
-          definition.pluginCommand !== undefined ||
-          !isRecord(definition.payload)
-        ) {
-          throw new CronInferenceMigrationPause(
-            "this job does not support an explicit model selection",
-          );
-        }
-        if (
-          job.payload.model &&
-          splitTrailingAuthProfile(job.payload.model).profile === binding.profileId
-        ) {
-          // Re-enabling an existing explicit pin must still check its recorded credential.
-          pausedDefinition = {
-            ...definition,
-            modelAuthProfileAuthorizationId: binding.authorizationId,
-          };
-        }
-        const agentId = tryResolveCronJobEffectiveAgentId(job, tryResolveAmbientOwnerAgentId(cfg));
-        if (!agentId) {
-          throw new CronInferenceMigrationPause("its execution agent could not be determined");
+          for (const agentPath of new Set([
+            resolveAuthProfileDatabasePath(resolveAgentDir(config, agentId, env)),
+            sessionTarget.path,
+          ])) {
+            if (existsSync(agentPath)) {
+              await prepareArtifactPreservingSqliteRead(agentPath);
+            }
+          }
+          inspectedAgents.add(agentId);
         }
         const session = await prepareCronInferenceDiagnosticSession({
-          cfg,
+          cfg: config,
           agentId,
           job: { ...job, id: stored.id },
-          runtimePinned: Boolean(binding.runtime),
         });
-        if (session.initialSessionEntry?.modelSelectionLocked) {
-          throw new CronInferenceMigrationPause("its session owns the model selection");
+        if (session.initialSessionEntry?.modelSelectionLocked === true) {
+          warnings.push(
+            `Automation ${label}: its session is owned by a native runtime; no host inference account was adopted. Recover ownership through that runtime before changing this job.`,
+          );
+          continue;
         }
         const selected = await resolveCronModelSelection({
-          cfg,
+          cfg: config,
           agentId,
-          agentDir: resolveAgentDir(cfg, agentId),
-          workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
-          agentConfigOverride: resolveAgentConfig(cfg, agentId),
+          agentDir: resolveAgentDir(config, agentId),
+          workspaceDir: resolveAgentWorkspaceDir(config, agentId),
+          agentConfigOverride: resolveAgentConfig(config, agentId),
           sessionEntry: session.sessionEntry,
           payloadModel: job.payload.model,
           isGmailHook: job.payload.externalContentSource === "gmail",
         });
-        if (!selected.ok || selected.provider !== binding.provider) {
-          throw new CronInferenceMigrationPause(
-            "the current model no longer matches the saved account’s provider",
-          );
+        if (!selected.ok) {
+          throw new Error(selected.error);
         }
-        if (
-          selected.configuredProfileId &&
-          selected.modelSource === "payload" &&
-          selected.configuredProfileId !== binding.profileId
-        ) {
-          throw new CronInferenceMigrationPause(
-            "the existing model and saved account name different accounts",
-          );
-        }
-        const model = `${selected.provider}/${selected.model}@${binding.profileId}`;
-        if (splitTrailingAuthProfile(model).profile !== binding.profileId) {
-          throw new CronInferenceMigrationPause(
-            "the saved account cannot be represented as a model suffix",
-          );
-        }
-        const payload = {
-          ...job.payload,
-          model,
-          ...(binding.runtime ? { modelRuntime: binding.runtime } : {}),
-        };
-        const preflight = {
-          cfg: selected.owner.config,
-          agentId,
-          provider: selected.provider,
-          model: selected.model,
-        };
-        const before = resolveCronPreflightCandidates({
-          ...preflight,
-          job,
-          useSubagentFallbacks: selected.useSubagentFallbacks,
-          inheritDefaultFallbacksForAgentStringModel:
-            selected.inheritDefaultFallbacksForAgentStringModel,
-          sessionModelOverrideSource:
-            selected.modelSource === "session"
-              ? (resolveSessionModelOverrideSource(session.sessionEntry) ?? undefined)
-              : undefined,
-        });
-        const after = resolveCronPreflightCandidates({ ...preflight, job: { ...job, payload } });
-        if (!isDeepStrictEqual(before, after)) {
-          payload.fallbacks = before
-            .slice(1)
-            .map((candidate) => candidate.provider + "/" + candidate.model);
-          const pinned = resolveCronPreflightCandidates({ ...preflight, job: { ...job, payload } });
-          if (!isDeepStrictEqual(before, pinned)) {
-            throw new CronInferenceMigrationPause("its fallback models cannot be preserved");
-          }
-        }
-        const store = await loadAuthProfileStoreForRuntimeAsync(selected.owner.agentDir, {
-          profileId: binding.profileId,
-          readOnly: true,
-          allowKeychainPrompt: false,
-        });
-        const credential = store.profiles[binding.profileId];
-        if (
-          !credential ||
-          resolveProviderModelAuthPolicy({
-            provider: binding.provider,
-            mode: credential.type,
-            authFlow: credential.type === "oauth" ? credential.authFlow : undefined,
-          }).authRequirement !== binding.authRequirement
-        ) {
-          throw new CronInferenceMigrationPause(
-            "its saved account is missing or no longer uses the same billing route",
-          );
-        }
-        authorization = await captureAuthProfileAuthorization({
-          profileId: binding.profileId,
-          cfg: selected.owner.config,
+        modelRef = `${selected.provider}/${selected.model}`;
+        const cfg = captureConfig(selected.owner.config);
+        shadowRoots ??= readAppliedUpgradeShadowRoots(resolveStateDir(env));
+        // With no receipt, the owner can confirm the current binding but cannot repair a mismatch.
+        verifyingSavedAccount = true;
+        const authority = await captureAuthProfileAuthorization({
+          cfg,
           agentDir: selected.owner.agentDir,
-          upgradeRecovery: { recordedId: binding.authorizationId, shadowRoots },
+          profileId: previous.profileId,
+          upgradeRecovery: { recordedId: previous.authorizationId, shadowRoots },
           assertCurrent() {},
         });
-        authorization.assertCurrent();
-        const verifiedAuthorizationId = authorization.authorizationId;
-        retained.push(authorization);
-        authorization = undefined;
+        if (authority.authorizationId === previous.authorizationId) {
+          authority.dispose();
+          continue;
+        }
+        retained.push(authority);
         changes.push({
           job: stored,
-          paused: false,
-          conversion: {
-            binding,
-            authorizationId: verifiedAuthorizationId,
-            model,
-            ...(payload.fallbacks !== job.payload.fallbacks
-              ? { fallbacks: payload.fallbacks }
-              : {}),
-          },
+          binding: { ...previous, authorizationId: authority.authorizationId },
+          previousAuthorizationId: previous.authorizationId,
         });
         descriptions.push(
-          `Automation ${label}: pinned ${model}${binding.runtime ? ` on ${binding.runtime}` : ""}.`,
+          `Automation ${label}: restored its existing ${previous.profileId} account after the state upgrade; schedule and run history unchanged.`,
         );
       } catch (error) {
-        const cause =
-          error instanceof CronInferenceMigrationPause
-            ? error.message
-            : "its saved account couldn’t be verified";
-        const reason = `Paused because ${cause}. Review its model and account before enabling it.`;
-        changes.push({
-          job: stored,
-          definition: { ...pausedDefinition, enabled: false, inferenceAccountPauseReason: reason },
-          paused: true,
-        });
-        paused.push(`Automation ${label}: ${reason}`);
-      } finally {
-        authorization?.dispose();
+        const recovery = isInvalidCronSessionTargetIdError(error)
+          ? `Repair its session target with openclaw automations edit ${quoteCliArg(stored.id)} --session <target>, then retry Doctor.`
+          : `Inspect available accounts with ${listAccountsCommand}, then explicitly adopt the intended stored account with openclaw automations edit ${quoteCliArg(stored.id)} --model ${quoteCliArg(`${modelRef ?? "<provider/model>"}@<profileId>`)}.`;
+        const reason =
+          verifyingSavedAccount &&
+          error instanceof AuthProfileAuthorizationError &&
+          error.code === "MCP_AUTHORIZATION_RETIRED"
+            ? "The saved account no longer matches and no usable upgrade receipt proves it is the same account. The job was left unchanged."
+            : formatErrorMessage(error);
+        warnings.push(
+          `Automation ${label}: inference account was not migrated: ${reason} ${recovery}`,
+        );
       }
+    }
+    if (changes.length === 0) {
+      return { changes: [], warnings };
+    }
+    if (!maintenance?.ownsSchemaMaintenance) {
+      throw new Error("Inference account migration requires offline Doctor maintenance.");
     }
     const assertCurrent = () => {
       maintenance.assertDatabaseAccess(resolveOpenClawStateSqlitePath(env));
@@ -272,33 +205,24 @@ export async function maybeRepairCronInferenceBindings(params: {
     };
     const result = await repairCronInferenceBindingsForDoctor(
       { env },
-      {
-        assertCurrent,
-        assertOwnedInTransaction: assertCurrent,
-      },
+      { assertCurrent, assertOwnedInTransaction: assertCurrent },
       inventory,
       changes,
-      params.trialBackupPath,
     );
     return {
       changes: [
         ...descriptions,
-        ...(result.backupPath
-          ? [
-              params.trialBackupPath
-                ? `Using managed trial rollback image: ${result.backupPath}`
-                : `Saved pre-repair cron backup: ${result.backupPath}`,
-            ]
-          : []),
+        ...(result.backupPath ? [`Saved pre-repair cron backup: ${result.backupPath}`] : []),
       ],
-      notices: [...notices, ...paused],
-      warnings: result.warnings ?? [],
+      warnings: [...warnings, ...(result.warnings ?? [])],
     };
   } catch (error) {
     return {
       changes: [],
-      notices,
-      warnings: [`Automation account migration was not committed: ${formatErrorMessage(error)}`],
+      warnings: [
+        ...warnings,
+        `Cron inference account migration was not committed: ${formatErrorMessage(error)}`,
+      ],
     };
   } finally {
     for (const authority of retained) {

@@ -43,7 +43,7 @@ export function autoDisableCronJob(params: {
     text: (reason === "account-unavailable"
       ? [
           `⚠️ Automation "${name}" was auto-disabled: the account it runs on was removed, signed out or replaced since the automation recorded it.`,
-          `Sign in again if needed${params.signInCommand ? ` (\`${params.signInCommand}\`)` : ""}, then record the account with \`openclaw automations edit ${job.id} --model <provider/model>@<profileId>\` (list accounts: \`openclaw gateway call models.authStatus\`). To return to the agent’s normal account selection: \`openclaw automations edit ${job.id} --model <provider/model>\`.`,
+          `Sign in again if needed${params.signInCommand ? ` (\`${params.signInCommand}\`)` : ""}, then record the account with \`openclaw automations edit ${job.id} --model <provider/model>@<profileId>\` (list accounts: \`openclaw gateway call models.authStatus\`). To use a key in the environment or provider config instead: \`openclaw automations edit ${job.id} --model <provider/model>\`.`,
           `Then run \`openclaw automations enable ${job.id}\` to re-enable it.`,
         ]
       : [

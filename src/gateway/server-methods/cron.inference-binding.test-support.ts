@@ -2,8 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, vi } from "vitest";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
-import { setAuthProfileOrder } from "../../agents/auth-profiles/profiles.js";
+import {
+  removeAuthProfilesAcrossOwnerStores,
+  setAuthProfileOrder,
+} from "../../agents/auth-profiles/profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/runtime-snapshots.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../../agents/auth-profiles/store-runtime.js";
 import { createAuthOwnerTestFixtures } from "../../agents/auth-profiles/store-state-owner.test-support.js";
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
 import {
@@ -11,9 +15,13 @@ import {
   testing as cliBackendsTesting,
 } from "../../agents/cli-backends.test-support.js";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
+import { prepareAgentRuntimeAuth } from "../../agents/runtime-plan/prepare-auth.js";
+import { resolvePreparedRuntimeModelAuth } from "../../agents/runtime-plan/resolve-auth.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.entry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { CronInferenceBinding } from "../../cron/inference-binding.js";
+import { acquireCronInferenceAuthorization } from "../../cron/inference-binding.runtime.js";
 import { CronService } from "../../cron/service.js";
 import { createNoopLogger } from "../../cron/service.test-harness.js";
 import { loadCronJobsStore } from "../../cron/store.js";
@@ -33,9 +41,9 @@ import { cronHandlers } from "./cron.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
 const { seedRoot, apiKey } = createAuthOwnerTestFixtures();
-const platformId = "openai:platform";
-const subscriptionId = "openai:subscription";
-const sessionKey = "agent:main:binding-creator";
+export const platformId = "openai:platform";
+export const subscriptionId = "openai:subscription";
+export const sessionKey = "agent:main:binding-creator";
 
 export async function withFixture(
   run: (fixture: Awaited<ReturnType<typeof createFixture>>) => Promise<void>,
@@ -164,7 +172,6 @@ async function createFixture(stateDir: string, agentDir: string) {
           ),
       }),
       client,
-      hasCurrentClientAuthority: client ? () => !client.invalidated : undefined,
       sessionMutationCommitGuard: options.beforeCommit,
       isWebchatConnect: () => false,
     });
@@ -316,6 +323,71 @@ async function createFixture(stateDir: string, agentDir: string) {
         return update(...args);
       });
     },
+    async resolveAuth(binding: CronInferenceBinding) {
+      const authority = await acquireCronInferenceAuthorization({ binding, cfg, agentDir });
+      try {
+        const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
+        const prepared = prepareAgentRuntimeAuth({
+          provider: binding.provider,
+          modelId: "gpt-4.1",
+          config: cfg,
+          agentId: "main",
+          agentDir,
+          authProfileStore: store,
+          requiredAuthProfileId: binding.profileId,
+          sessionAuthProfileId: binding.profileId,
+          sessionAuthProfileSource: binding.source,
+          allowAuthProfileFallback: false,
+          routeIntent: { authRequirement: binding.authRequirement, source: "explicit" },
+        });
+        const resolved = await resolvePreparedRuntimeModelAuth({
+          plan: prepared.plan,
+          cfg,
+          store,
+          agentDir,
+          model: {
+            id: "gpt-4.1",
+            name: "Synthetic scheduled model",
+            provider: "openai",
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 16_000,
+            maxTokens: 1_024,
+          },
+        });
+        await authority.revalidate();
+        authority.assertCurrent();
+        return resolved.auth;
+      } finally {
+        authority.dispose();
+      }
+    },
+    async useUnstoredCredential(provider: "openai" | "ollama", configuredKey?: string) {
+      const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
+      await removeAuthProfilesAcrossOwnerStores({ profileIds: Object.keys(store.profiles) });
+      const models =
+        provider === "ollama" || configuredKey
+          ? {
+              providers: {
+                [provider]: providerConfig(
+                  provider,
+                  provider === "ollama" ? "ollama-local" : configuredKey,
+                ),
+              },
+            }
+          : undefined;
+      cfg = {
+        agents: {
+          entries: { main: { agentDir } },
+          defaults: { model: provider === "openai" ? "openai/gpt-4.1" : "ollama/llama3.3" },
+        },
+        ...(models ? { models } : {}),
+      };
+      setRuntimeConfigSnapshot(cfg);
+    },
     async personalAccount() {
       const owner = ensureProfileForEmail("cron-owner@example.test");
       const other = ensureProfileForEmail("cron-other@example.test");
@@ -391,5 +463,17 @@ async function createFixture(stateDir: string, agentDir: string) {
       });
       await setAuthProfileOrder({ agentDir, provider: "openai", order: [profileId] });
     },
+  };
+}
+
+export function createParams() {
+  return {
+    name: "Durable inference binding",
+    enabled: false,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: "Synthetic scheduled prompt", toolsAllow: [] },
+    delivery: { mode: "none" },
   };
 }

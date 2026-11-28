@@ -168,6 +168,13 @@ export async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise
   await measureGatewayBootstrapStep("doctor.legacy-cron.crontab", () =>
     noteLegacyWhatsAppCrontabHealthCheck(),
   );
+  await measureGatewayBootstrapStep("doctor.legacy-cron.store", () =>
+    maybeRepairLegacyCronStore({
+      cfg: ctx.cfg,
+      options: ctx.options,
+      prompter: ctx.prompter,
+    }),
+  );
   const { maybeRepairCronInferenceBindings } =
     await import("../commands/doctor/cron/inference-binding-migration.js");
   const inference = await measureGatewayBootstrapStep("doctor.legacy-cron.inference", () =>
@@ -178,14 +185,7 @@ export async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise
     }),
   );
   noteDoctorRepairResult(inference);
-  recordDoctorHealthWarnings(ctx, [], [...inference.warnings, ...inference.notices]);
-  await measureGatewayBootstrapStep("doctor.legacy-cron.store", () =>
-    maybeRepairLegacyCronStore({
-      cfg: ctx.cfg,
-      options: ctx.options,
-      prompter: ctx.prompter,
-    }),
-  );
+  recordDoctorHealthWarnings(ctx, [], inference.warnings);
   const { noteScheduledContextReport } =
     await import("../commands/doctor/cron/execution-context-check.js");
   await measureGatewayBootstrapStep("doctor.legacy-cron.execution-context", () =>

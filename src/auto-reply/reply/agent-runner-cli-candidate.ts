@@ -521,12 +521,6 @@ export async function runCliFallbackCandidate(
                     }),
                 }),
             authProfileId,
-            nativeAuthOnly: scheduledInference?.usesNativeCliAccount(
-              params.provider,
-              params.cliExecutionProvider,
-            )
-              ? true
-              : undefined,
             // The CLI owner rechecks this after awaits and before credential/transport effects.
             assertCurrent: scheduledInference
               ? () => {
@@ -534,6 +528,13 @@ export async function runCliFallbackCandidate(
                   scheduledInference.assertCurrent(params.provider);
                 }
               : undefined,
+            // An unpinned run that selects no stored account keeps the CLI's native login.
+            nativeAuthOnly:
+              turn.followupRun.run.scheduledAutomation &&
+              !params.scheduledInference &&
+              !authProfileId
+                ? true
+                : undefined,
             mediaImageLayout: params.currentTurnImages.mediaImageLayout,
             messageChannel: turn.followupRun.originatingChannel,
             messageProvider: hookMessageProvider,

@@ -431,10 +431,9 @@ async function prepareCliRunContextWithinReadFence(
     backendAuthPolicy?.nativeAuthProfileIds !== undefined &&
     effectiveAuthProfileId !== undefined &&
     backendAuthPolicy.nativeAuthProfileIds.includes(effectiveAuthProfileId);
-  if (usesNativeAuthProfile) {
-    effectiveAuthProfileId = undefined;
-    authCredential = undefined;
-  } else if (params.nativeAuthOnly) {
+  // A native-only scheduled run forwarded no stored account, so the backend's default or
+  // automatic profile does not replace the CLI's own login.
+  if (usesNativeAuthProfile || params.nativeAuthOnly) {
     effectiveAuthProfileId = undefined;
     authCredential = undefined;
   } else if (

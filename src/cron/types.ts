@@ -209,8 +209,6 @@ export type CronFailureNotificationDetail =
       source: "payload" | "trigger";
       code: CronTriggerFailureCode;
     }
-  /** A deterministic setup refusal: the operator must record the intended account. */
-  | { kind: "inference-account-unrecorded" }
   /** The recorded account was removed, signed out or replaced: the job pauses until the operator acts. */
   | { kind: "inference-account-retired" }
   /** A stuck-session recovery aborted the run for a known semantic cause (e.g. `blocked_tool_call`). */
@@ -425,7 +423,6 @@ export type CronJob = CronJobBase<
 > & {
   declarationKey?: string;
   displayName?: string;
-  inferenceAccountPauseReason?: string;
   /** Read-only execution placement derived from the stored stream target. */
   streamExecutionHost?: "gateway" | "sandbox";
   /**
@@ -473,10 +470,6 @@ export type CronToolsAllowProvenance =
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
 export type CronStoredJob = Omit<CronJob, "streamExecutionHost" | "payloadSource"> & {
-  /** Only a newly authorized model profile or native runtime can resume a transferred job. */
-  ownerReauthorizationRequired?: true;
-  /** Credential lifetime saved when the model's explicitly selected stored profile was authorized. */
-  modelAuthProfileAuthorizationId?: string;
   /** Immutable host-captured scheduled command invocation; never public create/patch input. */
   pluginCommand?: PluginCommandSchedule;
   /** Original authenticated source for a same-conversation continuation, never a public grant. */
@@ -484,6 +477,10 @@ export type CronStoredJob = Omit<CronJob, "streamExecutionHost" | "payloadSource
     source: import("../gateway/operator-run-recovery-source.codec.js").RestartRecoveryOperatorSource;
     executionRevision: string;
   };
+  /** A human transfer retired inference authority; only fresh capture clears this marker. */
+  ownerTransferPending?: true;
+  /** Captured inference owner; private and independent of scheduled tool authority. */
+  inferenceBinding?: import("./inference-binding.js").CronInferenceBinding;
   /** Creation-bound destination for isolated results when no external route exists. */
   sourceConversation?: {
     sessionKey: string;
@@ -545,7 +542,6 @@ export type CronJobCreate = Omit<
   | "ownerProfileId"
   | "streamExecutionHost"
   | "payloadSource"
-  | "inferenceAccountPauseReason"
 > & {
   /** Internal callers can reserve a durable id before creation; public cron.add omits this. */
   id?: string;
@@ -558,7 +554,6 @@ export type CronJobPatch = Partial<
     CronJob,
     | "id"
     | "createdAtMs"
-    | "inferenceAccountPauseReason"
     | "state"
     | "payload"
     | "delivery"

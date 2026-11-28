@@ -348,7 +348,8 @@ export function replaceCronRows(
     db,
     getCronStoreKysely(db)
       .selectFrom("cron_jobs")
-      .select(["job_id", "job_json"])
+      .select("job_id")
+      .$if(opts?.preserveRuntimeState === true, (query) => query.select("job_json"))
       .where("store_key", "=", storeKey),
   ).rows;
   const normalizedJobs = store.jobs.map((job, index) =>
@@ -367,12 +368,7 @@ export function replaceCronRows(
     ) {
       legacyAuthorityJobIds.add(row.job_id);
     }
-    if (
-      nextJobIds.has(row.job_id) ||
-      (storedJob &&
-        getInvalidPersistedCronJobReason(storedJob) === "inference-account-needs-doctor")
-    ) {
-      // Runtime withholds legacy accounts; only Doctor can convert their durable rows.
+    if (nextJobIds.has(row.job_id)) {
       continue;
     }
     // Reconcile removed jobs only; deleting the partition first rewrites every

@@ -81,13 +81,6 @@ export function DetailView(
         <AdminRequired {...props} />
         <ErrorBanner error={props.error} reads={editing() ? props.reads : undefined} />
         <NoticeBanner notice={props.notice} />
-        <NoticeBanner
-          notice={
-            props.editingJob?.enabled === false
-              ? (props.editingJob.inferenceAccountPauseReason ?? null)
-              : null
-          }
-        />
         <div id="cron-detail-panel" class="cron-tab-panel">
           {editing() ? (
             <>

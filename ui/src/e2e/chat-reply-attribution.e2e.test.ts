@@ -97,12 +97,17 @@ suite.define(() => {
           const thread = page.locator(".chat-thread");
           const latest = page.getByRole("button", { name: "Scroll to latest", exact: true });
           const reply = thread.locator('[data-entry-id="note-77"] .chat-reply-attribution__target');
+          const returnToLatest = async () => {
+            await latest.click();
+            // The transcript can be idle while the smooth return is still queued.
+            await expect.poll(() => chatThreadDistanceFromBottom(page)).toBeLessThanOrEqual(1);
+            await waitForChatScrollIdle(page);
+            expect(await chatThreadDistanceFromBottom(page)).toBeLessThanOrEqual(1);
+          };
           await reply.waitFor();
           await thread.hover();
           await page.mouse.wheel(0, -1200);
-          await latest.click();
-          await waitForChatScrollIdle(page);
-          expect(await chatThreadDistanceFromBottom(page)).toBeLessThanOrEqual(1);
+          await returnToLatest();
 
           await reply.click();
           const original = thread.locator('[data-entry-id="note-10"].chat-bubble--reply-target');
@@ -111,9 +116,7 @@ suite.define(() => {
           expect((await visibleChatBubbleTexts(page)).join("\n")).toContain("Field note 10");
           expect(await chatThreadDistanceFromBottom(page)).toBeGreaterThan(900);
           await expect.poll(() => latest.count()).toBe(1);
-          await latest.click();
-          await waitForChatScrollIdle(page);
-          expect(await chatThreadDistanceFromBottom(page)).toBeLessThanOrEqual(1);
+          await returnToLatest();
           expect((await visibleChatBubbleTexts(page)).join("\n")).toContain("Field note 78");
           expect(await latest.count()).toBe(0);
         },

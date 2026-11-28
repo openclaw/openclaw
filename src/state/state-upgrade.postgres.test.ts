@@ -51,7 +51,7 @@ describe.skipIf(!connection)("PostgreSQL canonical startup migration", () => {
     await client.end();
   });
 
-  async function runStartupTrial(pendingCronAccount: boolean) {
+  it("migrates an additive SQLite agent beside canonical PostgreSQL state without copying either", async () => {
     const root = directories.make("postgres-state-upgrade-");
     const statePath = path.join(root, "state", "openclaw.sqlite");
     const agentPath = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -68,8 +68,8 @@ describe.skipIf(!connection)("PostgreSQL canonical startup migration", () => {
         source.exec(fragment.sqlite);
       }
       source.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
-      INSERT INTO schema_meta VALUES ('primary', 'global', ${OPENCLAW_STATE_SCHEMA_VERSION}, NULL, NULL, 1, 1);
-      INSERT INTO config_machine_state VALUES ('upgrade-witness', '"original"', 1);`);
+        INSERT INTO schema_meta VALUES ('primary', 'global', ${OPENCLAW_STATE_SCHEMA_VERSION}, NULL, NULL, 1, 1);
+        INSERT INTO config_machine_state VALUES ('upgrade-witness', '"original"', 1);`);
       await materializeDatabasePort({
         source: { engine: "sqlite", db: source },
         destination: { engine: "postgres", db: client, namespace },
@@ -79,32 +79,6 @@ describe.skipIf(!connection)("PostgreSQL canonical startup migration", () => {
       });
     }
     fs.rmSync(path.join(root, "seed.sqlite"));
-    const legacyJob = {
-      id: "legacy-job",
-      name: "Legacy job",
-      enabled: true,
-      createdAtMs: 1,
-      updatedAtMs: 1,
-      agentId: "main",
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      delivery: { mode: "none" },
-      payload: { kind: "agentTurn", message: "Saved prompt\u0000" },
-      ownerTransferPending: true,
-    };
-    if (pendingCronAccount) {
-      const encoded = JSON.stringify(legacyJob).replace(
-        "ownerTransferPending",
-        String.raw`ownerTransfer\u0050ending`,
-      );
-      await client.query(
-        `INSERT INTO "${namespace}".cron_jobs
-         (store_key, job_id, name, enabled, payload_kind, job_json, updated_at)
-       VALUES ('cron-default', $1, $2, 1, 'agentTurn', $3, 1)`,
-        [legacyJob.id, legacyJob.name, encoded],
-      );
-    }
     {
       using anchor = openNodeSqliteDatabase(statePath);
       anchor.exec(
@@ -113,13 +87,11 @@ describe.skipIf(!connection)("PostgreSQL canonical startup migration", () => {
       anchor
         .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
         .run(storeId, namespace);
-      if (!pendingCronAccount) {
-        using agent = openNodeSqliteDatabase(agentPath);
-        agent.exec(getOpenClawAgentMigrationSchema(43));
-        agent.exec(`PRAGMA user_version = 43;
+      using agent = openNodeSqliteDatabase(agentPath);
+      agent.exec(getOpenClawAgentMigrationSchema(43));
+      agent.exec(`PRAGMA user_version = 43;
         INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
           VALUES ('primary', 'agent', 43, 'main', 1, 1);`);
-      }
     }
     const configPath = path.join(root, "openclaw.json");
     const config: OpenClawConfig = {
@@ -131,7 +103,7 @@ describe.skipIf(!connection)("PostgreSQL canonical startup migration", () => {
     fs.writeFileSync(configPath, JSON.stringify(config));
     const originalAnchor = fs.readFileSync(statePath);
     const originalInode = fs.statSync(statePath).ino;
-    const originalAgentInode = fs.statSync(agentPath, { throwIfNoEntry: false })?.ino;
+    const originalAgentInode = fs.statSync(agentPath).ino;
     const env = { ...process.env, OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath };
     const prefix = resolvePrefix(env);
     const target = path.join(prefix, "releases", "candidate", "openclaw");
@@ -141,9 +113,6 @@ describe.skipIf(!connection)("PostgreSQL canonical startup migration", () => {
       prefix,
     );
     await writeTrial({ ...pending, phase: "trial" }, prefix);
-    const manifestPath = path.join(path.dirname(target), ".restore");
-    let manifest: { files: { live: string; preimage: string | null }[] } | undefined;
-    let rollback: ReturnType<typeof readBackupEngine> | undefined;
     const result = await withDatabaseEngineSelection(
       await resolveDatabaseEngineSelection(config, env),
       async () => {
@@ -173,18 +142,7 @@ describe.skipIf(!connection)("PostgreSQL canonical startup migration", () => {
           await lock.release();
         }
       },
-    ).finally(() => {
-      if (fs.existsSync(manifestPath)) {
-        manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-      }
-      const preimage = manifest?.files.find((entry) => entry.live === statePath)?.preimage;
-      if (preimage) {
-        rollback = readBackupEngine(preimage);
-        if (rollback.engine === "postgres" && rollback.namespace !== namespace) {
-          namespaces.add(rollback.namespace);
-        }
-      }
-    });
+    );
     expect(
       (
         await client.query(
@@ -196,30 +154,6 @@ describe.skipIf(!connection)("PostgreSQL canonical startup migration", () => {
     expect(readBackupEngine(statePath)).toMatchObject({ namespace });
     expect(fs.readFileSync(statePath)).toEqual(originalAnchor);
     expect(fs.statSync(statePath).ino).toBe(originalInode);
-    if (pendingCronAccount) {
-      assert(rollback?.engine === "postgres");
-      expect(rollback.namespace).not.toBe(namespace);
-      const readJob = async (schema: string) => {
-        const { rows } = await client.query<{ job_json: string }>(
-          `SELECT job_json FROM "${schema}".cron_jobs WHERE job_id = $1`,
-          [legacyJob.id],
-        );
-        return JSON.parse(rows[0]!.job_json);
-      };
-      const { ownerTransferPending: _pending, ...definition } = legacyJob;
-      expect(await readJob(namespace)).toEqual({
-        ...definition,
-        enabled: false,
-        ownerReauthorizationRequired: true,
-        inferenceAccountPauseReason:
-          "Paused because its owner changed and the new owner needs to choose the account. Review its model and account before enabling it.",
-      });
-      expect(await readJob(rollback.namespace)).toEqual(legacyJob);
-      expect(
-        fs.readdirSync(path.dirname(statePath)).filter((name) => name.includes(".doctor-cron-")),
-      ).toEqual([]);
-      return;
-    }
     expect(fs.statSync(agentPath).ino).toBe(originalAgentInode);
     using upgradedAgent = openNodeSqliteDatabase(agentPath, { readOnly: true });
     expect(upgradedAgent.prepare("PRAGMA user_version").get()).toEqual({
@@ -233,20 +167,11 @@ describe.skipIf(!connection)("PostgreSQL canonical startup migration", () => {
         [],
       );
     }
-    expect(manifest).toEqual({ v: 1, runId: pending.runId, files: [] });
+    expect(
+      JSON.parse(fs.readFileSync(path.join(path.dirname(target), ".restore"), "utf8")),
+    ).toEqual({ v: 1, runId: pending.runId, files: [] });
     expect(fs.readdirSync(root).some((name) => name.startsWith(".upgrade-"))).toBe(false);
-  }
-
-  it(
-    "migrates an additive SQLite agent beside canonical PostgreSQL state without copying either",
-    () => runStartupTrial(false),
-    60_000,
-  );
-  it(
-    "reuses the trial image when converting an escaped legacy PostgreSQL cron row",
-    () => runStartupTrial(true),
-    60_000,
-  );
+  }, 60_000);
 
   it("leaves a configured in-tree PostgreSQL agent in place while upgrading SQLite state", async () => {
     const root = directories.make("postgres-configured-agent-upgrade-");

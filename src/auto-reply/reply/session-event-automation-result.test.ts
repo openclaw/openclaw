@@ -31,6 +31,7 @@ import { readSessionEntryInWorker } from "../../config/sessions/session-entry-re
 import { listSessionPendingInputs } from "../../config/sessions/session-pending-input-history.js";
 import { resolveAdmittedCronCompletionStatus } from "../../cron/completion-status.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
+import { CRON_INFERENCE_ACCOUNT_RETIRED_CODE } from "../../cron/inference-binding.js";
 import { memberSourceCase } from "../../cron/isolated-agent/run.invalid-source.test-support.js";
 import { resolveCronRunErrorReason } from "../../cron/run-error-reason.js";
 import {
@@ -607,62 +608,80 @@ it.for([
   },
 );
 
-it("records a failure without expanding private causes or chat text", async ({ signal }) => {
-  await withOpenClawTestState(
-    { label: "automation-account-refusal", env: { OPENCLAW_TEST_FAST: "0" } },
-    async (state) => {
-      const cfg = completionConfig(state.workspaceDir);
-      setRuntimeConfigSnapshot(cfg);
-      await state.writeConfig(cfg);
-      openOpenClawStateDatabase();
-      const scope = { agentId: "main", sessionKey: "agent:main:automation-account-refusal" };
-      const sessionId = "automation-account-refusal-session";
-      await replaceSessionEntry(scope, {
-        sessionId,
-        updatedAt: Date.now(),
-        permissionMode: "full",
-      });
-      const refusal = new Error("Synthetic outer failure", {
-        cause: new Error("Synthetic private nested detail"),
-      });
-      model.mockReset().mockImplementation(async (params) => {
-        await admitModelTurn(params);
-        throw refusal;
-      });
-      try {
-        const outcome = await runGatewayCronSessionEvent(
-          {
-            occurrence: TEST_SCHEDULED_OCCURRENCE,
-            job: makeCronJob({
-              id: "account-refusal-job",
-              agentId: "main",
-              sessionTarget: `session:${scope.sessionKey}`,
-              delivery: { mode: "none" },
-              payload: { kind: "agentTurn", message: "Supervise the synthetic work." },
-            }),
-            text: "Supervise the synthetic work.",
-            admissionSource: "operator-schedule",
-            deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent() {} },
-            abortSignal: signal,
-            assertCurrent() {},
-          },
-          createGatewayCronTargetResolver(state.env, { warn() {} }).resolveCronTarget,
-        );
-        expect(outcome.status).toBe("error");
-        expect(outcome.error).toContain(refusal.message);
-        expect(outcome.error).not.toContain("Synthetic private nested detail");
-        const transcript = JSON.stringify(
-          (await loadTranscriptEvents({ ...scope, sessionId })).map(readTranscriptEventMessage),
-        );
-        expect(transcript).not.toContain("no recorded inference account");
-        expect(model).toHaveBeenCalledOnce();
-      } finally {
-        await drainGlobalSingletonLifecycleState("restart");
-        resetSystemEventsForTest();
-      }
-    },
-  );
-});
+it.for(["retired", "unrelated"] as const)(
+  "records %s failure without expanding private causes or chat text",
+  async (source, { signal }) => {
+    await withOpenClawTestState(
+      { label: "automation-account-refusal", env: { OPENCLAW_TEST_FAST: "0" } },
+      async (state) => {
+        const cfg = completionConfig(state.workspaceDir);
+        setRuntimeConfigSnapshot(cfg);
+        await state.writeConfig(cfg);
+        openOpenClawStateDatabase();
+        const scope = { agentId: "main", sessionKey: "agent:main:automation-account-refusal" };
+        const sessionId = "automation-account-refusal-session";
+        await replaceSessionEntry(scope, {
+          sessionId,
+          updatedAt: Date.now(),
+          permissionMode: "full",
+        });
+        const refusal =
+          source === "unrelated"
+            ? new Error("Synthetic outer failure", {
+                cause: new Error("Synthetic private nested detail"),
+              })
+            : Object.assign(
+                new Error(
+                  "Automation account-refusal-job runs on account openai:synthetic-account, which was removed or signed out.",
+                ),
+                { code: CRON_INFERENCE_ACCOUNT_RETIRED_CODE },
+              );
+        model.mockReset().mockImplementation(async (params) => {
+          await admitModelTurn(params);
+          throw refusal;
+        });
+        try {
+          const outcome = await runGatewayCronSessionEvent(
+            {
+              occurrence: TEST_SCHEDULED_OCCURRENCE,
+              job: makeCronJob({
+                id: "account-refusal-job",
+                agentId: "main",
+                sessionTarget: `session:${scope.sessionKey}`,
+                delivery: { mode: "none" },
+                payload: { kind: "agentTurn", message: "Supervise the synthetic work." },
+              }),
+              text: "Supervise the synthetic work.",
+              admissionSource: "operator-schedule",
+              deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent() {} },
+              abortSignal: signal,
+              assertCurrent() {},
+            },
+            createGatewayCronTargetResolver(state.env, { warn() {} }).resolveCronTarget,
+          );
+          expect(outcome.status).toBe("error");
+          expect(outcome.error).toContain(refusal.message);
+          expect(outcome.error).not.toContain("Synthetic private nested detail");
+          if (source !== "unrelated") {
+            expect(outcome).toMatchObject({
+              errorClassification: { kind: "permanent" },
+              failureNotificationDetail: { kind: "inference-account-retired" },
+            });
+            expect(outcome.diagnostics?.summary).toContain("which was removed or signed out");
+          }
+          const transcript = JSON.stringify(
+            (await loadTranscriptEvents({ ...scope, sessionId })).map(readTranscriptEventMessage),
+          );
+          expect(transcript).not.toContain("openai:synthetic-account");
+          expect(model).toHaveBeenCalledOnce();
+        } finally {
+          await drainGlobalSingletonLifecycleState("restart");
+          resetSystemEventsForTest();
+        }
+      },
+    );
+  },
+);
 
 it.for([
   "user",

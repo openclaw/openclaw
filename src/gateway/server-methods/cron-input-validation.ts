@@ -6,11 +6,18 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
-import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
-import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
+import { resolveAgentDir, tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
+import {
+  AuthProfileAuthorizationError,
+  type AuthProfileAuthorization,
+} from "../../agents/auth-profiles/authorization-contract.js";
+import { captureAuthProfileAuthorization } from "../../agents/auth-profiles/authorization.js";
+import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { captureScheduledOperatorSource } from "../../agents/operator-run-recovery-source.js";
+import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-selection.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { attributeDelegatedSessionCreator } from "../../config/sessions/session-entry-provenance.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveCronJobEffectiveAgentId,
@@ -24,9 +31,14 @@ import { resolveCronDeliveryDefaultsScope } from "../../cron/delivery-defaults.j
 import { resolveCronDeliveryPlan } from "../../cron/delivery-plan.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import {
+  acquireCronInferenceAuthorization,
+  captureCronInferenceBinding,
+} from "../../cron/inference-binding.runtime.js";
+import {
   requiresExternalCronDelivery,
   resolveDeliveryTarget,
 } from "../../cron/isolated-agent/delivery-target.js";
+import { resolveCarriedCronModelSelection } from "../../cron/isolated-agent/session-carried-model.js";
 import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import {
@@ -44,14 +56,17 @@ import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
 import type { CronJob, CronJobCreate, CronJobPatch, CronStoredJob } from "../../cron/types.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { resolveHookExternalContentSource } from "../../security/external-content-source.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
 } from "../../sessions/agent-harness-session-key.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { readGatewayDeviceSourceAuthority } from "../device-revocation.js";
+import type { UserModelAccountSelection } from "../model-account-authority.js";
 import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
@@ -67,22 +82,67 @@ type InferenceCaller = Pick<
   captureIndependentOperatorSource?: true;
 };
 
-/** Authorize explicitly authored personal accounts without recording a credential. */
-export async function authorizeCronModelPin(
-  job: Pick<CronJob, "payload">,
-  caller: InferenceCaller,
-): Promise<(() => void) | undefined> {
-  if (job.payload.kind !== "agentTurn") {
+/**
+ * The entry a job's cron session takes its runtime override from: the target row of a
+ * `session:` job, or what a `current` job carries from its creating conversation.
+ */
+async function loadCronRuntimeSessionEntry(params: {
+  cfg: OpenClawConfig;
+  job: Pick<CronJob, "sessionTarget" | "sessionKey">;
+  agentId?: string;
+  executionEntry?: SessionEntry;
+  loaded?: { key: string; entry?: SessionEntry };
+}): Promise<Partial<SessionEntry> | undefined> {
+  if (params.executionEntry) {
+    return params.executionEntry;
+  }
+  const sourceKey =
+    params.job.sessionTarget === "current" ? params.job.sessionKey?.trim() : undefined;
+  if (!sourceKey) {
     return undefined;
   }
-  const { profile } = splitTrailingAuthProfile(job.payload.model ?? "");
-  if (job.payload.modelRuntime && !profile) {
-    throw new Error("A model runtime requires a model with an explicit @profile account.");
-  }
-  if (profile && isUserModelAuthProfileId(profile)) {
-    return (await preparePersonalModelAccountSelection(caller, profile)).assertCurrent;
-  }
-  return undefined;
+  const source =
+    params.loaded?.key === sourceKey
+      ? params.loaded.entry
+      : (
+          await loadGatewaySessionEntryReadOnlyInWorker({
+            cfg: params.cfg,
+            key: sourceKey,
+            agentId: params.agentId,
+          })
+        )?.entry;
+  return source ? resolveCarriedCronModelSelection(source) : undefined;
+}
+
+async function captureCronInferenceForCaller(
+  params: Parameters<typeof captureCronInferenceBinding>[0],
+  caller: InferenceCaller,
+) {
+  let selection: UserModelAccountSelection | undefined;
+  let authority: AuthProfileAuthorization | undefined;
+  const inferenceBinding = await captureCronInferenceBinding({
+    ...params,
+    retainAuthorization: (captured) => {
+      authority = captured;
+    },
+    authorizeProfile: async (profileId, inherited) => {
+      // Trusted creator selections already carry their owner's permission. New
+      // personal selections require the same live human authority as chat.
+      if (isUserModelAuthProfileId(profileId) && !inherited) {
+        selection = await preparePersonalModelAccountSelection(caller, profileId);
+        return selection.assertCurrent;
+      }
+      return undefined;
+    },
+  });
+  return {
+    inferenceBinding,
+    assertInferenceSelectionCurrent: () => {
+      selection?.assertCurrent();
+      authority?.assertCurrent();
+    },
+    disposeInferenceAuthorization: () => authority?.dispose(),
+  };
 }
 
 export function requiresExplicitAgentRuntimeToolsAllow(params: {
@@ -339,9 +399,44 @@ export async function captureCronCreatorSession(
         callerScope.agentId,
       )
     : legacyActor;
-  const assertInferenceSelectionCurrent = hasRuntimeAuthority
-    ? undefined
-    : await authorizeCronModelPin(job, caller);
+  const executionSessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? "";
+  const executionSession =
+    !hasRuntimeAuthority && job.payload.kind === "agentTurn" && executionSessionKey
+      ? await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionSessionKey, agentId })
+      : undefined;
+  const runtimeSessionEntry =
+    !hasRuntimeAuthority && job.payload.kind === "agentTurn"
+      ? await loadCronRuntimeSessionEntry({
+          cfg,
+          job,
+          agentId,
+          executionEntry: executionSession?.entry,
+          loaded: sessionKey ? { key: sessionKey, entry: loaded?.entry } : undefined,
+        })
+      : undefined;
+  const inference =
+    // A creator runtime grant owns its own inference identity. Never bind an ambient host profile.
+    !hasRuntimeAuthority && job.payload.kind === "agentTurn" && job.sessionTarget !== "main"
+      ? await captureCronInferenceForCaller(
+          {
+            cfg,
+            agentId: resolveCronJobEffectiveAgentId(
+              { ...job, agentId },
+              tryResolveAmbientOwnerAgentId(cfg),
+            ),
+            model: job.payload.model,
+            isGmailHook:
+              (job.payload.externalContentSource ??
+                resolveHookExternalContentSource(
+                  parseAgentSessionKey(executionSessionKey)?.rest ?? executionSessionKey,
+                )) === "gmail",
+            sessionEntry: callerScope ? creatorSession : undefined,
+            executionSessionEntry: executionSession?.entry,
+            runtimeSessionEntry,
+          },
+          caller,
+        )
+      : undefined;
   const directControlUi =
     caller.client?.internal?.authenticatedControlUi === true &&
     !caller.client.internal.syntheticClient &&
@@ -431,7 +526,7 @@ export async function captureCronCreatorSession(
       caller.onOperatorAuthority?.(operatorAuthority);
     }
     return {
-      assertInferenceSelectionCurrent,
+      ...inference,
       ...(operatorSource ? { operatorSource } : {}),
       operatorSourceUnavailable: Boolean(
         parentLinked && operatorAuthority && job.payload.kind === "agentTurn" && !operatorSource,
@@ -445,8 +540,130 @@ export async function captureCronCreatorSession(
     };
   } catch (error) {
     captured?.release();
+    inference?.disposeInferenceAuthorization();
     throw error;
   }
+}
+
+/** Account edits replace ownership; a plain-model edit can release a deleted account onto a key. */
+export async function captureCronUpdatedInferenceBinding(
+  nextJob: CronStoredJob,
+  patch: CronJobPatch,
+  cfg: OpenClawConfig,
+  caller: InferenceCaller,
+) {
+  if (nextJob.runtimeAuthority !== undefined || nextJob.payload.kind !== "agentTurn") {
+    return undefined;
+  }
+  const model = patch.payload && "model" in patch.payload ? patch.payload.model : undefined;
+  // The owner the job runs as. Cron's default is the ambient owner (configured system agent),
+  // read from config because the lazy cron service has no default before it loads.
+  const agentId = resolveCronJobEffectiveAgentId(nextJob, tryResolveAmbientOwnerAgentId(cfg));
+  const selection = model
+    ? resolveSimpleCompletionSelectionForAgent({ cfg, agentId, modelRef: model })
+    : null;
+  let recoverMissingAccount = false;
+  if (
+    model &&
+    selection &&
+    !selection.profileId &&
+    nextJob.inferenceBinding &&
+    patch.agentId === undefined
+  ) {
+    try {
+      const authority = await captureAuthProfileAuthorization({
+        profileId: nextJob.inferenceBinding.profileId,
+        cfg,
+        agentDir: resolveAgentDir(cfg, agentId),
+        assertCurrent() {},
+      });
+      authority.dispose();
+    } catch (error) {
+      if (
+        !(error instanceof AuthProfileAuthorizationError) ||
+        error.code !== "MCP_AUTHORIZATION_RETIRED"
+      ) {
+        throw error;
+      }
+      recoverMissingAccount = true;
+    }
+  }
+  // Capture validates the execution route before authorizing a clear; an empty
+  // capture alone must never release an existing stored account.
+  const cliExecution = selection
+    ? resolveCliRuntimeExecutionProvider({
+        cfg,
+        agentId,
+        provider: selection.provider,
+        modelId: selection.modelId,
+        authProfileId: selection.profileId,
+      })
+    : undefined;
+  if (!model || !selection || (!selection.profileId && !recoverMissingAccount)) {
+    if (patch.agentId !== undefined && nextJob.inferenceBinding) {
+      // A move may keep the account only when the new agent sees the same credential owner.
+      const authority = await acquireCronInferenceAuthorization({
+        binding: nextJob.inferenceBinding,
+        cfg,
+        agentDir: resolveAgentDir(cfg, agentId),
+      });
+      return {
+        inferenceBinding: undefined,
+        assertInferenceSelectionCurrent: () => authority.assertCurrent(),
+        disposeInferenceAuthorization: () => authority.dispose(),
+      };
+    }
+    return undefined;
+  }
+  // An account edit keeps the runtime the job records; otherwise it resolves the way create does.
+  const recordedRuntime =
+    recoverMissingAccount && selection.provider !== nextJob.inferenceBinding?.provider
+      ? undefined
+      : nextJob.inferenceBinding?.runtime;
+  const executionKey = resolveCronSessionTargetSessionKey(nextJob.sessionTarget);
+  const runtimeSessionEntry = await loadCronRuntimeSessionEntry({
+    cfg,
+    job: nextJob,
+    agentId,
+    executionEntry: executionKey
+      ? (await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionKey, agentId }))?.entry
+      : undefined,
+  });
+  const inference = await captureCronInferenceForCaller(
+    { cfg, agentId, model, runtimeSessionEntry, recordedRuntime },
+    caller,
+  );
+  if (recoverMissingAccount) {
+    if (inference.inferenceBinding === null) {
+      return inference;
+    }
+    inference.disposeInferenceAuthorization();
+    throw new Error(
+      "Recover this automation with a model using a key in the environment or provider config, or select a stored account explicitly with model@profile.",
+    );
+  }
+  if (inference.inferenceBinding === undefined) {
+    if (cliExecution && !nextJob.inferenceBinding) {
+      return undefined;
+    }
+    throw new Error("The selected automation account is unavailable.");
+  }
+  // An account edit on the same provider never moves the job off the runtime it records;
+  // when that runtime is no longer available, the edit fails and the binding stays as it was.
+  const capturedRuntime =
+    inference.inferenceBinding === null ? cliExecution : inference.inferenceBinding.runtime;
+  if (
+    recordedRuntime &&
+    capturedRuntime !== recordedRuntime &&
+    (inference.inferenceBinding?.provider ?? selection.provider) ===
+      nextJob.inferenceBinding?.provider
+  ) {
+    inference.disposeInferenceAuthorization();
+    throw new Error(
+      `The automation runs on runtime ${recordedRuntime}, which is unavailable for this account; the edit would move it to runtime ${capturedRuntime ?? "unknown"}.`,
+    );
+  }
+  return inference;
 }
 
 /** Waiting cannot finish while the caller owns the execution or result conversation lane. */

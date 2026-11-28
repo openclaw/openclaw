@@ -159,10 +159,10 @@ export function createCronPromptExecutor(
   return async (promptText: string, runStartedAt: number): Promise<CronCompletedPromptRun> => {
     let currentContextSnapshot: CronCompletedPromptRun["currentContextSnapshot"];
     using inferenceLease = new DisposableStack();
+    const binding = params.job.inferenceBinding;
     const inference = await prepareCronRunInference({
       job: params.job,
-      trigger,
-      agentId: params.agentId,
+      binding,
       cfg: params.cfgWithAgentDefaults,
       agentDir: params.agentDir,
     });
@@ -575,12 +575,6 @@ export function createCronPromptExecutor(
                   ),
                   provider: executionProvider,
                   authProfileId,
-                  nativeAuthOnly: inference?.usesNativeCliAccount(
-                    providerOverride,
-                    executionProvider,
-                  )
-                    ? true
-                    : undefined,
                   // Keep the recorded credential lifetime live through CLI preparation and launch.
                   assertCurrent: inference
                     ? () => {
@@ -588,6 +582,9 @@ export function createCronPromptExecutor(
                         inference.assertCurrent(providerOverride);
                       }
                     : undefined,
+                  // An unpinned run that selects no stored account keeps the CLI's native login.
+                  nativeAuthOnly:
+                    trigger === "cron" && !binding && !authProfileId ? true : undefined,
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding: guardedCliSessionBinding,
                   cliSessionBindingFacts: params.cliSessionBindingFacts,

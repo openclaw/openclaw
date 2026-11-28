@@ -459,8 +459,6 @@ describe("scheduled message actions", () => {
         const selectedModelRef = runtime === "openclaw" ? embedded.modelRef : modelRef;
         const inferenceProvider = runtime === "openclaw" ? embedded.providerId : "anthropic";
         const inferenceProfileId = `${inferenceProvider}:scheduled-message-read`;
-        const pinnedModel =
-          runtime === "openclaw" ? `${selectedModelRef}@${inferenceProfileId}` : undefined;
         const inferenceKey = runtime === "openclaw" ? modelToken : "synthetic-unused-model-key";
         const cfg: OpenClawConfig = {
           gateway: {
@@ -654,7 +652,6 @@ describe("scheduled message actions", () => {
             message: nativeCreator
               ? `Set Discord channel ${channelId} to topic ${acceptedTopic}, then try topic ${deniedTopic}, using account ${creatorAccountId}.`
               : `Use message action ${action} for Discord channel ${channelId}${creator === "trusted" ? " with account default" : " without an accountId argument"}.`,
-            ...(pinnedModel ? { model: pinnedModel } : {}),
             toolsAllow: ["message"],
           },
           delivery:
@@ -748,10 +745,14 @@ describe("scheduled message actions", () => {
           (await loadCronStore(storePath)).jobs.find((entry) => entry.id === created.id),
           "persisted scheduled job",
         );
-        if (pinnedModel) {
-          expect(job.payload).toMatchObject({ kind: "agentTurn", model: pinnedModel });
+        if (runtime === "openclaw") {
+          expect(job.inferenceBinding).toMatchObject({
+            version: 1,
+            provider: inferenceProvider,
+            profileId: inferenceProfileId,
+          });
         } else {
-          expect(job.payload).not.toHaveProperty("model");
+          expect(job.inferenceBinding).toBeUndefined();
         }
         if (nativeCreator) {
           expect(job).toMatchObject({

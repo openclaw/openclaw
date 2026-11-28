@@ -1,11 +1,9 @@
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
-import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   readCronRunRecordsForTests,
   readCronRunHistoryPageForTests,
@@ -85,59 +83,51 @@ const schedule = (kind: "at" | "every" | "cron", at: number): CronJobCreate["sch
       : { kind, expr: "* * * * *", tz: "UTC", staggerMs: 0 };
 
 describe("ordinary session agent turns", () => {
-  it("requires fresh stored or native account selection after an ownership transfer", async () => {
-    const state = await createOpenClawTestState({ label: "cron-transferred-account" });
-    onTestFinished(() => state.cleanup());
-    const nativeModel = "anthropic/claude-sonnet-4-6";
-    setRuntimeConfigSnapshot({
-      agents: { defaults: { models: { [nativeModel]: { agentRuntime: { id: "claude-cli" } } } } },
-    });
-    await state.writeAuthProfiles({
-      version: 1,
-      profiles: {
-        "openai:old": { type: "api_key", provider: "openai", key: "synthetic-old-account-key" },
-      },
-    });
-    const { cron, run } = await service();
-    const job = await cron.add(
-      {
-        name: "Report",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
-        wakeMode: "now",
-        payload: {
-          kind: "agentTurn",
-          message: "Report",
-          model: "openai/gpt-4.1@openai:old",
-          modelRuntime: "openclaw",
+  it.each(["isolated", "main", "session:agent:main:project:inbox"] as const)(
+    "requires fresh authority after a human transfer on %s, including a transfer back",
+    async (sessionTarget) => {
+      const { cron, storePath, run } = await service();
+      await cron.start();
+      const job = await cron.add(jobInput({ enabled: false, sessionTarget }), {
+        createdActor: { type: "human", source: "profile", id: "alice" },
+      });
+      for (const ownerProfileId of ["bob", "alice"]) {
+        await cron.update(job.id, { ownerProfileId });
+        await cron.run(job.id, "force");
+        expect(run).not.toHaveBeenCalled();
+        expect(cron.getJob(job.id)?.state.lastError).toContain("fresh execution authority");
+        expect(
+          (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id),
+        ).toMatchObject({
+          ownerProfileId,
+          ownerTransferPending: true,
+          enabled: false,
+        });
+      }
+      await cron.update(job.id, { name: "Still awaiting reauthorization" });
+      await cron.run(job.id, "force");
+      expect(run).not.toHaveBeenCalled();
+      await cron.update(
+        job.id,
+        {},
+        {
+          inferenceBinding: {
+            version: 1,
+            provider: "openai",
+            profileId: "synthetic-owner-account",
+            authorizationId: "a".repeat(64),
+            authRequirement: "api-key",
+            source: "user",
+          },
         },
-      },
-      { createdActor: { type: "human", source: "profile", id: "alice" } },
-    );
-    await cron.update(job.id, { ownerProfileId: "bob" });
-    expect(cron.getJob(job.id)).toMatchObject({
-      enabled: false,
-      ownerProfileId: "bob",
-      payload: { model: "openai/gpt-4.1" },
-    });
-    expect(cron.getJob(job.id)?.payload).not.toHaveProperty("modelRuntime");
-    await cron.update(job.id, {
-      payload: { kind: "agentTurn", model: "openai/gpt-4.1@openai:old" },
-    });
-    await cron.run(job.id, "force");
-    expect(run).toHaveBeenCalledOnce();
-
-    await cron.update(job.id, { ownerProfileId: "alice" });
-    await cron.update(job.id, { enabled: true });
-    await cron.run(job.id, "force");
-    expect(run).toHaveBeenCalledOnce();
-    await cron.update(job.id, {
-      payload: { kind: "agentTurn", model: `${nativeModel}@anthropic:claude-cli` },
-    });
-    await cron.run(job.id, "force");
-    expect(run).toHaveBeenCalledTimes(2);
-  });
+      );
+      await cron.run(job.id, "force");
+      expect(run).toHaveBeenCalledOnce();
+      expect(
+        (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id),
+      ).not.toHaveProperty("ownerTransferPending");
+    },
+  );
 
   it.each(
     (["ok", "error"] as const).flatMap((status) =>

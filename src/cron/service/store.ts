@@ -86,9 +86,7 @@ function warnInvalidPersistedCronJob(params: {
       jobIndex: params.index,
       reason: params.reason,
     },
-    params.reason === "inference-account-needs-doctor"
-      ? "cron: run openclaw doctor --fix to migrate the saved automation account before it can run"
-      : "cron: quarantined invalid persisted job and skipped it from runtime",
+    "cron: quarantined invalid persisted job and skipped it from runtime",
   );
 }
 
@@ -129,19 +127,7 @@ export async function ensureLoaded(
   const loadedJobs = (loaded.store.jobs ?? []).filter(isRecord);
   const jobs: CronJob[] = [];
   const durableNextRunAtMsByJobId = new Map<string, number | undefined>();
-  const quarantinedConfigJobs: QuarantinedCronConfigJob[] = [];
-  for (const entry of loaded.invalidConfigRows) {
-    if (entry.reason === "inference-account-needs-doctor") {
-      warnInvalidPersistedCronJob({
-        state,
-        raw: entry.job ?? {},
-        index: entry.sourceIndex,
-        reason: entry.reason,
-      });
-    } else {
-      quarantinedConfigJobs.push(entry);
-    }
-  }
+  const quarantinedConfigJobs: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
   for (const [index, raw] of loadedJobs.entries()) {
     if (!hasCanonicalCronDeliveryMode(raw.delivery)) {
       const warningKey = `delivery:${raw.id}`;

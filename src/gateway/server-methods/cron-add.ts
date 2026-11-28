@@ -189,6 +189,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     );
   } catch (err) {
     creatorOptions?.disposeOperatorSource?.();
+    creatorOptions?.disposeInferenceAuthorization?.();
     respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
     return;
   }
@@ -350,6 +351,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     return;
   } finally {
     creatorOptions.disposeOperatorSource?.();
+    creatorOptions.disposeInferenceAuthorization?.();
   }
   const job = "job" in result ? result.job : result;
   commandCreation.creation?.record(job);

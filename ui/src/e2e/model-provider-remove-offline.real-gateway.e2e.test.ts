@@ -125,7 +125,7 @@ suite.define(() => {
           name: "Remove provider: minimax-cn",
           exact: true,
         });
-        expect(await regional.count()).toBe(1);
+        await expect.poll(() => regional.count()).toBe(1);
         await regional.click();
         expect(await dialog.textContent()).toContain("minimax-cn");
         await confirm.click();
@@ -135,7 +135,9 @@ suite.define(() => {
         await page.reload();
         await waitForControlUiGatewayReady(page);
         const remaining = await expandProvider(page, "minimax");
-        expect(await remaining.getByRole("button", { name: /^Remove provider:/ }).count()).toBe(1);
+        await expect
+          .poll(() => remaining.getByRole("button", { name: /^Remove provider:/ }).count())
+          .toBe(1);
         const final = await persistedConfig();
         expect(final.models?.providers).toEqual({
           fixture: siblings.fixture,

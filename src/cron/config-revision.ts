@@ -19,16 +19,11 @@ function configRevisionDefinition(projected: CronStoredJob) {
 }
 
 /** Hashes the job definition while preserving meaningful own-undefined config fields. */
-export function resolveCronJobConfigRevision(
-  job: CronStoredJob,
-  legacy?: { inferenceBinding: unknown },
-): string {
+export function resolveCronJobConfigRevision(job: CronStoredJob): string {
   // The storage projector canonicalizes every persisted config seam. Feed it
   // neutral runtime fields so large or malformed trigger state cannot affect the token.
   const projected = projectCronJobThroughStorageCodec({ ...job, updatedAtMs: 0, state: {} });
-  const definition = configRevisionDefinition(projected);
-  // Doctor compares old revisions without admitting retired fields through the live codec.
-  return hashCronJobDefinition(legacy ? { ...definition, ...legacy } : definition);
+  return hashCronJobDefinition(configRevisionDefinition(projected));
 }
 
 export type CronJobConfigRevisionResult = string | Error;

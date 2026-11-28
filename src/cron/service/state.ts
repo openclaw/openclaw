@@ -115,11 +115,6 @@ export type CronServiceDeps = {
   cronEnabled: boolean;
   /** CronConfig for session retention settings. */
   cronConfig?: CronConfig;
-  /** Best-effort host diagnostics after inventory publication, outside cron readiness and operations. */
-  describeJobLoadWarning?: (
-    job: CronStoredJob,
-    signal: AbortSignal,
-  ) => string | undefined | Promise<string | undefined>;
   /** Disallow automation jobs that run commands or scripts on the host. */
   hostExecutionDisabled?: boolean;
   resolveUserTimezone?: () => string | undefined;
@@ -673,6 +668,7 @@ export type CronUpdateOptions = Pick<
   | "toolsAllowExecTarget"
   | "commitGuard"
   | "captureRuntimeAuthority"
+  | "inferenceBinding"
   | "execPolicy"
   | "streamExecApproval"
   | "streamSandbox"

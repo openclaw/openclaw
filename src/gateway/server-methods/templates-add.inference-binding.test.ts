@@ -2,9 +2,11 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, assert, expect, it, vi } from "vitest";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { writeConfigFile } from "../../config/io.runtime.js";
 import { registerRuntimeConfigWriteListener } from "../../config/runtime-snapshot.js";
 import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
+import { acquireCronInferenceAuthorization } from "../../cron/inference-binding.runtime.js";
 import { resolveAuthenticatedDeviceTokenIdentity } from "../../infra/device-pairing-identity.js";
 import { revokeDeviceToken } from "../../infra/device-pairing-tokens.js";
 import { clawHubSecurityResponse } from "../../plugins/clawhub.test-fixtures.js";
@@ -21,7 +23,7 @@ import { pairedOperator, persistDevices } from "../operator-run-recovery.test-su
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
-import { withFixture } from "./cron.inference-binding.test-support.js";
+import { platformId, withFixture } from "./cron.inference-binding.test-support.js";
 import {
   applyTemplateAddForRequest,
   planTemplateAddForRequest,
@@ -266,20 +268,65 @@ it("reviews and installs the adding device's wall clock and refuses a different 
   });
 });
 
-it("installs a template with no model override without capturing a billing account", async () => {
-  await withFixture(async (fixture) => {
-    await remoteTemplate();
-    await withTemplateRuntime(fixture, async () => {
-      const result = await addTemplate(fixture, {
-        connId: "template-inference-owner",
-        invalidated: false,
-        connect: gatewayConnect(["operator.admin"]),
+it.each([false, true])(
+  "fresh Template Add captures the host account privately and refuses replaced authority (replace: %s)",
+  async (replace) => {
+    await withFixture(async (fixture) => {
+      const archive = await remoteTemplate();
+      await withTemplateRuntime(fixture, async () => {
+        const replacement = replace ? fixture.replaceAccountBeforeMutation("add") : undefined;
+        const client: GatewayClient = {
+          connId: "template-inference-owner",
+          invalidated: false,
+          connect: gatewayConnect(["operator.admin"]),
+        };
+        const result = await addTemplate(fixture, client);
+        expect(result, JSON.stringify(result)).toMatchObject({
+          agentId,
+          status: replace ? "partial" : "complete",
+        });
+        expect(
+          createHash("sha256")
+            .update(await fs.readFile(archive.archivePath))
+            .digest("hex"),
+        ).toBe(archive.sha256);
+        if (replace) {
+          expect(replacement).toHaveBeenCalledOnce();
+          expect(result).toMatchObject({ error: { code: "add_failed" }, agentRetained: true });
+          expect(await fixture.status()).toMatchObject({ jobs: 0 });
+          return;
+        }
+        const stored = await fixture.reload();
+        expect(stored).toMatchObject({
+          agentId,
+          enabled: false,
+          inferenceBinding: {
+            provider: "openai",
+            profileId: platformId,
+            authRequirement: "api-key",
+            source: "auto",
+          },
+        });
+        expect(stored.payload).not.toHaveProperty("model");
+        const publicJob = await fixture.invoke("cron.get", { id: stored.id });
+        expect(JSON.stringify(publicJob)).not.toMatch(
+          /inferenceBinding|authorizationId|synthetic-/,
+        );
+        const authority = await acquireCronInferenceAuthorization({
+          binding: stored.inferenceBinding!,
+          cfg: fixture.getConfig(),
+          agentDir: resolveAgentDir(fixture.getConfig(), agentId),
+        });
+        try {
+          await authority.revalidate();
+          authority.assertCurrent();
+        } finally {
+          authority.dispose();
+        }
       });
-      expect(result).toMatchObject({ agentId, status: "complete" });
-      expect((await fixture.reload()).payload).not.toHaveProperty("model");
     });
-  });
-});
+  },
+);
 
 it.each([
   "enabled",
@@ -338,6 +385,20 @@ it.each([
               ? personal.other
               : personal.owner,
         );
+        if (scenario === "foreign-account") {
+          expect(result).toMatchObject({
+            status: "partial",
+            agentRetained: true,
+            error: {
+              code: "add_failed",
+              message: expect.stringContaining(
+                "This account action requires a current authorized connection; reconnect and try again.",
+              ),
+            },
+          });
+          expect(await fixture.status()).toMatchObject({ jobs: 0 });
+          return;
+        }
         expect(result, JSON.stringify(result)).toMatchObject({
           status: ownerChanged ? "partial" : "complete",
         });
@@ -345,37 +406,18 @@ it.each([
         expect(stored).toMatchObject({
           agentId,
           enabled: !paused && !ownerChanged,
-          ownerProfileId: (ownerChanged || scenario === "foreign-account"
-            ? personal.other
-            : personal.owner
-          ).authenticatedUserProfile!.profileId,
+          ownerProfileId: (ownerChanged ? personal.other : personal.owner).authenticatedUserProfile!
+            .profileId,
           schedule: { kind: "every", everyMs: 1_800_000 },
         });
         expect((await fixture.getCron().readScratch(stored.id)).scratch).toMatchObject({
           content: scratch,
           revision: 1,
         });
-        expect(stored.payload).not.toHaveProperty("model");
-        if (scenario === "foreign-account") {
-          expect(
-            await fixture.invoke(
-              "cron.update",
-              {
-                id: stored.id,
-                patch: {
-                  payload: { kind: "agentTurn", model: `openai/gpt-4.1@${personal.profileId}` },
-                },
-              },
-              personal.other,
-              { expectedSuccess: false },
-            ),
-          ).toMatchObject({
-            message: expect.stringContaining(
-              "This account action requires a current authorized connection; reconnect and try again.",
-            ),
-          });
-          expect((await fixture.reload()).payload).not.toHaveProperty("model");
+        if (!ownerChanged) {
+          expect(stored.inferenceBinding).toMatchObject({ profileId: personal.profileId });
         }
+        expect(stored.payload).not.toHaveProperty("model");
       });
     });
   },

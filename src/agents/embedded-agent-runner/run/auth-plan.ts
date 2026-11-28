@@ -132,7 +132,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     if (params.nativeSessionRuntime?.auth === "native") {
       if (runParams.authProfileBinding) {
         throw new Error(
-          "A native connection cannot replace the automation’s pinned inference account.",
+          "A native connection cannot replace the automation’s recorded inference account.",
         );
       }
       // Only the binding-owned connection bypasses host credentials and routes;
