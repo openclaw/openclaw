@@ -34,6 +34,7 @@ export type SessionTranscriptMaintenanceRead =
       leafEntryId: string | null;
       checkpoint?: SessionTranscriptMaintenanceCheckpoint;
     }
+  | { operation: "latest-active-control"; customType: string }
   | { operation: "previous"; beforeSeq: number }
   | { operation: "identity"; eventId: string }
   | { operation: "version" }
@@ -54,6 +55,7 @@ export type SessionTranscriptMaintenanceRead =
 
 export type SessionTranscriptMaintenanceFacts = {
   kind: "transcript-maintenance";
+  latestControl?: "custom" | "compaction" | "reset";
   previous?: TranscriptEvent;
   seq?: number;
   version?: SessionTranscriptContextVersion;

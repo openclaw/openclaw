@@ -43,7 +43,6 @@ import {
 
 export type BootstrapContextMode = "full" | "lightweight";
 
-const CONTINUATION_SCAN_MAX_RECORDS = 500;
 export const FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE = "openclaw:bootstrap-context:full";
 const BOOTSTRAP_WARNING_DEDUPE_LIMIT = 1024;
 const seenBootstrapWarnings = new Set<string>();
@@ -71,19 +70,13 @@ export async function hasCompletedBootstrapTurn(
   }
   try {
     const reader = prepareSessionTranscriptHydration({ agentId, sessionId, sessionKey, storePath });
-    const records = await reader.readRecentActiveEvents(CONTINUATION_SCAN_MAX_RECORDS);
+    const facts = await reader.readMaintenance({
+      operation: "latest-active-control",
+      customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+    });
     reader.assertCurrent();
-    for (const entry of records.toReversed()) {
-      const record = entry as { type?: string; customType?: string } | null | undefined;
-      // Context before compaction/reset is not reusable on the active branch.
-      if (record?.type === "compaction" || record?.type === "reset") {
-        return false;
-      }
-      if (record?.type === "custom" && record.customType === FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE) {
-        return true;
-      }
-    }
-    return false;
+    // A newer reset or compaction invalidates context even in a very long session.
+    return facts.latestControl === "custom";
   } catch {
     return false;
   }

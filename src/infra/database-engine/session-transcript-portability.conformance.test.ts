@@ -29,6 +29,7 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
 import { prepareIncrementalSuffixIdempotencyMutation } from "../../config/sessions/session-accessor.sqlite-transcript-suffix-idempotency.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "../../config/sessions/session-transcript-index.js";
+import { readSessionTranscriptMaintenance } from "../../config/sessions/session-transcript-maintenance-read.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
 import { createTranscriptEventInserter } from "../../config/sessions/transcript-payload.js";
 import { appendSessionTranscriptMessageByIdentity } from "../../plugin-sdk/session-transcript-runtime.js";
@@ -543,6 +544,29 @@ for (const engine of ["sqlite", "postgres"] as const) {
         const query = { agentId: "main", query: "needle", sessionKeys: [scope.sessionKey] };
         expect((await searchSessionTranscripts(query)).hits).toHaveLength(1);
         expect(stored().slice(0, before.length)).toEqual(before);
+      });
+
+      it("finds the latest custom marker when a later custom entry holds an escaped NUL", async () => {
+        const scope = withEngineStoreAdmission(() => ({
+          agentId: "main",
+          sessionId: "transcript-portability-control-nul",
+          sessionKey: "agent:main:transcript-portability-control-nul",
+          storePath: openOpenClawAgentDatabase({ agentId: "main" }).path,
+        }));
+        await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+        const manager = await SessionManager.openAsync(scope);
+        await manager.appendCustomEntryAsync("marker", {});
+        await manager.appendCustomEntryAsync("plugin:state", { value: "a\u0000b" });
+
+        const latest = withEngineStoreAdmission(() =>
+          readSessionTranscriptMaintenance(
+            openOpenClawAgentDatabase({ agentId: "main" }),
+            scope,
+            { operation: "latest-active-control", customType: "marker" },
+            { ...resolveSqliteTranscriptReadScope(scope), sessionKey: scope.sessionKey },
+          ),
+        );
+        expect(latest).toMatchObject({ latestControl: "custom" });
       });
 
       it("advances mutation time beyond both prior mutation and observation with nullable fields", () =>
