@@ -402,7 +402,7 @@ describe("managed plugin install transactions", () => {
       if (settlement === "rollback") {
         mocks.commit.mockRejectedValue(conflict);
       }
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const runtime = { log: vi.fn() };
       const installed = installManagedPluginSource({
         request: { source: "npm", spec: "demo@2.0.0", mode: "update" },
         snapshot,

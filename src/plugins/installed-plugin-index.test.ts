@@ -38,7 +38,7 @@ function writePluginManifest(rootDir: string, manifest: Record<string, unknown>)
   );
 }
 
-function writePackageJson(rootDir: string, version = "1.2.3", name = "@vendor/demo-plugin") {
+function writePackageJson(rootDir: string, version: string, name = "@vendor/demo-plugin") {
   fs.writeFileSync(path.join(rootDir, "package.json"), JSON.stringify({ name, version }), "utf-8");
 }
 
@@ -52,7 +52,7 @@ function expectSha256(value: unknown) {
   expect(value).toMatch(/^[a-f0-9]{64}$/u);
 }
 
-function writeManifestlessClaudeBundle(rootDir: string, entries: readonly string[] = ["skills"]) {
+function writeManifestlessClaudeBundle(rootDir: string, entries: readonly string[]) {
   for (const entry of entries) {
     fs.mkdirSync(path.join(rootDir, entry), { recursive: true });
     fs.writeFileSync(path.join(rootDir, entry, "README.md"), `# ${entry}\n`, "utf-8");
