@@ -98,7 +98,7 @@ describe("cron stream watchers", () => {
 
   it("withholds a stream source until its human owner is reassigned", async () => {
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-      const missing = job({ ownerProfileId: "removed-profile" });
+      const missing = { ...job(), ownerProfileId: "removed-profile" };
       const owner = ensureProfileForEmail("stream-owner@example.test");
       const assigned = { ...missing, ownerProfileId: owner.id };
       let current = assigned;
