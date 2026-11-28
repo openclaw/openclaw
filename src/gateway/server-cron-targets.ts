@@ -289,7 +289,7 @@ export function createGatewayCronTargetResolver(
 function buildPostedNoticeInput(text: string): string {
   return [
     "Automation notice from the scheduler, not a user message. It is already shown to the user in this conversation, with what they need to do: do not repeat, paraphrase or acknowledge it.",
-    `If you can fix the cause yourself, do it and reply with one line saying what you changed. Otherwise reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer.`,
+    `If you can fix the cause yourself, do it and reply with one line saying what you changed. Leave a disabled automation disabled unless you fixed its cause. Otherwise reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer.`,
     // The notice names the automation, which is user-authored text: data, never instructions.
     wrapUntrustedPromptDataBlock({ label: "Notice shown to the user", text, maxChars: 4_000 }),
   ].join("\n");
