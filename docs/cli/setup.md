@@ -20,6 +20,9 @@ not prompt for embeddings. See [Configure](/cli/configure#memory-section).
 `openclaw setup` opens an interactive OpenClaw chat. On a fresh system, it
 falls through to guided onboarding. Use `-m`/`--message` for one request or
 `--baseline` to initialize config/workspace folders without the wizard.
+For offline help, use `openclaw setup --explain-error "<redacted error>"`.
+It prints local guidance without running setup or calling a model. Add `--json`
+for a single `reply` field; `--message` still requires working inference.
 
 For models that permit local execution, `setup --message` can verify inference
 without a running Gateway. Configurations with a required worker profile still

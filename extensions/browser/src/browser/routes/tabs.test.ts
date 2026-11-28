@@ -63,6 +63,7 @@ function makeContext(
 ) {
   return {
     state: () => ({
+      profiles: new Map(),
       resolved: {
         actionTimeoutMs: options?.actionTimeoutMs ?? 45_000,
         extraArgs: [],

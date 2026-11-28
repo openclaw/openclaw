@@ -14,9 +14,11 @@ import {
 } from "@openclaw/worker-runtime/lifecycle";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
+import { getDatabaseProcessRole } from "./database-engine/admission-scope.js";
 import { getDatabaseEngineSelection } from "./database-engine/context.js";
 import { getGatewayResourceProfile } from "./gateway-resource-profile.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
+import { postgresPoolState } from "./postgres-sync/pool-state.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import {
@@ -32,7 +34,10 @@ import { trackSqliteDatabaseAdmissionWorker } from "./sqlite-database-admission.
 import type { WorkerRetirementReason } from "./worker-cpu.js";
 import { receiveWorkerMemoryPort, setTrackedWorkerHostedEndpoints } from "./worker-cpu.js";
 import { registerHostedMemoryPredicates } from "./worker-memory-budget.js";
-import { createRetainedNativeWorker } from "./worker-native-lifecycle.js";
+import {
+  captureRetainedNativeWorkerSource,
+  createRetainedNativeWorker,
+} from "./worker-native-lifecycle.js";
 
 const hostedEntrypoints = {
   "sqlite-store": runtimeProcessEntrypoints.sqliteStore,
@@ -73,12 +78,16 @@ function hostedKind(url: URL): SharedWorkerHostKind | undefined {
 
 /**
  * Pure and synchronous: whether a new slot for this worker would run inside the shared host.
- * Only the lean profile hosts, only where explicit SQLite close releases native resources,
- * at most one live endpoint per slot key, and never while a failed host is still exiting,
- * so at most one host isolate exists at a time.
+ * Only the lean Gateway profile and one-shot CLI processes host, only where explicit SQLite
+ * close releases native resources, and never while a failed host is still exiting, so at
+ * most one host isolate exists at a time. A one-shot command waits for each core worker
+ * before its first request, so one shared isolate loads their common code once instead of
+ * once per worker. The lean Gateway admits one live endpoint per slot key; a one-shot command
+ * hosts every lane of a kind, since each extra lane would otherwise boot its own isolate.
  */
 export function claimsSharedHostSlot(url: URL, key?: string): boolean {
-  if (getGatewayResourceProfile()?.profile !== "lean") {
+  const oneShot = getDatabaseProcessRole() === "cli-oneshot";
+  if (getGatewayResourceProfile()?.profile !== "lean" && !oneShot) {
     return false;
   }
   const kind = hostedKind(url);
@@ -92,11 +101,11 @@ export function claimsSharedHostSlot(url: URL, key?: string): boolean {
   }
   // The Postgres bridge binds one pool per isolate; hosted endpoints cannot share it.
   const engines = getDatabaseEngineSelection()?.effectiveEngines;
-  if (engines && Object.values(engines).includes("postgres")) {
+  if (postgresPoolState.endpoints || (engines && Object.values(engines).includes("postgres"))) {
     return false;
   }
   const host = state.host;
-  return !host || (!host.failure && !host.hasEndpoint(key ?? kind));
+  return !host || (!host.failure && (oneShot || !host.hasEndpoint(key ?? kind)));
 }
 
 /** Includes construction and retirement until the native owner joins the physical host. */
@@ -137,6 +146,15 @@ export function isHostedWorkerEndpoint(worker: unknown): worker is HostedWorkerE
   return worker instanceof HostedWorkerEndpoint;
 }
 
+async function stopSharedWorkerHostEndpoints(): Promise<void> {
+  await Promise.all(
+    [...(state.host?.endpoints.values() ?? [])].map((endpoint) => {
+      endpoint.retiring("shutdown");
+      return endpoint.terminate();
+    }),
+  );
+}
+
 class SharedWorkerHost {
   /** Supervised, so synchronous callers can observe its exit through service(). */
   readonly worker: RetainedNativeWorker;
@@ -150,6 +168,12 @@ class SharedWorkerHost {
     const { port1, port2 } = new MessageChannel();
     this.control = port1;
     const url = resolveRuntimeProcessEntrypointUrl("sharedWorkerHost");
+    // Plain task pools own no native close of their own; terminal close of the host's native
+    // source stops their endpoints, so the host joins before the source checks for live workers.
+    captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }).retain(
+      state,
+      stopSharedWorkerHostEndpoints,
+    );
     this.worker = createRetainedNativeWorker(url, {
       env: resolveNodeCompileCacheEnv(),
       execArgv: resolveRuntimeWorkerThreadExecArgv(url),

@@ -10,6 +10,7 @@ import { hasSubagentKill } from "./subagent-control-kill-intent.js";
 import { getSubagentRunsForRequesterSession, subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { resumeSubagentRun, settleRequesterAfterSessionSpawns } from "./subagent-registry.js";
+import { hasRequesterTurnYielded, hasRequesterTurn } from "./subagent-requester-turn-custody.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
 /** An inline terminal result consumes the same durable obligation as a late completion. */
@@ -28,8 +29,8 @@ export async function acknowledgeSubagentResultForRequesterTurn(params: {
         !entry ||
         entry.requesterSessionKey !== params.requesterSessionKey ||
         entry.requesterAgentId !== params.requesterAgentId ||
-        entry.requesterTurnRunId !== params.requesterTurnRunId ||
-        entry.requesterTurnYielded ||
+        !hasRequesterTurn(entry, params.requesterTurnRunId) ||
+        hasRequesterTurnYielded(entry) ||
         hasSubagentKill(entry)
       ) {
         throw new Error("Inline child result no longer belongs to its requester turn.");
@@ -75,7 +76,7 @@ export async function reconcileRequesterTurnClaimForRun(params: {
     [...getSubagentRunsForRequesterSession(params.requesterSessionKey)].filter(
       (entry) =>
         entry.requesterAgentId === params.requesterAgentId &&
-        entry.requesterTurnRunId === requesterTurnRunId &&
+        hasRequesterTurn(entry, requesterTurnRunId) &&
         entry.expectsCompletionMessage === true,
     );
   const owned = ownedEntries();

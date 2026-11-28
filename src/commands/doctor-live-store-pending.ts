@@ -7,6 +7,11 @@ import {
 } from "../state/artifact-preserving-state-reads.js";
 import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 
+/** Store reads here are served from copies: an updater's migration capture or an artifact-preserving read. */
+export function storeReadsNeedCopies(): boolean {
+  return hasUpdateDoctorMigrationCapture() || isArtifactPreservingStateRead();
+}
+
 /**
  * Runs a Doctor pending check's SQLite reads against the live stores, never a copy.
  *
@@ -19,7 +24,7 @@ export async function decideDoctorPendingFromLiveStores(
   sqlitePaths: readonly string[],
   decide: () => DoctorMaintenancePending | Promise<DoctorMaintenancePending>,
 ): Promise<DoctorMaintenancePending> {
-  if (hasUpdateDoctorMigrationCapture() || isArtifactPreservingStateRead()) {
+  if (storeReadsNeedCopies()) {
     return "undecidable";
   }
   if (

@@ -316,11 +316,16 @@ function repairAndAssertAgentSchemaGroup(
 }
 
 /** Ensure the additive session-key contract table inside the caller's transaction. */
-export function ensureSessionKeyContractSchemaInTransaction(db: DatabaseSync): void {
-  if (
+/** Read-only: whether `ensureSessionKeyContractSchemaInTransaction` would run its DDL. */
+export function hasPendingSessionKeyContractSchema(db: DatabaseSync): boolean {
+  return !(
     tableExists(db, "session_key_contract") &&
     db.prepare("SELECT 1 FROM session_key_contract WHERE id = 1").get()
-  ) {
+  );
+}
+
+export function ensureSessionKeyContractSchemaInTransaction(db: DatabaseSync): void {
+  if (!hasPendingSessionKeyContractSchema(db)) {
     return;
   }
   db.exec(

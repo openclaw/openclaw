@@ -7280,7 +7280,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             #expect(terminal.runId == expectedRunID)
             let expectedTitle = switch scenario {
             case "reply": String(localized: "Reply saved")
-            case "accepted-failure": String(localized: "Gateway run failed")
+            case "accepted-failure": String(localized: "Run failed")
             default: String(localized: "Not sent")
             }
             #expect(WatchMessageJournalView.statusTitle(retained) == expectedTitle)

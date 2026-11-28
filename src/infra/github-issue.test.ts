@@ -139,17 +139,17 @@ it.each([
       ] as const,
   ),
 ] as const)("settles creation safely after %s", async (_name, response, lookup, expected) => {
-  const runGh = cli(authSuccess, response, ...(lookup ? [lookup] : []));
+  const runGh = cli(authSuccess, cliOutput("[]"), response, ...(lookup ? [lookup] : []));
   await expect(submitGithubIssue(issue, runGh)).resolves.toEqual(expected);
-  expect(runGh).toHaveBeenCalledTimes(lookup ? 3 : 2);
+  expect(runGh).toHaveBeenCalledTimes(lookup ? 4 : 3);
   if (lookup) {
-    expect(runGh.mock.calls[2]?.[0]).toContain(`"${issue.marker}" in:body`);
+    expect(runGh.mock.calls[3]?.[0]).toContain(`"${issue.marker}" in:body`);
   }
 });
 
 it("deduplicates concurrent submissions with the same marker", async () => {
   const { promise: auth, resolve: releaseAuth } = createDeferred<ReturnType<typeof cliResult>>();
-  const runGh = cli(auth, cliOutput(`${issueUrl(789)}\n`));
+  const runGh = cli(auth, cliOutput("[]"), cliOutput(`${issueUrl(789)}\n`));
 
   const first = submitGithubIssue(issue, runGh);
   const second = submitGithubIssue(issue, runGh);
@@ -158,7 +158,27 @@ it("deduplicates concurrent submissions with the same marker", async () => {
   releaseAuth?.(authSuccess);
 
   await expect(Promise.all([first, second])).resolves.toEqual([created(789), created(789)]);
-  expect(runGh).toHaveBeenCalledTimes(2);
+  expect(runGh).toHaveBeenCalledTimes(3);
+});
+
+it("links sequential successful submissions to one issue through exact-content search", async () => {
+  const issues: { body: string; title: string; url: string }[] = [];
+  const runGh: RunGithubCli = async (args, { input }) => {
+    if (args[0] === "auth") {
+      return authSuccess;
+    }
+    if (args[0] === "issue") {
+      expect(args).toContain(`"${issue.marker}" in:body`);
+      return cliOutput(JSON.stringify(issues));
+    }
+    expect(args).toContain("POST");
+    issues.push({ ...JSON.parse(input), url: issueUrl(789) });
+    return cliOutput(`${issueUrl(789)}\n`);
+  };
+
+  await expect(submitGithubIssue(issue, runGh)).resolves.toEqual(created(789));
+  await expect(submitGithubIssue(issue, runGh)).resolves.toEqual(created(789));
+  expect(issues).toEqual([{ body: issue.body, title: issue.title, url: issueUrl(789) }]);
 });
 
 it("bounds a stalled authentication preflight without exposing process diagnostics", async () => {
@@ -187,7 +207,7 @@ it.each([false, true])("checks child authority (retired=%s)", async (retire) => 
       authorityAtCreate = current;
       expect(claimed).toBe(true);
     }
-    return childFixture(args[0] === "api" ? `${issueUrl(123)}\n` : "");
+    return childFixture(args[0] === "api" ? `${issueUrl(123)}\n` : args[0] === "issue" ? "[]" : "");
   });
   const submission = submitGithubIssue(issue, undefined, {
     beforeIssueCreate: async () => {
@@ -216,6 +236,6 @@ it.each([false, true])("checks child authority (retired=%s)", async (retire) => 
     expect(authorityAtCreate).toBe(true);
   }
   expect(spawnMock.mock.calls.map(([, args]) => args[0])).toEqual(
-    retire ? ["auth"] : ["auth", "api"],
+    retire ? ["auth", "issue"] : ["auth", "issue", "api"],
   );
 });

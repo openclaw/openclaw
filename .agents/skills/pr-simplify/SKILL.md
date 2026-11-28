@@ -9,7 +9,7 @@ An editing pass by the change's author: run it on your own branch before you ope
 
 **The diff is a proposal.** Passing tests show it works, not that its architecture or every added test is needed.
 
-**Rules:** the root `AGENTS.md` sections "Choose good compromises", "Design priorities", "One owner, complete cutover", "Runtime and code safeguards" and "Product and validation", plus the nearest scoped `AGENTS.md`. Steps 2 and 3 apply every rule to every changed file.
+**Rules:** the root `AGENTS.md` sections "Decide authority once", "Choose good compromises", "Design priorities", "One owner, complete cutover", "Runtime and code safeguards" and "Product and validation", plus the nearest scoped `AGENTS.md`. Steps 2 and 3 apply every rule to every changed file.
 
 ## 1. Re-derive the smallest complete fix
 

@@ -96,7 +96,7 @@ final class IOSChatViewModelOwner {
                 voiceNoteRecorder?.ownsPendingChatAttachment == true
             },
             transcriptCache: offlineStore,
-            outbox: offlineStore,
+            outbox: appModel.isScreenshotFixtureModeEnabled ? ScreenshotFixtureMode.queueMenuOutbox : offlineStore,
             onSessionChanged: { [weak appModel] sessionKey in
                 appModel?.focusChatSession(sessionKey)
             },

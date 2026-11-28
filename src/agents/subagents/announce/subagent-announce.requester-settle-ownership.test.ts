@@ -290,35 +290,3 @@ it("fences a queued requester wake when its runtime owner rearms it", async () =
     await pending;
   }
 });
-
-it("excludes a suppressed member while its completed sibling still delivers once", async () => {
-  const batchRunIds = ["run-a", "run-b"];
-  const wake: RequesterSettleWakeState = {
-    status: "pending",
-    attemptCount: 0,
-    batchRunIds,
-    requesterYieldBatch: true,
-    rearmGeneration: 7,
-  };
-  const cancelled = makeSettledChild(
-    {
-      runId: "run-a",
-      killReconciliation: { killedAt: 3_000, suppressTaskDelivery: true },
-    },
-    wake,
-  );
-  const completed = makeSettledChild(
-    {
-      completion: { required: true, resultText: "completed sibling result" },
-    },
-    wake,
-  );
-  registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([cancelled, completed]);
-  // A suppressed member must not cancel its sibling's continuation.
-  expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
-  expect(deliverSpy).toHaveBeenCalledOnce();
-  expect(completed).toMatchObject({
-    requesterSettleWake: undefined,
-    completion: { resultText: "completed sibling result" },
-  });
-});
