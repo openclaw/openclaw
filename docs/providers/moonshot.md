@@ -15,6 +15,12 @@ separate Kimi Coding provider.
 Moonshot and Kimi Coding are **separate providers**, each shipped as a separate external plugin. Keys are not interchangeable, endpoints differ, and model refs differ (`moonshot/...` vs `kimi/...`).
 </Warning>
 
+For installation discovery, Doctor treats `KIMI_API_KEY` as a Kimi Coding credential when Kimi Coding is
+explicitly configured, rather than discovering an extra Moonshot install.
+Explicit Moonshot model or web-search selections and `MOONSHOT_API_KEY` still
+request the Moonshot plugin. Without an explicit Kimi Coding configuration,
+legacy environment-only discovery is unchanged.
+
 ## Built-in model catalog
 
 Moonshot and Kimi Coding setup save connection settings and aliases without copying generated catalog rows into your config.
