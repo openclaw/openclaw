@@ -1,10 +1,15 @@
 import { Value } from "typebox/value";
 import { afterEach, expect, it, vi } from "vitest";
 import { SessionsListParamsSchema } from "../../packages/gateway-protocol/src/schema/sessions-list.js";
-import { requestSessionListParams } from "../../ui/src/lib/sessions/session-requests.js";
+import {
+  buildSessionListParams,
+  requestSessionListParams,
+} from "../../ui/src/lib/sessions/session-requests.js";
+import { buildSessionsListQuery } from "../../ui/src/pages/sessions/list-query.js";
 import { createTestGatewayClient } from "../../ui/src/test-helpers/gateway-client.js";
 import { replaceSessionEntrySync, loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { serializeGatewayFrame } from "./serialized-json.js";
@@ -14,6 +19,60 @@ import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("includes already-materialized titles in each compact Sessions page window", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const context = requestContext(rolePolicyConfig());
+    const client = roleClient("view", "compact-reader");
+    const hiddenOwner = ensureProfileForEmail("compact-hidden-owner@example.test").id;
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    prepareGatewayRecipientProfile(client);
+    const key = "agent:main:archive-review";
+    const title = "Review the community archive";
+    const now = Date.now();
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: key },
+      { sessionId: "archive-review", updatedAt: now, subject: title, visibility: "shared" },
+    );
+    const nextKey = "agent:main:other";
+    const nextTitle = "Plan the archive rollout";
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: nextKey },
+      { sessionId: "other", updatedAt: now - 1, subject: nextTitle, visibility: "shared" },
+    );
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:hidden" },
+      {
+        sessionId: "hidden",
+        updatedAt: now + 1,
+        subject: "Private archive notes",
+        visibility: "draft",
+        createdActor: { type: "human", source: "profile", id: hiddenOwner },
+      },
+    );
+    const query = buildSessionsListQuery("main", {
+      includeGlobal: false,
+      includeUnknown: false,
+      statusFilter: "active",
+      limit: "1",
+    });
+    const result = await listSessions({ context, client, request: buildSessionListParams(query) });
+    expect(result).toMatchObject({ totalCount: 2, hasMore: true, nextOffset: 1 });
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0]).toMatchObject({ key, derivedTitle: title });
+    expect(result.sessions[0]?.displayName).toBeUndefined();
+    expect(result.sessions[0]?.lastMessagePreview).toBeUndefined();
+    const next = await listSessions({
+      context,
+      client,
+      request: buildSessionListParams({ ...query, offset: result.nextOffset! }),
+    });
+    expect(next).toMatchObject({ totalCount: 2, hasMore: false, nextOffset: null });
+    expect(next.sessions).toHaveLength(1);
+    expect(next.sessions[0]).toMatchObject({ key: nextKey, derivedTitle: nextTitle });
+    expect(next.sessions[0]?.lastMessagePreview).toBeUndefined();
+  });
+});
 
 it("reuses compact child rows through the real list handler and client decoder", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
