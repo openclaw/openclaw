@@ -379,6 +379,8 @@ export async function resolveEffectiveToolInventory(
           modelId: params.modelId,
         });
   const modelCompat = resolveConfiguredModelCompat(params);
+  const modelHasVision =
+    params.modelHasVision ?? runtimeModelContext.runtimeModel?.input?.includes("image");
 
   const capabilityProfile =
     params.conversationCapabilityProfile ??
@@ -404,6 +406,7 @@ export async function resolveEffectiveToolInventory(
         config: params.cfg,
         modelApi: runtimeModelContext.modelApi,
         modelBaseUrl: runtimeModelContext.runtimeModel?.baseUrl,
+        modelHasVision,
         modelCompat,
         senderName: params.senderName ?? undefined,
         senderUsername: params.senderUsername ?? undefined,
@@ -464,12 +467,21 @@ export async function resolveEffectiveToolInventory(
     notices.push(CODEX_GITHUB_PREVIEW_UNAVAILABLE_NOTICE);
   }
   const groups = buildEffectiveToolInventoryGroups(entries);
+  const toolAccess = diagnostics.finish(entries.map((entry) => entry.id));
+  if (modelHasVision === false) {
+    const computer = toolAccess.tools.find((tool) => tool.id === "computer");
+    if (computer?.status === "unavailable") {
+      computer.reasons = [
+        { kind: "runtime", label: "The selected model does not support image input" },
+      ];
+    }
+  }
 
   return {
     agentId,
     profile,
     groups,
-    toolAccess: diagnostics.finish(entries.map((entry) => entry.id)),
+    toolAccess,
     ...(notices.length > 0 ? { notices } : {}),
   };
 }
