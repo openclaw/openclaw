@@ -1296,12 +1296,12 @@ actor LocalFixtureChatStore {
                     transcriptMessageID: "fixture-long-latest"),
             ]
         }
-        return fixture.seedMessages.enumerated().map { index, text in
+        return ScreenshotFixtureMode.numberedPrompt(at: now) ?? fixture.seedMessages.enumerated().map { i, text in
             self.message(
                 role: "assistant",
                 text: text,
-                timestamp: now + Double(index),
-                transcriptMessageID: "\(fixture.sessionIDPrefix)-seed-\(index)")
+                timestamp: now + Double(i),
+                transcriptMessageID: "\(fixture.sessionIDPrefix)-seed-\(i)")
         }
     }
 

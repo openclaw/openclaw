@@ -3,6 +3,28 @@ import OpenClawChatUI
 import OpenClawProtocol
 
 enum ScreenshotFixtureMode {
+    static func numberedPrompt(at now: Double) -> [OpenClawChatMessage]? {
+        guard ProcessInfo.processInfo.arguments.contains("--openclaw-numbered-prompt-fixture") else { return nil }
+        let items = (1...8).map { index in
+            "\(index). Review item \(index) on the sample screen. Record what a reader sees " +
+                "before and after the change, using the same examples in both captures."
+        }
+        let prompt = (["Review notes."] + items + ["End of review."]).joined(separator: "\n\n")
+        return [
+            OpenClawChatMessage(
+                role: "user",
+                content: [.init(type: "text", text: prompt)],
+                timestamp: now,
+                transcriptMessageID: "fixture-numbered-prompt"),
+            OpenClawChatMessage(
+                role: "assistant",
+                content: [.init(type: "text", text: "The observations are ready for review.")],
+                timestamp: now + 1,
+                transcriptMessageID: "fixture-numbered-reply",
+                stopReason: "stop"),
+        ]
+    }
+
     static func clockMediaHistory() throws -> [AnyCodable]? {
         guard ProcessInfo.processInfo.arguments.contains("--openclaw-clock-media-fixture") else { return nil }
         let yesterday = Int(Date.now.timeIntervalSince1970 * 1000) - 86_400_000
