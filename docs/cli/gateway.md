@@ -63,6 +63,7 @@ Each entry points at the page that now holds the content.
 - <a id="remote-over-ssh-(mac-app-parity)" />[Remote over SSH (Mac app parity)](/cli/gateway/query#remote-over-ssh-%28mac-app-parity%29)
 - <a id="gateway-call-%3Cmethod%3E" />[`gateway call <method>`](/cli/gateway/query#gateway-call-%3Cmethod%3E)
 - <a id="gateway-suspend" />[`gateway suspend`](/cli/gateway/query#gateway-suspend)
+- <a id="gateway-suspend-status-%3Csuspensionid%3E" />[`gateway suspend status <suspensionId>`](/cli/gateway/query#gateway-suspend-status-%3Csuspensionid%3E)
 - <a id="gateway-resume-%3Csuspensionid%3E" />[`gateway resume <suspensionId>`](/cli/gateway/query#gateway-resume-%3Csuspensionid%3E)
 - <a id="manage-the-gateway-service" />[Manage the Gateway service](/cli/gateway/service#manage-the-gateway-service)
 - <a id="recover-an-unreadable-native-service-definition" />[Recover an unreadable native service definition](/cli/gateway/service#recover-an-unreadable-native-service-definition)
