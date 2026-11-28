@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import type { UpdateAdmissionContext } from "../../infra/update-admission-contract.js";
 import {
   parseUpdateAdmissionVerdict,
@@ -11,6 +12,9 @@ import {
   runReleaseAsServiceAccount,
   type ServiceAccountExecution,
 } from "./update-command-service-account-run.js";
+
+/** Time this process keeps, after the account's run, to clean up and print its refusal. */
+const ADMISSION_RESERVE_MS = 5_000;
 
 /**
  * Installed updaters stage the candidate in a private (0700) directory of their own
@@ -98,6 +102,18 @@ export async function admitAsServiceAccount(
       },
     };
   };
+  // The installed updater ends this process at its own deadline and then falls back to its
+  // own checks of root's state. Return a refusal well before that: its budget runs from when
+  // it started this process, less its cleanup reserve, less time for our cleanup and output.
+  const budgetMs = resolveTimerTimeoutMs(context.request.timeoutMs, 120_000);
+  const accountTimeoutMs =
+    budgetMs -
+    Math.min(2_000, Math.floor(budgetMs / 10)) -
+    ADMISSION_RESERVE_MS -
+    Math.ceil(process.uptime() * 1000);
+  if (accountTimeoutMs < 1_000) {
+    return refuse("no time was left for the account's checks");
+  }
   // Runtime selectors the installed updater set for this candidate, never root's state.
   const handoff = await createServiceAccountHandoff(execution, {
     NODE_DISABLE_COMPILE_CACHE: "1",
@@ -113,7 +129,7 @@ export async function admitAsServiceAccount(
     result = await runReleaseAsServiceAccount(execution, handoff, {
       root: facts.candidateRoot,
       args: ["update", "admit", "--context", file],
-      timeoutMs: context.request.timeoutMs ?? 120_000,
+      timeoutMs: accountTimeoutMs,
     });
   } catch (error) {
     return refuse(error instanceof Error ? error.message : String(error));

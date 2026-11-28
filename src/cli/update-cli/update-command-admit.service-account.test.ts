@@ -142,6 +142,8 @@ beforeEach(() => {
     return true;
   });
   vi.spyOn(console, "error").mockImplementation(() => {});
+  // The installed updater's admission deadline runs from when it started this process.
+  vi.spyOn(process, "uptime").mockReturnValue(1);
   Object.defineProperty(process, "platform", { ...platform, value: "linux" });
   vi.spyOn(os, "userInfo").mockReturnValue(account("root", 0));
   home = dirs.make("service-account-admission-");
@@ -377,7 +379,7 @@ describe("candidate admission for a system unit run by another account", () => {
 });
 
 /** A runuser stand-in: records what root handed the account and answers as the account would. */
-function installAccountProcess(answer: { stdout: string; code: number }) {
+function installAccountProcess(answer: { stdout: string; code: number; hangs?: boolean }) {
   const dir = dirs.make("service-account-process-");
   const shim = path.join(dir, "runuser");
   fs.writeFileSync(path.join(dir, "stdout"), answer.stdout);
@@ -393,6 +395,7 @@ function installAccountProcess(answer: { stdout: string; code: number }) {
       "for last; do :; done",
       'ls -ln "$last" > "$dir/context-mode"',
       'cp "$last" "$dir/context"',
+      ...(answer.hangs ? ["sleep 60"] : []),
       'cat "$dir/stdout"',
       `exit ${answer.code}`,
       "",
@@ -427,7 +430,44 @@ function serviceVerdict(overrides: Partial<UpdateAdmissionVerdict> = {}): Update
   };
 }
 
+/** Rewrites the fixture context with the installed updater's admission budget. */
+function setAdmissionBudget(timeoutMs: number) {
+  const context = JSON.parse(fs.readFileSync(contextPath, "utf8")) as UpdateAdmissionContext;
+  fs.writeFileSync(
+    contextPath,
+    JSON.stringify({ ...context, request: { ...context.request, timeoutMs } }),
+    { mode: 0o600 },
+  );
+}
+
 describe("candidate admission run as the unit's account", () => {
+  it("refuses before the installed updater's deadline when the account does not answer", async () => {
+    installAccountProcess({ stdout: JSON.stringify(serviceVerdict()), code: 0, hangs: true });
+    // 12 s budget: the installed updater gives up at about 10.8 s and then checks root's state.
+    setAdmissionBudget(12_000);
+    const started = Date.now();
+
+    const verdict = await admit();
+
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(process.exitCode).toBe(3);
+    expect(verdict.reasons[0]?.message).toContain("(admission timeout)");
+  });
+
+  it("refuses without starting the account's checks when no time is left", async () => {
+    const accountProcess = installAccountProcess({
+      stdout: JSON.stringify(serviceVerdict()),
+      code: 0,
+    });
+    setAdmissionBudget(12_000);
+    vi.mocked(process.uptime).mockReturnValue(6);
+
+    const verdict = await admit();
+
+    expect(verdict.reasons[0]?.message).toContain("no time was left for the account's checks");
+    expect(accountProcess.exists("argv")).toBe(false);
+  });
+
   it("admits with the verdict the service account's own admission gave for its state", async () => {
     // Installed updaters stage the candidate in a private directory of their own.
     const stage = dirs.make("service-account-stage-");
