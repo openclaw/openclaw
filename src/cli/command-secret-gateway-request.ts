@@ -34,6 +34,7 @@ export async function callGatewaySecretsResolve(
         : {}),
     },
     timeoutMs: params.gatewaySecretResolveTimeoutMs ?? 30_000,
+    ...(params.signal ? { signal: params.signal } : {}),
     clientName: GATEWAY_CLIENT_NAMES.CLI,
     mode: GATEWAY_CLIENT_MODES.CLI,
   };

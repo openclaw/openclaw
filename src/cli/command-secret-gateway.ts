@@ -65,6 +65,7 @@ type CommandSecretScope = {
   allowedPaths?: ReadonlySet<string>;
   forcedActivePaths?: ReadonlySet<string>;
   optionalActivePaths?: ReadonlySet<string>;
+  signal?: AbortSignal;
 };
 
 type CommandSecretResolution = CommandSecretScope & {
@@ -504,6 +505,7 @@ export async function resolveCommandSecretRefsViaGateway(
   try {
     payload = await callGatewaySecretsResolve(params);
   } catch (err) {
+    params.signal?.throwIfAborted();
     const forcedActiveCompatFailure =
       Boolean(params.forcedActivePaths?.size) && isAllowedPathsSecretsResolveCompatError(err);
     let localFailure = "Local resolution also failed.";

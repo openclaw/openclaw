@@ -59,6 +59,7 @@ export async function runStatusJsonCommand(params: {
   const updateRunStatus = await readUpdateRunStatus();
   const includeSecurityAudit = opts.all === true || opts.deep === true;
   const inspectionReason = "Local plugin inspection is not collected in online status.";
+  const usageSecretDiagnostics: string[] = [];
   const snapshot = await resolveStatusRuntimeSnapshot({
     config: scan.cfg,
     sourceConfig: scan.sourceConfig,
@@ -66,6 +67,7 @@ export async function runStatusJsonCommand(params: {
     gatewayProbeDeadlineMs: opts.gatewayProbeDeadlineMs,
     ...(opts.agent ? { agentId: opts.agent } : {}),
     usage: opts.usage,
+    onSecretDiagnostics: (diagnostics) => usageSecretDiagnostics.push(...diagnostics),
     deep: opts.deep,
     gatewayReachable: scan.gatewayReachable,
     ...(scan.gatewayProbe?.startupPhase
@@ -153,7 +155,7 @@ export async function runStatusJsonCommand(params: {
     nodeService: surface.nodeService,
     agents: scan.agentStatus,
     ...(scan.configDiagnostics ? { configDiagnostics: scan.configDiagnostics } : {}),
-    secretDiagnostics: scan.secretDiagnostics,
+    secretDiagnostics: [...scan.secretDiagnostics, ...usageSecretDiagnostics],
     ...(projectedSecurityAudit ? { securityAudit: projectedSecurityAudit } : {}),
     ...(pluginCompatibility
       ? {
