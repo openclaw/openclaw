@@ -44,6 +44,8 @@ export type SubagentCompletionRequest = {
   suppressSessionEffects?: boolean;
   /** Prepare database currency asynchronously; publication rechecks live host authority. */
   recoveryCurrent?: SubagentRecoveryCurrent;
+  /** Fence the recovered answer at commit without retaining its reader for cleanup. */
+  recoveredReplyCheck?: SessionEntryCurrentCheck;
   /** Child effects may be fenced while the recorded result still owes requester delivery. */
   sessionEffects?: SubagentSessionEffects;
   completionSnapshot?: { resultText: string | null; capturedAt: number };
@@ -71,6 +73,8 @@ type SubagentProgressOrigin = {
 type SubagentExecutionState = SubagentRunReadRecord["execution"] & {
   /** Gateway lifecycle that owns child-session effects for this run. */
   lifecycleGeneration?: string;
+  /** Retain unresolved native work even if this harness is unavailable next boot. */
+  replyRecoveryHarness?: string;
   /** Sticky terminal policy: this run must never mutate its child session again. */
   suppressSessionEffects?: true;
   acceptedAt?: number;

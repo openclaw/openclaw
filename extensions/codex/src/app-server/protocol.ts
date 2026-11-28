@@ -261,6 +261,7 @@ type CodexThreadGoal = {
 export type CodexTurnStartParams = JsonObject & {
   threadId: string;
   turnTrigger?: string | null;
+  clientUserMessageId?: string;
   input: CodexUserInput[];
   /** Native 0.153.4 flattens these entries into its Responses turn-metadata object. */
   responsesapiClientMetadata?: Record<string, string> | null;

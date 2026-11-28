@@ -178,6 +178,11 @@ const threadBindingSchema = z
     restrictedThreadConfigFingerprint: optionalNonBlankStringSchema,
     nativeHookRelayGeneration: optionalNonBlankStringSchema,
     appServerRuntimeFingerprint: optionalStringSchema,
+    // Binds one managed run and session to the originally admitted socket and TLS peer pin.
+    managedChildRecoveryFingerprint: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .optional(),
     pluginAppsFingerprint: optionalStringSchema,
     pluginAppsInputFingerprint: optionalStringSchema,
     pluginAppPolicyContext: pluginAppPolicyContextSchema.optional().catch(undefined),

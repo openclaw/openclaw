@@ -9,6 +9,7 @@ export function captureAgentHarnessLifecycleHooks<
     | "withDescendantCancellation"
     | "withSessionDeletion"
     | "withSessionContextReset"
+    | "withInterruptedSubagentReply"
     | "readNativeSubagents",
 >(hook: Hook) {
   const scopedRegistry = () =>

@@ -7,6 +7,7 @@ import {
   getSharedCodexAppServerClient,
   getLeasedSharedCodexAppServerClient,
   createIsolatedCodexAppServerClient,
+  openCodexConfiguredHistoryClient,
   releaseLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
@@ -23,6 +24,30 @@ export function registerSharedClientWebSocketStartupTests({
   createInitializingClientHarness: () => ReturnType<typeof createClientHarness>;
   authHandoff: () => unknown;
 }) {
+  it("opens a history connection without applying or refreshing model credentials", async () => {
+    const harness = createInitializingClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    const client = await openCodexConfiguredHistoryClient({
+      startOptions: createStartOptions({ transport: "websocket", url: "ws://example.invalid" }),
+      timeoutMs: 1_000,
+    });
+    try {
+      const responseIndex = harness.writes.length;
+      harness.send({
+        id: "refresh-on-read",
+        method: "account/chatgptAuthTokens/refresh",
+        params: { reason: "unauthorized" },
+      });
+      expect(JSON.parse(await harness.waitForWrite(responseIndex))).toEqual({
+        id: "refresh-on-read",
+        result: {},
+      });
+      expect(authHandoff).not.toHaveBeenCalled();
+    } finally {
+      await client.closeAndWait();
+    }
+  });
+
   it("recovers a shared unopened WebSocket for foreground acquisition joining background startup", async () => {
     const failed = createClientHarness();
     const replacement = createInitializingClientHarness();

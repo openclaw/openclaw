@@ -82,6 +82,7 @@ import {
   type CodexAppServerStartupLifetime,
   type SharedCodexAppServerClientEntry,
   type SharedCodexAppServerClientStartup,
+  captureSharedClientRegistration,
 } from "./shared-client-lifecycle.js";
 import * as codexStartup from "./shared-client-start-policy.js";
 import {
@@ -91,9 +92,14 @@ import {
 import { CodexAdoptedThreadActiveError } from "./thread-lifecycle-errors.js";
 
 export {
+  captureSharedClientRegistration,
+  captureSharedCodexAppServerCatalogLifetime,
   clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
-  retireSharedCodexAppServerClientIfCurrent,
+  clearSharedCodexAppServerClientIfCurrentAndWait,
+  readCodexServerOwnedWebSocketStartOptions,
   retainSharedCodexAppServerClientByInstanceId,
+  retainSharedCodexAppServerClientIfCurrent,
+  retireSharedCodexAppServerClientIfCurrent,
 } from "./shared-client-lifecycle.js";
 type CodexAppServerClientStartupOptions = Omit<
   Awaited<ReturnType<typeof resolveCodexAppServerClientStartContext>>,
@@ -113,6 +119,7 @@ type CodexAppServerClientStartupOptions = Omit<
     lifetime: CodexAppServerStartupLifetime;
     authProfileId: string | null | undefined;
     onInitializedClient?: () => void;
+    configuredHistoryOnly?: boolean;
     /** False asks this acquisition to join an already owned fallback startup. */
     onManagedFallback?: (startOptions: CodexAppServerStartOptions) => boolean;
   };
@@ -618,8 +625,27 @@ function createSharedCodexAppServerClientStartup(
 }
 
 /** Starts a caller-owned client; its assertion never binds ordinary shared-client leases. */
-export async function createIsolatedCodexAppServerClient(
+export function createIsolatedCodexAppServerClient(
   options?: CodexAppServerClientOptions,
+): Promise<CodexAppServerClient> {
+  return openIsolatedCodexAppServerClient(options);
+}
+
+/** Opens only the configured socket and initializes it for guarded history reads. */
+export function openCodexConfiguredHistoryClient(
+  options: Pick<CodexAppServerClientOptions, "abandonSignal" | "assertCurrent" | "timeoutMs"> & {
+    startOptions: CodexAppServerStartOptions;
+  },
+): Promise<CodexAppServerClient> {
+  if (options.startOptions.transport !== "websocket") {
+    throw new Error("Codex configured history requires a WebSocket connection");
+  }
+  return openIsolatedCodexAppServerClient({ ...options, authProfileId: null }, true);
+}
+
+async function openIsolatedCodexAppServerClient(
+  options?: CodexAppServerClientOptions,
+  configuredHistoryOnly = false,
 ): Promise<CodexAppServerClient> {
   await options?.assertCurrentAsync?.();
   options?.assertCurrent?.();
@@ -643,6 +669,7 @@ export async function createIsolatedCodexAppServerClient(
       abandonSignal,
       assertCurrent: options?.assertCurrent,
       assertCurrentAsync: options?.assertCurrentAsync,
+      configuredHistoryOnly,
       onStartedClient: (client) => {
         trackIsolatedCodexAppServerClient(client);
         options?.onStartedClient?.(client);
@@ -821,13 +848,15 @@ async function startInitializedCodexAppServerClientOnce(
         startOptions.commandSource === "resolved-managed"
           ? resolveManagedCodexNativeCommand(startOptions.command)
           : undefined;
-      getSharedCodexAppServerClientState().startMetadata.set(client, {
+      const metadata = {
         requestedStartOptions: params.requestedStartOptions,
         startOptions,
         agentDir: params.agentDir,
+        serverOwnedWebSocketAuth: false,
         ...(nativeCommandAtStart ? { nativeCommand: nativeCommandAtStart } : {}),
         ...(desktopGeneration ? { desktopGeneration } : {}),
-      });
+      };
+      getSharedCodexAppServerClientState().startMetadata.set(client, metadata);
       assertStartupCurrent();
       params.onStartedClient?.(client);
       try {
@@ -857,6 +886,11 @@ async function startInitializedCodexAppServerClientOnce(
         throw error;
       }
       assertStartupCurrent();
+      if (params.configuredHistoryOnly) {
+        // A passive history connection must never answer account token refresh requests.
+        ready = true;
+        return client;
+      }
       params.onInitializedClient?.();
       await waitForStartup(() =>
         observeCodexCatalogClient(client, {
@@ -913,6 +947,12 @@ async function startInitializedCodexAppServerClientOnce(
           assertCurrent: assertStartupCurrent,
           assertCurrentAsync: params.assertCurrentAsync,
           ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),
+          onServerOwnedAuth: () => {
+            metadata.serverOwnedWebSocketAuth =
+              startOptions.transport === "websocket" &&
+              params.authProfileId == null &&
+              params.preparedAuth === undefined;
+          },
         }),
       );
       const ownsInference =
@@ -962,84 +1002,6 @@ async function startInitializedCodexAppServerClientOnce(
   throw new Error("Managed Codex app-server fallback candidates were exhausted.");
 }
 
-function detachCurrentSharedClient(
-  client: CodexAppServerClient | undefined,
-): client is CodexAppServerClient {
-  const entry = client && getCurrentSharedClientEntry(client);
-  return Boolean(entry && getSharedCodexAppServerClientState().clients.delete(entry.key));
-}
-
-/** Captures the physical client lifetime for passive catalog reads. */
-export function captureSharedCodexAppServerCatalogLifetime(
-  client: CodexAppServerClient,
-): () => boolean {
-  const isCurrent = captureSharedClientRegistration(client);
-  const revision = client.getModelCatalogRevision();
-  return () => isCurrent() && client.getModelCatalogRevision() === revision;
-}
-
-/** Registration ends on retirement even when sibling leases keep the process alive. */
-export function captureSharedClientRegistration(client: CodexAppServerClient): () => boolean {
-  const state = getSharedCodexAppServerClientState();
-  const entry = getCurrentSharedClientEntry(client);
-  return () =>
-    entry !== undefined &&
-    state.clients.get(entry.key) === entry &&
-    entry.client === client &&
-    !entry.closeWhenIdle &&
-    !client.getCloseError();
-}
-
-export function retainSharedCodexAppServerClientIfCurrent(
-  client: CodexAppServerClient | undefined,
-): (() => void) | undefined {
-  const entry = getCurrentSharedClientEntry(client);
-  return entry ? retainSharedClientEntry(entry) : undefined;
-}
-
-/** Captures physical ownership, independently of unrelated thread and reader leases. */
-export function captureCodexAppServerClientLifetime(
-  client: CodexAppServerClient,
-  requiredOwnership: "connection" | "thread-configuration" | "native-process",
-): () => void {
-  const state = getSharedCodexAppServerClientState();
-  // Manual adoption requires a local process. Ordinary configuration refresh can
-  // use any owned connection; its caller separately verifies native thread unload.
-  const start = state.startMetadata.get(client)?.startOptions;
-  if (
-    requiredOwnership === "native-process" &&
-    (start?.transport !== "stdio" || isCodexAppServerProxyLaunch(start.args))
-  ) {
-    throw new AgentHarnessPreflightError(
-      "Codex manual thread adoption requires an OpenClaw-managed local stdio process, not an external socket or app-server proxy. No turn was sent; reconnect through managed local stdio before continuing.",
-    );
-  }
-  const isolated = state.isolatedClients.has(client);
-  const isCurrent = isolated
-    ? () => state.isolatedClients.has(client) && !client.getCloseError()
-    : captureSharedClientRegistration(client);
-  const assertCurrent = () => {
-    if (!isCurrent()) {
-      throw new CodexAdoptedThreadActiveError(
-        "Codex app-server connection changed during thread preparation; reconnect before continuing",
-      );
-    }
-  };
-  assertCurrent();
-  return assertCurrent;
-}
-
-export async function clearSharedCodexAppServerClientIfCurrentAndWait(
-  client: CodexAppServerClient | undefined,
-  options?: Parameters<CodexAppServerClient["closeAndWait"]>[0],
-): Promise<boolean> {
-  if (!detachCurrentSharedClient(client)) {
-    return false;
-  }
-  await client.closeAndWait(options);
-  return true;
-}
-
 export async function clearSharedCodexAppServerClientAndWait(
   options?: Parameters<CodexAppServerClient["closeAndWait"]>[0],
 ): Promise<void> {
@@ -1075,3 +1037,35 @@ resolveGlobalSingleton(
 );
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+/** Captures physical ownership, independently of unrelated thread and reader leases. */
+export function captureCodexAppServerClientLifetime(
+  client: CodexAppServerClient,
+  requiredOwnership: "connection" | "thread-configuration" | "native-process",
+): () => void {
+  const state = getSharedCodexAppServerClientState();
+  // Manual adoption requires a local process. Ordinary configuration refresh can
+  // use any owned connection; its caller separately verifies native thread unload.
+  const start = state.startMetadata.get(client)?.startOptions;
+  if (
+    requiredOwnership === "native-process" &&
+    (start?.transport !== "stdio" || isCodexAppServerProxyLaunch(start.args))
+  ) {
+    throw new AgentHarnessPreflightError(
+      "Codex manual thread adoption requires an OpenClaw-managed local stdio process, not an external socket or app-server proxy. No turn was sent; reconnect through managed local stdio before continuing.",
+    );
+  }
+  const isolated = state.isolatedClients.has(client);
+  const isCurrent = isolated
+    ? () => state.isolatedClients.has(client) && !client.getCloseError()
+    : captureSharedClientRegistration(client);
+  const assertCurrent = () => {
+    if (!isCurrent()) {
+      throw new CodexAdoptedThreadActiveError(
+        "Codex app-server connection changed during thread preparation; reconnect before continuing",
+      );
+    }
+  };
+  assertCurrent();
+  return assertCurrent;
+}

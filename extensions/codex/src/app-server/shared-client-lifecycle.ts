@@ -1,4 +1,4 @@
-/** Client ownership and synchronous retirement, independent of startup/auth execution. */
+/** Client ownership and retirement, independent of startup and authentication execution. */
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { defineCodexBuildState } from "../build-state.js";
 import type { CodexAppServerClient } from "./client.js";
@@ -129,6 +129,7 @@ type CodexAppServerClientStartMetadata = {
   transportExit?: Promise<void>;
   requestedStartOptions: CodexAppServerStartOptions;
   startOptions: CodexAppServerStartOptions;
+  serverOwnedWebSocketAuth?: boolean;
   agentDir?: string;
   nativeCommand?: string;
   desktopGeneration?: CodexDesktopGeneration;
@@ -161,6 +162,14 @@ export const getSharedCodexAppServerClientState = defineCodexBuildState(
     startMetadata: new WeakMap(),
   }),
 );
+
+/** Returns the physical socket selection only when startup attested no forwarded credentials. */
+export function readCodexServerOwnedWebSocketStartOptions(client: CodexAppServerClient) {
+  const metadata = getSharedCodexAppServerClientState().startMetadata.get(client);
+  return metadata?.serverOwnedWebSocketAuth && !client.getCloseError()
+    ? metadata.startOptions
+    : undefined;
+}
 
 export function trackIsolatedCodexAppServerClient(client: CodexAppServerClient): void {
   const state = getSharedCodexAppServerClientState();
@@ -197,6 +206,52 @@ export function getCurrentSharedClientEntry(
   return entry && entry.client === client && state.clients.get(entry.key) === entry
     ? entry
     : undefined;
+}
+
+/** Captures the physical client lifetime for passive catalog reads. */
+export function captureSharedCodexAppServerCatalogLifetime(
+  client: CodexAppServerClient,
+): () => boolean {
+  const isCurrent = captureSharedClientRegistration(client);
+  const revision = client.getModelCatalogRevision();
+  return () => isCurrent() && client.getModelCatalogRevision() === revision;
+}
+
+/** Registration ends on retirement even when sibling leases keep the process alive. */
+export function captureSharedClientRegistration(client: CodexAppServerClient): () => boolean {
+  const state = getSharedCodexAppServerClientState();
+  const entry = getCurrentSharedClientEntry(client);
+  return () =>
+    entry !== undefined &&
+    state.clients.get(entry.key) === entry &&
+    entry.client === client &&
+    !entry.closeWhenIdle &&
+    !client.getCloseError();
+}
+
+export function retainSharedCodexAppServerClientIfCurrent(
+  client: CodexAppServerClient | undefined,
+): (() => void) | undefined {
+  const entry = getCurrentSharedClientEntry(client);
+  return entry ? retainSharedClientEntry(entry) : undefined;
+}
+
+function detachCurrentSharedClient(
+  client: CodexAppServerClient | undefined,
+): client is CodexAppServerClient {
+  const entry = client && getCurrentSharedClientEntry(client);
+  return Boolean(entry && getSharedCodexAppServerClientState().clients.delete(entry.key));
+}
+
+export async function clearSharedCodexAppServerClientIfCurrentAndWait(
+  client: CodexAppServerClient | undefined,
+  options?: Parameters<CodexAppServerClient["closeAndWait"]>[0],
+): Promise<boolean> {
+  if (!detachCurrentSharedClient(client)) {
+    return false;
+  }
+  await client.closeAndWait(options);
+  return true;
 }
 
 /**

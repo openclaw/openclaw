@@ -638,6 +638,27 @@ type AgentHarnessContract<
     /** Revalidate the retained caller after awaited work and before returning ownership. */
     assertCurrent: () => void;
   }): Promise<AgentHarnessSessionRuntimeOwnership | undefined>;
+  /**
+   * Pass a verified final to the original owner without restarting work. An
+   * unclaimed run uses normal interruption handling. Unknown or live remote
+   * work must retain its local session, even if the connection is lost.
+   */
+  withInterruptedSubagentReply?(params: {
+    agentId: string;
+    sessionKey: string;
+    sessionId: string;
+    lifecycleRevision: string;
+    runId: string;
+    config: OpenClawConfig;
+    assertCurrent: () => void;
+    /** Claim a recognized launch before consulting its external history. Never grants execution. */
+    claim: () => Promise<void>;
+    accept: (
+      text: string,
+      assertBindingCurrent: () => void,
+      idempotencyKey: string,
+    ) => Promise<void>;
+  }): Promise<"pending" | "unknown" | "interrupted" | void>;
   /** Read retained native-child observations without starting or adopting native work. */
   readNativeSubagents?(params: {
     agentId: string;

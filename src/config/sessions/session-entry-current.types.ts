@@ -36,6 +36,7 @@ export type SessionEntryCurrentFacts = {
   lifecycleRunId?: unknown;
   lastRunId?: unknown;
   activeWriterRunId?: unknown;
+  abortedLastRun?: unknown;
   spawnedBy?: unknown;
   spawnDepth?: unknown;
   completionOwnerSessionKey?: unknown;

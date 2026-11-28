@@ -35,6 +35,10 @@ import {
   shouldRequireCodexSandboxExecServerEnvironment,
 } from "./dynamic-tool-build.js";
 import {
+  codexManagedChildRecoveryFingerprint,
+  isCodexManagedChildAttempt,
+} from "./managed-child-turn.js";
+import {
   buildCodexAppServerRuntimeFingerprint,
   buildCodexPluginAppCacheKey,
 } from "./plugin-app-cache-key.js";
@@ -55,6 +59,7 @@ import {
   createIsolatedCodexAppServerClient,
   getLeasedSharedCodexAppServerClient,
   readCodexAppServerClientDesktopGenerationFingerprint,
+  readCodexServerOwnedWebSocketStartOptions,
   releaseLeasedSharedCodexAppServerClient,
   type CodexAppServerClientOptions,
   type CodexAppServerClientFactory,
@@ -346,6 +351,22 @@ export async function startCodexAttemptThread(params: {
               appServerVersion: activeStartupClient.getServerVersion(),
               runtimeIdentity: startupRuntimeIdentity,
             });
+            // A cold reader may use only the originally admitted socket and server-owned auth.
+            const serverOwnedSocket =
+              readCodexServerOwnedWebSocketStartOptions(activeStartupClient);
+            const managedChildRecoveryFingerprint =
+              (params.attemptClientFactory === getLeasedSharedCodexAppServerClient ||
+                params.attemptClientFactory === createIsolatedCodexAppServerClient) &&
+              params.pluginConfig.appServer?.transport === "websocket" &&
+              params.appServer.start.transport === "websocket" &&
+              params.clientOptions.startOptions?.transport === "websocket" &&
+              serverOwnedSocket &&
+              isCodexManagedChildAttempt(attemptParams)
+                ? codexManagedChildRecoveryFingerprint({
+                    ...attemptParams,
+                    appServer: { ...params.appServer, start: serverOwnedSocket },
+                  })
+                : undefined;
             const createPluginThreadConfig = prepareCodexPluginThreadConfigStartupProvider({
               startupPolicy: pluginStartupPolicy,
               appCacheKey: pluginAppCacheKey,
@@ -489,6 +510,7 @@ export async function startCodexAttemptThread(params: {
                 configuredMcpOwnershipVersion: params.configuredMcpOwnershipVersion,
                 environmentSelection: startupEnvironmentSelection,
                 appServerRuntimeFingerprint,
+                managedChildRecoveryFingerprint,
                 contextEngineProjection: params.contextEngineProjection,
                 historyBootstrapItems: params.historyBootstrapItems,
                 historyDeltaItems: params.historyDeltaItems,

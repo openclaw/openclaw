@@ -92,6 +92,7 @@ function createCurrentEntryRead(
         lifecycleRunId: current.lifecycleRunId,
         lastRunId: current.lastRunId,
         activeWriterRunId: current.activeWriterRunId,
+        abortedLastRun: current.abortedLastRun,
         skillLibrarySelections: current.skillLibrarySelections,
         executionPolicy: captureSessionExecutionPolicy(current),
       };

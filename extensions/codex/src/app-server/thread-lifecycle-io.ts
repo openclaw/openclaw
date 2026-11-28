@@ -619,6 +619,7 @@ export async function startFreshCodexThread(
   );
   // An authored native base moves OpenClaw's base into the developer carrier.
   const baseInstructions = context.resolveOpenClawBaseInstructions();
+  const fresh = !replacementPredecessor && !startParams.ephemeral;
   const startedBinding: CodexAppServerThreadBinding = {
     threadId: response.thread.id,
     ...(clientId ? { clientId } : {}),
@@ -644,6 +645,7 @@ export async function startFreshCodexThread(
     ringZeroClientInstanceId,
     nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
     appServerRuntimeFingerprint: params.appServerRuntimeFingerprint,
+    managedChildRecoveryFingerprint: fresh ? params.managedChildRecoveryFingerprint : undefined,
     pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
     pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
     pluginAppPolicyContext: pluginThreadConfig?.policyContext,
