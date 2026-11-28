@@ -24,6 +24,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildFoundryDecisionProvider } from "./decision-provider.js";
 import { buildMicrosoftFoundryProvider } from "./provider.js";
 import { prepareFoundryRuntimeAuth } from "./runtime.js";
 import {
@@ -89,6 +90,9 @@ export default definePluginEntry({
   description: "Microsoft Foundry provider with Entra ID and API key auth",
   register(pluginApi) {
     pluginApi.registerProvider(buildMicrosoftFoundryProvider());
+    pluginApi.registerDecisionProvider(
+      buildFoundryDecisionProvider(() => pluginApi.runtime.config.current()),
+    );
     pluginApi.registerImageGenerationProvider({
       id: PROVIDER_ID,
       label: "Microsoft Foundry",

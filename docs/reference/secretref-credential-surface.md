@@ -156,6 +156,7 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 - `plugins.entries.google.config.webSearch.apiKey`
 - `plugins.entries.google.config.webSearch.headers.*`
 - `plugins.entries.imap.config.accounts.*.password`
+- `plugins.entries.microsoft-foundry.config.decision.apiKey`
 - `plugins.entries.minimax.config.webSearch.apiKey`
 - `plugins.entries.moonshot.config.webSearch.apiKey`
 - `plugins.entries.parallel.config.webSearch.apiKey`

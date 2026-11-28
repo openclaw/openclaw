@@ -549,12 +549,21 @@ path, serialized body (omit it for a GET), and a decoder for the bounded JSON
 payload. Optional route fields cover real provider differences: `authHeaders`
 replaces the default `Authorization: Bearer` header, `statusReason` maps a
 documented provider status, and `maxResponseBytes` changes the 1 MiB read bound.
+Set `capture: false` to skip application HTTP debug capture for the request.
 
-The executor owns the deadline and timeout signal, one admission check when the
-request starts, guarded fetch with the trusted env-proxy mode, no redirects,
-status classification (401/403 authentication, 429 rate-limited with
-Retry-After, 400/413/422 unsupported input, otherwise transport), the bounded
-read, credential-reflection rejection, and release. Cancellation and thrown
+For a resource-bound API key, supply `isBoundResourceCurrent` and validate the
+resource before constructing the URL. The executor requires HTTPS, restricts
+requests to the resource hostname under the strict address policy, and checks
+admission and the binding once when each request starts. A request that passes
+these checks may finish; subsequent requests check both again. It uses
+provider-owned auth headers instead of prepared model headers or auth overrides;
+prepared proxy and TLS policy still apply.
+
+The executor owns the deadline and timeout signal, admission at request start,
+guarded fetch with the trusted env-proxy mode, no redirects, status
+classification (401/403 authentication, 429 rate-limited with Retry-After,
+400/413/422 unsupported input, otherwise transport), the bounded read,
+credential-reflection rejection, and release. Cancellation and thrown caller
 admission errors pass through. A decoder that throws returns an invalid
 response. It makes one request, never discovers credentials, and never retries.
 A provider with a queue wait or retry calls it again, which checks admission

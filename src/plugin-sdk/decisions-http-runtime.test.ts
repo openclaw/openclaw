@@ -7,6 +7,7 @@ type GuardedRequest = {
   url: string;
   maxRedirects?: number;
   mode?: string;
+  beforeRequest?: () => void;
   signal: AbortSignal;
   init: RequestInit;
 };
@@ -229,11 +230,36 @@ it("checks admission once when the request starts and passes authority errors th
 
 it("passes caller cancellation through instead of reporting transport failure", async () => {
   const controller = new AbortController();
+  const cancelled = new Error("caller cancelled");
   mocks.fetch.mockImplementation(async () => {
-    controller.abort(new Error("caller cancelled"));
+    controller.abort(cancelled);
     throw new Error("socket closed");
   });
-  await expect(evaluate({ signal: controller.signal })).rejects.toThrow("caller cancelled");
+  await expect(evaluate({ signal: controller.signal })).rejects.toBe(cancelled);
+  expect(request().signal.reason).toBe(cancelled);
   mocks.fetch.mockRejectedValue(new Error("socket closed"));
   await expect(evaluate()).resolves.toEqual({ status: "unavailable", reason: "transport" });
+});
+
+it("lets an admitted resource-bound request finish and checks authority on the next request", async () => {
+  const authorityError = new Error("grant revoked during transport preparation");
+  let revoked = false;
+  const isAdmissible = vi.fn(() => {
+    if (revoked) {
+      throw authorityError;
+    }
+    return true;
+  });
+  mocks.fetch.mockImplementationOnce(async ({ beforeRequest }) => {
+    revoked = true;
+    beforeRequest?.();
+    return Response.json({ answer: true });
+  });
+
+  const route = { isBoundResourceCurrent: () => true };
+  await expect(evaluate({ isAdmissible }, route)).resolves.toEqual(ok);
+  expect(isAdmissible).toHaveBeenCalledOnce();
+  await expect(evaluate({ isAdmissible }, route)).rejects.toBe(authorityError);
+  expect(isAdmissible).toHaveBeenCalledTimes(2);
+  expect(mocks.fetch).toHaveBeenCalledOnce();
 });
