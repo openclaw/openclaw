@@ -75,6 +75,5 @@ test("encodeKeySequence supports hex + literal with warnings", () => {
 
 test("encodePaste wraps bracketed sequences by default", () => {
   const payload = encodePaste("line1\nline2\n");
-  expect(payload.startsWith(`${ESC}[200~`)).toBe(true);
-  expect(payload.endsWith(`${ESC}[201~`)).toBe(true);
+  expect(payload).toBe(`${ESC}[200~line1\nline2\n${ESC}[201~`);
 });
