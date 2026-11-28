@@ -110,6 +110,7 @@ export async function readSessionTranscriptAccountingAsync(
     ...(Object.hasOwn(options, "includeTurnTaint")
       ? { includeTurnTaint: options.includeTurnTaint }
       : {}),
+    ...(options.excludeSystemPromptCheckpoints ? { excludeSystemPromptCheckpoints: true } : {}),
   };
   const memory = captureSessionActorTranscriptRead(scope, signal);
   if (memory) {

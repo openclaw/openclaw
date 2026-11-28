@@ -551,7 +551,17 @@ export function readSessionActorMemoryHistoryFacts(
     }
     case "session.history.accounting": {
       const { options } = query.input;
-      const contextRows = options.includeByteSize ? contextAccountingRows(navigation) : [];
+      const contextRows = options.includeByteSize
+        ? contextAccountingRows(navigation).filter(
+            ({ event }) =>
+              !options.excludeSystemPromptCheckpoints ||
+              !(
+                isRecord(event) &&
+                event.type === "custom" &&
+                event.customType === "openclaw.system-prompt"
+              ),
+          )
+        : [];
       const tail = navigation.active
         .filter((row) => transcriptEventContextEligibility(row.event) === 1)
         .slice(-SQLITE_USAGE_TAIL_MAX_EVENTS);

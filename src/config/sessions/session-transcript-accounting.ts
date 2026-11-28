@@ -126,7 +126,9 @@ export function readSessionTranscriptAccountingFromProjection(
   const snapshot: SessionTranscriptAccountingSnapshot = {};
   try {
     if (params.includeByteSize) {
-      const stats = readVisibleTranscriptStats(projection);
+      const stats = readVisibleTranscriptStats(projection, {
+        excludeSystemPromptCheckpoints: params.excludeSystemPromptCheckpoints === true,
+      });
       snapshot.byteSize = stats.sizeBytes;
       snapshot.eventCount = stats.eventCount;
     }

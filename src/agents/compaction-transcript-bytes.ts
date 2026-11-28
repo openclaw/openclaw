@@ -39,7 +39,7 @@ export async function readCompactionTranscriptBytes(params: {
     rawBytes ??= (
       await readSessionTranscriptAccountingAsync(
         params.target,
-        { includeByteSize: true, includeUsage: false },
+        { includeByteSize: true, includeUsage: false, excludeSystemPromptCheckpoints: true },
         signal,
       )
     ).byteSize;

@@ -2,7 +2,11 @@
 import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { sql } from "kysely";
 import { selectResetKeptEntries } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
-import { jsonArrayElements, jsonValid } from "../../infra/database-engine/json-values.js";
+import {
+  jsonArrayElements,
+  jsonPathValue,
+  jsonValid,
+} from "../../infra/database-engine/json-values.js";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import {
   executeSqliteQuerySync,
@@ -643,15 +647,20 @@ export function* iterateVisibleMessageMetadata(
 /** Reads logical transcript bytes, reusing cached retained-tail facts after resets. */
 export function readVisibleTranscriptStats(
   projection: CurrentTranscriptProjection,
+  options?: { excludeSystemPromptCheckpoints?: boolean },
 ): SessionTranscriptContextStats {
-  if (projection.contextStats) {
-    return projection.contextStats;
+  const excludeSystemPromptCheckpoints = options?.excludeSystemPromptCheckpoints === true;
+  // Retained projection facts cannot prove checkpoint exclusion; the query below can.
+  if (!excludeSystemPromptCheckpoints) {
+    if (projection.contextStats) {
+      return projection.contextStats;
+    }
+    if (projection.contextMetadata) {
+      const { eventCount, sizeBytes } = projection.contextMetadata;
+      return { eventCount, sizeBytes, boundaryActivePosition: -1 };
+    }
   }
-  if (projection.contextMetadata) {
-    const { eventCount, sizeBytes } = projection.contextMetadata;
-    return { eventCount, sizeBytes, boundaryActivePosition: -1 };
-  }
-  const key = `${projection.database.path}\0${projection.resolved.sessionId}\0context`;
+  const key = `${projection.database.path}\0${projection.resolved.sessionId}\0context${excludeSystemPromptCheckpoints ? "-no-system-prompt" : ""}`;
   const cacheable = !hasUncommittedSqliteWrites(projection.database.db);
   const cached = cacheable ? resetMessageWindowCache.get(key) : undefined;
   const stats = cached && "window" in cached ? cached.stats : undefined;
@@ -688,6 +697,32 @@ export function readVisibleTranscriptStats(
     )
     .$if(window !== null, (query) =>
       query.where("active.active_position", ">", window!.boundaryActivePosition),
+    )
+    .$if(excludeSystemPromptCheckpoints, (query) =>
+      query.where(
+        /* kysely-allow-raw: saved prompt checkpoints keep their full navigation entry in facts. */
+        sql<number>`CASE
+          WHEN facts.seq IS NOT NULL THEN CASE
+            WHEN ${jsonPathValue(
+              projection.database.db,
+              sql.ref("facts.dependency_navigation_json"),
+              sql.lit("$.customType"),
+            )} = 'openclaw.system-prompt' THEN 0
+            ELSE 1
+          END
+          WHEN ${jsonPathValue(
+            projection.database.db,
+            sql`(SELECT ${transcriptEventNavigationSql(projection.database.db, "fallback")}
+              FROM transcript_events AS fallback
+              WHERE fallback.session_id = active.session_id
+                AND fallback.seq = active.event_seq)`,
+            sql.lit("$.customType"),
+          )} = 'openclaw.system-prompt' THEN 0
+          ELSE 1
+        END`,
+        "=",
+        1,
+      ),
     );
   const row = executeSqliteQueryTakeFirstSync(
     projection.database.db,
