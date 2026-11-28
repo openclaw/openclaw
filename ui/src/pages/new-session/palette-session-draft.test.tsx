@@ -242,7 +242,7 @@ describe("PaletteSessionDraft", () => {
     await select("local", "registered");
     await select("runtime:agentsapi");
     expect(setting(host, "workspace")?.textContent).toContain("Hosted workspace");
-    expect(setting(host, "workspace")?.textContent).toContain("OpenAI (Agents API)");
+    expect(setting(host, "workspace")?.getAttribute("aria-label")).toContain("OpenAI (Agents API)");
     expect(setting(host, "worktree")).toBeNull();
     await select("local", "registered");
     expect(setting(host, "workspace")?.textContent).toContain("Local project");
@@ -853,7 +853,6 @@ describe("palette-only remembered settings", () => {
     "leaves workspace-search composition keys untouched: %j",
     async (composition) => {
       const { host } = await mountPreferences();
-      setting(host, "trigger")!.click();
       expectDefined(setting(host, "workspace"), "workspace picker").click();
       await host.updateComplete;
       const search = expectDefined(

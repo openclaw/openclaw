@@ -855,10 +855,9 @@ disabled plugins. An uninstalled plugin with a catalog entry opens its catalog
 page directly. Search results show the plugin artwork when available. The
 **Plugins** navigation command opens the catalog hub.
 
-Open **New session settings** beside the input to choose the agent, workspace and
-machine, or whether to use a new worktree. These controls reuse the permissions
-and device/cloud availability rules of the full New session page. Model,
-attachment, and visibility controls remain on that page.
+Open the project field beside **New session settings** to choose a workspace and
+machine or turn on **New worktree**. These controls follow the same placement rules
+as the full New session page. Choose the agent in Settings and the model beside Send.
 
 The palette starts with your usual defaults. Turn on **Remember settings** to
 reuse different choices for Cmd/Ctrl+K without changing those defaults. Clearing

@@ -151,8 +151,9 @@ new background session without changing your current conversation or composer.
 Each newly added attachment switches the palette to **Compose**, including after
 you return to Search with an attachment still in the draft.
 Add optional instructions, then send or press **Cmd/Ctrl+Enter**. The settings
-button at the left of the composer opens **New session settings** for the agent,
-folder, worktree, and **Remember settings**; the model picker sits beside Send.
+button contains the agent and **Remember settings**. The adjacent project field shows
+the current workspace; open it to choose a project or toggle **New worktree**.
+A branch icon marks a new worktree. The model picker sits beside Send.
 Dropping a file does not start the session by itself.
 Files remain visible while preparing. If a file is rejected, an error toast
 explains the failure and only that file is removed. You can manually start a
