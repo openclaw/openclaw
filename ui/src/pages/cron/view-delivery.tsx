@@ -1,5 +1,5 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { createMemo, createSignal } from "solid-js";
+import { createMemo, createSignal, Show } from "solid-js";
 import type { ChannelPickerOption } from "../../components/solid/channel-picker.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
@@ -177,7 +177,6 @@ export function Advanced(
     selectedDeliveryMode: CronFormState["deliveryMode"];
   },
 ) {
-  const isCronSchedule = () => props.form.scheduleKind === "cron";
   const channelOptions = createMemo(() => buildChannelOptions(props));
   const [open, setOpen] = createSignal(false);
   const hasAdvancedError = createMemo(() =>
@@ -306,8 +305,22 @@ export function Advanced(
             </>
           ) : undefined}
         </SettingsSection>
-        {isCronSchedule() ? (
-          <SettingsSection title={t("cron.form.advancedTiming")}>
+        <SettingsSection title={t("cron.form.advancedTiming")}>
+          <ToggleRow
+            {...props}
+            field="idleOnly"
+            label={t("cron.form.idleOnly")}
+            help={t("cron.form.idleOnlyHelp")}
+          />
+          {props.isAgentTurn ? (
+            <ToggleRow
+              {...props}
+              field="payloadSkipIfScratchEmpty"
+              label={t("cron.form.skipIfScratchEmpty")}
+              help={t("cron.form.skipIfScratchEmptyHelp")}
+            />
+          ) : undefined}
+          <Show when={props.form.scheduleKind === "cron"}>
             <CronInput
               {...props}
               field="cronTz"
@@ -324,8 +337,8 @@ export function Advanced(
               help={t("cron.form.exactTimingHelp")}
             />
             <DurationRow {...props} kind="stagger" />
-          </SettingsSection>
-        ) : undefined}
+          </Show>
+        </SettingsSection>
         <SettingsSection title={t("cron.form.advancedConditions")}>
           <ToggleRow
             {...props}
@@ -359,20 +372,6 @@ export function Advanced(
                 placeholder={t("cron.form.timezonePlaceholder")}
               />
             </>
-          ) : undefined}
-          <ToggleRow
-            {...props}
-            field="idleOnly"
-            label={t("cron.form.idleOnly")}
-            help={t("cron.form.idleOnlyHelp")}
-          />
-          {props.isAgentTurn ? (
-            <ToggleRow
-              {...props}
-              field="payloadSkipIfScratchEmpty"
-              label={t("cron.form.skipIfScratchEmpty")}
-              help={t("cron.form.skipIfScratchEmptyHelp")}
-            />
           ) : undefined}
           <TriggerRows {...props} />
         </SettingsSection>
