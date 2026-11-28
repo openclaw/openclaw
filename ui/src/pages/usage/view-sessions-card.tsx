@@ -9,7 +9,7 @@ import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { useProviderDisplayLabel } from "../../lib/reactive/provider-presentation.tsx";
 import "../../components/tooltip.ts";
-import { formatAnalysisCost, formatUsageTokens } from "./metrics.ts";
+import { formatAnalysisCost, formatLatencyCompact, formatUsageTokens } from "./metrics.ts";
 import type { UsageProps, UsageSessionEntry } from "./types.ts";
 
 const SESSION_SORT_OPTIONS = [
@@ -28,6 +28,7 @@ const buildSessionMeta = (
   const provider = session.modelProvider ?? session.providerOverride;
   const counts = session.usage?.messageCounts;
   const tools = session.usage?.toolUsage?.totalCalls;
+  const p95Ms = session.usage?.latency?.p95Ms;
   return [
     session.channel,
     provider && providerDisplayLabel(provider),
@@ -37,6 +38,13 @@ const buildSessionMeta = (
     counts?.errors &&
       `${counts.errors.toLocaleString()} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))}`,
     session.usage?.durationMs && formatDurationCompact(session.usage.durationMs),
+    // Overview rows merge per-quarter p95s by keeping the largest, so this is the worst quarter's
+    // p95, not a percentile over every turn. Zero or non-finite samples stay silent, and the
+    // nowrap meta line clips p95 first on a narrow row.
+    p95Ms != null &&
+      Number.isFinite(p95Ms) &&
+      p95Ms > 0 &&
+      `${t("usage.overview.p95")} ${formatLatencyCompact(p95Ms)}`,
   ].filter((part): part is string => typeof part === "string" && part.length > 0);
 };
 
