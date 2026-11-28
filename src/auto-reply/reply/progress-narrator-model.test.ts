@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import { generateNarrationWithUtilityModel } from "./progress-narrator-model.js";
 
 const complete = vi.hoisted(() => vi.fn());
@@ -66,4 +68,27 @@ describe("progress narration completion cancellation", () => {
       expect(vi.getTimerCount()).toBe(0);
     },
   );
+
+  it("refuses a model the turn's role denies before dispatch", async () => {
+    const actual = await vi.importActual<typeof import("../../agents/isolated-completion.js")>(
+      "../../agents/isolated-completion.js",
+    );
+    complete.mockImplementationOnce(actual.runIsolatedCompletion);
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "narration-guest",
+      scopes: ["operator.write"],
+      assertCurrent: () => {},
+      modelPolicy: prepareOperatorModelPolicy({ cfg: {}, policy: { allow: [] } }),
+    });
+
+    const result = await generateNarrationWithUtilityModel({
+      cfg: {},
+      prepared,
+      input: { userMessage: "Inspect the fixture", activityNotes: [], previousText: "" },
+      operatorAuthority,
+    });
+
+    expect(result.text).toBeNull();
+    expect(result.error).toContain("Your operator role cannot use this model");
+  });
 });

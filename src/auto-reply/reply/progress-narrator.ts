@@ -1,3 +1,4 @@
+import { resolveIsolatedCompletionProvider } from "../../agents/isolated-completion-route.js";
 import {
   createSessionActivityNoteState,
   flushSessionActivityAssistantNote,
@@ -52,6 +53,8 @@ function createProgressNarrator(params: {
   onUpdate: (payload: { text: string }) => Promise<void> | void;
   isProgressDraftVisible?: () => boolean;
   abortSignal?: AbortSignal;
+  /** The turn's admitted authority; its role policy also binds the utility model. */
+  operatorAuthority?: InternalGetReplyOptions["operatorAuthority"];
   /** Mirror of the channel's commandText: "status" policy for narration input. */
   hideCommandText?: boolean;
 }) {
@@ -136,7 +139,16 @@ function createProgressNarrator(params: {
     if (abortSignal.aborted) {
       return null;
     }
-    if (!prepared) {
+    // A role that refuses the utility model gets no narration, like a missing model.
+    const policy = params.operatorAuthority?.modelPolicy;
+    if (
+      !prepared ||
+      (policy &&
+        !policy.allows({
+          provider: resolveIsolatedCompletionProvider(prepared).provider,
+          model: prepared.model,
+        }))
+    ) {
       disableNarration();
       return null;
     }
@@ -147,6 +159,7 @@ function createProgressNarrator(params: {
       prepared,
       input,
       abortSignal,
+      operatorAuthority: params.operatorAuthority,
     });
   };
 
@@ -393,6 +406,7 @@ export function attachProgressNarratorToReplyOptions(params: {
     onUpdate: onNarrationUpdate,
     isProgressDraftVisible: opts.isProgressDraftVisible,
     abortSignal: opts.abortSignal,
+    operatorAuthority: opts.operatorAuthority,
     hideCommandText: opts.narrationHideCommandText === true,
   });
   opts.onProgressNarratorLifecycle?.({

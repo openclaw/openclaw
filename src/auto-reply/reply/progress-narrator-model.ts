@@ -1,3 +1,4 @@
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { runIsolatedCompletion } from "../../agents/isolated-completion.js";
 import { prepareUtilityCompletionForAgent } from "../../agents/utility-completion.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -54,6 +55,8 @@ export async function generateNarrationWithUtilityModel(params: {
   prepared: NonNullable<Awaited<ReturnType<typeof prepareNarrationModel>>>;
   input: ProgressNarrationInput;
   abortSignal?: AbortSignal;
+  /** The turn's admitted authority; execution refuses a model its role denies. */
+  operatorAuthority?: AdmittedRunOperatorAuthority;
 }): Promise<{ text: string | null; error?: string }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), NARRATION_TIMEOUT_MS);
@@ -70,6 +73,7 @@ export async function generateNarrationWithUtilityModel(params: {
       prompt: buildNarrationUserPrompt(params.input),
       timeoutMs: NARRATION_TIMEOUT_MS,
       abortSignal: signal,
+      operatorAuthority: params.operatorAuthority,
       answerTokenBudget: 4_096,
       streamParams: { temperature: 0.3 },
     });

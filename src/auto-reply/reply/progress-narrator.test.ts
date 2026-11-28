@@ -1,6 +1,8 @@
 // Progress narrator tests cover trigger policy, gating, and reply-option wiring.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import { PROGRESS_STATUS_PREAMBLE_FRESH_MS } from "../../channels/progress-draft-compositor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
@@ -71,6 +73,7 @@ function createNarratorHarness(params?: {
   now?: () => number;
   hideCommandText?: boolean;
   isProgressDraftVisible?: () => boolean;
+  operatorAuthority?: InternalGetReplyOptions["operatorAuthority"];
 }) {
   const inputs: ProgressNarrationInput[] = [];
   const texts = params?.texts ?? ["Working on the request."];
@@ -95,6 +98,7 @@ function createNarratorHarness(params?: {
     opts: {
       onNarrationUpdate: onUpdate,
       abortSignal: params?.abortSignal,
+      operatorAuthority: params?.operatorAuthority,
       onToolStart: vi.fn(),
       onItemEvent: vi.fn(),
       onProgressNarratorLifecycle: (value) => {
@@ -451,6 +455,38 @@ describe("progress narration through reply options", () => {
     expect(String(narratorWarnSpy.mock.calls[0]?.[0])).toContain(
       "narration disabled after 2 consecutive failures",
     );
+  });
+
+  it.each([
+    { allow: "openai/gpt-main", narrates: false },
+    { allow: "openai/gpt-5.5-mini", narrates: true },
+  ])("binds the utility model to the turn's role (allow $allow)", async ({ allow, narrates }) => {
+    narratorWarnSpy.mockClear();
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "narration-guest",
+      scopes: ["operator.write"],
+      assertCurrent: () => {},
+      modelPolicy: prepareOperatorModelPolicy({
+        cfg: narratorCfg,
+        policy: { sourceAgent: "main", allow: [allow] },
+      }),
+    });
+    const { narrator, onUpdate } = createNarratorHarness({ operatorAuthority });
+
+    narrator.noteToolStart({ name: "exec", phase: "start" });
+    await flushNarrations();
+
+    if (narrates) {
+      expect(generateNarrationWithUtilityModel).toHaveBeenCalledWith(
+        expect.objectContaining({ operatorAuthority }),
+      );
+      expect(onUpdate).toHaveBeenLastCalledWith({ text: "Working on the request." });
+    } else {
+      // A refusing role makes no completion attempt and logs nothing.
+      expect(generateNarrationWithUtilityModel).not.toHaveBeenCalled();
+      expect(onUpdate).not.toHaveBeenCalled();
+      expect(narratorWarnSpy).not.toHaveBeenCalled();
+    }
   });
 
   it("clears rendered narration when it disables after failures", async () => {
