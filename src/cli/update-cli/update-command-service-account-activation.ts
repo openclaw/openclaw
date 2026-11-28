@@ -330,7 +330,13 @@ async function servesCandidate(
     const command = retitled ? execution.programArguments : argv;
     const index = resolveServiceEntrypointIndex(command);
     const script = index === undefined ? undefined : command[index];
-    const entry = script ? await fs.realpath(script).catch(() => "") : "";
+    // A relative entry (with the unit's WorkingDirectory=) resolves against the process's cwd.
+    const entry = script
+      ? await fs
+          .readlink(`/proc/${pid}/cwd`)
+          .then((cwd) => fs.realpath(path.resolve(cwd, script)))
+          .catch(() => "")
+      : "";
     return (
       entry.startsWith(realRoot + path.sep) &&
       (await readPackageVersion(realRoot, { maxBytes: 1024 * 1024 })) === candidateVersion

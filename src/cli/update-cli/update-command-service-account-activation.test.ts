@@ -425,6 +425,21 @@ describe("system service update as the unit's account", () => {
   );
 
   it.runIf(process.platform === "linux")(
+    "identifies a Gateway whose unit starts a relative entry from its WorkingDirectory",
+    async () => {
+      const child = spawn(process.execPath, [path.join("dist", "index.js"), "gateway"], {
+        cwd: root,
+        stdio: "ignore",
+      });
+      children.push(child);
+      native.startPid = child.pid ?? 0;
+      installAccount({ migrate: ok("migrated"), health: [0, "{}"], restore: ok("restored") });
+
+      expect(await activate()).toMatchObject({ status: "updated" });
+    },
+  );
+
+  it.runIf(process.platform === "linux")(
     "restores a retitled Gateway whose unit runs another installation",
     async () => {
       native.startPid = retitledGateway();
