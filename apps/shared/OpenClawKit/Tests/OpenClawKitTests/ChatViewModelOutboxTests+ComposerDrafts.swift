@@ -477,7 +477,7 @@ extension ChatViewModelOutboxTests {
         vm.attachments.append(OpenClawPendingAttachment(
             url: nil, data: Data([3]), fileName: "photo.png", mimeType: "image/png", preview: nil))
         await settleComposerDraft(vm)
-        #expect(vm.errorText == "Could not save photo.png with this draft. Send or remove it before switching chats.")
+        #expect(vm.errorText == "Couldn’t save photo.png with this draft. Send or remove it before switching chats.")
 
         vm.switchSession(to: "agent:main:other")
         #expect(vm.sessionKey == "main")

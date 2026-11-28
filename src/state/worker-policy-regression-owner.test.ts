@@ -58,6 +58,7 @@ function context(policy: typeof installation | undefined): OpenClawStateWorkerCo
       identity: { key: "file:fixture", canonicalPath: "/fixture.db" },
       databasePath: "/fixture.db",
       coordinationKey: "fixture",
+      isCurrent: () => true,
       assertCurrent: () => {},
     },
     environment: { OPENCLAW_STATE_DIR: "/fixture" },

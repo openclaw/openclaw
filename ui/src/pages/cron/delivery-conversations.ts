@@ -1,5 +1,6 @@
 import type { ConversationListItem, ConversationListResult } from "@openclaw/gateway-protocol";
 import { createStore } from "solid-js";
+import { t } from "../../i18n/index.ts";
 import type { CronFormState, CronState } from "../../lib/cron/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
@@ -213,7 +214,11 @@ export function createDeliveryConversations(deps: DeliveryConversationsDependenc
       if (isCurrent()) {
         setState((draft) => {
           draft.conversations = [];
-          draft.error = `Couldn’t load recipient suggestions. Check the Gateway connection and try again. Details: ${formatUiError(error)}`;
+          draft.error = t("cron.form.recipientSuggestionsUnavailable", {
+            advanced: t("cron.form.advanced"),
+            results: t("cron.form.advancedResults"),
+            details: formatUiError(error),
+          });
         });
       }
     }

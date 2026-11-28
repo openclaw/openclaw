@@ -395,16 +395,20 @@ export async function withUpdateCommandExecutor<T>(
               if (!active) {
                 throw new UpdateCommandRecoveryPendingError("Update executor admission is closed.");
               }
-              acquired = requireUpdateCommandAcquisition(
-                store.acquire(key, randomUUID(), { kind: "update" }),
-                () => {
-                  const retained = admissionStore.read(key);
-                  // Only explicit repair settles a cancelled original after its updater exits.
-                  return retained.kind === "current" && retained.lease.version === 4
+              const result = store.acquire(key, randomUUID(), { kind: "update" });
+              if (result.kind !== "acquired") {
+                const retained = admissionStore.read(key);
+                // Only explicit repair settles a cancelled original after its updater exits.
+                const message =
+                  retained.kind === "current" && retained.lease.version === 4
                     ? `Another update executor owns this installation. It retains cancelled update custody (owner ${retained.lease.owner}, lease version 4, last activity ${new Date(retained.lease.updatedAt).toISOString()}). If that update has exited, run ${formatCliCommand("openclaw update repair")} to settle it.`
                     : `Another update executor owns this installation. If no update is running, retry ${formatCliCommand("openclaw update repair")} in a moment; it settles once the interrupted update's processes are gone.`;
-                },
-              );
+                // The message names the lease owner; public reports use this code's fixed sentence.
+                throw Object.assign(new UpdateCommandRecoveryPendingError(message), {
+                  code: "update-executor-owned",
+                });
+              }
+              acquired = result;
             } finally {
               legacyFence.release();
             }

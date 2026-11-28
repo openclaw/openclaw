@@ -126,7 +126,7 @@ describe("transcript input order", () => {
           ? []
           : [
               "Stopped request",
-              "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
+              "Canceled before the agent started. Copy the message and send it again.",
             ];
       const rows = (messages: unknown[], searchQuery = "") =>
         visibleRows(
@@ -542,7 +542,7 @@ describe("transcript input order", () => {
     ({ state, timestamps }) => {
       const notice =
         state === "cancelled"
-          ? "Cancelled before the agent started it. It will not run automatically; copy it and send again."
+          ? "Canceled before the agent started. Copy the message and send it again."
           : null;
       const expectedInputs = ["First accepted input", "Second accepted input"].flatMap((text) =>
         notice ? [text, notice] : [text],

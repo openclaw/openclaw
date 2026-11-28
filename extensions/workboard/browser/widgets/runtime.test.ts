@@ -126,7 +126,7 @@ it("discloses incomplete widget data and loads an absent card on demand for read
   const [card, , board] = widgets;
   await settle(() => {
     expectText(widgets, "Counts and results include loaded cards only");
-    expect(text(card)).toContain("This card is not loaded yet");
+    expect(text(card)).toContain("This card isn’t loaded yet");
   });
   query(card, "button")!.click();
   await settle(() => {
@@ -318,7 +318,12 @@ it.each([
     startDrag(hidden);
   }
   move();
-  expect(hidden.viewRequest).toHaveBeenCalledExactlyOnceWith("workboard.cards.move", moveParams);
+  expect(hidden.viewRequest).toHaveBeenCalledExactlyOnceWith("workboard.cards.move", {
+    ...moveParams,
+    ...(input === "drop"
+      ? { expectedUpdatedAt: expectDefined(cards[0], "ready card").updatedAt }
+      : {}),
+  });
   await expectStatus(hidden, "running", 'select[aria-label="Status: Ready card"]');
   hidden.dispose();
   expect(fixture.events.get("plugin.workboard.changed")?.size).toBe(1);

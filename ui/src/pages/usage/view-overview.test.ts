@@ -5,8 +5,8 @@ import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-suppor
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import type { UsageAggregates, UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
-import { totals, dailyEntry } from "./usage-chart.test-support.ts";
-import { CostWindowComparison, renderFilterChips, UsageInsights } from "./view-overview.tsx";
+import { totals } from "./usage-chart.test-support.ts";
+import { renderFilterChips, UsageInsights } from "./view-overview.tsx";
 import { mountView, text, texts, usageState } from "./view-render.test-support.ts";
 import { SessionsCard } from "./view-sessions-card.tsx";
 import {
@@ -29,10 +29,7 @@ function mountInsights(currentTotals: () => UsageTotals, currentAggregates: () =
         return currentAggregates();
       },
       stats: { durationCount: 0, avgDurationMs: 0, errorRate: 0 },
-      showCostHint: false,
       errorHours: [],
-      sessionCount: 1,
-      totalSessions: 1,
     }),
   );
 }
@@ -77,8 +74,8 @@ describe("UsageInsights", () => {
     expect(text(cacheCard, ".usage-summary-value")).toBe("30.0%");
     expect(text(cacheCard, ".usage-summary-sub")).toBe("300 cached · 1.0K prompt");
     const tooltips = [...container.querySelectorAll("openclaw-tooltip")];
-    expect(buttons).toHaveLength(5);
-    expect(tooltips).toHaveLength(5);
+    expect(buttons).toHaveLength(3);
+    expect(tooltips).toHaveLength(3);
     expect(
       [...container.querySelectorAll(".usage-list-item .agent-row-chip")].map((chip) =>
         chip.getAttribute("data-agent-id"),
@@ -151,10 +148,7 @@ describe("UsageInsights", () => {
             ],
           },
           stats: { durationCount: 0, avgDurationMs: 0, errorRate: 0 },
-          showCostHint: false,
           errorHours: [],
-          sessionCount: 1,
-          totalSessions: 1,
         }),
       { container },
     );
@@ -195,37 +189,6 @@ it("preserves filter-chip order, session-only title, labels, and clear callbacks
   chips.forEach((chip) => chip.querySelector<HTMLButtonElement>("button")?.click());
   expect(onClearDays).toHaveBeenCalledOnce();
   expect(onClearSessions).toHaveBeenCalledOnce();
-});
-
-it("cost windows preserve sub-cent totals and day columns across refreshes", () => {
-  const day = dailyEntry("2026-07-01", 300, 0.003);
-  const [daily, setDaily] = createSignal([day]);
-  const { container } = mountView(() =>
-    CostWindowComparison({
-      get daily() {
-        return daily();
-      },
-      rangeStartDate: "2026-06-02",
-      rangeEndDate: "2026-07-01",
-      timeZone: "local",
-    }),
-  );
-
-  const range = container.querySelector(".cost-window--range");
-  expect(text(range, ".cost-window__value")?.trim()).toBe("$0.0030");
-  expect(text(range, ".cost-window__meta")).toContain("$0.0001 / day");
-  const column = range!.querySelector(".usage-bars__bar--current")!;
-  column.dispatchEvent(new MouseEvent("pointerenter"));
-  flush();
-  expect(text(range, ".usage-bars__tip")).toBe("Jul 1 · $0.0030");
-
-  setDaily([dailyEntry("2026-07-01", 600, 0.006)]);
-  flush();
-  expect(container.querySelector(".cost-window--range")).toBe(range);
-  expect(range!.querySelector(".usage-bars__bar--current")).toBe(column);
-  expect(text(range, ".cost-window__value")?.trim()).toBe("$0.0060");
-  expect(text(range, ".cost-window__meta")).toContain("$0.0002 / day");
-  expect(text(range, ".usage-bars__tip")).toBe("Jul 1 · $0.0060");
 });
 
 describe("SessionsCard", () => {

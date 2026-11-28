@@ -204,7 +204,6 @@ describe("createChannelMessageAdapterFromOutbound", () => {
     };
     const adapter = createChannelMessageAdapterFromOutbound({
       outbound: {
-        deliveryCapabilities: { durableFinal: { media: true } },
         sendMedia: vi.fn(async () => ({ channel: "demo", messageId: "legacy-id", receipt })),
       },
     });
@@ -265,7 +264,6 @@ describe("createChannelMessageAdapterFromOutbound", () => {
       sentAt: 123,
     };
     const adapter = createChannelMessageAdapterFromOutbound({
-      capabilities: { poll: true },
       outbound: {
         sendPoll: vi.fn(async () => ({ messageId: "card-1", receipt })),
       },

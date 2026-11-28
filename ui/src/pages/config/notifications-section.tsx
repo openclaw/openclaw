@@ -395,14 +395,22 @@ function WebPushSection(props: {
         <Loading on={props.push.read} fallback={null}>
           <Show when={props.push.canReadPreferences ? latest(preferences) : (read(), undefined)}>
             {(current) => (
-              <div class="settings-stack" inert={busy() || isPending(authoritativePreferences)}>
+              <div class="settings-stack">
                 <Show when={current().durableIdentity}>
                   <UserNotificationPreferences
+                    submission={props.push.agentSelections?.user}
+                    writePending={busy() || isPending(authoritativePreferences)}
                     presentationScope={props.actions.presentationRetired()}
                     agentCatalog={props.actions.notificationAgents}
                     onLoadAgents={props.actions.onNotificationAgentsLoad}
                     disabled={!props.push.canManage || !props.actions.connected}
                     preferences={current().user}
+                    onSaveAgents={(ids) =>
+                      props.actions.onWebPushSetUserPreferences?.(
+                        { ...current().user, agentIds: ids ?? [] },
+                        "agentIds",
+                      )
+                    }
                     onChange={(value) =>
                       submit(props.actions.onWebPushSetUserPreferences?.(value), {
                         scope: "user",
@@ -412,12 +420,24 @@ function WebPushSection(props: {
                   />
                 </Show>
                 <DeviceNotificationPreferences
+                  submission={props.push.agentSelections?.device}
+                  writePending={busy() || isPending(authoritativePreferences)}
                   presentationScope={props.actions.presentationRetired()}
                   agentCatalog={props.actions.notificationAgents}
                   onLoadAgents={props.actions.onNotificationAgentsLoad}
-                  inheritedAgentIds={current().user.agentIds}
+                  inheritedAgentIds={
+                    props.push.agentSelections?.user?.state === "pending"
+                      ? props.push.agentSelections.user.agentIds
+                      : current().user.agentIds
+                  }
                   disabled={!props.push.canManage || !props.actions.connected}
                   preferences={current().device}
+                  onSaveAgents={(agentIds) =>
+                    props.actions.onWebPushSetDevicePreferences?.(
+                      { ...current().device, agentIds },
+                      "agentIds",
+                    )
+                  }
                   onChange={(value) =>
                     submit(props.actions.onWebPushSetDevicePreferences?.(value), {
                       scope: "device",

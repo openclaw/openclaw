@@ -9,7 +9,9 @@ import { recordCliGatewayRunFailure } from "../cli/failure-output.js";
 import {
   assertGlobalUpdateOwner,
   requestUpdateDowngradeConfirmation,
+  type UpdateCommandOptions,
 } from "../cli/update-cli/shared.js";
+import { findSystemServiceAccountMismatch } from "../cli/update-cli/update-command-admit-service-account.js";
 import { mutateConfigFileWithRetry } from "../config/mutate.js";
 import type { CallGatewayOptions } from "../gateway/call-options.js";
 import {
@@ -34,6 +36,7 @@ import { defaultRuntime } from "../runtime.js";
 import { releaseOpenClawStateDatabaseCustody } from "../state/openclaw-state-db-cache.js";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
 import { VERSION } from "../version.js";
+import { updateSystemServicePackage } from "./cli-system-service.js";
 import {
   checkUpdateInstallationSlot,
   resolveInstalledPackageFrontend,
@@ -256,6 +259,33 @@ async function delegateInstalledPackageUpdate(
   if (preparationJson && process.exitCode !== 0) {
     process.stdout.write(result.stdout);
   }
+  return true;
+}
+
+/** Root owns the package, never the state of a system unit's User=. */
+export async function tryRunSystemServicePackageUpdate(
+  opts: UpdateCommandOptions,
+): Promise<boolean> {
+  if (
+    process.platform !== "linux" ||
+    process.geteuid?.() !== 0 ||
+    opts.dryRun ||
+    opts.run ||
+    opts.recovery ||
+    opts.sourceUpdate ||
+    process.env.OPENCLAW_UPDATE_POST_CORE === "1"
+  ) {
+    return false;
+  }
+  const root = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
+  if (!root) {
+    return false;
+  }
+  const unit = await findSystemServiceAccountMismatch({ env: process.env, root });
+  if (!unit || !unit.serviceUser || ["root", "0"].includes(unit.serviceUser)) {
+    return false;
+  }
+  await updateSystemServicePackage(opts, root, unit);
   return true;
 }
 

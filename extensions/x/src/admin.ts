@@ -33,6 +33,7 @@ class XAdminError extends Error {
   constructor(
     readonly code: "FORBIDDEN" | "INVALID_REQUEST",
     message: string,
+    readonly details?: { xHandleRequired: true },
   ) {
     super(message);
   }
@@ -157,6 +158,7 @@ export function registerXAllowlistMethods(
         throw new XAdminError(
           "INVALID_REQUEST",
           "username must be an X handle, with or without @.",
+          { xHandleRequired: true },
         );
       }
       const { cfg, account } = accountFor(request);
@@ -203,9 +205,17 @@ export function registerXAllowlistMethods(
           request.respond(true, await handler(request));
         } catch (error) {
           if (error instanceof XAdminError) {
-            request.respond(false, undefined, { code: error.code, message: error.message });
+            request.respond(false, undefined, {
+              code: error.code,
+              message: error.message,
+              ...(error.details ? { details: error.details } : {}),
+            });
           } else if (error instanceof XBudgetExceededError) {
-            request.respond(false, undefined, { code: "UNAVAILABLE", message: error.message });
+            request.respond(false, undefined, {
+              code: "UNAVAILABLE",
+              message: error.message,
+              details: { xBudgetResumesAt: error.exhaustedUntil },
+            });
           } else {
             api.logger.error(
               `X replies operation failed (${method}): ${error instanceof Error ? error.message : String(error)}`,

@@ -39,6 +39,21 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "session-rows-bottom")
     }
 
+    func testSessionsSeparateGroupsMoreThanNeighboringRows() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone Sessions page")
+        self.launchApp(for: Self.sessionRowsTarget, additionalArguments: [
+            "--openclaw-session-states-fixture",
+            "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryL",
+        ])
+        let app = try XCTUnwrap(self.app)
+        let previous = self.sessionRow("rows-rate-limit", in: app)
+        let last = self.sessionRow("rows-failed-plain", in: app)
+        let nextHeader = app.buttons["Sessions.Group.working"]
+        XCTAssertTrue(nextHeader.waitForExistence(timeout: 8))
+        XCTAssertTrue(previous.exists && last.exists)
+        XCTAssertGreaterThan(nextHeader.frame.midY - last.frame.midY, last.frame.midY - previous.frame.midY)
+    }
+
     /// At the largest text size, a row with a state line still ends above the next one.
     func testSessionRowsHoldAtTheLargestTextSize() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone Sessions page")

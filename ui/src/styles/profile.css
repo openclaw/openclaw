@@ -31,6 +31,7 @@ openclaw-profile-page [id^="settings-profile-"] {
     > .settings-row__control {
       width: 100%;
       max-width: 100%;
+      min-height: var(--settings-control-height);
       justify-content: flex-start;
     }
   }
