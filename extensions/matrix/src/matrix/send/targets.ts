@@ -80,6 +80,13 @@ async function resolveDirectRoomId(
     return inspection.activeRoomId;
   }
 
+  if (inspection.directReadError) {
+    const cause =
+      inspection.directReadError instanceof Error
+        ? inspection.directReadError.message
+        : String(inspection.directReadError);
+    throw new Error(`Could not read m.direct for ${trimmed} from the homeserver: ${cause}`);
+  }
   throw new Error(`No direct room found for ${trimmed} (m.direct missing)`);
 }
 

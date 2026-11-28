@@ -53,6 +53,35 @@ describe("inspectMatrixDirectRooms", () => {
     expect(result.activeRoomId).toBe("!fallback:example.org");
   });
 
+  it("surfaces the m.direct read error when the homeserver cannot be read", async () => {
+    const readError = new Error("M_UNKNOWN: 503 Service Unavailable");
+    const client = createClient({
+      getAccountData: vi.fn().mockRejectedValue(readError),
+      getJoinedRooms: vi.fn().mockRejectedValue(readError),
+    });
+
+    const result = await inspectMatrixDirectRooms({
+      client,
+      remoteUserId: "@alice:example.org",
+    });
+
+    expect(result.directReadError).toBe(readError);
+    expect(result.activeRoomId).toBeNull();
+  });
+
+  it("leaves directReadError null when m.direct is read successfully", async () => {
+    const client = createClient({
+      getAccountData: vi.fn(async () => ({ "@alice:example.org": [] })),
+    });
+
+    const result = await inspectMatrixDirectRooms({
+      client,
+      remoteUserId: "@alice:example.org",
+    });
+
+    expect(result.directReadError).toBeNull();
+  });
+
   it("does not treat discovered rooms with local is_direct false as active DMs", async () => {
     const client = createClient({
       getJoinedRooms: vi.fn(async () => ["!blocked:example.org"]),
