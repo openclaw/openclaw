@@ -281,13 +281,30 @@ export async function searchWorkspaceEntries(
     truncated: false,
     open: true,
   }));
-  let visited = 0;
+  // Each search gets its own visited-entry budget. A single shared counter let
+  // one query's subtree starve every other query: the walk stopped, the later
+  // queries were reported as truncated, and the Control UI refused the single
+  // exact match it had found (#207397).
+  //
+  // The walk is breadth-first for the same reason. Depth-first recursion
+  // finished one deep subtree before the next sibling was even listed, so a
+  // root-level file that sorted after that subtree was never visited at all.
+  //
+  // The counter is per SEARCH, not per folded query. Keying it by the folded
+  // query let two different searches that fold to the same text share one
+  // counter, and because the increment happens once per search, that shared
+  // counter was charged twice per visited entry. The effective budget for
+  // such a pair was then half of MAX_SEARCH_VISITED_ENTRIES - smaller than
+  // the budget a single search gets on main - so the pair was reported
+  // incomplete earlier than a lone search would be.
+  const visitedPerSearch = new Map<number, number>();
   const shouldStop = () => {
     let open = false;
-    for (const result of results) {
+    for (const [index, result] of results.entries()) {
       if (
         result.open &&
-        (result.entries.length >= MAX_SEARCH_ENTRIES || visited >= MAX_SEARCH_VISITED_ENTRIES)
+        (result.entries.length >= MAX_SEARCH_ENTRIES ||
+          (visitedPerSearch.get(index) ?? 0) >= MAX_SEARCH_VISITED_ENTRIES)
       ) {
         result.open = false;
         result.truncated = true;
@@ -296,23 +313,31 @@ export async function searchWorkspaceEntries(
     }
     return !open;
   };
-  const visit = async (dir: string): Promise<void> => {
+  const pending: string[] = [""];
+  while (pending.length > 0) {
     if (shouldStop()) {
-      return;
+      break;
     }
+    const dir = pending.shift()!;
     const dirents = await listWorkspacePath(readRoot, dir, assertCurrent);
     if (!dirents) {
-      return;
+      continue;
     }
+    const children: string[] = [];
     for (const dirent of sortDirents(dirents)) {
       if (shouldStop()) {
-        return;
+        break;
       }
-      visited += 1;
       const browserPath = dir ? `${dir}/${dirent.name}` : dirent.name;
       const folded = foldSearchCase(browserPath).normalize("NFC");
-      for (const result of results) {
-        if (result.open && folded.includes(result.query)) {
+      for (const [index, result] of results.entries()) {
+        if (!result.open) {
+          continue;
+        }
+        // Every open search counts this entry once against its own budget. A
+        // search that is already closed keeps its own count.
+        visitedPerSearch.set(index, (visitedPerSearch.get(index) ?? 0) + 1);
+        if (folded.includes(result.query)) {
           const entry = toWorkspaceBrowserEntry(browserPath, dirent, relevance);
           if (entry) {
             result.entries.push(entry);
@@ -328,12 +353,12 @@ export async function searchWorkspaceEntries(
             result.truncated ||= result.open;
           }
         } else if (!SEARCH_IGNORED_DIRS.has(dirent.name)) {
-          await visit(browserPath);
+          children.push(browserPath);
         }
       }
     }
-  };
-  await visit("");
+    pending.push(...children);
+  }
   return results.map(({ entries, truncated }) => ({ entries, truncated }));
 }
 
