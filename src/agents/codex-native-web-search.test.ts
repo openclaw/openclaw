@@ -19,7 +19,7 @@ import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-se
 type SearchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"];
 const searchConfig = (search: SearchConfig): OpenClawConfig => ({ tools: { web: { search } } });
 const baseConfig = searchConfig({ enabled: true, openaiCodex: { enabled: true, mode: "cached" } });
-function activate(params: Parameters<typeof resolveCodexNativeSearchActivation>[0] = {}) {
+function activate(params: Parameters<typeof resolveCodexNativeSearchActivation>[0]) {
   return resolveCodexNativeSearchActivation({
     config: baseConfig,
     modelProvider: "gateway",

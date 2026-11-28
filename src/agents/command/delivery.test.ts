@@ -164,7 +164,7 @@ function expectStatus(
 
 type JsonOutput = { payloads: unknown[]; meta?: unknown; deliveryStatus?: DeliveryStatusLike };
 
-function deliverMediaReplyForTest({ opts, ...overrides }: Partial<DeliveryFixture> = {}) {
+function deliverMediaReplyForTest({ opts, ...overrides }: Partial<DeliveryFixture>) {
   return deliverForTest({
     workspace: true,
     opts: { message: "go", replyTo: "#general", ...opts },
