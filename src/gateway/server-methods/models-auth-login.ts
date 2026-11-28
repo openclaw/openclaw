@@ -6,6 +6,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveNativeModelPrimary } from "../../agents/agent-scope-config.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveSharedMainAuthLoginTarget } from "../../agents/auth-profiles/shared-login-target.js";
 import { runModelsAuthLoginFlowForGateway } from "../../commands/models/auth.js";
 import { normalizeAgentModelRefForConfig } from "../../config/model-input.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -90,7 +91,17 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      const sharedTarget = resolveSharedMainAuthLoginTarget(
+        context.getRuntimeConfig(),
+        params.agentId,
+      );
       const assertLoginCurrent = () => {
+        if (
+          sharedTarget &&
+          !resolveSharedMainAuthLoginTarget(context.getRuntimeConfig(), params.agentId)
+        ) {
+          throw new Error("Shared credential ownership changed during sign-in.");
+        }
         assertOwner?.();
         const current = resolveChoice();
         if (

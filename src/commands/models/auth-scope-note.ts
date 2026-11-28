@@ -28,11 +28,15 @@ export async function isSharedGatewayForCliLogin(config: OpenClawConfig): Promis
   }
 }
 
-export async function showModelsAuthScopeNote(prompter: WizardPrompter, agentId: string) {
+export async function showModelsAuthScopeNote(
+  prompter: WizardPrompter,
+  agentId: string,
+  sharedCredentialOnly = false,
+) {
   await prompter.note(
     [
-      "Scope: System / agent",
-      `Agent: ${agentId}`,
+      sharedCredentialOnly ? "Scope: Shared / all inheriting agents" : "Scope: System / agent",
+      sharedCredentialOnly ? `Credential owner: ${agentId}` : `Agent: ${agentId}`,
       "Location: the machine running OpenClaw",
       // Chat /login and the Control UI show this too, so it names no terminal command.
       "Personal model accounts are managed in Settings → Profile → Connected accounts.",
