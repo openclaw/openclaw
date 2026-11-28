@@ -25,7 +25,7 @@ export function resolveNamespace(namespace?: string): string {
 }
 
 export function resolveScopedKey(namespace: string, key: string): string {
-  return `${namespace}:${key}`;
+  return JSON.stringify([namespace, key]);
 }
 
 export function resolveEntryKey(key: string): string {
