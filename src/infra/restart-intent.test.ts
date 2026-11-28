@@ -67,11 +67,8 @@ function insertIntentRow(
   env: NodeJS.ProcessEnv,
   values: {
     kind?: string;
-    pid?: number;
     createdAt?: number;
     reason?: string | null;
-    force?: number | null;
-    waitMs?: number | null;
   },
 ) {
   const { db } = openOpenClawStateDatabase({ env });
@@ -82,11 +79,11 @@ function insertIntentRow(
     stateDb.insertInto("gateway_restart_intent").values({
       intent_key: "gateway-restart",
       kind: values.kind ?? "gateway-restart",
-      pid: values.pid ?? process.pid,
+      pid: process.pid,
       created_at: values.createdAt ?? now,
       reason: values.reason ?? null,
-      force: values.force ?? null,
-      wait_ms: values.waitMs ?? null,
+      force: null,
+      wait_ms: null,
       updated_at_ms: now,
     }),
   );
