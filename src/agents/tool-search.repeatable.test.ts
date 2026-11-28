@@ -48,7 +48,7 @@ const delegationFamily: string[] = CORE_TOOL_DEFINITIONS.filter(
 function surface(
   mode: "tools" | "directory",
   executed: string[] = [],
-  members: readonly string[] = delegationFamily,
+  members: readonly string[] = Object.keys(familyFactories),
   include?: Array<{ name: string }>,
 ) {
   const catalogRef = createToolSearchCatalogRef();
@@ -88,7 +88,7 @@ it.each(["tools", "directory"] as const)(
   "%s: defers polling tools with their whole delegation family",
   (mode) => {
     const { sent } = surface(mode);
-    for (const name of [...delegationFamily, "lookup"]) {
+    for (const name of ["sessions_spawn", "subagents", "agents_wait", "lookup"]) {
       expect(sent).not.toContain(name);
     }
   },
