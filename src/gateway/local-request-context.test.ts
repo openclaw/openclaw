@@ -357,3 +357,31 @@ it("retires the session projection before its database maintenance scope closes"
     }
   });
 });
+
+it("closes the database scope when the disposed projection's last refresh loses its read", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      assertOwnerCurrent: () => {},
+      assertDatabaseAccess: () => {},
+    });
+    const host = new LegacyPluginSdkResourceHost();
+    try {
+      const projection = await maintenance.run(() =>
+        host.run(() =>
+          withConfig({ agents: { defaults: {} } }, async () => {
+            const context = localContext();
+            await context.ensureSessionRowProjection?.();
+            return requireSessionRowProjection(context);
+          }),
+        ),
+      );
+      // The agent databases close in the same phase and revoke the refresh's history read.
+      vi.spyOn(projection, "ensureMaterialized").mockRejectedValue(
+        new Error("Session history database read was revoked"),
+      );
+      await expect(maintenance.close()).resolves.toBeUndefined();
+    } finally {
+      await host.close();
+    }
+  });
+});

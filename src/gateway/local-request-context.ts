@@ -227,7 +227,12 @@ async function createLocalGatewayRequestContext(
       const release = async () => {
         await initializing?.catch(() => {});
         projection?.dispose();
-        await projection?.ensureMaterialized();
+        // Disposing cancels the projection; its in-flight refresh still settles before close.
+        // That refresh can lose its history read to the agent databases closing in the same
+        // phase, and a disposed projection has no reader, so its outcome cannot fail the command.
+        await projection?.ensureMaterialized().catch((error: unknown) => {
+          logGateway.debug(`disposed session projection refresh ended: ${String(error)}`);
+        });
       };
       // Resident reads use the command's database maintenance scope, so it retires them
       // before closing admission. Otherwise the same host retains embedded resources used
