@@ -118,6 +118,11 @@ export function resolveSessionDeliveryRoute(params: {
     establishedExternalChannel &&
     (params.isInterSession || !isExternalRoutingChannel(originatingChannel)),
   );
+  // An internal or inter-session turn's `to` addresses its own route (for WebChat, the session
+  // key), so it must never be paired with the preserved external channel.
+  const turnOwnsTarget =
+    !preserveExternalRoute ||
+    !(params.isInterSession || originatingChannel === INTERNAL_MESSAGE_CHANNEL);
   return {
     channel: preserveExternalRoute
       ? params.isInterSession
@@ -126,8 +131,7 @@ export function resolveSessionDeliveryRoute(params: {
       : params.originatingChannelRaw || params.persistedLastChannel,
     to:
       (preserveExternalRoute && params.persistedLastTo) ||
-      params.originatingToRaw ||
-      params.toRaw ||
+      (turnOwnsTarget ? params.originatingToRaw || params.toRaw : undefined) ||
       params.persistedLastTo,
   };
 }
