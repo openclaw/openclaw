@@ -59,12 +59,10 @@ import {
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./incomplete-turn-recovery.js";
 import {
-  hasYieldContinuationEvidence,
   resolveIncompleteTurnPayloadText,
   resolveRunLivenessState,
   shouldRetryMissingAssistantTurn,
   TRUNCATED_REPLY_NOTICE_TEXT,
-  YIELD_DIAGNOSTIC_TEXT,
 } from "./incomplete-turn-resolution.js";
 import type { RunEmbeddedAgentInternalParams as TerminalRunParams } from "./internal-params.js";
 import { resolveSuccessfulToolNames } from "./run-attempt-result.js";
@@ -528,9 +526,6 @@ async function completeEmbeddedRun(
     resolveFinalAssistantVisibleText(input.attemptAssistant) !== undefined;
   const isTruncatedPartialReply =
     stopReason === "length" && !hasAttemptTerminalState(input.attempt) && hasPartialAssistantText;
-  // Existing visible payloads already avoid the silent-park symptom. The diagnostic
-  // fills only an otherwise empty yielded turn and must not duplicate visible output.
-  // A length stop delivers partial text, so it is labeled instead of dropped. (#76477)
   const isMissingReplyNotice = isHostMissingReplyNoticeText(input.incompleteTurnText);
   const suppressErrorNotice =
     isMissingReplyNotice && !shouldDeliverMissingReplyNotice(input.runParams);
@@ -565,19 +560,15 @@ async function completeEmbeddedRun(
         ? input.payloadsForTerminalPath
         : input.emptyAssistantReplyIsSilent
           ? retainSilentFinalPayloads(input.payloadsForTerminalPath ?? [])
-          : input.payloadsForTerminalPath?.length
-            ? isTruncatedPartialReply
-              ? [
-                  ...input.payloadsForTerminalPath,
-                  setReplyPayloadMetadata(
-                    { text: TRUNCATED_REPLY_NOTICE_TEXT },
-                    { hostNotice: true },
-                  ),
-                ]
-              : input.payloadsForTerminalPath
-            : input.attempt.yieldDetected && !hasYieldContinuationEvidence(input.attempt)
-              ? [setReplyPayloadMetadata({ text: YIELD_DIAGNOSTIC_TEXT }, { hostNotice: true })]
-              : input.payloadsForTerminalPath;
+          : isTruncatedPartialReply && input.payloadsForTerminalPath?.length
+            ? [
+                ...input.payloadsForTerminalPath,
+                setReplyPayloadMetadata(
+                  { text: TRUNCATED_REPLY_NOTICE_TEXT },
+                  { hostNotice: true },
+                ),
+              ]
+            : input.payloadsForTerminalPath;
   const sourceFinal = input.attempt.messagingToolSourceReplyPayloads?.findLast(
     (payload) => payload.sourceReplyFinal === true && payload.text?.trim(),
   );
