@@ -55,6 +55,7 @@ describeLive("moonshot live", () => {
         },
       );
 
+      expect(["stop", "length", "toolUse"]).toContain(res.stopReason);
       lastContent = res.content;
       text = extractNonEmptyAssistantText(res.content);
       if (text.length > 0) {
