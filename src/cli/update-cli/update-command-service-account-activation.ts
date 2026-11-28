@@ -13,6 +13,7 @@ import { hasErrnoCode } from "../../infra/errno.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { inspectSystemServiceAccountForAdmission } from "./update-command-admit-service-account.js";
 import {
@@ -374,13 +375,24 @@ async function activateSystemServiceAsAccount(
       "native",
     );
     const budget = (fallback: number) => Math.max(1_000, options.remainingMs?.() ?? fallback);
-    const asAccount = (args: string[], timeoutMs: number) =>
-      runReleaseAsServiceAccount(execution, handoff, {
-        root: options.root,
-        args,
-        timeoutMs,
-        maxStdoutBytes: ACCOUNT_RESULT_MAX_BYTES,
-      }).catch(() => null);
+    // Set once an account run's processes could not be confirmed gone; that work may still
+    // write the state, so nothing restores or starts until the settle step sees it end.
+    let accountWorkUncertain = false;
+    const asAccount = async (args: string[], timeoutMs: number) => {
+      try {
+        const result = await runReleaseAsServiceAccount(execution, handoff, {
+          root: options.root,
+          args,
+          timeoutMs,
+          maxStdoutBytes: ACCOUNT_RESULT_MAX_BYTES,
+        });
+        accountWorkUncertain ||= hasCommandProcessCleanupError(result.error);
+        return result;
+      } catch (error) {
+        accountWorkUncertain ||= hasCommandProcessCleanupError(error);
+        return null;
+      }
+    };
     const control = async (action: "start" | "stop") => {
       const args = { stdout: process.stderr, systemdIdentity: identity, warn: options.warn };
       await (action === "start" ? startSystemdService(args) : stopSystemdService(args));
@@ -450,8 +462,16 @@ async function activateSystemServiceAsAccount(
       );
     }
     handoffOwned = false;
+    const awaitingAccountWork = (problem: string) =>
+      failed(
+        false,
+        `${problem} ${account}'s update steps could not be confirmed stopped, so nothing more was changed; ${unitName} stays stopped and ${backupKept}. ${settleUnit} settles the update once that work has ended.`,
+      );
     const restore = async (problem: string): Promise<ServiceAccountActivation> => {
       const resumes = `${unitName} starts again once the previous package is restored (${settleUnit}).`;
+      if (accountWorkUncertain) {
+        return awaitingAccountWork(problem);
+      }
       if (!(await stopConfirmed())) {
         return failed(
           false,
@@ -462,6 +482,9 @@ async function activateSystemServiceAsAccount(
         ["update", "restore", "--backup-root", backupRoot],
         DEFAULT_MIGRATE_TIMEOUT_MS,
       );
+      if (accountWorkUncertain) {
+        return awaitingAccountWork(problem);
+      }
       // No receipt means the migration never backed anything up, so the state was never changed.
       const untouched = await fs
         .lstat(`${backupRoot}.receipt.json`)
@@ -495,6 +518,9 @@ async function activateSystemServiceAsAccount(
       readAccountStatus(migrated.stdout) !== "migrated"
     ) {
       return await restore(`Migrating ${account}'s state as ${account} did not complete.`);
+    }
+    if (accountWorkUncertain) {
+      return awaitingAccountWork(`Migrating ${account}'s state finished, but`);
     }
     try {
       await control("start");

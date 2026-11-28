@@ -21,6 +21,8 @@ const native = vi.hoisted(() => ({
   cgroupPopulated: false,
   /** After start, the unit keeps exiting and systemd restarts it. */
   crashLoop: false,
+  /** The account command whose processes the runner could not confirm gone. */
+  uncertainCleanup: undefined as string | undefined,
   restarts: 0,
 }));
 // Unit selection and account resolution have their own tests in the admission suite.
@@ -71,6 +73,13 @@ vi.mock("../../process/exec.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../process/exec.js")>();
   return {
     ...actual,
+    runCommandBuffered: async (argv: string[], options: unknown) => {
+      const result = await actual.runCommandBuffered(argv, options as never);
+      const { CommandProcessCleanupError } = await import("../../process/exec-result.js");
+      return native.uncertainCleanup && argv.includes(native.uncertainCleanup)
+        ? { ...result, error: new CommandProcessCleanupError() }
+        : result;
+    },
     runCommandWithTimeout: async (argv: string[], options: unknown) => {
       if (argv[0] === "/usr/bin/systemd-run") {
         native.scheduled.push(argv);
@@ -175,6 +184,7 @@ beforeEach(() => {
   native.cgroupPopulated = false;
   native.crashLoop = false;
   native.restarts = 0;
+  native.uncertainCleanup = undefined;
   root = dirs.make("service-account-release-");
   fs.mkdirSync(path.join(root, "dist"));
   fs.writeFileSync(path.join(root, "dist", "index.js"), "setInterval(() => {}, 1000);\n");
@@ -345,6 +355,28 @@ describe("system service update as the unit's account", () => {
     expect(native.events).toEqual(["stop", "start", "stop"]);
     expect(calls()).toEqual(["migrate", "restore"]);
   });
+
+  it.each([
+    { name: "a failed migration", migrate: [1, ""] as [number, string] },
+    { name: "a migration that reported success", migrate: ok("migrated") },
+  ])(
+    "keeps the unit stopped and the state untouched while $name may still run",
+    async ({ migrate }) => {
+      native.uncertainCleanup = "migrate";
+      installAccount({ migrate, restore: ok("restored") });
+
+      const result = await activate();
+
+      expect(result).toMatchObject({ status: "failed", stateRestored: false });
+      expect(result.status === "failed" && result.message).toContain(
+        "could not be confirmed stopped, so nothing more was changed",
+      );
+      expect(native.events).toEqual(["stop"]);
+      expect(calls()).toEqual(["migrate"]);
+      // The armed settle step waits for that work before it acts.
+      expect(scheduledPayloads()).toMatchObject([{ mode: "settle" }]);
+    },
+  );
 
   it("restores without waiting out readiness when systemd keeps restarting the candidate", async () => {
     native.crashLoop = true;
