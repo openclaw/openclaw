@@ -17,6 +17,7 @@ import { openEditor } from "../../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   canArchiveSessionRow,
   canDeleteSessionRows,
@@ -65,7 +66,7 @@ export function SessionManagementMenu(props: SessionsPageMenuProps) {
     const pinnable = isPinnableUiSessionRow(row);
     return {
       session: {
-        label: normalizeOptionalString(row.label) ?? row.key,
+        label: resolveSessionDisplayName(row.key, row),
         placementAction: sessionMenuPlacementAction(row, context.agents.state.agentsList),
         target: { key: row.key, agentId: row.agentId },
         sessionId: normalizeOptionalString(row.sessionId) ?? null,
