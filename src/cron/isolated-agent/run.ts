@@ -42,7 +42,7 @@ import {
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
-import { CommandLane } from "../../process/lanes.js";
+import { CommandLane, resolveCronNestedAgentLane } from "../../process/lanes.js";
 import { getCurrentSessionControllerOwner } from "../../sessions/session-controller.lifecycle.js";
 import { finishReplyOperationBackend } from "../../sessions/session-controller.state.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -541,8 +541,11 @@ async function runCronIsolatedAgentTurnInTrace(
               if (admissionDeferredReason && !executionStarted) {
                 return deferredResult(admissionDeferredReason);
               }
+              const cronLane = resolveCronNestedAgentLane(prepared.context.agentId);
               const isCronLaneTimeout =
-                isAborted() || isCommandLaneTaskTimeoutError(err, CommandLane.CronNested);
+                isAborted() ||
+                isCommandLaneTaskTimeoutError(err, cronLane) ||
+                isCommandLaneTaskTimeoutError(err, CommandLane.CronNested);
               // A watchdog-cancelled run throws a generic abort. Surface the precise
               // recovery cause (e.g. blocked_tool_call) on the persisted error so the run
               // history (result.error -> job.state.lastError) and the chat/webhook alert

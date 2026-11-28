@@ -9,7 +9,7 @@ import {
   type QueueEntry,
 } from "./command-queue.state.js";
 import type { CommandLaneBlockReason, CommandLaneSnapshot } from "./command-queue.types.js";
-import { CommandLane, SUBAGENT_LANE_PREFIX } from "./lanes.js";
+import { CommandLane, CRON_NESTED_LANE_PREFIX, SUBAGENT_LANE_PREFIX } from "./lanes.js";
 
 type BoundedDrainLaneFn = (lane: string, maxStarts?: number) => number | void;
 
@@ -17,6 +17,15 @@ export type CommandLaneGroupSpec = {
   /** Hard aggregate cap across all members. */
   budget: number;
   members: readonly string[];
+  /**
+   * Lane-name prefixes whose lanes also belong to this group.
+   *
+   * Per-agent cron lanes are named at run time (`cron-nested:<agentId>`), so
+   * an exact member list cannot enumerate them. A prefix keeps every agent's
+   * cron lane inside the same shared budget without publishing agent ids up
+   * front, while still letting each agent own a separate lane queue.
+   */
+  memberPrefixes?: readonly string[];
   /**
    * Slots a member may always claim, non-borrowable by siblings.
    *
@@ -75,10 +84,68 @@ function assertGroupEligibleLane(lane: string): void {
   }
 }
 
+/** A prefix-scoped member must resolve to a lane that may join a group. */
+function assertGroupEligiblePrefix(prefix: string): void {
+  for (const ineligible of GROUP_INELIGIBLE_PREFIXES) {
+    if (prefix.startsWith(ineligible)) {
+      throw new Error(
+        `command lane prefix "${prefix}" cannot join a capacity group: "${ineligible}"* lanes can be synchronously awaited`,
+      );
+    }
+  }
+  const base = prefix.endsWith(":") ? prefix.slice(0, -1) : prefix;
+  if (GROUP_INELIGIBLE_LANES.has(base)) {
+    throw new Error(
+      `command lane prefix "${prefix}" cannot join a capacity group: "${base}" can be synchronously awaited by another lane`,
+    );
+  }
+}
+
 export function getLaneGroup(lane: string): LaneGroupState | undefined {
   const { laneGroups: groups, laneGroupByLane: groupByLane } = getQueueState();
   const groupId = groupByLane.get(lane);
-  return groupId ? groups.get(groupId) : undefined;
+  if (groupId) {
+    return groups.get(groupId);
+  }
+  return findGroupByLanePrefix(lane);
+}
+
+/** Resolves a dynamically named lane to the group that owns its prefix. */
+function findGroupByLanePrefix(lane: string): LaneGroupState | undefined {
+  const { laneGroups: groups, laneGroupByPrefix } = getQueueState();
+  let match: LaneGroupState | undefined;
+  let matchPrefixLength = -1;
+  for (const [prefix, groupId] of laneGroupByPrefix) {
+    if (!lane.startsWith(prefix)) {
+      continue;
+    }
+    const group = groups.get(groupId);
+    if (!group) {
+      continue;
+    }
+    // Longest prefix wins so a narrower prefix can shadow a broader one.
+    if (prefix.length > matchPrefixLength) {
+      match = group;
+      matchPrefixLength = prefix.length;
+    }
+  }
+  return match;
+}
+
+/** Every lane currently held by the group, including prefix-scoped lanes. */
+function collectGroupLanes(group: LaneGroupState): string[] {
+  const lanes = new Set(group.members);
+  if (group.memberPrefixes.length > 0) {
+    for (const lane of getQueueState().lanes.keys()) {
+      if (group.members.has(lane)) {
+        continue;
+      }
+      if (group.memberPrefixes.some((prefix) => lane.startsWith(prefix))) {
+        lanes.add(lane);
+      }
+    }
+  }
+  return [...lanes];
 }
 
 /**
@@ -96,7 +163,7 @@ type GroupCapacity = { active: number; reserved: number };
 function readGroupCapacity(group: LaneGroupState): GroupCapacity {
   let active = 0;
   let reserved = 0;
-  for (const member of group.members) {
+  for (const member of collectGroupLanes(group)) {
     const memberActive = getMemberActiveCount(member);
     active += memberActive;
     reserved += Math.max(0, (group.reservations.get(member) ?? 0) - memberActive);
@@ -157,6 +224,10 @@ export function validateCommandLaneGroupSpec(
   for (const member of members) {
     assertGroupEligibleLane(member);
   }
+  const memberPrefixes = [...new Set(spec.memberPrefixes ?? [])];
+  for (const prefix of memberPrefixes) {
+    assertGroupEligiblePrefix(prefix);
+  }
   const reservations = new Map<string, number>();
   let reservedTotal = 0;
   for (const [rawLane, count] of Object.entries(spec.reservations ?? {})) {
@@ -176,16 +247,35 @@ export function validateCommandLaneGroupSpec(
       `command lane group "${group}" reserves ${reservedTotal} slots but its budget is ${budget}`,
     );
   }
-  return { group, budget, members, reservations };
+  return { group, budget, members, memberPrefixes, reservations };
 }
 
 /** Install a validated group, detaching its members from any previous owner. */
 export function installCommandLaneGroup(next: LaneGroupState): void {
-  const { laneGroups: groups, laneGroupByLane: groupByLane } = getQueueState();
+  const { laneGroups: groups, laneGroupByLane: groupByLane, laneGroupByPrefix } = getQueueState();
   const previous = groups.get(next.group);
   if (previous) {
     for (const member of previous.members) {
       groupByLane.delete(member);
+    }
+    for (const prefix of previous.memberPrefixes) {
+      laneGroupByPrefix.delete(prefix);
+    }
+  }
+  // A prefix belongs to at most one group. Without this, the old owner would
+  // keep claiming every lane that starts with the prefix and would keep
+  // counting their active tasks toward a budget it no longer participates in.
+  for (const [prefix, owner] of [...laneGroupByPrefix]) {
+    if (owner === next.group) {
+      continue;
+    }
+    laneGroupByPrefix.delete(prefix);
+    const ownerGroup = groups.get(owner);
+    if (ownerGroup) {
+      const index = ownerGroup.memberPrefixes.indexOf(prefix);
+      if (index >= 0) {
+        ownerGroup.memberPrefixes.splice(index, 1);
+      }
     }
   }
   for (const member of next.members) {
@@ -201,6 +291,9 @@ export function installCommandLaneGroup(next: LaneGroupState): void {
   for (const member of next.members) {
     groupByLane.set(member, next.group);
   }
+  for (const prefix of next.memberPrefixes) {
+    laneGroupByPrefix.set(prefix, next.group);
+  }
 }
 
 /**
@@ -214,7 +307,7 @@ function resolveNextGroupLane(group: LaneGroupState): string | undefined {
       }
     | undefined;
   let capacity: GroupCapacity | undefined;
-  for (const lane of group.members) {
+  for (const lane of collectGroupLanes(group)) {
     const state = getQueueState().lanes.get(lane);
     const head = state ? peekLaneQueue(state.queue) : undefined;
     if (!state || !head || state.draining || state.activeTasks.size >= state.maxConcurrent) {

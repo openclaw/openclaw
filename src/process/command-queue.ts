@@ -303,12 +303,15 @@ export function publishLaneConfiguration(config: {
     }
   }
   for (const group of config.clearGroups ?? []) {
-    const { laneGroups: groups, laneGroupByLane: groupByLane } = getQueueState();
+    const { laneGroups: groups, laneGroupByLane: groupByLane, laneGroupByPrefix } = getQueueState();
     const existing = groups.get(group);
     if (existing) {
       for (const member of existing.members) {
         groupByLane.delete(member);
         touched.add(member);
+      }
+      for (const prefix of existing.memberPrefixes) {
+        laneGroupByPrefix.delete(prefix);
       }
       groups.delete(group);
     }

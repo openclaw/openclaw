@@ -1,6 +1,7 @@
 import {
   CommandLane,
   SUBAGENT_LANE_PREFIX,
+  resolveCronNestedAgentLane,
   type CommandLaneConfiguration,
 } from "../../process/lanes.js";
 
@@ -10,14 +11,18 @@ export function resolveGlobalLane(
     spawnedBy?: string | null;
     sessionKey?: string;
     sessionId: string;
+    agentId?: string;
     swarmExecutionLane?: CommandLaneConfiguration;
   },
 ) {
   const cleaned = lane?.trim();
   // Cron jobs hold the cron lane slot; inner operations need a dedicated lane
-  // to avoid deadlock without widening shared nested flows.
+  // to avoid deadlock without widening shared nested flows. The lane is scoped
+  // to the owning agent so one agent's cron turn cannot occupy the lane
+  // another agent's heartbeat observes.
   if (cleaned === CommandLane.Cron) {
-    return CommandLane.CronNested;
+    const owner = context?.agentId?.trim();
+    return owner ? resolveCronNestedAgentLane(owner) : CommandLane.CronNested;
   }
   if (cleaned === CommandLane.Subagent) {
     if (context?.swarmExecutionLane) {

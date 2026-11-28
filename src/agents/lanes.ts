@@ -1,7 +1,7 @@
 /**
  * Resolves command queue lane names for nested, cron, and subagent work.
  */
-import { CommandLane } from "../process/lanes.js";
+import { CommandLane, resolveCronNestedAgentLane } from "../process/lanes.js";
 
 /** Default lane for nested agent work. */
 const AGENT_LANE_NESTED = CommandLane.Nested;
@@ -11,13 +11,21 @@ const AGENT_LANE_CRON: string = CommandLane.Cron;
 const NESTED_LANE = "nested";
 const NESTED_LANE_PREFIX = `${NESTED_LANE}:`;
 
-/** Resolves the lane for agent work started from cron. */
-export function resolveCronAgentLane(lane?: string): string {
+/**
+ * Resolves the lane for agent work started from cron.
+ *
+ * Cron inner work is scoped to the owning agent so one agent's cron turn
+ * cannot occupy the lane another agent's heartbeat observes. Without an agent
+ * id the shared `cron-nested` lane is retained, because an unscoped lane
+ * cannot be attributed to an agent.
+ */
+export function resolveCronAgentLane(lane?: string, agentId?: string): string {
   const trimmed = lane?.trim();
   // Cron jobs already occupy the outer cron lane, so inner agent work needs
   // its own lane to avoid self-deadlock without widening shared nested flows.
   if (!trimmed || trimmed === AGENT_LANE_CRON) {
-    return AGENT_LANE_CRON_NESTED;
+    const owner = agentId?.trim();
+    return owner ? resolveCronNestedAgentLane(owner) : AGENT_LANE_CRON_NESTED;
   }
   return trimmed;
 }

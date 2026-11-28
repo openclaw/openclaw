@@ -21,6 +21,26 @@ export const enum CommandLane {
 export const SUBAGENT_LANE_PREFIX = `${CommandLane.Subagent}:`;
 export const SWARM_LANE_PREFIX = `${SUBAGENT_LANE_PREFIX}swarm:`;
 
+/**
+ * Per-agent cron lane prefix.
+ *
+ * Cron inner work used to share one `cron-nested` lane for every agent, so one
+ * agent's cron turn could occupy the lane another agent's heartbeat had to
+ * observe. Scoping the lane to the owning agent keeps each agent's cron queue
+ * separate while the shared cron budget still bounds the total.
+ */
+export const CRON_NESTED_LANE_PREFIX = `${CommandLane.CronNested}:`;
+
+/** Returns true for a per-agent cron lane such as `cron-nested:main`. */
+export function isCronNestedAgentLane(lane: string): boolean {
+  return lane.startsWith(CRON_NESTED_LANE_PREFIX);
+}
+
+/** Resolves the per-agent cron lane name for an agent id. */
+export function resolveCronNestedAgentLane(agentId: string): string {
+  return `${CRON_NESTED_LANE_PREFIX}${agentId}`;
+}
+
 export type CommandLaneConfiguration = {
   readonly lane: string;
   readonly maxConcurrent: number;

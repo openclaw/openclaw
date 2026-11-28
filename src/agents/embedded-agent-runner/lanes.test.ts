@@ -39,6 +39,8 @@ it("normalizes global lanes and isolates nested cron admission (#44805)", () => 
     ["  ", CommandLane.Main],
     ["  cron  ", CommandLane.CronNested],
     ["cron-nested", CommandLane.CronNested],
+    ["  cron  ", "cron-nested:main", { sessionId: "cron-agent", agentId: "main" }],
+    ["cron", "cron-nested:other", { sessionId: "cron-agent", agentId: "other" }],
     ["background:core:review", "background:core:review"],
     [" custom ", "custom"],
     [" subagent ", "subagent:agent:main:parent", sessionContext("child", " agent:main:parent ")],

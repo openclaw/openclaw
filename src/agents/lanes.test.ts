@@ -19,6 +19,18 @@ describe("resolveCronAgentLane", () => {
     expect(resolveCronAgentLane("subagent")).toBe("subagent");
     expect(resolveCronAgentLane(" custom-lane ")).toBe("custom-lane");
   });
+
+  it("scopes cron inner work to the owning agent", () => {
+    expect(resolveCronAgentLane("cron", "main")).toBe("cron-nested:main");
+    expect(resolveCronAgentLane("  cron  ", "main")).toBe("cron-nested:main");
+    expect(resolveCronAgentLane(undefined, "main")).toBe("cron-nested:main");
+    expect(resolveCronAgentLane("cron", "other")).toBe("cron-nested:other");
+  });
+
+  it("keeps the shared cron lane when no agent owns the work", () => {
+    expect(resolveCronAgentLane("cron")).toBe(AGENT_LANE_CRON_NESTED);
+    expect(resolveCronAgentLane("cron", "  ")).toBe(AGENT_LANE_CRON_NESTED);
+  });
 });
 
 describe("resolveNestedAgentLaneForSession (#67502)", () => {

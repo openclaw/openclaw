@@ -274,7 +274,7 @@ export function createCronPromptExecutor(
       identity: {
         runId,
         sessionId: params.cronSession.sessionEntry.sessionId,
-        lane: resolveCronAgentLane(params.lane),
+        lane: resolveCronAgentLane(params.lane, params.agentId),
         agentId: params.agentId,
         sessionKey: params.runSessionKey,
         sessionLifecycleRevision: params.cronSession.sessionEntry.lifecycleRevision ?? null,
@@ -441,7 +441,7 @@ export function createCronPromptExecutor(
             reasoningLevel: params.agentPayload?.includeReasoning ? "on" : undefined,
             timeoutMs: params.timeoutMs,
             runId,
-            lane: resolveCronAgentLane(params.lane),
+            lane: resolveCronAgentLane(params.lane, params.agentId),
             // Scheduling permits silence; an announce route only selects where output goes.
             terminalReplyExpectation: "optional",
             skillsSnapshot: params.skillsSnapshot,
