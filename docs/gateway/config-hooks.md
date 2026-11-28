@@ -178,7 +178,10 @@ Without a default, the allowlist must admit generated `hook:` keys.
 - `/wake` accepts an explicit key only with `mode: "now"` and the same caller-key/prefix policy. Without one, it uses the selected agent's main session; `defaultSessionKey` is for agent runs, not wakes.
 
 A logical hook key is not always the stored session key. Isolated runs use fresh
-automation run sessions even when the hook key is stable. Persistence controls
+automation sessions even when the hook key is stable and delete that transient
+session after completion (like a one-shot job with `deleteAfterRun`). If an
+isolated hook explicitly targets a `cron:` session key, it reuses that session
+without deleting its base session afterward. Persistence controls
 conversation reuse, not tool permissions or sandboxing. Requests sharing a
 normalized logical key are serialized through completion, even in isolated mode.
 A fixed `defaultSessionKey` therefore orders those requests but can make a later
