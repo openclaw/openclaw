@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 describe.skipIf(process.platform === "win32")("npm launcher shutdown", () => {
-  const outcomes = ["confirmed", "unconfirmed", "deadline"];
+  const outcomes = ["confirmed", "unconfirmed", "deadline", "joining deadline"];
   it.each(outcomes)("preserves %s force-kill containment", async (cleanup) => {
     vi.useFakeTimers();
     const harness = createClientHarness({ autoEmitExit: false });
@@ -30,10 +30,10 @@ describe.skipIf(process.platform === "win32")("npm launcher shutdown", () => {
     // Model OS reads/signals; the real containment owner must produce the receipt.
     vi.spyOn(processSnapshot, "readCodexAppServerProcessSnapshot").mockImplementation(
       async (deadline) => {
-        if (cleanup === "deadline") {
-          await new Promise((resolve) =>
-            setTimeout(resolve, Math.ceil(deadline! - performance.now())),
-          );
+        if (cleanup.endsWith("deadline")) {
+          await new Promise((resolve) => {
+            setTimeout(resolve, Math.ceil(deadline! - performance.now()));
+          });
           throw new processSnapshot.ProcessInspectionError("deadline");
         }
         if (cleanup === "unconfirmed") {
@@ -50,15 +50,31 @@ describe.skipIf(process.platform === "win32")("npm launcher shutdown", () => {
         root.state = value === "SIGSTOP" ? "T" : "S";
       }
       if (value === "SIGKILL") {
-        harness.process.emit("exit", null, "SIGKILL");
+        if (cleanup.endsWith("deadline")) {
+          setTimeout(() => harness.process.emit("exit", null, "SIGKILL"), 25);
+        } else {
+          harness.process.emit("exit", null, "SIGKILL");
+        }
       }
       return true;
     };
     const kill = vi.spyOn(process, "kill").mockImplementation(signal);
     vi.mocked(harness.process.kill).mockImplementation((value) => signal(root.pid, value));
     const warning = vi.spyOn(embeddedAgentLog, "warn");
+    if (cleanup === "joining deadline") {
+      harness.client.close({ forceKillDelayMs: 200 });
+    }
     const closing = harness.client.closeAndWait({ forceKillDelayMs: 10, exitTimeoutMs: 100 });
-    // A stalled census shares the existing 100 ms exit wait after the 2 s inspection.
+    if (cleanup === "joining deadline") {
+      // The short waiter settles while the first close still owns its force-kill grace.
+      await vi.advanceTimersByTimeAsync(2_301);
+      await expect(closing).resolves.toEqual({ exited: false, cleanup: "uncertain" });
+      expect(kill).not.toHaveBeenCalledWith(-root.pid, "SIGKILL");
+      await vi.advanceTimersByTimeAsync(125);
+      expect(kill).toHaveBeenCalledWith(-root.pid, "SIGKILL");
+      return;
+    }
+    // The existing exit wait leaves time to observe a real asynchronous process exit.
     await vi.advanceTimersByTimeAsync(cleanup === "deadline" ? 2_111 : 20);
     expect(kill).toHaveBeenCalledWith(-root.pid, "SIGKILL");
     await expect(closing).resolves.toEqual({

@@ -10,12 +10,11 @@ type TransportClose = {
   closing: Promise<"natural" | "graceful" | "contained" | "uncertain">;
   naturalExit: boolean;
   wasForced: () => boolean;
-  exitWaitStartedAt: () => number | undefined;
+  exitWaitReady: Promise<void>;
 };
 const CODEX_APP_SERVER_TRANSPORT_CLOSES = new WeakMap<object, TransportClose>();
 
 type TransportCloseOptions = {
-  exitTimeoutMs?: number;
   forceKillDelayMs?: number;
   drainStdio?: boolean;
   /** Safe only when native commands cannot have left untracked descendants. */
@@ -78,7 +77,8 @@ function beginCodexAppServerTransportClose(
     return current;
   }
   let forced = false;
-  let exitWaitStartedAt: number | undefined;
+  const exitWaitReady = Promise.withResolvers<void>();
+  let forceKillAt: number | undefined;
   const forceKill = () => {
     forced = true;
     signalCodexAppServerTransport(child, "SIGKILL");
@@ -103,24 +103,17 @@ function beginCodexAppServerTransportClose(
       return "uncertain";
     }
     const contained = await terminateCodexAppServerDescendants(child, {
-      startExitWait: () => {
-        // A failed census would start the force-kill timer and exit wait here.
-        // Charge the retry to that same window, including for short usage reads.
-        exitWaitStartedAt = performance.now();
-        return exitWaitStartedAt + (options.exitTimeoutMs ?? 2_000);
+      startForceKillGrace: () => {
+        forceKillAt = performance.now() + (options.forceKillDelayMs ?? 1_000);
+        exitWaitReady.resolve();
+        return forceKillAt;
       },
     }).catch(() => undefined);
     if (contained === "exited") {
       return options.gracefulExit ? "graceful" : "natural";
     }
     try {
-      finishCodexAppServerTransportClose(
-        child,
-        options,
-        forceKill,
-        contained?.resume,
-        exitWaitStartedAt,
-      );
+      finishCodexAppServerTransportClose(child, options, forceKill, contained?.resume, forceKillAt);
     } catch {
       forceKill();
     }
@@ -128,11 +121,12 @@ function beginCodexAppServerTransportClose(
     // Failed containment cannot certify cleanup from the root's exit alone.
     return contained ? "contained" : "uncertain";
   })();
+  void closing.then(exitWaitReady.resolve, exitWaitReady.reject);
   const closure = {
     closing,
     naturalExit: false,
     wasForced: () => forced,
-    exitWaitStartedAt: () => exitWaitStartedAt,
+    exitWaitReady: exitWaitReady.promise,
   };
   CODEX_APP_SERVER_TRANSPORT_CLOSES.set(child, closure);
   return closure;
@@ -143,10 +137,12 @@ function finishCodexAppServerTransportClose(
   options: TransportCloseOptions,
   killTransport: () => void,
   resumeRoot?: () => void,
-  exitWaitStartedAt?: number,
+  forceKillAt?: number,
 ): void {
-  const elapsed = exitWaitStartedAt === undefined ? 0 : performance.now() - exitWaitStartedAt;
-  const forceKillDelayMs = (options.forceKillDelayMs ?? 1_000) - elapsed;
+  const forceKillDelayMs =
+    forceKillAt === undefined
+      ? (options.forceKillDelayMs ?? 1_000)
+      : forceKillAt - performance.now();
   const forceKill = setTimeout(
     () => {
       if (hasCodexAppServerTransportExited(child)) {
@@ -179,7 +175,7 @@ function finishCodexAppServerTransportClose(
 /** Reports physical settlement separately from confirmed process cleanup. */
 export async function closeCodexAppServerTransportAndWait(
   child: CodexAppServerTransport,
-  options: TransportCloseOptions = {},
+  options: TransportCloseOptions & { exitTimeoutMs?: number } = {},
 ): Promise<CodexAppServerCloseResult> {
   const drained = options.drainStdio
     ? Promise.all(
@@ -189,17 +185,19 @@ export async function closeCodexAppServerTransportAndWait(
         () => false,
       )
     : undefined;
-  const joinedAt = performance.now();
   const closure = beginCodexAppServerTransportClose(child, options);
-  const containment = await closure.closing;
-  const exitWaitStartedAt = closure.exitWaitStartedAt();
-  const elapsed =
-    exitWaitStartedAt === undefined ? 0 : performance.now() - Math.max(joinedAt, exitWaitStartedAt);
+  // Even a late caller with a shorter exit budget can stop waiting while the
+  // transport owns the retry. Confirm exit, containment and pipe drain together.
+  await closure.exitWaitReady;
   const settled = await waitForCodexAppServerTransportExit(
     child,
-    (options.exitTimeoutMs ?? 2_000) - elapsed,
-    drained,
+    options.exitTimeoutMs ?? 2_000,
+    closure.closing.then(
+      () => drained ?? true,
+      () => false,
+    ),
   );
+  const containment = settled ? await closure.closing : undefined;
   if (settled) {
     await Promise.all([
       waitForCodexAppServerProcessRegistrationCleanup(child),

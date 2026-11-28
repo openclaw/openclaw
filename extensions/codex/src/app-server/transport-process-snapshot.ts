@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { open, readdir } from "node:fs/promises";
+import { open, readdir, readFile } from "node:fs/promises";
 import { setImmediate } from "node:timers/promises";
 import {
   DarwinProcessInspectionError,
@@ -280,20 +280,24 @@ function readLinuxProcesses(
   deadline: number,
 ): Promise<PosixProcess[]> {
   return withinInspectionDeadline(deadline, async () => {
-    const buffer = Buffer.allocUnsafe(4096);
     const bootId = parseLinuxBootId(
-      (await readProcFile("/proc/sys/kernel/random/boot_id", deadline, buffer)).toString("utf8"),
+      (await readFile("/proc/sys/kernel/random/boot_id")).toString("utf8"),
     );
     remainingInspectionTime(deadline);
     const entries = (selected?.map(String) ?? (await readdir("/proc"))).filter((entry) =>
       /^\d+$/.test(entry),
     );
-    const buffers = [buffer];
-    const budget = { remaining: PROCESS_INSPECTION_MAX_BYTES };
-    const readStat = async (entry: string, slot: number) => {
-      const scratch = (buffers[slot] ??= Buffer.allocUnsafe(4096));
+    let remainingBytes = PROCESS_INSPECTION_MAX_BYTES;
+    const readStat = async (entry: string) => {
+      remainingInspectionTime(deadline);
       try {
-        const stat = await readProcFile(`/proc/${entry}/stat`, deadline, scratch, budget);
+        // Unlike cmdline, proc_pid_stat is a single kernel record: a bounded
+        // task name and a fixed number of integer fields. Read it in one operation.
+        const stat = await readFile(`/proc/${entry}/stat`);
+        if (stat.length > remainingBytes) {
+          throw new ProcessInspectionError("unavailable");
+        }
+        remainingBytes -= stat.length;
         return parseLinuxProcess(stat.toString("utf8"), entry, bootId, selected !== undefined);
       } catch (error) {
         // A process can exit between enumeration and read; denial never proves exit.
@@ -322,7 +326,7 @@ function readLinuxProcesses(
           // The batch has closed its handles. A host with one spare descriptor
           // can finish the same census serially, within its original deadline.
           batchSize = 1;
-          row = await readStat(batch[slot]!, 0);
+          row = await readStat(batch[slot]!);
         }
         if (row) {
           rows.push(row);
@@ -397,12 +401,7 @@ async function withinInspectionDeadline<T>(deadline: number, read: () => Promise
   return value;
 }
 
-async function readProcFile(
-  file: string,
-  deadline: number,
-  scratch: Buffer,
-  budget = { remaining: PROCESS_INSPECTION_MAX_BYTES },
-): Promise<Buffer> {
+async function readProcFile(file: string, deadline: number, scratch: Buffer): Promise<Buffer> {
   // No runtime launch: procfs reads cannot load ambient preloads or project config.
   remainingInspectionTime(deadline);
   const handle = await open(file, "r");
@@ -414,20 +413,21 @@ async function readProcFile(
       const { bytesRead } = await handle.read(
         buffer,
         bytes,
-        Math.min(buffer.length - bytes, budget.remaining + 1),
+        Math.min(buffer.length - bytes, PROCESS_INSPECTION_MAX_BYTES - bytes + 1),
         null,
       );
       remainingInspectionTime(deadline);
       if (bytesRead === 0) {
         return buffer.subarray(0, bytes);
       }
-      if (bytesRead > budget.remaining) {
+      bytes += bytesRead;
+      if (bytes > PROCESS_INSPECTION_MAX_BYTES) {
         throw new ProcessInspectionError("unavailable");
       }
-      budget.remaining -= bytesRead;
-      bytes += bytesRead;
       if (bytes === buffer.length) {
-        const next = Buffer.allocUnsafe(Math.min(buffer.length * 2, bytes + budget.remaining + 1));
+        const next = Buffer.allocUnsafe(
+          Math.min(buffer.length * 2, PROCESS_INSPECTION_MAX_BYTES + 1),
+        );
         buffer.copy(next);
         buffer = next;
       }

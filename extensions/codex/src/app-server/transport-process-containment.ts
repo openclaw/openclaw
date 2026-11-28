@@ -119,7 +119,7 @@ export async function terminateCodexAppServerOrphan(
   }
 }
 
-type TreeInspectionBudget = { deadline: number; startExitWait?: () => number };
+type TreeInspectionBudget = { deadline: number; startForceKillGrace?: () => number };
 
 async function readContainmentTree(
   roots: number[],
@@ -130,19 +130,19 @@ async function readContainmentTree(
     return await read();
   } catch (error) {
     if (
-      !budget.startExitWait ||
+      !budget.startForceKillGrace ||
       !(error instanceof ProcessInspectionError) ||
       error.reason !== "deadline"
     ) {
       return undefined;
     }
     // A root-only kill would orphan separate groups. Retry while ancestry is
-    // still held, within the transport's existing exit-wait deadline.
+    // still held, spending only the grace already reserved for that kill.
     budget.deadline = Math.min(
-      budget.startExitWait(),
+      budget.startForceKillGrace(),
       performance.now() + MAX_PROCESS_CONTAINMENT_MS,
     );
-    budget.startExitWait = undefined;
+    budget.startForceKillGrace = undefined;
     return await read().catch(() => undefined);
   }
 }
@@ -151,12 +151,12 @@ export async function terminateCodexAppServerDescendants(
   child: ContainableTransport,
   {
     expected,
-    deadline,
-    startExitWait,
+    deadline: initialDeadline,
+    startForceKillGrace,
   }: {
     expected?: CodexAppServerProcessIdentity;
     deadline?: number;
-    startExitWait?: () => number;
+    startForceKillGrace?: () => number;
   } = {},
 ): Promise<{ root: PosixProcess; resume: () => void } | "exited" | undefined> {
   const rootPid = child.pid;
@@ -168,8 +168,9 @@ export async function terminateCodexAppServerDescendants(
   }
   // Inspection failures never grant containment or signal authority.
   const budget = {
-    deadline: deadline ?? performance.now() + MAX_PROCESS_CONTAINMENT_MS,
-    startExitWait: process.platform === "linux" && !expected ? startExitWait : undefined,
+    deadline: initialDeadline ?? performance.now() + MAX_PROCESS_CONTAINMENT_MS,
+    startForceKillGrace:
+      process.platform === "linux" && !expected ? startForceKillGrace : undefined,
   };
   const snapshot = await readContainmentTree([rootPid], budget);
   if (!snapshot || performance.now() >= budget.deadline) {

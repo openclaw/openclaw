@@ -4,11 +4,15 @@ export function createProcfsFixture(
   readFile: (file: string) => string | undefined | Promise<string | undefined>,
   readPids?: () => string[] | undefined,
 ) {
+  const fixtureContents = (file: unknown) =>
+    typeof file === "string" && file.startsWith("/proc/") ? readFile(file) : undefined;
   return {
+    readFile: async (...args: Parameters<typeof original.readFile>) => {
+      const data = args[1] === undefined ? await fixtureContents(args[0]) : undefined;
+      return data === undefined ? original.readFile(...args) : Buffer.from(data);
+    },
     open: async (...args: Parameters<typeof original.open>) => {
-      const file = args[0];
-      const data =
-        typeof file === "string" && file.startsWith("/proc/") ? await readFile(file) : undefined;
+      const data = await fixtureContents(args[0]);
       if (data === undefined) {
         return original.open(...args);
       }
