@@ -32,18 +32,24 @@ execution proof; inspect the actual harness in the completed result. See
 **OpenAI Codex runtime falls back to the API-key path:** collect a redacted
 gateway excerpt that shows the model, runtime, selected provider, and
 failure. Ask affected collaborators to run this read-only command on their
-OpenClaw host:
+OpenClaw host. Use the same `OPENCLAW_STATE_DIR` as the Gateway if set.
+For a named profile, replace `openclaw logs` in the snippet with
+`openclaw --profile <name> logs`.
+[`openclaw logs`](/cli/logs) uses the Gateway's active log file and can
+fall back to the configured local file when the local Gateway is unavailable.
+If the command requires credentials you do not have, set `log_file` below to
+the [selected Gateway's log file](/logging#where-logs-live).
 
 ```bash
 (
-  pattern='openai/gpt-5\.[45]|openai[-]codex|agentRuntime(\.id)?|harnessRuntime|Runtime: OpenAI Codex|legacy OpenAI Codex prefix|candidateProvider[": ]+openai|status[": ]+401|Incorrect API key|No API key|api-key path|API-key path|OAuth'
+  log_file=''
+  pattern='openai/gpt-|openai[-]codex|agentRuntime(\.id)?|harnessRuntime|Runtime: OpenAI Codex|legacy OpenAI Codex prefix|candidateProvider[": ]+openai|status[": ]+401|Incorrect API key|No API key|api-key path|API-key path|OAuth'
 
-  if ls /tmp/openclaw/openclaw-*.log >/dev/null 2>&1; then
-    grep -E -i -n "$pattern" /tmp/openclaw/openclaw-*.log 2>/dev/null || true
+  if [ -n "$log_file" ]; then
+    tail -n 2000 "$log_file"
   else
-    journalctl --user -u openclaw-gateway --since today --no-pager 2>/dev/null \
-      | grep -E -i "$pattern" || true
-  fi
+    openclaw logs --plain --limit 2000 --max-bytes 1000000
+  fi | grep -E -i "$pattern" || true
 ) | sed -E \
     -e 's/(Authorization: Bearer )[A-Za-z0-9._~+\/-]+/\1[REDACTED]/Ig' \
     -e 's/(Bearer )[A-Za-z0-9._~+\/-]+/\1[REDACTED]/Ig' \
