@@ -117,7 +117,6 @@ function makeCommandJob(id: string, nextRunAtMs: number): CronJob {
     updatedAtMs: nextRunAtMs - 1,
     schedule: { kind: "every", everyMs: 60_000, anchorMs: nextRunAtMs },
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload: { kind: "command", argv: ["true"] },
     state: { nextRunAtMs },
   };

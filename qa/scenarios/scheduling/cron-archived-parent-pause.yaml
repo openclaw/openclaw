@@ -83,7 +83,6 @@ flow:
                 kind: every
                 everyMs: 3600000
               sessionTarget: isolated
-              wakeMode: now
               payload:
                 kind: agentTurn
                 message: Cron parent QA check, reply with a short status line.

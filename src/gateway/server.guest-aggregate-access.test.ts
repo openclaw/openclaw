@@ -132,7 +132,6 @@ it("filters usage, cron and approval responses after invited membership is remov
           name: "Invited cron",
           enabled: false,
           sessionTarget: `session:${key}`,
-          wakeMode: "next-heartbeat",
           schedule: { kind: "every", everyMs: 3_600_000 },
           payload: { kind: "agentTurn", message: "Private fixture", model: model.modelRef },
           delivery: { mode: "none" },

@@ -115,9 +115,7 @@ it.each(["session-target", "isolated"] as const)(
             ...makeCronJob({
               id: `rate-limited-${path}`,
               agentId: "main",
-              ...(path === "session-target"
-                ? { sessionTarget: `session:${sessionKey}`, wakeMode: "now" as const }
-                : {}),
+              ...(path === "session-target" ? { sessionTarget: `session:${sessionKey}` } : {}),
               delivery: { mode: "none" },
               payload: { kind: "agentTurn", message: "Reply.", model },
             }),

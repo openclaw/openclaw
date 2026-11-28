@@ -182,7 +182,6 @@ describe("scheduled cron session retirement through the Gateway", () => {
           : { kind: "every", everyMs: 10_000 },
         deleteAfterRun: oneShot,
         sessionTarget: "isolated",
-        wakeMode: "now",
         payload: {
           kind: "agentTurn",
           message: `fixture-case:${id}`,

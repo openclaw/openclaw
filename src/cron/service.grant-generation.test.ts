@@ -36,7 +36,6 @@ it("preserves grant generations across non-definition edits and advances changed
       enabled: true,
       schedule: { kind: "every", everyMs: 60_000 },
       sessionTarget: "isolated",
-      wakeMode: "now",
       payload: { kind: "agentTurn", message: "run" },
     });
     const before = readGrantDefinitionProjection(created.id);

@@ -181,7 +181,6 @@ export function registerCronRepairCases(
         "cron.add",
         makeCronJob("stopped scheduled turn", {
           sessionTarget: `session:${ownerSessionKey}`,
-          wakeMode: "now",
           payload: { kind: "agentTurn", message: "Wait for cancellation." },
           owner: { agentId: "main", sessionKey: ownerSessionKey },
           delivery: { mode: "none" },

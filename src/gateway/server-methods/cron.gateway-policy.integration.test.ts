@@ -69,7 +69,6 @@ const jobInput: CronJobCreate = {
   agentId: "main",
   schedule: { kind: "every", everyMs: 3_600_000 },
   sessionTarget: "isolated",
-  wakeMode: "next-heartbeat",
   payload: { kind: "agentTurn", message: "Read the workspace", toolsAllow: [] },
   delivery: { mode: "none" },
 };

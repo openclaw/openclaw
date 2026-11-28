@@ -452,7 +452,6 @@ try {
         enabled: true,
         schedule: { kind: "at", at: new Date(Date.now() + 2000).toISOString() },
         sessionTarget: "isolated",
-        wakeMode: "now",
         payload: { kind: "agentTurn", message: `SHUTDOWN_CRON_${index}`, timeoutSeconds: 180 },
         delivery: { mode: "none" },
       }),

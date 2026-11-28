@@ -17,7 +17,6 @@ const minimalAddParams = {
   name: "daily-summary",
   schedule: { kind: "every", everyMs: 60_000 },
   sessionTarget: "main",
-  wakeMode: "next-heartbeat",
   payload: { kind: "systemEvent", text: "tick" },
 } as const;
 const add = (overrides: Record<string, unknown> = {}) => ({ ...minimalAddParams, ...overrides });
@@ -224,9 +223,11 @@ describe("cron protocol validators", () => {
     checkUpdate(patch).toBe(accepted);
   });
 
-  it("requires scheduling fields on add", () => {
-    const { wakeMode: _wakeMode, ...withoutWakeMode } = minimalAddParams;
-    expect(isAdd(withoutWakeMode)).toBe(false);
+  it("keeps protocol-v4 wake metadata limited to its released values", () => {
+    expect(Value.Check(CronJobSchema, { ...jobWithState(), wakeMode: "next-heartbeat" })).toBe(
+      true,
+    );
+    expect(isAdd({ ...minimalAddParams, wakeMode: "later" })).toBe(false);
   });
 
   it.each([

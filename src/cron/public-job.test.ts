@@ -16,6 +16,18 @@ function publicJob(job: CronStoredJob, privateFields: string[] = []) {
 }
 
 describe("toPublicCronJob", () => {
+  it.each([undefined, "next-heartbeat"])(
+    "keeps the required Android v2026.11.10 read field out of definitions (stored %s)",
+    (wakeMode) => {
+      const job = { ...makeCronJob({}), ...(wakeMode === undefined ? {} : { wakeMode }) };
+      const before = structuredClone(job);
+      const response = cronJobReadView(job);
+      expect(response).toMatchObject({ wakeMode: "now" });
+      expect(cronJobDefinitionFromReadView(response)).not.toHaveProperty("wakeMode");
+      expect(job).toEqual(before);
+    },
+  );
+
   it("preserves script fields and public state without mutating the stored job", () => {
     const state = {
       nextRunAtMs: 2_000,

@@ -154,7 +154,8 @@ type PluginHookGatewayCronCreateInput = {
     tz?: string;
   };
   sessionTarget: string;
-  wakeMode: string;
+  /** @deprecated Scheduled jobs ignore this field. */
+  wakeMode?: string;
   payload: {
     kind: string;
     text?: string;

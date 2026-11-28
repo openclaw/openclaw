@@ -599,7 +599,6 @@ export function usePrefixStabilityJourney() {
           // Keep the run record for the wait below; the job is removed afterwards.
           deleteAfterRun: false,
           sessionTarget: `session:${TARGET}`,
-          wakeMode: "now",
           payload: { kind: "agentTurn", message: "CRON-TICK scheduled turn" },
           delivery: { mode: "none" },
         };

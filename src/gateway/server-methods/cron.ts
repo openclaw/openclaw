@@ -134,6 +134,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       respondInvalidCronParams(respond, "cron.update", "patch did not normalize");
       return;
     }
+    delete candidate.patch.wakeMode;
     const p = candidate as {
       id?: string;
       jobId?: string;

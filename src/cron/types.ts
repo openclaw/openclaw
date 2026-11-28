@@ -50,9 +50,6 @@ export type CronSchedule = CronJobWire["schedule"];
 /** Runtime target that decides whether a job joins main, isolated, or a named session. */
 type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
 
-/** Wake policy for main-session jobs waiting on heartbeat/user activity. */
-type CronWakeMode = CronJobWire["wakeMode"];
-
 /** Messaging channel id accepted by cron delivery settings. */
 export type CronMessageChannel = ChannelId;
 
@@ -418,7 +415,6 @@ export type CronTriggerEvaluationResult =
 export type CronJob = CronJobBase<
   CronSchedule,
   CronSessionTarget,
-  CronWakeMode,
   CronPayload,
   CronDelivery,
   CronFailureAlert | false

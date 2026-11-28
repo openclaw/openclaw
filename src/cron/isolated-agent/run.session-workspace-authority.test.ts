@@ -160,7 +160,6 @@ it.each([
   const definition = {
     name: `Workspace authority ${scenario}`,
     enabled: false,
-    wakeMode: "now",
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: isolatedChild ? "isolated" : `session:${targetKey}`,
     payload: { kind: "agentTurn", message: "Read sentinel.txt", toolsAllow: ["read"] },

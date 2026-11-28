@@ -166,7 +166,6 @@ describe.each<Api>(["openai-responses", "anthropic-messages"])("%s", (api) => {
       agentId: "main",
       enabled: false,
       schedule: { kind: "every", everyMs: 3_600_000 },
-      wakeMode: "now",
       ...job,
     });
     await gateway.client.request("cron.run", { id: created.id, mode: "force" });

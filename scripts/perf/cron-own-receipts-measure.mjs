@@ -118,7 +118,6 @@ try {
         updatedAtMs: now,
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
         payload: { kind: "agentTurn", message: "Read this job's delivery receipts" },
         delivery: {
           mode: "announce",

@@ -834,7 +834,6 @@ it.skipIf(process.platform === "win32")(
           enabled: true,
           schedule: { kind: "every", everyMs: 2_000 },
           sessionTarget: `session:${key(0, "stream")}`,
-          wakeMode: "now",
           idleOnly: false,
           payload: { kind: "agentTurn", message: marker(0, "stream") },
           delivery: { mode: "none" },

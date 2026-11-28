@@ -18,10 +18,9 @@ const AGENT_JOB = {
   enabled: true,
   schedule: CRON_SCHEDULE,
   sessionTarget: "isolated",
-  wakeMode: "now",
   payload: AGENT_TURN,
 };
-const MAIN_JOB = { sessionTarget: "main", wakeMode: "next-heartbeat", payload: SYSTEM_EVENT };
+const MAIN_JOB = { sessionTarget: "main", payload: SYSTEM_EVENT };
 const GROUP_SESSION = "agent:main:telegram:group:-100123";
 const DIRECT_SESSION = "agent:main:telegram:direct:42";
 const CUSTOM_SESSION = "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
@@ -288,7 +287,6 @@ it("normalizes completion destinations without inventing an enclosing mode", () 
   };
   const created = createMain({
     schedule: EVERY_SCHEDULE,
-    wakeMode: "now",
     delivery: { mode: "none", ...delivery },
   });
   const patch = normalizePatch({ delivery });
@@ -313,7 +311,7 @@ it.each([
 ])("normalizes blank $kind text so validation rejects it", ({ kind, field, create }) => {
   const payload = { kind, [field]: "   " };
   const expected = { kind, [field]: "" };
-  const created = create({ schedule: EVERY_SCHEDULE, wakeMode: "now", payload });
+  const created = create({ schedule: EVERY_SCHEDULE, payload });
   expect(created.payload).toEqual(expected);
   expect(validateCronAddParams(created)).toBe(false);
   if (kind === "agentTurn") {

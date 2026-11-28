@@ -54,7 +54,6 @@ flow:
                 at:
                   ref: at
               sessionTarget: isolated
-              wakeMode: now
               payload:
                 kind: agentTurn
                 message:

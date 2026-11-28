@@ -450,6 +450,7 @@ it("creates a configured agent job from a positional cron schedule and prompt", 
     {
       "--name": "job",
       "--agent": " Ops ",
+      "--wake": "next-heartbeat",
       "--session": "SESSION:agent:ops:telegram:group:-100123:topic:42",
       "--model": "  opus  ",
       "--thinking": "  low  ",
@@ -466,6 +467,7 @@ it("creates a configured agent job from a positional cron schedule and prompt", 
   );
   expect(params).toMatchObject({
     name: "job",
+    wakeMode: "next-heartbeat",
     agentId: "ops",
     sessionTarget: "session:agent:ops:telegram:group:-100123:topic:42",
     schedule: { kind: "cron", expr: "0 2 * * *", staggerMs: 45_000 },
@@ -672,6 +674,7 @@ it("creates stream schedules from exact argv flags", async () => {
 it("updates configured agent payload fields", async () => {
   const patch = await editOptions({
     "--message": "hello",
+    "--wake": "now",
     "--model": "  opus  ",
     "--thinking": "  high  ",
     "--fallbacks": "openrouter/gpt-4.1-mini,openai/gpt-5",
@@ -679,6 +682,7 @@ it("updates configured agent payload fields", async () => {
     "--light-context": true,
     "--timeout-seconds": "0",
   });
+  expect(patch).toHaveProperty("wakeMode", "now");
   expect(patch.payload).toEqual({
     kind: "agentTurn",
     message: "hello",

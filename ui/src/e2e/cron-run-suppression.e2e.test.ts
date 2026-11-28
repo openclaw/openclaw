@@ -26,7 +26,6 @@ suite.define(() => {
       updatedAtMs: 2_000,
       schedule: { kind: "every", everyMs: 60_000 },
       sessionTarget: "isolated",
-      wakeMode: "now",
       payload: { kind: "agentTurn", message: "Check for pending work." },
       delivery: { mode: "announce", channel: "last", bestEffort: true },
       state: {},

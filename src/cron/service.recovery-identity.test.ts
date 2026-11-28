@@ -79,7 +79,6 @@ it.each(["predecessor", "pending", "late"] as const)(
         schedule: { kind: "every", everyMs: 86_400_000, anchorMs: firstStartedAt },
         trigger: { script: "return true", once: true },
         sessionTarget: "isolated",
-        wakeMode: "now",
         payload: { kind: "agentTurn", message: "watcher payload" },
         delivery: { mode: "none" },
         state: { triggerState: { owner: "initial" } },

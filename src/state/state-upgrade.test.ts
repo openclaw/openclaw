@@ -91,7 +91,6 @@ it("adopts a legacy automation account during boot without Doctor", async () => 
             updatedAtMs: 1,
             schedule: { kind: "every", everyMs: 60_000 },
             sessionTarget: "isolated",
-            wakeMode: "now",
             payload: { kind: "agentTurn", message: "Synthetic work" },
             delivery: { mode: "none" },
             state: { lastRunAtMs: 123, lastRunStatus: "ok" },

@@ -55,7 +55,6 @@ flow:
                 script: "const count = (trigger.state?.count ?? 0) + 1; return { fire: count >= 3, state: { count } };"
                 once: true
               sessionTarget: isolated
-              wakeMode: now
               payload:
                 kind: command
                 argv:

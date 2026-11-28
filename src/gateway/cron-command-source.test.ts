@@ -55,7 +55,6 @@ it("preserves an admitted command but rejects fresh runs after OCID device remov
           enabled: true,
           schedule: { kind: "every", everyMs: 3_600_000 },
           sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
           payload: { kind: "command", argv: [process.execPath, "-e", source], timeoutSeconds: 60 },
         },
         {

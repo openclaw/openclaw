@@ -253,7 +253,6 @@ export function createJob(
     ...(input.sessionTarget === "main" && input.payload.kind === "systemEvent"
       ? { systemEventAccount: "session" as const }
       : {}),
-    wakeMode: input.wakeMode,
     payload:
       input.payload.kind === "script"
         ? normalizeCronScriptPayload(structuredClone(input.payload))
@@ -390,9 +389,6 @@ export function applyJobPatch(
     } else {
       job.idleOnly = patch.idleOnly;
     }
-  }
-  if (patch.wakeMode) {
-    job.wakeMode = patch.wakeMode;
   }
   if (patch.payload) {
     job.payload = mergeCronPayload(job.payload, patch.payload);

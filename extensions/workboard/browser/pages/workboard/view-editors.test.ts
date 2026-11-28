@@ -461,7 +461,6 @@ describe("WorkboardView", () => {
           updatedAtMs: 1,
           schedule: { kind: "every", everyMs: 60000 },
           sessionTarget: "isolated",
-          wakeMode: "now",
           payload: { kind: "agentTurn", message: "Review the board" },
           state: {},
         },

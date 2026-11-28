@@ -169,7 +169,6 @@ async function boundJob(
     updatedAtMs: 1,
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "isolated",
-    wakeMode: "now",
     delivery: { mode: "none" },
     payload: { kind: "agentTurn", message: "Reply.", lightContext: true, ...payload },
     state: {},

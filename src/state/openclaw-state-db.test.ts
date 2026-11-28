@@ -531,10 +531,9 @@ function insertAuditMarker(
 function seedLegacyCronJob(
   database: DatabaseSync,
   storeKey: string,
-  job: Pick<
-    CronStoredJob,
-    "id" | "name" | "createdAtMs" | "updatedAtMs" | "sessionTarget" | "wakeMode"
-  > & { payload: Pick<CronStoredJob["payload"], "kind"> },
+  job: Pick<CronStoredJob, "id" | "name" | "createdAtMs" | "updatedAtMs" | "sessionTarget"> & {
+    payload: Pick<CronStoredJob["payload"], "kind">;
+  },
   fields: Record<string, SQLInputValue> = {},
 ) {
   insertRow(database, "cron_jobs", {
@@ -547,7 +546,7 @@ function seedLegacyCronJob(
     schedule_kind: "every",
     every_ms: 60_000,
     session_target: job.sessionTarget,
-    wake_mode: job.wakeMode,
+    wake_mode: "now",
     payload_kind: job.payload.kind,
     job_json: JSON.stringify(job),
     state_json: "{}",
@@ -1443,7 +1442,8 @@ describe("openclaw state database", () => {
       { enabled: false },
       { enabled: true, delivery: { mode: "none" } },
     ];
-    const jobs: CronStoredJob[] = cases.map(({ enabled, delivery }, index) => ({
+    type LegacyCronJob = CronStoredJob & { wakeMode: string };
+    const jobs = cases.map<LegacyCronJob>(({ enabled, delivery }, index) => ({
       id: `legacy-main-${index}`,
       name: "Legacy main job",
       enabled,

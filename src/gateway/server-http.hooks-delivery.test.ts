@@ -52,7 +52,6 @@ function deliveryMapping(id: string, target: Partial<HookMappingResolved>): Hook
     id,
     matchPath: id,
     action: "agent",
-    wakeMode: "now",
     messageTemplate: "Mapped",
     ...target,
   };

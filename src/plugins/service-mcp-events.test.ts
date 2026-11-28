@@ -144,7 +144,6 @@ function fixture(pluginId = "mcp-events") {
     updatedAtMs: 1,
     agentId: "main",
     sessionTarget: "isolated",
-    wakeMode: "now",
     owner: { agentId: "main", sessionKey: "agent:main:discord:direct:alice", accountId: "default" },
     scheduledToolPolicy: {
       version: 1,

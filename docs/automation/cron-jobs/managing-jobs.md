@@ -28,8 +28,7 @@ Run links from automation messages and notifications open the exact recorded run
       --name "Calendar check" \
       --at "20m" \
       --session main \
-      --system-event "Check the calendar for upcoming events." \
-      --wake now
+      --system-event "Check the calendar for upcoming events."
     ```
   </Tab>
   <Tab title="Recurring isolated job">
@@ -79,6 +78,12 @@ Run links from automation messages and notifications open the exact recorded run
 </Tabs>
 
 ## Managing jobs
+
+The schedule controls when an automation runs. For released protocol-v4 clients,
+the Gateway accepts and discards `wakeMode` on create and update. It accepts
+both legacy values, `"now"` and `"next-heartbeat"`. Full job responses include
+`wakeMode: "now"` so clients such as Android v2026.11.10 can open job details.
+This compatibility lasts until protocol v4 retires.
 
 In the Control UI, an open automation refreshes its next-run time and condition activity when scheduler events arrive. These runtime updates preserve unsaved settings and the saved definition used for conflict detection, including when the selected automation is outside the current list page or filter.
 

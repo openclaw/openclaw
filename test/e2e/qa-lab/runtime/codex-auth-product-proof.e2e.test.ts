@@ -263,7 +263,6 @@ describe("Codex auth product proof", () => {
         schedule: { kind: "every", everyMs: 3_600_000, anchorMs: createdAtMs },
         sessionKey: "agent:main:main",
         sessionTarget: "session:agent:main:main",
-        wakeMode: "now",
         idleOnly: true,
         payload: {
           kind: "agentTurn",

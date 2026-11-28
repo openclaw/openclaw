@@ -81,7 +81,6 @@ it("readmits pending native child and scheduled work under current invitation bo
               deleteAfterRun: false,
               schedule: { kind: "at", at: new Date(Date.now() + 86_400_000).toISOString() },
               sessionTarget: `session:${parent.key}`,
-              wakeMode: "now",
               payload: { kind: "agentTurn", message: "NATIVE_OCCURRENCE" },
               delivery: { mode: "none" },
             },

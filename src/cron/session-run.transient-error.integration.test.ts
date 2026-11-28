@@ -136,7 +136,6 @@ it.each(["server_error", "rate_limit_exceeded"])(
               id: "transient-continuation",
               agentId: "main",
               sessionTarget: `session:${sessionKey}`,
-              wakeMode: "now",
               delivery: { mode: "none" },
               schedule: { kind: "at", at: new Date(startedAt).toISOString() },
               state: { runningAtMs: startedAt, nextRunAtMs: startedAt },

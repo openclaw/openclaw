@@ -35,7 +35,6 @@ export function job(overrides: Partial<CronStoredJob> = {}): CronStoredJob {
     updatedAtMs: 1,
     schedule: { kind: "stream", command: ["stream-source"], batchMs: 50 },
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: "base" },
     state: {},
     ...overrides,

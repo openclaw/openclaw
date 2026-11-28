@@ -53,7 +53,6 @@ describe("CronService restart catch-up with dynamic cadence", () => {
         schedule: { kind: "cron", expr: "0 12 * * *", tz: "UTC", staggerMs: 0 },
         pacing: { min: "15m", max: "4h" },
         sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
         payload: { kind: "agentTurn", message: "Check the reminder" },
         delivery: { mode: "none" },
       });
@@ -133,7 +132,6 @@ describe("CronService restart catch-up with dynamic cadence", () => {
         schedule: { kind: "cron", expr: "* * * * *", tz: "UTC", staggerMs: 0 },
         ...(scenario.paced ? { pacing: { min: "15m", max: "4h" } } : {}),
         sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
         payload: { kind: "agentTurn", message: "Check the reminder" },
         delivery: { mode: "none" },
       });
@@ -196,7 +194,6 @@ function dailyJob(
     updatedAtMs: Date.parse("2026-07-29T08:00:00.000Z"),
     schedule,
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload: { kind: "command", argv: ["echo", "FIRED"] },
     state,
   };

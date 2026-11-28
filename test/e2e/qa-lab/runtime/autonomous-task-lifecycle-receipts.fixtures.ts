@@ -307,7 +307,6 @@ export function createMappedWebhookProof(hookToken: string) {
       action: "agent" as const,
       messageTemplate: "{{payload.value}}: reply WEBHOOK-DONE",
       deliver: false,
-      wakeMode: "next-heartbeat" as const,
     },
     async admit(gateway: QaGatewayChild) {
       const webhookProofs: Array<Awaited<ReturnType<typeof admitRequest>>> = [];

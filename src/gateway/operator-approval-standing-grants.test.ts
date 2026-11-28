@@ -154,7 +154,6 @@ function cronJob(overrides: Partial<CronStoredJob> = {}): CronStoredJob {
     updatedAtMs: NOW_MS - 1_000,
     schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: "run the backup" },
     ...overrides,
   } as CronStoredJob;

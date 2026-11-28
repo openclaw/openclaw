@@ -230,7 +230,6 @@ describe("cron CLI delivery suppression readback", () => {
             enabled: true,
             schedule: { kind: "every", everyMs: 3_600_000 },
             sessionTarget: "isolated",
-            wakeMode: "next-heartbeat",
             payload: { kind: "agentTurn", message: "Check for work; reply NO_REPLY when idle." },
             delivery: { mode: "announce", channel: "telegram", to: "123" },
           });

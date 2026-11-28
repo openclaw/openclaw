@@ -168,7 +168,6 @@ struct CronJobsListLiteTests {
                 "anchorMs": AnyCodable(1_783_468_800_000),
             ]),
             sessiontarget: AnyCodable("isolated"),
-            wakemode: AnyCodable("now"),
             payload: AnyCodable([
                 "kind": AnyCodable("agentTurn"),
                 "message": AnyCodable("Summarize release readiness."),

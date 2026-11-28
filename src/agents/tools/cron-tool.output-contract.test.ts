@@ -35,7 +35,6 @@ const job: CronJob = {
   updatedAtMs: 1_800_000_000_000,
   schedule: { kind: "every", everyMs: 60_000 },
   sessionTarget: "main",
-  wakeMode: "next-heartbeat",
   payload: { kind: "systemEvent", text: "Check unpaid invoices" },
   state: { scheduleErrorCount: 3, lastError: "schedule error: bad cron expr" },
 };
@@ -54,7 +53,6 @@ const createJob = {
   name: job.name,
   schedule: job.schedule,
   sessionTarget: job.sessionTarget,
-  wakeMode: job.wakeMode,
   payload: job.payload,
 };
 const history = {

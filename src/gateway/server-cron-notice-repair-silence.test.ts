@@ -42,7 +42,6 @@ it("lets the agent stay silent after a posted automation notice", async () => {
     enabled: true,
     schedule: { kind: "every", everyMs: 3_600_000 },
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "Check the dashboard." },
     delivery: { mode: "none" },
     owner: { agentId: "main", sessionKey: SESSION },

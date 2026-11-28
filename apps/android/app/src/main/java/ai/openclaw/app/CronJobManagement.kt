@@ -197,7 +197,6 @@ data class GatewayCronJobEdit(
   val deleteAfterRun: Boolean,
   val schedule: GatewayCronScheduleEdit,
   val sessionTarget: String,
-  val wakeMode: String,
   val payload: GatewayCronPayloadEdit,
 ) {
   fun withSchedule(value: GatewayCronScheduleEdit): GatewayCronJobEdit =
@@ -360,7 +359,6 @@ internal fun GatewayCronJobDetail.toCronJobEdit(): GatewayCronJobEdit =
         }
       },
     sessionTarget = sessionTarget,
-    wakeMode = wakeMode,
     payload =
       when (payloadKind) {
         "systemEvent" -> {
@@ -406,10 +404,6 @@ internal fun buildCronUpdateParams(
       sessionTarget == "current" ||
       (sessionTarget.startsWith("session:") && sessionTarget.removePrefix("session:").isNotBlank()),
   ) { "Session target must be main, isolated, current, or session:<id>." }
-  val wakeMode = edit.wakeMode.trim()
-  require(wakeMode == "now" || wakeMode == "next-heartbeat") {
-    "Wake mode must be now or next-heartbeat."
-  }
 
   val schedulePatch = buildCronSchedulePatch(original = original, edit = edit.schedule)
   val payloadPatch = buildCronPayloadPatch(original = original, edit = edit.payload)
@@ -425,7 +419,6 @@ internal fun buildCronUpdateParams(
       if (sessionTarget != original.sessionTarget) {
         put("sessionTarget", JsonPrimitive(sessionTarget))
       }
-      if (wakeMode != original.wakeMode) put("wakeMode", JsonPrimitive(wakeMode))
       payloadPatch?.let { put("payload", it) }
     }
   require(patch.isNotEmpty()) { "No cron changes to save." }

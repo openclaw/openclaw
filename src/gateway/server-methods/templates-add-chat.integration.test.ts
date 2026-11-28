@@ -350,7 +350,6 @@ it("completes only missing owned declarations on another device, preserving exis
       owner: { agentId, sessionKey },
       enabled: false,
       sessionTarget: `session:${sessionKey}`,
-      wakeMode: "now",
       schedule: { kind: "cron", expr: "0 17 * * 5", tz },
       payload: { kind: "agentTurn", message: "Check weekly.", toolsAllow: ["read"] },
       delivery: { mode: "none" },

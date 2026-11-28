@@ -193,7 +193,6 @@ it.each([
           enabled: true,
           schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
           sessionTarget: "isolated",
-          wakeMode: "now",
           payload: {
             kind: "agentTurn",
             message: "Resume this copied conversation from cron.",

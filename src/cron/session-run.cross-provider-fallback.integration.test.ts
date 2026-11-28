@@ -182,7 +182,6 @@ async function runSessionFallback(
             id: "session-fallback",
             agentId: "main",
             sessionTarget: `session:${sessionKey}`,
-            wakeMode: "now",
             schedule: { kind: "every", everyMs: 30 * 60_000 },
             delivery: { mode: "none" },
             payload: { kind: "agentTurn", message: "Reply.", model },

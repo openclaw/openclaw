@@ -472,7 +472,6 @@ export function createParams() {
     enabled: false,
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "Synthetic scheduled prompt", toolsAllow: [] },
     delivery: { mode: "none" },
   };

@@ -467,7 +467,9 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
             description: "main | isolated | current (agentTurn default) | session:<id>",
           }),
         ),
-        wakeMode: optionalStringEnum(CRON_WAKE_MODES, { description: "Wake timing" }),
+        wakeMode: optionalStringEnum(CRON_WAKE_MODES, {
+          description: "Deprecated. Scheduled jobs ignore this field.",
+        }),
         payload: createCronPayloadSchema({
           triggersEnabled,
           management: management && options?.allowCommandJobs !== false,

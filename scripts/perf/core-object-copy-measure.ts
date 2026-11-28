@@ -74,7 +74,6 @@ const jobs: CronStoredJob[] = Array.from({ length: 10_000 }, (_, index) => ({
   updatedAtMs: 1_700_000_000_000,
   schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_700_000_000_000 },
   sessionTarget: "isolated",
-  wakeMode: "next-heartbeat",
   payload: {
     kind: "agentTurn",
     message: "Summarize the synthetic project status",

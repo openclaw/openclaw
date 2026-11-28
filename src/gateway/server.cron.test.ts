@@ -934,7 +934,6 @@ describe("gateway server cron", () => {
 
     const response = await cronState.addJob("malformed script", {
       sessionTarget: "isolated",
-      wakeMode: "now",
       payload: { kind: "script", script: "const x = ;" },
     });
 
@@ -945,7 +944,6 @@ describe("gateway server cron", () => {
     );
 
     const triggerInput = makeCronJob("condition watcher", {
-      wakeMode: "now",
       payload: { kind: "systemEvent", text: "changed" },
     });
     const invalidTrigger = { script: "const x = ;" };
@@ -1040,7 +1038,6 @@ describe("gateway server cron", () => {
         "cron.add",
         makeCronJob("meeting sync", {
           sessionTarget: "isolated",
-          wakeMode: "now",
           payload: { kind: "agentTurn", message: "Follow scripts/sync.md." },
           delivery: { mode: "announce", channel: "telegram", to: group, threadId: 42 },
           owner: { agentId: "main", sessionKey: ownerSessionKey },
