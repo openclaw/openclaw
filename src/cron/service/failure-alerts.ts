@@ -265,13 +265,27 @@ type FailureAlertIncident = NonNullable<CronJob["state"]["failureAlertIncident"]
 /** One notification-worthy failure: its dedupe signature and recovery scope. */
 type FailureAlertSignal = Required<FailureAlertIncident>;
 
+const localProviderRecovery = [
+  "Cause: the local model provider is unreachable.",
+  "Start the provider or check its configured endpoint in automation history.",
+];
+
+function isLocalProviderCronSkip(job: CronJob): boolean {
+  return (
+    job.state.lastRunStatus === "skipped" &&
+    job.state.lastDiagnostics?.entries.some((entry) => entry.source === "model-preflight") === true
+  );
+}
+
 export function buildOneTimeCronFailureNotice(
   job: CronJob,
   detail?: CronFailureNotificationDetail,
 ): string {
   return [
     `⚠️ One-time automation "${truncateUtf16Safe(job.name || job.id, 120)}" ended without a confirmed successful outcome.`,
-    ...cronFailureDetailLines(job.state.lastErrorReason, detail),
+    ...(isLocalProviderCronSkip(job)
+      ? localProviderRecovery
+      : cronFailureDetailLines(job.state.lastErrorReason, detail)),
     "Check the run in Automations → Run history before retrying.",
   ].join("\n");
 }
@@ -301,8 +315,7 @@ function buildFailureAlertPayload(params: {
         ]
       : params.localProviderUnavailable
         ? [
-            "Cause: the local model provider is unreachable.",
-            "Start the provider or check its configured endpoint in automation history.",
+            ...localProviderRecovery,
             isJobEnabled(params.job) && params.job.state.nextRunAtMs !== undefined
               ? "OpenClaw will check again on a later scheduled run."
               : "After restoring the provider, use Run Now or reschedule this automation.",
@@ -431,12 +444,11 @@ function maybeEmitFailureAlert(
     runAtMs: number;
     consecutiveCount: number;
     terminalOneShot?: boolean;
+    oneTimeEnded: boolean;
     deferredNotifications: DeferredCronNotifications;
   },
 ): "queued" | undefined {
-  const localProviderUnavailable =
-    params.status === "skipped" &&
-    params.job.state.lastDiagnostics?.entries.some((entry) => entry.source === "model-preflight");
+  const localProviderUnavailable = isLocalProviderCronSkip(params.job);
   if (
     params.status === "skipped" &&
     !params.alertConfig?.includeSkipped &&
@@ -479,7 +491,7 @@ function maybeEmitFailureAlert(
       route: alertConfig,
       status: params.status,
       localProviderUnavailable,
-      oneTimeEnded: terminal,
+      oneTimeEnded: params.oneTimeEnded,
     }),
     runAtMs: params.runAtMs,
     route: alertConfig,
@@ -553,6 +565,7 @@ export function finalizeCronFailureNotifications(
     };
     completionStatus: CronCompletionStatus;
     terminalOneShot?: boolean;
+    oneTimeEnded: boolean;
     /** A quick re-run for a provider outage is scheduled; alert/repair wait for its outcome. */
     pendingTransientRetry?: boolean;
     replay?: boolean;
@@ -588,6 +601,7 @@ export function finalizeCronFailureNotifications(
           ? params.job.state.consecutiveSkipped
           : params.job.state.consecutiveErrors) ?? 0,
       terminalOneShot: params.terminalOneShot,
+      oneTimeEnded: params.oneTimeEnded,
       deferredNotifications: params.deferredNotifications,
     });
   } else if (

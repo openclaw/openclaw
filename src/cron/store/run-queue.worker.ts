@@ -25,8 +25,10 @@ import {
 } from "../proactive-job-receipt.kernel.js";
 import { CRON_ADMISSION_DEFERRED_RECEIPT_ERROR } from "../service/admission-deferred.js";
 import { isJobEnabled, recomputeJobNextRunAtMs } from "../service/jobs-scheduling.js";
-import { hasLegacyCronCleanupPolicy } from "../service/one-shot-schedule.js";
-import { retainManualOneShotOccurrence } from "../service/one-shot-schedule.js";
+import {
+  hasLegacyCronCleanupPolicy,
+  retainManualOneShotOccurrence,
+} from "../service/one-shot-schedule.js";
 import type { CronJob, CronStoredJob } from "../types.js";
 import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
 import { readCronEventClaimInDatabase, transferCronEventInDatabase } from "./event-ingress.js";
@@ -407,8 +409,12 @@ function drainCronQueueInDatabase(
     result.promotedReceiptIds = [...promotedReceiptIds];
   }
   for (const receipt of queued) {
-    const handle = receiptHandle(receipt);
     const job = jobs.get(receipt.jobId)!;
+    // Doctor converts the stored policy. Keep the accepted occurrence queued until then.
+    if (hasLegacyCronCleanupPolicy(job)) {
+      continue;
+    }
+    const handle = receiptHandle(receipt);
     if (waitsForCronRunSlot(job, receipt.receiptId)) {
       // The same occurrence resumes when its receipt gets a slot.
       if (!input.schedulingPaused && hasRunSlot(job.state.runSlotWaitProvider)) {
@@ -449,7 +455,6 @@ function drainCronQueueInDatabase(
           (context.mode === "on-exit" && !matchingExit(job, context))
         ? "cron: queued job is no longer eligible"
         : !agentId ||
-            hasLegacyCronCleanupPolicy(job) ||
             !hasCanonicalCronDeliveryMode(job.delivery) ||
             isAgentDeletionBlocked(agentId, {}, db)
           ? "cron: queued job owner is unavailable"

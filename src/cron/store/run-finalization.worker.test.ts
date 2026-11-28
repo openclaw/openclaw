@@ -48,6 +48,7 @@ it("commits execution, delivery, and history once despite an owner edit and a du
     const now = Date.now();
     const storePath = fixture.statePath("cron", "jobs.json");
     const job = createDueIsolatedJob({ id: "completed", nowMs: now, nextRunAtMs: now });
+    job.schedule = { kind: "every", everyMs: 60_000, anchorMs: now };
     job.payload = { kind: "command", argv: ["echo", "synthetic"] };
     job.state.runningAtMs = now;
     await saveCronStore(storePath, { version: 1, jobs: [job] });

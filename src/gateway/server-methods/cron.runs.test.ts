@@ -66,12 +66,13 @@ it("retries an ended one-time definition only for an administrator without expos
       retryAvailable: true,
     });
     const record = historyRecord(entry, storePath, "main", "failed-build-task");
-    persistRuns([
-      {
-        ...record,
-        detail: cronRunLogEntryToDetail(entry, { storeKey: record.storeKey, archivedJob: job }),
-      },
-    ]);
+    const persistArchivedJob = (archivedJob: Record<string, unknown>) =>
+      persistRuns([
+        {
+          ...record,
+          detail: cronRunLogEntryToDetail(entry, { storeKey: record.storeKey, archivedJob }),
+        },
+      ]);
     const context = createDirectChatContext({
       cron,
       cronStorePath: storePath,
@@ -81,6 +82,18 @@ it("retries an ended one-time definition only for an administrator without expos
     const admin = { connect: { scopes } } as GatewayClient;
     const selection = { id: job.id, retryRunId: entry.runId };
     try {
+      for (const archived of [
+        { ...job, id: ` ${job.id} ` },
+        { ...job, deleteAfterRun: false },
+        { ...job, payload: { text: "Check status", skipIfScratchEmpty: true } },
+      ]) {
+        persistArchivedJob(archived);
+        expectError(
+          await invokeCron(context, "cron.run", selection, { client: admin }),
+          expect.objectContaining({ message: expect.stringContaining("must be recreated") }),
+        );
+      }
+      persistArchivedJob({ ...job, state: undefined });
       const history = await invokeCron(
         context,
         "cron.runs",

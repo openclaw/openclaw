@@ -262,6 +262,7 @@ export function applyJobResult(
           result,
           completionStatus,
           terminalOneShot,
+          oneTimeEnded: shouldDelete,
           pendingTransientRetry,
           replay: opts.replay,
           deferredNotifications: opts.deferredNotifications,

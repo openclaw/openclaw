@@ -16,6 +16,12 @@ import type { CronRunHistoryWrite } from "../../../cron/store/run-history.types.
 import type { CronStoredJob } from "../../../cron/types.js";
 import type { EngineConnection } from "../../../infra/sql-connection.js";
 
+function hasJobIdentity(
+  job: Record<string, unknown>,
+): job is Record<string, unknown> & { id: string; name: string } {
+  return typeof job.id === "string" && typeof job.name === "string";
+}
+
 export function planEndedOneTimeCronRepair(jobs: readonly Record<string, unknown>[]) {
   const ended = [];
   const incompatible = [];
@@ -25,7 +31,7 @@ export function planEndedOneTimeCronRepair(jobs: readonly Record<string, unknown
     const at = typeof schedule.at === "string" ? parseAbsoluteTimeMs(schedule.at) : null;
     const state = isRecord(job.state) ? job.state : {};
     const status = state.lastRunStatus ?? state.lastStatus;
-    if (typeof job.id !== "string" || typeof job.name !== "string") {
+    if (!hasJobIdentity(job)) {
       continue;
     }
     const busy =
@@ -106,7 +112,7 @@ export function describeEndedOneTimeCronRepair(
   ];
 }
 
-export function endedOneTimeCronHistory(
+function endedOneTimeCronHistory(
   row: ReturnType<typeof planEndedOneTimeCronRepair>["ended"][number],
   storeKey: string,
 ): CronRunHistoryWrite {
@@ -135,7 +141,7 @@ export function endedOneTimeCronHistory(
     error: typeof state.lastError === "string" ? state.lastError : undefined,
     deliveryError:
       typeof state.lastDeliveryError === "string" ? state.lastDeliveryError : undefined,
-    retryAvailable: canRetryArchivedCronJob(archivedJob as CronStoredJob) || undefined,
+    retryAvailable: canRetryArchivedCronJob(archivedJob) || undefined,
   };
   return {
     storeKey,
@@ -154,7 +160,7 @@ export function applyEndedOneTimeCronRepair(
   jobs: Record<string, unknown>[],
   oneTimeRepair: ReturnType<typeof planEndedOneTimeCronRepair>,
 ) {
-  const endedJobs = new Set(oneTimeRepair.ended.map((entry) => entry.job));
+  const endedJobs = new Set<Record<string, unknown>>(oneTimeRepair.ended.map((entry) => entry.job));
   for (const job of oneTimeRepair.incompatible) {
     job.enabled = false;
     const reason =

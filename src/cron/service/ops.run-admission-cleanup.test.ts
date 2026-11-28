@@ -7,6 +7,7 @@ import {
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { readCronRunStateForTests } from "../run-history.test-support.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { locked } from "./locked.js";
 import { start, stop } from "./ops-lifecycle.js";
@@ -65,12 +66,11 @@ describe("cron service run admission cleanup", () => {
     });
     await expect(activeRun).resolves.toEqual({ ok: true, ran: true });
 
-    const persisted = await readJob();
-    expect(persisted?.state).toMatchObject({
+    expect(await readJob()).toBeUndefined();
+    expect(readCronRunStateForTests(job.id)).toMatchObject({
       lastRunStatus: "error",
       lastError: "cron job agent is unavailable: main",
     });
-    expect(persisted?.state.runningAtMs).toBeUndefined();
     expect(receipt()?.status).toBe("error");
   });
 

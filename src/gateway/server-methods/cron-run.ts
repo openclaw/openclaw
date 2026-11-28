@@ -5,11 +5,11 @@ import { normalizeCronRunJobId } from "../../cron/run-history.js";
 import { canRetryArchivedCronJob } from "../../cron/service/one-shot-schedule.js";
 import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js";
 import { cronStoreKey } from "../../cron/store/key.js";
+import { normalizeStoredCronJob } from "../../cron/store/normalize-stored-job.js";
 import {
   readCronRunHistoryCandidates,
   readCronRunHistoryRecords,
 } from "../../cron/store/read-only.js";
-import type { CronStoredJob } from "../../cron/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isRecord } from "../../utils.js";
 import { getCronManagementAuthority } from "../cron-creator-authority-grant.js";
@@ -169,9 +169,13 @@ export const cronRunHandler = defineValidatedGatewayHandler(
         fail("This run no longer has a retryable automation definition");
         return;
       }
-      // This private field is written by cron finalization or Doctor, never by RPC callers.
-      const job = record.detail.archivedJob as Record<string, unknown> as CronStoredJob;
-      if (job.id !== id || !canRetryArchivedCronJob(job)) {
+      const archived = record.detail.archivedJob;
+      // Check the archived identity and restrictions before normalization can drop legacy fields.
+      const job =
+        archived.id === id && canRetryArchivedCronJob(archived)
+          ? normalizeStoredCronJob(archived)
+          : null;
+      if (!job) {
         fail("This automation must be recreated to authorize its execution again");
         return;
       }

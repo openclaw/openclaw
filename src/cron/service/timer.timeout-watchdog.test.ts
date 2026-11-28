@@ -11,7 +11,10 @@ import {
   markCronJobActive,
   requestActiveCronJobCancellation,
 } from "../active-jobs.js";
-import { readCronRunRecordsForTests } from "../run-history.test-support.js";
+import {
+  readCronRunRecordsForTests,
+  readCronRunStateForTests,
+} from "../run-history.test-support.js";
 import { saveCronStore } from "../store.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
@@ -276,7 +279,6 @@ it.each(["one-shot", "recurring"])(
       expect(jobState().consecutiveErrors).toBe(1);
       await onTimer(state);
       expect(runner.run).toHaveBeenCalledTimes(2);
-      expect(jobState().lastStatus).toBe("ok");
       expect(readCronRunRecordsForTests(job.id)).toHaveLength(2);
       expect(readCronRunRecordsForTests(job.id)).toEqual(
         expect.arrayContaining([
@@ -454,7 +456,7 @@ it.each(["finite", "unlimited", "trigger evaluating"] as const)(
         expect(settled).toBe(false);
         release.resolve();
         await timer;
-        expect(requireJob(state, job.id).state.lastStatus).toBe("ok");
+        expect(readCronRunStateForTests(job.id)?.lastStatus).toBe("ok");
         return;
       } else {
         await timer;

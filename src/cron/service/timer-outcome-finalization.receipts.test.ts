@@ -377,21 +377,12 @@ describe("cron outcome receipt finalization", () => {
               ?.receiptId,
           ).toBe(successor.receiptId);
         } else {
-          expect(persisted).toMatchObject({ enabled: false, state: { lastRunStatus: "ok" } });
-          expect(persisted?.state.runningAtMs).toBeUndefined();
+          expect(persisted).toBeUndefined();
         }
         expect(state.store?.jobs.find((job) => job.id === retired.id)).toEqual(persisted);
-        const expectedDefinitions = structuredClone(definitionsBefore);
-        for (const row of expectedDefinitions) {
-          if (replaced || row.job_id !== retired.id) {
-            continue;
-          }
-          if (typeof row.job_json !== "string") {
-            throw new Error("Expected persisted cron definition JSON.");
-          }
-          row.enabled = 0;
-          row.job_json = JSON.stringify({ ...JSON.parse(row.job_json), enabled: false });
-        }
+        const expectedDefinitions = definitionsBefore.filter(
+          (row) => replaced || row.job_id !== retired.id,
+        );
         expect(readDefinitions()).toEqual(expectedDefinitions);
         expect(receiptStatus(currentReceipt)).toEqual({ status: "ok" });
         expect(receiptStatus(retiredReceipt)).toEqual({ status: replaced ? "superseded" : "ok" });
