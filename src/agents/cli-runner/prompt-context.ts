@@ -10,7 +10,10 @@ import {
 } from "../../infra/active-node-context.js";
 import { labelRuntimeContextText } from "../../llm/types.js";
 import type { CliBackendConfig, CliBackendPromptContext } from "../../plugins/cli-backend.types.js";
-import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import {
+  annotateInterSessionPromptText,
+  type InputProvenance,
+} from "../../sessions/input-provenance.js";
 import { settleCurrentReadPreparations } from "../../shared/current-read-authority.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
@@ -216,7 +219,11 @@ export async function prepareCliSystemPrompt({
   | "requesterProfileId"
   | "prepareSessionProjectGuidance"
 > & {
-  requester?: { operatorAuthority?: AdmittedRunOperatorAuthority; senderIsOwner?: boolean };
+  requester?: {
+    operatorAuthority?: AdmittedRunOperatorAuthority;
+    senderIsOwner?: boolean;
+    inputProvenance?: InputProvenance;
+  };
 }): Promise<string> {
   const { buildCliAgentSystemPrompt } = await import("./helpers.js");
   const requesterProfileId = requester?.operatorAuthority?.profileId;

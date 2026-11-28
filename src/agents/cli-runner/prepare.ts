@@ -1330,7 +1330,11 @@ async function prepareCliRunContextWithinReadFence(
         : await prepareCliSystemPrompt({
             preparedTtsPreferences: params.preparedTtsPreferences,
             preparedSessionEntry: params.sessionEntry,
-            requester: { operatorAuthority, senderIsOwner: params.senderIsOwner },
+            requester: {
+              operatorAuthority,
+              senderIsOwner: params.senderIsOwner,
+              inputProvenance: params.inputProvenance,
+            },
             workspaceDir,
             cwd,
             config: params.config,

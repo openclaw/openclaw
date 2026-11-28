@@ -5,6 +5,10 @@ import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SessionProjectRequester } from "../gateway/session-project-move-policy.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  isHostGeneratedInputProvenance,
+  type InputProvenance,
+} from "../sessions/input-provenance.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
@@ -54,6 +58,7 @@ export function sessionProjectGuidanceSource(params: {
   entry?: InternalSessionEntry;
   senderIsOwner?: boolean;
   operatorAuthority?: SessionProjectRequester;
+  inputProvenance?: InputProvenance;
 }) {
   const { config, agentId, sessionKey, entry, operatorAuthority } = params;
   if (
@@ -62,7 +67,13 @@ export function sessionProjectGuidanceSource(params: {
     !entry ||
     !isSessionProjectMoveEligible(config, agentId, entry, params.workspaceDir) ||
     !sessionKey ||
-    !(params.senderIsOwner || operatorAuthority)
+    // Turns the Gateway starts (completions, automations, sessions_send) keep the session's
+    // prompt; only a person who may not choose projects drops it. session_project gates calls.
+    !(
+      params.senderIsOwner ||
+      operatorAuthority ||
+      isHostGeneratedInputProvenance(params.inputProvenance)
+    )
   ) {
     return undefined;
   }

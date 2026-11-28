@@ -5,6 +5,7 @@ import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
+import * as projects from "../../projects/project-registry.js";
 import { resolveSessionGitCoauthorPrompt } from "../git-coauthor-prompt.js";
 import { prepareAgentPromptRepoRoot, withAgentPromptProjects } from "../prompt-projects.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
@@ -244,5 +245,36 @@ describe("buildCliAgentSystemPrompt", () => {
 
     expect(prompt).toContain("`send`: `target` + `message`; target required this turn");
     expect(prompt).not.toContain("current source is default target");
+  });
+
+  it("keeps the session project section on Gateway-started turns of an owner conversation", async () => {
+    const workspaceDir = "/workspace";
+    vi.spyOn(projects, "listProjectRegistry").mockResolvedValue([
+      { id: "workspace:main", displayName: "Workspace", source: "workspace", repoRoot: workspaceDir },
+      { id: "website", displayName: "Website", source: "registered", repoRoot: "/website" },
+    ]);
+    const prompt = (requester: Parameters<typeof prepareCliSystemPrompt>[0]["requester"]) =>
+      prepareCliSystemPrompt({
+        workspaceDir,
+        config: { agents: { entries: { main: { workspace: workspaceDir } } } },
+        agentId: "main",
+        sessionKey: "agent:main:telegram:direct:1222",
+        sessionId: "chat",
+        preparedSessionEntry: { sessionId: "chat", updatedAt: 1 },
+        tools: [createStubTool("session_project")],
+        modelDisplay: "claude-cli/opus",
+        requester,
+      });
+
+    const owner = await prompt({ senderIsOwner: true });
+    expect(owner).toContain("## Session project");
+    // Completions, automations and sessions_send turns carry no sender; they render the same prompt.
+    for (const inputProvenance of [
+      { kind: "internal_system", sourceTool: "exec" },
+      { kind: "inter_session", sourceTool: "subagent_announce" },
+    ] as const) {
+      expect(await prompt({ senderIsOwner: false, inputProvenance })).toBe(owner);
+    }
+    expect(await prompt({ senderIsOwner: false })).not.toContain("## Session project");
   });
 });

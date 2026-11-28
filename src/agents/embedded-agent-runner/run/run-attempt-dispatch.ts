@@ -305,6 +305,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     cwd: params.cwd,
     entry,
     senderIsOwner: params.senderIsOwner,
+    inputProvenance: params.inputProvenance,
     admittedRunContext: params.admittedRunContext,
     agentId: workspaceResolution.agentId,
     authProfileId: runtime.lastProfileId,

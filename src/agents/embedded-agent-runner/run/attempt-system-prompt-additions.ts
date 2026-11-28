@@ -6,6 +6,7 @@ import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hasPairedCardRenderer } from "../../../infra/device-pairing.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
+import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
 import {
   readAdmittedRunOperatorAuthority,
@@ -40,6 +41,7 @@ export async function prepareAttemptSystemPromptAdditions(params: {
   toolsAllow?: string[];
   entry?: InternalSessionEntry;
   senderIsOwner?: boolean;
+  inputProvenance?: InputProvenance;
   admittedRunContext?: AdmittedRunContext;
 }) {
   let extraSystemPrompt = params.extraSystemPrompt;
@@ -123,6 +125,7 @@ export async function prepareAttemptSystemPromptAdditions(params: {
             entry: params.entry,
             senderIsOwner: params.senderIsOwner,
             operatorAuthority: readAdmittedRunOperatorAuthority(params.admittedRunContext),
+            inputProvenance: params.inputProvenance,
           }),
         }
       : {}),
