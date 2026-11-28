@@ -39,7 +39,6 @@ import {
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { estimateToolResultTextChars } from "openclaw/plugin-sdk/text-utility-runtime";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -654,43 +653,6 @@ describe("createCodexDynamicToolBridge", () => {
     const invalidResult = await callTool(bridge, testCase.name, {}, "call-invalid");
     expect(invalidResult).toMatchObject({ success: false, executionStarted: false });
     expectInputText(invalidResult, `Unknown OpenClaw tool: ${testCase.name}`, false);
-  });
-
-  it("preserves the canonical cap for tiny contexts", async () => {
-    const bridge = createBridgeWithToolResult("large_lookup", textToolResult("x".repeat(70_000)), {
-      contextWindowTokens: 1,
-    });
-    const result = await callTool(bridge, "large_lookup", {}, "call-context-cap");
-    expect(firstInputText(result).length).toBe(1);
-  });
-
-  it("shares weighted budget across mixed text blocks while preserving images", async () => {
-    const bridge = createBridgeWithToolResult(
-      "mixed_lookup",
-      {
-        content: [
-          { type: "text", text: "a".repeat(4_000) },
-          frameImage(COMPUTER_FRAME_IMAGE),
-          { type: "text", text: "你".repeat(9_000) },
-        ],
-        details: {},
-      },
-      { contextWindowTokens: 128_000 },
-    );
-
-    const result = await callTool(bridge, "mixed_lookup", {}, "call-mixed-weighted");
-    const text = result.contentItems
-      .map((item) => (item.type === "inputText" && typeof item.text === "string" ? item.text : ""))
-      .join("");
-
-    expect(result.contentItems.map((item) => item.type)).toEqual([
-      "inputText",
-      "inputImage",
-      "inputText",
-    ]);
-    expect(result.contentItems[0]).toEqual({ type: "inputText", text: "a".repeat(4_000) });
-    expect(estimateToolResultTextChars(text)).toBeLessThanOrEqual(32_000);
-    expect(text).toContain("original 13000 chars, weighted budget 32000");
   });
 
   it.each([

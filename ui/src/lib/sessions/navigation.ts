@@ -13,6 +13,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { parseCatalogSessionKey } from "./catalog-key.ts";
 import {
   isUiGlobalSessionKey,
+  isDashboardSessionKey,
   isSessionKeyTiedToAgent,
   isSubagentSessionKey,
   normalizeAgentId,
@@ -262,7 +263,15 @@ export function resolveSessionNavigation(input: SessionNavigationInput) {
     currentSessionKey &&
     currentSessionKey.toLowerCase() !== "unknown" &&
     !parseCatalogSessionKey(currentSessionKey)
-      ? { ...(selectedSession ?? { kind: "direct", updatedAt: null }), key: currentSessionKey }
+      ? {
+          ...(selectedSession ?? {
+            kind: "direct",
+            updatedAt: null,
+            // A route-only dashboard row has no title facts yet. Do not paint a made-up name.
+            titlePending: isDashboardSessionKey(currentSessionKey),
+          }),
+          key: currentSessionKey,
+        }
       : undefined;
   const sortedSessions = filterVisibleSessionRows(input.result?.sessions ?? [], {
     currentSessionKey: currentSessionKey || undefined,
