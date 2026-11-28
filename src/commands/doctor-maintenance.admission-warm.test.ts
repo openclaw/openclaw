@@ -17,7 +17,10 @@ import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun, recordUpdateRunRepairContinuation } from "../infra/update-run-ledger.js";
 import * as ledger from "../infra/update-run-ledger.js";
 import { seedOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.test-support.js";
-import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import {
+  createOpenClawDatabaseMaintenanceScope,
+  runOutsideOpenClawDatabaseMaintenanceScope,
+} from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
   isOpenClawStateDatabaseOpen,
@@ -312,6 +315,58 @@ it.each(["cached-writer", "admitted-read-only", "cold-read-only"] as const)(
       }
     }),
 );
+
+// Doctor steps such as session-transcript repair take their own SQLite maintenance lock,
+// which nests a scope inside Doctor's. Each of their database accesses rechecks admission.
+it.each(warmSources)(
+  "serves a nested step scope from the %s reader and still sees a run started inside it",
+  (source) =>
+    withMaintenance(source, ({ maintenance, openPeer }) => {
+      const peer = openPeer();
+      maintenance.assertAdmission();
+      const step = createOpenClawDatabaseMaintenanceScope({
+        schemaMaintenance: true,
+        assertOwnerCurrent: () => {},
+      });
+      const hashes = vi.spyOn(snapshots, "readSqliteSourceContentVersionSync");
+      const copies = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
+      step.run(() => {
+        for (let write = 0; write < 4; write++) {
+          // A commit that leaves admission unchanged still changes the database files.
+          peer.exec("UPDATE update_runs SET updated_at_ms = updated_at_ms + 1");
+          step.assertAdmission();
+        }
+        expect(hashes).not.toHaveBeenCalled();
+        expect(copies).not.toHaveBeenCalled();
+        peer.exec(runningSql);
+        const runId = peer.prepare("SELECT run_id FROM update_runs").get()?.run_id;
+        expect(() => step.assertAdmission()).toThrow(String(runId));
+      });
+    }),
+);
+
+it("reads unrelated maintenance scopes from fresh private snapshots", () =>
+  withMaintenance("cached-writer", async ({ admission, maintenance, openPeer }) => {
+    const peer = openPeer();
+    maintenance.assertAdmission();
+    // Created outside Doctor's scope, this owner is a sibling, not a nested step.
+    const unrelated = runOutsideOpenClawDatabaseMaintenanceScope(() => maintenanceScope(admission));
+    const hashes = vi.spyOn(snapshots, "readSqliteSourceContentVersionSync");
+    try {
+      runOutsideOpenClawDatabaseMaintenanceScope(() =>
+        unrelated.run(() => {
+          peer.exec("UPDATE update_runs SET updated_at_ms = updated_at_ms + 1");
+          unrelated.assertAdmission();
+          expect(hashes).toHaveBeenCalled();
+          peer.exec(runningSql);
+          const runId = peer.prepare("SELECT run_id FROM update_runs").get()?.run_id;
+          expect(() => unrelated.assertAdmission()).toThrow(String(runId));
+        }),
+      );
+    } finally {
+      await unrelated.close();
+    }
+  }));
 
 it("refuses committed WAL updates while preserving all live source artifacts", () => {
   using context = fixture(true);

@@ -92,6 +92,11 @@ export function readSqlitePageHeader(database: DatabaseSync) {
 }
 
 /** Read logical image bytes, including WAL growth but excluding historical frames. */
+/** Connection-local: changes only when another connection's commit becomes visible here. */
+export function readSqliteDataVersion(database: DatabaseSync): number {
+  return Number(database.prepare("PRAGMA data_version").get()?.data_version);
+}
+
 export function readSqliteImageSizeBytes(database: DatabaseSync): number {
   return (
     Number(database.prepare("PRAGMA page_count;").get()?.page_count) *
