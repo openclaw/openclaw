@@ -25,6 +25,7 @@ import {
 } from "../plugins/plugin-metadata-snapshot.js";
 import { normalizePluginPolicyId } from "../plugins/plugin-policy-id.js";
 import { preparePluginRegistrySnapshotReader } from "../plugins/plugin-registry-snapshot.js";
+import { withConfiguredPluginStateEngine } from "../plugins/plugin-state-database-engine.js";
 import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -131,19 +132,24 @@ export async function resolveConfigWidePluginMetadataSnapshotAsync(
     return current;
   }
   const cache = getPluginCache();
-  return withPluginCache(cache, async () => {
-    // Policy and inventory share one worker read before synchronous metadata derivation.
-    const activateDiscovery =
-      captured.installRecords === undefined
-        ? await preparePluginMetadataMachineStateAsync({
-            env: captured.env,
-            stateDir: captured.stateDir,
-          })
-        : await prepareBundledDiscoveryMode(captured.env);
-    activateDiscovery();
-    // Parsing, recovery, trust checks and persisted/derived selection retain one owner.
-    return resolveConfigWidePluginMetadataSnapshot(captured);
-  });
+  return withPluginCache(cache, () =>
+    withConfiguredPluginStateEngine(
+      { config: captured.config, env: captured.env, stateDir: captured.stateDir },
+      async () => {
+        // Policy and inventory share one worker read before synchronous metadata derivation.
+        const activateDiscovery =
+          captured.installRecords === undefined
+            ? await preparePluginMetadataMachineStateAsync({
+                env: captured.env,
+                stateDir: captured.stateDir,
+              })
+            : await prepareBundledDiscoveryMode(captured.env);
+        activateDiscovery();
+        // Parsing, recovery, trust checks and persisted/derived selection retain one owner.
+        return resolveConfigWidePluginMetadataSnapshot(captured);
+      },
+    ),
+  );
 }
 
 function resolveConfigWideMetadataSelection(params: ResolveConfigWidePluginMetadataParams) {

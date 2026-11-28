@@ -3,12 +3,13 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "./installed-plugin-index-store-path.js";
 import { getPluginSourceAdmissionPublisher } from "./plugin-source-admission-context.js";
 import type { PluginSourceAdmissionPublication } from "./plugin-source-admission.types.js";
+import { isPluginStateEngineUnavailable } from "./plugin-state-database-engine.js";
 
 /** Deferred publication retains its original store and authority through settlement. */
 export function createPluginSourceAdmissionPublisher(
   options: { env?: NodeJS.ProcessEnv; stateDir?: string } = {},
 ): ((publication: PluginSourceAdmissionPublication) => Promise<boolean>) | undefined {
-  if (isArtifactPreservingStateRead()) {
+  if (isArtifactPreservingStateRead() || isPluginStateEngineUnavailable()) {
     return undefined;
   }
   const delegated = getPluginSourceAdmissionPublisher();
@@ -27,7 +28,7 @@ export function createPluginSourceAdmissionPublisher(
     };
   }
   return async (publication) => {
-    if (isArtifactPreservingStateRead()) {
+    if (isArtifactPreservingStateRead() || isPluginStateEngineUnavailable()) {
       return false;
     }
     const { runOpenClawStateWorkerOperation } =

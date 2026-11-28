@@ -14,6 +14,7 @@ import { collectConfiguredMemoryEmbeddingProviderIds } from "../gateway-startup-
 import { createInstalledPluginIndexScopeLookup } from "../installed-plugin-index-scope-lookup.js";
 import { loadAndActivateRootPluginRegistry } from "../loader.js";
 import { hasNonEmptyPluginIdScope } from "../plugin-scope.js";
+import { withConfiguredPluginStateEngine } from "../plugin-state-database-engine.js";
 import { buildPluginRuntimeLoadOptions } from "./load-context.js";
 import { resolvePluginRuntimeLoadContext } from "./load-context.resolve.js";
 
@@ -89,65 +90,71 @@ export async function ensurePluginRegistryLoaded(options?: {
   persistedSandboxBackendIds?: readonly string[];
 }): Promise<void> {
   const scope = options?.scope ?? "all";
-  const context = resolvePluginRuntimeLoadContext({
-    ...options,
-    config: options?.config ?? (await captureRuntimeConfigAsyncReader()()),
-  });
-  let pluginIds: string[];
-  switch (scope) {
-    case "configured-channels":
-      pluginIds = await resolveConfiguredChannelPluginIdsAsync({
-        config: context.config,
-        activationSourceConfig: context.activationSourceConfig,
-        workspaceDir: context.workspaceDir,
-        env: context.env,
+  const resolvedConfig = options?.config ?? (await captureRuntimeConfigAsyncReader()());
+  await withConfiguredPluginStateEngine(
+    { config: resolvedConfig, env: options?.env, prepareMachineState: true },
+    async () => {
+      const context = resolvePluginRuntimeLoadContext({
+        ...options,
+        config: resolvedConfig,
       });
-      break;
-    case "channels":
-      pluginIds = resolveChannelPluginIds({
-        config: context.config,
-        workspaceDir: context.workspaceDir,
-        env: context.env,
-      });
-      break;
-    case "memory":
-      // Memory CLI commands must use the same backend and embedding adapters as
-      // Gateway, without activating unrelated explicitly enabled plugins.
-      pluginIds = resolveMemoryPluginIds(context);
-      break;
-    case "sandbox-backends":
-      pluginIds = resolveSandboxBackendPluginIds(context, options?.persistedSandboxBackendIds);
-      break;
-    default:
-      pluginIds = await resolveEffectivePluginIdsAsync({
-        config: context.rawConfig,
-        workspaceDir: context.workspaceDir,
-        env: context.env,
-      });
-  }
-  const activateConfigured = scope === "configured-channels" && pluginIds.length > 0;
-  const config = activateConfigured
-    ? (withActivatedPluginIds({ config: context.config, pluginIds }) ?? context.config)
-    : context.config;
-  const activationSourceConfig = activateConfigured
-    ? (withActivatedPluginIds({
-        config: context.activationSourceConfig,
-        pluginIds,
-      }) ?? context.activationSourceConfig)
-    : context.activationSourceConfig;
-  await loadAndActivateRootPluginRegistry(
-    buildPluginRuntimeLoadOptions(
-      { ...context, config, activationSourceConfig },
-      {
-        throwOnLoadError: true,
-        ...(scope === "configured-channels" ||
-        scope === "memory" ||
-        scope === "sandbox-backends" ||
-        scope === "all" ||
-        hasNonEmptyPluginIdScope(pluginIds)
-          ? { onlyPluginIds: pluginIds }
-          : {}),
-      },
-    ),
+      let pluginIds: string[];
+      switch (scope) {
+        case "configured-channels":
+          pluginIds = await resolveConfiguredChannelPluginIdsAsync({
+            config: context.config,
+            activationSourceConfig: context.activationSourceConfig,
+            workspaceDir: context.workspaceDir,
+            env: context.env,
+          });
+          break;
+        case "channels":
+          pluginIds = resolveChannelPluginIds({
+            config: context.config,
+            workspaceDir: context.workspaceDir,
+            env: context.env,
+          });
+          break;
+        case "memory":
+          // Memory CLI commands must use the same backend and embedding adapters as
+          // Gateway, without activating unrelated explicitly enabled plugins.
+          pluginIds = resolveMemoryPluginIds(context);
+          break;
+        case "sandbox-backends":
+          pluginIds = resolveSandboxBackendPluginIds(context, options?.persistedSandboxBackendIds);
+          break;
+        default:
+          pluginIds = await resolveEffectivePluginIdsAsync({
+            config: context.rawConfig,
+            workspaceDir: context.workspaceDir,
+            env: context.env,
+          });
+      }
+      const activateConfigured = scope === "configured-channels" && pluginIds.length > 0;
+      const config = activateConfigured
+        ? (withActivatedPluginIds({ config: context.config, pluginIds }) ?? context.config)
+        : context.config;
+      const activationSourceConfig = activateConfigured
+        ? (withActivatedPluginIds({
+            config: context.activationSourceConfig,
+            pluginIds,
+          }) ?? context.activationSourceConfig)
+        : context.activationSourceConfig;
+      await loadAndActivateRootPluginRegistry(
+        buildPluginRuntimeLoadOptions(
+          { ...context, config, activationSourceConfig },
+          {
+            throwOnLoadError: true,
+            ...(scope === "configured-channels" ||
+            scope === "memory" ||
+            scope === "sandbox-backends" ||
+            scope === "all" ||
+            hasNonEmptyPluginIdScope(pluginIds)
+              ? { onlyPluginIds: pluginIds }
+              : {}),
+          },
+        ),
+      );
+    },
   );
 }
