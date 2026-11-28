@@ -69,7 +69,10 @@ function buildConsolidationPrompt(
   return JSON.stringify({
     currentMemory: existingMemory,
     candidates: candidates.map((candidate) => ({
-      key: candidate.key,
+      // Match the field name CONSOLIDATION_SYSTEM_PROMPT asks the model to echo back
+      // (candidateKey): a model that mirrors the payload's own field name instead of the
+      // instruction produces output parseConsolidationPlan rejects outright (#206625).
+      candidateKey: candidate.key,
       text: truncateUtf16Safe(candidate.snippet, maxSnippetChars),
       resultEntry: buildCandidateResultEntry(candidate, maxPromotedSnippetTokens),
       sourceRef: candidateSourceRef(candidate),
