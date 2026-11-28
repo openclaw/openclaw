@@ -481,10 +481,11 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     const resolvedPatch = invalidateStaleDeliveryRoute(
       current,
       resolveCronEventPatch(current, patch),
+      cron.cronCreateOpen,
     );
     const next = normalizeCronFormState({ ...cron.cronForm, ...resolvedPatch }, resolvedPatch);
     cron.cronForm = next;
-    cron.cronFieldErrors = validateCronForm(cron.cronForm);
+    cron.cronFieldErrors = validateCronForm(cron.cronForm, cron.cronEditingJob);
     if (requiresDirectoryReload(current, next)) {
       void deliveryDirectory.load();
     }
@@ -636,7 +637,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     if (hasCronFormErrors(eventErrors) || hasCronFormErrors(modelErrors)) {
       // Catalog/schema feedback is derived from the current source in the view,
       // not retained on the form after discovery finishes or changes revision.
-      cron.cronFieldErrors = validateCronForm(cron.cronForm);
+      cron.cronFieldErrors = validateCronForm(cron.cronForm, cron.cronEditingJob);
       publishCronState();
       return;
     }

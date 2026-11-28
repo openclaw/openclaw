@@ -36,7 +36,7 @@ function installGateway(page: Page, agents = roster, jobs: CronJob[] = [retired]
   return installMockGateway(page, {
     sessions: [
       { key: gardenKey, label: "Garden planning", kind: "direct" },
-      { key: "agent:main:dashboard:other", label: "Garden planning", kind: "direct" },
+      { key: "agent:main:dashboard:other", displayName: "Garden planning", kind: "direct" },
       { key: writerKey, label: "Editorial calendar", kind: "direct" },
     ],
     featureMethods: cronSidebarFeatureMethods,
@@ -68,17 +68,24 @@ suite.define(() => {
       const gateway = await installGateway(page);
       await page.goto(`${suite.server.baseUrl}cron?new`);
       await page.locator("#cron-payload-text").fill("Summarize the fictional garden inventory.");
+      await chooseAgent(page, "Clawd");
+      await page.getByRole("button", { name: /^Report to:/ }).click();
+      await page.getByRole("option").filter({ hasText: gardenKey }).click();
       await chooseAgent(page, "Writer");
-      await expect
-        .poll(() => agentPicker(page).locator(".agent-select__label").textContent())
-        .toBe("Writer");
+      await expect.poll(() => page.getByRole("button", { name: /^Report to:/ }).count()).toBe(0);
       await page.locator("#cron-session-target").click();
+      await page
+        .getByRole("option", { name: "Its own session with recent chat", exact: true })
+        .click();
+      expect(await page.locator('[data-test-id="cron-submit"]').isDisabled()).toBe(true);
+      await page.locator("#cron-recent-chat-source").click();
       await page.getByRole("option", { name: "Editorial calendar", exact: true }).click();
-      expect(await page.getByRole("button", { name: /^Report to:/ }).count()).toBe(0);
       await page.locator('[data-test-id="cron-submit"]').click();
       expect((await gateway.waitForRequest("cron.add")).params).toMatchObject({
         agentId: "writer",
-        sessionTarget: `session:${writerKey}`,
+        sessionTarget: "current",
+        sessionKey: writerKey,
+        delivery: { mode: "none" },
       });
     });
   });

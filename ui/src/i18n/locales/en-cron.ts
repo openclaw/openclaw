@@ -32,6 +32,8 @@ const enCron = {
       unknown: "Couldn’t start this automation. Try again.",
     },
     errors: {
+      recentChatSourceRequired:
+        "Choose the conversation whose recent messages this automation should read.",
       activeHoursTime: "Enter HH:MM (24:00 is allowed only for the end).",
       activeHoursTimezone: "Enter a valid IANA time zone, local, or user.",
       scheduleAtInvalid: "Enter a valid date and time.",
@@ -232,6 +234,7 @@ const enCron = {
       reportTo: "Report to",
       defaultDestination: "Default destination",
       recentChatSource: "Use recent chat from",
+      chooseConversation: "Choose a conversation",
       recentChatSourceHelp:
         "The automation reads recent messages here. Announcements return here unless another destination is configured.",
       reportToHelp: "This chat gets the result when no channel destination is configured.",

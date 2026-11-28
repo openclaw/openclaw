@@ -1,15 +1,27 @@
 import type { ConversationListItem, ConversationListResult } from "@openclaw/gateway-protocol";
 import { createStore } from "solid-js";
+import { hasExplicitCronDeliveryTarget } from "../../../../src/cron/delivery-target-validation.js";
 import { t } from "../../i18n/index.ts";
 import type { CronFormState, CronState } from "../../lib/cron/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
+
+export function hasExplicitFormDelivery(form: CronFormState): boolean {
+  return hasExplicitCronDeliveryTarget({
+    target: form.deliveryTarget || undefined,
+    channel: form.deliveryChannel,
+    to: form.deliveryTo.trim(),
+    accountId: form.deliveryAccountId.trim(),
+    threadId: form.deliveryThreadId,
+  });
+}
 
 // Topics belong to an exact delivery route; retain one only when that route survives
 // or the same patch supplies a replacement.
 export function invalidateStaleDeliveryRoute(
   current: CronFormState,
   patch: Partial<CronFormState>,
+  creating = false,
 ): Partial<CronFormState> {
   const agentId =
     (patch.clearAgent ?? current.clearAgent) ? "" : (patch.agentId ?? current.agentId).trim();
@@ -33,11 +45,29 @@ export function invalidateStaleDeliveryRoute(
       patch.failureAlertAccountId?.trim() !== current.failureAlertAccountId.trim()) ||
     ("failureAlertTo" in patch && patch.failureAlertTo?.trim() !== current.failureAlertTo.trim()) ||
     agentChanged;
+  let next = patch;
+  // A new agent must not turn the previous chat choice into an announcement to its default channel.
+  if (creating && agentChanged) {
+    next = { ...patch };
+    if (current.sessionKey && patch.sessionKey === undefined) {
+      next.sessionKey = "";
+      if (
+        current.deliveryMode === "announce" &&
+        !hasExplicitFormDelivery(current) &&
+        patch.deliveryMode === undefined
+      ) {
+        next.deliveryMode = "none";
+      }
+    }
+    if (current.sessionTarget.startsWith("session:") && patch.sessionTarget === undefined) {
+      next.sessionTarget = "isolated";
+    }
+  }
   const resolved =
-    deliveryIdentityChanged && patch.deliveryThreadId === undefined
-      ? { ...patch, deliveryThreadId: undefined }
-      : patch;
-  return failureAlertIdentityChanged && patch.failureAlertThreadId === undefined
+    deliveryIdentityChanged && next.deliveryThreadId === undefined
+      ? { ...next, deliveryThreadId: undefined }
+      : next;
+  return failureAlertIdentityChanged && next.failureAlertThreadId === undefined
     ? { ...resolved, failureAlertThreadId: undefined }
     : resolved;
 }

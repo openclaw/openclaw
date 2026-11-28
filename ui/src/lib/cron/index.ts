@@ -151,7 +151,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
     if (form !== state.cronForm) {
       state.cronForm = form;
     }
-    const fieldErrors = validateCronForm(form);
+    const fieldErrors = validateCronForm(form, state.cronEditingJob);
     state.cronFieldErrors = fieldErrors;
     if (hasCronFormErrors(fieldErrors)) {
       return;
@@ -495,7 +495,7 @@ function setCronEditState(state: CronState, job: CronJob, form: CronFormState) {
   state.cronCloningJob = null;
   state.cronRunsJobId = job.id;
   state.cronForm = form;
-  state.cronFieldErrors = validateCronForm(form);
+  state.cronFieldErrors = validateCronForm(form, state.cronEditingJob);
 }
 
 export function startCronEdit(state: CronState, job: CronJob) {

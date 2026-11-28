@@ -13,6 +13,7 @@ type BlockingField = {
   inputId: string;
 };
 const CRON_FIELD_LABEL_KEYS: Record<CronFieldKey, string> = {
+  recentChatSource: "cron.form.recentChatSource",
   name: "cron.form.fieldName",
   eventServer: "cron.events.server",
   eventName: "cron.events.name",

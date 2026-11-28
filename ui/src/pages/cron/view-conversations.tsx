@@ -1,5 +1,4 @@
 import { createMemo, createSignal, Show } from "solid-js";
-import { hasExplicitCronDeliveryTarget } from "../../../../src/cron/delivery-target-validation.js";
 import { Picker } from "../../components/solid/select-picker.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
@@ -7,7 +6,8 @@ import {
   SESSION_SEARCH_SCOPE,
   SESSIONS_PAGE_DEFAULT_LIMIT,
 } from "../../lib/sessions/session-requests.ts";
-import { CronSelect, FieldRow } from "./view-fields.tsx";
+import { hasExplicitFormDelivery } from "./delivery-conversations.ts";
+import { CronSelect, FieldRow, errorIdForField, inputIdForField } from "./view-fields.tsx";
 import type { CronPanelMode, CronProps } from "./view-types.ts";
 
 export function ConversationFields(props: CronProps & { mode: CronPanelMode }) {
@@ -24,13 +24,7 @@ export function ConversationFields(props: CronProps & { mode: CronPanelMode }) {
       form().sessionTarget !== "current" &&
       (canContinue() || form().payloadLocked) &&
       (form().deliveryMode === "none" || form().deliveryMode === "announce") &&
-      !hasExplicitCronDeliveryTarget({
-        target: form().deliveryTarget || undefined,
-        channel: form().deliveryChannel,
-        to: form().deliveryTo.trim(),
-        accountId: form().deliveryAccountId.trim(),
-        threadId: form().deliveryThreadId,
-      }),
+      !hasExplicitFormDelivery(form()),
   );
   const sessions = createMemo(() => (props.connected ? props.sessions : undefined));
   const effectiveAgentId = createMemo(() => props.conversationAgentId);
@@ -119,12 +113,15 @@ export function ConversationFields(props: CronProps & { mode: CronPanelMode }) {
       ? []
       : [{ value: "main", label: t("cron.form.mainSession") }]),
     { value: "isolated", label: t("cron.form.isolatedSession") },
-    ...(target() === "current" || (canContinue() && form().sessionKey)
+    ...(target() === "current" || (canContinue() && (props.mode === "create" || linkedKey()))
       ? [{ value: "current", label: t("cron.form.currentSession") }]
       : []),
     ...(canContinue() || target().startsWith("session:") ? choices(executionKey()) : []),
   ]);
   const choosesSource = () => props.mode === "create" && target() === "current";
+  const chatControlId = () =>
+    choosesSource() ? inputIdForField("recentChatSource") : "cron-report-to";
+  const sourceError = () => (choosesSource() ? props.fieldErrors.recentChatSource : undefined);
   const chatFieldLabel = () =>
     t(choosesSource() ? "cron.form.recentChatSource" : "cron.form.reportTo");
   return (
@@ -158,11 +155,16 @@ export function ConversationFields(props: CronProps & { mode: CronPanelMode }) {
       >
         <FieldRow
           label={chatFieldLabel()}
-          controlId="cron-report-to"
+          controlId={chatControlId()}
+          required={choosesSource()}
+          error={sourceError()}
+          errorId={errorIdForField("recentChatSource")}
           help={t(choosesSource() ? "cron.form.recentChatSourceHelp" : "cron.form.reportToHelp")}
           control={
             <Picker
-              id="cron-report-to"
+              id={chatControlId()}
+              invalid={Boolean(sourceError())}
+              describedBy={sourceError() ? errorIdForField("recentChatSource") : undefined}
               label={chatFieldLabel()}
               value={
                 !choosesSource() && form().deliveryMode === "none"
@@ -171,7 +173,15 @@ export function ConversationFields(props: CronProps & { mode: CronPanelMode }) {
               }
               options={[
                 ...(choosesSource()
-                  ? []
+                  ? linkedKey()
+                    ? []
+                    : [
+                        {
+                          value: "session:",
+                          label: t("cron.form.chooseConversation"),
+                          disabled: true,
+                        },
+                      ]
                   : [
                       { value: "none", label: t("cron.form.noneInternal") },
                       { value: "session:", label: t("cron.form.defaultDestination") },
