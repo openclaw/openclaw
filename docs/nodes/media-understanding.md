@@ -160,7 +160,7 @@ When `tools.media.<capability>.enabled` is not `false` and no models are configu
     The active reply model, when its provider supports the capability.
   </Step>
   <Step title="Provider auth (audio only, before local CLIs)">
-    Configured `models.providers.*` entries that support audio are tried before local CLIs. Bundled provider priority order (ties break alphabetically by provider id): Groq/OpenAI &rarr; xAI &rarr; Deepgram &rarr; OpenRouter &rarr; Google/SenseAudio &rarr; Deepinfra/ElevenLabs &rarr; Mistral.
+    Configured `models.providers.*` entries that support audio are tried before local CLIs. Bundled provider priority order (ties break alphabetically by provider id): Groq/OpenAI &rarr; xAI &rarr; Deepgram &rarr; OpenRouter/Vercel AI Gateway &rarr; Google/SenseAudio &rarr; Deepinfra/ElevenLabs &rarr; Mistral.
   </Step>
   <Step title="Local CLIs (audio only)">
     Ready local binaries become an ordered fallback list:
@@ -220,7 +220,7 @@ Set `capabilities` on a `models[]` entry to restrict it to specific media types.
 | `deepinfra`                                                              | image + audio         |
 | `mistral`                                                                | audio                 |
 | `zai`                                                                    | image                 |
-| `groq`, `xai`, `deepgram`, `senseaudio`                                  | audio                 |
+| `groq`, `xai`, `deepgram`, `senseaudio`, `vercel-ai-gateway`             | audio                 |
 | Any `models.providers.<id>.models[]` catalog with an image-capable model | image                 |
 
 CLI entries require explicit `capabilities`; entries without valid capability tags are skipped. Provider entries without valid explicit tags use their registered capability metadata.
@@ -230,7 +230,7 @@ CLI entries require explicit `capabilities`; entries without valid capability ta
 | Capability | Providers                                                                                                                                               | Notes                                                                                                                                                                                   |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Image      | Anthropic, Codex app-server, Deepinfra, Google, MiniMax, MiniMax Portal, Moonshot, OpenAI, OpenAI Codex OAuth, OpenRouter, Qwen, Z.AI, config providers | Vendor plugins register image support; `openai/*` can use API-key or Codex OAuth routing; `codex/*` uses a bounded Codex app-server turn; image-capable config providers auto-register. |
-| Audio      | Deepgram, Deepinfra, ElevenLabs, Google, Groq, Mistral, OpenAI, OpenRouter, SenseAudio, xAI                                                             | Provider transcription (Whisper/Groq/xAI/Deepgram/OpenRouter STT/Gemini/SenseAudio/Scribe/Voxtral).                                                                                     |
+| Audio      | Deepgram, Deepinfra, ElevenLabs, Google, Groq, Mistral, OpenAI, OpenRouter, SenseAudio, Vercel AI Gateway, xAI                                          | Provider transcription (Whisper/Groq/xAI/Deepgram/OpenRouter STT/AI Gateway STT/Gemini/SenseAudio/Scribe/Voxtral).                                                                      |
 | Video      | Google, Moonshot, Qwen                                                                                                                                  | Provider video understanding via vendor plugins; Qwen video understanding uses the standard DashScope endpoints.                                                                        |
 
 <Note>

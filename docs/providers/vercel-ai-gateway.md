@@ -120,6 +120,37 @@ Use either form in your configuration; OpenClaw resolves the full
     OpenAI, and `vercel-ai-gateway/moonshotai/kimi-k2.6` routes through
     MoonshotAI. One `AI_GATEWAY_API_KEY` authenticates all upstream providers.
   </Accordion>
+  <Accordion title="Audio transcription">
+    The plugin registers AI Gateway as an audio [media understanding](/nodes/media-understanding)
+    provider. Inbound voice notes and audio attachments go to AI Gateway's native
+    transcription endpoint with the same API key used for chat. The default model is
+    `openai/gpt-transcribe`; any AI Gateway transcription model works, for example
+    `elevenlabs/scribe-v2` or `microsoft/mai-transcribe-2`:
+
+    ```json5
+    {
+      tools: {
+        media: {
+          models: [
+            { provider: "vercel-ai-gateway", model: "openai/gpt-4o-mini-transcribe", capabilities: ["audio"] },
+          ],
+        },
+      },
+    }
+    ```
+
+    `prompt` and per-entry provider options are sent as AI SDK `providerOptions`
+    under the model's provider prefix (`elevenlabs/scribe-v2` &rarr; `elevenlabs`),
+    so option names follow that provider's AI SDK options. The standard `language`
+    hint is translated to the provider's field (`languageCode` for ElevenLabs,
+    `language` otherwise).
+
+    Before uploading audio, OpenClaw checks that the transcription model appears in
+    the key's own model list. Token Pass and other scoped keys exclude audio models,
+    so they are skipped before upload and automatic selection moves on to the next
+    available transcriber.
+
+  </Accordion>
   <Accordion title="Thinking levels">
     `/think` options follow the upstream model prefix when OpenClaw recognizes
     it. `vercel-ai-gateway/anthropic/...` uses the Claude thinking profile,
