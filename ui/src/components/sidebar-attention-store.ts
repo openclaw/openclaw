@@ -78,7 +78,8 @@ function isSidebarCronJob(job: unknown): job is SidebarCronJob {
     (autoDisabled === undefined ||
       (isRecord(autoDisabled) &&
         (autoDisabled.reason === "consecutive-failures" ||
-          autoDisabled.reason === "schedule-errors") &&
+          autoDisabled.reason === "schedule-errors" ||
+          autoDisabled.reason === "account-unavailable") &&
         typeof autoDisabled.atMs === "number" &&
         Number.isFinite(autoDisabled.atMs) &&
         autoDisabled.atMs >= 0 &&
