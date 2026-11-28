@@ -27,11 +27,10 @@ type ResolutionOptions = Partial<Parameters<typeof resolvePluginRuntimeArtifact>
 function write(file: string, content: string) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, content);
-  return file;
 }
 
 function writeJson(file: string, value: unknown) {
-  return write(file, JSON.stringify(value));
+  write(file, JSON.stringify(value));
 }
 
 function expectLoaded(registry: ReturnType<typeof loadFixture>, fields: Record<string, string>) {
