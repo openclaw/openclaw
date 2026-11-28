@@ -112,6 +112,36 @@ it("batch schema retains closed, kind-specific inputs and nested evidence throug
   expect(accepts(wrongKind)).toBe(false);
 });
 
+it("batch claims accept atom fields, and each kind keeps validating annotations it does not list", () => {
+  const atom = {
+    ...claim,
+    input: {
+      ...claim.input,
+      assertion_origin: "agent_inference",
+      occurred_at: "2026-09-20",
+      occurred_until: "2026-09-23T10:30:00-07:00",
+      takeaway: "Ship the option that lands by Friday.",
+      tags: ["story_angle"],
+      inferred_by: { agent: "extractor", at: "2026-10-01T08:00:00Z", confidence: "medium" },
+    },
+  };
+  const link = {
+    ...relationship,
+    input: { ...relationship.input, source_event: false, continuity: [] },
+  };
+  expect(Check(BatchInput, batch([atom, link]))).toBe(true);
+  for (const [item, field, value] of [
+    [atom, "inferred_by", { agent: "extractor" }],
+    [atom, "takeaway", " "],
+    [atom, "identity", { status: "resolved" }],
+    [link, "source_event", "yes"],
+    [link, "continuity", [{ id: "@prior", relation: "updates", basis: "Notes", evidence: [] }]],
+  ] as const) {
+    const changed = { ...item, input: { ...item.input, [field]: value } };
+    expect(Check(BatchInput, batch([changed])), field).toBe(false);
+  }
+});
+
 // Codex's input schema projection retains these keywords and lowers const to
 // enum before applying its 5,000-byte compaction threshold. An oversized schema
 // loses $defs, then nested objects, hiding batch fields as Array<unknown>.

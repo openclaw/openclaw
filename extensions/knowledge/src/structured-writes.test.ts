@@ -16,6 +16,7 @@ import {
   toolContext,
   useTestTempDirs,
 } from "./test-support.js";
+import { leanToolResults } from "./tool-results.js";
 
 const tempDirs = useTestTempDirs();
 
@@ -91,6 +92,122 @@ it("structured UI/agent service parity: decision, owned commitment, event, edge 
     (await f.service.connections_detail({ id: f.pages.person.id, direction: "claims" }, f.owner))
       .connections[0],
   ).toMatchObject({ id: commitment.id });
+});
+
+it("extracted claims keep takeaway, tags, event span and inference provenance", async () => {
+  const f = await foundation();
+  const atom = {
+    title: "Option B story angle",
+    body: "Alex chose option B over the incumbent.",
+    claim_kind: "event",
+    assertion_origin: "agent_inference",
+    attribution: "GBrain extractor from the meeting transcript",
+    occurred_at: "2026-09-20",
+    occurred_until: "2026-09-23T10:30:00-07:00",
+    takeaway: "Teams pick the option they can ship by Friday.",
+    tags: ["story_angle"],
+    inferred_by: {
+      agent: "gbrain-extractor/claude",
+      at: "2026-10-01T08:00:00Z",
+      confidence: "medium",
+    },
+  };
+  const receipt = await f.service.create_claim(f.claim(atom), f.owner);
+  const read = await f.service.record_detail({ id: receipt.id, includeMetadata: true }, f.owner);
+  expect(Check(contract.operations.record_detail.output, read)).toBeTruthy();
+  expect(read.record!.metadata).toMatchObject({
+    occurred_at: atom.occurred_at,
+    occurred_until: atom.occurred_until,
+    takeaway: atom.takeaway,
+    tags: atom.tags,
+    inferred_by: atom.inferred_by,
+  });
+  const tagged = await f.service.grep({ query: "option", tag: "story_angle" }, f.owner);
+  expect(tagged.hits.map((hit: any) => hit.record.id)).toStrictEqual([receipt.id]);
+  expect(tagged.hits[0].inferredBy).toStrictEqual(atom.inferred_by);
+  const agentGrep = await leanToolResults(f.service).grep(
+    { query: "option", tag: "story_angle" },
+    f.owner,
+  );
+  expect(agentGrep.hits[0]!.inferredBy).toStrictEqual(atom.inferred_by);
+  const agentRead = await leanToolResults(f.service).record({ id: receipt.id }, f.owner);
+  expect(agentRead.record).toMatchObject({
+    date: atom.occurred_at,
+    dateUntil: atom.occurred_until,
+    takeaway: atom.takeaway,
+    inferredBy: atom.inferred_by,
+    tags: atom.tags,
+  });
+  const listed = await f.service.records_detail({ kind: "claim", includeCards: true }, f.owner);
+  expect(Check(contract.operations.records_detail.output, listed)).toBeTruthy();
+  expect(listed.records.find((r: any) => r.id === receipt.id).card.metadata).toMatchObject({
+    occurred_until: atom.occurred_until,
+    takeaway: atom.takeaway,
+    inferred_by: atom.inferred_by,
+  });
+  for (const change of [
+    { assertion_origin: "source" },
+    { occurred_at: undefined },
+    { occurred_until: "2026-09-19" },
+    { occurred_until: "2026-02-30" },
+    { inferred_by: { agent: "x", at: "2026-02-30" } },
+    { inferred_by: {} },
+    { inferred_by: { agent: "x" } },
+    { inferred_by: { at: "2026-10-01", confidence: "low" } },
+    { inferred_by: { agent: "x", at: "2026-10-01", confidence: "certain" } },
+    { inferred_by: { agent: "x", at: new Date(Date.now() + 3_600_000).toISOString() } },
+    {
+      inferred_by: {
+        agent: "x",
+        at: new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10),
+      },
+    },
+    { takeaway: " " },
+  ]) {
+    const input = f.claim({ ...atom, ...change });
+    await expect(f.service.create_claim(input, f.owner)).rejects.toThrow();
+    expect((await f.service.mutation({ requestId: input.requestId }, f.owner)).receipt).toBe(null);
+  }
+});
+
+it("authored frontmatter using the claim field names, in any shape, stays valid and saveable", async () => {
+  const f = await foundation();
+  const page = (await f.service.record_detail({ id: f.pages.project.id }, f.owner)).record!;
+  const file = path.join(f.root, "private", page.path);
+  const raw = await readFile(file, "utf8");
+  await writeFile(
+    file,
+    raw.replace(/^---\n/, '---\ntakeaway: [a]\noccurred_until: ""\ninferred_by: my-script\n'),
+  );
+  const detail = await f.service.record_detail({ id: page.id, includeMetadata: true }, f.owner);
+  expect(Check(contract.operations.record_detail.output, detail)).toBeTruthy();
+  const read = detail.record!;
+  expect([read.valid, read.metadata!.takeaway, read.metadata!.inferred_by]).toStrictEqual([
+    true,
+    ["a"],
+    "my-script",
+  ]);
+  const listed = await f.service.records_detail({ kind: "page" }, f.owner);
+  expect(listed.records.map((r: any) => r.id)).toContain(page.id);
+  const saved = await f.service.save_page(edit(read, { title: "Renamed project" }), f.owner);
+  expect(saved.state).toBe("published");
+  expect(await readFile(file, "utf8")).toContain("inferred_by: my-script");
+});
+
+it("a claim card shows only the well-formed claim fields of its authored frontmatter", async () => {
+  const f = await foundation();
+  const receipt = await f.service.create_claim(f.claim({ takeaway: "Kept" }), f.owner);
+  const claim = (await f.service.record_detail({ id: receipt.id }, f.owner)).record!;
+  const claimFile = path.join(f.root, "private", claim.path);
+  await writeFile(
+    claimFile,
+    (await readFile(claimFile, "utf8")).replace(/^---\n/, "---\ninferred_by: [x]\n"),
+  );
+  const cards = await f.service.records_detail({ kind: "claim", includeCards: true }, f.owner);
+  expect(Check(contract.operations.records_detail.output, cards)).toBeTruthy();
+  const card = cards.records.find((r: any) => r.id === receipt.id).card;
+  expect(card.metadata.takeaway).toBe("Kept");
+  expect(card.metadata).not.toHaveProperty("inferred_by");
 });
 
 it("all claim kinds roundtrip; contradictions and uncertain attribution are not merged", async () => {

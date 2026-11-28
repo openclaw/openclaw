@@ -1,4 +1,4 @@
-import type { Envelope } from "./model.js";
+import type { StrictClaimFields, Envelope } from "./model.js";
 
 /** Source dates retain their precision; instants must carry an explicit offset. */
 export function validSourceDate(value: string): boolean {
@@ -49,6 +49,39 @@ export function temporalProblems(m: Envelope): string[] {
   }
   return issues;
 }
+const CLOCK_SKEW_MS = 5 * 60_000;
+const LOCAL_DATE_AHEAD_OF_UTC_MS = 86_400_000;
+
+function sourceDateAfter(a: string, b: string): boolean {
+  return a.length > 10 && b.length > 10
+    ? Date.parse(a) > Date.parse(b)
+    : a.slice(0, 10) > b.slice(0, 10);
+}
+
+export function assertClaimInput(
+  input: Pick<Envelope, "occurred_at" | "assertion_origin"> & StrictClaimFields,
+): void {
+  const { occurred_at: from, occurred_until: until, inferred_by: inference } = input;
+  const issues: string[] = [];
+  if (until !== undefined && (!validSourceDate(until) || !from || sourceDateAfter(from, until))) {
+    issues.push("occurred_until must be a real date at or after occurred_at");
+  }
+  if (
+    inference &&
+    (input.assertion_origin !== "agent_inference" || !validSourceDate(inference.at))
+  ) {
+    issues.push("inferred_by needs assertion_origin agent_inference and a real date");
+  } else if (
+    inference &&
+    Date.parse(inference.at) >
+      Date.now() + (inference.at.length > 10 ? CLOCK_SKEW_MS : LOCAL_DATE_AHEAD_OF_UTC_MS)
+  ) {
+    issues.push("inferred_by.at must not be in the future");
+  }
+  if (issues.length) {
+    throw new Error(`Record validation failed: ${issues.join("; ")}`);
+  }
+}
 /** Validity is [from, until). Expiry is exclusive. Occurrence and due dates never expire a record. */
 export function activeNow(m: Envelope, now = Date.now()): boolean {
   return (
@@ -57,6 +90,10 @@ export function activeNow(m: Envelope, now = Date.now()): boolean {
     (!m.valid_until || Date.parse(m.valid_until) > now) &&
     (!m.expires_at || Date.parse(m.expires_at) > now)
   );
+}
+
+export function occurredText(at: string, until?: string): string {
+  return until ? `${formatSourceDate(at)} – ${formatSourceDate(until)}` : formatSourceDate(at);
 }
 
 /** Date-only values are calendar dates, not UTC instants to shift into yesterday. */

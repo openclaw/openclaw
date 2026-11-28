@@ -1,7 +1,17 @@
 import { Type, type Static } from "typebox";
 import { ExpectedHash } from "./hash-fence.js";
 import { BODY_INPUT_MAX_CHARS } from "./limits.js";
-import { text, name, Evidence, Envelope, id, strings, RecordAnnotations, Recall } from "./model.js";
+import {
+  text,
+  name,
+  StrictClaimFields,
+  Evidence,
+  Envelope,
+  id,
+  strings,
+  RecordAnnotations,
+  Recall,
+} from "./model.js";
 import { PageBudget } from "./page-budget.js";
 export const requestId = Type.String({
   pattern: "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
@@ -82,13 +92,20 @@ const CreateClaim = Type.Object(
     entities: Envelope.properties.entities,
     subject_hint: Envelope.properties.subject_hint,
     occurred_at: Envelope.properties.occurred_at,
+    occurred_until: StrictClaimFields.properties.occurred_until,
     owner: Envelope.properties.owner,
     due_at: Envelope.properties.due_at,
+    takeaway: StrictClaimFields.properties.takeaway,
+    tags: Envelope.properties.tags,
+    inferred_by: StrictClaimFields.properties.inferred_by,
   },
   { additionalProperties: false },
 );
 // Remove Optional markers inherited from the portable (multi-kind) envelope.
 export const ClaimInput = CreateClaim;
+export const claimOnlyInputKeys = Object.keys(CreateClaim.properties).filter(
+  (key) => !(key in common),
+);
 export type ClaimInput = Static<typeof ClaimInput>;
 export const RelationshipInput = Type.Object(
   {

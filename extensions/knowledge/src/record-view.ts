@@ -3,6 +3,7 @@ import { renderClaim, summaryLink } from "./claim-view.js";
 import { evidenceView, originalDownload } from "./evidence-view.js";
 import { displayAliases, identityTag } from "./knowledge-presentation.js";
 import { markdownView } from "./markdown-view.js";
+import { wellFormedClaimFields } from "./model.js";
 import type { Page } from "./page-context.js";
 import {
   button,
@@ -23,7 +24,7 @@ import { fileDetails } from "./record-files.js";
 import { recordPanels } from "./record-panels.js";
 import { recordTimeline } from "./record-timeline.js";
 import { claimVersions } from "./record-versions.js";
-import { formatSourceDate, sourceDateNote } from "./temporal.js";
+import { formatSourceDate, occurredText, sourceDateNote } from "./temporal.js";
 import { foldTimeline } from "./timeline-fold.js";
 import { icon } from "./ui-icons.js";
 
@@ -88,7 +89,13 @@ export async function showDetail(
     meta?.occurred_at ??
     (typeof meta?.fields?.occurred_at === "string" ? meta.fields.occurred_at : undefined);
   if (occurred) {
-    heading.append(el("p", `Occurred ${formatSourceDate(occurred)}`, "knowledge-occurred"));
+    heading.append(
+      el(
+        "p",
+        `Occurred ${occurredText(occurred, wellFormedClaimFields(meta ?? {}).occurred_until)}`,
+        "knowledge-occurred",
+      ),
+    );
     const note = sourceDateNote(occurred);
     if (note) {
       heading.append(el("p", note, "knowledge-muted"));

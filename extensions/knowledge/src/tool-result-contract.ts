@@ -1,7 +1,7 @@
 import { Type, type Static } from "typebox";
 import { ConnectionsInput, DirectedRow } from "./connections-contract.js";
 import { RecordInput, RecordOutput } from "./inspection-contract.js";
-import { Definition, Field, text } from "./model.js";
+import { StrictClaimFields, Definition, Field, text } from "./model.js";
 import { Receipt } from "./mutation-contract.js";
 import { PageBudget } from "./page-budget.js";
 import { RememberResult } from "./remember-contract.js";
@@ -54,8 +54,11 @@ const LeanRecordFields = Type.Object(
     type: Type.Optional(text(64)),
     claimKind: Type.Optional(text(30)),
     date: Type.Optional(text(40)),
+    dateUntil: Type.Optional(text(40)),
     dueAt: Type.Optional(text(40)),
     owner: Type.Optional(Ref),
+    takeaway: Type.Optional(text(1000)),
+    inferredBy: StrictClaimFields.properties.inferred_by,
     from: Type.Optional(text(96)),
     to: Type.Optional(text(96)),
     aliases: Type.Optional(Type.Array(text(200), { maxItems: 100 })),
@@ -166,6 +169,7 @@ export const LeanHit = Type.Object(
     lifecycle: Type.Optional(text(20)),
     snippet: Type.Optional(text(COMPACT_SNIPPET_CHARS)),
     via: Type.Optional(Via),
+    inferredBy: StrictClaimFields.properties.inferred_by,
   },
   { additionalProperties: false },
 );

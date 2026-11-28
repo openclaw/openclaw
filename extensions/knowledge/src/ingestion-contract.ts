@@ -62,14 +62,28 @@ function localRefs<T extends TSchema>(schema: T) {
   };
   return Type.Unsafe<Static<T>>(visit(schema));
 }
+// Every kind accepts every annotation its tool accepts. Those a kind can never use (identity on
+// claims and relationships; continuity and source_event on pages and relationships) validate under
+// patternProperties instead: same accepted values, outside the properties host budgets count.
 const payload = <T extends typeof SavePage | typeof ClaimInput | typeof RelationshipInput>(
   schema: T,
-) =>
-  localRefs(
+  unusable: string[],
+) => {
+  const typed = localRefs(
     Type.Omit(schema, ["requestId", "expectedVaultId", "expectedOntologyFingerprint", "source"], {
       additionalProperties: false,
     }),
   );
+  const closed: TSchema = typed;
+  // SAFETY: TSchema is an empty interface; Type.Omit of an object schema keeps a properties map.
+  const properties = { ...(closed as { properties: Record<string, TSchema> }).properties };
+  const patternProperties: Record<string, TSchema> = {};
+  for (const key of unusable) {
+    patternProperties[`^${key}$`] = properties[key]!;
+    delete properties[key];
+  }
+  return Type.Unsafe<Static<typeof typed>>({ ...closed, properties, patternProperties });
+};
 // Share schemas. Stay below host compaction limits. Same accepted values.
 function compactBatchSchema<T extends TSchema>(schema: T) {
   const evidenceShape = JSON.stringify(Evidence);
@@ -77,29 +91,30 @@ function compactBatchSchema<T extends TSchema>(schema: T) {
   const shared = new Map(
     Object.entries({
       k: RecordAnnotations.properties.record_class,
-      i: localRefs(RecordAnnotations.properties.identity),
       a: RecordAnnotations.properties.attribution_confidence,
-      c: localRefs(RecordAnnotations.properties.continuity),
       r: localRefs(Envelope.properties.dependencies),
+      s: Envelope.properties.tags,
+      f: RelationshipInput.properties.fields,
     }).map(([name, value]) => [JSON.stringify(value), name]),
   );
   const definitions: Record<string, TSchema> = {};
   const visit = (original: TSchema, define = false): TSchema => {
-    const name = shared.get(JSON.stringify(original));
-    if (name && !define) {
-      definitions[name] ??= visit(original, true);
-      return { $ref: `#/$defs/${name}` };
-    }
     // SAFETY: TSchema is an empty interface; a JSON Schema description keyword is a string.
     const { description: _description, ...compact } = original as TSchema & {
       description?: string;
     };
+    const name = shared.get(JSON.stringify(compact));
+    if (name && !define) {
+      definitions[name] ??= visit(original, true);
+      return { $ref: `#/$defs/${name}` };
+    }
     const value: TSchema = compact;
     // SAFETY: TSchema is an empty interface; visited values are TypeBox JSON Schemas with these keywords.
     const shape = value as {
       type?: string;
       anyOf?: { const?: unknown }[];
       properties?: Record<string, TSchema>;
+      patternProperties?: Record<string, TSchema>;
       items?: TSchema;
     };
     // Share the array, not just its items; $ref siblings retain each use's bounds.
@@ -111,18 +126,25 @@ function compactBatchSchema<T extends TSchema>(schema: T) {
         // SAFETY: value is the array schema matched above; type and items are its JSON Schema keywords.
       } = value as TSchema & { type?: string; items?: TSchema };
       definitions.e ??= { type: "array", items: visit(Evidence) };
-      return { ...bounds, $ref: "#/$defs/e" };
+      // SAFETY: bounds holds the array schema's remaining JSON Schema keywords.
+      const { minItems, ...rest } = bounds as TSchema & { minItems?: number };
+      if (minItems !== 1) {
+        return { ...bounds, $ref: "#/$defs/e" };
+      }
+      definitions.m ??= { $ref: "#/$defs/e", minItems };
+      return { ...rest, $ref: "#/$defs/m" };
     }
     if (shape.anyOf?.every((branch) => typeof branch.const === "string")) {
       const { anyOf, ...rest } = shape;
       return { ...rest, type: "string", enum: anyOf.map((branch) => branch.const) };
     }
     if (shape.properties) {
+      const each = (children: Record<string, TSchema>) =>
+        Object.fromEntries(Object.entries(children).map(([key, child]) => [key, visit(child)]));
       return {
         ...value,
-        properties: Object.fromEntries(
-          Object.entries(shape.properties).map(([key, child]) => [key, visit(child)]),
-        ),
+        properties: each(shape.properties),
+        ...(shape.patternProperties && { patternProperties: each(shape.patternProperties) }),
       };
     }
     if (shape.items) {
@@ -149,7 +171,7 @@ export const BatchInput = compactBatchSchema(
             {
               key: Type.String({ pattern: "^[a-z][a-z0-9_-]{0,39}$" }),
               kind: Type.Literal("page"),
-              input: payload(SavePage),
+              input: payload(SavePage, ["source_event", "continuity"]),
             },
             { additionalProperties: false },
           ),
@@ -157,7 +179,7 @@ export const BatchInput = compactBatchSchema(
             {
               key: Type.String({ pattern: "^[a-z][a-z0-9_-]{0,39}$" }),
               kind: Type.Literal("claim"),
-              input: payload(ClaimInput),
+              input: payload(ClaimInput, ["identity"]),
             },
             { additionalProperties: false },
           ),
@@ -165,7 +187,7 @@ export const BatchInput = compactBatchSchema(
             {
               key: Type.String({ pattern: "^[a-z][a-z0-9_-]{0,39}$" }),
               kind: Type.Literal("relationship"),
-              input: payload(RelationshipInput),
+              input: payload(RelationshipInput, ["source_event", "identity", "continuity"]),
             },
             { additionalProperties: false },
           ),

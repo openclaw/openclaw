@@ -17,6 +17,7 @@ import { Envelope, RecordAnnotations, type LoadedRecord } from "./model.js";
 import {
   SavePage,
   ClaimInput,
+  claimOnlyInputKeys,
   RelationshipInput,
   CorrectInput,
   type WriteInput,
@@ -41,6 +42,7 @@ import {
   type Plan,
   type Prepared,
 } from "./storage-types.js";
+import { assertClaimInput } from "./temporal.js";
 import type { SampleVault } from "./vault.js";
 import { digest } from "./vault.js";
 /** Validation and journaled acceptance of planned publications, plus single-record writes. */
@@ -285,15 +287,7 @@ export class StoragePublication extends StorageJournal {
         ? []
         : ["attribution", "evidence", "valid_from", "valid_until", "expires_at"]),
       ...(kind === "claim"
-        ? [
-            "claim_kind",
-            "assertion_origin",
-            "entities",
-            "subject_hint",
-            "occurred_at",
-            "owner",
-            "due_at",
-          ]
+        ? claimOnlyInputKeys
         : kind === "relationship"
           ? ["from", "to", "label"]
           : []),
@@ -305,6 +299,7 @@ export class StoragePublication extends StorageJournal {
         (metadata as Record<string, unknown>)[key] = (input as Record<string, unknown>)[key];
       }
     }
+    assertClaimInput(input);
     if (kind !== "page" && !input.attribution.trim()) {
       throw new Error("Attribution must not be blank.");
     }

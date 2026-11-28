@@ -3,6 +3,7 @@ import { evidenceView } from "./evidence-view.js";
 import { assertionOrigin as origin, identityTag } from "./knowledge-presentation.js";
 import { loadingPlaceholder } from "./loading-view.js";
 import { markdownView } from "./markdown-view.js";
+import { wellFormedClaimFields } from "./model.js";
 import type { Page } from "./page-context.js";
 import {
   button,
@@ -17,7 +18,7 @@ import {
   type Detail,
   type Summary,
 } from "./page-dom.js";
-import { formatSourceDate } from "./temporal.js";
+import { formatSourceDate, occurredText } from "./temporal.js";
 import { icon } from "./ui-icons.js";
 
 // Full metadata is only for inspection, so it loads when its disclosure first opens.
@@ -131,6 +132,10 @@ export function renderClaim(
             "knowledge-claim-text",
           )),
   );
+  const { takeaway } = wellFormedClaimFields(record.metadata ?? {});
+  if (takeaway) {
+    copy.append(el("p", `Takeaway: ${takeaway}`, "knowledge-claim-takeaway"));
+  }
   const metadata = el("div", undefined, "knowledge-claim-meta");
   const assertionOrigin = el(
     "span",
@@ -231,7 +236,8 @@ export function renderClaim(
   const showEvidence = (loaded: Detail) => {
     evidenceBody.replaceChildren();
     const details = el("dl", undefined, "knowledge-claim-details"),
-      m = loaded.record?.metadata;
+      m = loaded.record?.metadata,
+      extra = wellFormedClaimFields(m ?? {});
     const field = (name: string, value: string | HTMLElement) => {
       const dd = el("dd");
       dd.append(value);
@@ -262,8 +268,18 @@ export function renderClaim(
     if (about.childNodes.length) {
       field("About", about);
     }
+    if (m?.occurred_at) {
+      field("Occurred", occurredText(m.occurred_at, extra.occurred_until));
+    }
     if (!originInMeta) {
       field("Origin", origin(record.assertionOrigin, record.attribution));
+    }
+    if (extra.inferred_by) {
+      const { agent, at, confidence } = extra.inferred_by;
+      field(
+        "Inferred by",
+        `${agent} · ${formatSourceDate(at)}${confidence ? ` · ${confidence} confidence` : ""}`,
+      );
     }
     field(
       "Saved",

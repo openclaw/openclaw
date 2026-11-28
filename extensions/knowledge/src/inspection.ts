@@ -7,7 +7,7 @@ import type {
   OntologyOutput,
 } from "./inspection-contract.js";
 import { RECORD_RESPONSE_MAX_BYTES } from "./limits.js";
-import type { Envelope, LoadedRecord } from "./model.js";
+import { wellFormedClaimFields, type Envelope, type LoadedRecord } from "./model.js";
 import { eligible } from "./retrieval.js";
 import { splitsPair, textWindow } from "./text-window.js";
 import type { SampleVault } from "./vault.js";
@@ -66,6 +66,7 @@ const compactMetadata = (m: Envelope): CompactMetadata => {
   ] as const;
   return {
     ...Object.fromEntries(keys.filter((k) => m[k] !== undefined).map((k) => [k, m[k]])),
+    ...wellFormedClaimFields(m),
     ...(m.identity
       ? {
           identity: {

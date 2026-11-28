@@ -371,7 +371,7 @@ export const contract = defineFeatureContract({
     create_claim: {
       kind: "action",
       description:
-        "Publish one evidence-backed claim (fact, preference, decision, commitment, event or belief). Agent chooses what the source supports; no automatic extraction or semantic deduplication. Required current ontology fingerprint comes from knowledge_ontology. Explicit attribution and assertion_origin distinguish source statements, user beliefs and agent inference. Unknown owner/dates remain absent. occurred_at and due_at preserve date-only or offset timestamp precision; validity/expiry are UTC instants. No task is scheduled. Reuse the exact request and payload for retries; no claim overwrite or lifecycle mutation.",
+        "Publish one evidence-backed claim (fact, preference, decision, commitment, event or belief). Agent chooses what the source supports; no automatic extraction or semantic deduplication. Required current ontology fingerprint comes from knowledge_ontology. Explicit attribution and assertion_origin distinguish source statements, user beliefs and agent inference. Unknown owner/dates remain absent. occurred_at, occurred_until (inclusive span end) and due_at preserve date-only or offset timestamp precision; validity/expiry are UTC instants. Optional takeaway holds the lesson apart from the body; inferred_by {agent, at, confidence} is for agent_inference only. No task is scheduled. Reuse the exact request and payload for retries; no claim overwrite or lifecycle mutation.",
       input: ClaimInput,
       output: receipt,
       tool: { name: "knowledge_create_claim", label: "Create knowledge claim" },
@@ -572,7 +572,7 @@ export const contract = defineFeatureContract({
     record: {
       kind: "query",
       description:
-        "Read one saved record by stable ID: id, revision, full hash; pages add title, type, aliases, tags, dependencies, non-empty domain fields and body; claims add kind, date, due date, owner, linked pages, source, attribution and text; partial identity, supersession and merge redirects appear when present. maxChars (default 12,000) bounds the whole response by shortening the text, never identity or metadata; follow nextOffset with offset and compare hashes. includeEvidence=true adds citation locators and short excerpts (follow nextEvidenceOffset with evidenceOffset); read full passages with knowledge_evidence_read. Use knowledge_verify for structural and link checks and knowledge_connections for neighbors. Missing/duplicate IDs return null. Never edit from a truncated body.",
+        "Read one saved record by stable ID: id, revision, full hash; pages add title, type, aliases, tags, dependencies, non-empty domain fields and body; claims add kind, date and span end, due date, owner, takeaway, tags, inferredBy, linked pages, source, attribution and text; partial identity, supersession and merge redirects appear when present. maxChars (default 12,000) bounds the whole response by shortening the text, never identity or metadata; follow nextOffset with offset and compare hashes. includeEvidence=true adds citation locators and short excerpts (follow nextEvidenceOffset with evidenceOffset); read full passages with knowledge_evidence_read. Use knowledge_verify for structural and link checks and knowledge_connections for neighbors. Missing/duplicate IDs return null. Never edit from a truncated body.",
       input: AgentRecordInput,
       output: LeanRecordOutput,
       tool: { name: "knowledge_record", label: "Inspect knowledge" },

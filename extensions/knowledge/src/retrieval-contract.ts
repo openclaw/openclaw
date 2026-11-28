@@ -1,7 +1,7 @@
 import { Type, type Static } from "typebox";
 import { TemporalFilters } from "./chronicle-contract.js";
 import { Summary } from "./inspection-contract.js";
-import { text, Envelope } from "./model.js";
+import { text, StrictClaimFields, Envelope } from "./model.js";
 import { QueryFreshness } from "./query-freshness.js";
 
 const filters = {
@@ -71,6 +71,7 @@ const hit = Type.Object({
   score: Type.Union([Type.Number(), Type.Null()]),
   attribution: text(1000),
   assertionOrigin: text(30),
+  inferredBy: StrictClaimFields.properties.inferred_by,
   evidence: Type.Array(locator, { maxItems: 3 }),
   evidenceTruncated: Type.Boolean(),
 });

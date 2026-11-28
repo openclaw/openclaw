@@ -8,6 +8,10 @@ const timestamp = Type.String({
   pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$",
 });
 export const strings = Type.Array(text(), { maxItems: 100 });
+const sourceDate = Type.String({
+  pattern:
+    "^\\d{4}-\\d{2}-\\d{2}(?:T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,3})?(?:Z|[+-]\\d{2}:\\d{2}))?$",
+});
 export const Recall = Type.Object(
   {
     summary: Type.String({ minLength: 1, maxLength: 500, pattern: "^(?=.*\\S)[\\s\\S]+$" }),
@@ -217,12 +221,7 @@ export const Envelope = Type.Object(
         Type.Literal("agent_inference"),
       ]),
     ),
-    occurred_at: Type.Optional(
-      Type.String({
-        pattern:
-          "^\\d{4}-\\d{2}-\\d{2}(?:T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,3})?(?:Z|[+-]\\d{2}:\\d{2}))?$",
-      }),
-    ),
+    occurred_at: Type.Optional(sourceDate),
     valid_from: Type.Optional(timestamp),
     valid_until: Type.Optional(timestamp),
     expires_at: Type.Optional(timestamp),
@@ -243,6 +242,38 @@ export const Envelope = Type.Object(
   { additionalProperties: true },
 );
 export type Envelope = Static<typeof Envelope>;
+
+export const StrictClaimFields = Type.Object({
+  occurred_until: Type.Optional(sourceDate),
+  takeaway: Type.Optional(
+    Type.String({ minLength: 1, maxLength: 1000, pattern: "^(?=.*\\S)[\\s\\S]+$" }),
+  ),
+  inferred_by: Type.Optional(
+    Type.Object(
+      {
+        agent: Type.String({ minLength: 1, maxLength: 100, pattern: "^(?=.*\\S)[^\\r\\n]+$" }),
+        at: sourceDate,
+        confidence: Type.Optional(
+          Type.Union([Type.Literal("high"), Type.Literal("medium"), Type.Literal("low")]),
+        ),
+      },
+      { additionalProperties: false },
+    ),
+  ),
+});
+export type StrictClaimFields = Static<typeof StrictClaimFields>;
+
+export function wellFormedClaimFields(metadata: Record<string, unknown>): StrictClaimFields {
+  const { occurred_until, takeaway, inferred_by } = metadata;
+  const { properties: p } = StrictClaimFields;
+  return {
+    ...(occurred_until !== undefined && Check(p.occurred_until, occurred_until)
+      ? { occurred_until }
+      : {}),
+    ...(takeaway !== undefined && Check(p.takeaway, takeaway) ? { takeaway } : {}),
+    ...(inferred_by !== undefined && Check(p.inferred_by, inferred_by) ? { inferred_by } : {}),
+  };
+}
 
 export const Field = Type.Object(
   {
