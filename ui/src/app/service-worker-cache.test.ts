@@ -646,6 +646,10 @@ describe("Control UI offline app shell", () => {
       const html = await response?.text();
       expect(html).toContain(`src="${new URL(base).pathname}assets/app-AbCd1234.js"`);
       expect(html).toContain("generic shell");
+      expect(html).toContain(
+        `data-openclaw-control-ui-base-path="${new URL(base).pathname.slice(0, -1)}"`,
+      );
+      expect(html).toContain('data-openclaw-terminal-enabled="false"');
       const map = /<script type="importmap">(.*?)<\/script>/u.exec(html ?? "")?.[1] ?? "";
       const assets = new URL(base).pathname + "assets/";
       expect(JSON.parse(map)).toEqual({
