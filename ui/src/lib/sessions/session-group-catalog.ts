@@ -22,6 +22,7 @@ type SessionGroupCatalogHost = {
   readState: () => SessionState;
   publish: (state: SessionState, errorSource?: "session-observer" | "operation") => void;
   refreshRows: () => Promise<void>;
+  notify: () => void;
   retryDelayMs: (error: unknown) => number | null;
 };
 
@@ -45,6 +46,13 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
   let loadedEpoch = -1;
   let defaultsStatus: SessionGroupDefaultsStatus = "idle";
   let pendingLoad: Promise<readonly SessionGroupSettings[] | null> | null = null;
+  let reorder:
+    | {
+        scope: SessionConnectionScope;
+        order: readonly string[];
+        write: Promise<SessionGroupMutationResult>;
+      }
+    | undefined;
   let retryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 
   const clearRetry = () => {
@@ -104,7 +112,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
   const loadAttempt = async (scope: SessionConnectionScope, isCurrentLoad: () => boolean) => {
     try {
       const listed = await scope.client.request<SessionsGroupsListResult>(GROUPS_LIST_METHOD, {});
-      if (!host.connection.isCurrent(scope)) {
+      if (!host.connection.isCurrent(scope) || !isCurrentLoad()) {
         return null;
       }
       let settings = listed.groups;
@@ -119,10 +127,6 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
         }).allowed
       ) {
         if (settings.length === 0) {
-          // Import replaces persisted groups, so an invalidated read cannot authorize it.
-          if (!isCurrentLoad()) {
-            return null;
-          }
           const put = await scope.client.request<SessionsGroupsListResult>("sessions.groups.put", {
             names: legacy,
           });
@@ -136,6 +140,9 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
           getSafeLocalStorage()?.removeItem(LEGACY_GROUPS_STORAGE_KEY);
         } catch {
           // The gateway catalog is canonical even when browser cleanup fails.
+        }
+        if (!isCurrentLoad()) {
+          return null;
         }
       }
       const defaultsAllowed = readSessionMethodAccess(host.snapshot(), {
@@ -153,7 +160,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
         GROUPS_DEFAULTS_METHOD,
         {},
       );
-      if (!host.connection.isCurrent(scope)) {
+      if (!host.connection.isCurrent(scope) || !isCurrentLoad()) {
         return null;
       }
       settings = mergeSessionGroupDefaults(settings, defaults.defaults);
@@ -179,7 +186,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       defaultsStatus = "loading";
       host.publish({ ...host.readState() });
     }
-    // Concurrent catalog edits settle best effort until the next refresh or reconnect.
+    // A catalog write retires older list/defaults reads before publishing its receipt.
     const promise: Promise<readonly SessionGroupSettings[] | null> = loadAttempt(
       scope,
       () => pendingLoad === promise,
@@ -237,15 +244,44 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     );
   };
 
-  const put = (names: readonly string[], sectionOrder?: readonly string[]) =>
-    mutate(
-      (client) =>
-        client.request<SessionsGroupsListResult>("sessions.groups.put", {
-          names,
-          ...(sectionOrder === undefined ? {} : { sectionOrder }),
-        }),
-      applyCatalogMutation,
-    );
+  const put = async (
+    names: readonly string[],
+    sectionOrder?: readonly string[],
+  ): Promise<SessionGroupMutationResult> => {
+    const send = () =>
+      mutate(
+        (client) =>
+          client.request<SessionsGroupsListResult>("sessions.groups.put", {
+            names,
+            ...(sectionOrder === undefined ? {} : { sectionOrder }),
+          }),
+        applyCatalogMutation,
+      );
+    if (!sectionOrder) {
+      return send();
+    }
+    const scope = host.connection.capture();
+    if (!scope) {
+      return "stale";
+    }
+    // Show every drop immediately, but send replacement orders in gesture order.
+    // The saved catalog stays untouched until the Gateway replies.
+    const next = () => (host.connection.isCurrent(scope) ? send() : ("stale" as const));
+    const write =
+      reorder && host.connection.isCurrent(reorder.scope) ? reorder.write.then(next, next) : send();
+    reorder = { scope, order: sectionOrder, write };
+    host.notify();
+    try {
+      return await write;
+    } finally {
+      if (reorder?.write === write) {
+        reorder = undefined;
+        if (host.connection.isCurrent(scope)) {
+          host.notify();
+        }
+      }
+    }
+  };
 
   const rename = (from: string, to: string) =>
     mutate(
@@ -294,6 +330,9 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     dispose,
     invalidate,
     load,
+    get pendingSectionOrder() {
+      return reorder && host.connection.isCurrent(reorder.scope) ? reorder.order : undefined;
+    },
     put,
     rename,
     status: () => defaultsStatus,
