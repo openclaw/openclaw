@@ -14,6 +14,16 @@ function finiteMediaTime(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
+function isTimeBuffered(media: HTMLMediaElement, time: number): boolean {
+  const ranges = media.buffered;
+  for (let i = 0; i < ranges.length; i++) {
+    if (ranges.start(i) <= time && time < ranges.end(i)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Synchronous browser-playback owner; keeps refreshed tickets from interrupting active media. */
 export class ChatMediaSourceOwner {
   private syncQueued = false;
@@ -177,7 +187,7 @@ export class ChatMediaSourceOwner {
     if (
       !this.appliedSource ||
       media.ended ||
-      (media.paused && finiteMediaTime(media.currentTime) === 0)
+      (!this.restore && media.paused && finiteMediaTime(media.currentTime) === 0)
     ) {
       this.applySource(media, nextSource, nextIdentity, null);
       return;
@@ -201,6 +211,15 @@ export class ChatMediaSourceOwner {
     return false;
   }
 
+  resumeBufferedAudio(media: HTMLMediaElement, hasPreparedBlob: boolean): void {
+    if (
+      this.pendingSource &&
+      (hasPreparedBlob || !isTimeBuffered(media, this.playbackTime(media)))
+    ) {
+      this.applyPendingSource(media);
+    }
+  }
+
   applyPendingSource(media: HTMLMediaElement, restorePlayback = true): boolean {
     if (!this.pendingSource) {
       return false;
@@ -210,27 +229,46 @@ export class ChatMediaSourceOwner {
       this.pendingSource,
       this.pendingIdentity,
       restorePlayback
-        ? { currentTime: finiteMediaTime(media.currentTime), paused: media.paused }
+        ? (this.restore ?? {
+            currentTime: finiteMediaTime(media.currentTime),
+            paused: media.paused,
+          })
         : null,
     );
     return true;
   }
 
+  playbackTime(media: HTMLMediaElement): number {
+    return this.restore?.currentTime ?? media.currentTime;
+  }
+
   seek(media: HTMLMediaElement, nextTime: number): boolean {
     const targetTime = Math.max(0, finiteMediaTime(nextTime));
-    try {
-      media.currentTime = targetTime;
-      return true;
-    } catch {
-      if (!this.pendingSource) {
-        return false;
-      }
-      this.applySource(media, this.pendingSource, this.pendingIdentity, {
-        currentTime: targetTime,
-        paused: media.paused,
-      });
+    if (this.restore) {
+      this.restore.currentTime = targetTime;
       return true;
     }
+    // An unbuffered seek starts a range request. Use the queued ticket before
+    // the browser sends that request against the old, possibly expired grant.
+    if (!this.pendingSource || isTimeBuffered(media, targetTime)) {
+      try {
+        media.currentTime = targetTime;
+        return true;
+      } catch {
+        if (!this.pendingSource) {
+          return false;
+        }
+      }
+    }
+    this.applySource(media, this.pendingSource, this.pendingIdentity, {
+      currentTime: targetTime,
+      paused: media.paused,
+    });
+    return true;
+  }
+
+  get willResumePlayback(): boolean {
+    return this.restore?.paused === false;
   }
 
   cancelPendingResume(): void {

@@ -3,6 +3,7 @@ import { createServer, request } from "node:http";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.ts";
+import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playback.js";
 import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -39,6 +40,76 @@ function pdfFixture(padding: number) {
 }
 
 suite.define(() => {
+  it("plays a workspace MP3 link in the side panel without downloading it first", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const name = "sample.mp3";
+      const filePath = "/workspace/sample.mp3";
+      const url = "/api/artifacts/download/audio-fixture/sample.mp3";
+      const bytes = createPlaybackMediaFixture("mp3");
+      await page.route("**" + url, (route) =>
+        route.fulfill({
+          contentType: "audio/mpeg",
+          body: bytes,
+          headers: { "content-disposition": 'attachment; filename="sample.mp3"' },
+        }),
+      );
+      const gateway = await installMockGateway(page, {
+        historyMessages: [
+          chatMessage("assistant", "Listen to [sample.mp3](/workspace/sample.mp3).", {
+            timestamp: 1,
+          }),
+        ],
+        methodResponses: {
+          "sessions.files.get": {
+            sessionKey,
+            root: "/workspace",
+            file: {
+              name,
+              path: name,
+              workspacePath: name,
+              kind: "read",
+              missing: false,
+              previewKind: "unsupported",
+              mimeType: "audio/mpeg",
+              size: bytes.length,
+            },
+          },
+          "sessions.files.download": {
+            url,
+            filename: name,
+            mimeType: "audio/mpeg",
+            expiresAt: "2099-01-01T00:00:00Z",
+          },
+        },
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      await page.locator(`.chat-thread a[data-file-path="${filePath}"]`).click();
+      const panel = page.locator("openclaw-chat-detail-panel");
+      const player = panel.locator("openclaw-chat-audio-player");
+      if (captureUiProofEnabled) {
+        await panel.getByRole("button", { name: "Download file", exact: true }).first().waitFor();
+        await panel.screenshot({
+          path: path.join(suite.artifactDir, "sample.mp3.png"),
+          animations: "disabled",
+        });
+      }
+      await polledCount(player).toBe(1);
+      await player.getByRole("button", { name: /play/i }).first().click();
+      await expect
+        .poll(() =>
+          player.locator("audio").evaluate((audio: HTMLAudioElement) => audio.currentTime),
+        )
+        .toBeGreaterThan(0);
+      expect((await gateway.getRequests("sessions.files.download")).at(-1)?.params).toMatchObject({
+        sessionKey,
+        path: filePath,
+      });
+      expect(await panel.getByRole("button", { name: "Download file", exact: true }).count()).toBe(
+        1,
+      );
+    });
+  });
+
   it("previews linked PDFs above and below the inline cap and downloads fresh bytes", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const files = [

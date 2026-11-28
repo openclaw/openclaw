@@ -85,7 +85,10 @@ function ChatAudioPlayerContent(
   });
   const sourceController = new ChatMediaSourceOwner();
   const sourceState = projectOwner(sourceController, (owner) => owner);
-  const cancelPendingResume = () => sourceController.cancelPendingResume();
+  const cancelPendingResume = () => {
+    sourceController.cancelPendingResume();
+    setState((draft) => Object.assign(draft, { playing: false }));
+  };
   let mediaElement: HTMLAudioElement | null = null;
   let fallbackDownload: HTMLAnchorElement | undefined;
   const setFallbackDownload = (element: HTMLAnchorElement) => (fallbackDownload = element);
@@ -238,7 +241,7 @@ function ChatAudioPlayerContent(
         applyPreparedAudio(cacheKey, cached);
       }
     }
-    sourceController.applyPendingSource(media);
+    sourceController.resumeBufferedAudio(media, Boolean(releaseWaveformBlob));
   }
 
   async function prepareWaveformAudio(): Promise<void> {
@@ -350,13 +353,21 @@ function ChatAudioPlayerContent(
     if (!media || sourceController.readiness !== "ready") {
       return;
     }
-    if (media.paused) {
+    if (media.paused && !(sourceController.willResumePlayback && state.playing)) {
       adoptPreparedAudioForPlayback();
       claimChatAudioPlayback(media, cancelPendingResume);
       const requestedSource = resolveWaveformCacheKey();
       // Invoke play in the click task so strict browser media policies retain user activation.
       const playback = media.play();
-      const failed = () => {
+      const failed = (error: unknown) => {
+        // Replacing src aborts the previous play request while the renewed seek owns the resume.
+        if (
+          error instanceof DOMException &&
+          error.name === "AbortError" &&
+          sourceController.willResumePlayback
+        ) {
+          return;
+        }
         releaseChatAudioPlayback(media);
         setState((draft) => Object.assign(draft, { playing: false }));
       };
@@ -375,7 +386,9 @@ function ChatAudioPlayerContent(
         })
         .catch(failed);
     } else {
+      sourceController.cancelPendingResume();
       media.pause();
+      setState((draft) => Object.assign(draft, { playing: false }));
     }
   }
 
@@ -386,7 +399,9 @@ function ChatAudioPlayerContent(
     }
     const duration = Number.isFinite(media.duration) ? media.duration : state.duration;
     if (sourceController.seek(media, Math.min(nextTime, duration || nextTime))) {
-      setState((draft) => Object.assign(draft, { currentTime: media.currentTime }));
+      setState((draft) =>
+        Object.assign(draft, { currentTime: sourceController.playbackTime(media) }),
+      );
     }
   }
 
@@ -415,7 +430,9 @@ function ChatAudioPlayerContent(
     ) {
       event.preventDefault();
       const direction = event.key === "ArrowLeft" || event.key === "ArrowDown" ? -1 : 1;
-      seekTo((mediaElement?.currentTime ?? 0) + direction * SEEK_STEP_SECONDS);
+      if (mediaElement) {
+        seekTo(sourceController.playbackTime(mediaElement) + direction * SEEK_STEP_SECONDS);
+      }
     }
   }
 
@@ -621,7 +638,7 @@ function ChatAudioPlayerContent(
             });
           }}
           onTimeUpdate={(event) => {
-            const currentTime = event.currentTarget.currentTime;
+            const currentTime = sourceController.playbackTime(event.currentTarget);
             setState((draft) => Object.assign(draft, { currentTime }));
             updateBuffered(event.currentTarget);
           }}

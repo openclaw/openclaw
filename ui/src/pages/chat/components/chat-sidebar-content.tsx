@@ -390,7 +390,8 @@ export function SidebarPanel(props: SidebarPanelProps) {
                       !props.content.src &&
                       !props.content.resolveSource &&
                       (props.content.download ||
-                        !isPdfAttachment(props.content.mimeType ?? "", props.content.title)))) &&
+                        (props.content.attachmentKind !== "audio" &&
+                          !isPdfAttachment(props.content.mimeType ?? "", props.content.title))))) &&
                   props.content.file
                     ? props.content.file
                     : undefined
