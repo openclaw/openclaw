@@ -82,9 +82,11 @@ Write prompt text for the person who will approve the action:
   private payloads that should not appear in chat approval surfaces.
 - `severity` defaults to `"warning"` when omitted. Use `"critical"` only for
   actions where the wrong decision could cause production damage or data loss.
-- `allowedDecisions` defaults to `["allow-once", "allow-always", "deny"]` when
-  omitted. Pass `["allow-once", "deny"]` when persistent trust is unsafe for
-  that action.
+- `allowedDecisions` defaults to `["allow-once", "deny"]` when omitted and the
+  request has no `onResolution` callback, because nothing would remember an
+  `allow-always` choice. With an `onResolution` callback the default is
+  `["allow-once", "allow-always", "deny"]`. Pass `["allow-once", "deny"]` when
+  persistent trust is unsafe for that action.
 - `timeoutMs` defaults to 120000 (2 minutes) and is capped at 600000 (10
   minutes) regardless of the requested value.
 
@@ -170,7 +172,8 @@ that persistence. For ordinary `before_tool_call.requireApproval` hooks,
 OpenClaw treats `allow-once` and `allow-always` as approval decisions for the
 current call and passes the resolved value to `onResolution`. If your plugin
 offers `allow-always`, document and implement exactly what future calls it
-trusts.
+trusts. A request that omits both `allowedDecisions` and `onResolution` does not
+offer `allow-always`.
 
 If the hook also returns `params`, OpenClaw snapshots the base parameters and
 those overrides when approval is requested, then applies the overrides only
