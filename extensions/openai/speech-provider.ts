@@ -173,7 +173,10 @@ const parseDirectiveToken = createSpeechDirectiveParser({
   ],
 });
 
-async function synthesizeOpenAISpeech(req: SpeechSynthesisRequest, responseFormatOverride?: "pcm") {
+async function requestOpenAISpeech(
+  req: SpeechSynthesisRequest,
+  mode: "buffered" | "telephony" | "stream",
+) {
   const config = normalizeOpenAIProviderConfig(req.providerConfig, "resolved");
   const model = normalizeOptionalString(req.providerOverrides?.model) ?? config.model;
   const voice = normalizeOptionalString(req.providerOverrides?.voice) ?? config.voice;
@@ -184,7 +187,7 @@ async function synthesizeOpenAISpeech(req: SpeechSynthesisRequest, responseForma
     throw new Error("OpenAI API key missing");
   }
   const responseFormat =
-    responseFormatOverride ??
+    (mode === "telephony" ? "pcm" : undefined) ??
     config.responseFormat ??
     (isGroqSpeechBaseUrl(config.baseUrl) ? "wav" : req.target === "voice-note" ? "opus" : "mp3");
   const { resolveGeneratedMediaMaxBytes } =
@@ -206,11 +209,8 @@ async function synthesizeOpenAISpeech(req: SpeechSynthesisRequest, responseForma
   if (!isValidOpenAIVoice(voice, config.baseUrl)) {
     throw new Error(`Invalid voice: ${voice}`);
   }
-  const {
-    assertOkOrThrowProviderError,
-    readProviderBinaryResponse,
-    resolveProviderRequestHeaders,
-  } = await import("openclaw/plugin-sdk/provider-http");
+  const { assertOkOrThrowProviderError, resolveProviderRequestHeaders } =
+    await import("openclaw/plugin-sdk/provider-http");
   const proxyCaptureSdk = await import("openclaw/plugin-sdk/proxy-capture");
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
     await import("openclaw/plugin-sdk/ssrf-runtime");
@@ -223,17 +223,21 @@ async function synthesizeOpenAISpeech(req: SpeechSynthesisRequest, responseForma
       "Content-Type": "application/json",
     },
   );
-  const requestBody = JSON.stringify(
-    buildOpenAiSpeechRequestBody({
-      model,
-      text,
-      voice,
-      responseFormat,
-      speed,
-      instructions: effectiveInstructions,
-      extraBody: config.extraBody,
-    }),
-  );
+  const payload = buildOpenAiSpeechRequestBody({
+    model,
+    text,
+    voice,
+    responseFormat,
+    speed,
+    instructions: effectiveInstructions,
+    extraBody: config.extraBody,
+  });
+  if (mode === "stream") {
+    // The stream result describes raw audio, not SSE or an overridden codec.
+    payload.response_format = responseFormat;
+    delete payload.stream_format;
+  }
+  const requestBody = JSON.stringify(payload);
   const requestUrl = `${config.baseUrl}/audio/speech`;
   const debugProxyFetchPatchInstalled = proxyCaptureSdk.isDebugProxyGlobalFetchPatchInstalled();
   const { response, release } = await fetchWithSsrFGuard({
@@ -250,7 +254,8 @@ async function synthesizeOpenAISpeech(req: SpeechSynthesisRequest, responseForma
     auditContext: "openai-tts",
   });
   try {
-    if (!debugProxyFetchPatchInstalled) {
+    // Do not clone a live audio body for capture; an independent reader can spool it.
+    if (mode !== "stream" && !debugProxyFetchPatchInstalled) {
       // Finalization retains capture failures; observe the Promise returned by the SDK view.
       void proxyCaptureSdk
         .captureHttpExchangeAsync({
@@ -270,6 +275,17 @@ async function synthesizeOpenAISpeech(req: SpeechSynthesisRequest, responseForma
 
     await assertOkOrThrowProviderError(response, "OpenAI TTS API error");
 
+    return { response, release, responseFormat, maxBytes };
+  } catch (error) {
+    await release();
+    throw error;
+  }
+}
+
+async function synthesizeOpenAISpeech(req: SpeechSynthesisRequest, mode: "buffered" | "telephony") {
+  const { readProviderBinaryResponse } = await import("openclaw/plugin-sdk/provider-http");
+  const { response, release, responseFormat, maxBytes } = await requestOpenAISpeech(req, mode);
+  try {
     const audioBuffer = await readProviderBinaryResponse(
       response,
       "OpenAI TTS API error",
@@ -283,6 +299,42 @@ async function synthesizeOpenAISpeech(req: SpeechSynthesisRequest, responseForma
     return { audioBuffer, responseFormat };
   } finally {
     await release();
+  }
+}
+
+async function streamOpenAISpeech(req: SpeechSynthesisRequest) {
+  const [{ createBoundedProviderBinaryStream }, { assertProviderBinaryResponseContent }] =
+    await Promise.all([
+      import("openclaw/plugin-sdk/provider-binary-stream"),
+      import("openclaw/plugin-sdk/provider-http"),
+    ]);
+  const { isVoiceMessageCompatibleAudio } = await import("openclaw/plugin-sdk/media-runtime");
+  const { response, release, responseFormat, maxBytes } = await requestOpenAISpeech(req, "stream");
+  try {
+    assertProviderBinaryResponseContent(response, "OpenAI TTS API error", "audio");
+    if (!response.body) {
+      throw new Error("OpenAI TTS response has no audio body");
+    }
+    const bounded = createBoundedProviderBinaryStream(response.body, {
+      maxBytes,
+      createOverflowError: ({ maxBytes: limit }) =>
+        new Error(`OpenAI TTS API error: audio response exceeds ${limit} bytes`),
+      createReleaseError: () => new Error("OpenAI TTS stream released"),
+      cleanup: release,
+    });
+    const fileExtension = `.${responseFormat}`;
+    return {
+      audioStream: bounded.stream,
+      outputFormat: responseFormat,
+      fileExtension,
+      voiceCompatible:
+        req.target === "voice-note" &&
+        isVoiceMessageCompatibleAudio({ fileName: `speech${fileExtension}` }),
+      release: bounded.release,
+    };
+  } catch (error) {
+    await release();
+    throw error;
   }
 }
 
@@ -336,7 +388,7 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
     isConfigured,
     isConfiguredAsync: async (ctx) => isConfigured(ctx),
     synthesize: async (req) => {
-      const { audioBuffer, responseFormat } = await synthesizeOpenAISpeech(req);
+      const { audioBuffer, responseFormat } = await synthesizeOpenAISpeech(req, "buffered");
       const fileExtension = `.${responseFormat}`;
       const { isVoiceMessageCompatibleAudio } = await import("openclaw/plugin-sdk/media-runtime");
       return {
@@ -348,8 +400,12 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
           isVoiceMessageCompatibleAudio({ fileName: `speech${fileExtension}` }),
       };
     },
+    streamSynthesize: streamOpenAISpeech,
     synthesizeTelephony: async (req) => {
-      const { audioBuffer } = await synthesizeOpenAISpeech({ ...req, target: "telephony" }, "pcm");
+      const { audioBuffer } = await synthesizeOpenAISpeech(
+        { ...req, target: "telephony" },
+        "telephony",
+      );
       return { audioBuffer, outputFormat: "pcm", sampleRate: 24_000 };
     },
   };
