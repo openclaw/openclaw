@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import {
@@ -33,9 +32,9 @@ function workspacePlugin(workspaceDir: string, channelId: string) {
   });
 }
 
-describe("read-only channel plugin legacy workspace discovery", () => {
+describe("read-only channel plugin workspace discovery", () => {
   it.each([true, false])(
-    "discovers configured workspace channels (retained owner: %s)",
+    "discovers configured workspace channels (implicit first workspace: %s)",
     (legacy) => {
       const root = fs.realpathSync.native(tempDirs.make("read-only-workspaces-"));
       const opsWorkspace = path.join(root, "ops");
@@ -60,9 +59,8 @@ describe("read-only channel plugin legacy workspace discovery", () => {
           entries: Object.fromEntries(plugins.map(({ pluginId }) => [pluginId, { enabled: true }])),
         },
       };
-      const cfg = legacy ? retainLegacyDefaultAgentId(config, "ops") : config;
       const stateDir = path.join(root, "state");
-      const resolution = resolveReadOnlyChannelPluginsForConfig(cfg, {
+      const resolution = resolveReadOnlyChannelPluginsForConfig(config, {
         env: { ...createColdPluginHermeticEnv(root), OPENCLAW_STATE_DIR: stateDir },
         stateDir,
         includePersistedAuthState: false,
