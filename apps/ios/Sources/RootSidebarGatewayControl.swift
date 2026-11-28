@@ -4,7 +4,11 @@ import SwiftUI
 
 /// A projection of saved entries, not a second registry or connection owner.
 struct SidebarGatewayPresentation {
-    let entries: [GatewaySettingsStore.GatewayRegistryEntry]
+    let registry: GatewaySettingsStore.GatewayRegistry
+    var entries: [GatewaySettingsStore.GatewayRegistryEntry] {
+        self.registry.entries
+    }
+
     let focusedID: String?
     let state: GatewayDisplayState
     /// The status owner's plain-words reason, read out when the state is an error.
@@ -17,7 +21,7 @@ struct SidebarGatewayPresentation {
         state: GatewayDisplayState,
         problemText: String? = nil)
     {
-        self.entries = registry.entries
+        self.registry = registry
         // A saved selection can precede TLS review. Keep the current route's
         // identity until the connection owner actually hands off to the target.
         self.focusedID = connectionID ?? connectedID ?? registry.activeStableID
@@ -31,6 +35,12 @@ struct SidebarGatewayPresentation {
 
     var focusedEntry: GatewaySettingsStore.GatewayRegistryEntry? {
         self.entries.first { GatewayStableIdentifier.matches($0.stableID, self.focusedID) }
+    }
+
+    /// The name the app shows for this connection: its saved name, else `fallback` (what the Gateway calls
+    /// itself or its address).
+    func connectionName(fallback: String) -> String {
+        self.focusedEntry?.name ?? fallback
     }
 
     var statusTitle: String {
@@ -59,11 +69,11 @@ struct SidebarGatewayPresentation {
         }
     }
 
-    func rowTitle(_ entry: GatewaySettingsStore.GatewayRegistryEntry) -> String {
-        // The background fleet does not publish per-row health. Do not label
-        // 'keep connected' intent as Online or invent Offline for other rows.
-        guard GatewayStableIdentifier.matches(entry.stableID, self.focusedID) else { return entry.name }
-        return "\(entry.name) — \(self.statusTitle)"
+    func rowSubtitle(_ entry: GatewaySettingsStore.GatewayRegistryEntry) -> String? {
+        // Only the focused route has an observed connection state.
+        let address = self.registry.distinguishingAddress(for: entry)
+        guard GatewayStableIdentifier.matches(entry.stableID, self.focusedID) else { return address }
+        return address.map { "\($0) · \(self.statusTitle)" } ?? self.statusTitle
     }
 }
 
@@ -77,43 +87,17 @@ struct SidebarGatewayPicker: View {
     var body: some View {
         Group {
             if self.presentation.showsPicker {
-                Menu {
-                    Picker(selection: Binding(
-                        get: { self.presentation.focusedID ?? "" },
-                        set: self.selectGateway))
-                    {
-                        // Keep the binding valid if a removed/transient route
-                        // does not belong to any currently saved entry.
-                        if self.presentation.focusedEntry == nil {
-                            Text(verbatim: self.fallbackName)
-                                .font(OpenClawType.subheadSemiBold)
-                                .tag(self.presentation.focusedID ?? "")
-                                .disabled(true)
-                        }
-                        ForEach(self.presentation.entries) { entry in
-                            Text(verbatim: self.presentation.rowTitle(entry))
-                                .font(OpenClawType.subheadSemiBold)
-                                .tag(entry.stableID)
-                        }
-                    } label: {
-                        Text("Gateway")
-                            .font(OpenClawType.subheadSemiBold)
+                self.controlLabel
+                    .accessibilityHidden(true)
+                    .overlay {
+                        SidebarConnectionMenu(
+                            presentation: self.presentation,
+                            fallbackName: self.fallbackName,
+                            controlName: self.controlName,
+                            isSwitching: self.isSwitching,
+                            selectGateway: self.selectGateway,
+                            openSettings: self.openSettings)
                     }
-                    .pickerStyle(.inline)
-                    .disabled(self.isSwitching)
-                    Button(action: self.openSettings) {
-                        Label {
-                            Text("Manage Gateways…")
-                                .font(OpenClawType.subheadSemiBold)
-                        } icon: {
-                            Image(systemName: "server.rack")
-                        }
-                    }
-                } label: {
-                    self.controlLabel
-                }
-                .menuIndicator(.hidden)
-                .accessibilityIdentifier("RootTabs.Sidebar.GatewayPicker")
             } else {
                 Button(action: self.openSettings) {
                     self.controlLabel
@@ -126,35 +110,37 @@ struct SidebarGatewayPicker: View {
         .accessibilityLabel(self.controlName)
         .accessibilityValue(self.presentation.accessibilityStatus(isSwitching: self.isSwitching))
         .accessibilityHint(self.presentation.showsPicker
-            ? String(localized: "Switch gateway or manage saved gateways")
-            : String(localized: "Open gateway setup and connection settings"))
+            ? String(localized: "Switch or manage connections")
+            : String(localized: "Open connection settings"))
     }
 
     private var controlName: String {
-        if self.presentation.entries.isEmpty { return String(localized: "Add Gateway") }
-        return self.presentation.focusedEntry?.name ?? self.fallbackName
+        if self.presentation.entries.isEmpty { return String(localized: "Add connection") }
+        return self.presentation.focusedEntry.map(self.presentation.registry.compactName) ?? self.fallbackName
     }
 
-    @ViewBuilder
     private var controlLabel: some View {
         // Each state has its own mark, told apart by shape as well as color: a green dot when online,
         // a spinner while connecting, a slashed antenna when offline, a warning badge on an error.
         let state = self.presentation.entries.isEmpty ? GatewayDisplayState.connected : self.presentation.state
+        return self.connectionMark(state: state)
+            .rootSidebarGlassCircle()
+    }
+
+    private func connectionMark(state: GatewayDisplayState) -> some View {
         ZStack {
             if self.isSwitching || state == .connecting {
                 ProgressView()
                     .controlSize(.small)
                     .tint(OpenClawSidebarPalette.muted)
             } else {
-                Image(systemName: state == .disconnected
+                RootSidebarIcon(systemName: state == .disconnected
                     ? "antenna.radiowaves.left.and.right.slash"
                     : "antenna.radiowaves.left.and.right")
-                    .font(.system(size: 17, weight: .regular))
                     .environment(\.symbolVariants, .none)
                     .foregroundStyle(state == .disconnected
                         ? OpenClawSidebarPalette.muted
                         : OpenClawSidebarPalette.text)
-                    .frame(width: 22, height: 22)
                     .overlay(alignment: .topTrailing) {
                         if self.presentation.showsOnlineDot(isSwitching: self.isSwitching) {
                             Circle()
@@ -173,10 +159,75 @@ struct SidebarGatewayPicker: View {
                     }
             }
         }
+        .frame(width: 22, height: 22)
         .accessibilityHidden(true)
-        .frame(width: 44, height: 44)
-        .contentShape(Circle())
-        .glassEffect(.regular.interactive(), in: Circle())
+    }
+}
+
+/// UIKit's inline, single-selection picker preserves native subtitles. SwiftUI's inline
+/// Picker drops the second Text from each option on iPhone, including the distinguishing port.
+private struct SidebarConnectionMenu: UIViewRepresentable {
+    let presentation: SidebarGatewayPresentation
+    let fallbackName: String
+    let controlName: String
+    let isSwitching: Bool
+    let selectGateway: @MainActor (String) -> Void
+    let openSettings: () -> Void
+
+    func makeUIView(context: Context) -> UIButton {
+        let button = UIButton(type: .custom)
+        button.showsMenuAsPrimaryAction = true
+        button.accessibilityIdentifier = "RootTabs.Sidebar.GatewayPicker"
+        return button
+    }
+
+    func updateUIView(_ button: UIButton, context: Context) {
+        button.accessibilityLabel = self.controlName
+        button.accessibilityValue = self.presentation.accessibilityStatus(isSwitching: self.isSwitching)
+        button.accessibilityHint = String(localized: "Switch or manage connections")
+        var options = self.presentation.entries.map { entry in
+            let action = UIAction(
+                title: self.menuText(entry.displayName, style: .body, traits: button.traitCollection),
+                attributes: self.isSwitching ? .disabled : [],
+                state: GatewayStableIdentifier.matches(entry.stableID, self.presentation.focusedID) ? .on : .off)
+            { _ in self.selectGateway(entry.stableID) }
+            let subtitle = self.presentation.rowSubtitle(entry)
+            action.subtitle = subtitle.map { self.menuText($0, style: .footnote, traits: button.traitCollection) }
+            action.accessibilityLabel = entry.displayName
+            action.accessibilityValue = subtitle
+            return action
+        }
+        if self.presentation.focusedEntry == nil {
+            options.insert(UIAction(title: self.fallbackName, attributes: .disabled, state: .on) { _ in }, at: 0)
+        }
+        let picker = UIMenu(options: [.displayInline, .singleSelection], children: options)
+        let preferences = UIMenuDisplayPreferences()
+        preferences.maximumNumberOfTitleLines = 1
+        picker.displayPreferences = preferences
+        let manage = UIAction(title: String(localized: "Manage connections")) { _ in self.openSettings() }
+        button.menu = UIMenu(children: [picker, manage])
+        button.preferredMenuElementOrder = .fixed
+    }
+
+    /// The narrow iPhone menu has 180 pt between its checkmark gutter and trailing inset.
+    /// UIMenu only offers a line cap (tail truncation); keep the distinguishing suffix ourselves.
+    private func menuText(_ text: String, style: UIFont.TextStyle, traits: UITraitCollection) -> String {
+        let font = UIFont.preferredFont(forTextStyle: style, compatibleWith: traits)
+        let attributes: [NSAttributedString.Key: Any] = [.font: font]
+        func fits(_ value: String) -> Bool {
+            (value as NSString).size(withAttributes: attributes).width <= 180
+        }
+        guard !fits(text) else { return text }
+        var low = 0
+        var high = text.count - 1
+        func shortened(_ count: Int) -> String {
+            text.prefix((count + 1) / 2) + "…" + text.suffix(count / 2)
+        }
+        while low < high {
+            let mid = (low + high + 1) / 2
+            if fits(shortened(mid)) { low = mid } else { high = mid - 1 }
+        }
+        return shortened(low)
     }
 }
 

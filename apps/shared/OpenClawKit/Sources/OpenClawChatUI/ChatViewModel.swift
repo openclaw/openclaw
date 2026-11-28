@@ -19,6 +19,7 @@ public final class OpenClawChatViewModel {
     #endif
     let sourcePreviewState = ChatSourcePreviewState()
     var reactionState = ChatMessageReactionState()
+    public let statusStrip = OpenClawChatStatusStrip()
 
     public var input: String = "" {
         didSet {

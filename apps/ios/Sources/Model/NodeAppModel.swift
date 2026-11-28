@@ -489,12 +489,16 @@ final class NodeAppModel {
         guard let problem = self.lastGatewayProblem else { return nil }
         // Keep transient network failures in Settings while the operator route is live,
         // including display history retained after reconnect clears the live problems.
-        if self.operatorConnected, problem.owner == .network,
-           problem.retryable, !problem.pauseReconnect, !problem.needsPairingApproval
-        {
+        if self.operatorConnected, problem.isUnreachable {
             return nil
         }
         return problem
+    }
+
+    /// The last approval answer failed only because the operator connection was down. The chat's
+    /// status strip carries that ("Can’t reach …"), so the approval card does not repeat it.
+    var pendingExecApprovalFailedUnreachable: Bool {
+        self.pendingExecApprovalPromptErrorText == Self.execApprovalUnreachableMessage
     }
 
     static let execApprovalUnreachableMessage = "OpenClaw couldn't connect to the gateway operator session."
@@ -4395,6 +4399,23 @@ extension NodeAppModel {
             guard let self else { return false }
             return self.operatorTalkConnectionGeneration == talkConnectionGeneration &&
                 self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID)
+        }
+        // Resolve an untouched address once, without delaying chat or reconnect hydration.
+        if GatewaySettingsStore.loadGatewayRegistry().entries.contains(where: {
+            GatewayStableIdentifier.matches($0.stableID, stableID) && $0.hasAutomaticAddressName
+        }) {
+            Task {
+                struct HostInfo: Decodable { let machineName: String }
+                guard await self.operatorGateway.supportsServerMethod("system.info", ifCurrentRoute: route) == true,
+                      let data = try? await self.operatorGateway.request(
+                          method: "system.info",
+                          paramsJSON: "{}",
+                          timeoutSeconds: 5,
+                          ifCurrentRoute: route),
+                      let info = try? JSONDecoder().decode(HostInfo.self, from: data), shouldContinue()
+                else { return }
+                GatewaySettingsStore.setGatewayName(info.machineName, stableID: stableID, onlyIfAutomatic: true)
+            }
         }
         // Watch approval resolutions flush from the reconcile-gated watch path
         // (reconcileWatchExecApprovalCache), not eagerly on operator connect.
