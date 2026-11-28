@@ -22,6 +22,7 @@ When a job fires: the five schedule kinds, cron expression rules, dynamic cadenc
 | `stream`  | `--stream-command` | Fire from batched lines produced by a supervised long-lived command                                      |
 
 These schedule flags work with both `openclaw automations add` and `openclaw automations edit <job-id>`. For example, `openclaw automations edit <job-id> --on-exit "./watch.sh" --on-exit-cwd /srv/app` converts an existing job to an exit-triggered schedule.
+Omit `--on-exit-cwd` to use the default working directory. An empty or whitespace-only value is an error.
 
 Timestamps without a timezone are treated as UTC. Add `--tz America/New_York` to interpret an offset-less `--at` datetime, or to evaluate a cron expression, in that IANA timezone. Cron expressions without `--tz` use the Gateway host timezone. `--tz` is not valid with `--every` or `--on-exit`.
 

@@ -131,6 +131,12 @@ async function expectCronCommandExit(args: string[]): Promise<void> {
   await expect(runCronCommand(args)).rejects.toMatchObject({ name: "ExitError", code: 1 });
 }
 
+it("rejects a blank watched-command working directory before updating an automation", async () => {
+  await expectCronCommandExit([...EDIT, "--on-exit", "node --version", "--on-exit-cwd", " "]);
+  expectRuntimeErrorContaining("--on-exit-cwd must not be blank");
+  expect(callGatewayFromCli).not.toHaveBeenCalled();
+});
+
 const createCronJob = (id: string, name: string) => cronTestJob({ id, name });
 
 function mockExistingJob(job: Partial<CronJob>): void {
