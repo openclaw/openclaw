@@ -59,6 +59,8 @@ Desktop-enabled Windows workers use Crabbox's interactive desktop service; see [
 
 Before enrollment, the Gateway prepares a reusable archive from its current built installation, including the node host and trusted plugins required by the selected execution mode. Codex's plugin and managed binary pin travel with it. The archive contains runtime code and package metadata, not Gateway config, authentication profiles, sessions, or process environment.
 
+Cleanup of temporary worker bundle trees runs in bounded child processes, keeping the Gateway's shared filesystem threadpool available for session reads and writes.
+
 The worker bundle and its standalone GitHub launcher include the pinned Windows permission-inspection helper and the package metadata needed for fallback inspection. These assets are covered by the same archive manifest and content verification.
 
 Archives and fresh installations are verified by content digest, rather than version alone. A snapshot fork tops up an older runtime before enrollment. For `install: "bundle"`, the node bootstrap archive includes the preassembled production dependency closure for each prepared OS and CPU. Workers verify the archive size and SHA-256, reject unsafe archive paths and links, extract into private staging, check the manifest pin and target/build identity, then atomically publish the runtime. Cold bundle-mode node-bootstrap caches and cache misses never invoke npm, resolve dependencies, or run package lifecycle scripts. Missing target dependencies fail with a Gateway preparation hint. Enrollment and archive-download credentials are not passed to extraction tools or the node process.

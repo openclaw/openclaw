@@ -5,6 +5,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import * as tar from "tar/raw";
+import { nativeWorktreeFilesystem } from "../../agents/worktrees/filesystem-native.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { sha256File } from "../../infra/directory-durability.js";
 import { FsSafeError, root } from "../../infra/fs-safe.js";
@@ -255,7 +256,7 @@ async function verifyPublishedNpmRelease(params: {
     }
     return published.integrity;
   } finally {
-    await fs.rm(temporaryRoot, { recursive: true, force: true });
+    await nativeWorktreeFilesystem.remove(temporaryRoot, { commitGuard: () => {} });
   }
 }
 
@@ -395,7 +396,11 @@ async function pruneWorkerBundleCache(params: {
       if (entry.staging ? !stats.isDirectory() : !stats.isFile()) {
         continue;
       }
-      await fs.rm(target, { recursive: entry.staging, force: true });
+      if (entry.staging) {
+        await nativeWorktreeFilesystem.remove(target, { commitGuard: () => {} });
+      } else {
+        await fs.rm(target, { force: true });
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         params.onError?.(error);
@@ -483,7 +488,7 @@ export async function prepareWorkerBundle(
       tarballPath,
     };
   } finally {
-    await fs.rm(stagingRoot, { recursive: true, force: true });
+    await nativeWorktreeFilesystem.remove(stagingRoot, { commitGuard: () => {} });
   }
 }
 
