@@ -277,6 +277,38 @@ it.each([
   },
 );
 
+it.each([
+  [true, false, "No text-to-speech provider is ready."],
+  [false, true, "No transcription provider is configured."],
+] as const)(
+  "explains what split Talk is missing (transcription=%s, speech=%s)",
+  async (transcriptionReady, speechReady, expected) => {
+    discover.mockResolvedValue(emptyDevices);
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.config") {
+        return { config: { talk: { provider: "elevenlabs", realtime: { mode: "stt-tts" } } } };
+      }
+      if (method === "talk.catalog") {
+        return {
+          realtime: { ready: false, providers: [] },
+          transcription: { ready: transcriptionReady, providers: [] },
+          speech: {
+            activeProvider: "elevenlabs",
+            providers: [{ id: "elevenlabs", configured: speechReady }],
+          },
+        };
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const v = await mountPicker({ gatewayClient: { request } as unknown as GatewayBrowserClient });
+    await v.open();
+    await waitForSolid(() => {
+      const talk = v.all('[data-chat-talk-capability="realtime"]')[0];
+      expect(talk?.textContent).toContain(expected);
+    });
+  },
+);
+
 it("points a sign-in without voice to its provider's API key", async () => {
   discover.mockResolvedValue(emptyDevices);
   const openai = { id: "openai", label: "OpenAI", configured: false, apiKeyRequired: true };

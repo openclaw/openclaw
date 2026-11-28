@@ -143,6 +143,7 @@ const catalog = {
       realtimeTalkCapability: "Tap to talk",
       dictationCapability: "Dictation",
       realtimeTalkProviderUnavailable: "No realtime voice provider is configured.",
+      talkSpeechProviderUnavailable: "No text-to-speech provider is ready.",
       dictationProviderUnavailableShort: "No transcription provider is configured.",
       talkCapabilityChecking: "Checking provider availability…",
       talkCapabilityUnknown: "Couldn’t check provider availability. Try again.",
