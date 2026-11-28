@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { access as accessCallback, constants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -957,10 +958,11 @@ describe("update preflight", () => {
   });
 
   it.each([
-    ["EACCES", false],
-    ["EPERM", false],
-    ["EACCES", true],
-  ] as const)("reports %s with safe ownership repair (system prefix: %s)", async (code, system) => {
+    ["EACCES", false, false],
+    ["EPERM", false, false],
+    ["EACCES", true, false],
+    ["EACCES", true, true],
+  ] as const)("reports %s ownership repair (%s, %s)", async (code, system, writeCheck) => {
     const target = await repository();
     const prefix = path.join(root, "user's install");
     await fs.mkdir(prefix);
@@ -971,6 +973,15 @@ describe("update preflight", () => {
     });
     const stat = await fs.stat(prefix);
     vi.spyOn(fs, "stat").mockResolvedValue(Object.assign(stat, { uid: 0 }));
+    if (writeCheck) {
+      const access = promisify(accessCallback);
+      vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
+        if (file === prefix && mode === constants.W_OK) {
+          throw Object.assign(new Error("permission denied"), { code });
+        }
+        return access(file, mode);
+      });
+    }
     expect(
       await preflight({
         kind: "git",

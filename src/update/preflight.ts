@@ -168,32 +168,36 @@ export async function preflight(params: {
       }
     }
     reason = "disk-space-unavailable";
-    try {
-      const stat = await (params.statfs ?? fs.statfs)(ancestor);
-      if (BigInt(stat.bavail) * BigInt(stat.bsize) < 2n * 700n * 1024n * 1024n) {
-        return refuse(
-          "insufficient-install-space",
-          "The update needs at least 1.4 GB free on the installation filesystem.",
-        );
-      }
-    } catch (error) {
-      if (!hasErrnoCode(error, "EACCES") && !hasErrnoCode(error, "EPERM")) {
-        throw error;
-      }
-      const owner = await fs.stat(ancestor);
-      const user = os.userInfo();
-      const relative = path.relative(user.homedir, await fs.realpath(ancestor));
-      const outsideHome =
-        relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+    const stat = await (params.statfs ?? fs.statfs)(ancestor);
+    if (BigInt(stat.bavail) * BigInt(stat.bsize) < 2n * 700n * 1024n * 1024n) {
       return refuse(
-        "prefix-not-writable",
-        owner.uid === 0 && outsideHome
-          ? `The installation at '${params.prefix}' is owned by root. Run: sudo openclaw update`
-          : `Files in '${params.prefix}' are not writable by ${user.username}. Fix ownership with: sudo chown -R ${user.username} ${shellEscape(params.prefix)}. Then retry the update.`,
+        "insufficient-install-space",
+        "The update needs at least 1.4 GB free on the installation filesystem.",
       );
     }
     return { ok: true };
   } catch (error) {
+    if (
+      (reason === "prefix-not-writable" || reason === "disk-space-unavailable") &&
+      (hasErrnoCode(error, "EACCES") || hasErrnoCode(error, "EPERM"))
+    ) {
+      try {
+        const ancestor = await existingAncestor(params.prefix);
+        const owner = await fs.stat(ancestor);
+        const user = os.userInfo();
+        const relative = path.relative(user.homedir, await fs.realpath(ancestor));
+        const outsideHome =
+          relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+        return refuse(
+          "prefix-not-writable",
+          owner.uid === 0 && outsideHome
+            ? `The installation at '${params.prefix}' is owned by root. Run: sudo openclaw update`
+            : `Files in '${params.prefix}' are not writable by ${user.username}. Fix ownership with: sudo chown -R ${user.username} ${shellEscape(params.prefix)}. Then retry the update.`,
+        );
+      } catch {
+        // Preserve the original permission failure if ownership cannot be inspected.
+      }
+    }
     return refuse(reason, formatErrorMessage(error));
   }
 }
