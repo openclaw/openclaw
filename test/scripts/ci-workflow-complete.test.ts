@@ -603,6 +603,8 @@ ${check.run}
       {
         MLX_NATIVE_PROOF: String(row.extended),
         NATIVE_STARTED: "1234",
+        GITHUB_WORKSPACE: root,
+        CHECKOUT_SHA: "a".repeat(40),
         DRIVER_EXIT: String(row.exit),
       },
     );
@@ -614,7 +616,11 @@ ${check.run}
     expect(args).toEqual([
       "-I",
       "-S",
-      "scripts/test-macos-mlx-native.py",
+      ".ci-harness/scripts/test-macos-mlx-native.py",
+      "--candidate-root",
+      root,
+      "--candidate-sha",
+      "a".repeat(40),
       "--proof-dir",
       proof,
       "--started",

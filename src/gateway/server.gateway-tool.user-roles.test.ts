@@ -1,8 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createGatewayTool } from "../agents/tools/gateway-tool.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as profileWrites from "../state/user-profile-writes.js";
 import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileRole,
@@ -49,6 +50,7 @@ it("looks up, assigns and clears a profile role under the original operator", as
       const run = async (
         client: ReturnType<typeof createOperatorClient>,
         params: Record<string, unknown>,
+        options?: { signal?: AbortSignal; receiptAuthority?: () => boolean },
       ) => {
         const source = expectDefined(
           await prepareGatewayOperatorRunAuthority({ client, context }),
@@ -60,10 +62,13 @@ it("looks up, assigns and clears a profile role under the original operator", as
             {
               agentId: "main",
               sessionKey: "agent:main:dashboard:role-test",
+              operationalRunInstance: { instanceId: "role-instance", runId: "role-run" },
               operatorAuthority: source.authority,
               gatewayContextResolver: () => context,
+              receiptAuthority: options?.receiptAuthority ?? (() => true),
             },
-            async () => (await createGatewayTool().execute("manage-role", params)).details,
+            async () =>
+              (await createGatewayTool().execute("manage-role", params, options?.signal)).details,
           );
         } finally {
           source.release();
@@ -97,6 +102,106 @@ it("looks up, assigns and clears a profile role under the original operator", as
       expect(await run(adminClient, lookup)).toEqual(inherited);
       // The audit must name the original administrator, not the synthetic Gateway client.
       expect((await listSystemChanges({})).entries.map(({ summary }) => summary)).toEqual([
+        `Role for profile ${profileId} cleared (was "administrator") by profile ${admin.id}`,
+        `Role for profile ${profileId} changed from no role to "administrator" by profile ${admin.id}`,
+      ]);
+
+      for (const boundary of ["abort", "revocation"] as const) {
+        const controller = new AbortController();
+        let current = true;
+        const write = profileWrites.setCanonicalUserProfileRole;
+        using pausedWrite = vi.spyOn(profileWrites, "setCanonicalUserProfileRole");
+        pausedWrite.mockImplementation((...args) => {
+          if (boundary === "abort") {
+            controller.abort(new Error("role request canceled before commit"));
+          } else {
+            current = false;
+          }
+          return write(...args);
+        });
+        const pending = run(
+          adminClient,
+          { ...setRole, role: "administrator" },
+          {
+            signal: controller.signal,
+            receiptAuthority: () => current,
+          },
+        );
+        await pending.catch(() => {});
+        expect(pausedWrite).toHaveBeenCalledOnce();
+        await expect(pending, `precommit ${boundary}`).rejects.toThrow(
+          boundary === "abort" ? "role request canceled" : /authority.*no longer active/i,
+        );
+        expect(await run(adminClient, lookup)).toEqual(inherited);
+        expect((await listSystemChanges({})).entries).toHaveLength(2);
+      }
+
+      const controller = new AbortController();
+      context.disconnectClientsForUserProfile = vi.fn((changedProfileId) => {
+        expect(changedProfileId).toBe(admin.id);
+        controller.abort(new Error("committed self-downgrade retired the request"));
+      });
+      expect(
+        await run(
+          adminClient,
+          { action: "users.setRole", profileId: admin.id, role: "reader" },
+          {
+            signal: controller.signal,
+          },
+        ),
+      ).toEqual({ profileId: admin.id, role: "reader" });
+      expect(controller.signal.aborted).toBe(true);
+      expect(context.disconnectClientsForUserProfile).toHaveBeenCalledOnce();
+      expect(
+        await run(readerClient, { action: "users.getRole", profileId: admin.id }),
+      ).toMatchObject({
+        role: "reader",
+        effectiveRole: "reader",
+      });
+      await expect(run(adminClient, { ...setRole, role: "administrator" })).rejects.toThrow(
+        "Your operator role changed; reconnect before continuing.",
+      );
+      expect((await listSystemChanges({})).entries.map(({ summary }) => summary)).toEqual([
+        `Role for profile ${admin.id} changed from "administrator" to "reader" by profile ${admin.id}`,
+        `Role for profile ${profileId} cleared (was "administrator") by profile ${admin.id}`,
+        `Role for profile ${profileId} changed from no role to "administrator" by profile ${admin.id}`,
+      ]);
+
+      const errorAdmin = await ensureCanonicalUserProfileForEmail("error-admin@example.test");
+      await setCanonicalUserProfileRole(errorAdmin.id, "administrator");
+      const errorClient = createOperatorClient({
+        profileId: errorAdmin.id,
+        scopes: ["operator.admin"],
+      });
+      const errorController = new AbortController();
+      context.disconnectClientsForUserProfile = vi.fn(() => {
+        errorController.abort(new Error("committed error caller retired"));
+      });
+      const write = profileWrites.setCanonicalUserProfileRole;
+      using failedDelivery = vi.spyOn(profileWrites, "setCanonicalUserProfileRole");
+      failedDelivery.mockImplementation(async (...args) => {
+        await write(...args);
+        throw new Error("committed role result delivery failed");
+      });
+      await expect(
+        run(
+          errorClient,
+          { action: "users.setRole", profileId: errorAdmin.id, role: "reader" },
+          {
+            signal: errorController.signal,
+          },
+        ),
+      ).rejects.toThrow("committed role result delivery failed");
+      expect(failedDelivery).toHaveBeenCalledOnce();
+      expect(errorController.signal.aborted).toBe(true);
+      expect(
+        await run(readerClient, { action: "users.getRole", profileId: errorAdmin.id }),
+      ).toMatchObject({
+        role: "reader",
+      });
+      expect((await listSystemChanges({})).entries.map(({ summary }) => summary)).toEqual([
+        `Role for profile ${errorAdmin.id} changed from "administrator" to "reader" by profile ${errorAdmin.id}`,
+        `Role for profile ${admin.id} changed from "administrator" to "reader" by profile ${admin.id}`,
         `Role for profile ${profileId} cleared (was "administrator") by profile ${admin.id}`,
         `Role for profile ${profileId} changed from no role to "administrator" by profile ${admin.id}`,
       ]);

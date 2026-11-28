@@ -34,7 +34,11 @@ import {
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
-import { callInProcessGatewayTool, getInProcessGatewayToolContext } from "./in-process-gateway.js";
+import {
+  bindAgentToolGatewayRequest,
+  callInProcessGatewayTool,
+  getInProcessGatewayToolContext,
+} from "./in-process-gateway.js";
 
 // Keep complete JSON below the smallest default tool-result presentation budget.
 const MAX_GATEWAY_CONFIG_GET_TEXT_CHARS = 12_000;
@@ -300,11 +304,17 @@ export function createGatewayTool(options?: {
         const profileId = readToolStringParam(params, "profileId", { required: true });
         const role =
           params.role === null ? null : readToolStringParam(params, "role", { required: true });
-        const { profile } = await callInProcessGatewayTool<UsersSetRoleResult>(
-          "users.setRole",
-          { profileId, role },
-          localGateway,
-        );
+        const request = bindAgentToolGatewayRequest({
+          resolveGatewayContext: getInProcessGatewayToolContext,
+          // A committed self-downgrade retires its own caller; keep pre-commit cancellation.
+          forwardAbortSignal: false,
+        });
+        const { profile } = await request<UsersSetRoleResult>({
+          method: "users.setRole",
+          params: { profileId, role },
+          signal,
+          timeoutMs: null,
+        });
         return jsonResult({ profileId: profile.id, role: profile.role ?? null });
       }
       const gatewayOpts = readGatewayCallOptions(params);
