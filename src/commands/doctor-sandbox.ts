@@ -120,17 +120,13 @@ async function runCodexBwrapNamespaceProbe(args: string[]): Promise<CodexBwrapNa
   }
 }
 
-function codexBwrapNeedsNetworkNamespaceProbe(cfg: OpenClawConfig): boolean {
-  const network = cfg.agents?.defaults?.sandbox?.docker?.network?.trim().toLowerCase();
-  return network === undefined || network === "" || network === "none";
-}
-
 async function probeCodexBwrapNamespaces(
   cfg: OpenClawConfig,
   options: SandboxHealthOptions,
+  needsNetworkNamespace: boolean,
 ): Promise<CodexBwrapNamespaceProbe> {
   const userProbe = await runCodexBwrapNamespaceProbe(["--user", "--map-root-user", "true"]);
-  if (!userProbe.ok || !codexBwrapNeedsNetworkNamespaceProbe(cfg)) {
+  if (!userProbe.ok || !needsNetworkNamespace) {
     return userProbe;
   }
   try {
@@ -246,17 +242,23 @@ export async function noteCodexBwrapNamespaceWarnings(
   cfg: OpenClawConfig,
   options: SandboxHealthOptions = {},
 ): Promise<void> {
-  const containerEngine = resolveEnabledSandboxBackends(cfg).enabled.find(
+  const active = resolveEnabledSandboxBackends(cfg).enabled.filter(
     (enabled) => enabled.mode !== "off" && enabled.containerEngine,
-  )?.containerEngine;
+  );
+  const containerEngine = active[0]?.containerEngine;
   if (process.platform !== "linux" || !containerEngine) {
     return;
   }
   if (!(await isContainerEngineAvailable(containerEngine.command))) {
     return;
   }
+  // Each sandbox's resolved network, as the runtime starts it: one without egress needs the
+  // unprivileged network namespace too.
+  const needsNetworkNamespace = active.some((enabled) =>
+    ["", "none"].includes(enabled.sandbox.docker.network.trim().toLowerCase()),
+  );
   const engineName = containerEngine.displayName;
-  const probe = await probeCodexBwrapNamespaces(cfg, options);
+  const probe = await probeCodexBwrapNamespaces(cfg, options, needsNetworkNamespace);
   if (probe.ok) {
     return;
   }
@@ -276,7 +278,7 @@ export async function noteCodexBwrapNamespaceWarnings(
     probe.kind === "user"
       ? "  bwrap: setting up uid map: Permission denied"
       : "  bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted";
-  const networkSentence = codexBwrapNeedsNetworkNamespaceProbe(cfg)
+  const networkSentence = needsNetworkNamespace
     ? `With ${engineName} sandbox network egress disabled, it also needs an unprivileged network namespace.`
     : `${engineName} sandbox network egress is enabled, so doctor only checked the user namespace.`;
   const lines = [

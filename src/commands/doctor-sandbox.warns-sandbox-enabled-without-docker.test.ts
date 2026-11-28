@@ -296,6 +296,22 @@ describe("sandbox health", () => {
   });
 
   it.each([
+    ["an agent with egress over defaults without it", "none", "bridge", false],
+    ["an agent without egress over defaults with it", "bridge", "none", true],
+  ] as const)(
+    "probes the network namespace from each sandbox's resolved network: %s",
+    async (_name, defaultsNetwork, agentNetwork, probed) => {
+      await probeOnLinux({
+        agents: {
+          defaults: { sandbox: { docker: { network: defaultsNetwork } } },
+          entries: { work: { sandbox: { mode: "all", docker: { network: agentNetwork } } } },
+        },
+      });
+      expect(probeCodexWorkspaceWriteSandbox.mock.calls.length > 0).toBe(probed);
+    },
+  );
+
+  it.each([
     ["unshare", "user", "unshare: write failed /proc/self/uid_map: Operation not permitted"],
     ["Codex", "network", "bwrap: loopback: Failed RTM_NEWADDR: No child processes"],
     ["Codex", "user", "bwrap: setting up uid map: Permission denied"],
