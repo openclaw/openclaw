@@ -8,6 +8,8 @@ import {
   resolveOpenAIResponsesCompactEndpointPlan,
 } from "@openclaw/ai/transports";
 import type { Message } from "@openclaw/llm-core";
+import { rewritePreparedTranscriptMessageAtAnchor } from "../../config/sessions/session-message-rewrite.js";
+import { readActiveTranscriptEntryAnchorAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { CompactionRequestBudget } from "../sessions/compaction/preparation.types.js";
@@ -17,6 +19,7 @@ import { sanitizeTranscriptMessage } from "../transcript-sanitize.js";
 import type { UsageLike } from "../usage.js";
 import { compactWithSafetyTimeout } from "./compaction-safety-timeout.js";
 import { log } from "./logger.js";
+import { isRunnerToolCallBlock } from "./run/attempt-tool-call-block-type.js";
 import {
   estimateLlmBoundaryTokenPressure,
   estimateProjectedRequestTokenPressure,
@@ -63,9 +66,20 @@ export async function attemptServerEndpointCompaction(params: {
       (message): message is Message =>
         message.role === "user" || message.role === "assistant" || message.role === "toolResult",
     );
-    if (messages.at(-1)?.role !== "assistant") {
+    // Keep an unfinished exchange after the checkpoint, including the assistant
+    // call that frames its tool result. Never send that suffix to /compact.
+    const ownerIndex =
+      messages.at(-1)?.role === "assistant"
+        ? messages.length - 1
+        : messages.findLastIndex(
+            (message) =>
+              message.role === "assistant" &&
+              message.stopReason === "stop" &&
+              !message.content.some(isRunnerToolCallBlock),
+          );
+    if (ownerIndex < 0) {
       log.warn(
-        "Responses compact endpoint skipped: history does not end with an assistant message; " +
+        "Responses compact endpoint skipped: history has no completed assistant prefix; " +
           "using client compaction",
       );
       return undefined;
@@ -79,6 +93,9 @@ export async function attemptServerEndpointCompaction(params: {
       );
       return undefined;
     }
+    const tail = messages.slice(ownerIndex + 1);
+    const prefix = tail.length ? messages.slice(0, ownerIndex + 1) : messages;
+    const context = { systemPrompt: params.context.systemPrompt, messages: prefix };
     const contextWindow = Math.min(
       params.model.contextWindow ?? Infinity,
       params.requestBudget?.contextWindow ?? Infinity,
@@ -87,14 +104,11 @@ export async function attemptServerEndpointCompaction(params: {
       params.estimatedInputTokens !== undefined && params.estimatedInputTokens > contextWindow
         ? params.estimatedInputTokens
         : estimateLlmBoundaryTokenPressure({
-            messages,
+            messages: prefix,
             systemPrompt: params.context.systemPrompt,
             prompt: "",
             replay: { model: params.model, ...params.requestOptions },
-            llmBoundaryTokenPressure: () =>
-              estimateProjectedRequestTokenPressure({
-                context: { systemPrompt: params.context.systemPrompt, messages },
-              }),
+            llmBoundaryTokenPressure: () => estimateProjectedRequestTokenPressure({ context }),
           });
     if (inputTokens > contextWindow) {
       log.warn(
@@ -104,7 +118,7 @@ export async function attemptServerEndpointCompaction(params: {
       return undefined;
     }
     // Retained windows must already contain canonical image payloads.
-    const windowSource = findEndpointWindowNormalizationSource(params);
+    const windowSource = findEndpointWindowNormalizationSource({ model: params.model, context });
     if (windowSource) {
       log.warn(
         `Responses compact endpoint skipped: its ${windowSource} would require image ` +
@@ -112,20 +126,41 @@ export async function attemptServerEndpointCompaction(params: {
       );
       return undefined;
     }
-    const owner = params.sessionManager[sessionManagerReadTranscriptBranch]().findLast(
-      (entry) => entry.type === "message" && entry.message.role === "assistant",
-    );
+    const branch = params.sessionManager[sessionManagerReadTranscriptBranch]();
+    // Prepared assistant content can differ from its durable representation.
+    // Walk the durable suffix in order, matching message identities rather than
+    // picking an older, identical assistant or consuming an unpersisted tail.
+    let boundary = messages.length - 1;
+    const owner = branch.findLast((entry) => {
+      if (
+        entry.type !== "message" ||
+        !["assistant", "user", "toolResult"].includes(entry.message.role)
+      ) {
+        return false;
+      }
+      if (!tail.length) {
+        return entry.message.role === "assistant";
+      }
+      const projected = messages[boundary];
+      if (
+        !projected ||
+        entry.message.role !== projected.role ||
+        entry.message.timestamp !== projected.timestamp
+      ) {
+        boundary = -1;
+        return false;
+      }
+      return boundary-- === ownerIndex;
+    });
     if (!owner || owner.type !== "message" || owner.message.role !== "assistant") {
       throw new Error("Responses compact endpoint requires a persisted assistant owner");
     }
     const compacted = await compactWithSafetyTimeout(
       (signal) =>
-        requestPreparedOpenAIResponsesCompaction(
-          params.streamFn,
-          params.model,
-          { systemPrompt: params.context.systemPrompt, messages },
-          { ...params.requestOptions, signal },
-        ),
+        requestPreparedOpenAIResponsesCompaction(params.streamFn, params.model, context, {
+          ...params.requestOptions,
+          signal,
+        }),
       params.requestOptions.timeoutMs,
       params.requestOptions.signal ? { abortSignal: params.requestOptions.signal } : undefined,
     );
@@ -146,7 +181,7 @@ export async function attemptServerEndpointCompaction(params: {
       // Foreground fixed costs already include the otherwise empty prompt boundary.
       const replacementTokens =
         estimateLlmBoundaryTokenPressure({
-          messages: [replacement],
+          messages: [replacement, ...tail],
           prompt: "",
           replay: {
             model: params.model,
@@ -174,20 +209,47 @@ export async function attemptServerEndpointCompaction(params: {
     await withSessionManagerWrite(params.sessionManager, async () => {
       params.requestOptions.signal?.throwIfAborted();
       params.assertActive?.();
-      const rewritten = await rewriteTranscriptEntriesInSessionManager({
-        sessionManager: params.sessionManager,
-        replacements: [{ entryId: owner.id, message: normalized }],
-        preserveReplacementCompactionReplay: true,
-      });
-      if (
-        replacement.providerReplay?.data !== compacted.item.encrypted_content ||
-        !rewritten.changed
-      ) {
-        throw new Error(
-          `Responses compact endpoint checkpoint was not persisted: ${rewritten.reason}`,
+      const target = tail.length ? params.sessionManager.getSessionTarget() : undefined;
+      if (target) {
+        // A running turn owns its pending input. Install the checkpoint at its
+        // existing anchor rather than branching and re-appending the admitted suffix.
+        const anchor = await readActiveTranscriptEntryAnchorAsync(
+          { ...target, entryId: owner.id },
+          params.requestOptions.signal,
         );
+        const written =
+          anchor &&
+          (await rewritePreparedTranscriptMessageAtAnchor(
+            anchor,
+            (message) => {
+              if (!isDeepStrictEqual(message, owner.message)) {
+                throw new Error("Checkpoint owner changed before persistence");
+              }
+              return normalized;
+            },
+            { active: "exact", assertCurrent: params.assertActive },
+          ));
+        if (written?.message.providerReplay?.data !== compacted.item.encrypted_content) {
+          throw new Error("Responses compact endpoint checkpoint was not persisted");
+        }
+        compactionCommitted = true;
+        await params.sessionManager.reloadPersistedTranscriptAsync(params.requestOptions.signal);
+      } else {
+        const rewritten = await rewriteTranscriptEntriesInSessionManager({
+          sessionManager: params.sessionManager,
+          replacements: [{ entryId: owner.id, message: normalized }],
+          preserveReplacementCompactionReplay: true,
+        });
+        if (
+          replacement.providerReplay?.data !== compacted.item.encrypted_content ||
+          !rewritten.changed
+        ) {
+          throw new Error(
+            `Responses compact endpoint checkpoint was not persisted: ${rewritten.reason}`,
+          );
+        }
+        compactionCommitted = true;
       }
-      compactionCommitted = true;
       params.onCompactionCommitted?.(compacted.usage.input_tokens);
     });
     return compacted;

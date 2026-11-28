@@ -346,6 +346,67 @@ describe("attemptServerEndpointCompaction", () => {
     },
   );
 
+  it("compacts only completed history before a tool exchange", async () => {
+    const session = createSession();
+    const owner = checkpointOwner(session);
+    const tail = [
+      makeUserMessage("inspect fixture", 3),
+      makeAgentAssistantMessage({
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        timestamp: 4,
+        stopReason: "toolUse",
+        content: [
+          { type: "toolCall", id: "call_fixture", name: "read", arguments: { path: "fixture" } },
+        ],
+      }),
+      {
+        role: "toolResult",
+        toolCallId: "call_fixture",
+        toolName: "read",
+        content: [{ type: "text", text: "recorded result" }],
+        isError: false,
+        timestamp: 5,
+      } satisfies AgentMessage,
+    ];
+    for (const message of tail) {
+      await session.sessionManager.appendMessageAsync(message);
+    }
+    const prefix = session.messages;
+    session.messages = branchMessages(session.sessionManager);
+    await expect(attempt({}, session).result).resolves.toBeDefined();
+    expect(requestPreparedCompactionMock.mock.calls[0]?.[2].messages).toEqual(prefix);
+    const persisted = branchMessages(session.sessionManager);
+    expect(persisted[prefix.length - 1]).toMatchObject({
+      timestamp: owner.message.timestamp,
+      providerReplay: { data: "opaque" },
+    });
+    expect(persisted.slice(prefix.length)).toEqual(tail);
+  });
+
+  it("discards a returned checkpoint when the preserved user tail would exceed the budget", async () => {
+    const session = createSession();
+    await session.sessionManager.appendMessageAsync(makeUserMessage("uncached ".repeat(800), 3));
+    session.messages = branchMessages(session.sessionManager);
+    const before = structuredClone(session.sessionManager.getBranch());
+    const { result } = attempt(
+      {
+        trigger: "budget",
+        requestBudget: {
+          contextWindow: 1500,
+          fixedTokens: 400,
+          pendingTokens: 100,
+          reserveTokens: 200,
+        },
+      },
+      session,
+    );
+    await expect(result).resolves.toBeUndefined();
+    expect(requestPreparedCompactionMock).toHaveBeenCalledOnce();
+    expect(session.sessionManager.getBranch()).toEqual(before);
+  });
+
   it("does not compact transcript entries that remain after the checkpoint owner", async () => {
     const messages = createSession().messages.concat(makeUserMessage("trailing turn", 3));
     const { result } = attempt({ context: { systemPrompt: "system", messages } });
