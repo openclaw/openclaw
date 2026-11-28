@@ -17,7 +17,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import "../../components/tooltip.ts";
 import { useProviderDisplayLabel } from "../../lib/reactive/provider-presentation.tsx";
 import type { ProviderUsageSummary } from "./data-types.ts";
-import { formatIsoDate } from "./helpers.ts";
+import { formatIsoDate, usageSessionKeyLabel, usageSessionName } from "./helpers.ts";
 import {
   buildUsageCostWindows,
   formatAnalysisCost,
@@ -94,20 +94,18 @@ function renderFilterChips(
     return undefined;
   }
 
-  const selectedSessionKey = selectedSessions.at(0) ?? "";
-  const selectedSession =
-    selectedSessions.length === 1 ? sessions.find((s) => s.key === selectedSessionKey) : null;
-  const sessionsLabel = selectedSession
-    ? truncateUtf16Safe(selectedSession.label || selectedSession.key, 20) +
-      ((selectedSession.label || selectedSession.key).length > 20 ? "…" : "")
-    : selectedSessions.length === 1
-      ? truncateUtf16Safe(selectedSessionKey, 8) + "…"
-      : t("usage.filters.sessionsCount", { count: String(selectedSessions.length) });
-  const sessionsFullName = selectedSession
-    ? selectedSession.label || selectedSession.key
-    : selectedSessions.length === 1
-      ? selectedSessionKey
-      : selectedSessions.join(", ");
+  const selectedSessionKey = selectedSessions.length === 1 ? selectedSessions[0] : undefined;
+  const selectedSession = selectedSessionKey
+    ? sessions.find((session) => session.key === selectedSessionKey)
+    : undefined;
+  const sessionName = usageSessionName(selectedSession);
+  const sessionLabel = selectedSessionKey
+    ? (sessionName ?? usageSessionKeyLabel(selectedSessionKey))
+    : undefined;
+  const labelLimit = selectedSession ? 20 : 8;
+  const sessionsLabel = sessionLabel
+    ? truncateUtf16Safe(sessionLabel, labelLimit) + (sessionLabel.length > labelLimit ? "…" : "")
+    : t("usage.filters.sessionsCount", { count: String(selectedSessions.length) });
 
   const daysLabel =
     selectedDays.length === 1
@@ -127,7 +125,7 @@ function renderFilterChips(
       value: sessionsLabel,
       removeKey: "usage.filters.removeSession",
       onClear: onClearSessions,
-      title: sessionsFullName,
+      title: sessionName,
     },
   ];
 

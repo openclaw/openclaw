@@ -153,14 +153,10 @@ it.each<
       expect.soft(texts(page.element, ".usage-metric-badge strong")).toEqual(["100", "$1.00", "1"]);
     }
     // Selection narrows accounting and exports, not the roster available for comparison.
-    expect(
+    expect(new Set(texts(page.element, ".session-bar-title"))).toEqual(
       new Set(
-        [...page.querySelectorAll(".session-bar-row")].map((row) => row.getAttribute("title")),
-      ),
-    ).toEqual(
-      new Set(
-        sortedKeys(
-          menuProvider ? expected : query ? ["first", "third"] : ["first", "second", "third"],
+        (menuProvider ? expected : query ? ["first", "third"] : ["first", "second", "third"]).map(
+          (id) => sessions.find((session) => session.key === `agent:main:${id}`)?.label,
         ),
       ),
     );

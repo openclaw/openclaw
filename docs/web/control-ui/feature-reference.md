@@ -99,7 +99,7 @@ Workboard sidebar entries offer pin/unpin and, with write access, confirmed boar
     The session timeline's range handles support Tab, arrow keys to move one recorded point, and Home/End to select a boundary. Each handle has an accessible label and current time.
 
     - Session-derived token and estimated-cost analysis stays separate from provider billing.
-    - Session rows and selected details show saved conversation names, including generated titles. Explicit renames take precedence; unnamed sessions show their keys.
+    - Session rows and selected details show saved session names, including generated titles. Explicit renames take precedence. Unnamed sessions show their keys inline but not in tooltips. When you select multiple sessions, the filter shows how many you selected.
     - Overview charts and totals cover every session matching the active filters. The Sessions card pages 50 rows on the server; its shown count excludes the separate selected-session comparison. Comparisons remain visible when you change pages and refresh with the overview. Shift-click selects a range within the current page.
     - Changing pages, sorting, or filtering reuses a complete usage snapshot until session or usage data changes. Partial reports retry on the next read. If a request exceeds its time budget, the page shows the partial-result explanation even when no sessions were returned. Narrow the date range or select a session, then refresh.
     - Filter sessions with the provider, model, channel, or tool menus, or type case-insensitive `key:value` terms. Values within one category match as alternatives. Toggling a menu option preserves the other filters and their quoted text.

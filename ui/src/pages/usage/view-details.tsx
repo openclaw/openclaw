@@ -5,7 +5,12 @@ import "../../components/tooltip.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { parseSessionLog, prepareUsageDateRange } from "./helpers.ts";
+import {
+  parseSessionLog,
+  prepareUsageDateRange,
+  usageSessionKeyLabel,
+  usageSessionName,
+} from "./helpers.ts";
 import { charsToTokens, formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import { renderUsageRefreshStatus } from "./page-shell.tsx";
 import { createUsageRead, UsagePending, UsageReadStatus } from "./read-status.tsx";
@@ -90,7 +95,8 @@ export function SessionDetailPanel(props: {
   const state = createMemo(() => {
     const session = props.session;
     const detail = props.detail;
-    const label = session.label || session.key;
+    const name = usageSessionName(session);
+    const label = name ?? usageSessionKeyLabel(session.key);
     const displayLabel = label.length > 50 ? truncateUtf16Safe(label, 50) + "…" : label;
     const usage = session.usage;
     const { timeSeriesCursorStart, timeSeriesCursorEnd } = detail;
@@ -113,6 +119,7 @@ export function SessionDetailPanel(props: {
       includedSessionCount,
       filteredLogs,
       displayLabel,
+      fullName: displayLabel === label ? undefined : name,
       cursorIndicator,
       headerStats,
       filteredUsage,
@@ -123,7 +130,7 @@ export function SessionDetailPanel(props: {
       <div class="session-detail-header">
         <div class="session-detail-header-left">
           <div class="session-detail-title">
-            {state().displayLabel}
+            <span title={state().fullName}>{state().displayLabel}</span>
             {state().cursorIndicator ? (
               <>
                 {" "}

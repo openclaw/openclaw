@@ -1,6 +1,17 @@
-import type { SessionLogEntry, UsageFilterState } from "./usage-state-types.ts";
+import type { SessionLogEntry, UsageFilterState, UsageSessionEntry } from "./usage-state-types.ts";
 
 export const DEFAULT_USAGE_SESSION_SORT = { sort: "cost", sortDirection: "desc" } as const;
+
+/** Usage already carries the saved name; a routing key is not a name. */
+export function usageSessionName(session: UsageSessionEntry | undefined): string | undefined {
+  const name = session?.label?.trim();
+  return name && name !== session?.key && name === usageSessionKeyLabel(name) ? name : undefined;
+}
+
+export function usageSessionKeyLabel(key: string): string {
+  const token = key.startsWith("agent:") ? key.indexOf("?token=") : -1;
+  return token < 0 ? key : key.slice(0, token);
+}
 
 export function formatIsoDate(date: Date, timeZone: "local" | "utc" = "local"): string {
   const year = timeZone === "utc" ? date.getUTCFullYear() : date.getFullYear();
