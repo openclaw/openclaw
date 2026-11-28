@@ -836,7 +836,7 @@ describe("service definition backup receipts", () => {
       await expect(f.install()).rejects.toThrow(
         failure === "registration denied"
           ? "startup fallback is unsupported"
-          : "definition upgrade failed",
+          : "Scheduled Task definition upgrade failed: ERROR: Access is denied. Windows requires administrator rights to register a task with a boot trigger.",
       );
       if (failure === "registration denied") {
         expect(f.task()).toBe(f.originalTask);

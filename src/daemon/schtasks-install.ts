@@ -384,7 +384,12 @@ export async function installScheduledTask(
           const detail = (create.stderr || create.stdout).trim() || "unknown error";
           // Transactional repair must compensate; ordinary installs keep best-effort activation.
           if (definitionTransaction) {
-            throw new Error(`Scheduled Task definition upgrade failed: ${detail}`);
+            const bootTriggerHint = expectedXml.includes("<BootTrigger>")
+              ? " Windows requires administrator rights to register a task with a boot trigger."
+              : "";
+            throw new Error(
+              `Scheduled Task definition upgrade failed: ${detail}${bootTriggerHint}`,
+            );
           }
           warn?.(
             `Scheduled Task ${taskName} launch command was refreshed, but XML settings (including battery settings) were not: ${detail}. Inspect Task Scheduler and retry the service installation to refresh those settings.`,
