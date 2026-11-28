@@ -121,16 +121,7 @@ suite.define(() => {
 
   it("keeps edit, remove, and reorder outcomes exact through reconnect", async () => {
     const page = await newChatPage(suite);
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "chat.history": {
-          messages: [],
-          sessionId: "session:agent:main:main",
-          sessionInfo: { hasActiveRun: false, status: "done" },
-          thinkingLevel: null,
-        },
-      },
-    });
+    const gateway = await installMockGateway(page);
 
     try {
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
