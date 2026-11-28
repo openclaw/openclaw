@@ -62,7 +62,6 @@ describe("tool image sanitizer without native image backend", () => {
 
   it("keeps small header-verified images without probing the backend", async () => {
     readImageMetadataFromHeaderMock.mockReturnValueOnce({ width: 32, height: 24 });
-    getImageMetadataMock.mockRejectedValueOnce(backendUnavailableError);
     const { sanitizeContentBlocksImages } = await importSanitizer();
 
     const out = await sanitizeContentBlocksImages(
