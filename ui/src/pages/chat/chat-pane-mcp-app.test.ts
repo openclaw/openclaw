@@ -22,6 +22,7 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
+import * as toast from "../../lib/toast.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { StartedSessionNavigation } from "../new-session/started-session-navigation.ts";
@@ -246,6 +247,22 @@ describe("MCP app pane actions", () => {
     expect(await sent.receipt.promise).toBe(true);
     expect(getChatAttachmentDataUrl(attachments[0]!)).not.toBeNull();
     releaseChatAttachmentPayloads(attachments);
+  });
+
+  it("rejects an app’s empty binary attachment without asking the reader to choose a file", async () => {
+    const f = fixture();
+    const notice = vi.spyOn(toast, "showToast").mockReturnValue(false);
+    const sent = message(f.state.sessionKey);
+    sent.detail.content = [
+      { type: "text", text: "Review this part" },
+      { type: "resource", resource: { uri: "cad://parts/bolt.stl", blob: "" } },
+    ];
+    f.dispatch(MCP_APP_MESSAGE_EVENT, sent.detail);
+    expect(await sent.receipt.promise).toBe(false);
+    expect(f.state.handleSendChat).not.toHaveBeenCalled();
+    expect(notice).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ message: "OpenClaw can’t attach empty files." }),
+    );
   });
 
   it("releases attachment payloads and reports rejection when no outbox takes custody", async () => {
