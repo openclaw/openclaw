@@ -7,7 +7,7 @@ import {
   readBorrowedLegacyHandoffParent as readParent,
 } from "./update-managed-service-handoff-legacy-parent.js";
 import { createManagedHandoffProcessIdentityReader as processReader } from "./update-managed-service-handoff-process.js";
-import { inspectUpdateRepairDriverAdmission } from "./update-run-activity.js";
+import { inspectUpdateRepairDriverAdmission } from "./update-repair-driver-admission.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import { createUpdateRunRecordFixture } from "./update-run-record.test-support.js";
 

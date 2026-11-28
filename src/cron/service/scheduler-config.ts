@@ -1,3 +1,4 @@
+import { captureServiceAvailableMemoryReader } from "../../infra/host-memory.js";
 import { isSessionRunActiveForKey } from "../../sessions/session-controller.queries.js";
 import { listAgentDatabaseAdmissionRefusals } from "../../state/agent-database-admission.js";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
@@ -16,12 +17,10 @@ export function preparingCronAgentIds(env: NodeJS.ProcessEnv): string[] {
 /** Free memory that lets automation start one run past its default slots; see `cron.drainQueue`. */
 const CRON_EXTRA_RUN_FREE_MEMORY_BYTES = 1024 ** 3;
 
-/**
- * Whether one memory reading shows room for another automation run once the default slots are
- * busy. Node's available memory counts the process's cgroup limit, as in a container.
- */
-export function cronMemoryAllowsExtraRun(): boolean {
-  return process.availableMemory() >= CRON_EXTRA_RUN_FREE_MEMORY_BYTES;
+/** Each drain samples live headroom before admitting a run beyond the default slots. */
+export function cronMemoryAllowsExtraRun(state: CronServiceState): boolean {
+  const read = (state.readAvailableMemoryBytes ??= captureServiceAvailableMemoryReader());
+  return (read() ?? 0) >= CRON_EXTRA_RUN_FREE_MEMORY_BYTES;
 }
 
 /** The conversation a job's run would have to wait for right now, if its turn is still running. */
@@ -58,7 +57,7 @@ export async function captureCronSchedulerSnapshot(
       cronEnabled: state.deps.cronEnabled,
       preparingAgentIds: preparingCronAgentIds(state.deps.env),
       busyConversationJobIds: busyConversationCronJobIds(state),
-      memoryAllowsExtraRun: cronMemoryAllowsExtraRun(),
+      memoryAllowsExtraRun: cronMemoryAllowsExtraRun(state),
       providerBackoff: captureCronProviderBackoff(),
       cronConfig: state.deps.cronConfig,
       defaultAgentId: preparedOwner

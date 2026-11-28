@@ -235,19 +235,28 @@ node --import tsx "$ROOT_DIR/scripts/e2e/lib/npm-telegram-live/prepare-package.m
 cleanup() {
   local rc=$?
   trap - EXIT
-  # The harness has stopped; return its private output to the host uploader
-  # without widening modes or following links outside this run's directory.
+  # The appuser owns entries in both mounts. Return them to the host uploader
+  # and cleanup without widening modes or following links outside this run.
   if ! docker_e2e_docker_with_timeout 30s run --rm --network none --user 0:0 \
-    -v "$OUTPUT_DIR_HOST:/output" "$IMAGE_NAME" \
-    find -P /output -exec chown -h "$(id -u):$(id -g)" '{}' +; then
-    echo "Could not return Telegram artifacts to the host user." >&2
+    -v "$OUTPUT_DIR_HOST:/output" -v "$npm_prefix_host:/npm-global" "$IMAGE_NAME" \
+    find -P /output /npm-global -exec chown -h "$(id -u):$(id -g)" '{}' +; then
+    echo "Could not return Telegram artifacts and npm prefix to the host user." >&2
     if [ "$rc" -eq 0 ]; then
       rc=1
     fi
   fi
-  printf 'schema=1\nexit_code=%s\nlive_output=job_log\n' "$rc" > "$OUTPUT_DIR_HOST/run-metadata.txt"
-  rm -rf "$npm_prefix_host"
-  rm -rf "$harness_root"
+  if ! rm -rf -- "$npm_prefix_host" "$harness_root" 2>/dev/null; then
+    echo "Could not fully remove Telegram npm prefix or harness scratch directory." >&2
+    if [ "$rc" -eq 0 ]; then
+      rc=1
+    fi
+  fi
+  if ! printf 'schema=1\nexit_code=%s\nlive_output=job_log\n' "$rc" > "$OUTPUT_DIR_HOST/run-metadata.txt"; then
+    echo "Could not write Telegram run metadata." >&2
+    if [ "$rc" -eq 0 ]; then
+      rc=1
+    fi
+  fi
   exit "$rc"
 }
 trap cleanup EXIT
@@ -458,6 +467,13 @@ if [ -n "${OPENCLAW_NPM_TELEGRAM_COMMAND_SCENARIO:-}" ]; then
     exit 1
   fi
   command_scenario_mount_args=(-v "$OPENCLAW_NPM_TELEGRAM_COMMAND_SCENARIO:/app/qa/scenarios/channels/telegram-repeated-command-authorization.yaml:ro")
+fi
+if [ -n "${OPENCLAW_NPM_TELEGRAM_CONTEXT_SCENARIO:-}" ]; then
+  if [ ! -f "$OPENCLAW_NPM_TELEGRAM_CONTEXT_SCENARIO" ]; then
+    echo "Frozen Telegram context scenario is missing" >&2
+    exit 1
+  fi
+  command_scenario_mount_args+=(-v "$OPENCLAW_NPM_TELEGRAM_CONTEXT_SCENARIO:/app/qa/scenarios/channels/telegram-context-command.yaml:ro")
 fi
 run_logged_print_heartbeat "npm-telegram-live-suite" 60 docker_e2e_run_with_harness \
   "${docker_env[@]}" \

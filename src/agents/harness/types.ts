@@ -590,6 +590,13 @@ type AgentHarnessContract<
   /** Certifies binding the actual native model through the host before every inference dispatch. */
   nativeModelPolicySupport?: "exact";
   /**
+   * Who builds the model-facing user prompt. `captures`: the harness freezes the prompt
+   * projection before every provider dispatch, so a later fallback may never re-capture.
+   * `external` (default): a native runtime builds its own prompt; a later fallback keeps
+   * the stored transcript text for a turn it sent without a projection.
+   */
+  promptProjection?: "captures" | "external";
+  /**
    * Canonical OpenClaw tool names whose exact denies the harness can also enforce
    * against native equivalents. Every other deny remains fail-closed.
    */

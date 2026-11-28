@@ -292,6 +292,22 @@ class ChatUserMessageDisclosurePolicyTest {
   }
 
   @Test
+  fun collapsedPreviewDisplaysTwelveRowsAcrossLineEndings() {
+    val rows = List(12) { "- x" }
+    for ((sourceBreak, displayBreak) in listOf("\r" to "\n", "\r\n" to "\r\n")) {
+      val source = rows.joinToString(sourceBreak)
+      assertNull(ChatUserMessageDisclosurePolicy.collapsedPreview(source))
+      assertEquals(
+        rows.joinToString(displayBreak) + "…",
+        ChatUserMessageDisclosurePolicy.collapsedPreview("$source$sourceBreak- x"),
+      )
+    }
+
+    val mixed = rows.joinToString("\n").replaceFirst("\n", "\r")
+    assertEquals(rows.joinToString("\n") + "…", ChatUserMessageDisclosurePolicy.collapsedPreview("$mixed\n- x"))
+  }
+
+  @Test
   fun characterLimitPreservesWholeGraphemes() {
     for (cluster in listOf("👍🏽", "🇳🇿", "👩‍👩‍👧‍👦", "e\u0301")) {
       val exactFit = "a".repeat(700 - cluster.length) + cluster

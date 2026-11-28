@@ -179,7 +179,7 @@ describe("resolveGroupToolPolicy group context validation", () => {
     );
   });
 
-  it("keeps the generic message when a named account is removed from configuration", () => {
+  it("identifies an unlisted account without implying there is a scoped registry", () => {
     const params = {
       config,
       sessionKey: "agent:main:whatsapp:group:safe-room",
@@ -187,7 +187,7 @@ describe("resolveGroupToolPolicy group context validation", () => {
       requireConfiguredAccount: true,
     };
     expect(() => resolveGroupToolPolicy(params)).toThrow(
-      'Scheduled account "removed" is unavailable. Re-add it to the channel configuration',
+      'Scheduled account "removed" is unavailable on channel "whatsapp". Process registry: account not listed; scoped registry: no scope.',
     );
   });
 

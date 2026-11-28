@@ -8,7 +8,7 @@ import {
   type WorkerOptions,
 } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { createSpawnBrokerHost, type SpawnBrokerHost } from "../process/spawn-broker/host.js";
+import { createAttachmentBrokerHost } from "../process/spawn-broker/host.js";
 import { attachBrokerNativeResource } from "../process/spawn-broker/resource-client.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
@@ -78,6 +78,8 @@ export type RetainedNativeWorkerSource = {
   }>;
   /** The domain joins admitted work and its resources before shared native cleanup. */
   retain(owner: object, closeOwner: () => Promise<void>): void;
+  /** Stop remaining shared-host endpoints only after the domains using them have drained. */
+  retainSharedHost(closeEndpoints: () => Promise<void>): void;
   /** Join an idle broker without closing registered domains or their independent work. */
   retireIdleBroker(): Promise<boolean>;
   /** Let successive native captures reuse the broker before attempting to join it. */
@@ -85,7 +87,7 @@ export type RetainedNativeWorkerSource = {
 };
 
 type NativeBrokerLifetime = {
-  host?: SpawnBrokerHost;
+  host?: ReturnType<typeof createAttachmentBrokerHost>;
   closing?: Promise<void>;
   idleTimer?: ReturnType<typeof setTimeout>;
   retainedUntilProcessExit?: boolean;
@@ -114,6 +116,7 @@ const lifetime = resolveGlobalSingleton(
     defaultBroker: {},
   }),
   closeDefaultRetainedNativeWorkerSource,
+  "native-workers",
 );
 
 /** Terminal process cleanup joins the existing unbound owner without starting another. */
@@ -137,11 +140,11 @@ function nativeCleanupFailures(results: PromiseSettledResult<unknown>[]): unknow
 
 const NATIVE_BROKER_IDLE_MS = 60_000;
 
-function nativeResourceBroker(source: NativeSource): SpawnBrokerHost {
+function nativeResourceBroker(source: NativeSource) {
   clearTimeout(source.broker.idleTimer);
   source.broker.idleTimer = undefined;
   return (source.broker.host ??= runInDetachedAsyncContext(() =>
-    createSpawnBrokerHost({ nativeResources: true, workerUrl: source.brokerModuleUrl }),
+    createAttachmentBrokerHost(source.brokerModuleUrl),
   ));
 }
 
@@ -393,6 +396,7 @@ export function captureRetainedNativeWorkerSource(options?: {
           if (errors.length) {
             throw new AggregateError(errors, "Native worker execution owner cleanup failed");
           }
+          await closeSharedHost?.();
           if (source.hasActiveWorkers) {
             throw new Error("Native worker execution owners have not joined");
           }
@@ -547,11 +551,15 @@ export function captureRetainedNativeWorkerSource(options?: {
           : undefined,
       });
     },
+    retainSharedHost(closeEndpoints) {
+      closeSharedHost = closeEndpoints;
+    },
     retain(owner, closeOwner) {
       owners.set(owner, closeOwner);
       captured.runtimeGeneration?.retain(source, () => source.close());
     },
   };
+  let closeSharedHost: (() => Promise<void>) | undefined;
   const owners = new Map<object, () => Promise<void>>();
   let closingOwners: Promise<void> | undefined;
   if (captured.runtimeGeneration) {

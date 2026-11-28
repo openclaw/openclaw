@@ -272,6 +272,7 @@ describe("registerPolicyDoctorChecks", () => {
 
   it.each([
     ["clickclack", { baseUrl: "https://app.clickclack.chat", workspace: "wsp_1", token: "ccb" }],
+    ["discord", { token: "root-token" }],
     ["feishu", { appId: "cli_a", appSecret: "secret" }],
     ["irc", { host: "irc.example.com", nick: "claw" }],
     ["line", { channelAccessToken: "line-token" }],
@@ -279,6 +280,7 @@ describe("registerPolicyDoctorChecks", () => {
     ["nextcloud-talk", { baseUrl: "https://nextcloud.example.com", botSecret: "nc-secret" }],
     ["qqbot", { appId: "qqbot-app", clientSecret: "qqbot-secret" }],
     ["synology-chat", { token: "synology-token" }],
+    ["telegram", { botToken: "root-token" }],
     ["tlon", { ship: "zod" }],
     ["twitch", { username: "openclaw" }],
   ])("evaluates %s implicit default account posture with named accounts", async (channel, root) => {
@@ -338,27 +340,6 @@ describe("registerPolicyDoctorChecks", () => {
           channel: "slack",
           accountId: undefined,
           kind: "channelDmPolicy",
-        }),
-      ]),
-    );
-  });
-
-  it("evaluates implicit default account posture with named accounts", async () => {
-    const { result } = await runIngressPolicyScenario({
-      discord: {
-        token: "root-token",
-        dmPolicy: "open",
-        groupPolicy: "allowlist",
-        requireMention: true,
-        accounts: createNamedAllowlistAccounts(),
-      },
-    });
-
-    expect(result.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "policy/ingress-dm-policy-unapproved",
-          ocPath: "oc://openclaw.config/channels/discord/dmPolicy",
         }),
       ]),
     );
@@ -519,27 +500,6 @@ describe("registerPolicyDoctorChecks", () => {
       ]),
     );
     expect(result.findings).toEqual([]);
-  });
-
-  it("evaluates Telegram implicit default account posture with named accounts", async () => {
-    const { result } = await runIngressPolicyScenario({
-      telegram: {
-        botToken: "root-token",
-        dmPolicy: "open",
-        groupPolicy: "allowlist",
-        requireMention: true,
-        accounts: createNamedAllowlistAccounts(),
-      },
-    });
-
-    expect(result.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "policy/ingress-dm-policy-unapproved",
-          ocPath: "oc://openclaw.config/channels/telegram/dmPolicy",
-        }),
-      ]),
-    );
   });
 
   it("accepts inherited account ingress posture", async () => {

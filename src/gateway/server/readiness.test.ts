@@ -141,6 +141,14 @@ describe("createReadinessChecker", () => {
     );
     expect(readiness()).toEqual(readySnapshot());
 
+    pluginReload = {
+      phase: "reloading",
+      pluginIds: ["discord"],
+      deadlineAtMs: Date.now() + 60_000,
+      reason: "Waiting for admitted work while the previous generation stays active.",
+    };
+    expect(readiness()).toEqual(readySnapshot());
+
     manager.getRuntimeSnapshot.mockReturnValue(snapshotWith({ running: false, connected: false }));
 
     pluginReload = {

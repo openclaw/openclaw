@@ -25,3 +25,9 @@ export function resolveCliArgvInvocation(argv: string[]): {
     isRootHelpInvocation: isRootHelpInvocation(argv),
   };
 }
+
+export function isRemoteAgentDispatchInvocation(
+  invocation: ReturnType<typeof resolveCliArgvInvocation>,
+): boolean {
+  return invocation.primary === "agent" && !invocation.argv.includes("--local");
+}

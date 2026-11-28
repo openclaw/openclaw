@@ -39,11 +39,12 @@ import {
   type UpdateCheckResult,
 } from "../../infra/update-check.js";
 import { projectUpdateRunHistory } from "../../infra/update-run-history-projection.js";
+import { renderUpdateRunSummary } from "../../infra/update-run-notice.js";
 import { formatUpdateRunOmittedSteps } from "../../infra/update-run-omission.js";
-import { formatUpdateOwedStep, listUpdateOwedSteps } from "../../infra/update-run-owed-step.js";
+import { formatUpdateOwedStep } from "../../infra/update-run-owed-step.js";
 import { readUpdateRunReportHealth } from "../../infra/update-run-report-health.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { readUpdateRunStatusWithOwedSteps } from "../../infra/update-run-status.js";
+import { updateRunWarningMessages } from "../../infra/update-run-step.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { defaultRuntime } from "../../runtime.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
@@ -130,7 +131,9 @@ async function inspectUpdateStatus(
     return retainedRunStatus;
   };
   const deadline = performance.now() + timeoutMs;
-  const remainingMs = () => Math.max(1, deadline - performance.now());
+  // RPC and child-process timeouts require integer milliseconds; a fractional
+  // remainder is rejected by the channels.status schema (`at /timeoutMs: must be integer`).
+  const remainingMs = () => Math.max(1, Math.ceil(deadline - performance.now()));
   const inspect = async <T>(
     section: string,
     operation: () => T | Promise<T>,
@@ -608,9 +611,7 @@ async function inspectUpdateStatus(
     const { lastRun, staleRun, abandonedRun, advisories, owedSteps } = runStatus;
     const run = activeRun ?? lastRun;
     for (const advisory of advisories ?? []) {
-      if (advisory.runId !== run?.runId) {
-        defaultRuntime.log(advisory.message);
-      }
+      defaultRuntime.log(advisory.message);
     }
     if (run) {
       if (!activeRun) {
@@ -636,33 +637,29 @@ async function inspectUpdateStatus(
               undefined,
             )
           : undefined;
-      const report = renderUpdateRunReport(
-        run,
+      const summary = renderUpdateRunSummary(
         refusedRestartRecovery
-          ? { nextAction: refusedRestartRecovery }
-          : run.status === "failed"
-            ? { currentHealth: currentRunHealth }
-            : {},
+          ? { ...run, origin: { ...run.origin, nextAction: refusedRestartRecovery } }
+          : run,
       );
       const historical =
         currentRunHealth?.kind === "responding"
           ? projectUpdateRunHistory(run, currentRunHealth)
           : null;
       if (!abandonedRun && !staleRun) {
-        defaultRuntime.log(historical ?? report.headline);
+        defaultRuntime.log(historical ?? summary);
+      }
+      for (const warning of updateRunWarningMessages(run.steps)) {
+        printWarning(safeMessage(`Warning: ${warning}`));
       }
       const omission = historical ? formatUpdateRunOmittedSteps(run.steps) : undefined;
-      for (const line of historical ? (omission ? [omission] : []) : report.lines) {
+      for (const line of historical && omission ? [omission] : []) {
         defaultRuntime.log(line);
       }
       defaultRuntime.log("");
     }
-    // The displayed run's report already lists what that run owes.
-    const reported = new Set(run ? listUpdateOwedSteps(run).map((step) => step.id) : []);
     for (const step of owedSteps ?? []) {
-      if (!reported.has(step.id)) {
-        printWarning(safeMessage(`Warning: ${formatUpdateOwedStep(step)}`));
-      }
+      printWarning(safeMessage(`Warning: ${formatUpdateOwedStep(step)}`));
     }
   }
 

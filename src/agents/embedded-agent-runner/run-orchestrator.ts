@@ -52,10 +52,7 @@ import {
   runOutsidePreparedModelRuntimePluginGenerationScope,
   withPreparedModelRuntimePluginGenerationScope,
 } from "../prepared-model-runtime-generation-scope.js";
-import {
-  PreparedModelRuntimeInitialRunAdmissionError,
-  PreparedModelRuntimeOwnerNotPublishedError,
-} from "../prepared-model-runtime.errors.js";
+import { PreparedModelRuntimeOwnerNotPublishedError } from "../prepared-model-runtime.errors.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
@@ -353,13 +350,10 @@ async function runEmbeddedAgentForSession(
             .catch((error: unknown) => {
               // A refreshed generation may already have executed tools. Only the first
               // acquisition can prove that this candidate never entered execution.
-              if (
-                !refreshed &&
-                error instanceof PreparedModelRuntimeOwnerNotPublishedError &&
-                error.admissionBlocked
-              ) {
-                params.releaseUnstartedProbe?.();
-                throw new PreparedModelRuntimeInitialRunAdmissionError(error);
+              if (!refreshed && error instanceof PreparedModelRuntimeOwnerNotPublishedError) {
+                if (error.admissionBlocked) {
+                  params.releaseUnstartedProbe?.();
+                }
               }
               throw error;
             })

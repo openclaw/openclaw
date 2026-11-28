@@ -270,7 +270,7 @@ export class CommandPaletteState {
     }
     this.hasOpened = true;
     this.open = true;
-    this.draft.open();
+    this.draft.open(this.modes.current);
     this.onDraftInitialized();
     this.composing = false;
     this.mentionInput = undefined;

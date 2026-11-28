@@ -1,6 +1,7 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { callMeetingToolGateway } from "openclaw/plugin-sdk/meeting-plugin-entry";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeInvokePolicy,
@@ -22,7 +23,6 @@ export const loadGoogleMeetCliModule = createLazyRuntimeModule(() => import("./c
 export const loadGoogleMeetCreateModule = createLazyRuntimeModule(() => import("./create.js"));
 export const loadGoogleMeetNodeHostModule = createLazyRuntimeModule(() => import("./node-host.js"));
 
-const loadGoogleMeetRuntimeModule = createLazyRuntimeModule(() => import("./runtime.js"));
 const loadGoogleMeetNodeInvokePolicyModule = createLazyRuntimeModule(
   () => import("./node-invoke-policy.js"),
 );
@@ -137,33 +137,14 @@ export async function callGoogleMeetGatewayFromTool(params: {
   raw: Record<string, unknown>;
   runtime?: OpenClawPluginApi["runtime"];
 }): Promise<unknown> {
-  const method = googleMeetGatewayMethods[params.action];
-  try {
-    if (params.runtime) {
-      return await params.runtime.gateway.request(method, params.raw, {
-        timeoutMs: resolveGoogleMeetGatewayOperationTimeoutMs(params.config),
-        scopes: ["operator.admin"],
-      });
-    }
-    // Standalone agent workers connect as this bundled plugin, not as the
-    // model session; its Gateway methods remain the only exposed actions.
-    const { callGatewayFromCli } = await loadGoogleMeetGatewayRuntimeModule();
-    return await callGatewayFromCli(
-      method,
-      {
-        json: true,
-        timeout: String(resolveGoogleMeetGatewayOperationTimeoutMs(params.config)),
-      },
-      params.raw,
-      { progress: false, scopes: ["operator.admin"] },
-    );
-  } catch (err) {
-    const details = err && typeof err === "object" && "details" in err ? err.details : undefined;
-    if (details && typeof details === "object") {
-      return details;
-    }
-    throw err;
-  }
+  return await callMeetingToolGateway({
+    method: googleMeetGatewayMethods[params.action],
+    params: params.raw,
+    gateway: params.runtime?.gateway,
+    timeoutMs: resolveGoogleMeetGatewayOperationTimeoutMs(params.config),
+    scopes: ["operator.admin"],
+    loadGatewayCli: loadGoogleMeetGatewayRuntimeModule,
+  });
 }
 
 export function keepTrustedToolAgentId(
@@ -178,43 +159,17 @@ export function keepTrustedToolAgentId(
   return agentId ? { ...rest, agentId } : rest;
 }
 
-export function createGoogleMeetRuntimeAccessor(params: {
+export async function createGoogleMeetRuntime(params: {
   api: OpenClawPluginApi;
   config: GoogleMeetConfig;
-}): () => Promise<GoogleMeetRuntime> {
-  let transcriptsEnabled = params.api.config.transcripts?.enabled !== false;
-  let runtime: GoogleMeetRuntime | undefined;
-  let runtimePromise: Promise<GoogleMeetRuntime> | undefined;
-  params.api.registerService({
-    id: "google-meet-transcripts",
-    reload: { configPrefixes: ["transcripts.enabled"] },
-    start: ({ config }) => {
-      transcriptsEnabled = config.transcripts?.enabled !== false;
-      return runtime?.reconcileTranscriptPolicy(transcriptsEnabled);
-    },
-    stop: () => {
-      transcriptsEnabled = false;
-      return runtime?.reconcileTranscriptPolicy(false);
-    },
+}): Promise<GoogleMeetRuntime> {
+  const { GoogleMeetRuntime } = await import("./runtime.js");
+  return new GoogleMeetRuntime({
+    config: params.config,
+    fullConfig: params.api.config,
+    runtime: params.api.runtime,
+    logger: params.api.logger,
   });
-  return async () => {
-    if (!params.config.enabled) {
-      throw new Error("Google Meet plugin disabled in plugin config");
-    }
-    runtimePromise ??= loadGoogleMeetRuntimeModule().then(
-      async ({ GoogleMeetRuntime: Runtime }) => {
-        runtime = new Runtime({
-          config: params.config,
-          fullConfig: params.api.config,
-          runtime: params.api.runtime,
-          logger: params.api.logger,
-        });
-        await runtime.reconcileTranscriptPolicy(transcriptsEnabled);
-        return runtime;
-      },
-    );
-    return await runtimePromise;
-  };
 }
 
 export function createLazyGoogleMeetNodeInvokePolicy(

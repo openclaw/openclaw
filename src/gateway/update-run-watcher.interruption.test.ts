@@ -18,7 +18,6 @@ import {
 } from "../infra/update-run-ledger.js";
 import { readInterruptedUpdateCandidate } from "../infra/update-run-read.kernel.js";
 import { reconcileUpdateRunsInNativeKernelForTest } from "../infra/update-run-reconciliation.test-support.js";
-import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { retainCommandProcessCleanup } from "../process/exec-spawn.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -209,9 +208,12 @@ it("settles a verified abandoned CLI run", async () => {
     "update.run.changed",
     expect.objectContaining({ runId, status: "succeeded" }),
   );
-  const report = renderUpdateRunReport(getUpdateRun(runId)!).markdown;
-  expect(report).toContain("Updater exited before recording completion");
-  expect(report).toContain("settle check: settled");
+  expect(getUpdateRun(runId)?.steps).toContainEqual(
+    expect.objectContaining({
+      step: "reconcile:settle",
+      detail: expect.stringContaining("settle check: settled"),
+    }),
+  );
   expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("settle check: settled"));
 });
 
@@ -400,7 +402,6 @@ it.each(["unverified", "timed-out"])(
       detail: expect.stringContaining(`settle check: ${outcome}`),
     });
     expect(pending.status).toBe("running");
-    expect(renderUpdateRunReport(pending).markdown).toContain(`settle check: ${outcome}`);
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining(diagnostic!.detail!));
     if (outcome === "timed-out") {
       expect(diagnostic?.detail).toContain(
@@ -414,7 +415,6 @@ it.each(["unverified", "timed-out"])(
     expect(recovered.steps.filter((step) => step.step === "reconcile:settle")).toEqual([
       expect.objectContaining({ detail: expect.stringContaining("settle check: settled") }),
     ]);
-    expect(renderUpdateRunReport(recovered).markdown).not.toContain(`settle check: ${outcome}`);
   },
 );
 
@@ -445,7 +445,6 @@ it("records an unmanaged skip when the restart step is skipped", async () => {
     status: "completed",
     detail: expect.stringContaining("skipped-unmanaged after 0 ms during ownership"),
   });
-  expect(renderUpdateRunReport(run).markdown).toContain("skipped-unmanaged");
   expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("skipped-unmanaged"));
   expect(observation.context).not.toHaveBeenCalled();
   expect(observation.settle).not.toHaveBeenCalled();
@@ -462,7 +461,6 @@ it("records cleanup uncertainty instead of settling an interrupted update", asyn
     status: "failed",
     detail: expect.stringContaining("cleanup-unknown"),
   });
-  expect(renderUpdateRunReport(run).markdown).toContain("Command cleanup failed");
   expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("cleanup outcome unknown"));
   observation.settle.mockResolvedValue(health());
   expect(await reconcileInterruptedUpdateRuns()).toEqual([]);
@@ -514,7 +512,6 @@ it.each(["uncertain", "forced"] as const)(
       if (outcome === "uncertain") {
         expect(terminal.status).toBe("failed");
         expect(terminal.detail).toContain("cleanup-unknown");
-        expect(renderUpdateRunReport(recorded).markdown).toContain("Command cleanup failed");
         expect(console.warn).toHaveBeenCalledWith(
           expect.stringContaining("Command cleanup failed"),
         );

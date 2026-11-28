@@ -70,7 +70,8 @@ export type SecretsRuntimeRefreshContext = {
   includeConfigRefs?: boolean;
   includeAuthStoreRefs: boolean;
   loadAuthStore?: (agentDir?: string) => AuthProfileStore | Promise<AuthProfileStore>;
-  loadablePluginOrigins: ReadonlyMap<string, PluginOrigin>;
+  /** An omitted inventory lets a later config refresh discover its first plugin secret surface. */
+  loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 };
 
@@ -117,7 +118,7 @@ function cloneSecretsRuntimeRefreshContext(
     explicitAgentDirs: context.explicitAgentDirs ? [...context.explicitAgentDirs] : null,
     includeConfigRefs: context.includeConfigRefs ?? true,
     includeAuthStoreRefs: context.includeAuthStoreRefs,
-    loadablePluginOrigins: new Map(context.loadablePluginOrigins),
+    loadablePluginOrigins: context.loadablePluginOrigins && new Map(context.loadablePluginOrigins),
     ...(context.manifestRegistry ? { manifestRegistry: context.manifestRegistry } : {}),
     ...(context.loadAuthStore ? { loadAuthStore: context.loadAuthStore } : {}),
   };

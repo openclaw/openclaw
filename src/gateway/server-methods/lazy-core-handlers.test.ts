@@ -16,6 +16,12 @@ vi.mock("./agent-run-handler.js", () => {
   return { agentRunHandler: vi.fn() };
 });
 
+// mock-isolation: Detect execution-service evaluation without starting the provider runtime.
+vi.mock("../agent-turn/agent-turn-service.js", () => {
+  runStackLoaded();
+  return { createAgentTurnService: unavailable };
+});
+
 vi.mock("../session-create-service.js", () => {
   sessionCreateStackLoaded();
   return {};
@@ -166,6 +172,21 @@ describe("lazy core handler families", () => {
     expect(runStackLoaded).not.toHaveBeenCalled();
   });
 
+  it("waits for an accepted chat run without importing the agent execution stack", async () => {
+    const runId = " exact accepted run ";
+    const dedupe = new Map([
+      [`chat:${runId}`, { ts: Date.now(), ok: true, payload: { runId, status: "started" } }],
+    ]);
+    const respond = await invoke(
+      "agent.wait",
+      { runId, timeoutMs: 0 },
+      { context: { dedupe } as never },
+    );
+
+    expect(respond).toHaveBeenCalledWith(true, { runId, status: "timeout" });
+    expect(runStackLoaded).not.toHaveBeenCalled();
+  });
+
   it("loads session reads without importing the session create stack", async () => {
     const respond = await invoke("sessions.list", { limit: "invalid" });
 
@@ -179,5 +200,19 @@ describe("lazy core handler families", () => {
     expectInvalid(respond);
     expect(optionalMediaRuntimesLoaded).not.toHaveBeenCalled();
     expect(titleRuntimeLoaded).not.toHaveBeenCalled();
+  });
+  it("prepares the actual run handler before rechecking dispatch authority", async () => {
+    const { coreGatewayHandlers } = await import("./core-handlers.js");
+    const { prepareGatewayRequestHandler } = await import("./lazy-core-handlers.js");
+    const handler = await prepareGatewayRequestHandler(
+      expectDefined(coreGatewayHandlers.agent, "agent handler"),
+      undefined,
+      {
+        prepareDispatchCurrent: async () => {
+          expect(runStackLoaded).toHaveBeenCalledTimes(1);
+        },
+      },
+    );
+    expect(handler).toBe((await import("./agent-run-handler.js")).agentRunHandler);
   });
 });

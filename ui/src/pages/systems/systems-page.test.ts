@@ -207,28 +207,6 @@ describe("Systems workspace", () => {
     },
   );
 
-  const cloudWorker: NonNullable<EnvironmentSummary["worker"]> = {
-    providerId: "crabbox",
-    profileId: "standard",
-    state: "ready",
-    ageMs: 0,
-    attachedSessionIds: [],
-    tunnelStatus: "stopped",
-  };
-  it.each([
-    [worker, "Device"],
-    [{ ...worker, worker: { ...cloudWorker, providerId: "device" } }, "Device"],
-    [{ ...worker, worker: cloudWorker }, "Cloud device · standard"],
-  ] satisfies [EnvironmentSummary, string][])(
-    "labels device placement from provisioned metadata %#",
-    async (device, label) => {
-      const { controller } = harness(async () => [device]);
-      controller.select(device.id);
-      const { page } = await mount(controller);
-      expect(text(page, ".systems-heading span")).toBe(label);
-    },
-  );
-
   it.each([
     [[], "You need admin access to view a desktop.", "You need read access to view backups."],
     [["operator.admin"], "Desktop access isn’t available on this device.", "No backups yet."],

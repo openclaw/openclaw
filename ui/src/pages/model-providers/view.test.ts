@@ -1039,22 +1039,3 @@ it("filters provider access without hiding global defaults and exposes an empty 
   expect(container.querySelectorAll("[data-provider-id]")).toHaveLength(0);
   expect(container.querySelector("#settings-model-behavior")).not.toBeNull();
 });
-
-it("lists usable providers first, each group alphabetical", () => {
-  const unusable = { apiKey: undefined, modelCount: 0, availableModelCount: 0 };
-  const container = mount(
-    props({
-      cards: [
-        card({ id: "zeta", displayName: "Zeta", ...unusable }),
-        card({ id: "xai", displayName: "xAI" }),
-        card({ id: "alpha", displayName: "Alpha", ...unusable }),
-        card({ id: "anthropic", displayName: "Anthropic" }),
-      ],
-    }),
-  );
-  expect(
-    [...container.querySelectorAll("[data-provider-id]")].map((row) =>
-      row.getAttribute("data-provider-id"),
-    ),
-  ).toEqual(["anthropic", "xai", "alpha", "zeta"]);
-});

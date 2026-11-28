@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
@@ -200,6 +201,38 @@ it("warns once per append failure streak and continues with later batches", asyn
   expect(warnings[0]).toContain("records dropped; check that the path is a writable regular file");
   expect(warnings.join("\n")).not.toContain(secret);
 });
+
+it.skipIf(process.platform === "win32" || process.platform === "android")(
+  "names the unsafe home directory and its repair instead of blaming the log file",
+  async () => {
+    fs.mkdirSync(logPath);
+    const home = fs.realpathSync(logPath);
+    const stateDir = path.join(home, "state");
+    const file = path.basename(logPath);
+    const stderr = captureStderr();
+    const targetPreparation = fileLogTransport.prepareTarget(file, true, { options: { stateDir } });
+    vi.stubEnv("HOME", `${home}/`);
+    try {
+      fs.chmodSync(home, 0o775);
+      fileLogTransport.enqueue({ ...entry(file, "dropped\n"), targetPreparation });
+      await fileLogTransport.flush();
+      const [warning] = warningLines(stderr);
+      expect(warning).toContain(
+        `log directory unavailable; records dropped (file=${file}): Directory $HOME is writable by group or others and has no sticky bit.`,
+      );
+      expect(warning).toContain('chmod go-w "$HOME"');
+      expect(warning).toContain('chmod +t "$HOME"');
+      expect(warning).not.toContain(home);
+      expect(warning).not.toContain("writable regular file");
+    } finally {
+      fs.chmodSync(home, 0o755);
+      vi.unstubAllEnvs();
+    }
+    fileLogTransport.enqueue({ ...entry(file, "recovered\n"), targetPreparation });
+    await fileLogTransport.flush();
+    expect(read(path.join(stateDir, "logs", file))).toBe("recovered\n");
+  },
+);
 
 it("keeps failure streaks independent by file", async () => {
   const firstPath = logPathTracker.nextPath();

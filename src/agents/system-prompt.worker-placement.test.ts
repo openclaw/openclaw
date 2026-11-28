@@ -15,16 +15,6 @@ function renderLocalAndWorker(params: Partial<PromptParams>) {
 }
 
 describe("buildAgentSystemPrompt with worker-placed session tools", () => {
-  it("describes the worker sessions_spawn arguments", () => {
-    const { local, worker } = renderLocalAndWorker({ toolNames: ["sessions_spawn"] });
-    expect(local).toContain('`context:"isolated"`');
-    expect(worker).toContain("delegate bounded independent work via `sessions_spawn`");
-    expect(worker).toContain("the whole child brief goes in `task`");
-    for (const fullToolOnly of ["objective/output", "`context:", "`taskName`"]) {
-      expect(worker).not.toContain(fullToolOnly);
-    }
-  });
-
   it("describes worker delegation as visible children briefed through task", () => {
     const { local, worker } = renderLocalAndWorker({
       toolNames: ["sessions_spawn"],
@@ -43,10 +33,10 @@ describe("buildAgentSystemPrompt with worker-placed session tools", () => {
     const { local, worker } = renderLocalAndWorker({
       toolNames: ["sessions_spawn", "sessions_create"],
     });
-    expect(local).toContain("use hidden children by default");
+    expect(local).toContain("hidden `sessions_spawn` children");
     expect(worker).toContain("## Session routing");
-    expect(worker).toContain("`sessions_spawn` children are always visible sessions");
-    expect(worker).not.toContain("hidden children");
+    expect(worker).toContain("visible `sessions_spawn` children");
+    expect(worker).not.toContain("hidden `sessions_spawn` children");
   });
 
   it("omits ACP spawn guidance on a worker", () => {

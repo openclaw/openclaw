@@ -666,6 +666,12 @@ footer.sidebar-issues-panel__mentions-note {
   gap: 6px;
 }
 
+.sidebar-mention-row[inert] {
+  flex: none;
+  min-height: 0;
+  overflow: clip;
+}
+
 .sidebar-mention-row__excerpt {
   margin: 0;
   color: color-mix(in srgb, var(--text) 88%, var(--muted));

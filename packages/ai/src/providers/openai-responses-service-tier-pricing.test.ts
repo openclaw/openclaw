@@ -26,6 +26,8 @@ describe("applyResponsesServiceTierPricing", () => {
     ["priority is 2.5x for gpt-5.5", "priority", "gpt-5.5", 9.375],
     ["GPT-6.2 Astra Fast doubles cost", "priority", "gpt-6.2-astra", 7.5],
     ["GPT-6.2 Sol Fast doubles cost", "priority", "gpt-6.2-sol", 7.5],
+    ["served Fast doubles cost", "fast", "gpt-6.2-sol", 7.5],
+    ["served Fast keeps the GPT-5.5 rate", "fast", "gpt-5.5", 9.375],
   ] as const)("%s", (_name, tier, modelId, expectedTotal) => {
     const value = usage();
     applyResponsesServiceTierPricing(value, tier, { id: modelId });

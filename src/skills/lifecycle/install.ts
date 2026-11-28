@@ -19,12 +19,12 @@ import { runCommandWithTimeout, type CommandOptions } from "../../process/exec.j
 import { resolveUserPath } from "../../utils.js";
 import { prepareSkillBundle } from "../library/bundle.js";
 import { hasBinary, resolveSkillsInstallPreferences } from "../loading/config.js";
-import { resolveSkillKey } from "../loading/frontmatter.js";
 import type { Skill } from "../loading/skill-contract.js";
 import { resolveSkillSource } from "../loading/source.js";
 import { prepareWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { materializeSkillResources } from "../runtime/resources.js";
 import { resolveSkillFileHost } from "../skill-file-host.js";
+import { resolveSkillKey } from "../skill-key.js";
 import type { SkillInstallSpec, SkillsInstallPreferences } from "../types.js";
 import { installDownloadSpec } from "./install-download.js";
 import { formatInstallFailureMessage } from "./install-output.js";

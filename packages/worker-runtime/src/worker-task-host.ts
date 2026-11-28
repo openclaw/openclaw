@@ -57,6 +57,8 @@ export type WorkerTaskHost = {
   ): WorkerPoolMemoryBudget | undefined;
   /** Internal served workers acknowledge initialization; arbitrary SDK Workers do not. */
   requiresReady?: true;
+  /** A logical endpoint can stay warm without keeping a dedicated isolate alive. */
+  isSharedWorker?(worker: WorkerLifecycle): boolean;
   createWorker(
     url: URL,
     options: Omit<WorkerOptions, "eval">,

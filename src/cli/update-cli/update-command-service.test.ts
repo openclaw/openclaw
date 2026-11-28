@@ -16,10 +16,6 @@ import {
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
-import {
-  renderUpdateRunReport,
-  updateRunReportInputFromResult,
-} from "../../infra/update-run-report.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
@@ -384,7 +380,7 @@ describe("maybeRestartService", () => {
     expect(loadUpdateRecovery(record.runId, options)).toEqual(record);
   });
 
-  it("records changed-key warnings before health verification and retains them in the outcome and report", async () => {
+  it("records changed-key warnings before health verification and retains them in the outcome", async () => {
     const home = tempDirs.make("service-warning-history-");
     const options = { env: { HOME: home, OPENCLAW_STATE_DIR: home } };
     const admitted = createUpdateRun({ trigger: "cli" }, options);
@@ -434,9 +430,6 @@ describe("maybeRestartService", () => {
       }),
     );
     expect(result.steps).toContainEqual(expect.objectContaining({ warnings: [warning] }));
-    expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
-      warning,
-    );
   });
   it("records measured reconciliation child timing in the outcome and run history", async () => {
     const home = tempDirs.make("service-timing-history-");

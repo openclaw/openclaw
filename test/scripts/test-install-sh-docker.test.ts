@@ -339,10 +339,13 @@ const UPDATE_URL = "http://candidate.invalid/openclaw.tgz";
 function runUpdateJson(
   payload: {
     status: string;
+    runId?: string;
     reason?: string;
     before: { version: string; buildId?: string };
-    after: { version: string; buildId?: string };
-    steps: Record<string, unknown>[];
+    after?: { version: string; buildId?: string };
+    steps: readonly Record<string, unknown>[];
+    target?: Record<string, unknown>;
+    run?: unknown;
   },
   env: NodeJS.ProcessEnv = {},
 ) {
@@ -354,7 +357,7 @@ function runUpdateJson(
     env: {
       ...process.env,
       UPDATE_JSON: JSON.stringify(payload),
-      UPDATE_EXPECT_VERSION: payload.after.version,
+      UPDATE_EXPECT_VERSION: payload.after?.version ?? payload.before.version,
       UPDATE_BASELINE_VERSION: payload.before.version,
       UPDATE_TAG_URL: UPDATE_URL,
       ...env,
@@ -1570,6 +1573,80 @@ fs.readFileSync = (file, ...args) => {
     };
 
     expect(runUpdateJson(payload, { UPDATE_EXPECT_OUTCOME: "already-current" }).status).toBe(0);
+  });
+
+  it("requires both halves of a wrapped already-current receipt and the installed build witness", () => {
+    const before = { version: "2026.11.11", buildId: "candidate-build" };
+    const stage = {
+      name: "package-install",
+      exitCode: 0,
+      command: `npm install --allow-scripts=${UPDATE_URL} ${UPDATE_URL}`,
+    };
+    const run = {
+      runId: "candidate-update-run",
+      phase: "finished",
+      status: "skipped",
+      reason: "already-current",
+      before,
+      after: before,
+      target: { kind: "package", channel: "stable", version: before.version, tag: UPDATE_URL },
+      steps: [
+        { step: "staging", status: "completed" },
+        { step: "validating", status: "skipped" },
+        { step: "global update", status: "completed", exitCode: 0 },
+      ],
+    };
+    const receipt = {
+      runId: run.runId,
+      status: run.status,
+      reason: run.reason,
+      before,
+      after: before,
+      steps: [stage],
+      run,
+    };
+    const buildInfo = join(tempDirs.make("installer-noop-build-"), "build-info.json");
+    const verify = (payload: Parameters<typeof runUpdateJson>[0], buildId = before.buildId) => {
+      writeFileSync(buildInfo, JSON.stringify({ buildId }));
+      return runUpdateJson(payload, {
+        UPDATE_EXPECT_OUTCOME: "already-current",
+        BUILD_INFO: buildInfo,
+        INSTALLED_BUILD_BEFORE: before.buildId,
+      });
+    };
+    const positive = verify(receipt);
+    expect(positive.status, positive.stderr).toBe(0);
+    expect(positive.stdout).toContain("installed build unchanged, no activation");
+    const bare = verify({ ...run, steps: [{ step: "prepare:pack", status: "completed" }] });
+    expect(bare.status, bare.stderr).toBe(0);
+
+    const negatives = [
+      [{ ...receipt, run: null }, "run identity"],
+      [{ ...receipt, run: { ...run, runId: "other-run" } }, "run identity"],
+      [{ ...receipt, run: { ...run, target: { ...run.target, tag: "wrong" } } }, "run target"],
+      [{ ...receipt, run: { ...run, phase: "validating" } }, "terminal"],
+      [
+        { ...receipt, run: { ...run, steps: [{ step: "activating", status: "completed" }] } },
+        "activated a release",
+      ],
+      [
+        {
+          ...receipt,
+          steps: [
+            { ...stage, command: `npm install --allow-scripts=${UPDATE_URL} ${UPDATE_URL}.wrong` },
+          ],
+        },
+        "missing expected tgz URL",
+      ],
+    ] as const;
+    for (const [payload, error] of negatives) {
+      const result = verify(payload);
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain(error);
+    }
+    const changed = verify(receipt, "different-build");
+    expect(changed.status, changed.stderr).toBe(1);
+    expect(changed.stderr).toContain("changed or omitted installed build identity");
   });
 
   it("accepts legacy same-version apply only with the frozen-target compatibility flag", () => {

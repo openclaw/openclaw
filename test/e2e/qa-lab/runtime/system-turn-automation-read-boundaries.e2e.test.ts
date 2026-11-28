@@ -367,7 +367,9 @@ it(
                   break;
                 case 6:
                   // Fail fast on the owner gate instead of waiting on later reads.
-                  expect(outputs.get("get_owned")).not.toContain("needs the owner's authority");
+                  expect(outputs.get("get_owned")).not.toContain(
+                    "needs the Gateway owner's authority",
+                  );
                   call("automations", "runs_owned", { action: "runs", jobId: owned() });
                   break;
                 case 7:
@@ -388,7 +390,7 @@ it(
                   break;
                 case 11:
                   expect(outputs.get("update")).toContain(
-                    "Other actions need the owner's authority",
+                    "I did not run other automations actions.",
                   );
                   call("automations", "remove", { action: "remove", jobId: owned() });
                   break;
@@ -621,9 +623,9 @@ it(
         );
         // Every write and every other owner-only tool keeps the owner gate.
         for (const id of ["update", "remove", "add", "run", "status"]) {
-          expect(outputs.get(id)).toContain("Other actions need the owner's authority");
+          expect(outputs.get(id)).toContain("I did not run other automations actions.");
         }
-        expect(outputs.get("gateway")).toContain("gateway needs the owner's authority");
+        expect(outputs.get("gateway")).toContain("I did not run gateway.");
         // The admitted read survives removal, but the deleted job's history stays undisclosed.
         expect(removedOutcome).toMatchObject({
           id: jobs.owned.id,
@@ -641,7 +643,7 @@ it(
         });
         expect(lateNoticeRequest ?? "").not.toContain('"entries"');
         // Asserted scheduler provenance on a non-owner client turn unlocks nothing.
-        expect(outputs.get("forged_get")).toContain("automations needs the owner's authority");
+        expect(outputs.get("forged_get")).toContain("I did not run automations.");
         const stillListed = await live.client.request<{ jobs: CronJob[] }>("cron.list", {
           includeDisabled: true,
         });

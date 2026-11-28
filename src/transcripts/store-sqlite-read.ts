@@ -10,7 +10,7 @@ import {
   prepareSqliteQueryTakeFirstSync,
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { createTranscriptSpeakerLabels, presentTranscriptTurn } from "./speaker-labels.js";
+import { createTranscriptSpeakerLabels, presentTranscriptTurns } from "./speaker-labels.js";
 import { iterateTranscriptSpeakerObservations } from "./store-speakers.js";
 import {
   meetingTranscriptDb,
@@ -137,6 +137,7 @@ export function readTranscriptSummarySnapshot(
   const summaryRevision = readStoredTranscriptSummaryRevision(database, session);
   const query = meetingTranscriptUtteranceQuery(database, session).select([
     "sequence",
+    "started_at",
     "speaker_id",
     "speaker_label",
     "text",
@@ -160,8 +161,12 @@ export function readTranscriptSummarySnapshot(
       label(speaker.speaker_id, speaker.speaker_label);
     }
   }
-  const turns = rows.flatMap(
-    (turn) => presentTranscriptTurn(turn.text, label(turn.speaker_id, turn.speaker_label)) ?? [],
+  const turns = presentTranscriptTurns(
+    rows.map((turn) => ({
+      text: turn.text,
+      startedAt: turn.started_at,
+      speakerLabel: label(turn.speaker_id, turn.speaker_label),
+    })),
   );
   return {
     ...(hasSpeakerAliases ? { hasSpeakerAliases: true } : {}),
