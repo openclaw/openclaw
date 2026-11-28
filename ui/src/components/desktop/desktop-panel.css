@@ -731,10 +731,12 @@ openclaw-desktop-panel {
     overflow: hidden;
     max-width: 100%;
     color: var(--muted);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 11px;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .desktop-session[data-identifier="true"] {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
   .desktop-note {
     padding: 7px 12px;

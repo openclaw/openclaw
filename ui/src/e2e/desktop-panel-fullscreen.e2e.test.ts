@@ -2,11 +2,13 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
+import { workerDesktop } from "./panel-fixtures.test-support.ts";
 
 const realVncWsUrl = process.env.OPENCLAW_DESKTOP_REAL_VNC_WS_URL?.trim() || null;
 const suite = createControlUiE2eSuite({
@@ -57,6 +59,10 @@ const workerDesktopEnvironment = {
 async function openDesktopPanel(page: Page) {
   await page.goto(`${suite.server.baseUrl}activity`);
   await waitForControlUiGatewayReady(page);
+  return showDesktopPicker(page);
+}
+
+async function showDesktopPicker(page: Page) {
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent("openclaw:command-palette-open"));
   });
@@ -101,6 +107,85 @@ async function captureDesktopProof(page: Page, panel: import("playwright").Locat
 }
 
 suite.define(() => {
+  it("names attached sessions from the held roster without looking up each desktop", async () => {
+    await suite.withPage(
+      { colorScheme: "dark", locale: "en-US", viewport: { width: 1280, height: 900 } },
+      async ({ page }) => {
+        const generation = (index: number) =>
+          `912e51e5-a509-4bd8-bcb1-${String(index).padStart(12, "0")}`;
+        const rows = Array.from({ length: 200 }, (_, index) => ({
+          key: `agent:main:dashboard:${generation(index === 1 ? 200 : index)}`,
+          sessionId: generation(index),
+          kind: "direct",
+          label: index === 0 ? "Review the release notes" : `Session ${index + 1}`,
+          updatedAt: 200 - index,
+        }));
+        const environments = Array.from({ length: 64 }, (_, index) => {
+          const environment = workerDesktop(`worker-desktop-${index}`);
+          return {
+            ...environment,
+            label: index === 0 ? "Release workstation" : `Workstation ${index + 1}`,
+            worker: {
+              ...environment.worker,
+              // The machine still reports an old generation of a reused routing key.
+              attachedSessionIds: [generation(index === 1 ? 200 : index)],
+            },
+          };
+        });
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["desktop.observe", "environments.list"],
+          methodResponses: {
+            "sessions.list": chatSessionListResponse(rows),
+            "environments.list": { environments },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}activity`);
+        await waitForControlUiGatewayReady(page);
+        await expect
+          .poll(() =>
+            evaluateControlUiContext(
+              page,
+              ({ sessions }) =>
+                sessions.canonicalListReady && sessions.state.result?.sessions.length,
+            ),
+          )
+          .toBe(200);
+        const before = (await gateway.getRequests()).length;
+        const panel = await showDesktopPicker(page);
+        const attachments = panel.locator(".desktop-session");
+        await attachments.nth(63).waitFor({ state: "attached" });
+        if (captureUiProof) {
+          await panel
+            .locator(".desktop-environment")
+            .nth(0)
+            .screenshot({
+              animations: "disabled",
+              path: path.join(proofDir, `${proofStage}-attached-session.png`),
+            });
+        }
+        expect(await attachments.allTextContents()).toEqual([
+          rows[0]!.label,
+          generation(200),
+          ...rows.slice(2, 64).map(({ label }) => label),
+        ]);
+        const pickerReads = (await gateway.getRequests())
+          .slice(before)
+          .map(({ method }) => method)
+          .filter((method) =>
+            [
+              "environments.list",
+              "environments.status",
+              "sessions.list",
+              "sessions.describe",
+              "sessions.resolve",
+            ].includes(method),
+          );
+        expect(pickerReads).toContain("environments.list");
+        expect(pickerReads.filter((method) => method !== "environments.list")).toEqual([]);
+      },
+    );
+  });
+
   it.each(["dark", "light"] as const)(
     "keeps the production noVNC canvas mounted through fullscreen entry and exit in %s mode",
     async (theme) => {
