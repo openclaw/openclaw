@@ -1,0 +1,3 @@
+# Bundled-channel cache regression test proving lazy runtime/setup companions load outside the calling
+# plugin's captured module graph while keeping the Gateway request scope. Exact net growth for PR #197121.
+122
