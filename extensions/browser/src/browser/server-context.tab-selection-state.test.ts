@@ -236,7 +236,7 @@ describe("browser tab selection and ownership", () => {
     await openclaw.listTabs();
     runtime.lastTargetId = "GOOD";
     const aliases = structuredClone(runtime.tabAliases);
-    const opening = openclaw.openTab("https://example.com/start", { label: "undiscovered" });
+    const opening = openclaw.openTab("https://example.com/start");
     await vi.advanceTimersByTimeAsync(2_100);
     await expect(opening).resolves.toEqual({
       targetId: "UNDISCOVERED",
@@ -277,9 +277,7 @@ describe("browser tab selection and ownership", () => {
         byTargetId: { GOOD: { tabId: "t1", label: "good", url: "about:blank" } },
       };
       const aliases = structuredClone(runtime.tabAliases);
-      await expect(
-        openclaw.openTab("https://example.com", { label: "unsettled" }),
-      ).resolves.toEqual({
+      await expect(openclaw.openTab("https://example.com")).resolves.toEqual({
         targetId: "UNSETTLED",
         title: transport === "CDP" ? "" : "UNSETTLED",
         ...(transport === "HTTP" ? { wsUrl: "ws://127.0.0.1:18800/devtools/page/UNSETTLED" } : {}),
@@ -290,6 +288,68 @@ describe("browser tab selection and ownership", () => {
       expect(runtime.lastTargetId).toBe("GOOD");
       expect(runtime.tabAliases).toEqual(aliases);
       expect(fetchMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("fails a labeled open when the created tab is not discovered in time", async () => {
+    vi.useFakeTimers();
+    mockCreatedTarget("UNDISCOVERED", "https://example.com/final");
+    const closes: string[] = [];
+    const { openclaw, runtime } = setup(async (url) => {
+      if (url.includes("/json/list")) {
+        return Response.json([page("GOOD")]);
+      }
+      if (url.includes("/json/close/")) {
+        closes.push(url);
+        return new Response();
+      }
+      throw new Error("unexpected fetch: " + url);
+    });
+    runtime.running = mockLaunchedChrome(vi.fn(), 1234);
+    await openclaw.listTabs();
+    runtime.lastTargetId = "GOOD";
+    const aliases = structuredClone(runtime.tabAliases);
+    const opening = openclaw.openTab("https://example.com/start", { label: "undiscovered" });
+    const rejection = expect(opening).rejects.toThrow(
+      /Failed to assign label "undiscovered" to the new tab/,
+    );
+    await vi.advanceTimersByTimeAsync(2_100);
+    await rejection;
+    // The unadopted created target is closed by the open failure cleanup, and
+    // the prior implicit target and alias state are preserved.
+    expect(closes).toEqual(["http://127.0.0.1:18800/json/close/UNDISCOVERED"]);
+    expect(runtime.lastTargetId).toBe("GOOD");
+    expect(runtime.tabAliases).toEqual(aliases);
+  });
+
+  it.each(["CDP", "HTTP"] as const)(
+    "fails a labeled %s open that settles without a committed navigation",
+    async (transport) => {
+      const create = vi.spyOn(cdp, "createTargetViaCdp");
+      if (transport === "CDP") {
+        create.mockResolvedValue({ targetId: "UNSETTLED" });
+      } else {
+        create.mockRejectedValue(new Error("cdp unavailable"));
+        vi.spyOn(cdp, "waitForCdpCommittedNavigationUrl").mockResolvedValue(undefined);
+        vi.spyOn(cdpHelpers, "fetchJson").mockResolvedValueOnce(
+          page("UNSETTLED", "https://example.com"),
+        );
+      }
+      const { openclaw, runtime } = setup(async () => {
+        throw new Error("unexpected discovery or cleanup");
+      });
+      runtime.running = mockLaunchedChrome(vi.fn(), 1234);
+      runtime.lastTargetId = "GOOD";
+      runtime.tabAliases = {
+        nextTabNumber: 2,
+        byTargetId: { GOOD: { tabId: "t1", label: "good", url: "about:blank" } },
+      };
+      const aliases = structuredClone(runtime.tabAliases);
+      await expect(openclaw.openTab("https://example.com", { label: "unsettled" })).rejects.toThrow(
+        /Failed to assign label "unsettled" to the new tab/,
+      );
+      expect(runtime.lastTargetId).toBe("GOOD");
+      expect(runtime.tabAliases).toEqual(aliases);
     },
   );
 

@@ -498,7 +498,15 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
           opts?.signal?.throwIfAborted();
         }
         // Uncommitted or undiscovered targets are returned without sticky,
-        // alias, or managed-cleanup adoption.
+        // alias, or managed-cleanup adoption. A requested label can only be
+        // registered by adoption, so fail the open instead of silently
+        // dropping the label; the failure cleanup below closes the created
+        // target and prior sticky/alias state stays untouched.
+        if (normalizedLabel !== undefined) {
+          throw new Error(
+            `Failed to assign label "${normalizedLabel}" to the new tab: the tab was not discovered with a committed navigation, so the open was aborted and the created tab was closed`,
+          );
+        }
         return await withTabOwnership(
           {
             targetId: createdViaCdp.targetId,
@@ -580,6 +588,15 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         },
         opts,
       );
+      if (!committedUrl && normalizedLabel !== undefined) {
+        // Without a committed navigation the tab cannot be adopted, so its
+        // label cannot be registered either. Fail the open instead of
+        // silently dropping the label; the failure cleanup below closes the
+        // created target and prior sticky/alias state stays untouched.
+        throw new Error(
+          `Failed to assign label "${normalizedLabel}" to the new tab: the tab was not adopted because its committed navigation could not be confirmed, so the open was aborted and the created tab was closed`,
+        );
+      }
       return committedUrl ? adoptValidatedTab(opened, { ...opts, label: normalizedLabel }) : opened;
     } catch (openError) {
       if (closeCreatedPage) {
