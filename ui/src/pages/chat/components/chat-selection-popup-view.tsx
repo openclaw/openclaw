@@ -68,12 +68,21 @@ export function showChatSelectionToolbar(
               {t("chat.messages.addToChat")}
             </button>
           ) : undefined}
-          <button
-            type="button"
-            onClick={() => activate(() => actions.onAskSideChat(source, anchor))}
-          >
-            {t("chat.messages.askInSideChat")}
-          </button>
+          {actions.onAddToHomeAgent ? (
+            <button
+              type="button"
+              onClick={() => activate(() => actions.onAddToHomeAgent?.(source))}
+            >
+              {t("chat.messages.addToHomeAgent")}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => activate(() => actions.onAskSideChat(source, anchor))}
+            >
+              {t("chat.messages.askInSideChat")}
+            </button>
+          )}
           <button
             type="button"
             aria-label={t("chat.messages.askInNewSession")}

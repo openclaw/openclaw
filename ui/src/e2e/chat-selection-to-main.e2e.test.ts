@@ -2,6 +2,7 @@ import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { storedChatOutboxScopeKey } from "../lib/chat/outbox-store.ts";
 import {
+  controlUiSessionUrl,
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -520,6 +521,99 @@ suite.define(() => {
       const params = await sentMessage(gateway);
       expect(params.message).toBe("> A\n> B");
       expect(params.attachments ?? []).toHaveLength(0);
+    });
+  });
+
+  it("offers Add to Home agent instead of Ask in side chat only while the Home sidebar is open", async () => {
+    await withPage(async ({ page, toolbar }) => {
+      const workKey = "agent:main:work-selection";
+      const homeKey = "agent:main:main";
+      const gateway = await installMockGateway(page, {
+        sessionKey: workKey,
+        featureMethods: [
+          ...defaultControlUiFeatureMethods,
+          "openclaw.chat",
+          "openclaw.chat.history",
+        ],
+        sessions: [
+          { key: workKey, label: "Deploy review", kind: "direct", updatedAt: 1_700_000_000_000 },
+          { key: homeKey, label: "Home", kind: "direct", updatedAt: 1_700_000_000_000 },
+        ],
+        historyMessages: [{ role: "assistant", content: selectedText }],
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, workKey));
+      const main = page.locator("#control-ui-main");
+      const source = main
+        .locator(".chat-bubble .chat-text p:not(blockquote p)")
+        .filter({ hasText: selectedText });
+      await source.waitFor({ state: "visible" });
+
+      // Home sidebar closed -> shows Ask in side chat.
+      await selectText(source);
+      await toolbar.waitFor({ state: "visible" });
+      expect(await button(toolbar, "Ask in side chat").count()).toBe(1);
+      expect(await button(toolbar, "Add to Home agent").count()).toBe(0);
+      await page.keyboard.press("Escape");
+
+      // Open the Home sidebar -> swaps Ask in side chat for Add to Home agent.
+      await page.locator(".sidebar-footer-bar__home .session-glyph__content").click();
+      const panel = page.locator("openclaw-assistant-panel");
+      const homeComposer = panel.locator(".agent-chat__composer-combobox textarea");
+      await homeComposer.waitFor({ state: "visible" });
+
+      await selectText(source);
+      await toolbar.waitFor({ state: "visible" });
+      expect(await button(toolbar, "Add to Home agent").count()).toBe(1);
+      expect(await button(toolbar, "Ask in side chat").count()).toBe(0);
+      await button(toolbar, "Add to Home agent").click();
+      await toolbar.waitFor({ state: "detached" });
+
+      const removeSelection = panel.getByRole("button", {
+        name: "Remove selected text",
+        exact: true,
+      });
+      await removeSelection.waitFor({ state: "visible" });
+      await expect
+        .poll(() => homeComposer.evaluate((element) => document.activeElement === element))
+        .toBe(true);
+      await homeComposer.fill("Check this checklist item.");
+      await homeComposer.press("Enter");
+      const sent = await gateway.waitForRequest("chat.send");
+      expect(sent.params).toMatchObject({
+        sessionKey: homeKey,
+        message: "Check this checklist item.",
+        workContext: {
+          page: "chat",
+          sessionKey: workKey,
+          selection: selectedText,
+        },
+      });
+
+      // Selecting inside the Home sidebar itself keeps Ask in side chat.
+      const homeSource = panel.locator(".chat-bubble .chat-text p").first();
+      await homeSource.waitFor({ state: "visible" });
+      await selectText(homeSource);
+      await toolbar.waitFor({ state: "visible" });
+      expect(await button(toolbar, "Ask in side chat").count()).toBe(1);
+      expect(await button(toolbar, "Add to Home agent").count()).toBe(0);
+      await page.keyboard.press("Escape");
+
+      // Switching the assistant sidebar to Ask OpenClaw restores Ask in side chat.
+      await panel.getByRole("button", { name: "Ask OpenClaw", exact: true }).click();
+      await selectText(source);
+      await toolbar.waitFor({ state: "visible" });
+      expect(await button(toolbar, "Ask in side chat").count()).toBe(1);
+      expect(await button(toolbar, "Add to Home agent").count()).toBe(0);
+      await page.keyboard.press("Escape");
+
+      // Returning to Home and then closing the sidebar restores Ask in side chat.
+      await panel.getByRole("button", { name: "Home", exact: true }).click();
+      await homeComposer.waitFor({ state: "visible" });
+      await panel.getByRole("button", { name: "Close assistant sidebar", exact: true }).click();
+      await selectText(source);
+      await toolbar.waitFor({ state: "visible" });
+      expect(await button(toolbar, "Ask in side chat").count()).toBe(1);
+      expect(await button(toolbar, "Add to Home agent").count()).toBe(0);
     });
   });
 

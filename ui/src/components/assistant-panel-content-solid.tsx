@@ -86,6 +86,7 @@ export const AssistantPanelContent = defineSolidBridge<Props>(
             <HomeSession
               sessionKey={props.sessionKey}
               agentId={props.agentId}
+              homeDock={props.destination === "home"}
               workContext={workContext()}
             />
           ) : (

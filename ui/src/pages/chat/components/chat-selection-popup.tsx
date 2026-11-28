@@ -11,6 +11,7 @@ import { listen } from "../../../lib/reactive/listener.ts";
 export type ChatSelectionPopupActions = {
   paneId: string;
   onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
+  onAddToHomeAgent?: (selection: ChatSelectionSource) => void;
   onAskSideChat: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
   onAskNewSession: (selection: ChatSelectionSource) => void;
 };

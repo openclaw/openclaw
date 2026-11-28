@@ -494,7 +494,11 @@ composer. The optional comment field starts on one line, grows to five lines,
 then scrolls internally. Confirm or press Enter to save; Shift+Enter adds a line.
 Saving keeps your existing draft and does not send a message.
 
-**Ask in side chat** asks about the passage in Side chat. **New session**
+**Ask in side chat** asks about the passage in Side chat. While the Home agent
+sidebar is open alongside another chat, that action becomes **Add to Home
+agent**. Choosing it attaches the passage to Home's work context and focuses
+the Home composer. Closing the sidebar or switching to **Ask OpenClaw**
+restores **Ask in side chat**. **New session**
 opens the new-session launcher with the passage attached as a
 comment; starting the session sends it as a quote ahead of your prompt,
 followed by a link to the session it came from. The launcher's comment preview can delete the passage but not edit it, and your

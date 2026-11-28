@@ -230,6 +230,9 @@ export type ChatThreadProps = Omit<
       anchorRect: DOMRect,
       widget?: WidgetCommentEditorScope,
     ) => void;
+    resolveHomeAgentSelection?: (
+      sourceNode?: Node | null,
+    ) => ((selection: ChatSelectionSource) => void) | undefined;
     onCompanionSelection?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
     onNewSessionSelection?: (selection: ChatSelectionSource) => void;
     /** Shows one of the session's subagents. */
@@ -248,6 +251,7 @@ type TranscriptInteractionProps = Pick<
   | "onForkMessage"
   | "onFocusComposer"
   | "onAddToChat"
+  | "resolveHomeAgentSelection"
   | "onCompanionSelection"
   | "onNewSessionSelection"
 >;
@@ -504,9 +508,11 @@ export function handleTranscriptPointerUp(
   if (event.button !== 0 || event.ctrlKey || typeof props.onCompanionSelection !== "function") {
     return;
   }
+  const sourceNode = event.currentTarget instanceof Node ? event.currentTarget : null;
   handleChatSelectionPointerUp(event, {
     paneId: props.paneId,
     onAddToChat: props.onAddToChat,
+    onAddToHomeAgent: props.resolveHomeAgentSelection?.(sourceNode),
     onAskSideChat: (selection, anchorRect) => props.onCompanionSelection?.(selection, anchorRect),
     onAskNewSession: (selection) => props.onNewSessionSelection?.(selection),
   });

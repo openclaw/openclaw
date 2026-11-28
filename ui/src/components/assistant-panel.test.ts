@@ -248,6 +248,7 @@ describe("assistant panel", () => {
     });
     await openHome(panel);
     expect(home(panel)).toMatchObject({ sessionKey: "agent:main:home", agentId: "main" });
+    expect(context.assistantDock.homeOpen).toBe(true);
     expect(refresh).not.toHaveBeenCalled();
     expect(chatInputOwnerForContext(context).current).toBe("dock");
     expect(dom.query("select")).toBeNull();
@@ -256,6 +257,7 @@ describe("assistant panel", () => {
     await update(panel, { pageSessionKey: "agent:research:other-task" });
     expect(home(panel)).toMatchObject({ sessionKey: "agent:research:home", agentId: "research" });
     expect(panel.assistantPanelOpen).toBe(true);
+    expect(context.assistantDock.homeOpen).toBe(true);
 
     context.agentSelection.state.selectedId = "care";
     await update(panel, { pageSessionKey: "agent:research:task" });
@@ -264,9 +266,11 @@ describe("assistant panel", () => {
 
     await update(panel, { pageSessionKey: "agent:research:home" });
     expect(home(panel)).toBeNull();
+    expect(context.assistantDock.homeOpen).toBe(false);
     expect(chatInputOwnerForContext(context).current).toBe("page");
     await update(panel, { pageRouteId: "appearance" });
     expect(home(panel)?.agentId).toBe("research");
+    expect(context.assistantDock.homeOpen).toBe(true);
 
     context.gateway.snapshot.phase = "offline";
     context.gateway.snapshot.hello = null;
@@ -311,6 +315,7 @@ describe("assistant panel", () => {
     expect(panel.textContent).toContain("Review conversation");
     expect(dom.query("openclaw-custodian-surface")).toBeNull();
     expect(context.assistantDock.openSessionKey).toBe("agent:research:review");
+    expect(context.assistantDock.homeOpen).toBe(false);
     await update(panel, { pageRouteId: "appearance" });
     expect(home(panel)).not.toBeNull();
     panel.pageSessionKey = "agent:research:review";

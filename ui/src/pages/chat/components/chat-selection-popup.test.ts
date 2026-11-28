@@ -127,6 +127,31 @@ describe("chat selection popup", () => {
     expect(popup()).toBeNull();
   });
 
+  it("swaps Ask in side chat for Add to Home agent when Home sidebar is active", async () => {
+    const thread = selection("send to home agent", 12);
+    const onAddToHomeAgent = vi.fn();
+    const onAddToChat = vi.fn();
+    await pointerUp(thread, { onAddToChat, onAddToHomeAgent });
+    const buttons = [...popup()!.querySelectorAll("button")];
+    expect(buttons.map((button) => button.textContent)).toEqual([
+      "Add to chat",
+      "Add to Home agent",
+      "New session",
+    ]);
+    buttons[1]!.click();
+    expect(onAddToHomeAgent).toHaveBeenCalledWith({
+      text: "send to home",
+      start: 0,
+      end: 12,
+      messageId: "assistant-1",
+      entryId: "entry-1",
+    });
+    expect(onAskSideChatSpy).not.toHaveBeenCalled();
+    expect(onAddToChat).not.toHaveBeenCalled();
+    expect(popup()).toBeNull();
+    expect(window.getSelection()?.isCollapsed).toBe(true);
+  });
+
   it("routes New session to the new-session launcher", async () => {
     const thread = selection("route this passage", 5);
     await pointerUp(thread);
