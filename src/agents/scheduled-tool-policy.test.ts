@@ -10,7 +10,7 @@ const account = {
   ownerSessionKey: "agent:main:main",
   ownerAccountId: "creator",
 } as const;
-const policy = (params: Parameters<typeof resolvePolicy>[0] = {}) =>
+const policy = (params: Parameters<typeof resolvePolicy>[0]) =>
   resolvePolicy({ toolsAllow: ["exec"], scheduledToolPolicy: account, ...params });
 
 it("requires both a persisted cap and valid server provenance", () => {
