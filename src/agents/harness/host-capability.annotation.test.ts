@@ -223,6 +223,38 @@ async function holdTranscriptWriter(target: Parameters<typeof resolveSqliteTrans
 }
 
 describe("host-owned current admission annotation", () => {
+  it.each([false, true])(
+    "annotates pre-persisted input only before an internal retry (internal: %s)",
+    async (internal) => {
+      await withAdmission(async (f) => {
+        const host = f.createHost({
+          suppressNextUserMessagePersistence: true,
+          skipPreparedUserTurnMessage: internal,
+        });
+        try {
+          if (internal) {
+            expect(host.capabilities.annotateCurrentUserTurn).toBeUndefined();
+          } else {
+            const annotate = expectDefined(host.capabilities.annotateCurrentUserTurn, "annotation");
+            await annotate(nativeAnnotation());
+            expect(f.recorder.getPersistedMessage?.()).toMatchObject({
+              content: "prompt",
+              __openclaw: nativeAnnotation(),
+            });
+            const continuation = f.createHost({ suppressNextUserMessagePersistence: true });
+            try {
+              expect(continuation.capabilities.annotateCurrentUserTurn).toBeUndefined();
+            } finally {
+              continuation.close();
+            }
+          }
+        } finally {
+          host.close();
+        }
+      });
+    },
+  );
+
   it("annotates the exact cron run while its same-ID base row changes", async () => {
     const cronBaseKey = "agent:main:cron:annotation";
     await withAdmission(
