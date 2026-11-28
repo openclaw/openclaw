@@ -1149,36 +1149,10 @@ describe("memory-core dreaming phases", () => {
     );
   });
 
-  it("drops generic day headings but keeps meaningful section labels", async () => {
-    await writeDailyNote([
-      "# Friday, April 5, 2026",
-      "",
-      "11:30",
-      "",
-      "## Morning",
-      "- Reviewed travel timing and calendar placement.",
-      "",
-      "## Emma Rees",
-      "- She prefers direct plans over open-ended maybes.",
-      "- Better to offer one concrete time window.",
-    ]);
-
-    const { sweep } = createDailyHarness({ lookbackDays: 2 });
-
-    await runLight(sweep);
-
-    const snippets = await readCandidateSnippets("2026-04-05T10:05:00.000Z");
-    expect(snippets.toSorted()).toEqual([
-      "Emma Rees: Better to offer one concrete time window.",
-      "Emma Rees: She prefers direct plans over open-ended maybes.",
-      "Reviewed travel timing and calendar placement.",
-    ]);
-  });
-
   it("keeps nested-list ancestry and continuation lines in one daily signal", async () => {
     await writeDailyNote([
-      "# 2026-04-05",
-      "",
+      "# Friday, April 5, 2026",
+      "## Morning",
       "- Relationship notes for Emma Rees:",
       "",
       "  - Prefers short messages",

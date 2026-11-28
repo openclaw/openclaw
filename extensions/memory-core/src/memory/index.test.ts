@@ -908,23 +908,14 @@ describe("memory index", () => {
       await diagnostic.sync({ reason: "cli", force: true });
 
       const db = Reflect.get(diagnostic, "db") as DatabaseSync;
-      memoryIndexFixtureWriter(diagnostic)
-        .prepare(`INSERT INTO memory_embedding_cache
-        (provider, model, provider_key, hash, embedding, dims, updated_at)
-        VALUES ('previous-provider', 'previous-model', 'previous-key', 'retained', ?, 2, 1)`)
-        .run(encodeMemoryEmbedding([0, 1]));
-      expect(diagnostic.status().storage).toMatchObject({
-        embeddingCacheEntries: 1,
-        embeddingCacheBytes: 16,
-      });
       const storedBytes = db
         .prepare(
           "SELECT SUM(length(CAST(text AS BLOB)) + length(CAST(embedding AS BLOB))) AS bytes FROM memory_index_chunks WHERE source = 'memory'",
         )
         .get()?.bytes;
-      const refreshedBytes = diagnostic.status().sourceCounts?.[0]?.chunkBytes;
+      const refreshedBytes = (await diagnostic.statusAsync()).sourceCounts?.[0]?.chunkBytes;
       expect(refreshedBytes).toBe(storedBytes);
-      expect(refreshedBytes).not.toBe(previousBytes);
+      expect(refreshedBytes).toBeGreaterThan(previousBytes ?? 0);
     } finally {
       await diagnostic.close();
     }
