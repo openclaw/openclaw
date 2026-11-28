@@ -1,4 +1,5 @@
 import "./attempt-selectors.test-support.js";
+import "./attempt-transcript-runtime.test-support.js";
 import fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -56,6 +57,8 @@ import type { createCopilotToolBridge } from "./tool-bridge.js";
 
 const { copilotAttemptOverrides, resetCopilotAttemptOverrides } =
   await import("./attempt-selectors.test-support.js");
+const { appendPreparedTranscriptMessage, transcriptRuntimeMock } =
+  await import("./attempt-transcript-runtime.test-support.js");
 
 type AgentHarnessAttemptResult = Extract<AgentHarnessAttemptResultContract, { terminal: unknown }>;
 type SettledTurnFinalizationAttemptParams = Parameters<
@@ -214,47 +217,6 @@ function createStubToolBridge(
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
-
-type TranscriptAppendParams = Parameters<
-  typeof import("openclaw/plugin-sdk/session-transcript-runtime").appendSessionTranscriptMessageByIdentityStrict
->[0];
-
-const transcriptRuntimeMock = vi.hoisted(() => ({
-  append: vi.fn(appendPreparedTranscriptMessage),
-  appendBatch: vi.fn(async (params: { messages: Array<Record<string, unknown>> }) =>
-    params.messages.map((message) => ({
-      appended: true,
-      message: message.message,
-      messageId: (message.eventId as string | undefined) ?? "transcript-message",
-    })),
-  ),
-  publish: vi.fn(async () => undefined),
-  appendStrict: vi.fn(async (params: TranscriptAppendParams) => {
-    const result = await transcriptRuntimeMock.append(params);
-    return result ? { kind: "result" as const, result } : { kind: "suppressed" as const };
-  }),
-  readVisible: vi.fn(async () => []),
-}));
-vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-runtime")>();
-  return {
-    ...actual,
-    appendSessionTranscriptMessageByIdentity: transcriptRuntimeMock.append,
-    appendSessionTranscriptMessageByIdentityStrict: transcriptRuntimeMock.appendStrict,
-    appendSessionTranscriptMessagesByIdentity: transcriptRuntimeMock.appendBatch,
-    publishSessionTranscriptUpdateByIdentity: transcriptRuntimeMock.publish,
-    readVisibleSessionTranscriptMessageEntries: transcriptRuntimeMock.readVisible,
-  };
-});
-
-async function appendPreparedTranscriptMessage(params: TranscriptAppendParams) {
-  const prepare = params.preparation?.prepareMessage;
-  const message = prepare ? await prepare(params.message) : params.message;
-  return message
-    ? { appended: true, message, messageId: params.eventId ?? "transcript-message" }
-    : undefined;
-}
 
 // The real bootstrap loader is covered in workspace-bootstrap.test.ts.
 const workspaceBootstrapMock = vi.hoisted(() => ({
