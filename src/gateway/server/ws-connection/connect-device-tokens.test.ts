@@ -33,7 +33,7 @@ it("fences person-bound credential publication when the profile row ends", async
     bootstrapDeviceTokens: [],
   };
   const context: Parameters<typeof createGatewayConnectDeviceTokenPreparation>[0] = {
-    configSnapshot: { gateway: { openclawId: { enabled: true }, roles: { definitions: {} } } },
+    configSnapshot: { gateway: { roles: { definitions: {} } } },
     hasBrowserOriginHeader: false,
     handler: { ingressAttribution: { kind: "direct" } },
   };
