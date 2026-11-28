@@ -543,6 +543,98 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue((input.value as? String ?? "").contains("Parent draft"))
     }
 
+    func testGoalControlsReflectConfirmedChanges() throws {
+        let flags = [
+            "--openclaw-activity-fixture",
+            "--openclaw-activity-fixture-goal-only",
+            "--openclaw-goal-controls-fixture",
+        ]
+        self.launchApp(for: Self.activityTarget, additionalArguments: flags)
+        let app = try XCTUnwrap(self.app)
+        let pill = self.activityPill("goal", in: app)
+        XCTAssertTrue(pill.waitForExistence(timeout: 8))
+        pill.tap()
+        app.buttons["Pause goal"].tap()
+        let status = app.staticTexts["chat-goal-status"]
+        XCTAssertTrue(self.waitForLabelPrefix("Paused · ", on: status))
+        self.attachScreenshot(named: "goal-proof-paused")
+        app.buttons["Resume goal"].tap()
+        XCTAssertTrue(self.waitForLabelPrefix("Active · ", on: status))
+        self.attachScreenshot(named: "goal-proof-sheet-after")
+        app.buttons["chat-activity-sheet-close"].tap()
+        self.chatMessageInput(in: app).tap()
+        XCTAssertTrue(pill.label.hasPrefix("Goal active:"))
+        self.attachScreenshot(named: "goal-proof-pill-after")
+        pill.tap()
+        let objective = app.staticTexts["chat-activity-goal-objective"]
+        let restingTop = objective.frame.minY
+        app.buttons["Edit goal"].tap()
+        let save = app.buttons["Save"]
+        XCTAssertFalse(save.isEnabled)
+        let field = app.descendants(matching: .any)["Goal text"].firstMatch
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        field.typeText(" Discard this.")
+        app.buttons["Cancel"].tap()
+        XCTAssertFalse(objective.label.contains("Discard this"))
+        XCTAssertEqual(objective.frame.minY, restingTop, accuracy: 12, "Cancel restores the compact Goal sheet")
+        app.buttons["Edit goal"].tap()
+        field.typeText(" Keep it concise.")
+        XCTAssertTrue(save.isEnabled)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        let editing = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        editing.name = "goal-proof-edit"
+        editing.lifetime = .keepAlways
+        add(editing)
+        save.tap()
+        XCTAssertTrue(objective.label.contains("Keep it concise"))
+        // Saving a longer prompt can grow the fitted sheet; the editor does not stay on screen.
+        XCTAssertTrue(field.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Edit goal"].isHittable)
+        let delete = app.buttons["chat-goal-delete"]
+        delete.tap()
+        let question = app.staticTexts["Delete this goal?"]
+        XCTAssertTrue(question.waitForExistence(timeout: 5))
+        self.attachScreenshot(named: "goal-proof-delete-confirm")
+        // A compact confirmation can be dismissed by tapping outside it.
+        if app.buttons["Cancel"].exists {
+            app.buttons["Cancel"].tap()
+        } else {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).tap()
+        }
+        delete.tap()
+        app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != %@", "Delete goal", "chat-goal-delete"))
+            .firstMatch.tap()
+        XCTAssertTrue(pill.waitForNonExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["chat-activity-sheet-close"].exists)
+    }
+
+    private func waitForLabelPrefix(_ prefix: String, on element: XCUIElement) -> Bool {
+        let condition = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label BEGINSWITH %@", prefix),
+            object: element)
+        return XCTWaiter.wait(for: [condition], timeout: 5) == .completed
+    }
+
+    func testGoalRequestFailuresKeepTheGoalAndDraft() throws {
+        self.launchApp(for: Self.activityTarget, appearance: "light", additionalArguments: [
+            "--openclaw-activity-fixture", "--openclaw-activity-fixture-goal-only", "--openclaw-goal-controls-fixture",
+            "--openclaw-activity-fixture-failures",
+        ])
+        let app = try XCTUnwrap(self.app)
+        self.activityPill("goal", in: app).tap()
+        self.attachScreenshot(named: "goal-proof-light")
+        app.buttons["Pause goal"].tap()
+        XCTAssertTrue(app.staticTexts["Couldn’t change the goal. Review its status and try again."]
+            .waitForExistence(timeout: 5))
+        XCTAssertTrue(self.waitForLabelPrefix("Active · ", on: app.staticTexts["chat-goal-status"]))
+        app.buttons["Edit goal"].tap()
+        let field = app.descendants(matching: .any)["Goal text"].firstMatch
+        field.typeText(" Keep this draft.")
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.staticTexts["Couldn’t save the goal. Try again."].waitForExistence(timeout: 5))
+        XCTAssertTrue((field.value as? String)?.contains("Keep this draft") == true)
+    }
+
     func testActivitySheetsShowFailuresInPlace() throws {
         launchApp(
             for: Self.activityTarget,

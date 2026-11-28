@@ -70,6 +70,7 @@ extension OpenClawChatViewModel {
             approvalPending: approvalPending,
             children: self.activityChildren.roster,
             goal: session?.goal,
+            goalOperationLabel: session?.goal.flatMap { self.goalOperationLabel(for: $0) },
             plan: card.map { card in
                 ChatActivityPlan(
                     steps: card.steps ?? [],
@@ -99,6 +100,11 @@ extension OpenClawChatViewModel {
         } while page.sessionId == sessionID
         return ChatActivityChildTranscript(order: order, latestReply: reply)
     }
+}
+
+struct ChatGoalActivity {
+    var operation: OpenClawChatGoalMutation?
+    var pending = false
 }
 
 struct ChatActivityChildTranscript: Equatable {

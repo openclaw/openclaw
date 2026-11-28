@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import OpenClawProtocol
 import Testing
 @testable import OpenClawChatUI
@@ -71,6 +72,26 @@ struct ChatActivityTests {
         OpenClawChatSessionGoal(id: "g1", objective: "Ship the trip plan", status: status, createdAt: 0, updatedAt: 0)
     }
 
+    #if os(iOS)
+    @Test func goalSheetOnlyShowsProgressForABudget() throws {
+        func goal(budget: Double?, used: Double = 12000) -> OpenClawChatSessionGoal {
+            OpenClawChatSessionGoal(
+                id: "g1",
+                objective: "Write the plan",
+                status: .active,
+                createdAt: 0,
+                updatedAt: 0,
+                tokensUsed: used,
+                tokenBudget: budget)
+        }
+        let budget = try #require(ChatGoalBudget(goal(budget: 50000)))
+        #expect(budget.label == "12k of 50k tokens")
+        #expect(budget.fraction == 0.24)
+        #expect(ChatGoalBudget(goal(budget: 1000))?.fraction == 1)
+        #expect(ChatGoalBudget(goal(budget: nil)) == nil)
+    }
+    #endif
+
     private func plan(_ statuses: [ProgressCardStepStatus], runActive: Bool = false) -> ChatActivityPlan {
         ChatActivityPlan(
             steps: statuses.enumerated().map { ProgressCardStep(step: "Step \($0.offset + 1)", status: $0.element) },
@@ -92,6 +113,28 @@ struct ChatActivityTests {
         #expect(pill.accessibilityLabel == "Goal active: Ship the trip plan")
         #expect(ChatActivityRules.goal(self.goal(.budgetLimited)).labelTone == .attention)
         #expect(ChatActivityRules.goal(self.goal(.complete)).label == "Goal achieved")
+    }
+
+    @Test func `goal requests retain the target and send only fields the method accepts`() {
+        for action: OpenClawChatGoalMutation.Action in [.pause, .resume, .edit("New plan"), .clear] {
+            let mutation = OpenClawChatGoalMutation(
+                action: action,
+                sessionKey: "agent:main:test",
+                agentID: "main",
+                sessionID: "s1",
+                goalID: "g1")
+            let request = mutation.request
+            #expect(request.method == (action == .clear ? "sessions.goal.clear" : "sessions.goal.update"))
+            #expect(request.params["action"]?.stringValue == (action == .clear ? nil : action.name))
+            #expect(request.params["objective"]?.stringValue == (action == .edit("New plan") ? "New plan" : nil))
+            #expect(request.params["sessionKey"]?.stringValue == "agent:main:test")
+            #expect(request.params["agentId"]?.stringValue == "main")
+            #expect(request.params["sessionId"]?.stringValue == "s1")
+            #expect(request.params["goalId"]?.stringValue == "g1")
+            #expect(request.params["operationId"]?.stringValue == mutation.operationID)
+            #expect(request.params["issuedAtMs"]?.value is Int64)
+            #expect(request == mutation.request)
+        }
     }
 
     @Test func `a Goal the app cannot read stays out of the row`() throws {
