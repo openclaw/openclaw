@@ -518,6 +518,11 @@ by the previous command.
 
 `openclaw automations list` shows enabled jobs across agents by default, including jobs whose owner cannot be resolved. Pass `--all` to include disabled jobs, or `--agent <id>` to filter by the effective normalized agent ID. Ownership resolves from the job's declared agent, its agent-scoped session key, then the configured system-agent owner. Unresolved jobs do not match an agent filter. The `cron list` alias has the same behavior.
 
+To list or re-enable a disabled job, use the same profile and Gateway. In an
+interactive terminal, `disable` includes the named profile or container in its
+suggested commands. If you supplied `--url`, `--port`, or credentials, use the
+same connection options again; the hint does not print them.
+
 Use `--query <text>` to search job IDs, names, descriptions, declared agent IDs,
 and display names. Matching is case-insensitive and compares canonically equivalent
 Unicode forms as the same text without rewriting stored metadata. The Gateway filters
