@@ -169,6 +169,14 @@ export function createAgentTurnPresentation(params: {
     } else {
       partialTypingLength = 0;
     }
+    const onPartialReply = params.turn.opts?.onPartialReply;
+    if (!onPartialReply) {
+      // Without a preview consumer, keep typing alive but skip sanitizing text nobody reads.
+      return await presentWithTyping(
+        params.turn.typingSignals.signalTextDelta(textForTyping),
+        () => false,
+      );
+    }
     let didMaterialize = false;
     let materializedText: string | undefined;
     const materializeText = () => {
@@ -189,11 +197,8 @@ export function createAgentTurnPresentation(params: {
             },
             mediaUrls: payload.mediaUrls,
           };
-    const onPartialReply = params.turn.opts?.onPartialReply;
     return await presentWithTyping(params.turn.typingSignals.signalTextDelta(textForTyping), () =>
-      !onPartialReply || (runtime === "cli" && !partialPayload.text)
-        ? false
-        : onPartialReply(partialPayload),
+      runtime === "cli" && !partialPayload.text ? false : onPartialReply(partialPayload),
     );
   };
 

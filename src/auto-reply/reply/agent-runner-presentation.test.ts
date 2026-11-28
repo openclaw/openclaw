@@ -16,6 +16,22 @@ import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import { createTypingController } from "./typing.js";
 
+const sanitizerState = vi.hoisted(() => ({
+  sanitizeUserFacingText: vi.fn(),
+}));
+
+vi.mock("../../agents/embedded-agent-helpers/sanitize-user-facing-text.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../agents/embedded-agent-helpers/sanitize-user-facing-text.js")
+  >("../../agents/embedded-agent-helpers/sanitize-user-facing-text.js");
+  sanitizerState.sanitizeUserFacingText.mockImplementation(actual.sanitizeUserFacingText);
+  return {
+    ...actual,
+    sanitizeUserFacingText: (...args: Parameters<typeof actual.sanitizeUserFacingText>) =>
+      sanitizerState.sanitizeUserFacingText(...args),
+  };
+});
+
 function createPresentation(
   options: {
     silentExpected?: boolean;
@@ -406,4 +422,26 @@ it("keeps media sendable without emitting an empty text preview", async () => {
   await presentation.presentPartialReply(payload, "cli");
   expect(onPartialReply).not.toHaveBeenCalled();
   expect(presentation.normalizeStreamingText(payload)).toEqual({ text: undefined, skip: false });
+});
+
+it("keeps CLI typing without sanitizing previews when no preview consumer exists", async () => {
+  const typing = createTypingController({});
+  const typingSignals = createTypingSignaler({ typing, mode: "never" });
+  const signalTextDelta = vi.spyOn(typingSignals, "signalTextDelta");
+  const presentation = createPresentation({ typingSignals });
+  const text = "HEARTBEAT_OK visible CLI answer";
+  try {
+    sanitizerState.sanitizeUserFacingText.mockClear();
+    await expect(presentation.presentPartialReply({ text }, "cli")).resolves.toBe(false);
+    expect(signalTextDelta).toHaveBeenCalledWith("visible CLI answer");
+    expect(sanitizerState.sanitizeUserFacingText).not.toHaveBeenCalled();
+
+    expect(presentation.normalizeStreamingText({ text })).toEqual({
+      text: "visible CLI answer",
+      skip: false,
+    });
+    expect(sanitizerState.sanitizeUserFacingText).toHaveBeenCalledTimes(1);
+  } finally {
+    typing.cleanup();
+  }
 });
