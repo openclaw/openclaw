@@ -25,7 +25,6 @@ async function importPluginModuleLoader(scope: string) {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.resetModules();
-  vi.doUnmock("jiti");
   resetPluginCache();
 });
 
