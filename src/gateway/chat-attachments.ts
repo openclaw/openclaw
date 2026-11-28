@@ -160,14 +160,21 @@ export function logAttachmentFailure(
   });
 }
 
-export function stripImageMediaMarkers(message: string, refs: readonly OffloadedRef[]): string {
+export function stripOffloadedMediaMarkers(message: string, refs: readonly OffloadedRef[]): string {
   return refs.reduce((projected, ref) => {
-    const marker = ref.mimeType.startsWith("image/") ? `\n[media attached: ${ref.mediaRef}]` : "";
-    const index = marker ? projected.lastIndexOf(marker) : -1;
+    const marker = `\n[media attached: ${ref.mediaRef}]`;
+    const index = projected.lastIndexOf(marker);
     return index < 0
       ? projected
       : projected.slice(0, index) + projected.slice(index + marker.length);
   }, message);
+}
+
+export function stripImageMediaMarkers(message: string, refs: readonly OffloadedRef[]): string {
+  return stripOffloadedMediaMarkers(
+    message,
+    refs.filter((ref) => ref.mimeType.startsWith("image/")),
+  );
 }
 
 export async function persistInboundImagesForTranscript(params: {

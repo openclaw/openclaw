@@ -1654,7 +1654,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(context.broadcast).toHaveBeenCalledOnce();
   });
 
-  it.each([false, true])("steers document context with render failure=%s", async (renderFails) => {
+  const steerCases = [
+    { name: "rendered", renderFails: false, rewriteUrl: false },
+    { name: "render failed", renderFails: true, rewriteUrl: false },
+    { name: "staged URL", renderFails: false, rewriteUrl: true },
+  ];
+  it.each(steerCases)("steers document context ($name)", async ({ renderFails, rewriteUrl }) => {
     const { respond, send } = await createSqliteChatRequest("openclaw-chat-send-steer-document-");
     mockState.hasMessageReceivedHooks = true;
     const mediaStore =
@@ -1670,6 +1675,16 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     if (renderFails) {
       mockState.steerDocumentRenderError = new Error("lazy media runtime unavailable");
     }
+    const staging = await import("../../auto-reply/reply/stage-reply-media.js");
+    const stageReplyMedia = staging.stageReplyMedia;
+    const stage = rewriteUrl
+      ? vi.spyOn(staging, "stageReplyMedia").mockImplementation(async (params) => {
+          const result = await stageReplyMedia(params);
+          // A workspace projection can replace the original managed URL with its staged path.
+          params.ctx.media = params.ctx.media?.map((fact) => ({ ...fact, url: fact.path }));
+          return result;
+        })
+      : undefined;
     const queueMessage = vi.fn(async (_text: string, options?: ReplyBackendQueueMessageOptions) => {
       await options?.userTurnTranscriptRecorder?.persistApproved();
     });
@@ -1709,9 +1724,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     } finally {
       operation.complete();
       mockState.steerDocumentRenderError = null;
+      stage?.mockRestore();
     }
     expect(queueMessage).toHaveBeenCalledOnce();
     const [injectedText] = expectDefined(queueMessage.mock.calls[0], "injected document text");
+    expect(injectedText.match(/\[media attached: /gu)).toHaveLength(1);
+    expect(injectedText).toContain(document.id);
+    expect(injectedText).toContain(" (text/plain)");
     if (renderFails) {
       expect(respond).toHaveBeenCalledWith(
         true,

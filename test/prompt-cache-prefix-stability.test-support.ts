@@ -585,11 +585,11 @@ export function usePrefixStabilityJourney() {
         await until(() => sentToTarget("STEER-INPUT"));
         // The steered input joins the same run, right after the tool result it waited for, with
         // its document text.
-        expect(
-          targetRequests.some((r) =>
-            /slow-finished[\s\S]*STEER-INPUT[\s\S]*STEER-DOC-BODY/.test(lastMessage(r)),
-          ),
-        ).toBe(true);
+        const steerRequest = targetRequests
+          .map(lastMessage)
+          .find((text) => /slow-finished[\s\S]*STEER-INPUT[\s\S]*STEER-DOC-BODY/.test(text));
+        expect(steerRequest).toBeDefined();
+        expect(steerRequest?.match(/\[media attached: /gu)).toHaveLength(1);
         step = "cron";
         const cronJob = {
           agentId: "main",
