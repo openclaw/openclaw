@@ -1,10 +1,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
-import type {
-  ModelAuthStatusResult,
-  ProviderLoginOption,
-  SystemAgentSetupDetectResult,
-} from "../../api/types.ts";
+import type { ModelAuthStatusResult, ProviderLoginOption } from "../../api/types.ts";
 import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
@@ -15,10 +11,7 @@ import { hasProviderAccounts } from "./profiles-view.tsx";
 
 registerModelSetupEnglish();
 
-export type LoginChoice = Omit<ProviderLoginOption, "kind"> & {
-  kind: ProviderLoginOption["kind"] | "setup-secret";
-  authProvider: string;
-};
+export type LoginChoice = ProviderLoginOption & { authProvider: string };
 
 export type LoginProvider = {
   id: string;
@@ -35,13 +28,11 @@ export function buildLoginProviders({
   pluginId,
   authStatus,
   allowQuickApiKey,
-  manualProviders,
 }: {
   providers?: string[];
   pluginId?: string;
   authStatus?: ModelAuthStatusResult | null;
   allowQuickApiKey: boolean;
-  manualProviders?: SystemAgentSetupDetectResult["manualProviders"];
 }): LoginProvider[] {
   const groups = new Map<string, LoginProvider>();
   const choices = new Set<string>();
@@ -92,29 +83,6 @@ export function buildLoginProviders({
         group.featured = true;
       }
     }
-  }
-  for (const option of (pluginId ? undefined : manualProviders) ?? []) {
-    const id = option.brandId ?? option.id;
-    if (choices.has(option.id) || (providers && !providers.includes(id))) {
-      continue;
-    }
-    const group = ensureGroup(id, id);
-    group.label ||= option.groupLabel?.trim() || option.label;
-    const duplicateLabel = group.choices.some((choice) => choice.label === option.label);
-    group.choices.push({
-      ...option,
-      brandId: id,
-      authProvider: id,
-      kind: "setup-secret",
-      featured: false,
-      ...(duplicateLabel
-        ? {
-            label: t("modelSetup.manual.accessValueFor", { provider: option.label }),
-            hint: t("modelSetup.manual.accessValuePlaceholder"),
-          }
-        : {}),
-    });
-    choices.add(option.id);
   }
   for (const group of groups.values()) {
     group.label ||= providerDisplayLabel(group.id);

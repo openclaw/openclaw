@@ -436,6 +436,7 @@ describe("telegram bot message processor", () => {
         const replay = await processing;
         expect(replay.value).toEqual(result);
         await expect(replay.deferredWork?.task).resolves.toEqual(result);
+        expect(replay.deferredWork?.abortSignal.aborted).toBe(false);
         expect(finalizeSpooledReplayResult).toHaveBeenCalledOnce();
       } finally {
         receipt.resolve();

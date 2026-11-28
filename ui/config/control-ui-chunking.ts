@@ -175,7 +175,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/session-git-diff.tsx":
     case "ui/src/lib/sessions/usage.ts":
     case "src/shared/weak-owner-map.ts":
-    case "src/shared/assistant-display-content.ts":
     case "src/shared/agent-run-status.ts":
     case "ui/src/app/assistant-media.ts":
     case "ui/src/lib/image-download.ts":
