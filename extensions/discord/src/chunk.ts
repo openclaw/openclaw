@@ -147,7 +147,7 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
     const lineLimit = Math.max(1, maxLines - (fence ? 1 : 0));
     const content = current ? raw(current) : (ranges.fenceAt(consumed)?.reopenLine ?? "");
     // An original closer consumes its reservation; splitting it first would turn markers into code.
-    const segmentLimit =
+    let segmentLimit =
       openFence?.reopenLine &&
       openFence.closeStart === lineStart &&
       fits({ start: lineStart, end: lineStart + line.length })
@@ -161,6 +161,19 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
               ),
           );
     let segmentStart = lineStart;
+    // A line that fits an empty message starts the next message whole. Splitting at the
+    // boundary instead leaves the tail of a short line (a usage footer, say) without its
+    // own marker, so Discord renders it as plain text.
+    if (current && line.length > segmentLimit) {
+      const standaloneLimit = Math.max(
+        1,
+        charLimit - (fence?.reopenLine ? fence.reopenLine.length + 1 : 0),
+      );
+      if (line.length <= standaloneLimit) {
+        current = flush(current);
+        segmentLimit = standaloneLimit;
+      }
+    }
     for (const segment of chunkTextForOutbound(line, segmentLimit, {
       preserveWhitespace: Boolean(openFence),
     })) {

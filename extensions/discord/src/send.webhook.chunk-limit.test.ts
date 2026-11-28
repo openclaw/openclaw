@@ -104,6 +104,17 @@ describe("Discord webhook delivery", () => {
     });
   });
 
+  it("delivers an over-cap answer and its usage footer as two well-formed payloads", async () => {
+    const answer = "z".repeat(1970);
+    const footer = "-# gpt-6.2-sol (high) · 37k in + 73k cached (67%) · 812 out · 1m 22s";
+    await withWebhookServer(accepted, async (contents) => {
+      await realWebhookSend(`${answer}\n${footer}`, webhookOpts);
+      expect(contents).toHaveLength(2);
+      expect(contents[0]).toBe(answer);
+      expect(contents[1]).toBe(footer);
+    });
+  });
+
   it("resolves punctuated mentions outside code through bound-thread persona delivery", async () => {
     const text = "Example: `first\n@alice.`\nPlease review @alice. then `notify @alice.";
     await withWebhookServer(accepted, async (contents) => {
