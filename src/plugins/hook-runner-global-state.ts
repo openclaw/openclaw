@@ -2,7 +2,14 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { GlobalHookRunnerRegistry } from "./hook-registry.types.js";
 import type { HookRunner } from "./hooks.js";
-import { isPluginRegistryRetired } from "./registry-lifecycle.js";
+import {
+  getPluginRegistryGatewayOwner,
+  getPluginRegistryResourceOwner,
+  isPluginRecordAdmitting,
+  isPluginRecordBorrowed,
+  isPluginRegistryRecordSetAdmitting,
+  isPluginRegistryRetired,
+} from "./registry-lifecycle.js";
 import type {
   PluginRegistry,
   PluginTrustedToolPolicyRegistryRegistration,
@@ -120,15 +127,98 @@ function overlayHookRegistries(
   };
 }
 
+// Each replaced plugin's entries from the published registry, in the place the run held its own.
+function substituteEntries<T>(
+  own: readonly T[],
+  published: readonly T[],
+  replaced: ReadonlySet<string>,
+  pluginIdOf: (entry: T) => string,
+): T[] {
+  const inserted = new Set<string>();
+  const fromPublished = (pluginId: string) =>
+    published.filter((entry) => pluginIdOf(entry) === pluginId);
+  return [
+    ...own.flatMap((entry) => {
+      const pluginId = pluginIdOf(entry);
+      if (!replaced.has(pluginId)) {
+        return [entry];
+      }
+      if (inserted.has(pluginId)) {
+        return [];
+      }
+      inserted.add(pluginId);
+      return fromPublished(pluginId);
+    }),
+    ...published.filter((entry) => {
+      const pluginId = pluginIdOf(entry);
+      return replaced.has(pluginId) && !inserted.has(pluginId);
+    }),
+  ];
+}
+
+// A run's own registry outlives one plugin's replacement (isPluginRegistryRecordSetAdmitting):
+// it stays current while the plugin it borrowed from the Gateway is gone, so that plugin's hooks
+// would fail closed for the rest of the run (#205714). Those hooks come from the loaded successor
+// the Gateway has since published. Every other record keeps its own registration and failure
+// behavior: one the run owns, one the Gateway still publishes (a reload still draining or rolled
+// back), one with no loaded successor, and an overlap plugin, whose old instance serves the run.
+function withReplacedLoansFromGateway(registry: PluginRegistry): TrustedPolicyHookRunnerRegistry {
+  if (isPluginRegistryRecordSetAdmitting(registry)) {
+    return registry;
+  }
+  const owner = getPluginRegistryResourceOwner(registry);
+  const published = getPluginRegistryGatewayOwner(registry)?.current();
+  if (!published || getPluginRegistryResourceOwner(published) === owner) {
+    return registry;
+  }
+  const replaced = new Set(
+    owner.plugins
+      .filter(
+        (record) =>
+          isPluginRecordBorrowed(owner, record) &&
+          !isPluginRecordAdmitting(record) &&
+          record.generationOverlap !== true &&
+          published.plugins.some(
+            (successor) =>
+              successor.id === record.id &&
+              successor !== record &&
+              successor.enabled &&
+              successor.status === "loaded",
+          ),
+      )
+      .map(({ id }) => id),
+  );
+  if (replaced.size === 0) {
+    return registry;
+  }
+  const byPlugin = ({ pluginId }: { pluginId: string }) => pluginId;
+  return {
+    hooks: substituteEntries(registry.hooks, published.hooks, replaced, byPlugin),
+    typedHooks: substituteEntries(registry.typedHooks, published.typedHooks, replaced, byPlugin),
+    plugins: substituteEntries(registry.plugins, published.plugins, replaced, ({ id }) => id),
+    // Bundled policies run first, as the registrar and overlayHookRegistries keep them.
+    trustedToolPolicies: substituteEntries(
+      registry.trustedToolPolicies,
+      published.trustedToolPolicies,
+      replaced,
+      byPlugin,
+    ).toSorted(
+      (left, right) => Number(left.origin !== "bundled") - Number(right.origin !== "bundled"),
+    ),
+  };
+}
+
 function resolveHookRegistry(state: HookRunnerGlobalState): TrustedPolicyHookRunnerRegistry | null {
   const generationRegistry = getPluginRuntimeGenerationRegistry();
   if (generationRegistry && !isPluginRegistryRetired(generationRegistry)) {
-    return generationRegistry;
+    return withReplacedLoansFromGateway(generationRegistry);
   }
   const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? null;
   return overlayHookRegistries(
     resolveRootHookRegistry(state),
-    requestRegistry && !isPluginRegistryRetired(requestRegistry) ? requestRegistry : null,
+    requestRegistry && !isPluginRegistryRetired(requestRegistry)
+      ? withReplacedLoansFromGateway(requestRegistry)
+      : null,
   );
 }
 

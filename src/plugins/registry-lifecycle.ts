@@ -461,13 +461,16 @@ export function isPluginRecordActive(registry: PluginRegistry, record: PluginRec
  * can no longer admit calls.
  */
 export function isPluginRegistryRecordSetAdmitting(registryView: PluginRegistry): boolean {
-  const registry = getPluginRegistryResourceOwner(registryView);
-  return registry.plugins.every(
-    (record) =>
-      !record.enabled ||
-      record.status !== "loaded" ||
-      (!pluginInstanceState.records.get(record)?.revoked &&
-        getPluginInstance(record)?.acceptingCalls !== false),
+  return getPluginRegistryResourceOwner(registryView).plugins.every(isPluginRecordAdmitting);
+}
+
+/** One record of {@link isPluginRegistryRecordSetAdmitting}: false once it can no longer admit calls. */
+export function isPluginRecordAdmitting(record: PluginRecord): boolean {
+  return (
+    !record.enabled ||
+    record.status !== "loaded" ||
+    (!pluginInstanceState.records.get(record)?.revoked &&
+      getPluginInstance(record)?.acceptingCalls !== false)
   );
 }
 
