@@ -56,9 +56,8 @@ it(
             ).sessions.find((entry) => entry.key === key);
           const observed: Array<number | undefined> = [];
           let turnOffset = 0;
-          const before: Array<number | undefined> = [];
           const execute: CliBackendExecute = async function* () {
-            before.push((await row())?.totalTokens);
+            if (turnOffset === 0) expect((await row())?.totalTokens).toBeUndefined();
             for (const [index, cacheRead] of [19_288, 28_503].entries()) {
               const id = "parent-" + index;
               const usage = {
@@ -145,7 +144,6 @@ it(
               totalTokensFresh: true,
             });
           }
-          expect(before[0]).toBeUndefined();
           expect(observed).toEqual([19_302, 28_517, 19_402, 28_617]);
         } finally {
           await disconnectGatewayClient(gateway.client);

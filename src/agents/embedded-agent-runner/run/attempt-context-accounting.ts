@@ -34,7 +34,11 @@ export async function publishEmbeddedRequestContext(
 
 export async function publishSessionContext(
   target: SessionTranscriptRuntimeTarget,
-  expected: { sessionId: string; lifecycleRevision?: string; activeWriterRunId?: string },
+  {
+    sessionId,
+    lifecycleRevision,
+    activeWriterRunId,
+  }: { sessionId: string; lifecycleRevision?: string; activeWriterRunId?: string },
   assertCurrent: SessionSourceAssertion,
   contextTokens: number,
 ): Promise<void> {
@@ -43,7 +47,7 @@ export async function publishSessionContext(
       target,
       {
         kind: "fields",
-        expected,
+        expected: { sessionId, lifecycleRevision, activeWriterRunId },
         patch: {
           totalTokens: contextTokens,
           totalTokensFresh: true,

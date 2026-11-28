@@ -75,24 +75,14 @@ export function withAdmittedCliCandidate(
         throw createAgentRunSupersededAbortError();
       }
       // History preparation publishes its writer into this candidate's working row.
-      let contextEntry = sessionEntry ? { ...sessionEntry } : undefined;
+      const workingEntry = sessionEntry ? { ...sessionEntry } : undefined;
+      let contextEntry = workingEntry;
       const runResult = await run({
-        sessionEntry: contextEntry,
+        sessionEntry: workingEntry,
         publishContext:
-          target && contextEntry
-            ? async (tokens) => {
-                if (!contextEntry) return;
-                await publishSessionContext(
-                  target,
-                  {
-                    sessionId: contextEntry.sessionId,
-                    lifecycleRevision: contextEntry.lifecycleRevision,
-                    activeWriterRunId: contextEntry.activeWriterRunId,
-                  },
-                  assertSettlementCurrent,
-                  tokens,
-                );
-              }
+          target && workingEntry
+            ? (tokens) =>
+                publishSessionContext(target, workingEntry, assertSettlementCurrent, tokens)
             : undefined,
         cliSessionBinding: getCliSessionBinding(sessionEntry, params.provider),
         assertSettlementCurrent,
