@@ -517,7 +517,7 @@ describe("Codex app inventory across physical process restart", () => {
     },
   );
 
-  it("reuses a negative readiness repair across unchanged warm turns", async () => {
+  it("force-refreshes negative readiness repair across unchanged warm turns", async () => {
     const f = await fixture(false);
     f.revokeAccount();
     const process = await f.createProcess();
@@ -543,7 +543,7 @@ describe("Codex app inventory across physical process restart", () => {
       f.calls
         .slice(boundary)
         .filter((call) => call.method === "app/installed" && call.params.forceRefresh === true),
-    ).toHaveLength(1);
+    ).toHaveLength(3);
     expect(f.readBinding()?.pluginAppPolicyContext?.apps).toEqual({});
   });
 

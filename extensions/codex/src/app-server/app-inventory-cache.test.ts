@@ -37,51 +37,46 @@ describe("Codex app inventory cache", () => {
     await cache.refreshNow({ key, request, nowMs: 1 });
   });
 
-  it("scopes readiness refresh reuse without delaying manual refresh or invalidation", async () => {
+  it("shares only matching in-flight forced refreshes", async () => {
     const cache = new CodexAppInventoryCache();
     const apps = [app("app-a"), app("app-b")];
-    const request = vi.fn(async (method, params) =>
-      codexAppInventoryResponse(method, apps, params),
-    );
-    const repair = (key: string, targetAppIds: string[], nowMs = 0) =>
+    const installedResolvers: Array<(response: v2.AppsInstalledResponse) => void> = [];
+    const request = vi.fn(async (method, params) => {
+      if (method === "app/installed") {
+        return await new Promise<v2.AppsInstalledResponse>((resolve) => {
+          installedResolvers.push(resolve);
+        });
+      }
+      return codexAppInventoryResponse(method, apps, params);
+    });
+    const repair = (key: string, targetAppIds: string[]) =>
       cache.refreshNow({
         key,
         targetAppIds,
         request,
-        nowMs,
         forceRefetch: true,
-        reuseRecentForcedRefresh: true,
       });
     const installedCount = () =>
       request.mock.calls.filter(([method]) => method === "app/installed").length;
 
-    await Promise.all([
-      repair("account-a:thread-a", ["app-a"]),
-      repair("account-a:thread-a", ["app-a"]),
-    ]);
+    const first = repair("account-a:thread-a", ["app-a"]);
+    const second = repair("account-a:thread-a", ["app-a"]);
     expect(installedCount()).toBe(1);
-    await repair("account-a:thread-b", ["app-a"]);
-    await repair("account-a:thread-a", ["app-a"]);
-    await repair("account-b:thread-a", ["app-a"]);
-    expect(installedCount()).toBe(3);
-    const broader = await repair("account-a:thread-a", ["app-a", "app-b"]);
-    expect(broader.apps.map((row) => row.id)).toEqual(["app-a", "app-b"]);
-    expect(installedCount()).toBe(4);
-    await repair("account-a:thread-a", ["app-a"], 59_999);
-    expect(installedCount()).toBe(4);
-    await repair("account-a:thread-a", ["app-a"], 60_000);
-    expect(installedCount()).toBe(5);
+    installedResolvers.shift()?.(codexAppInventoryResponse("app/installed", apps));
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
 
-    await cache.refreshNow({
-      key: "account-a:thread-a",
-      request,
-      nowMs: 60_001,
-      forceRefetch: true,
-    });
-    expect(installedCount()).toBe(6);
-    cache.invalidate("account-a:thread-a");
-    await repair("account-a:thread-a", ["app-a"], 60_002);
-    expect(installedCount()).toBe(7);
+    const narrower = repair("account-a:thread-a", ["app-a"]);
+    const broader = repair("account-a:thread-a", ["app-a", "app-b"]);
+    expect(installedCount()).toBe(3);
+    installedResolvers.shift()?.(codexAppInventoryResponse("app/installed", apps));
+    await expect(narrower).resolves.toMatchObject({ apps: [app("app-a")] });
+    installedResolvers.shift()?.(codexAppInventoryResponse("app/installed", apps));
+    await expect(broader).resolves.toMatchObject({ apps });
+
+    const afterCompleted = repair("account-a:thread-a", ["app-a", "app-b"]);
+    expect(installedCount()).toBe(4);
+    installedResolvers.shift()?.(codexAppInventoryResponse("app/installed", apps));
+    await expect(afterCompleted).resolves.toMatchObject({ apps });
   });
 
   it.each([false, true, undefined])(

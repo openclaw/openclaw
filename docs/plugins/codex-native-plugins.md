@@ -484,16 +484,15 @@ combined inventory in memory for one hour and refreshes stale or missing
 entries asynchronously. The cache is process-local; restarting the CLI or
 gateway drops it.
 
-When a configured plugin's app remains missing or inaccessible, readiness repair
-reuses a successful forced refresh for up to one minute within the same account,
-thread, and covered app set. The next turn after that interval can retry, so an
-unavailable connector does not force hosted discovery on every message or stay
-excluded indefinitely. Initial cold-runtime repair, installation, explicit cache
-invalidation, and `/codex plugins refresh` still refresh immediately. Native app
-policy checks continue on enabled-policy turns; reusing inventory grants no access.
-Runtime refresh invalidates cached thread readiness for that account/runtime too,
-so the next message can reconsider a newly connected app without waiting for the
-minute to elapse. Other accounts and runtimes retain their own cached readiness.
+When a configured plugin's app remains missing or inaccessible after cached
+metadata discovery completes, readiness repair performs a genuine forced
+`app/installed` refresh on the next check. Matching forced refreshes that are
+already in flight can still share one native request, but a completed missing or
+inaccessible result is not treated as fresh proof for a later message. Positive
+readiness remains cached by the normal inventory TTL, and installation, explicit
+cache invalidation, and `/codex plugins refresh` still refresh immediately.
+Runtime refresh invalidates cached thread readiness for that account/runtime;
+other accounts and runtimes retain their own cached readiness.
 
 Missing inventory methods, authentication errors, transport failures, and
 connector refresh failures do not admit app tools. Ordinary turns, including

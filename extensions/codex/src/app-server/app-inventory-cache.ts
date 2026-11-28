@@ -15,7 +15,6 @@ import type {
 } from "./protocol.js";
 
 const CODEX_APP_INVENTORY_CACHE_TTL_MS = 60 * 60 * 1_000;
-const CODEX_APP_READINESS_RETRY_INTERVAL_MS = 60_000;
 const CODEX_APP_THREAD_CACHE_KEY_SEPARATOR = ":thread:";
 // Codex app/read rejects metadata requests containing more than 100 app IDs.
 const CODEX_APP_READ_BATCH_LIMIT = 100;
@@ -53,7 +52,6 @@ export type CodexAppInventoryCacheRead = {
 
 type CacheEntry = CodexAppInventorySnapshot & {
   invalidated: boolean;
-  lastForcedRefresh?: { atMs: number; targetAppIds: ReadonlySet<string> };
 };
 
 type RefreshParams = {
@@ -61,8 +59,6 @@ type RefreshParams = {
   request: CodexAppInventoryRequest;
   nowMs?: number;
   forceRefetch?: boolean;
-  /** Readiness repair may reuse a recent covering forced refresh, including a negative. */
-  reuseRecentForcedRefresh?: boolean;
   suppressRefresh?: boolean;
   targetAppIds?: readonly string[];
 };
@@ -104,7 +100,6 @@ export class CodexAppInventoryCache {
     for (const [entryKey, entry] of this.entries) {
       if (entryKey === key || entryKey.startsWith(threadPrefix)) {
         entry.invalidated = true;
-        entry.lastForcedRefresh = undefined;
       }
     }
   }
@@ -116,24 +111,10 @@ export class CodexAppInventoryCache {
 
   /** Forces or joins an immediate refresh for a cache key. */
   async refreshNow(params: RefreshParams): Promise<CodexAppInventorySnapshot> {
-    const entry = this.entries.get(params.key);
-    const nowMs = resolveDateTimestampMs(params.nowMs);
-    if (
-      params.reuseRecentForcedRefresh &&
-      entry &&
-      !entry.invalidated &&
-      isFutureDateTimestampMs(entry.expiresAtMs, { nowMs }) &&
-      entry.lastForcedRefresh &&
-      nowMs >= entry.lastForcedRefresh.atMs &&
-      nowMs - entry.lastForcedRefresh.atMs < CODEX_APP_READINESS_RETRY_INTERVAL_MS &&
-      doesRefreshCover(entry.lastForcedRefresh, params)
-    ) {
-      return entry;
-    }
     const existing = this.inFlight.get(params.key);
     if (
       existing &&
-      (!params.forceRefetch || (params.reuseRecentForcedRefresh && existing.forceRefetch)) &&
+      (!params.forceRefetch || existing.forceRefetch) &&
       doesRefreshCover(existing, params)
     ) {
       return existing.promise;
@@ -199,13 +180,6 @@ export class CodexAppInventoryCache {
       this.entries.set(params.key, {
         ...resolvePublishedInventorySnapshot(this.entries.get(params.key), snapshot, nowMs),
         invalidated: false,
-        // Only an explicit forced read settles readiness repair. A cheap native
-        // snapshot read must not suppress the first cold-runtime repair. Failed
-        // reads never settle; activation/manual refreshes bypass reuse entirely.
-        lastForcedRefresh:
-          params.forceRefetch === true
-            ? { atMs: nowMs, targetAppIds: targetAppIdSet(params.targetAppIds) }
-            : this.entries.get(params.key)?.lastForcedRefresh,
       });
       return snapshot;
     } catch (error) {
