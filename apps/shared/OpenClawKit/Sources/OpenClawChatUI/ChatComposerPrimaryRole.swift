@@ -5,7 +5,7 @@ enum ChatComposerPrimaryRole: Equatable {
     enum Talk: Equatable {
         case unavailable
         case available
-        case live
+        case live(canStop: Bool)
     }
 
     case talk
@@ -24,10 +24,9 @@ enum ChatComposerPrimaryRole: Equatable {
         isLocalVoiceCaptureActive: Bool,
         talk: Talk) -> Self
     {
-        // A live voice conversation owns the button in every one of its states, thinking included: it ends
-        // Talk. A Stop here would leave Talk listening; the agent's speech already stops when spoken over.
-        if talk == .live {
-            return .talk
+        // End Talk remains available beside Stop when this client can abort the run.
+        if case let .live(canStop) = talk {
+            return canStop ? .stop : .talk
         }
         if hasOwnReply {
             // Decision point (F38, pending Victor): a draft that can be sent now wins over Stop, and

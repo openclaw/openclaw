@@ -168,6 +168,10 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private static let dataChannelLabel = "oai-events"
     private static let toolCallTimeoutSeconds = 12
     private static let toolResultTimeoutSeconds = 45
+    static let userStoppedConsultToolResult = [
+        "status": "cancelled_by_user",
+        "message": "The user stopped this task. Do not retry unless the user asks again.",
+    ]
     private static let agentWaitSliceSeconds = 3
     private static let agentWaitRequestGraceSeconds = 15
     private static let historyFallbackTimeoutSeconds = 5
@@ -270,6 +274,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
         self.assistantAudioFinishTask?.cancel()
         self.assistantAudioFinishTask = nil
         self.stopped = false
+        self.preserveRunsOnStop = false
         self.peerReady = false
         self.liveCaptionBuffer.reset()
         self.resetTranscriptOrder()
@@ -346,10 +351,12 @@ final class TalkRealtimeWebRTCSession: NSObject {
         self.observeReadiness()
     }
 
-    func stop(preserveRuns: Bool = false) {
+    func stop(preserveRuns: Bool = true) {
         let shouldNotify = !self.stopped
+        if !self.stopped {
+            self.preserveRunsOnStop = preserveRuns
+        }
         self.stopped = true
-        self.preserveRunsOnStop = self.preserveRunsOnStop || preserveRuns
         self.peerReady = false
         self.finishReadiness(error: CancellationError())
         self.liveCaptionBuffer.reset()
@@ -408,7 +415,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
         }
     }
 
-    private func cancelActiveToolCalls(preserveRuns: Bool = false) {
+    private func cancelActiveToolCalls(preserveRuns: Bool = true) {
         let runs = Array(activeToolRuns.values)
         for task in self.activeToolTasks.values {
             task.cancel()
@@ -676,6 +683,10 @@ final class TalkRealtimeWebRTCSession: NSObject {
                 await Self.abortChatRun(gateway: self.gateway, run: run).value
             }
             if Task.isCancelled || self.stopped {
+                return
+            }
+            if (error as NSError).code == 15 {
+                self.submitToolResult(callId: callId, result: Self.userStoppedConsultToolResult)
                 return
             }
             let confirmationInstruction = Self.voiceConfirmationInstruction(from: error)

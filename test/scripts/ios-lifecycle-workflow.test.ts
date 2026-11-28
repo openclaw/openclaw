@@ -315,16 +315,19 @@ it.skipIf(process.platform === "win32")(
 );
 
 describe("iOS simulator owner selection", () => {
-  it.each(["apps/swabble/Sources/SwabbleKit/Speech.swift", "scripts/lib/swift-toolchain.sh"])(
-    "selects both groups for shared owner %s",
-    (file) => {
-      const selected = resolveIosSimulatorTestSelection([file]);
-      expect(selected).toMatchObject({ voice: { selected: true }, lifecycle: { selected: true } });
-      for (const group of [selected.voice, selected.lifecycle]) {
-        expect(group.reasons.some((reason: string) => reason.includes(file))).toBe(group.selected);
-      }
-    },
-  );
+  it.each([
+    "apps/swabble/Sources/SwabbleKit/Speech.swift",
+    "scripts/lib/swift-toolchain.sh",
+    "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
+    "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer+CleanControls.swift",
+    "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatCameraFlipButton.swift",
+  ])("selects both groups for shared owner %s", (file) => {
+    const selected = resolveIosSimulatorTestSelection([file]);
+    expect(selected).toMatchObject({ voice: { selected: true }, lifecycle: { selected: true } });
+    for (const group of [selected.voice, selected.lifecycle]) {
+      expect(group.reasons.some((reason: string) => reason.includes(file))).toBe(group.selected);
+    }
+  });
 
   it("does not force full coverage for an unadmitted job", () => {
     expect(
@@ -379,6 +382,7 @@ it.skipIf(process.platform === "win32").each([
   { owner: "apps/ios/Tests/TalkModeConfigParsingTests.swift", groups: ["voice"] },
   { owner: "apps/ios/Tests/TalkTranscriptCompletionTests.swift", groups: ["voice"] },
   { owner: "apps/ios/Tests/ChatSendHydrationTests.swift", groups: ["lifecycle"] },
+  { owner: "apps/ios/Tests/ChatTypingFocusTests.swift", groups: ["lifecycle"] },
   {
     owner: "apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatSessionsCodingTests.swift",
     groups: ["lifecycle"],

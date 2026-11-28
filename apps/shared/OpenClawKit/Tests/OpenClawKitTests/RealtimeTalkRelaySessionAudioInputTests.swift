@@ -165,7 +165,10 @@ struct RealtimeTalkRelaySessionAudioInputTests {
         #expect(recorded.first?.params?["disposition"]?.stringValue == (supportsCloseDisposition ? "detach" : nil))
     }
 
-    @Test func `explicit stop keeps the aborting close`() async throws {
+    @Test(arguments: [false, true])
+    func `stop detaches accepted work when Gateway supports close disposition`(
+        supportsCloseDisposition: Bool) async throws
+    {
         let requests = RealtimeRelayStartupRequestLog()
         let session = RealtimeTalkRelaySession(
             transport: RealtimeTalkRelayTransport(
@@ -174,7 +177,7 @@ struct RealtimeTalkRelaySessionAudioInputTests {
                     await requests.record(method: method, params: params)
                     return Data("{\"ok\":true}".utf8)
                 },
-                supportsCloseDisposition: { true }),
+                supportsCloseDisposition: { supportsCloseDisposition }),
             options: .init(sessionKey: "main", provider: "openai", model: nil, voice: nil),
             audioCapture: TestRealtimeTalkAudioCapture(),
             pcmPlayer: UnusedPCMStreamingAudioPlayer(),
@@ -186,7 +189,8 @@ struct RealtimeTalkRelaySessionAudioInputTests {
 
         let recorded = await requests.snapshot()
         #expect(recorded.map(\.method) == ["talk.session.close"])
-        #expect(recorded.first?.params?["disposition"] == nil)
+        #expect(recorded.first?.params?["disposition"]?
+            .stringValue == (supportsCloseDisposition ? "detach" : nil))
     }
 
     @Test func `stop and pause retire buffered audio while resume admits a fresh frame`() async throws {

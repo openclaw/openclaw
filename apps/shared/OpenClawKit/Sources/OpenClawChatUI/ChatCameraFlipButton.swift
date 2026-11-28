@@ -2,51 +2,6 @@ import Foundation
 import SwiftUI
 
 @MainActor
-struct ChatCameraFlipButton: View {
-    let control: OpenClawChatTalkControl
-    let controlHeight: CGFloat
-    let visualSize: CGFloat
-
-    static func isAvailable(for control: OpenClawChatTalkControl) -> Bool {
-        control.isEnabled && control.cameraFacing != nil && control.flipCamera != nil
-    }
-
-    var body: some View {
-        Button {
-            self.control.flipCamera?()
-        } label: {
-            // A plain glyph like the composer's other secondary controls: no disc, no tint.
-            Image(systemName: "arrow.triangle.2.circlepath.camera")
-                #if os(iOS)
-                    .font(OpenClawChatTypography.composerGlyph)
-                    .foregroundStyle(CleanChatComposerMetrics.footerInk)
-                #else
-                    .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .subheadline))
-                    .foregroundStyle(.secondary)
-                #endif
-                .frame(width: self.visualSize, height: self.visualSize)
-                .frame(width: self.controlHeight, height: self.controlHeight)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(self.accessibilityLabel)
-        .accessibilityIdentifier("chat-camera-flip")
-        .help(self.accessibilityLabel)
-    }
-
-    private var accessibilityLabel: String {
-        switch self.control.cameraFacing {
-        case .front:
-            String(localized: "Switch to back camera")
-        case .back:
-            String(localized: "Switch to front camera")
-        case nil:
-            String(localized: "Flip camera")
-        }
-    }
-}
-
-@MainActor
 struct ChatTalkButton: View {
     enum Style {
         case full
@@ -220,6 +175,29 @@ extension OpenClawChatComposer {
         isLocalVoiceCaptureActive: Bool) -> Bool
     {
         !hasDraftToSend && !hasBlockingRunActivity && !isLocalVoiceCaptureActive
+    }
+
+    /// Keep the Talk control reachable beside Stop or Send. While Talk is live it ends the call
+    /// without canceling an accepted run or clearing a draft. While a run continues after End
+    /// Talk it starts Talk again in the same chat; Stop alone owns the run. Local capture
+    /// still wins the microphone, and a typed draft keeps Send as the only neighbour.
+    nonisolated static func showsSeparateActiveTalkControl(
+        isTalkEnabled: Bool,
+        usesPhonePrimaryControl: Bool = false,
+        hasDraftToSend: Bool,
+        hasBlockingRunActivity: Bool,
+        isLocalVoiceCaptureActive: Bool) -> Bool
+    {
+        if isTalkEnabled, usesPhonePrimaryControl { return false }
+        if self.showsCompactTalkControl(
+            hasDraftToSend: hasDraftToSend,
+            hasBlockingRunActivity: hasBlockingRunActivity,
+            isLocalVoiceCaptureActive: isLocalVoiceCaptureActive)
+        {
+            return false
+        }
+        if isTalkEnabled { return true }
+        return hasBlockingRunActivity && !hasDraftToSend && !isLocalVoiceCaptureActive
     }
 }
 

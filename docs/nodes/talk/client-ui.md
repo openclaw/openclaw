@@ -14,7 +14,14 @@ sidebarTitle: "Client UI"
 - Native settings: **Use realtime Gateway relay** is a local, default-off opt-in for this Mac.
 - **Open in Dashboard** hands provider, model, voice, and transport setup to Control UI **Settings → Talk** under **Connections**.
 - Menu bar: **Talk Mode** starts or stops the current Talk session.
+- Chat composer: ending Talk stops listening and playback without canceling accepted agent work when the Gateway advertises `talk-session-close-disposition` (older Gateways keep their legacy aborting close). While Talk is active, the Talk control stays reachable alongside Stop or Send when a draft or stoppable response is present.
 - Overlay: the orb renders the universal talk waveform (shared with iOS, watchOS, and Android). Listening follows the live mic level, Speaking follows the actual TTS playback envelope, Thinking breathes softly. Click the orb to pause/resume, double-click to stop speaking, click X to exit Talk mode.
+
+## iOS UI
+
+- Ending Talk in the Chat composer stops listening and playback without canceling accepted agent work, leaving the Talk control reachable alongside Stop or Send when a draft or stoppable response is present.
+- Realtime relay closes send `disposition: "detach"` when the Gateway advertises `talk-session-close-disposition` (older Gateways keep their legacy aborting close); direct WebRTC stops preserve accepted consult runs by default.
+- Ending Talk does not retarget chat focus if the active Talk call belongs to a different session than the displayed chat.
 
 ## Apple Watch UI
 

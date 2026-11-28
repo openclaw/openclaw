@@ -81,7 +81,7 @@ public struct RealtimeTalkRelayTransport: Sendable {
     public let request: @Sendable (String, [String: AnyCodable]?, Double) async throws -> Data
     public let isCurrent: @Sendable () async -> Bool
     /// Whether the socket that owns the relay advertises `talk-session-close-disposition`.
-    /// Older Gateways reject unknown close fields, so they keep the legacy aborting close.
+    /// Older Gateways reject unknown close fields, so they omit `disposition` and keep their default close.
     public let supportsCloseDisposition: @Sendable () async -> Bool
 
     public init(
@@ -467,16 +467,14 @@ public final class RealtimeTalkRelaySession {
         try await self.serverClose?.task.value
     }
 
-    /// Failure teardown keeps accepted agent work when the owning Gateway supports detach.
-    public func stopAfterFailure() {
-        self.close(sendClose: true, detachAcceptedWork: true)
-    }
-
-    private func close(sendClose: Bool, detachAcceptedWork: Bool = false) {
+    private func close(sendClose: Bool) {
         guard !self.isClosed else { return }
         self.isClosed = true
         self.outputCancellationGeneration &+= 1
-        self.outputCancellationTask?.cancel()
+        let pendingOutputCancellation = sendClose ? self.outputCancellationTask : nil
+        if !sendClose {
+            self.outputCancellationTask?.cancel()
+        }
         self.outputCancellationTask = nil
         self.output.withLock { output in
             let wasClosed = output.isClosed
@@ -503,7 +501,9 @@ public final class RealtimeTalkRelaySession {
         Task { await audioSender?.close() }
         self.drainOutputEffects()
         if sendClose, let relaySessionId {
-            self.beginServerClose(relaySessionId: relaySessionId, detachAcceptedWork: detachAcceptedWork)
+            self.beginServerClose(
+                relaySessionId: relaySessionId,
+                pendingOutputCancellation: pendingOutputCancellation)
         }
         relaySessionId = nil
     }
@@ -526,14 +526,17 @@ public final class RealtimeTalkRelaySession {
     @discardableResult
     private func beginServerClose(
         relaySessionId: String,
-        detachAcceptedWork: Bool = false) -> Task<Void, Error>
+        pendingOutputCancellation: Task<Void, Never>? = nil) -> Task<Void, Error>
     {
         if let serverClose, serverClose.sessionId == relaySessionId {
             return serverClose.task
         }
-        let task = Task { [transport] in
+        let task = Task { [transport, pendingOutputCancellation] in
+            if let pendingOutputCancellation {
+                await pendingOutputCancellation.value
+            }
             var payload = ["sessionId": AnyCodable(relaySessionId)]
-            if detachAcceptedWork, await transport.supportsCloseDisposition() {
+            if await transport.supportsCloseDisposition() {
                 payload["disposition"] = AnyCodable("detach")
             }
             let response = try await transport.request("talk.session.close", payload, 8000)
@@ -1204,7 +1207,8 @@ extension RealtimeTalkRelaySession {
                 self.onStatus(issue.message)
                 // A failed current cancellation leaves remote output ownership unknown.
                 // Keep the fence until terminal teardown makes late audio impossible.
-                self.stopAfterFailure()
+                self.outputCancellationTask = nil
+                self.stop()
                 self.onTermination(.outputCancellationFailed)
             }
         }
@@ -1222,7 +1226,7 @@ extension RealtimeTalkRelaySession {
             phase: "output-playback")
         self.onIssue(issue)
         self.onStatus(message)
-        self.stopAfterFailure()
+        self.stop()
         self.onTermination(.outputPlaybackOverflow)
     }
 
@@ -1278,7 +1282,7 @@ extension RealtimeTalkRelaySession {
         self.logger.error("talk realtime microphone failed: \(Self.safeLogMessage(message), privacy: .public)")
         self.onIssue(issue)
         self.onStatus(message)
-        self.stopAfterFailure()
+        self.stop()
         self.onTermination(.audioInputFailed(message: message))
     }
 

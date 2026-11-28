@@ -7,32 +7,8 @@ extension OpenClawChatComposer {
     @ViewBuilder
     var cleanTrailingControl: some View {
         #if os(iOS)
-        ChatComposerPrimaryButton(
-            role: self.phonePrimaryRole,
-            send: .init(
-                isEnabled: self.canSendMessage,
-                isReplyRunning: self.viewModel.pendingRunCount > 0,
-                keepsReply: self.sendKeepsReply,
-                fill: self.sendButtonFill,
-                disabledFill: self.disabledSendButtonFill,
-                ink: self.sendButtonForeground,
-                borderOpacity: self.sendButtonBorderOpacity,
-                queueModes: self.inputModel?.sendModeChoices ?? [],
-                action: { mode in
-                    self.markAwaitingReplyIfNeeded()
-                    // The message leaves from the field this button sits in.
-                    ChatSendEntrance.composerWillSend()
-                    self.sendDraftIfEnabled(queueMode: mode)
-                }),
-            stop: .init(
-                canStop: self.viewModel.pendingRunCount > 0,
-                isAborting: self.viewModel.isAborting,
-                ink: Color(uiColor: OpenClawIOSBrand.danger),
-                action: { self.viewModel.abort() }),
-            talkControl: self.talkControl,
-            sessionKey: self.viewModel.sessionKey,
-            controlSize: self.cleanControlHeight,
-            visualSize: self.cleanIconControlSize)
+        let role = self.phonePrimaryRole
+        self.cleanPhonePrimaryButton(role: role)
             .onChange(of: self.replyMarkEnded) { _, ended in
                 if ended { self.primaryReplyMark = nil }
             }
@@ -45,6 +21,9 @@ extension OpenClawChatComposer {
                 }
                 self.primaryReplyMark = nil
             }
+        if role == .stop, self.talkControl?.isEnabled == true {
+            self.cleanPhonePrimaryButton(role: .talk)
+        }
         #else
         if Self.showsCompactTalkControl(
             hasDraftToSend: self.viewModel.hasDraftToSend,
@@ -108,6 +87,35 @@ extension OpenClawChatComposer {
     }
 
     #if os(iOS)
+    private func cleanPhonePrimaryButton(role: ChatComposerPrimaryRole) -> some View {
+        ChatComposerPrimaryButton(
+            role: role,
+            send: .init(
+                isEnabled: self.canSendMessage,
+                isReplyRunning: self.viewModel.pendingRunCount > 0,
+                keepsReply: self.sendKeepsReply,
+                fill: self.sendButtonFill,
+                disabledFill: self.disabledSendButtonFill,
+                ink: self.sendButtonForeground,
+                borderOpacity: self.sendButtonBorderOpacity,
+                queueModes: self.inputModel?.sendModeChoices ?? [],
+                action: { mode in
+                    self.markAwaitingReplyIfNeeded()
+                    // The message leaves from the field this button sits in.
+                    ChatSendEntrance.composerWillSend()
+                    self.sendDraftIfEnabled(queueMode: mode)
+                }),
+            stop: .init(
+                canStop: self.viewModel.hasAbortableRun,
+                isAborting: self.viewModel.isAborting,
+                ink: Color(uiColor: OpenClawIOSBrand.danger),
+                action: { self.viewModel.abort() }),
+            talkControl: self.talkControl,
+            sessionKey: self.viewModel.sessionKey,
+            controlSize: self.cleanControlHeight,
+            visualSize: self.cleanIconControlSize)
+    }
+
     var phonePrimaryRole: ChatComposerPrimaryRole {
         ChatComposerPrimaryRole.resolve(
             // A tile, preparing or failed, keeps the button on a disabled Send instead of Talk:
@@ -121,7 +129,9 @@ extension OpenClawChatComposer {
                 self.viewModel.hasActiveSessionRunWithoutChatSnapshot,
             hasBlockingRunActivity: self.viewModel.hasBlockingRunActivity,
             isLocalVoiceCaptureActive: self.isLocalVoiceCaptureActive,
-            talk: self.talkControl.map { $0.isEnabled ? .live : .available } ?? .unavailable)
+            talk: self.talkControl.map {
+                $0.isEnabled ? .live(canStop: self.viewModel.hasAbortableRun) : .available
+            } ?? .unavailable)
     }
 
     /// The reply normally registers within about a second (0.1 s live, up to 1 s through the
@@ -151,7 +161,7 @@ extension OpenClawChatComposer {
     }
     #endif
 
-    private var isLocalVoiceCaptureActive: Bool {
+    var isLocalVoiceCaptureActive: Bool {
         self.dictationTask != nil ||
             self.dictationControl?.isActive == true ||
             self.voiceNoteControl?.recorder.isRecording == true ||
@@ -195,8 +205,6 @@ struct ChatComposerPrimaryButton: View {
     let visualSize: CGFloat
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// Stop arrives under the finger that just tapped Send, so it stays inert for a moment.
-    @State private var isStopArmed = false
     /// Set by the Send tap so the swap to Stop lands in the next frame: the send keeps the main
     /// thread busy for a few hundred milliseconds, which held a cross-fade on Send that long.
     /// A refused send keeps it until the next role change, which then swaps without a fade.
@@ -216,15 +224,15 @@ struct ChatComposerPrimaryButton: View {
             .accessibilityIdentifier(self.accessibilityIdentifier)
             .geometryGroup()
             .task(id: self.role) {
-                self.isStopArmed = false
-                self.swapsWithoutFade = false
-                guard self.role == .stop else { return }
-                do {
-                    try await Task.sleep(for: .milliseconds(700))
-                } catch {
-                    return
+                // Only a Stop replacing a Send just tapped in this slot needs a delay.
+                if self.role == .stop, self.swapsWithoutFade {
+                    do {
+                        try await Task.sleep(for: .milliseconds(700))
+                    } catch {
+                        return
+                    }
                 }
-                self.isStopArmed = true
+                self.swapsWithoutFade = false
             }
     }
 
@@ -310,7 +318,7 @@ struct ChatComposerPrimaryButton: View {
     }
 
     private var isInertStop: Bool {
-        self.role == .stop && (!self.isStopArmed || !self.stop.canStop)
+        self.role == .stop && (self.swapsWithoutFade || !self.stop.canStop)
     }
 
     private func face(for role: ChatComposerPrimaryRole) -> some View {
@@ -347,7 +355,7 @@ struct ChatComposerPrimaryButton: View {
         case .send:
             return !self.send.isEnabled
         case .stop:
-            return !self.stop.canStop || self.stop.isAborting || !self.isStopArmed
+            return !self.stop.canStop || self.stop.isAborting || self.swapsWithoutFade
         }
     }
 

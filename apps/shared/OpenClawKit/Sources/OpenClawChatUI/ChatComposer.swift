@@ -686,12 +686,6 @@ struct OpenClawChatComposer: View {
                         sessionKey: self.viewModel.sessionKey,
                         helpText: self.talkHelpText(talkControl),
                         style: .full)
-                    if ChatCameraFlipButton.isAvailable(for: talkControl) {
-                        ChatCameraFlipButton(
-                            control: talkControl,
-                            controlHeight: 32,
-                            visualSize: 32)
-                    }
                 }
                 if self.style == .standard {
                     ChatConnectionPill(
@@ -809,8 +803,10 @@ struct OpenClawChatComposer: View {
         if !talkControl.isGatewayConnected, !talkControl.isEnabled {
             return "Connect the gateway before starting realtime chat"
         }
-        let action = talkControl.isEnabled ? "Stop" : "Start"
-        return "\(action) realtime chat for \(self.activeSessionLabel)"
+        if talkControl.isEnabled {
+            return "Stop realtime chat"
+        }
+        return "Start realtime chat for \(self.activeSessionLabel)"
     }
 
     private var activeSessionLabel: String {

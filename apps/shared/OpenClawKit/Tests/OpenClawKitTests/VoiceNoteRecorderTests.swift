@@ -385,6 +385,39 @@ final class VoiceNoteRecorderTests: XCTestCase {
             hasDraftToSend: false,
             hasBlockingRunActivity: true,
             isLocalVoiceCaptureActive: false))
+
+        // A run that continues after End Talk leaves Talk startable again beside Stop.
+        XCTAssertTrue(OpenClawChatComposer.showsSeparateActiveTalkControl(
+            isTalkEnabled: false,
+            hasDraftToSend: false,
+            hasBlockingRunActivity: true,
+            isLocalVoiceCaptureActive: false))
+        // Local capture owns the microphone, and a draft keeps Send as the only neighbour.
+        XCTAssertFalse(OpenClawChatComposer.showsSeparateActiveTalkControl(
+            isTalkEnabled: false,
+            hasDraftToSend: false,
+            hasBlockingRunActivity: true,
+            isLocalVoiceCaptureActive: true))
+        XCTAssertFalse(OpenClawChatComposer.showsSeparateActiveTalkControl(
+            isTalkEnabled: false,
+            hasDraftToSend: true,
+            hasBlockingRunActivity: true,
+            isLocalVoiceCaptureActive: false))
+        XCTAssertFalse(OpenClawChatComposer.showsSeparateActiveTalkControl(
+            isTalkEnabled: true,
+            hasDraftToSend: false,
+            hasBlockingRunActivity: false,
+            isLocalVoiceCaptureActive: false))
+        XCTAssertTrue(OpenClawChatComposer.showsSeparateActiveTalkControl(
+            isTalkEnabled: true,
+            hasDraftToSend: false,
+            hasBlockingRunActivity: true,
+            isLocalVoiceCaptureActive: false))
+        XCTAssertTrue(OpenClawChatComposer.showsSeparateActiveTalkControl(
+            isTalkEnabled: true,
+            hasDraftToSend: true,
+            hasBlockingRunActivity: false,
+            isLocalVoiceCaptureActive: false))
     }
 
     @MainActor

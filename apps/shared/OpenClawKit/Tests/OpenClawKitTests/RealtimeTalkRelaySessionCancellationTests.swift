@@ -507,4 +507,31 @@ struct RealtimeTalkRelaySessionCancellationTests {
 
         #expect(issues.isEmpty)
     }
+
+    @Test func `stop preserves an in flight output cancellation before detaching the relay`() async throws {
+        let requests = RealtimeRelayStartupRequestLog()
+        let session = RealtimeTalkRelaySession(
+            transport: RealtimeTalkRelayTransport(
+                subscribeServerEvents: { _ in AsyncStream { _ in } },
+                request: { method, params, _ in
+                    try Task.checkCancellation()
+                    await requests.record(method: method, params: params)
+                    return Data("{\"ok\":true}".utf8)
+                },
+                supportsCloseDisposition: { true }),
+            options: .init(sessionKey: "main", provider: "openai", model: nil, voice: nil),
+            audioCapture: TestRealtimeTalkAudioCapture(),
+            pcmPlayer: DrainingPCMStreamingAudioPlayer(),
+            onStatus: { _ in },
+            onSpeakingChanged: { _ in })
+        session._test_setRelaySessionId("relay-1")
+
+        await session._test_handleGatewayEvent(outputAudioEvent(turnId: "turn-1"))
+        #expect(session.cancelOutput(reason: "user"))
+        try await session.stopAndWait()
+
+        let recorded = await requests.snapshot()
+        #expect(recorded.map(\.method) == ["talk.session.cancelOutput", "talk.session.close"])
+        #expect(recorded.last?.params?["disposition"]?.stringValue == "detach")
+    }
 }

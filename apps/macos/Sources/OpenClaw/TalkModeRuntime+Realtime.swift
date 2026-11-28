@@ -436,8 +436,8 @@ extension TalkModeRuntime {
         realtimeRelayGeneration &+= 1
         let terminalGeneration = realtimeRelayGeneration
         // Session-owned terminations already closed; a failed microphone restart leaves the relay
-        // open. Retire it before recovery without cancelling accepted agent work.
-        await MainActor.run { session.stopAfterFailure() }
+        // open. Retire it before recovery while keeping accepted agent work detached.
+        await MainActor.run { session.stop() }
         guard self.ownsRealtimeRelay(terminalGeneration, session) else { return }
         realtimeSession = nil
         realtimeSessionReadyAt = nil

@@ -68,6 +68,38 @@ extension OpenClawSnapshotUITests {
         }
     }
 
+    func testTalkSeparatesStopFromEndCall() throws {
+        let app = try self.launchTalkFixture("listening", live: true, extra: ["--openclaw-external-run-fixture"])
+        let row = app.otherElements["chat-talk-row"]
+        let talk = row.buttons.matching(identifier: "chat-realtime-control")
+        let stop = row.buttons["chat-stop-response"]
+        XCTAssertTrue(row.waitForExistence(timeout: 8))
+        XCTAssertTrue(stop.waitForExistence(timeout: 10))
+        XCTAssertTrue(stop.isEnabled)
+        XCTAssertEqual(talk.count, 1)
+        XCTAssertEqual(talk.firstMatch.label, "End voice conversation")
+        self.attachScreenshot(named: "talk-live-running")
+
+        talk.firstMatch.tap()
+        XCTAssertTrue(row.waitForNonExistence(timeout: 3))
+        let detachedStop = app.buttons["chat-stop-response"].firstMatch
+        let start = app.buttons["chat-realtime-control"].firstMatch
+        XCTAssertTrue(detachedStop.exists)
+        XCTAssertTrue(detachedStop.isEnabled)
+        XCTAssertEqual(start.label, "Start voice conversation")
+        self.attachScreenshot(named: "talk-ended-running")
+
+        start.tap()
+        XCTAssertTrue(row.waitForExistence(timeout: 3))
+        XCTAssertTrue(stop.isEnabled)
+        stop.tap()
+        XCTAssertTrue(stop.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(row.exists)
+        XCTAssertEqual(talk.count, 1)
+        XCTAssertEqual(talk.firstMatch.label, "End voice conversation")
+        self.attachScreenshot(named: "talk-live-idle")
+    }
+
     func testMuteReadsAsSelectedAndLeavesTalkOn() throws {
         let app = try self.launchTalkFixture("listening", live: true)
         let mute = app.buttons["chat-talk-microphone"].firstMatch

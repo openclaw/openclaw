@@ -6,6 +6,13 @@ import XCTest
 
 @MainActor
 final class TalkRealtimeConsultCancellationTests: XCTestCase {
+    func testAbortedConsultUsesExplicitUserStopResult() {
+        XCTAssertEqual(TalkRealtimeWebRTCSession.userStoppedConsultToolResult, [
+            "status": "cancelled_by_user",
+            "message": "The user stopped this task. Do not retry unless the user asks again.",
+        ])
+    }
+
     func testHistoryFallbackWaitsForTheAcknowledgedRunInsteadOfANewerForeignReply() async throws {
         let completed = XCTestExpectation(description: "consult returned to listening")
         let requests = ConsultRequestCapture()
@@ -84,7 +91,9 @@ final class TalkRealtimeConsultCancellationTests: XCTestCase {
             let capturedID = await requests.requestID(method: "talk.client.toolCall")
             let requestID = try XCTUnwrap(capturedID)
 
-            // Stopping before the response must not abandon the side-effecting request's run.
+            // Explicit abort before the response must still cancel the returned run,
+            // and a subsequent default stop() must not override that choice.
+            talk.stop(preserveRuns: false)
             talk.stop()
             let ack = try JSONSerialization.data(withJSONObject: [
                 "type": "res", "id": requestID, "ok": true,
@@ -135,7 +144,7 @@ final class TalkRealtimeConsultCancellationTests: XCTestCase {
             XCTAssertEqual(sent, .completed)
             let capturedID = await requests.requestID(method: "talk.client.toolCall")
             let requestID = try XCTUnwrap(capturedID)
-            talk.stop(preserveRuns: true)
+            talk.stop()
             let ack = try JSONSerialization.data(withJSONObject: [
                 "type": "res", "id": requestID, "ok": true,
                 "payload": ["runId": "run-1", "agentId": "voice", "agentSessionKey": "global"],
@@ -145,6 +154,106 @@ final class TalkRealtimeConsultCancellationTests: XCTestCase {
             XCTAssertEqual(retained, .completed)
             XCTAssertEqual(delegate.finishes, 1)
             XCTAssertFalse(delegate.statuses.contains("Listening"))
+        }
+    }
+
+    func testEndTalkDoesNotSwitchFocusOrAbortMismatchedSessionRun() async throws {
+        let held = XCTestExpectation(description: "consult reached Gateway")
+        let aborted = XCTestExpectation(description: "End Talk must not abort accepted work")
+        aborted.isInverted = true
+        let requests = ConsultRequestCapture()
+        let socket = GatewayTestWebSocketTask(sendHook: { _, message, _ in
+            let data: Data
+            switch message {
+            case let .data(value): data = value
+            case let .string(value): data = Data(value.utf8)
+            @unknown default: return
+            }
+            let frame = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            await requests.append(data)
+            if frame["method"] as? String == "talk.client.toolCall" {
+                held.fulfill()
+            }
+            if frame["method"] as? String == "chat.abort" {
+                aborted.fulfill()
+            }
+        })
+        let delegate = ConsultCancellationDelegate()
+        let previousTalkEnabled = UserDefaults.standard.object(forKey: "talk.enabled")
+        let appModel = NodeAppModel()
+        let gateway = GatewayNodeSession()
+        let talk = TalkRealtimeWebRTCSession(
+            gateway: gateway,
+            sessionKey: "agent:main:watch:call-1",
+            transcriptStore: TalkRealtimeTranscriptStore(),
+            delegate: delegate)
+        RTCInitializeSSL()
+        let factory = RTCPeerConnectionFactory()
+        let peer = try XCTUnwrap(factory.peerConnection(
+            with: RTCConfiguration(),
+            constraints: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil),
+            delegate: nil))
+        defer {
+            appModel.setTalkEnabled(false)
+            if let previousTalkEnabled {
+                UserDefaults.standard.set(previousTalkEnabled, forKey: "talk.enabled")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "talk.enabled")
+            }
+            talk.stop()
+            peer.close()
+        }
+        do {
+            try await gateway.connect(
+                url: XCTUnwrap(URL(string: "ws://talk-test.invalid")),
+                credentials: .init(),
+                connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions,
+                sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: { socket })),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+            appModel.focusChatSession("main")
+            appModel.talkMode.attachGateway(gateway)
+            appModel.talkMode.updateMainSessionKey("agent:main:watch:call-1")
+            appModel.talkMode._test_prepareEnabledRealtimeSessionForClose(direct: talk)
+            let channel = try XCTUnwrap(peer.dataChannel(
+                forLabel: "synthetic-consult",
+                configuration: RTCDataChannelConfiguration()))
+            let event = #"{"type":"response.function_call_arguments.done","call_id":"call-1","#
+                + #""name":"openclaw_agent_consult","arguments":"{\"question\":\"Keep running\"}"}"#
+            talk.dataChannel(channel, didReceiveMessageWith: RTCDataBuffer(data: Data(event.utf8), isBinary: false))
+
+            let sent = await XCTWaiter.fulfillment(of: [held], timeout: 5)
+            XCTAssertEqual(sent, .completed)
+            let capturedID = await requests.requestID(method: "talk.client.toolCall")
+            let requestID = try XCTUnwrap(capturedID)
+
+            // Ending Talk while the composer displays a different session must neither
+            // retarget Talk's session key nor abort the accepted consult.
+            ChatProTab.talkControl(appModel: appModel).toggle("main")
+            XCTAssertFalse(appModel.talkMode.isEnabled)
+            XCTAssertEqual(appModel.talkMode._test_mainSessionKey(), "agent:main:watch:call-1")
+
+            let ack = try JSONSerialization.data(withJSONObject: [
+                "type": "res", "id": requestID, "ok": true,
+                "payload": ["runId": "run-1", "agentId": "voice", "agentSessionKey": "global"],
+            ])
+            socket.emitReceiveSuccess(.data(ack))
+            let retained = await XCTWaiter.fulfillment(of: [aborted], timeout: 1)
+            XCTAssertEqual(retained, .completed)
+            let abortCount = await requests.count(method: "chat.abort")
+            XCTAssertEqual(abortCount, 0)
+
+            // Enabling Talk from the composer still focuses the displayed session.
+            ChatProTab.talkControl(appModel: appModel).toggle("agent:main:other")
+            XCTAssertEqual(appModel.chatSessionKey, "agent:main:other")
+            XCTAssertEqual(appModel.talkMode._test_mainSessionKey(), "agent:main:other")
+            appModel.setTalkEnabled(false)
+            await gateway.disconnect()
+        } catch {
+            appModel.setTalkEnabled(false)
+            await gateway.disconnect()
+            throw error
         }
     }
 

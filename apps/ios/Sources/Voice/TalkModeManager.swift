@@ -2244,7 +2244,7 @@ final class TalkModeManager {
             if let owner = session.voiceSessionOwner {
                 _ = self.adoptRealtimeVoiceSession(owner)
             }
-            self.stopRealtimeSession(preserveRuns: voiceChange != nil)
+            self.stopRealtimeSession()
             let issue = Self.runtimeIssue(from: error)
             GatewayDiagnostics
                 .log("talk realtime: unavailable; falling back to speech pipeline error=\(error.localizedDescription)")
@@ -2630,7 +2630,7 @@ final class TalkModeManager {
         self.activeRealtimeVoiceSession = nil
         self.prefetchedRealtimeSession = nil
         self.realtimeVoiceSessionGeneration &+= 1
-        direct?.stop(preserveRuns: true)
+        direct?.stop()
         self.isListening = false
         self.isSpeaking = false
         self.isUserSpeechDetected = false
@@ -2753,7 +2753,7 @@ final class TalkModeManager {
         return session
     }
 
-    private func stopRealtimeSession(preserveRuns: Bool = false) {
+    private func stopRealtimeSession(preserveRuns: Bool = true) {
         let realtimeSession = self.realtimeSession
         if self.activeRealtimeVoiceSession == nil {
             // A stopped create may have returned its ID before the manager adopted it.
@@ -4564,11 +4564,20 @@ extension TalkModeManager {
         self.handleRealtimeRelayTermination(termination)
     }
 
-    func _test_prepareEnabledRealtimeSessionForClose() {
+    func _test_prepareEnabledRealtimeSessionForClose(
+        direct: TalkRealtimeWebRTCSession? = nil,
+        relay: RealtimeTalkRelaySession? = nil)
+    {
         self.isEnabled = true
         self.gatewayConnected = true
         self.captureMode = .idle
         self.realtimeSessionReadyAt = nil
+        if let direct {
+            self.realtimeSession = direct
+        }
+        if let relay {
+            self.realtimeRelaySession = relay
+        }
     }
 
     func _test_rapidRealtimeRestartCount() -> Int {

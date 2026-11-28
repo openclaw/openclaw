@@ -3309,17 +3309,6 @@ extension NodeAppModel {
     nonisolated static func cameraFacingPreference(rawValue: String?) -> OpenClawCameraFacing {
         rawValue.flatMap(OpenClawCameraFacing.init(rawValue:)) ?? .front
     }
-
-    func setPreferredCameraFacing(_ facing: OpenClawCameraFacing) {
-        guard self.preferredCameraFacing != facing else { return }
-        self.preferredCameraFacing = facing
-        UserDefaults.standard.set(facing.rawValue, forKey: Self.preferredCameraFacingKey)
-    }
-
-    func flipPreferredCameraFacing() {
-        self.setPreferredCameraFacing(self.preferredCameraFacing == .front ? .back : .front)
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-    }
 }
 
 extension NodeAppModel {
