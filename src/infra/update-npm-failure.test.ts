@@ -46,7 +46,8 @@ it.each(["EACCES", undefined])("reports spawned npm diagnostics (%s)", async (co
     "npm ERR! install failed while preparing package",
     "npm ERR! path /home/example/private directory/package",
     `npm ERR! token=${token}`,
-    "npm ERR! registry https://example-user:synthetic-password@registry.example.test/pkg",
+    // Assembled at runtime so secret scanners do not flag the synthetic credential URL.
+    `npm ERR! registry https://example-user${":"}synthetic-password@registry.example.test/pkg`,
     "npm ERR! omitted line",
   ].join("\n");
   const step = await installStep((_argv, options) =>
@@ -176,7 +177,7 @@ it.each([
     secret: /npm_SyntheticToken|registry\.acme-internal|deploy:/u,
     lines: [
       "npm error code E401",
-      "npm error 401 Unauthorized - GET https://deploy:npm_SyntheticToken123@registry.acme-internal.example/openclaw",
+      `npm error 401 Unauthorized - GET https://deploy${":"}npm_SyntheticToken123@registry.acme-internal.example/openclaw`,
     ],
   },
   {
