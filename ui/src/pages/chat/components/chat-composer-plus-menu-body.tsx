@@ -44,6 +44,7 @@ function rootRenderInputs(menu: ChatComposerPlusMenuContentProps) {
     uploadsEnabled(menu.attachments.uploadConfig),
     menu.showCapabilities,
     Boolean(menu.capabilityMenu),
+    Boolean(menu.readDictation?.()),
   );
   for (const toggle of menu.rootToggles ?? []) {
     inputs.push(
@@ -87,6 +88,14 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
         entries.push(menuDivider("plugin-actions-divider"));
       }
       entries.push(...plugins);
+    }
+    if (menu.readDictation?.()) {
+      entries.push({
+        id: "dictation-cleanup",
+        label: t("chat.composer.dictationCleanup"),
+        icon: <Icon name="wandSparkles" />,
+        class: "agent-chat__capability-menu-item",
+      });
     }
     if (!entries.length) {
       return attachments;

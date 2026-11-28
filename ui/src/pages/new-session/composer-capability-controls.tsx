@@ -20,6 +20,7 @@ type NewSessionComposerCapabilityOptions = {
   submitting: boolean;
   messageLocked?: boolean;
   capabilityMenu?: ChatComposerCapabilityMenuSource;
+  readDictation?: ChatComposerPlusMenuProps["readDictation"];
   toolOverrides?: SessionToolOverrides | null;
   onChange: () => void;
 };
@@ -37,6 +38,7 @@ export function NewSessionPlusMenu(props: {
       attachments: props.attachments,
       inputHandle: props.inputHandle,
       capabilityMenu: options.capabilityMenu,
+      readDictation: options.readDictation,
       disabled,
       open: textarea.capabilityMenuOpen,
       view: textarea.capabilityMenuView,

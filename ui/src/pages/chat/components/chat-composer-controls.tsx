@@ -232,6 +232,7 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
             !active() &&
             (!props.connected ||
               props.disabled ||
+              props.readDictation?.().awaitingCleanup ||
               (!props.readDictation && Boolean(props.submitDisabledReason)))
           }
           aria-disabled={finalizing() ? "true" : "false"}
@@ -268,9 +269,13 @@ export function ComposerDictationSendAction(props: {
     if (dictation.finalizing) {
       return;
     }
-    await dictation.finishActive();
+    const requiresReview = dictation.requiresCleanupReview;
+    const committed = await dictation.finishActive();
     // Keep the initiating input action when asynchronous dictation finishes.
-    send(event);
+    // Conservative cleanup must be reviewed in the unsent draft first.
+    if (!requiresReview || committed) {
+      send(event);
+    }
   };
   return (
     <Show when={props.readDictation().active}>

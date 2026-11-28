@@ -13,6 +13,7 @@ import type {
   ChatComposerCapabilityMenuProps,
   ChatComposerPlusMenuView,
 } from "../composer-capability-types.ts";
+import type { ComposerDictationOwner } from "../composer-dictation.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import type { ChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 
@@ -21,6 +22,7 @@ export type ChatComposerPlusMenuProps = {
   inputHandle: ChatAttachmentInputHandle;
   pluginActions?: readonly ComposerMenuAction[];
   capabilityMenu?: ChatComposerCapabilityMenuSource;
+  readDictation?: () => ComposerDictationOwner | undefined;
   disabled: boolean;
   open: boolean;
   view: ChatComposerPlusMenuView;

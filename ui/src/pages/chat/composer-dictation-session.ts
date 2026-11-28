@@ -7,6 +7,7 @@ import { registerChatDictationEnglish } from "../../i18n/locales/en-chat-dictati
 import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import type { DictationCleanupSource } from "./dictation-cleanup.ts";
 import {
   floatToG711Ulaw,
   measureRealtimeTalkAudioFrame,
@@ -45,7 +46,18 @@ function eventPayload(frame: GatewayEventFrame) {
   if (frame.event !== "talk.event" || !frame.payload || typeof frame.payload !== "object") {
     return null;
   }
-  return asOptionalObjectRecord(frame.payload) ?? null;
+  const payload = asOptionalObjectRecord(frame.payload);
+  const eventType = asOptionalObjectRecord(payload?.talkEvent)?.type;
+  // The relay also uses the transcript envelope for empty lifecycle markers.
+  // They carry no recognized text and must not make a final transcript provisional.
+  if (
+    payload?.type === "transcript" &&
+    payload.text === "" &&
+    (eventType === "input.audio.committed" || eventType === "turn.ended")
+  ) {
+    return null;
+  }
+  return payload ?? null;
 }
 
 function formatDictationError(error: unknown): string {
@@ -185,6 +197,10 @@ export class ComposerDictationSession {
   private transcriptionSessionId: string | null = null;
   private readonly finalTranscripts: string[] = [];
   private currentPartial = "";
+  private transcriptRevision = 0;
+  private lastTranscriptSeq: number | null = null;
+  private transcriptIsPartial = false;
+  private finalizedTranscript: string | null = null;
   private startPromise: Promise<void> | null = null;
   private appendChain: Promise<void> = Promise.resolve();
   private closeRequest: { discard: boolean; promise: Promise<void> } | null = null;
@@ -261,7 +277,11 @@ export class ComposerDictationSession {
         (payload.type === "transcript" || payload.type === "partial") &&
         typeof payload.text === "string"
       ) {
+        if (!this.acceptTranscript(payload)) {
+          return;
+        }
         const text = payload.text.trim();
+        this.transcriptIsPartial = payload.type === "partial" || payload.final !== true || !text;
         if (payload.type === "partial" || payload.final !== true) {
           this.currentPartial = text;
         } else if (text) {
@@ -309,6 +329,41 @@ export class ComposerDictationSession {
 
   transcriptSnapshot(): string {
     return [...this.finalTranscripts, this.currentPartial].filter(Boolean).join(" ").trim();
+  }
+
+  /** Finality comes from successful provider finalization, never from a timeout fallback. */
+  cleanupSource(text: string): DictationCleanupSource {
+    return Object.freeze({
+      id: this.sessionId ?? "",
+      revision: this.transcriptRevision,
+      text,
+      isFinal:
+        this.finalizedTranscript !== null &&
+        this.finalizedTranscript === text &&
+        !this.discarded &&
+        !this.failed &&
+        !this.gatewayDisconnected,
+    });
+  }
+
+  private acceptTranscript(payload: Record<string, unknown>): boolean {
+    const seq = asOptionalObjectRecord(payload.talkEvent)?.seq;
+    if (seq !== undefined) {
+      if (
+        typeof seq !== "number" ||
+        !Number.isSafeInteger(seq) ||
+        seq < 0 ||
+        (this.lastTranscriptSeq !== null && seq <= this.lastTranscriptSeq)
+      ) {
+        return false;
+      }
+      this.lastTranscriptSeq = seq;
+    }
+    // Unsequenced events keep the existing behavior. Identical final text can be
+    // deliberate repetition, so text equality never retires a provider event.
+    this.transcriptRevision += 1;
+    this.finalizedTranscript = null;
+    return true;
   }
 
   async finish(requireTranscript?: true): Promise<string> {
@@ -445,13 +500,22 @@ export class ComposerDictationSession {
   }
 
   private waitForLateFinal(): Promise<string> {
+    this.finalizedTranscript = null;
     return new Promise((resolve) => {
       const initialTranscript = this.transcriptSnapshot();
       const transcripts: string[] = [...this.finalTranscripts];
       let partial = this.currentPartial;
+      let hasProvisionalTail = this.transcriptIsPartial;
+      let settled = false;
       let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
       let unsubscribe = () => {};
-      const finish = (text: string) => {
+      const finish = (text: string, isFinal = false) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        this.finalizedTranscript =
+          isFinal && !this.discarded && !this.failed && !this.gatewayDisconnected ? text : null;
         globalThis.clearTimeout(timer);
         unsubscribe();
         this.settleLateFinalDrain = null;
@@ -467,17 +531,26 @@ export class ComposerDictationSession {
       this.resumeFinalDrain();
       unsubscribe = this.client.addEventListener((frame) => {
         const payload = eventPayload(frame);
-        if (!payload || payload.transcriptionSessionId !== this.transcriptionSessionId) {
+        if (settled || !payload || payload.transcriptionSessionId !== this.transcriptionSessionId) {
           return;
         }
         if (
-          payload.type === "transcript" &&
-          payload.final === true &&
-          typeof payload.text === "string" &&
-          payload.text.trim()
+          (payload.type === "transcript" || payload.type === "partial") &&
+          typeof payload.text === "string"
         ) {
-          transcripts.push(payload.text.trim());
-          partial = "";
+          if (!this.acceptTranscript(payload)) {
+            return;
+          }
+          const text = payload.text.trim();
+          if (payload.type === "transcript" && payload.final === true && text) {
+            transcripts.push(text);
+            partial = "";
+            hasProvisionalTail = false;
+          } else {
+            // Late partials did not enter the Off fallback before cleanup existed.
+            // Preserve that text behavior, but do not call an unfinished tail final.
+            hasProvisionalTail = true;
+          }
         } else if (payload.type === "error" || payload.type === "close") {
           if (payload.type === "error" || payload.reason === "error") {
             this.reportFailure(
@@ -487,7 +560,13 @@ export class ComposerDictationSession {
               ),
             );
           } else {
-            finish(transcript());
+            finish(
+              transcript(),
+              payload.reason === "completed" &&
+                transcripts.length > 0 &&
+                !partial &&
+                !hasProvisionalTail,
+            );
           }
         }
       });

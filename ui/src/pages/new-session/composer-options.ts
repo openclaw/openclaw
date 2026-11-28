@@ -7,6 +7,7 @@ import type { ComposerDraftSource } from "../../lib/chat/composer-draft-changes.
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import type { ChatComposerCapabilityMenuSource } from "../chat/components/chat-composer-plus-menu.types.ts";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
+import type { ComposerDictationOwner } from "../chat/composer-dictation.ts";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import type { NewSessionModelControl } from "./model-control.ts";
 
@@ -30,6 +31,7 @@ export type NewSessionComposerOptions = {
   onChange: () => void;
   submitDisabledReason?: string;
   onBlockedSubmit?: () => void;
+  readDictation?: () => ComposerDictationOwner | undefined;
   dictationActive?: boolean;
   dictationPreview?: string;
   dictationStatus?: JSX.Element;

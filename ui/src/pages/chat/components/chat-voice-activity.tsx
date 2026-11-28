@@ -1,4 +1,5 @@
-import { createMemo, lazy, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, lazy, onSettled, Show } from "solid-js";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -171,15 +172,44 @@ export function ChatVoiceStatus(props: {
 const ActiveDictationStatus = lazy(() => import("./composer-dictation-status.tsx"), {
   export: "ActiveDictationStatus",
 });
+export const DictationCleanupDialog = lazy(() => import("./dictation-cleanup-dialog.tsx"), {
+  export: "DictationCleanupDialog",
+});
 
 export function ComposerDictationStatus(props: {
   readDictation: () => ComposerDictationOwner | undefined;
 }) {
+  const [cleanupOpen, setCleanupOpen] = createSignal(false);
+  const review = () => props.readDictation()?.cleanupReview;
   return (
-    <Show when={props.readDictation()?.active || props.readDictation()?.transcribing}>
-      <ChatLazyBoundary>
-        <ActiveDictationStatus readDictation={props.readDictation} />
-      </ChatLazyBoundary>
-    </Show>
+    <>
+      <Show when={props.readDictation()?.active || props.readDictation()?.transcribing}>
+        <ChatLazyBoundary>
+          <ActiveDictationStatus readDictation={props.readDictation} />
+        </ChatLazyBoundary>
+      </Show>
+      <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {review() ? t("chat.composer.reviewDictation") : null}
+      </span>
+      <Show when={review() || cleanupOpen()}>
+        <button
+          type="button"
+          class="btn btn--sm primary"
+          aria-haspopup="dialog"
+          onClick={() => setCleanupOpen(true)}
+        >
+          <Icon name="wandSparkles" />
+          {t("chat.composer.reviewDictation")}
+        </button>
+        <Show when={cleanupOpen()}>
+          <ChatLazyBoundary>
+            <DictationCleanupDialog
+              readDictation={props.readDictation}
+              onClose={() => setCleanupOpen(false)}
+            />
+          </ChatLazyBoundary>
+        </Show>
+      </Show>
+    </>
   );
 }

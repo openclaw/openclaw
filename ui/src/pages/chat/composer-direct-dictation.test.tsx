@@ -10,6 +10,13 @@ import { ComposerDictationStatus } from "./components/chat-voice-activity.tsx";
 import { DirectDictationView } from "./components/direct-dictation-view.tsx";
 import { placeComposerDictation } from "./composer-dictation-session.ts";
 import type * as ComposerDictationModule from "./composer-dictation.ts";
+import type { DictationDraftSnapshot } from "./dictation-refinement.ts";
+
+type DictationHarnessOptions = {
+  onCommit: (transcript: string, late?: true) => false | void;
+  readDraft?: () => DictationDraftSnapshot | undefined;
+  prepareSession?: () => Promise<string | undefined>;
+};
 
 const dictationHarness = vi.hoisted(() => {
   class Controller extends EventTarget {
@@ -18,6 +25,9 @@ const dictationHarness = vi.hoisted(() => {
     finalizing = false;
     transcribing = false;
     transcript = "";
+    requiresCleanupReview = false;
+    dismissCleanup = vi.fn();
+    placeTranscript = placeComposerDictation;
 
     get locksComposer() {
       return this.active;
@@ -40,12 +50,7 @@ const dictationHarness = vi.hoisted(() => {
       return true;
     });
 
-    constructor(
-      private options: {
-        onCommit: (transcript: string) => void;
-        prepareSession?: () => Promise<string | undefined>;
-      },
-    ) {
+    constructor(private options: DictationHarnessOptions) {
       super();
       this.update(options);
       harness.controllers.push(this);
@@ -54,10 +59,7 @@ const dictationHarness = vi.hoisted(() => {
       this.addEventListener("change", listener);
       return () => this.removeEventListener("change", listener);
     }
-    update(options: {
-      onCommit: (transcript: string) => void;
-      prepareSession?: () => Promise<string | undefined>;
-    }) {
+    update(options: DictationHarnessOptions) {
       this.options = options;
       harness.options = options;
     }
@@ -69,10 +71,7 @@ const dictationHarness = vi.hoisted(() => {
     }
   }
   const harness = {
-    options: null as null | {
-      onCommit: (transcript: string) => void;
-      prepareSession?: () => Promise<string | undefined>;
-    },
+    options: null as null | DictationHarnessOptions,
     controllers: [] as Controller[],
   };
   return Object.assign(harness, { Controller });
@@ -116,9 +115,10 @@ function fixture(
   const onMessage = vi.fn();
   const onError = vi.fn();
   const onSubmit = vi.fn();
+  const client = {};
   const control = new DirectDictationControl({
     textarea: { captureSelection, insertTranscript } as never,
-    getClient: () => ({}) as never,
+    getClient: () => client as never,
     isConnected: () => true,
     canCommit: () => true,
     onMessage,
@@ -314,6 +314,31 @@ describe("DirectDictationControl", () => {
     expect(dictationHarness.controllers).toHaveLength(3);
     expect(insertTranscript).not.toHaveBeenCalled();
     expect(onMessage).not.toHaveBeenCalled();
+  });
+
+  it("refuses an oversized conservative insertion before writing and accepts the exact limit", () => {
+    const target = document.createElement("textarea");
+    target.value = "prefix";
+    target.maxLength = 9;
+    target.setSelectionRange(6, 6);
+    document.body.append(target);
+    const textarea = createDirectDictationTextarea(() => target);
+    const f = fixture({ textarea });
+    f.control.prepare("agent-a").voice.onDirectDictationStart();
+    expectDefined(dictationHarness.controllers[0], "dictation owner").requiresCleanupReview = true;
+    onTestFinished(() => {
+      f.control.dispose();
+      target.remove();
+    });
+    const revision = textarea.readDraft()?.revision;
+    expect(dictationHarness.options?.onCommit("fit", true)).toBe(false);
+    expect(target.value).toBe("prefix");
+    expect(textarea.readDraft()?.revision).toBe(revision);
+    expect(f.onMessage).not.toHaveBeenCalled();
+    target.maxLength = 10;
+    dictationHarness.options?.onCommit("fit", true);
+    expect(target.value).toBe("prefix fit");
+    expect(f.onMessage).toHaveBeenCalledExactlyOnceWith("prefix fit");
   });
 });
 

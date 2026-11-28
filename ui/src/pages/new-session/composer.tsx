@@ -376,6 +376,7 @@ function NewSessionComposerInput(props: {
           target.value,
           mentions.length || nextMentions.length ? nextMentions : undefined,
         );
+        textarea.recordInput();
         textarea.mentionInput = undefined;
         props.frame.updateMenus(target, event);
       }}

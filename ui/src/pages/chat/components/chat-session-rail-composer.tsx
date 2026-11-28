@@ -84,8 +84,9 @@ export function SessionRailComposer(props: {
   const inputHandle = createChatAttachmentInputHandle();
   const [plusMenuOpen, setPlusMenuOpen] = createSignal(false);
   const [settled, setSettled] = createSignal(false);
+  const draft = createDirectDictationTextarea(() => textarea ?? null);
   const dictationControl = new DirectDictationControl({
-    textarea: createDirectDictationTextarea(() => textarea ?? null),
+    textarea: draft,
     getClient: () => props.client,
     isConnected: () => props.connected,
     // Follow-ups stay editable while an answer is pending; submit owns that gate.
@@ -142,7 +143,11 @@ export function SessionRailComposer(props: {
   // The dictated preview reaches the draft only on commit, so submission finishes it first.
   const submit = () => {
     const active = dictationControl.dictation;
+    if (active?.finishingCleanup) {
+      return;
+    }
     if (!active?.active) {
+      dictationControl.dismissCleanup();
       props.submit();
       return;
     }
@@ -150,8 +155,14 @@ export function SessionRailComposer(props: {
       return;
     }
     const sessionKey = props.sessionKey;
+    const requiresReview = active.requiresCleanupReview;
     void active.finishActive().then(() => {
-      if (props.sessionKey === sessionKey) {
+      if (
+        !requiresReview &&
+        props.sessionKey === sessionKey &&
+        dictationControl.dictation === active
+      ) {
+        dictationControl.dismissCleanup();
         props.submit();
       }
     });
@@ -268,6 +279,7 @@ export function SessionRailComposer(props: {
               }
               adjustTextareaHeight(event.currentTarget);
               props.onDraftChange?.(event.currentTarget.value);
+              draft.recordInput();
               emojiMenu.update(event.currentTarget, !composing);
             }}
             ref={[
@@ -289,6 +301,7 @@ export function SessionRailComposer(props: {
             menu={{
               attachments: props.attachmentProps,
               inputHandle,
+              readDictation: () => dictation.read().dictation,
               disabled: !props.connected || dictationActive(),
               open: plusMenuOpen(),
               view: "root",

@@ -10,7 +10,7 @@ import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { renderComposerVoiceButtonSolid } from "./components/chat-composer-controls.tsx";
-import { ComposerDictationSession, placeComposerDictation } from "./composer-dictation-session.ts";
+import { ComposerDictationSession } from "./composer-dictation-session.ts";
 import { ComposerDictationOwner } from "./composer-dictation.ts";
 import { MockDictationAudioContext, type MockAudioProcessor } from "./talk/input.test-support.ts";
 
@@ -272,6 +272,130 @@ afterEach(() => {
 });
 
 describe("ComposerDictationOwner", () => {
+  describe("conservative cleanup publication", () => {
+    beforeEach(() =>
+      patchSettings({ dictationCleanup: { version: 1, mode: "conservative", locale: "en" } }),
+    );
+    afterEach(() => patchSettings({ dictationCleanup: { version: 1, mode: "off", locale: null } }));
+
+    it("keeps a recording admitted with Off on its existing delivery path", async () => {
+      patchSettings({ dictationCleanup: { version: 1, mode: "off", locale: null } });
+      const { controller, target, onCommit } = createHarness();
+      await startHold(target);
+      controller.setCleanupPolicy({ mode: "conservative", locale: "en" });
+      expect(controller.requiresCleanupReview).toBe(false);
+      transcript("um please call me tomorrow");
+      const finished = controller.finishActive();
+      await waitForFast(() => expectClosed());
+      emit({ type: "close", reason: "completed" });
+      await expect(finished).resolves.toBe(true);
+      expect(onCommit).toHaveBeenCalledExactlyOnceWith("um please call me tomorrow", true);
+      expect(controller.cleanupReview).toBeNull();
+    });
+
+    it.each([
+      "unavailable semantics",
+      "raw",
+      "edit",
+      "cancel",
+      "disable",
+      "uncertain write",
+      "auth change",
+      "destination change",
+    ])("keeps the real session delivery boundary owned after %s", async (choice) => {
+      let value = "Existing draft";
+      let revision = 0;
+      const original = "um I I need the invoice";
+      const publish = vi.fn((text: string) => {
+        if (choice === "uncertain write") {
+          throw new Error("Draft owner failed after an uncertain write");
+        }
+        value += ` ${text}`;
+        revision += 1;
+      });
+      const { controller, target, options } = createHarness({
+        readDraft: () => ({ value, revision }),
+        onCommit: publish,
+      });
+      await startHold(target);
+      if (choice === "raw") {
+        emit({ transcriptionSessionId: "dictation-1", type: "partial", text: "um I I need" });
+      } else {
+        transcript(original);
+      }
+      if (choice === "auth change") {
+        Object.defineProperty(options.client, "auth", { value: { scopes: ["operator.read"] } });
+      }
+      const finished = controller.finishActive();
+      expect(controller.locksComposer).toBe(false);
+      expect(publish).not.toHaveBeenCalled();
+      await waitForFast(() => expectClosed());
+      if (choice === "raw") {
+        expect(controller.cleanupReview).toMatchObject({ status: "pending", canUseRaw: false });
+        expect(controller.chooseCleanupRaw()).toBe(false);
+        expect(publish).not.toHaveBeenCalled();
+        transcript(original);
+      } else if (choice === "edit") {
+        value = "User replacement";
+        revision += 1;
+      } else if (choice === "cancel") {
+        controller.cancel();
+      } else if (choice === "disable") {
+        controller.setCleanupPolicy({ mode: "off", locale: null });
+      } else if (choice === "destination change") {
+        controller.update({ ...options, draftKey: "replacement" });
+      }
+      emit({ type: "close", reason: "completed" });
+      await expect(finished).resolves.toBe(false);
+      await vi.advanceTimersByTimeAsync(0);
+      if (choice === "unavailable semantics") {
+        expect(controller.cleanupReview).toMatchObject({
+          status: "ready",
+          rawText: original,
+          reason: "semantic-unavailable",
+          canUseRaw: true,
+          canRetry: false,
+        });
+        expect(publish).not.toHaveBeenCalled();
+        controller.retryCleanup();
+        expect(controller.cleanupReview?.status).toBe("ready");
+        expect(controller.chooseCleanupRaw()).toBe(true);
+        expect(controller.chooseCleanupRaw()).toBe(false);
+        expect(publish).toHaveBeenCalledExactlyOnceWith(original, true);
+        expect(controller.cleanupReview).toBeNull();
+      } else if (choice === "raw") {
+        expect(controller.chooseCleanupRaw()).toBe(true);
+        expect(publish).toHaveBeenCalledExactlyOnceWith(original, true);
+        expect(controller.cleanupReview).toBeNull();
+      } else if (choice === "uncertain write") {
+        expect(controller.chooseCleanupRaw()).toBe(false);
+        expect(controller.chooseCleanupRaw()).toBe(false);
+        expect(controller.cleanupReview?.publicationUncertain).toBe(true);
+        expect(controller.cleanupReview?.canRetry).toBe(false);
+        expect(publish).toHaveBeenCalledTimes(1);
+      } else {
+        expect(publish).not.toHaveBeenCalled();
+        if (choice === "auth change" || choice === "destination change") {
+          expect(controller.chooseCleanupRaw()).toBe(false);
+          expect(controller.cleanupReview?.rawText ?? "").toBe("");
+        } else if (choice === "edit") {
+          expect(controller.chooseCleanupRaw()).toBe(false);
+          expect(value).toBe("User replacement");
+          expect(controller.cleanupReview?.rawText).toBe(original);
+        } else {
+          expect(controller.chooseCleanupRaw()).toBe(true);
+          expect(publish).toHaveBeenCalledExactlyOnceWith(original, true);
+        }
+      }
+      expect(
+        request.mock.calls.filter(([method]) => method === "talk.session.create"),
+      ).toHaveLength(1);
+      expect(
+        request.mock.calls.some(([method]) => method === "chat.send" || method === "tts.speak"),
+      ).toBe(false);
+    });
+  });
+
   it.each(["cancel", "restart", "draft switch"])(
     "does not revive a retired lazy capture after %s",
     async (transition) => {
@@ -994,13 +1118,6 @@ describe("composer microphone button", () => {
     expect(request).not.toHaveBeenCalled();
     expect(controller.locksComposer).toBe(false);
   });
-});
-
-it("placeComposerDictation spaces inserted and replaced selections", () => {
-  const place = (start: number, end: number, spoken: string) =>
-    placeComposerDictation(spoken, null, { start, end, value: "hello world" });
-  expect(place(6, 6, "brave new")).toMatchObject({ value: "hello brave new world", caret: 16 });
-  expect(place(6, 11, "there")).toMatchObject({ value: "hello there", caret: 11 });
 });
 
 it.each([false, true])(

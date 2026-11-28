@@ -1,4 +1,10 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import {
+  normalizeDictationCleanupPolicy,
+  type DictationCleanupPolicy,
+} from "../../app/settings-contract.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { hasModalSurface } from "../../components/overlay-registry.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -8,6 +14,11 @@ import type {
   ComposerDictationSession,
   placeComposerDictation,
 } from "./composer-dictation-session.ts";
+import type {
+  DictationCleanupReview,
+  DictationDraftSnapshot,
+  DictationRefinement,
+} from "./dictation-refinement.ts";
 import type { RealtimeTalkLevelSignal } from "./talk/level.ts";
 
 const HOLD_ARM_DELAY_MS = 150,
@@ -29,7 +40,8 @@ type ComposerDictationOwnerOptions = {
   enabled: boolean;
   dictationAvailable?: boolean;
   realtimeTalkActive: boolean;
-  onCommit: (text: string, late?: true, preservePreview?: true) => void;
+  onCommit: (text: string, late?: true, preservePreview?: true) => false | void;
+  readDraft?: () => DictationDraftSnapshot | undefined;
   onError: (message: string, failure: ComposerDictationFailure) => void;
   onTap?: () => void;
   onDictationUnavailable?: () => void;
@@ -52,6 +64,14 @@ export class ComposerDictationOwner extends EventTarget {
   private suppressClickTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   // Created with the lazy capture module, before the first transcript exists.
   private commits: ComposerDictationCommits | undefined;
+  private refinement: DictationRefinement | undefined;
+  private cleanupCapture: {
+    policy: DictationCleanupPolicy;
+    cancelled: boolean;
+    auth: GatewayBrowserClient["auth"];
+  } | null = null;
+  private pendingCleanup: { policy: DictationCleanupPolicy; cancelled: boolean } | null = null;
+  private scope = {};
   private disposed = false;
 
   constructor(private options: ComposerDictationOwnerOptions) {
@@ -83,6 +103,77 @@ export class ComposerDictationOwner extends EventTarget {
     return Boolean(this.commits?.size);
   }
 
+  get cleanupPolicy(): DictationCleanupPolicy {
+    return normalizeDictationCleanupPolicy(loadSettings().dictationCleanup);
+  }
+
+  get cleanupReview(): DictationCleanupReview | null {
+    const review = this.refinement?.review ?? null;
+    return this.finishingCleanup && review && review.status !== "unavailable"
+      ? { ...review, status: "pending", canUseRaw: false }
+      : review;
+  }
+
+  get finishingCleanup(): boolean {
+    return this.pendingCleanup !== null;
+  }
+
+  get awaitingCleanup(): boolean {
+    return this.finishingCleanup || this.refinement?.blocksCapture === true;
+  }
+
+  get requiresCleanupReview(): boolean {
+    return Boolean(
+      this.cleanupCapture ||
+      this.awaitingCleanup ||
+      (this.connecting && !this.session && this.cleanupPolicy.mode === "conservative"),
+    );
+  }
+
+  setCleanupPolicy(policy: Pick<DictationCleanupPolicy, "mode" | "locale">): void {
+    const normalized = normalizeDictationCleanupPolicy({ version: 1, ...policy });
+    patchSettings({ dictationCleanup: normalized });
+    if (normalized.mode === "off") {
+      // Turning cleanup off does not insert previously reviewed text.
+      if (this.cleanupCapture) {
+        this.cleanupCapture.policy = normalized;
+      }
+      this.refinement?.cancel();
+      this.retireCleanupCapture();
+    }
+    this.dispatchEvent(new Event("change"));
+  }
+
+  chooseCleanupRaw(): boolean {
+    if (this.finishingCleanup) {
+      return false;
+    }
+    const chosen = this.refinement?.chooseRaw() === true;
+    if (chosen || this.refinement?.review?.publicationUncertain) {
+      this.retireCleanupCapture();
+    }
+    return chosen;
+  }
+
+  retryCleanup(): void {
+    this.refinement?.retry(this.cleanupPolicy);
+  }
+
+  dismissCleanup(): void {
+    this.retireCleanupCapture();
+    this.refinement?.dismiss();
+  }
+
+  private retireCleanupCapture(): void {
+    if (this.pendingCleanup) {
+      this.pendingCleanup.cancelled = true;
+      this.pendingCleanup = null;
+      this.commits?.retire();
+      this.releasePlayback();
+      this.pendingCommitsChanged();
+    }
+  }
+
   get locksComposer(): boolean {
     return this.phase !== "idle";
   }
@@ -109,7 +200,12 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   startDirect(): boolean {
-    if (this.phase !== "idle" || !this.canHold()) {
+    if (
+      this.phase !== "idle" ||
+      !this.canHold() ||
+      this.awaitingCleanup ||
+      (this.cleanupPolicy.mode === "conservative" && this.transcribing)
+    ) {
       return false;
     }
     // Surfaces without Talk do not need the hold discriminator. Enter the same
@@ -126,8 +222,14 @@ export class ComposerDictationOwner extends EventTarget {
       this.options.draftKey !== options.draftKey
     ) {
       this.cancel();
+      this.scope = {};
+      this.refinement?.dismiss();
     }
     this.options = options;
+    if (this.refinement && (!options.connected || !options.enabled || options.realtimeTalkActive)) {
+      this.retireCleanupCapture();
+      this.refinement.dismiss();
+    }
     if (!options.connected) {
       this.commits?.markGatewayDisconnected();
     }
@@ -153,7 +255,13 @@ export class ComposerDictationOwner extends EventTarget {
       // A new press is explicit Stop, even if the held release was lost outside the window.
       this.clearClickSuppression();
     }
-    if (event.button !== 0 || this.phase !== "idle" || !this.canHold()) {
+    if (
+      event.button !== 0 ||
+      this.phase !== "idle" ||
+      !this.canHold() ||
+      this.awaitingCleanup ||
+      (this.cleanupPolicy.mode === "conservative" && this.transcribing)
+    ) {
       return false;
     }
     event.preventDefault();
@@ -222,6 +330,7 @@ export class ComposerDictationOwner extends EventTarget {
   dispose(): void {
     this.disposed = true;
     this.cancel();
+    this.refinement?.dismiss();
   }
 
   cancel(): void {
@@ -231,6 +340,11 @@ export class ComposerDictationOwner extends EventTarget {
       this.commits.retire();
       this.pendingCommitsChanged();
     }
+    if (this.pendingCleanup) {
+      this.pendingCleanup.cancelled = true;
+      this.pendingCleanup = null;
+    }
+    this.refinement?.cancel();
     void this.stop({ commit: false });
   }
 
@@ -279,7 +393,12 @@ export class ComposerDictationOwner extends EventTarget {
   };
 
   private readonly handleDocumentKeyDown = (event: KeyboardEvent): void => {
-    if (event.key !== "Escape" || (this.phase === "idle" && !this.transcribing)) {
+    if (
+      event.key !== "Escape" ||
+      event.defaultPrevented ||
+      hasModalSurface(document) ||
+      (this.phase === "idle" && !this.transcribing && !this.awaitingCleanup)
+    ) {
       return;
     }
     event.preventDefault();
@@ -341,6 +460,11 @@ export class ComposerDictationOwner extends EventTarget {
         : this.options.sessionKey;
       const { ComposerDictationSession, ComposerDictationCommits, describeDictationStartError } =
         await import("./composer-dictation-session.ts");
+      const cleanupPolicy = this.cleanupPolicy;
+      if (cleanupPolicy.mode === "conservative" && !this.refinement) {
+        const { DictationRefinement } = await import("./dictation-refinement.ts");
+        this.refinement = new DictationRefinement(() => this.pendingCommitsChanged());
+      }
       if (
         this.captureStart !== captureStart ||
         this.disposed ||
@@ -350,6 +474,11 @@ export class ComposerDictationOwner extends EventTarget {
         return;
       }
       describeStartError = describeDictationStartError;
+      this.refinement?.dismiss();
+      this.cleanupCapture =
+        cleanupPolicy.mode === "conservative"
+          ? { policy: cleanupPolicy, cancelled: false, auth: client.auth }
+          : null;
       const commits = (this.commits ??= new ComposerDictationCommits());
       const session = new ComposerDictationSession(
         client,
@@ -404,8 +533,39 @@ export class ComposerDictationOwner extends EventTarget {
     }
     this.setPhase("stopping");
     this.session = null;
+    const cleanup = this.cleanupCapture;
+    this.cleanupCapture = null;
+    // Capture the unlocked draft before waiting for final STT. Later typing must
+    // not be replaced by an original-text choice.
+    const draft = this.options.readDraft?.();
+    const scope = this.scope;
+    const client = this.options.client;
+    const auth = cleanup ? cleanup.auth : client?.auth;
+    const binding = {
+      isCurrent: () =>
+        !this.disposed &&
+        this.scope === scope &&
+        this.options.client === client &&
+        client?.auth === auth &&
+        this.options.connected &&
+        this.options.enabled &&
+        !this.options.realtimeTalkActive,
+      readDraft: () => this.options.readDraft?.(),
+      publish: (text: string) => this.options.onCommit(text, true),
+    };
+    // Publish the finalization state before observers can send or insert text.
+    this.pendingCleanup = options.commit ? cleanup : null;
     this.setPhase("idle");
-    if (!options.commit) {
+    if (cleanup && session.transcriptSnapshot()) {
+      this.refinement!.prepare(
+        session.cleanupSource(session.transcriptSnapshot()),
+        cleanup.policy,
+        binding,
+        draft,
+      );
+    }
+    if (!options.commit || cleanup?.cancelled) {
+      this.refinement?.cancel();
       this.releasePlayback();
       void session.cancel().catch(() => undefined);
       return Promise.resolve(false);
@@ -414,7 +574,6 @@ export class ComposerDictationOwner extends EventTarget {
     // and commit in capture order, even when a later provider finishes first.
     const committed = this.commits!.add(session, (lateTranscript) => {
       this.releasePlayback();
-      this.pendingCommitsChanged();
       if (
         !lateTranscript ||
         !wasActive ||
@@ -422,8 +581,30 @@ export class ComposerDictationOwner extends EventTarget {
         !this.options.enabled ||
         this.options.realtimeTalkActive
       ) {
+        if (this.pendingCleanup === cleanup) {
+          this.pendingCleanup = null;
+        }
+        this.pendingCommitsChanged();
         return false;
       }
+      if (cleanup) {
+        if (cleanup.cancelled || !binding.isCurrent()) {
+          if (this.pendingCleanup === cleanup) {
+            this.pendingCleanup = null;
+          }
+          this.pendingCommitsChanged();
+          return false;
+        }
+        this.pendingCleanup = null;
+        this.refinement!.prepare(
+          session.cleanupSource(lateTranscript),
+          cleanup.policy,
+          binding,
+          draft,
+        );
+        return false;
+      }
+      this.pendingCommitsChanged();
       if (this.active) {
         this.options.onCommit(lateTranscript, true, true);
       } else {
@@ -489,7 +670,7 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   private syncCancellationListeners(): void {
-    if (this.phase !== "idle" || this.transcribing) {
+    if (this.phase !== "idle" || this.transcribing || this.awaitingCleanup) {
       if (this.cancellationListeners) {
         return;
       }

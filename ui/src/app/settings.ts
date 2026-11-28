@@ -37,6 +37,7 @@ import {
   normalizeChatSendShortcut,
   normalizeChatWorkspaceDock,
   normalizeDashboardsDisplay,
+  normalizeDictationCleanupPolicy,
   normalizeSessionFilesDisplay,
   normalizeTextScale,
   UI_APPEARANCE_DEFAULTS,
@@ -386,6 +387,7 @@ export function loadUiPreferences(
     showAdvancedSettings: false,
     pinnedAgentIds: [],
     composerHoldToRecord: UI_APPEARANCE_DEFAULTS.composerHoldToRecord,
+    dictationCleanup: normalizeDictationCleanupPolicy(undefined),
   };
 
   try {
@@ -449,6 +451,7 @@ export function loadUiPreferences(
       realtimeTalkInputDeviceId: normalizeOptionalString(parsed.realtimeTalkInputDeviceId),
       realtimeTalkVideoDeviceId: normalizeOptionalString(parsed.realtimeTalkVideoDeviceId),
       composerHoldToRecord: booleanSetting("composerHoldToRecord"),
+      dictationCleanup: normalizeDictationCleanupPolicy(parsed.dictationCleanup),
       talkCameraAutoEnable:
         typeof parsed.talkCameraAutoEnable === "boolean" ? parsed.talkCameraAutoEnable : undefined,
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
@@ -585,6 +588,7 @@ export function saveSettings(
       ],
     ].slice(-MAX_SCOPED_SESSION_ENTRIES),
   );
+  const dictationCleanup = normalizeDictationCleanupPolicy(next.dictationCleanup);
   const persisted: PersistedUiSettings = {
     gatewayUrl: next.gatewayUrl,
     theme: next.theme,
@@ -610,6 +614,7 @@ export function saveSettings(
     realtimeTalkInputDeviceId: normalizeOptionalString(next.realtimeTalkInputDeviceId),
     realtimeTalkVideoDeviceId: normalizeOptionalString(next.realtimeTalkVideoDeviceId),
     composerHoldToRecord: next.composerHoldToRecord === false ? false : undefined,
+    dictationCleanup: dictationCleanup.mode === "conservative" ? dictationCleanup : undefined,
     talkCameraAutoEnable: next.talkCameraAutoEnable,
     chatSplitLayout: next.chatSplitLayout || undefined,
     // Right dock is the default; only the opt-in bottom dock persists.

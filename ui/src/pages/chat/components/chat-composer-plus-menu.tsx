@@ -26,6 +26,8 @@ import type {
   ChatComposerPlusMenuHandlers,
   ChatComposerPlusMenuProps,
 } from "./chat-composer-plus-menu.types.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { DictationCleanupDialog } from "./chat-voice-activity.tsx";
 
 registerEnglishCatalog(registerChatComposerEnglish);
 
@@ -40,6 +42,7 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuProps }) {
   let releaseAnchor = () => {};
   let disposed = false;
   const [handlers, setHandlers] = createSignal<ChatComposerPlusMenuHandlers>();
+  const [cleanupOpen, setCleanupOpen] = createSignal(false);
   let focusOnReady = false;
   let focusLastOnReady = false;
   let openingFocus: Element | null | undefined;
@@ -179,7 +182,13 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuProps }) {
           releaseAnchor();
           releaseAnchor = props.menu.inputHandle.bindAnchor(next.overlay.trigger);
         }}
-        onSelect={(item, event) => handlers()?.select(item, event)}
+        onSelect={(item, event) => {
+          if (item.id === "dictation-cleanup") {
+            setCleanupOpen(true);
+          } else {
+            handlers()?.select(item, event);
+          }
+        }}
         onNavigate={({ value }) => handlers()?.navigate(value)}
         onBeforeShow={() => {
           openingFocus = host.ownerDocument.activeElement;
@@ -197,6 +206,15 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuProps }) {
           }
         }}
       />
+      <Show when={cleanupOpen()}>
+        <ChatLazyBoundary>
+          <DictationCleanupDialog
+            readDictation={() => props.menu.readDictation?.()}
+            returnFocus={() => handle.overlay.trigger ?? null}
+            onClose={() => setCleanupOpen(false)}
+          />
+        </ChatLazyBoundary>
+      </Show>
     </div>
   );
 }
@@ -219,6 +237,7 @@ export function ChatComposerPlusMenu(props: { menu: ChatComposerPlusMenuProps })
       props.menu.pluginActions?.length ||
       props.menu.capabilityMenu ||
       props.menu.rootToggles?.length ||
+      props.menu.readDictation?.() ||
       uploadsEnabled(props.menu.attachments.uploadConfig),
     ),
   );

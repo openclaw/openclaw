@@ -2761,7 +2761,8 @@
                           "nodes/talk/realtime-sessions",
                           "nodes/talk/session-ownership",
                           "nodes/talk/macos-relay",
-                          "nodes/talk/client-ui"
+                          "nodes/talk/client-ui",
+                          "nodes/talk/conservative-dictation-cleanup"
                         ]
                       },
                       "nodes/voicewake",

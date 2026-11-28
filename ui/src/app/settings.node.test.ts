@@ -613,6 +613,45 @@ describe("gateway settings and layout persistence", () => {
     expect(loadSettings().talkCameraAutoEnable).toBeUndefined();
   });
 
+  it("keeps existing settings unchanged until English cleanup is selected and disabled", () => {
+    writeStored({ theme: "claw", chatShowThinking: true, composerHoldToRecord: false });
+    expect(loadSettings().dictationCleanup).toEqual({ version: 1, mode: "off", locale: null });
+    const before = loadSettings();
+    patchSettings({ dictationCleanup: { version: 1, mode: "conservative", locale: "en" } });
+    expect(loadSettings()).toEqual({
+      ...before,
+      dictationCleanup: { version: 1, mode: "conservative", locale: "en" },
+    });
+    expect(readStored().dictationCleanup).toEqual({
+      version: 1,
+      mode: "conservative",
+      locale: "en",
+    });
+    patchSettings({ dictationCleanup: { version: 1, mode: "off", locale: null } });
+    expect(loadSettings()).toEqual(before);
+    expect(readStored().dictationCleanup).toBeUndefined();
+  });
+
+  it.each([
+    "conservative",
+    { version: 2, mode: "conservative", locale: "en" },
+    { version: 1, mode: "aggressive", locale: "en" },
+    { version: 1, mode: "conservative", locale: "fr" },
+    { version: 1, mode: "conservative" },
+  ])("never enables cleanup from unsupported saved policy %j", (dictationCleanup) => {
+    writeStored({ dictationCleanup, locale: "en" });
+    expect(loadSettings().dictationCleanup).toEqual({ version: 1, mode: "off", locale: null });
+  });
+
+  it("keeps cleanup opt-in scoped to the selected Gateway", () => {
+    patchSettings({
+      gatewayUrl: "wss://first.example",
+      dictationCleanup: { version: 1, mode: "conservative", locale: "en" },
+    });
+    expect(loadSettings("wss://first.example").dictationCleanup?.mode).toBe("conservative");
+    expect(loadSettings("wss://second.example").dictationCleanup?.mode).toBe("off");
+  });
+
   it("persists pinned agents and normalizes duplicate or malformed entries", () => {
     saveSettings({ ...loadSettings(), pinnedAgentIds: ["main", "research"] });
     expect(loadSettings().pinnedAgentIds).toEqual(["main", "research"]);

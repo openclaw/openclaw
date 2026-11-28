@@ -34,16 +34,17 @@ Apple Watch also retains **Talk to Claw**, the separate [one-turn companion flow
 
 ## Talk documentation pages
 
-Talk mode is documented on this page and four child pages, one per reader job.
+Talk mode is documented on this page and five child pages, one per reader job.
 This page keeps the voice directives and the `talk` configuration reference.
 Open the child page that matches your task.
 
-| Page                                                                   | Read it when                                                                          |
-| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| [Talk realtime sessions and delegation](/nodes/talk/realtime-sessions) | You are wiring realtime Talk: voice selection, delegation, steering, and transcripts. |
-| [Talk session ownership](/nodes/talk/session-ownership)                | You need agent and session resolution, control authority, or close semantics.         |
-| [Talk on macOS and the Gateway relay](/nodes/talk/macos-relay)         | You run Talk on macOS or enable the streamed realtime Gateway relay.                  |
-| [Talk client UI](/nodes/talk/client-ui)                                | You need the macOS, Apple Watch, or Android client controls and behavior.             |
+| Page                                                                         | Read it when                                                                          |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| [Talk realtime sessions and delegation](/nodes/talk/realtime-sessions)       | You are wiring realtime Talk: voice selection, delegation, steering, and transcripts. |
+| [Talk session ownership](/nodes/talk/session-ownership)                      | You need agent and session resolution, control authority, or close semantics.         |
+| [Talk on macOS and the Gateway relay](/nodes/talk/macos-relay)               | You run Talk on macOS or enable the streamed realtime Gateway relay.                  |
+| [Talk client UI](/nodes/talk/client-ui)                                      | You need the macOS, Apple Watch, or Android client controls and behavior.             |
+| [Conservative dictation cleanup](/nodes/talk/conservative-dictation-cleanup) | You want to review optional English cleanup in an unsent Control UI draft.            |
 
 ## Where each section moved
 

@@ -20,26 +20,31 @@ export function createComposerDictationOptions(
     enabled: props.composerHoldToRecord !== false,
     dictationAvailable: devicePicker.dictationStatus === "ready",
     realtimeTalkActive: props.realtimeTalkActive === true,
-    onCommit: (transcript: string, late?: true, preservePreview?: true) => {
+    readDraft: () => ({
+      revision: state.editRevision,
+      value: props.getDraft?.() ?? props.draft,
+    }),
+    onCommit: (transcript: string, late?: true, preservePreview?: true): false | void => {
       const target = state.composerTextarea;
       const captured = state.dictationSelection;
       // A newer recording may be painting a partial over its captured draft.
       const liveValue = preservePreview
         ? (captured?.value ?? props.getDraft?.() ?? props.draft)
         : (target?.value ?? props.getDraft?.() ?? props.draft);
+      const liveSelection = {
+        start: target?.selectionStart ?? liveValue.length,
+        end: target?.selectionEnd ?? liveValue.length,
+        value: liveValue,
+      };
       const insertion = state.dictation?.placeTranscript(
         transcript,
         captured,
-        {
-          start: target?.selectionStart ?? liveValue.length,
-          end: target?.selectionEnd ?? liveValue.length,
-          value: liveValue,
-        },
+        liveSelection,
         late,
         preservePreview,
       );
       if (!insertion) {
-        return;
+        return false;
       }
       if (target) {
         target.value = insertion.value;
@@ -47,13 +52,13 @@ export function createComposerDictationOptions(
       }
       commitComposerDraft(props, insertion.value);
       state.dictationSelection = insertion.captured;
+      const revision = state.editRevision;
       queueMicrotask(() => {
-        const textarea = state.composerTextarea;
-        if (!textarea) {
+        if (!target || state.composerTextarea !== target || state.editRevision !== revision) {
           return;
         }
-        focusComposerInput(textarea, { preventScroll: true });
-        selectComposerInput(textarea, insertion.caret, insertion.caret);
+        focusComposerInput(target, { preventScroll: true });
+        selectComposerInput(target, insertion.caret, insertion.caret);
       });
     },
     onError: (
