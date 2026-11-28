@@ -88,13 +88,14 @@ describe("web inbound helpers", () => {
     });
   });
 
-  it.each([
-    ['N;ALTID="a:b":Family;Given;;;', "Family Given"],
-  ])("reads the shared contact name from %s", (field, name) => {
-    const card = ["BEGIN:VCARD", "VERSION:4.0", field, "END:VCARD"].join("\r\n");
-    const input = message({ contactMessage: { displayName: "", vcard: card } });
-    expect(extractContactContext(input)?.contacts).toEqual([{ name, phones: [] }]);
-  });
+  it.each([['N;ALTID="a:b":Family;Given;;;', "Family Given"]])(
+    "reads the shared contact name from %s",
+    (field, name) => {
+      const card = ["BEGIN:VCARD", "VERSION:4.0", field, "END:VCARD"].join("\r\n");
+      const input = message({ contactMessage: { displayName: "", vcard: card } });
+      expect(extractContactContext(input)?.contacts).toEqual([{ name, phones: [] }]);
+    },
+  );
 
   it.each([
     [
