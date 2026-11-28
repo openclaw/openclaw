@@ -536,7 +536,7 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
                 if (snapshot) {
                   snapshot = {
                     ...snapshot,
-                    grants: snapshot.grants.filter((row) => row.grantId !== grant.grantId),
+                    grants: snapshot.grants.filter((item) => item.grantId !== grant.grantId),
                   };
                 }
                 const result = await host.request<Grants>("mcp-relay.grants", {});
