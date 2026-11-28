@@ -348,8 +348,8 @@ describe("Turn on remote access over a personal sign-in", () => {
     for (const email_verified of [false, true]) {
       tokenClaims = { email: "JOSH@tailnet.example", email_verified };
       store.linkedProfile.mockResolvedValueOnce(null);
-      const idToken = await deviceSignIn(josh);
-      expect(await authority(josh, { ...commitParams, idToken })).toMatchObject({
+      const token = await deviceSignIn(josh);
+      expect(await authority(josh, { ...commitParams, idToken: token })).toMatchObject({
         payload: {
           linked: true,
           profileLink: email_verified ? "linked" : "link_approval_required",
