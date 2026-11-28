@@ -24,6 +24,7 @@ import * as stateOwner from "./gateway-state-owner.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-turn.js";
 import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
+import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import {
   useSqliteWorkerStoreFixture,
   appendWorkerRow as append,
@@ -593,6 +594,45 @@ it("releases broker client capacity and drains after synchronous cold path failu
     await expect(openBroker(broker, loop)).rejects.toMatchObject({ code: "ELOOP" });
   }
   try {
+    const store = await withinTest(openBroker(broker, databasePath()), signal);
+    assert(store);
+    expect(await append(store, "capacity recovered")).toMatchObject({ writes: 1 });
+  } finally {
+    await withinTest(broker.close(), signal);
+  }
+});
+
+it("releases broker client capacity when request byte calculation throws synchronously", async ({
+  signal,
+}) => {
+  const broker = new SqliteWorkerBroker();
+  const failedPath = databasePath();
+  const cyclicSelection: Record<string, unknown> = {};
+  cyclicSelection.self = cyclicSelection;
+  const stateContext = {
+    environment: { ...process.env, OPENCLAW_STATE_DIR: os.tmpdir() },
+    databaseEngineSelection: cyclicSelection,
+  } as unknown as SqliteWorkerStateContext;
+  const openWithCyclicSelection = () =>
+    broker.open<FixtureOperations>(
+      {
+        moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
+        databasePath: failedPath,
+        input: undefined,
+      },
+      stateContext,
+    );
+
+  try {
+    for (let index = 0; index < 64; index++) {
+      let failedOpen: Promise<unknown>;
+      try {
+        failedOpen = openWithCyclicSelection();
+      } catch (error) {
+        failedOpen = Promise.reject(error);
+      }
+      await expect(failedOpen).rejects.toThrow(/cycli/i);
+    }
     const store = await withinTest(openBroker(broker, databasePath()), signal);
     assert(store);
     expect(await append(store, "capacity recovered")).toMatchObject({ writes: 1 });
