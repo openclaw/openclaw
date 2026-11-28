@@ -86,6 +86,7 @@ export type TabAccessPolicy = {
     epoch?: TabAccessEpoch,
     afterNavigation?: boolean,
   ): Promise<AccessibleBrowserTabSnapshot>;
+  requireInputReceipt(tabId: number, epoch: TabAccessEpoch): Promise<AccessibleBrowserTabSnapshot>;
   listAccessibleTabs(options?: {
     allowDuringTransition?: boolean;
   }): Promise<AccessibleBrowserTabSnapshot[]>;
