@@ -47,7 +47,7 @@ const facts = (cfg: OpenClawConfig = {}) => ({
   metadataSnapshot: createPluginMetadataSnapshotFixture(),
 });
 type ViewOptions = Parameters<typeof prepareModelCatalogView>[0];
-const prepare = (options: Partial<ViewOptions> = {}) =>
+const prepare = (options: Partial<ViewOptions>) =>
   prepareModelCatalogView({ ...facts(options.cfg), ...options });
 const paired = (entry: ModelCatalogEntry) => ({ entry, runtimeEntry: entry });
 
@@ -262,7 +262,7 @@ const nativeResult = (
   availability: boolean | undefined,
   extra: Partial<ModelAuthAvailabilityEvaluation> = {},
 ) => ({ availability, runtimeAuth: { id: "native-test", source: "native" }, ...extra });
-function nativeReader(entry: ModelCatalogEntry = apiEntry, overrides: Partial<ViewOptions> = {}) {
+function nativeReader(entry: ModelCatalogEntry, overrides: Partial<ViewOptions> = {}) {
   const view = prepare({
     snapshot: { entries: [entry], routeVariants: [entry, nativeEntry] },
     pluginRegistry: nativeRegistry(subscriptionReadiness),
