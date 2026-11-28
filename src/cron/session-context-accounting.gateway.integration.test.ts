@@ -46,6 +46,7 @@ it(
         let summaryRequests = 0;
         let toolRounds = 0;
         let overWindow = 0;
+        let largestRequestTokens = 0;
         let largestPrompt = 0;
         const longTurnRequests: Array<{
           tokens: number;
@@ -53,6 +54,7 @@ it(
           lastItemTokens: number;
         }> = [];
         let publishedBeforeSummary = 0;
+        let lastToolTokens = 0;
         let lastAnswerTokens = 0;
         let listRow: ((key: string) => Promise<GatewaySessionRow | undefined>) | undefined;
         const providerWork: Promise<void>[] = [];
@@ -86,7 +88,9 @@ it(
                   }).length / 4,
                 );
                 largestPrompt = Math.max(largestPrompt, tokens);
-                if (tokens + (wire.max_output_tokens ?? 4_096) > 1_000_000) {
+                const requestTokens = tokens + (wire.max_output_tokens ?? 4_096);
+                largestRequestTokens = Math.max(largestRequestTokens, requestTokens);
+                if (requestTokens > 1_000_000) {
                   overWindow += 1;
                   response.writeHead(400, { "content-type": "application/json" });
                   response.end(
@@ -96,7 +100,7 @@ it(
                 }
                 if (longTurn && summaryRequests === 0) {
                   const row = await expectDefined(listRow, "connected list reader")(longKey);
-                  publishedBeforeSummary = Math.max(publishedBeforeSummary, row?.totalTokens ?? 0);
+                  publishedBeforeSummary = row?.totalTokens ?? 0;
                 }
                 const summary = isCompactionSummaryRequest(body);
                 if (longTurn) {
@@ -122,6 +126,8 @@ it(
                   total_tokens: (longTurn ? tokens : 3_000) + 5,
                 };
                 if (longTurn && summaryRequests === 0 && toolRounds < 64) {
+                  expect.soft(publishedBeforeSummary).toBeGreaterThanOrEqual(lastToolTokens);
+                  lastToolTokens = usage.total_tokens;
                   toolRounds += 1;
                   writeOpenAiResponsesItem(
                     response,
@@ -292,8 +298,10 @@ it(
               reported: lastAnswerTokens,
               toolRounds,
               summaryRequests,
+              largestRequestTokens,
               largestPrompt,
               publishedBeforeSummary,
+              lastToolTokens,
             });
           }
           expect(overWindow).toBe(0);
@@ -315,6 +323,9 @@ it(
           expect(largestPrompt).toBeLessThan(
             Math.min(1_000_000, trigger + toolRound + longTurnRequests[summaryAt]!.lastItemTokens),
           );
+          expect(Math.max(...beforeSummary.map((request) => request.tokens))).toBeLessThan(trigger);
+          expect(longTurnRequests[summaryAt]!.tokens).toBeGreaterThanOrEqual(trigger);
+          expect(largestRequestTokens).toBeLessThanOrEqual(1_000_000);
           expect(publishedBeforeSummary).toBeGreaterThan(700_000);
         } finally {
           if (gateway) {

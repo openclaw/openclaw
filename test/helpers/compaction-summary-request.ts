@@ -4,6 +4,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // normal request plus one trailing user instruction from summary-checkpoint-prompt.ts.
 const COLD_SUMMARY_SYSTEM_PROMPT = "context summarization assistant";
 const WARM_SUMMARY_INSTRUCTION = "The messages above are ";
+const WARM_SAFEGUARD_INSTRUCTION =
+  "Produce a compact, factual summary with these exact section headings:";
 
 function text(content: unknown): string {
   if (typeof content === "string") {
@@ -30,6 +32,7 @@ export function isCompactionSummaryRequest(raw: string): boolean {
   return (
     isRecord(last) &&
     last.role === "user" &&
-    text(last.content).startsWith(WARM_SUMMARY_INSTRUCTION)
+    (text(last.content).startsWith(WARM_SUMMARY_INSTRUCTION) ||
+      text(last.content).startsWith(WARM_SAFEGUARD_INSTRUCTION))
   );
 }
