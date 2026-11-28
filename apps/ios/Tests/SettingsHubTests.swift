@@ -597,7 +597,7 @@ private final class AccessCookieInstallFixture {
 /// loads. Swift Testing suites bound a lost signal with their time limit (#161616). The CI step does
 /// not enable XCTest time limits, so XCTest callers pass their test's one shared `deadline`.
 @MainActor
-private func waitForDashboardCondition(
+func waitForDashboardCondition(
     until deadline: ContinuousClock.Instant? = nil,
     _ condition: () -> Bool) async throws
 {
@@ -1087,12 +1087,13 @@ final class SettingsHubHTTPFixture {
 }
 
 @MainActor
-private final class DashboardDocumentFixture: NSObject, WKNavigationDelegate {
-    let url = URL(string: "https://gateway.example/settings")!
+final class DashboardDocumentFixture: NSObject, WKNavigationDelegate {
+    let url: URL
     let webView: WKWebView
     private var loaded: CheckedContinuation<WKNavigation, any Error>?
 
-    override init() {
+    init(url: URL = URL(string: "https://gateway.example/settings")!) {
+        self.url = url
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         self.webView = WKWebView(frame: .zero, configuration: configuration)

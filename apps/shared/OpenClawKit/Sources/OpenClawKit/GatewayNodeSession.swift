@@ -108,6 +108,7 @@ public actor GatewayNodeSession {
     private var serverMethods: Set<String>?
     private var serverCapabilities: Set<GatewayServerCapability>?
     private var operatorScopes: Set<String>?
+    private var authRecoveryScope: String?
     var reactionAccess: GatewayReactionAccessFacts?
     private var attachmentLimits: GatewayAttachmentLimits?
     private var mainSessionKey: String?
@@ -633,6 +634,10 @@ public actor GatewayNodeSession {
         self.currentRouteValue(self.operatorScopes, ifCurrentRoute: route)
     }
 
+    public func currentAuthRecoveryScope(ifCurrentRoute route: GatewayNodeSessionRoute) -> String? {
+        self.currentRouteValue(self.authRecoveryScope, ifCurrentRoute: route)
+    }
+
     /// The released Control UI accepts only shared startup credentials. Return
     /// them only when this exact live operator route selected them.
     public func controlUIDashboardLegacyCredentials(
@@ -848,6 +853,7 @@ extension GatewayNodeSession {
         self.serverCapabilities = Set(
             GatewayServerCapability.allCases.filter { snapshot.supportsServerCapability($0) })
         self.operatorScopes = snapshot.advertisedOperatorScopes()
+        self.authRecoveryScope = snapshot.auth["recoveryScope"]?.stringValue
         self.reactionAccess = GatewayReactionAccessFacts(hello: snapshot)
         self.attachmentLimits = snapshot.advertisedAttachmentLimits()
         self.mainSessionKey = snapshot.snapshot.sessiondefaults?["mainSessionKey"]?.stringValue?.trimmedNonEmpty
@@ -889,6 +895,7 @@ extension GatewayNodeSession {
         self.serverMethods = nil
         self.serverCapabilities = nil
         self.operatorScopes = nil
+        self.authRecoveryScope = nil
         self.reactionAccess = nil
         self.attachmentLimits = nil
         self.mainSessionKey = nil

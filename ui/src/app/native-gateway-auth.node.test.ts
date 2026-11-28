@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { Buffer } from "node:buffer";
 import { createHash, generateKeyPairSync, webcrypto } from "node:crypto";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
 import {
@@ -15,6 +16,7 @@ import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 
 const gatewayUrl = "wss://gateway.example/work/";
 const scopes = ["operator.read", "operator.write"];
+const personalRecoveryScope = "tailscale-account-a";
 const nativeClient = {
   id: "openclaw-android",
   version: "test",
@@ -35,6 +37,61 @@ const signedAt = 1_790_000_000_000;
 type Challenge = { id: string; nonce: string; signedAt: number };
 const identityKey = "openclaw-device-identity-v1";
 const authKey = "openclaw.device.auth.v1:wss://gateway.example/work";
+const typedArrayApiDescriptors = {
+  toBase64: Object.getOwnPropertyDescriptor(Uint8Array.prototype, "toBase64"),
+  fromBase64: Object.getOwnPropertyDescriptor(Uint8Array, "fromBase64"),
+  toHex: Object.getOwnPropertyDescriptor(Uint8Array.prototype, "toHex"),
+};
+
+// Node 24 does not yet expose the TypedArray APIs available in supported browsers.
+function installTypedArrayApiFixture() {
+  if (typeof Uint8Array.prototype.toBase64 !== "function") {
+    Object.defineProperty(Uint8Array.prototype, "toBase64", {
+      configurable: true,
+      value(this: Uint8Array, options?: { alphabet?: "base64" | "base64url"; omitPadding?: boolean }) {
+        let encoded = Buffer.from(this.buffer, this.byteOffset, this.byteLength).toString("base64");
+        if (options?.alphabet === "base64url") {
+          encoded = encoded.replaceAll("+", "-").replaceAll("/", "_");
+        }
+        if (options?.omitPadding) {
+          encoded = encoded.replace(/=+$/u, "");
+        }
+        return encoded;
+      },
+    });
+  }
+  if (typeof Uint8Array.fromBase64 !== "function") {
+    Object.defineProperty(Uint8Array, "fromBase64", {
+      configurable: true,
+      value(value: string) {
+        const binary = atob(value);
+        return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+      },
+    });
+  }
+  if (typeof Uint8Array.prototype.toHex !== "function") {
+    Object.defineProperty(Uint8Array.prototype, "toHex", {
+      configurable: true,
+      value(this: Uint8Array) {
+        return Buffer.from(this.buffer, this.byteOffset, this.byteLength).toString("hex");
+      },
+    });
+  }
+}
+
+function restoreTypedArrayApiFixture() {
+  for (const [target, key, descriptor] of [
+    [Uint8Array.prototype, "toBase64", typedArrayApiDescriptors.toBase64],
+    [Uint8Array, "fromBase64", typedArrayApiDescriptors.fromBase64],
+    [Uint8Array.prototype, "toHex", typedArrayApiDescriptors.toHex],
+  ] as const) {
+    if (descriptor) {
+      Object.defineProperty(target, key, descriptor);
+    } else {
+      Reflect.deleteProperty(target, key);
+    }
+  }
+}
 
 function expectNativeGrant(params: ConnectParams, auth: Record<string, string>) {
   expect(params.device?.id).toBe(deviceId);
@@ -97,14 +154,22 @@ class RecordingSocket extends MockWebSocket {
 function nativeAuthorization(
   challenge: Challenge,
   token = "synthetic-native-grant",
-  kind: "token" | "password" | "deviceToken" = "deviceToken",
+  kind: "token" | "password" | "deviceToken" | "credentialless" = "deviceToken",
+  expectedGatewayId?: string,
 ) {
   return {
     id: challenge.id,
     result: {
       client: nativeClient,
       scopes,
-      auth: { [kind]: token },
+      ...(expectedGatewayId ? { expectedGatewayId } : {}),
+      auth: kind === "credentialless" ? {} : { [kind]: token },
+      ...(kind === "credentialless"
+        ? {
+            requiredAuthMethod: "tailscale",
+            expectedRecoveryScope: personalRecoveryScope,
+          }
+        : {}),
       device: {
         ...nativeProof,
         signedAt: challenge.signedAt,
@@ -171,6 +236,7 @@ describe("native authenticated Control UI", () => {
   }
 
   beforeEach(() => {
+    installTypedArrayApiFixture();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     vi.spyOn(Math, "random").mockReturnValue(0);
     wsInstances.length = 0;
@@ -214,6 +280,7 @@ describe("native authenticated Control UI", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    restoreTypedArrayApiFixture();
     wsInstances.length = 0;
   });
 
@@ -384,13 +451,40 @@ describe("native authenticated Control UI", () => {
 
   type Rejection =
     | { kind: "credential"; auth: unknown }
+    | { kind: "gateway"; expectedGatewayId: unknown }
+    | {
+        kind: "personalRequirement";
+        auth?: unknown;
+        requiredAuthMethod?: unknown;
+        expectedRecoveryScope?: unknown;
+      }
     | { kind: "target"; target: string }
     | { kind: "unavailable"; failure: "missing bridge" | "wrong challenge" | "subframe" }
     | { kind: "challenge"; challenge: { nonce: string; ts: number } };
   it.each<Rejection>([
+    { kind: "gateway", expectedGatewayId: "" },
+    { kind: "gateway", expectedGatewayId: "  " },
+    { kind: "gateway", expectedGatewayId: 1 },
     { kind: "credential", auth: { bootstrapToken: "not-a-reusable-native-grant" } },
     { kind: "credential", auth: { token: "shared", deviceToken: "ambiguous-second-method" } },
     { kind: "credential", auth: { token: "" } },
+    {
+      kind: "personalRequirement",
+      auth: {},
+      requiredAuthMethod: "token",
+      expectedRecoveryScope: personalRecoveryScope,
+    },
+    {
+      kind: "personalRequirement",
+      auth: {},
+      requiredAuthMethod: "tailscale",
+      expectedRecoveryScope: "   ",
+    },
+    {
+      kind: "personalRequirement",
+      requiredAuthMethod: "tailscale",
+      expectedRecoveryScope: personalRecoveryScope,
+    },
     { kind: "credential", auth: undefined },
     { kind: "credential", auth: null },
     { kind: "credential", auth: [] },
@@ -412,6 +506,33 @@ describe("native authenticated Control UI", () => {
         const reply = nativeAuthorization(challenge);
         return { ...reply, result: { ...reply.result, auth: scenario.auth } };
       });
+    } else if (scenario.kind === "gateway") {
+      respondWith((challenge) => {
+        const reply = nativeAuthorization(challenge);
+        return {
+          ...reply,
+          result: { ...reply.result, expectedGatewayId: scenario.expectedGatewayId },
+        };
+      });
+    } else if (scenario.kind === "personalRequirement") {
+      bridge.postMessage.mockImplementation((message) => {
+        const reply = nativeAuthorization(JSON.parse(message));
+        bridge.onmessage?.({
+          data: JSON.stringify({
+            ...reply,
+            result: {
+              ...reply.result,
+              auth: scenario.auth,
+              ...(scenario.requiredAuthMethod !== undefined
+                ? { requiredAuthMethod: scenario.requiredAuthMethod }
+                : {}),
+              ...(scenario.expectedRecoveryScope !== undefined
+                ? { expectedRecoveryScope: scenario.expectedRecoveryScope }
+                : {}),
+            },
+          }),
+        });
+      });
     } else if (scenario.kind === "unavailable") {
       if (scenario.failure === "missing bridge") {
         Object.assign(window, { OpenClawNativeGatewayAuth: undefined });
@@ -429,7 +550,9 @@ describe("native authenticated Control UI", () => {
       scenario.kind === "challenge" ? scenario.challenge : undefined,
     );
     await expectRejected(socket);
-    if (scenario.kind === "credential") {
+    if (scenario.kind === "gateway") {
+      expect(gateway!.snapshot.lastError).toContain("invalid Gateway authorization");
+    } else if (scenario.kind === "credential" || scenario.kind === "personalRequirement") {
       expect(gateway!.snapshot.lastError).toContain("invalid Gateway credential");
     } else if (scenario.kind === "target") {
       expect(bridge.postMessage).not.toHaveBeenCalled();
@@ -447,6 +570,87 @@ describe("native authenticated Control UI", () => {
     expect(socket.sent).toEqual([]);
     expect(localStorage.getItem(identityKey)).toBeNull();
   });
+
+  it.each([
+    ["Android", undefined],
+    ["WebKit", "gateway-boot-a"],
+    ["Tauri", undefined],
+    ["WebKit", "cloned-gateway-boot"],
+  ] as const)(
+    "checks the app-approved personal identity over %s and returned Gateway boot %s",
+    async (transport, bootId) => {
+      if (transport === "WebKit") {
+        Object.assign(window, {
+          OpenClawNativeGatewayAuth: undefined,
+          webkit: {
+            messageHandlers: {
+              OpenClawNativeGatewayAuth: {
+                postMessage: async (challenge: Challenge) =>
+                  nativeAuthorization(challenge, undefined, "credentialless", "gateway-boot-a"),
+              },
+            },
+          },
+        });
+      } else if (transport === "Tauri") {
+        bridge.postMessage.mockImplementation((message) =>
+          Promise.resolve(nativeAuthorization(JSON.parse(message), undefined, "credentialless")),
+        );
+      } else {
+        bridge.postMessage.mockImplementation((message) => {
+          bridge.onmessage?.({
+            data: JSON.stringify(
+              nativeAuthorization(JSON.parse(message), undefined, "credentialless"),
+            ),
+          });
+        });
+      }
+      const socket = connect();
+      const frame = await Promise.race([
+        socket.connect.promise,
+        socket.closed.promise.then(() => {
+          throw new Error("native Tailscale authorization was rejected before connect");
+        }),
+      ]);
+      expect(frame.params.auth).toEqual({});
+      expect(frame.params.scopes).toEqual(scopes);
+      if (transport === "WebKit") {
+        expect(bridge.postMessage).not.toHaveBeenCalled();
+      } else {
+        expect(bridge.postMessage).toHaveBeenCalledOnce();
+      }
+      expect(localStorage.getItem("openclaw-device-identity-v1")).toBeNull();
+      expect(localStorage.getItem("openclaw.device.auth.v1:wss://gateway.example/work")).toBeNull();
+      expect(frame.params.device).toEqual({ ...nativeProof, nonce: "challenge-1", signedAt });
+
+      socket.emitMessage({
+        type: "res",
+        id: frame.id,
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          protocol: 3,
+          ...(bootId ? { server: { bootId } } : {}),
+          auth: {
+            role: "operator",
+            scopes,
+            method: "tailscale",
+            recoveryScope: personalRecoveryScope,
+          },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      if (bootId === "cloned-gateway-boot") {
+        expect(gateway!.snapshot.hello).toBeNull();
+        expect(gateway!.snapshot.lastError).toContain("app-approved Tailscale identity");
+        return;
+      }
+      expect(gateway!.snapshot.phase).toBe("connected");
+      expect(gateway!.snapshot.hello?.auth).toMatchObject({
+        method: "tailscale",
+        recoveryScope: personalRecoveryScope,
+      });
+    },
+  );
 
   it("obtains the current native grant again when the dashboard reconnects", async () => {
     const first = connect();
@@ -507,43 +711,45 @@ describe("native authenticated Control UI", () => {
     },
   );
 
-  it("preserves the shipped iOS nonpersistent identity handoff", async () => {
-    const deviceFamily = "iPhone";
-    // The existing iOS host seeds its nonpersistent WKWebView, rather than
-    // exposing a signing bridge. Exercise that shipped input with real signing.
-    Object.assign(window, {
-      __OPENCLAW_NATIVE_CONTROL_AUTH__: {
-        gatewayUrl,
-        client: { ...nativeClient, id: "openclaw-ios", platform: "iOS", deviceFamily, scopes },
-      },
-    });
-    store(identityKey, {
-      version: 1,
-      deviceId,
-      publicKey: publicKeyBytes.toString("base64url"),
-      privateKey: keys.privateKey
-        .export({ format: "der", type: "pkcs8" })
-        .subarray(-32)
-        .toString("base64url"),
-      createdAtMs: 1,
-    });
-    store(authKey, {
-      version: 1,
-      deviceId,
-      tokens: {
-        operator: { token: "ios-existing-grant", role: "operator", scopes, updatedAtMs: 1 },
-      },
-    });
-    const socket = connect(gatewayUrl, "");
-    const frame = await socket.connect.promise;
-    expectNativeGrant(frame.params, { deviceToken: "ios-existing-grant" });
-    expect(frame.params.client).toMatchObject({
-      id: "openclaw-ios",
-      mode: "ui",
-      platform: "iOS",
-      deviceFamily,
-      instanceId: nativeClient.instanceId,
-    });
-    expect(bridge.postMessage).not.toHaveBeenCalled();
-  });
+  it.each(["iPhone", "iPad"])(
+    "preserves the shipped %s nonpersistent identity handoff",
+    async (deviceFamily) => {
+      // The existing iOS host seeds its nonpersistent WKWebView, rather than
+      // exposing a signing bridge. Exercise that shipped input with real signing.
+      Object.assign(window, {
+        __OPENCLAW_NATIVE_CONTROL_AUTH__: {
+          gatewayUrl,
+          client: { ...nativeClient, id: "openclaw-ios", platform: "iOS", deviceFamily, scopes },
+        },
+      });
+      store(identityKey, {
+        version: 1,
+        deviceId,
+        publicKey: publicKeyBytes.toString("base64url"),
+        privateKey: keys.privateKey
+          .export({ format: "der", type: "pkcs8" })
+          .subarray(-32)
+          .toString("base64url"),
+        createdAtMs: 1,
+      });
+      store(authKey, {
+        version: 1,
+        deviceId,
+        tokens: {
+          operator: { token: "ios-existing-grant", role: "operator", scopes, updatedAtMs: 1 },
+        },
+      });
+      const socket = connect(gatewayUrl, "");
+      const frame = await socket.connect.promise;
+      expectNativeGrant(frame.params, { deviceToken: "ios-existing-grant" });
+      expect(frame.params.client).toMatchObject({
+        id: "openclaw-ios",
+        mode: "ui",
+        platform: "iOS",
+        deviceFamily,
+        instanceId: nativeClient.instanceId,
+      });
+      expect(bridge.postMessage).not.toHaveBeenCalled();
+    },
+  );
 });

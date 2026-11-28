@@ -1,3 +1,4 @@
+import Foundation
 import OpenClawProtocol
 
 public enum OpenClawGatewayClientCapability {
@@ -7,6 +8,10 @@ public enum OpenClawGatewayClientCapability {
     public static let personalSessionPins = "personal-session-pins"
     public static let ultrafast = "ultrafast"
     public static let usageRefreshing = "usage-refreshing"
+}
+
+public enum GatewayPersonalAuthMethod: String, Sendable {
+    case tailscale
 }
 
 public struct GatewayConnectOptions: Sendable, Equatable {
@@ -32,6 +37,8 @@ public struct GatewayConnectOptions: Sendable, Equatable {
     /// Stable Gateway owner for device tokens. Nil preserves legacy unscoped storage only when
     /// `allowStoredDeviceAuth` is true; false plus nil disables both lookup and persistence.
     public var deviceAuthGatewayID: String?
+    /// An explicit personal route must not be admitted as shared-owner authentication.
+    public var requiredAuthMethod: GatewayPersonalAuthMethod?
 
     public init(
         role: String,
@@ -48,7 +55,8 @@ public struct GatewayConnectOptions: Sendable, Equatable {
         deviceIdentityProfile: GatewayDeviceIdentityProfile = .primary,
         includeDeviceIdentity: Bool = true,
         allowStoredDeviceAuth: Bool = true,
-        deviceAuthGatewayID: String? = nil)
+        deviceAuthGatewayID: String? = nil,
+        requiredAuthMethod: GatewayPersonalAuthMethod? = nil)
     {
         self.role = role
         self.scopes = scopes
@@ -65,6 +73,7 @@ public struct GatewayConnectOptions: Sendable, Equatable {
         self.includeDeviceIdentity = includeDeviceIdentity
         self.allowStoredDeviceAuth = allowStoredDeviceAuth
         self.deviceAuthGatewayID = deviceAuthGatewayID
+        self.requiredAuthMethod = requiredAuthMethod
     }
 }
 
@@ -108,10 +117,31 @@ public struct GatewayAuthBinding: Equatable, Sendable {
 }
 
 extension GatewayConnectOptions {
+    func validatePersonalSignInRequest(token: String?, bootstrapToken: String?, password: String?) throws {
+        if self.requiredAuthMethod != nil,
+           self.role != "operator" || token?.trimmedNonEmpty != nil ||
+           bootstrapToken?.trimmedNonEmpty != nil || password?.trimmedNonEmpty != nil
+        {
+            throw NSError(domain: "Gateway", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Personal sign-in requires a credentialless operator connection",
+            ])
+        }
+    }
+
+    func validatePersonalSignInHello(method: String?, recoveryScope: String?) throws {
+        if let requiredAuthMethod = self.requiredAuthMethod,
+           method != requiredAuthMethod.rawValue || recoveryScope?.trimmedNonEmpty == nil
+        {
+            throw NSError(domain: "Gateway", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "The Gateway did not verify the selected personal sign-in",
+            ])
+        }
+    }
+
     var allowsDeviceAuthPersistence: Bool {
         // Legacy callers must rotate credentials in the same unscoped namespace they read.
         // Fresh pairing instead supplies an owner; explicit ownerless handoffs set false/nil.
-        self.allowStoredDeviceAuth || self.deviceAuthGatewayID != nil
+        self.requiredAuthMethod == nil && (self.allowStoredDeviceAuth || self.deviceAuthGatewayID != nil)
     }
 
     /// Additive connect-frame fields, sent only when this node declares them.
