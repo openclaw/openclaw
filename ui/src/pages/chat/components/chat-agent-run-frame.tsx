@@ -366,6 +366,18 @@ function RunFrame(props: FrameProps) {
           },
         });
         const resume = () => state().resumes.get(`${part().kind}:${part().key}`);
+        const standaloneResume = () => {
+          const wake = resume();
+          if (!wake || wake.receipt) {
+            return undefined;
+          }
+          // The tool log already shows work resumed. With tools hidden, keep the wake's cue.
+          const kind = part().kind;
+          const hasVisibleActivity =
+            (kind === "activity-run" || kind === "work-group") &&
+            shellOptions().showToolCalls !== false;
+          return wake.source === "exec" && hasVisibleActivity ? undefined : wake;
+        };
         const groupOptions = (group: MessageGroupData) => ({
           ...options().renderGroupOptions(group),
           firstBubbleKey: firstBubbleKey(),
@@ -392,11 +404,9 @@ function RunFrame(props: FrameProps) {
         };
         return (
           <>
-            <Show when={resume()}>
+            <Show when={standaloneResume()}>
               {(display) => (
-                <Show when={!display().receipt}>
-                  <ChatContinuationActivity source={display().source} elapsed={display().elapsed} />
-                </Show>
+                <ChatContinuationActivity source={display().source} elapsed={display().elapsed} />
               )}
             </Show>
             <Switch>

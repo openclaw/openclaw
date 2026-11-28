@@ -210,21 +210,30 @@ suite.define(() => {
         await writeFile(file, frame.png);
         console.log(`Screenshot: ${file}`);
       }
-      // One assistant block per prompt; the earlier answer stays in place above
-      // one activity row for each wake that continued the work.
+      // A background command wake adds no row when the following tool log is visible.
+      // The narration, child completion, and next prompt keep their own boundaries.
       expect(await thread.locator(".chat-group.assistant").count()).toBe(2);
       const agent = thread.locator(".chat-tool-row--subagent", { hasText: "An agent finished" });
       expect(await agent.count()).toBe(1);
       expect(await agent.locator(".chat-tool-row__detail").textContent()).toContain("4m 39s later");
-      expect(
-        (await thread.locator(".chat-continuation-activity").allTextContents()).map((text) =>
-          text.replace(/\s+/gu, " ").trim(),
-        ),
-      ).toEqual([
-        "A background command finished · 3m 40s later",
-        "A background command finished · 4m 30s later",
-        "A background command finished · 1m 40s later",
-      ]);
+      expect(await thread.locator('.chat-continuation-activity[data-source="exec"]').count()).toBe(
+        0,
+      );
+      for (const summary of await thread
+        .locator('.chat-activity-group__summary[aria-expanded="false"]')
+        .all()) {
+        await summary.click();
+      }
+      const commands = thread.locator(".chat-activity-group__body").filter({
+        has: page.getByText("pnpm docs:check", { exact: true }),
+      });
+      await expect
+        .poll(async () => commands.getByText("curl -s preview/health", { exact: true }).count())
+        .toBe(1);
+      const expandedLog = (await commands.textContent()) ?? "";
+      expect(expandedLog.indexOf("pnpm docs:check")).toBeLessThan(
+        expandedLog.indexOf("curl -s preview/health"),
+      );
       await thread.getByText(ANSWER, { exact: true }).waitFor();
       await page.reload();
       await agent.waitFor();

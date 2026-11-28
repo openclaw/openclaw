@@ -164,6 +164,7 @@ export function projectTranscriptChain(
     sessionKey: string;
     runWorking: boolean;
     searchActive: boolean;
+    showToolCalls?: boolean;
     bubbleMode?: boolean;
     messages?: readonly unknown[];
     activeRunId?: string | null;
@@ -183,6 +184,7 @@ export function projectTranscriptChain(
     options.sessionKey,
     options.runWorking,
     options.searchActive,
+    options.showToolCalls,
     options.bubbleMode,
     options.messages,
     options.activeRunId,
