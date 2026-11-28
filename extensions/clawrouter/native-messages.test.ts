@@ -16,6 +16,7 @@ const providerId = "cloudflare-ai-gateway";
 const upstream = "claude-sonnet-4-6";
 const selected = `${providerId}/${upstream}`;
 const messagesPath = "/v1/native/cloudflare-ai-gateway/anthropic/v1/messages";
+const notOffered = (model = selected) => `ClawRouter catalog does not offer ${model} to this key`;
 
 function catalog() {
   return {
@@ -213,10 +214,22 @@ it.each(["removed", "malformed", "explicitly denied legacy"])(
     if (kind === "explicitly denied legacy") {
       Object.assign(body.providers[0], { offers: undefined, allowed: false });
     }
-    await fixture(async ({ prepare, seen }) => {
-      await expect(prepare()).rejects.toThrow(
-        "ClawRouter catalog does not offer the selected model",
+    await fixture(async ({ prepare, provider, seen }) => {
+      const error = await prepare().then(
+        () => undefined,
+        (refusal: unknown) => refusal as Error & { code?: string },
       );
+      // The refusal names the model and the repair, and classifies so fallback skips it.
+      expect(error?.message).toBe(
+        `${notOffered()}. Choose a model it offers (openclaw models list --provider clawrouter), or ask your ClawRouter admin to grant this one.`,
+      );
+      expect(
+        provider.classifyFailoverReason?.({
+          provider: "clawrouter",
+          code: error?.code,
+          errorMessage: error?.message ?? "",
+        }),
+      ).toBe("model_not_found");
       expect(seen.map(({ path }) => path)).toEqual(["/v1/catalog"]);
     }, body);
   },
@@ -252,9 +265,7 @@ it.each([false, true])(
       clearLiveCatalogCacheForTests();
       await fixture(async ({ prepare, discover, seen }) => {
         expect(await discover()).toMatchObject({ provider: { models: [] } });
-        await expect(prepare()).rejects.toThrow(
-          "ClawRouter catalog does not offer the selected model",
-        );
+        await expect(prepare()).rejects.toThrow(notOffered());
         expect(seen.map(({ path }) => path)).toEqual(["/v1/catalog"]);
       }, body);
     }
@@ -324,9 +335,7 @@ it.each([
     }
     await fixture(async ({ prepare, discover, seen }) => {
       expect(await discover()).toMatchObject({ provider: { models: [] } });
-      await expect(prepare()).rejects.toThrow(
-        "ClawRouter catalog does not offer the selected model",
-      );
+      await expect(prepare()).rejects.toThrow(notOffered());
       expect(seen.map(({ path }) => path)).toEqual(["/v1/catalog"]);
     }, body);
   },
@@ -483,7 +492,7 @@ it.each([
   invalidate(body.providers[0]);
   await fixture(async ({ prepare, discover, seen }) => {
     expect(await discover()).toMatchObject({ provider: { models: [] } });
-    await expect(prepare()).rejects.toThrow("ClawRouter catalog does not offer the selected model");
+    await expect(prepare()).rejects.toThrow(notOffered());
     expect(seen.map(({ path }) => path)).toEqual(["/v1/catalog"]);
   }, body);
 });
@@ -527,7 +536,7 @@ it("does not reuse a selected key's Messages grant after credential rotation", a
     expect(await prepare()).toMatchObject({ id: selected });
     body.providers[0].offers.splice(0);
     auth.resolveApiKeyForProvider.mockResolvedValue({ apiKey: "synthetic-router-key-b" });
-    await expect(prepare()).rejects.toThrow("ClawRouter catalog does not offer the selected model");
+    await expect(prepare()).rejects.toThrow(notOffered());
     auth.resolveApiKeyForProvider.mockResolvedValue({ apiKey: "synthetic-router-key" });
     expect(await prepare()).toMatchObject({ id: selected });
     expect(seen.map(({ path, key }) => [path, key])).toEqual([
@@ -584,9 +593,7 @@ it("preserves Vercel's exact Messages precedence over Chat", async () => {
       });
       row.offers.splice(0);
       clearLiveCatalogCacheForTests();
-      await expect(prepare()).rejects.toThrow(
-        "ClawRouter catalog does not offer the selected model",
-      );
+      await expect(prepare()).rejects.toThrow(notOffered(row.models[0].id));
     },
     body,
     row.models[0].id,
