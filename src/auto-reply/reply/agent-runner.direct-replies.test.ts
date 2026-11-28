@@ -29,7 +29,7 @@ async function runEmptyDirectReply({
   config?: OpenClawConfig;
   onBlockReply?: (payload: unknown) => Promise<void> | void;
   onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
-} = {}) {
+}) {
   const sessionEntry = { sessionId: "session", updatedAt: Date.now(), totalTokens: 50_000 };
   runEmbeddedAgentMock.mockImplementationOnce(async (params: RunEmbeddedAgentInternalParams) => {
     for (const event of agentEvents) {
