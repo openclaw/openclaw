@@ -14,6 +14,7 @@ const enChatToolLabels = {
       agentsTimedOut: "{names} timed out",
       agentsFailed: "{names} failed",
       agentsStopped: "{names} stopped",
+      agentsTrackingInterrupted: "Tracking interrupted for {names}",
       completionAgent: "An agent",
       completionAgents: "{count} agents",
       summary: "Summary",

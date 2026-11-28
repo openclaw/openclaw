@@ -403,13 +403,16 @@ const COMPLETION_SENTENCE_KEYS = {
   timeout: "agentsTimedOut",
   failed: "agentsFailed",
   killed: "agentsStopped",
-} as const;
+  interrupted: "agentsTrackingInterrupted",
+} as const satisfies Record<NonNullable<SubagentCompletion["outcome"]> | "finished", string>;
 
 /** One sentence per settled outcome, finished first, each in receipt order. */
 export function groupSubagentCompletions(entries: readonly SubagentCompletion[]) {
   return Object.entries(COMPLETION_SENTENCE_KEYS).flatMap(([outcome, key]) => {
     const group = entries.filter((entry) => (entry.outcome ?? "finished") === outcome);
-    return group.length ? [{ key, failed: outcome !== "finished", entries: group }] : [];
+    return group.length
+      ? [{ key, failed: outcome !== "finished" && outcome !== "interrupted", entries: group }]
+      : [];
   });
 }
 

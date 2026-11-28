@@ -151,6 +151,7 @@ local run and wakes the parent with an interruption notice. The parent's status
 line shows `status=interrupted; execution=unknown`: losing contact does not
 establish that the worker stopped, failed, or succeeded. For a collector,
 `agents_wait` returns `interrupted` rather than leaving the parent waiting.
+The parent chat shows which child's tracking was interrupted, even if the tool output was truncated.
 The terminal notice waits for fresh requester authority after startup; it cannot
 use the previous Gateway's retired custody.
 

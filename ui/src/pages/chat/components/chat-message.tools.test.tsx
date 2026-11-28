@@ -141,6 +141,39 @@ describe("grouped chat rendering", () => {
     expect(harness.view.textContent).toContain("Worker01 and Worker02 finished");
   });
 
+  it("shows interrupted tracking after a nested collector result is capped", async () => {
+    const activity = createNestedToolActivity({
+      runId: "parent",
+      scopeId: "scope",
+      afterEntryId: null,
+      startOrder: 0,
+      toolCallId: "collect",
+      toolName: "agents_wait",
+      input: { ids: ["child"] },
+      result: {
+        content: [],
+        details: {
+          completed: [
+            {
+              runId: "child",
+              sessionKey: "agent:main:subagent:atlas",
+              label: "Atlas",
+              status: "interrupted",
+              result: "x".repeat(40_000),
+            },
+          ],
+        },
+      },
+      isError: false,
+      startedAt: 10,
+      timestamp: 20,
+    });
+    const history = attachHistoryActivity(prepareChatHistoryFixture([activity]));
+    await renderToolGroups(groupsOf(buildItems({ messages: history.messages })), {});
+    expectCount('[aria-label="Tracking interrupted for Atlas"]', 1);
+    expectCount("button.chat-tool-msg-summary", 0);
+  });
+
   function toolResultEntry(key: string, ...args: Parameters<typeof createToolResultMessage>) {
     return createMessageEntry(key, createToolResultMessage(...args));
   }
