@@ -420,11 +420,12 @@ it.each([
       avatarPlacement,
       ...viewer,
     });
-    expect(text(".chat-sender-name")).toBe(sender ? "Recorded author" : "Message");
     expect(query("a.chat-sender-name, img")).toBeNull();
     if (sender) {
+      expect(text(".chat-sender-name")).toBe("Recorded author");
       expect(text(".chat-avatar")?.trim()).toBe("RA");
     } else {
+      expect(query(".chat-sender-name")).toBeNull();
       expect(query(".chat-avatar, .chat-author-avatar, .chat-group--peer")).toBeNull();
       expect(text(".chat-text")).toContain(message.content);
     }

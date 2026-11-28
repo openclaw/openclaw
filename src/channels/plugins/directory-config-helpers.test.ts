@@ -20,7 +20,7 @@ const groups = (...ids: string[]) => ids.map((id) => ({ kind: "group", id }));
 describe("directory config helpers", () => {
   it("normalizes, deduplicates, filters, and limits user ids", () => {
     const entries = listDirectoryUserEntriesFromAllowFrom({
-      allowFrom: ["", "*", "  user:Alice ", "user:alice", "user:Bob", "user:Carla"],
+      allowFrom: ["", "*", "  user:Alice ", "user:alice", "user:Bob", "user:Carla", "user:Dana"],
       normalizeId: (entry) => stripUser(entry).toLowerCase(),
       query: "a",
       limit: 2,
@@ -41,7 +41,7 @@ describe("directory config helpers", () => {
   it("merges allowFrom and map keys with dedupe/query/limit", () => {
     const entries = listDirectoryUserEntriesFromAllowFromAndMapKeys({
       allowFrom: ["user:alice", "user:bob"],
-      map: { "user:carla": {}, "user:alice": {} },
+      map: { "user:carla": {}, "user:alice": {}, "user:dana": {} },
       normalizeAllowFromId: stripUser,
       normalizeMapKeyId: stripUser,
       query: "a",

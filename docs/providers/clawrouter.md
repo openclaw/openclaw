@@ -649,10 +649,10 @@ shows the pool of the policy your agents route through. The key stays on the
 Gateway and is never included in the page response.
 
 Pool visibility is opt-in on the ClawRouter policy. If it is hidden, ask your
-ClawRouter admin to enable pool status for that policy. An older deployment
-without `/v1/pool` reports that an update is needed; rejected keys and temporary
-connection failures have separate next-step messages. These states do not
-prevent model calls or the existing `/v1/usage` snapshot.
+ClawRouter admin to enable pool status for that policy. A deployment without
+`/v1/pool` reports that it does not provide pool status. The pool page distinguishes a
+rejected key from other load failures. These states do not prevent model calls
+or the existing `/v1/usage` snapshot.
 
 ## Troubleshooting
 

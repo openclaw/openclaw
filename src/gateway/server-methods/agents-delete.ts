@@ -52,6 +52,7 @@ import {
   withConfigMutationExclusive,
 } from "../../config/config.js";
 import type { ConfigWriteOptions } from "../../config/io.js";
+import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import { purgeAgentSessionStoreEntries } from "../../config/sessions.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -194,6 +195,12 @@ async function deleteGatewayAgentAttempt(
             `Agent "${agentId}" owns inherited credentials through agents.defaults.authInheritance.agentId and cannot be deleted. Relocate those credentials, then re-point or remove that binding before retrying.`,
           );
         }
+        // A retired agent is no longer in config; only its completed deletion records its paths.
+        const recorded = retired && lockedJournal?.cleanupCompleted ? lockedJournal : undefined;
+        if (recorded && !requestedDeleteFiles) {
+          // The completed deletion kept the registration; a repeat without files changes nothing.
+          return undefined;
+        }
         if ((configured || retired) && lockedJournal?.cleanupCompleted) {
           const claimed = await claimCompletedAgentDeletion(agentId, lockedJournal.operationId);
           const remainingJournal = await readAgentDeletionJournalAsync(agentId);
@@ -212,9 +219,9 @@ async function deleteGatewayAgentAttempt(
         const deletion = await begin(
           lockedJournal ?? {
             agentId,
-            agentDir: resolveAgentDir(lockedConfig, agentId),
-            workspaceDir: resolveAgentWorkspaceDir(lockedConfig, agentId),
-            sessionsDir: resolveSessionTranscriptsDirForAgent(agentId),
+            agentDir: recorded?.agentDir ?? resolveAgentDir(lockedConfig, agentId),
+            workspaceDir: recorded?.workspaceDir ?? resolveAgentWorkspaceDir(lockedConfig, agentId),
+            sessionsDir: recorded?.sessionsDir ?? resolveSessionTranscriptsDirForAgent(agentId),
             deleteFiles,
             phase: "draining",
           },
@@ -223,6 +230,13 @@ async function deleteGatewayAgentAttempt(
         options.recoveryOperationId = deletion.entry.operationId;
         return { deletion, lockedJournal, config: lockedConfig };
       });
+      if (!prepared) {
+        // Nothing was written, so the caller's config-application receipt has nothing to apply.
+        if (writeOptions) {
+          getRuntimeConfigWriteApplication(writeOptions)?.claim()?.settle("applied");
+        }
+        return { ok: true, agentId, removedBindings: 0, removed: [], failed: [] };
+      }
       const { deletion, lockedJournal } = prepared;
       const journal = deletion.entry;
       if (journal.phase === "draining") {
