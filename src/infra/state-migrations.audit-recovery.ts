@@ -265,10 +265,7 @@ async function advanceAuditRecoveryWrite(params: {
   desiredContent: Buffer;
   handle: Awaited<ReturnType<AuditMigrationRoot["openWritable"]>>["handle"];
 }): Promise<AuditRecoveryProgress> {
-  let progress = params.progress;
-  if (progress.pendingEnd > progress.committedBytes) {
-    progress = await reconcileAuditRecoveryPendingWrite(params);
-  }
+  let progress = { ...params.progress };
   while (progress.committedBytes < progress.extentBytes) {
     const end = Math.min(
       progress.committedBytes + AUDIT_RECOVERY_WRITE_CHUNK_BYTES,
@@ -276,7 +273,7 @@ async function advanceAuditRecoveryWrite(params: {
     );
     // Commit intent before target bytes. A crash can leave any prefix of this
     // range changed; pendingEnd lets recovery finish it without guessing.
-    progress = { ...progress, pendingEnd: end };
+    progress.pendingEnd = end;
     await writeAuditRecoveryProgress({ ...params, progress });
     progress = await reconcileAuditRecoveryPendingWrite({ ...params, progress });
   }

@@ -14,6 +14,7 @@ import {
   openLegacyAuditRawCheckpointStore as openCheckpoints,
   type LegacyAuditRawCheckpoint,
 } from "./state-migrations.audit-checkpoints.js";
+import type { AuditRecoveryProgress } from "./state-migrations.audit-recovery-protocol.js";
 import { readLegacyAuditSourceSnapshot } from "./state-migrations.audit-recovery.js";
 import {
   AuditMigrationFixture,
@@ -586,13 +587,14 @@ it("retains malformed UTF-8 without importing replacement characters", async ({ 
   expect(audit.configRecords()).toHaveLength(1);
 });
 
-it.for(["stale", "later", "redacted", "scrubbing", "restoring"] as const)(
+it.for(["stale", "later", "redacted", "scrubbing", "restoring", "restoring-pending"] as const)(
   "recovers %s restore journals",
   async (mode, { audit }) => {
     const { raw, restore } = audit.system;
     const token = ["token", "redaction-marker"].join("=");
     let replacement = "";
-    const summary = mode === "restoring" ? "restore after restart" : "original archive";
+    const restoring = mode === "restoring" || mode === "restoring-pending";
+    const summary = restoring ? "restore after restart" : "original archive";
     if (mode === "stale" || mode === "later") {
       const original = mode === "stale" ? event(token, "03", "config.set") : event("original");
       const bytes = Buffer.from(jsonLine(original));
@@ -616,10 +618,9 @@ it.for(["stale", "later", "redacted", "scrubbing", "restoring"] as const)(
       await writeAuditRestoreJournal(raw, Buffer.from(original, "utf8"));
     } else {
       const bytes = Buffer.from(jsonLine(event(summary)));
-      const restoredBytes = mode === "restoring" ? Math.floor(bytes.length / 2) : 0;
-      const pending =
-        mode === "restoring" ? buildAuditScrubbedContent(bytes.length) : Buffer.from(bytes);
-      if (mode === "restoring") {
+      const restoredBytes = restoring ? Math.floor(bytes.length / 2) : 0;
+      const pending = restoring ? buildAuditScrubbedContent(bytes.length) : Buffer.from(bytes);
+      if (restoring) {
         bytes.subarray(0, restoredBytes).copy(pending);
       } else {
         pending[0] = FIRST_AUDIT_SCRUB_BYTE;
@@ -627,8 +628,16 @@ it.for(["stale", "later", "redacted", "scrubbing", "restoring"] as const)(
       await audit.seedRawArchive(audit.system, pending);
       await writeAuditRestoreJournal(raw, bytes, {
         restoredBytes,
-        scrubbedBytes: mode === "restoring" ? bytes.length : 1,
+        scrubbedBytes: restoring ? bytes.length : 1,
       });
+      if (mode === "restoring-pending") {
+        const progressPath = `${raw}.doctor-scrub-progress`;
+        const progress: AuditRecoveryProgress = JSON.parse(await readText(progressPath));
+        await fs.writeFile(
+          progressPath,
+          jsonLine({ ...progress, committedBytes: 0, pendingEnd: bytes.length }),
+        );
+      }
     }
     const detected = audit.detect();
     if (mode === "stale") {
