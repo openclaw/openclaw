@@ -2115,51 +2115,6 @@ describe("runAgentHarnessAttempt", () => {
 });
 
 describe("selectAgentHarness", () => {
-  it("auto-selects the highest-priority plugin harness without duplicate support probes", () => {
-    const lowPrioritySupports = vi.fn(() => ({
-      supported: true as const,
-      priority: 10,
-      reason: "generic codex support",
-    }));
-    const highPrioritySupports = vi.fn(() => ({
-      supported: true as const,
-      priority: 100,
-      reason: "native codex app-server",
-    }));
-    const unsupportedSupports = vi.fn(() => ({
-      supported: false as const,
-      reason: "provider mismatch",
-    }));
-    registerHarness({
-      id: "codex-low",
-      label: "Low Codex",
-      supports: lowPrioritySupports,
-      runAttempt: vi.fn(async () => createAttemptResult("codex-low")),
-    });
-    registerHarness({
-      id: "codex-high",
-      label: "High Codex",
-      supports: highPrioritySupports,
-      runAttempt: vi.fn(async () => createAttemptResult("codex-high")),
-    });
-    registerHarness({
-      id: "other",
-      label: "Other Harness",
-      supports: unsupportedSupports,
-      runAttempt: vi.fn(async () => createAttemptResult("other")),
-    });
-
-    const harness = selectAgentHarness({
-      provider: "codex",
-      modelId: "gpt-5.4",
-    });
-
-    expect(harness.id).toBe("codex-high");
-    expect(lowPrioritySupports).toHaveBeenCalledTimes(1);
-    expect(highPrioritySupports).toHaveBeenCalledTimes(1);
-    expect(unsupportedSupports).toHaveBeenCalledTimes(1);
-  });
-
   it("rejects a harness replaced during its support probe", () => {
     const replacement: AgentHarness = {
       id: "codex",

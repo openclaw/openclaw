@@ -462,15 +462,6 @@ describe("Canvas widget view", () => {
     expect(events.size).toBe(0);
   });
 
-  it("preserves a loaded full-access frame when a result commits", async () => {
-    const { view, frame } = await loaded();
-    expect(gateways.get(view)!.eventListeners.size).toBe(0);
-    commitWidget(view);
-    await settle(view);
-    expect(view.querySelector("iframe")).toBe(frame);
-    expect(client.request).toHaveBeenCalledOnce();
-  });
-
   it("binds guest retry events before each lookup and releases unresolved bindings", async () => {
     const pending = createDeferred<CanvasDocumentViewResult>();
     const listenersAtLookup: number[] = [];

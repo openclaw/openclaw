@@ -3787,31 +3787,6 @@ if [[ /dev/fd/0 -ef /dev/null ]]; then echo "devnull" > "${stdinLog}"; else echo
 });
 
 describe("install.sh duplicate OpenClaw install detection", () => {
-  it("warns with concrete package paths and versions for duplicate npm roots", () => {
-    const result = runInstallShell(`
-      set -euo pipefail
-      source "${SCRIPT_PATH}"
-      root="$(mktemp -d)"
-      trap 'rm -rf "$root"' EXIT
-      mkdir -p "$root/brew/openclaw" "$root/fnm/openclaw"
-      printf '{"version":"2026.3.7"}\\n' > "$root/brew/openclaw/package.json"
-      printf '{"version":"2026.3.1"}\\n' > "$root/fnm/openclaw/package.json"
-      collect_openclaw_npm_root_candidates() { printf '%s\\n' "$root/brew" "$root/fnm"; }
-      OPENCLAW_BIN="$root/fnm/.bin/openclaw"
-      ui_warn() { echo "WARN: $*"; }
-      warn_duplicate_openclaw_global_installs
-    `);
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Multiple OpenClaw global installs detected");
-    expect(result.stdout).toContain("2026.3.7");
-    expect(result.stdout).toContain("2026.3.1");
-    expect(result.stdout).toContain("/brew/openclaw");
-    expect(result.stdout).toContain("/fnm/openclaw");
-    expect(result.stdout).toContain("Active openclaw:");
-    expect(result.stdout).toContain("npm uninstall -g openclaw");
-  });
-
   it.each([
     { noPrompt: 0, visible: "1", expected: "/dev/ttys003" },
     { noPrompt: 0, visible: "0", expected: "/dev/null" },

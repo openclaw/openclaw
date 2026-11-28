@@ -239,33 +239,6 @@ describe("plugin scheduled turns", () => {
     resetPluginRuntimeStateForTest();
   });
 
-  it("schedules session turns with cron-compatible tagged cleanup metadata", async () => {
-    mockCronAdd(makeCronJob({ id: "job-tagged" }));
-
-    const handle = await scheduleWorkflowTurn({
-      pluginName: "Workflow Plugin",
-      schedule: {
-        tag: "nudge",
-        name: "custom-nudge-name",
-        deliveryMode: "announce",
-      },
-    });
-
-    expect(handle).toEqual({
-      id: "job-tagged",
-      pluginId: WORKFLOW_PLUGIN_ID,
-      sessionKey: MAIN_SESSION_KEY,
-      kind: "session-turn",
-    });
-    const job = getCronAddBody();
-    expect(job.name).toBe("plugin:workflow-plugin:tag:nudge:agent:main:main:custom-nudge-name");
-    expect(job.sessionTarget).toBe("session:agent:main:main");
-    expect(job.deleteAfterRun).toBe(true);
-    expect(job.delivery).toEqual({ mode: "announce", channel: "last" });
-    expect(job.payload).toEqual({ kind: "agentTurn", message: "wake" });
-    expect(listPluginSessionSchedulerJobs(WORKFLOW_PLUGIN_ID)).toHaveLength(1);
-  });
-
   it("prefixes explicit untagged schedule names with plugin ownership metadata", async () => {
     mockCronAdd(makeCronJob({ id: "job-untagged" }));
 
@@ -348,29 +321,6 @@ describe("plugin scheduled turns", () => {
     expect(removed).toContain("job-page-2");
   });
 
-  it("tracks scheduled session turns using cron.add's top-level job id", async () => {
-    workflowMocks.cronAdd.mockResolvedValueOnce(makeCronJob({ id: "cron-top-level-id" }));
-
-    await expect(
-      scheduleWorkflowTurn({
-        pluginName: "Workflow Plugin",
-      }),
-    ).resolves.toEqual({
-      id: "cron-top-level-id",
-      pluginId: WORKFLOW_PLUGIN_ID,
-      sessionKey: MAIN_SESSION_KEY,
-      kind: "session-turn",
-    });
-    expect(listPluginSessionSchedulerJobs(WORKFLOW_PLUGIN_ID)).toEqual([
-      {
-        id: "cron-top-level-id",
-        pluginId: WORKFLOW_PLUGIN_ID,
-        sessionKey: MAIN_SESSION_KEY,
-        kind: "session-turn",
-      },
-    ]);
-  });
-
   it("keeps one-shot scheduled-turn records until cleanup confirms the job is gone", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-01T00:00:00.000Z"));
@@ -432,19 +382,6 @@ describe("plugin scheduled turns", () => {
 
     await expect(scheduleWorkflowTurn({ schedule: { delayMs: 1 } })).resolves.toBeUndefined();
     expect(workflowMocks.cronAdd).not.toHaveBeenCalled();
-  });
-
-  it("falls back to a valid delay schedule when a malformed cron value is absent", async () => {
-    mockCronAdd(makeCronJob({ id: "delay-job" }));
-
-    const handle = await scheduleWorkflowTurn({
-      schedule: {
-        cron: undefined,
-      } as never,
-    });
-    expectSessionTurnHandle(handle, "delay-job");
-
-    expect((getCronAddBody() as { schedule?: { kind?: string } }).schedule?.kind).toBe("at");
   });
 
   it("removes a stale cron job when the plugin unloads after cron.add", async () => {

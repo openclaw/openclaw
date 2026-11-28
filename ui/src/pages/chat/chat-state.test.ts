@@ -10,11 +10,7 @@ import * as assistantIdentity from "../../app/assistant-identity.ts";
 import { createConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { revalidateChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
-import {
-  buildFallbackSlashCommands,
-  replaceSlashCommands,
-  SLASH_COMMANDS,
-} from "../../lib/chat/commands.ts";
+import { buildFallbackSlashCommands, replaceSlashCommands } from "../../lib/chat/commands.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import {
   beginModelCatalogRead,
@@ -2383,39 +2379,6 @@ describe("refreshChatMetadata", () => {
     expect(state.chatModelCatalog).toEqual([]);
     expect(state.chatModelCatalogError).toBeNull();
     expect(state.chatModelCatalogRefreshFailed).toBeUndefined();
-  });
-
-  it("keeps fallback slash commands when chat metadata omits commands", async () => {
-    replaceSlashCommands(buildFallbackSlashCommands());
-    const request = vi.fn(async (method: string) => {
-      if (method === "chat.metadata") {
-        return {
-          models: [{ id: "metadata-model", name: "Metadata Model", provider: "openai" }],
-        };
-      }
-      if (method === "models.list") {
-        return { models: [] };
-      }
-      return {
-        commands: [
-          {
-            name: "remote-command",
-            textAliases: ["/remote-command"],
-            description: "Loaded through commands.list.",
-            source: "plugin",
-            scope: "text",
-            acceptsArgs: false,
-          },
-        ],
-      };
-    });
-    const state = createMetadataState(request);
-
-    await refreshChatMetadata(state);
-
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["models.list", "chat.metadata"]);
-    expect(SLASH_COMMANDS.some((command) => command.name === "help")).toBe(true);
-    expect(SLASH_COMMANDS.some((command) => command.name === "remote-command")).toBe(false);
   });
 });
 

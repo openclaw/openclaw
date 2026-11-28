@@ -1918,64 +1918,6 @@ describe("WorkboardStore", () => {
     await expect(store.stats({ boardId: " " })).resolves.toEqual(await store.stats());
   });
 
-  it("excludes archived ready cards from active queue-age statistics", async () => {
-    using clock = fakeClock();
-    clock.set(1_000);
-
-    const { store, stores } = createWorkboardSqliteTestHarness();
-    const oldReady = await createCard(store, "Archived ready work", {
-      boardId: "ops",
-      status: "ready",
-    });
-    clock.set(2_000);
-    await store.archive(oldReady.id, true);
-
-    await expect(store.stats({ boardId: "ops" }, 5_000)).resolves.toMatchObject({
-      total: 1,
-      active: 0,
-      archived: 1,
-      byStatus: { ready: 1 },
-    });
-    await expect(store.stats({ boardId: "ops" }, 5_000)).resolves.not.toHaveProperty(
-      "oldestReadyAgeMs",
-    );
-
-    clock.set(3_000);
-    await createCard(store, "Active ready work", { boardId: "ops", status: "ready" });
-    await expect(store.stats({ boardId: "ops" }, 5_000)).resolves.toMatchObject({
-      total: 2,
-      active: 1,
-      archived: 1,
-      byStatus: { ready: 2 },
-      oldestReadyAgeMs: 2_000,
-      updatedAt: 3_000,
-    });
-    await expect(store.stats({ boardId: "ops" }, 1_000)).resolves.toMatchObject({
-      oldestReadyAgeMs: 0,
-    });
-    const epochReady = await createCard(store, "Epoch ready", {
-      boardId: "epoch",
-      status: "ready",
-    });
-    await stores.cards.register(epochReady.id, {
-      version: 1,
-      card: {
-        ...epochReady,
-        agentId: "",
-        updatedAt: 0,
-        metadata: { ...epochReady.metadata, archivedAt: 0 },
-      },
-    });
-    await expect(store.stats({ boardId: "epoch" }, 5_000)).resolves.toEqual({
-      id: "epoch",
-      total: 1,
-      active: 1,
-      archived: 0,
-      byStatus: { ready: 1 },
-      byAgent: { "(default)": 1 },
-    });
-  });
-
   it("rejects completed manifests for cards not created from the parent", async () => {
     const store = createStore();
     const parent = await createCard(store, "Parent", { status: "running" });

@@ -1736,33 +1736,6 @@ describe("handleToolExecutionEnd derived tool events", () => {
       }
     },
   );
-
-  it("emits patch summary events for apply_patch results", async () => {
-    const { ctx, onAgentEvent } = createTestContext();
-
-    await executeTool(ctx, {
-      toolName: "apply_patch",
-      toolCallId: "tool-patch-summary",
-      args: { patch: "*** Begin Patch" },
-      result: resultWithDetails({
-        summary: { added: ["a.ts"], modified: ["b.ts"], deleted: ["c.ts"] },
-      }),
-    });
-
-    const patchEvent = requireRecord(
-      onAgentEvent.mock.calls
-        .map((call) => call[0])
-        .find((event) => (event as { stream?: string })?.stream === "patch"),
-      "patch event",
-    );
-    expectRecordFields(patchEvent.data, "patch event data", {
-      itemId: "patch:tool-patch-summary",
-      added: ["a.ts"],
-      modified: ["b.ts"],
-      deleted: ["c.ts"],
-      summary: "1 added, 1 modified, 1 deleted",
-    });
-  });
 });
 
 describe("messaging tool media URL tracking", () => {

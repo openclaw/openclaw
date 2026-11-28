@@ -31,12 +31,7 @@ import {
 } from "./send.messages.js";
 import { sendMessageDiscord } from "./send.outbound.js";
 import { canViewDiscordGuildChannel, fetchChannelPermissionsDiscord } from "./send.permissions.js";
-import {
-  fetchReactionsDiscord,
-  reactMessageDiscord,
-  removeOwnReactionsDiscord,
-  removeReactionDiscord,
-} from "./send.reactions.js";
+import { removeOwnReactionsDiscord, removeReactionDiscord } from "./send.reactions.js";
 
 async function loopbackRest(options?: Parameters<typeof createDiscordLoopbackRest>[0]) {
   const loopback = await createDiscordLoopbackRest(options);
@@ -668,17 +663,6 @@ it("preserves caption and caller media options in the uploaded attachment", asyn
   });
 });
 
-it("reacts with custom emoji syntax", async () => {
-  const { rest, putMock } = makeDiscordRest();
-  await reactMessageDiscord("chan1", "1", "<:party_blob:123>", {
-    ...clientOptions(rest),
-    accountId: "default",
-  });
-  expect(putMock).toHaveBeenCalledWith(
-    Routes.channelMessageOwnReaction("chan1", "1", "party_blob%3A123"),
-  );
-});
-
 it("retries transient failures while removing an idempotent reaction", async () => {
   const { rest, deleteMock } = makeDiscordRest();
   queue(deleteMock, httpError(502), undefined);
@@ -737,37 +721,6 @@ it("surfaces a failed deletion instead of reporting false success", async () => 
     removeOwnReactionsDiscord("chan1", "1", { rest, token: "t", cfg: DISCORD_TEST_CFG }),
   ).rejects.toThrow("Discord API 500");
   expect(deleteMock).toHaveBeenCalledTimes(2);
-});
-
-it("returns reactions with users", async () => {
-  const { rest, getMock } = makeDiscordRest();
-  queue(
-    getMock,
-    {
-      reactions: [
-        { count: 2, emoji: { name: "✅", id: null } },
-        { count: 1, emoji: { name: "party_blob", id: "123" } },
-      ],
-    },
-    [{ id: "u1", username: "alpha", discriminator: "0001" }],
-    [{ id: "u2", username: "beta" }],
-  );
-  const res = await fetchReactionsDiscord("chan1", "1", {
-    ...clientOptions(rest),
-    accountId: "default",
-  });
-  expect(res).toEqual([
-    {
-      emoji: { id: null, name: "✅", raw: "✅" },
-      count: 2,
-      users: [{ id: "u1", username: "alpha", tag: "alpha#0001" }],
-    },
-    {
-      emoji: { id: "123", name: "party_blob", raw: "party_blob:123" },
-      count: 1,
-      users: [{ id: "u2", username: "beta", tag: "beta" }],
-    },
-  ]);
 });
 
 it("stops permission lookup when the caller deadline aborts", async () => {

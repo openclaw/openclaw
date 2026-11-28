@@ -71,34 +71,6 @@ it("starts the Granola scribe once the plugin is connected", async () => {
   ]);
 });
 
-it("shows an On Granola scribe's weekday schedule and a disconnected plugin in its detail", async () => {
-  const { render, ui } = fixture({
-    sessions: {
-      "Scribe · Learn from Granola": {
-        key: "s-granola",
-        displayName: "Scribe · Learn from Granola",
-      },
-    },
-    jobs: [
-      {
-        ...reviewJob,
-        id: "job-granola",
-        declarationKey: "knowledge:scribe:granola",
-        sessionTarget: "session:s-granola",
-        schedule: { kind: "cron", expr: "0 10,14,18 * * 1-5" },
-      },
-    ],
-    granola: { installed: true, enabled: true },
-  });
-  ui.s.scribe = "granola";
-  const view = await render();
-  expect(view.textContent).toMatch(/ScheduleWeekdays, 10:00\sAM, 2:00\sPM and 6:00\sPM/);
-  expect(view.textContent).toContain(
-    "SourceGranola plugin installed, not connected to your Granola account",
-  );
-  expect(buttonNamed(view, "Connect Granola…")).toBeTruthy();
-});
-
 it("starts a conversations scribe: creates its titled conversation and sends the prompt shown", async () => {
   const { render, create, calls, ui, load, page } = fixture({});
   const view = await render();

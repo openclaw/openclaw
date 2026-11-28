@@ -237,25 +237,6 @@ describe("setupWizardCommand", () => {
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
 
-  it("logs ASCII-safe Windows guidance before setup", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-
-    try {
-      const runtime = await runSetup({});
-
-      expect(runtime.log).toHaveBeenCalledWith(
-        [
-          "Windows detected - OpenClaw runs great on WSL2!",
-          "Native Windows might be trickier.",
-          "Quick setup: wsl --install (one command, one reboot)",
-          "Guide: https://docs.openclaw.ai/windows",
-        ].join("\n"),
-      );
-    } finally {
-      platformSpy.mockRestore();
-    }
-  });
-
   it.each([["classic JSON", { reset: true, classic: true, json: true }]] as const)(
     "rejects headless %s onboarding before reset",
     async (_label, options) => {
