@@ -19,7 +19,6 @@ extension RootTabs {
 
     enum SidebarDestination: String, CaseIterable, Hashable, Identifiable {
         case chat
-        case overview
         case activity
         case systems
         case workboard
@@ -42,7 +41,6 @@ extension RootTabs {
         var title: String {
             switch self {
             case .chat: String(localized: "Chat")
-            case .overview: String(localized: "Overview")
             case .activity: String(localized: "Activity")
             case .systems: String(localized: "Systems")
             case .workboard: String(localized: "Workboard")
@@ -70,17 +68,16 @@ extension RootTabs {
         var systemImage: String {
             switch self {
             case .chat: "bubble.left"
-            case .overview: "chart.bar"
             case .activity: "waveform.path.ecg"
             case .systems: "server.rack"
             case .workboard: "folder"
             case .skillWorkshop: "hammer"
             case .instances: "dot.radiowaves.left.and.right"
-            case .sessions: "doc.text"
+            case .sessions: "bubble.left.and.bubble.right"
             case .files: "folder.fill"
             case .dreaming: "moon.stars"
-            case .usage: "chart.bar.xaxis"
-            case .cron: "timer"
+            case .usage: "gauge.with.dots.needle.33percent"
+            case .cron: "clock"
             case .desktop: "display"
             case .terminal: "terminal"
             case .settings: "gearshape"
@@ -99,7 +96,6 @@ extension RootTabs {
             case .usage: .dashboard(DashboardRouteMap.usagePagePath)
             case .cron: .dashboard(DashboardRouteMap.cronJobsPagePath)
             case .chat: .chat
-            case .overview: .overview
             case .sessions: .sessions
             case .files: .files
             case .desktop: .desktop
@@ -116,7 +112,7 @@ extension RootTabs {
 
     enum SidebarScreen: Equatable {
         case dashboard(String)
-        case chat, overview, sessions, files, desktop, terminal, settings, gateway
+        case chat, sessions, files, desktop, terminal, settings, gateway
     }
 
     static func notificationSettingsPath(servingEnabled: Bool, disclosureAccepted: Bool) -> String {
@@ -264,7 +260,6 @@ extension RootTabs {
 
     static let sidebarDestinations: [SidebarDestination] = [
         .chat,
-        .overview,
         .workboard,
         .usage,
         .cron,
@@ -283,10 +278,7 @@ extension RootTabs {
     /// pinned/unpinned by the user.
     static let pinnableSidebarPages: [SidebarDestination] = sidebarDestinations.filter { $0 != .chat }
 
-    /// Echoes the web first-run Pages zone (Home, Usage, Automations, …):
-    /// compact by default so sessions stay above the fold. The Sessions page is
-    /// intentionally unpinned — the sessions section + "All Sessions…" own it.
-    static let defaultPinnedSidebarPages: [SidebarDestination] = [.overview, .usage, .cron]
+    static let defaultPinnedSidebarPages: [SidebarDestination] = [.sessions, .cron, .usage]
     static let pinnedSidebarPagesStorageKey = "sidebar.pinnedPages"
 
     /// "" = never customized (defaults); "none" = user unpinned everything.

@@ -406,6 +406,14 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
                 hasActiveRun: true))
         }
         if ScreenshotFixtureMode.groupControlsEnabled { sessions += await DrawerGroupFixture.store.sessions() }
+        if ScreenshotFixtureMode.sessionStatesEnabled { sessions += ScreenshotFixtureMode.sessionStateRows() }
+        if ScreenshotFixtureMode.toolFailuresEnabled {
+            sessions += ScreenshotFixtureMode.toolFailureChats.map { chat in
+                var entry = OpenClawChatSessionEntry(key: chat.key, parentSessionKey: self.fixture.sessionKey)
+                entry.label = chat.label
+                return entry
+            }
+        }
         if archived {
             sessions = []
         }

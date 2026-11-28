@@ -59,7 +59,7 @@ extension ChatSessionSidebarModel {
             } else if grouping == .project, let path = self.projectPath(row) {
                 id = "project:\(path)"
                 projects[id] = path
-                titles[id] = path.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? path
+                titles[id] = self.projectName(fromPath: path)
             } else if grouping == .person, let actor = row.owner?.actor,
                       let identity = actor.identity, let ownerID = self.identityField(identity, "id"), !ownerID.isEmpty
             {
