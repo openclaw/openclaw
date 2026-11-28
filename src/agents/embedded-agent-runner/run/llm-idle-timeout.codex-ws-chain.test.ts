@@ -57,7 +57,6 @@ type Frame = Record<string, unknown>;
 class ControlledWebSocket extends EventTarget {
   static instances: ControlledWebSocket[] = [];
   static onSend?: (socket: ControlledWebSocket, payload: string) => void;
-  static onOpen?: () => void;
   readyState = 1;
   sent: string[] = [];
   closeCalls: Array<[number | undefined, string | undefined]> = [];
@@ -66,7 +65,6 @@ class ControlledWebSocket extends EventTarget {
     super();
     ControlledWebSocket.instances.push(this);
     queueMicrotask(() => {
-      ControlledWebSocket.onOpen?.();
       this.dispatchEvent(new Event("open"));
     });
   }
@@ -83,10 +81,6 @@ class ControlledWebSocket extends EventTarget {
 
   deliver(frame: Frame): void {
     this.dispatchEvent(Object.assign(new Event("message"), { data: JSON.stringify(frame) }));
-  }
-
-  fail(): void {
-    this.dispatchEvent(Object.assign(new Event("error"), { message: "WebSocket error" }));
   }
 }
 
@@ -222,7 +216,6 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
     cleanupSessionResources();
     ControlledWebSocket.instances = [];
     ControlledWebSocket.onSend = undefined;
-    ControlledWebSocket.onOpen = undefined;
     vi.unstubAllGlobals();
     vi.useRealTimers();
   });
