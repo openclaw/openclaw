@@ -220,6 +220,32 @@ Scratch writes are revision-guarded. Use `--expected-revision <n>` to pin a know
 revision. During an automation run, the agent can read or update its own scratch
 through the automations tool without gaining access to other jobs.
 
+### Keep the checklist current
+
+The checklist is the job's scratch. Use one workflow for everyday requests:
+
+- **During a run**, the job's agent can update its own scratch with the
+  self-scoped `scratch_set` action, so it can drop a finished item or add a new
+  one it was asked to watch.
+- **Between runs, or while the job is disabled**, edit scratch yourself. Read
+  first so the write is revision-safe, and remember `--set` replaces the whole
+  checklist:
+
+  ```bash
+  openclaw automations scratch <job-id> --json
+  openclaw automations scratch <job-id> --set "..." --expected-revision <n>
+  ```
+
+A disabled job keeps its scratch. `openclaw automations enable <job-id>` resumes
+scheduled runs with the saved checklist; `disable` stops new scheduled runs.
+Removing the job requests cancellation of an occurrence already in progress and
+reports `activeRunCancellationRequested` in its JSON response. `--unset` removes
+the checklist entirely.
+
+Deleting every item is not the same as removing scratch: with
+`payload.skipIfScratchEmpty: true`, an explicitly empty checklist skips the run,
+while missing scratch still runs. Disable the job when it should stop regardless.
+
 Scratch is not a scheduler. Put recurring work in separate automation jobs,
 not a `tasks:` block. Doctor imports supported legacy blocks once; runtime does
 not parse them as schedules or read `HEARTBEAT.md`.
