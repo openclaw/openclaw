@@ -16,7 +16,7 @@ import type { DoctorHealthCheckContext } from "../flows/doctor-health-contributi
 import {
   stateSchemaHealthCheck,
   exitCodeFromFindings,
-  runDoctorLintChecks,
+  runDoctorLintChecksWithProgress,
   selectUpdateReadinessChecks,
   type DoctorLintRunOptions,
 } from "../flows/doctor-lint-flow.js";
@@ -56,11 +56,14 @@ import {
 import type { DoctorLintCliOptions } from "./doctor-lint-options.js";
 import {
   createDeferredInspectionExecution,
+  createDoctorLintProgress,
   createStateSnapshotFailureExecution,
   createStateSnapshotFailureFinding,
   detectDoctorLintOutputMode,
+  noDoctorLintProgress,
   writeJsonResult,
   type DoctorLintExecution,
+  type DoctorLintProgress,
 } from "./doctor-lint-output.js";
 import {
   DoctorLintStateSnapshotError,
@@ -74,6 +77,7 @@ import { collectRecoveryDiskUsage, formatRecoveryDiskUsage } from "./recovery-di
 
 type DoctorLintStateView = {
   coreChecks?: readonly DoctorHealthCheck[];
+  progress: DoctorLintProgress;
   deferredCheckIds?: ReadonlySet<string>;
   deferInspectionDisposal?: DoctorHealthCheckContext["deferInspectionDisposal"];
   cleanupWarnings?: HealthFinding[];
@@ -109,7 +113,10 @@ export async function runDoctorLintCliInProcess(
   worker?: { commandStartedAtMs?: number },
 ): Promise<number> {
   let reported: DoctorLintExecution | undefined;
+  // Rehearsal workers report through their update parent, which parses their stderr.
+  const progress = worker ? noDoctorLintProgress : createDoctorLintProgress(opts);
   const report = (execution: DoctorLintExecution) => {
+    progress.stop();
     execution.writeOutput();
     reported = execution;
   };
@@ -124,6 +131,7 @@ export async function runDoctorLintCliInProcess(
               opts,
               worker ? report : undefined,
               worker?.commandStartedAtMs,
+              progress,
             ),
           { agentDatabases: true },
         ),
@@ -143,6 +151,8 @@ export async function runDoctorLintCliInProcess(
     }
     runtime.error(`${UPDATE_DOCTOR_DISPOSAL_WARNING_PREFIX}: ${scrubDoctorErrorMessage(error)}`);
     return reported.exitCode;
+  } finally {
+    progress.stop();
   }
 }
 
@@ -167,6 +177,7 @@ async function prepareDoctorLintExecution(
   opts: DoctorLintCliOptions,
   onChecksComplete?: (execution: DoctorLintExecution) => void,
   commandStartedAtMs?: number,
+  progress: DoctorLintProgress = noDoctorLintProgress,
 ): Promise<DoctorLintExecution> {
   const sevMin =
     opts.severityMin === undefined ? "warning" : parseHealthFindingSeverity(opts.severityMin);
@@ -200,6 +211,7 @@ async function prepareDoctorLintExecution(
       }
     }
   }
+  progress.phase("preparing state snapshot");
   const cleanupWarnings: HealthFinding[] | undefined = isUpdateDoctorLintPass(sourceEnv)
     ? []
     : undefined;
@@ -263,6 +275,7 @@ async function prepareDoctorLintExecution(
         async (runWithPluginStateSnapshot) => {
           const stateView: DoctorLintStateView = {
             coreChecks,
+            progress,
             deferredCheckIds,
             cleanupWarnings,
             pluginMetadataEnv: sourceEnv,
@@ -349,6 +362,7 @@ async function executeDoctorLint(
   sevMin: NonNullable<ReturnType<typeof parseHealthFindingSeverity>>,
   stateView: DoctorLintStateView,
 ): Promise<DoctorLintExecution> {
+  stateView.progress.phase("loading config and checks");
   const snapshot = await stateView.readConfigSnapshot();
   const projectedHeartbeatConfig =
     snapshot.exists && !snapshot.valid
@@ -529,7 +543,10 @@ async function executeDoctorLint(
     skipIds: [...(opts.skipIds ?? []), ...(stateView.deferredCheckIds ?? [])],
     ...(opts.onlyIds && opts.onlyIds.length > 0 ? { onlyIds: opts.onlyIds } : {}),
   };
-  const result = await runDoctorLintChecks(ctx, runOpts);
+  const result = await runDoctorLintChecksWithProgress(ctx, runOpts, (check, index, total) =>
+    stateView.progress.check(index, total, check.id),
+  );
+  stateView.progress.phase("finishing report");
   const advisoryChecks = new Set(
     coreChecks
       .filter(

@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => ({
   prepareSqliteReadOnlyLocation: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
   resolveDoctorContributionHealthChecks: vi.fn(),
+  progressEvents: [] as string[],
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -47,6 +48,27 @@ vi.mock("../config/config.js", async (importOriginal) => {
     readConfigFileSnapshotWithPluginMetadata: async () => ({
       snapshot: await mocks.readConfigFileSnapshot({ observe: false }),
     }),
+  };
+});
+vi.mock("../cli/progress.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../cli/progress.js")>();
+  return {
+    ...actual,
+    createCliProgress: (options: Parameters<typeof actual.createCliProgress>[0]) => {
+      mocks.progressEvents.push(`create enabled=${String(options.enabled)}`);
+      const progress = actual.createCliProgress(options);
+      return {
+        ...progress,
+        setLabel: (label: string) => {
+          mocks.progressEvents.push(`label ${label}`);
+          progress.setLabel(label);
+        },
+        done: () => {
+          mocks.progressEvents.push("done");
+          progress.done();
+        },
+      };
+    },
   };
 });
 vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => {
@@ -593,6 +615,185 @@ describe("runDoctorLintCli", () => {
     await expect(runDoctorLintCli(runtime, { json: true })).rejects.toThrow(
       "health check already registered: core/doctor/not-yet-owned",
     );
+  });
+
+  describe("progress on an interactive stderr", () => {
+    const originalStderrIsTTY = process.stderr.isTTY;
+    let stderr: MockInstance<typeof process.stderr.write>;
+    const stderrText = () => stderr.mock.calls.map(([chunk]) => String(chunk)).join("");
+    const labels = () =>
+      mocks.progressEvents
+        .filter((event) => event.startsWith("label "))
+        .map((event) => event.slice("label ".length));
+    const setStderrTTY = (value: boolean) =>
+      Object.defineProperty(process.stderr, "isTTY", { configurable: true, value });
+
+    beforeEach(() => {
+      mocks.progressEvents.length = 0;
+      stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    });
+    afterEach(() => {
+      setStderrTTY(originalStderrIsTTY);
+    });
+
+    function registerPendingCheck(id: string) {
+      let release: () => void = () => {};
+      const pending = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      registerHealthCheck({
+        id,
+        kind: "plugin",
+        description: "waits until the test releases it",
+        detect: async () => {
+          await pending;
+          return [];
+        },
+      });
+      return () => release();
+    }
+
+    it("shows the pending check on one spinner line and erases it before the report", async () => {
+      mockConfig();
+      setStderrTTY(true);
+      const release = registerPendingCheck("test/pending-check");
+
+      const run = runDoctorLintCli(runtime, { onlyIds: ["test/pending-check"] });
+      await vi.waitFor(() =>
+        expect(stderrText()).toContain("Doctor lint: check 1/1 (0%) test/pending-check"),
+      );
+      expect(mocks.progressEvents[0]).toBe("create enabled=true");
+      expect(labels()).toEqual([
+        "Doctor lint: preparing state snapshot",
+        "Doctor lint: loading config and checks",
+        "Doctor lint: check 1/1 (0%) test/pending-check",
+      ]);
+      expect(stdout).not.toHaveBeenCalled();
+
+      release();
+      expect(await run).toBe(0);
+      expect(mocks.progressEvents.at(-1)).toBe("done");
+      expect(JSON.parse(outputText())).toMatchObject({ ok: true, checksRun: 1, findings: [] });
+    });
+
+    it("shows preparation while the config snapshot is still loading", async () => {
+      let resolveSnapshot: () => void = () => {};
+      mocks.readConfigFileSnapshot.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveSnapshot = () => resolve(createTestConfigSnapshot({}));
+          }),
+      );
+      setStderrTTY(true);
+      registerHealthCheck({
+        id: "test/after-preparation",
+        kind: "plugin",
+        description: "runs after preparation",
+        detect: async () => [],
+      });
+
+      const run = runDoctorLintCli(runtime, { onlyIds: ["test/after-preparation"] });
+      await vi.waitFor(() =>
+        expect(labels().at(-1)).toBe("Doctor lint: loading config and checks"),
+      );
+      expect(labels().some((label) => label.includes(" check "))).toBe(false);
+
+      resolveSnapshot();
+      expect(await run).toBe(0);
+      expect(labels()).toContain("Doctor lint: check 1/1 (0%) test/after-preparation");
+      expect(JSON.parse(outputText())).toMatchObject({ ok: true, checksRun: 1 });
+    });
+
+    it("writes no progress when stderr is not a terminal", async () => {
+      mockConfig();
+      setStderrTTY(false);
+      registerHealthCheck({
+        id: "test/piped",
+        kind: "plugin",
+        description: "piped run",
+        detect: async () => [],
+      });
+
+      expect(await runDoctorLintCli(runtime, { onlyIds: ["test/piped"] })).toBe(0);
+      expect(stderrText()).not.toContain("Doctor lint:");
+      expect(JSON.parse(outputText())).toMatchObject({ ok: true, checksRun: 1 });
+    });
+
+    it("writes no progress for an explicit --json", async () => {
+      mockConfig();
+      setStderrTTY(true);
+      registerHealthCheck({
+        id: "test/explicit-json",
+        kind: "plugin",
+        description: "explicit json run",
+        detect: async () => [],
+      });
+
+      expect(await runDoctorLintCli(runtime, { json: true, onlyIds: ["test/explicit-json"] })).toBe(
+        0,
+      );
+      expect(mocks.progressEvents[0]).toBe("create enabled=false");
+      expect(stderrText()).not.toContain("Doctor lint:");
+      expect(JSON.parse(outputText())).toMatchObject({ ok: true, checksRun: 1 });
+    });
+
+    it("writes no progress during an update Doctor lint pass", async () => {
+      mockConfig();
+      setStderrTTY(true);
+      process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE = "1";
+      registerHealthCheck({
+        id: "test/update-pass",
+        kind: "plugin",
+        description: "update pass",
+        detect: async () => [],
+      });
+
+      await runDoctorLintCli(runtime, { onlyIds: ["test/update-pass"] });
+      expect(mocks.progressEvents[0]).toBe("create enabled=false");
+      expect(stderrText()).not.toContain("Doctor lint:");
+    });
+
+    it("stops the spinner when a check throws", async () => {
+      // Only the spinner's frame interval is faked, so the run's own I/O keeps real time.
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      try {
+        mockConfig();
+        setStderrTTY(true);
+        let fail: () => void = () => {};
+        const failing = new Promise<void>((resolve) => {
+          fail = resolve;
+        });
+        registerHealthCheck({
+          id: "test/throws",
+          kind: "plugin",
+          description: "throws while the spinner runs",
+          detect: async () => {
+            await failing;
+            throw new Error("boom");
+          },
+        });
+
+        const run = runDoctorLintCli(runtime, { onlyIds: ["test/throws"] });
+        await vi.waitFor(() => expect(labels().at(-1)).toContain("test/throws"));
+        const writesBeforeFrames = stderr.mock.calls.length;
+        vi.advanceTimersByTime(500);
+        expect(stderr.mock.calls.length).toBeGreaterThan(writesBeforeFrames);
+
+        fail();
+        expect(await run).toBe(1);
+        expect(mocks.progressEvents.at(-1)).toBe("done");
+        expect(JSON.parse(outputText())).toMatchObject({
+          ok: false,
+          findings: [expect.objectContaining({ checkId: "test/throws", severity: "error" })],
+        });
+        const writesAfterRun = stderr.mock.calls.length;
+        vi.advanceTimersByTime(500);
+        expect(stderr.mock.calls.length).toBe(writesAfterRun);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("rejects invalid severity thresholds", async () => {

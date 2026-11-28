@@ -94,6 +94,9 @@ export interface DoctorLintRunOptions {
   readonly includeAllChecks?: boolean;
 }
 
+/** Called before each selected check runs, so the CLI can show which check is pending. */
+type DoctorLintCheckStart = (check: HealthCheck, index: number, total: number) => void;
+
 interface DoctorLintRunResult {
   readonly findings: readonly HealthFinding[];
   readonly checksRun: number;
@@ -104,6 +107,15 @@ interface DoctorLintRunResult {
 export async function runDoctorLintChecks(
   ctx: HealthCheckContext,
   opts: DoctorLintRunOptions = {},
+): Promise<DoctorLintRunResult> {
+  return await runDoctorLintChecksWithProgress(ctx, opts);
+}
+
+/** CLI-only runner: the same selection and execution, with a progress hook kept off the SDK. */
+export async function runDoctorLintChecksWithProgress(
+  ctx: HealthCheckContext,
+  opts: DoctorLintRunOptions = {},
+  onCheckStart?: DoctorLintCheckStart,
 ): Promise<DoctorLintRunResult> {
   const all = opts.checks ?? listHealthChecks();
   const skip = opts.skipIds instanceof Set ? opts.skipIds : new Set(opts.skipIds ?? []);
@@ -138,8 +150,9 @@ export async function runDoctorLintChecks(
       path: id,
     });
   }
-  for (const check of selected) {
+  for (const [index, check] of selected.entries()) {
     try {
+      onCheckStart?.(check, index, selected.length);
       const out = await check.detect(ctx);
       for (const f of out) {
         findings.push(f);
