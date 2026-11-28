@@ -194,8 +194,8 @@ export function buildMinimaxSpeechProvider({
     voices: MINIMAX_TTS_VOICES,
     resolveConfig: ({ rawConfig, cfg }) => normalizeMinimaxProviderConfig(rawConfig, cfg),
     parseDirectiveToken,
-    resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
-      const base = normalizeMinimaxProviderConfig(baseTtsConfig);
+    resolveTalkConfig: ({ cfg, baseTtsConfig, talkProviderConfig }) => {
+      const base = normalizeMinimaxProviderConfig(baseTtsConfig, cfg);
       const talkBaseUrl = trimToUndefined(talkProviderConfig.baseUrl);
       return {
         ...base,
