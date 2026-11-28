@@ -766,4 +766,13 @@ describe("renderModelSetup", () => {
       .click();
     expect(onVerify).toHaveBeenCalledOnce();
   });
+
+  it("names the model that answered first-run verification", () => {
+    const container = mount({
+      ...firstRunProps(),
+      verify: { phase: "ok", modelRef: "anthropic/claude-opus-4-8" },
+    });
+    expect(container.textContent).toContain("anthropic/claude-opus-4-8");
+    expect(container.textContent).not.toContain("openai/gpt-5");
+  });
 });

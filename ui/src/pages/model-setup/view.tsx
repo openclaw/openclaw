@@ -436,8 +436,13 @@ function ActivationNotices(props: ModelSetupViewProps) {
 function FirstRunSummary(props: ModelSetupViewProps) {
   const result = () => (props.page.phase === "ready" ? props.page.result : undefined);
   // A configured model is verified on request; once it answers, first run hands off to onboarding.
+  // Verification names the model that actually answered, which can differ from the scan.
   const configuredModel = () =>
-    props.activation.phase !== "success" ? result()?.configuredModel : undefined;
+    props.activation.phase !== "success" && result()?.configuredModel
+      ? props.verify.phase === "ok"
+        ? props.verify.modelRef
+        : result()?.configuredModel
+      : undefined;
   return (
     <>
       {/* The open discovery dialog shows these notices beside the action that caused them. */}
