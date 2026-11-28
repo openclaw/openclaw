@@ -159,6 +159,12 @@ describe("recorded plugin trust diagnostics", () => {
       trusted: false,
     },
     {
+      name: "matching local archive install",
+      override: { source: "archive" },
+      reason: "origin-path",
+      trusted: false,
+    },
+    {
       name: "official AgentMail ClawHub install",
       pluginId: "agentmail",
       packageName: "@agentmail/agentmail",
