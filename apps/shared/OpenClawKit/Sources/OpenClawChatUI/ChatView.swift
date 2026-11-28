@@ -1264,7 +1264,7 @@ extension OpenClawChatView {
     }
 
     /// Where an app shows toasts (the iPhone), a failure is a toast and the banner keeps only the
-    /// model's standing sign-in problem, which the composer's Model sign-in row acts on.
+    /// model's standing sign-in problem, which the model picker or active recovery control acts on.
     private var bannerText: String? {
         guard self.toastPresenter != nil else { return self.activeErrorText }
         let showsContextualSignIn = self.showsComposer && self.isDesktopLayout && self.composerChrome == .clean

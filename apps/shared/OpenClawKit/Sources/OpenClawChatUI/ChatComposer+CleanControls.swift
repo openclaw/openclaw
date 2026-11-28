@@ -453,13 +453,11 @@ extension OpenClawChatComposer {
         #endif
     }
 
-    /// Keep recovery visible when authentication blocks send or a voice note replaces the model menu.
-    /// Talk hides the model chip too, but a working chat needs no sign-in link under it.
+    /// Keep the sign-in route available while voice-note capture replaces the model picker.
     var showsModelSignInRow: Bool {
         #if os(iOS)
         guard self.composerChrome == .clean else { return true }
-        return self.viewModel.composerModelAvailabilityMessage != nil ||
-            self.voiceNoteControl?.recorder.isRecording == true
+        return self.voiceNoteControl?.recorder.isRecording == true
         #else
         !self.usesDesktopModelMenu
         #endif

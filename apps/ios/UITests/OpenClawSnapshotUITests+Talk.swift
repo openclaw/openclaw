@@ -25,9 +25,9 @@ extension OpenClawSnapshotUITests {
         XCTAssertEqual(status.label, "Listening")
         XCTAssertEqual(talk.label, "End voice conversation")
         XCTAssertEqual(talk.value as? String, "Listening")
-        // One place says the state: no strip above the card, no Model sign-in under it.
+        // One place says the state: no strip above the card or idle sign-in row under it.
         XCTAssertFalse(app.otherElements["chat-talk-activity"].exists)
-        XCTAssertFalse(app.buttons["Model sign-in"].exists)
+        XCTAssertFalse(app.buttons["chat-model-sign-in"].exists)
         XCTAssertEqual(surface.frame.height, restingHeight, accuracy: 1, "Talk keeps the card's height")
         self.assertMinimumTouchTarget(app.buttons["chat-talk-microphone"].firstMatch)
         self.assertMinimumTouchTarget(talk)
@@ -38,6 +38,19 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(input.waitForExistence(timeout: 3))
         XCTAssertEqual(talk.label, "Start voice conversation")
         XCTAssertEqual(surface.frame.height, restingHeight, accuracy: 1)
+    }
+
+    func testTalkHidesSignInRecoveryWhenModelAuthFails() throws {
+        let app = try self.launchTalkFixture(
+            "listening",
+            live: false,
+            extra: [
+                "--openclaw-selected-model-auth-failure-fixture",
+                "--openclaw-model-sign-in-fixture", "ordinary",
+            ])
+        XCTAssertTrue(app.staticTexts["Sign-in failed for this model."].waitForExistence(timeout: 8))
+        XCTAssertFalse(app.buttons["chat-model-sign-in"].exists)
+        XCTAssertFalse(app.buttons["chat-composer-inline-model"].exists)
     }
 
     func testTalkSaysEachStateInOnePlace() throws {

@@ -58,15 +58,17 @@ Icon glyphs stay within their controls while chat text continues to scale.
 
 ## Model sign-in
 
-Open the model menu in the chat composer and choose **Model sign-in**. The menu
-remains available during a response, while session settings are saving, and when
-no models are listed. Model choices still respect their existing permission and
-busy-state restrictions; opening sign-in does not grant permission to change them.
+Open the model picker in the chat composer. Choose a provider's **Sign in** or
+**Sign in again** action, or choose **Provider accounts** to manage connections.
+The picker remains available during a response, while session settings are saving,
+and when no models are listed. Model choices still respect their existing permission
+and busy-state restrictions; opening sign-in does not grant permission to change them.
 
-When the selected model cannot send because its credentials are missing or invalid,
-a **Model sign-in** link also appears beside the composer. The link stays available
-when camera or voice-note capture replaces the model menu. Provider authentication
-and Gateway permissions are unchanged.
+When the selected model's credentials block an online send, the warning remains visible
+and Send stays disabled. Drafts routed through the durable queue are not blocked by this
+model-availability check. A separate **Sign in** link remains available during voice-note
+recording.
+Provider authentication and Gateway permissions are unchanged.
 
 ## Settings
 

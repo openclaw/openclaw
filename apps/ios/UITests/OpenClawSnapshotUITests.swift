@@ -951,7 +951,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.staticTexts[
             "Sign-in failed for this model.",
         ].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Sign in again"].exists)
+        XCTAssertFalse(app.buttons["Sign in again"].exists)
         XCTAssertFalse(app.buttons["Model sign-in"].exists)
         self.attachScreenshot(named: "chat-composer-model-auth-failed")
 
