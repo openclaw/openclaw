@@ -1,7 +1,9 @@
 import { isTerminalSessionStatus } from "../../../config/sessions/types.js";
 import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
+import { sanitizeAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.runtime.js";
+import { readSubagentRunFinalAnswerEvidence } from "../announce/subagent-announce-output.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -171,21 +173,37 @@ export async function settleRestartInterruptedSubagentRun(params: {
   ) {
     return false;
   }
-  subagentRegistryLog.warn("Settling subagent interrupted by Gateway restart", {
-    runId,
-    requesterSessionKey: entry.requesterSessionKey,
-    createdAt: entry.createdAt,
-  });
+  let answer;
+  if (entry.expectsCompletionMessage === true && !entry.completion?.terminalReply) {
+    try {
+      answer = await readSubagentRunFinalAnswerEvidence(entry);
+    } catch (error) {
+      subagentRegistryLog.warn("Deferring subagent restart settlement: result read failed", {
+        runId,
+        error,
+      });
+      return false;
+    }
+  }
+  const saved = answer?.completedAt !== undefined ? answer : undefined;
+  if (!saved) {
+    subagentRegistryLog.warn("Settling subagent interrupted by Gateway restart", {
+      runId,
+      requesterSessionKey: entry.requesterSessionKey,
+      createdAt: entry.createdAt,
+    });
+  }
   await complete(
     {
       runId,
       expectedEntry: entry,
       recoveryCurrent: readScope?.completionCurrent,
-      endedAt: now,
-      outcome: { status: "error", error: SUBAGENT_RESTART_INTERRUPTED_ERROR },
-      // The old Gateway cannot publish another reply; the completion owner keeps any saved one.
-      terminalReply: { disposition: "empty" },
-      reason: SUBAGENT_ENDED_REASON_ERROR,
+      endedAt: saved?.completedAt ?? now,
+      outcome: saved
+        ? { status: "ok" }
+        : { status: "error", error: SUBAGENT_RESTART_INTERRUPTED_ERROR },
+      terminalReply: saved ? sanitizeAgentRunTerminalReply(saved.text) : { disposition: "empty" },
+      reason: saved ? SUBAGENT_ENDED_REASON_COMPLETE : SUBAGENT_ENDED_REASON_ERROR,
       sendFarewell: true,
       accountId: entry.requesterOrigin?.accountId,
       triggerCleanup: true,

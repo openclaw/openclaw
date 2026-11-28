@@ -370,6 +370,10 @@ export async function readSubagentRunAnnounceResult(
 export async function readSubagentRunFinalAnswer(
   child: SubagentRunRecord,
 ): Promise<string | undefined> {
+  return (await readSubagentRunFinalAnswerEvidence(child))?.text;
+}
+
+export async function readSubagentRunFinalAnswerEvidence(child: SubagentRunRecord) {
   return await readSubagentRunFinalAnswerUsing(child, {
     findTranscriptEvent,
     findSessionTranscriptArchiveEventReadOnly,

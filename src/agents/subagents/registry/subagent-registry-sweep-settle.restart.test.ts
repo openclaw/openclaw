@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
+import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { SessionManager } from "../../sessions/session-manager.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -52,35 +57,86 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-it("fails a running child restored from an earlier Gateway so its requester wakes", async () => {
-  using warning = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
-  const entry = restoredRunningRow();
-  // Startup has admitted fresh completion custody; the child's outcome is unknown.
+it("fails a running child restored from an earlier Gateway so its requester wakes", () =>
+  withOpenClawTestState({ label: "child-restart-no-final" }, async () => {
+    setRuntimeConfigSnapshot({});
+    using warning = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
+    const entry = restoredRunningRow();
+    // Startup has admitted fresh completion custody; the child's outcome is unknown.
 
-  const { complete, settled } = settle(entry);
+    const { complete, settled } = settle(entry);
 
-  expect(await settled).toBe(true);
-  expect(warning).toHaveBeenCalledWith("Settling subagent interrupted by Gateway restart", {
-    runId: entry.runId,
-    requesterSessionKey: entry.requesterSessionKey,
-    createdAt: entry.createdAt,
-  });
-  expect(complete).toHaveBeenCalledWith(
-    {
+    expect(await settled).toBe(true);
+    expect(warning).toHaveBeenCalledWith("Settling subagent interrupted by Gateway restart", {
       runId: entry.runId,
-      expectedEntry: entry,
-      recoveryCurrent: undefined,
-      endedAt: NOW,
-      outcome: { status: "error", error: SUBAGENT_RESTART_INTERRUPTED_ERROR },
-      terminalReply: { disposition: "empty" },
-      reason: SUBAGENT_ENDED_REASON_ERROR,
-      sendFarewell: true,
-      accountId: "primary",
-      triggerCleanup: true,
-    },
-    "sweeper-restart-interrupted",
-  );
-});
+      requesterSessionKey: entry.requesterSessionKey,
+      createdAt: entry.createdAt,
+    });
+    expect(complete).toHaveBeenCalledWith(
+      {
+        runId: entry.runId,
+        expectedEntry: entry,
+        recoveryCurrent: undefined,
+        endedAt: NOW,
+        outcome: { status: "error", error: SUBAGENT_RESTART_INTERRUPTED_ERROR },
+        terminalReply: { disposition: "empty" },
+        reason: SUBAGENT_ENDED_REASON_ERROR,
+        sendFarewell: true,
+        accountId: "primary",
+        triggerCleanup: true,
+      },
+      "sweeper-restart-interrupted",
+    );
+  }));
+
+it("recovers only the stopped run's saved answer, even after a later turn", () =>
+  withOpenClawTestState({ label: "child-restart-saved-final" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      sessionId: "reused-child",
+      sessionKey: "agent:main:subagent:child",
+      storePath: state.statePath("transcript.sqlite"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: NOW });
+    const manager = await SessionManager.openAsync(scope);
+    const finalAt = PROCESS_STARTED_AT - 1;
+    for (const [runId, text, stopReason, runTerminal] of [
+      ["interrupted", "partial answer", "aborted", true],
+      ["checkpoint", "Stopped: one repair remains.", "stop", undefined],
+      ["completed", "saved child answer", "stop", true],
+      ["later", "another run's answer", "stop", true],
+    ] as const) {
+      const message = {
+        ...makeAgentAssistantMessage({
+          content: [{ type: "text", text }],
+          stopReason,
+          timestamp: finalAt,
+        }),
+        __openclaw: { runId, runTerminal },
+      };
+      await manager.appendMessageAsync(message);
+    }
+    for (const runId of ["completed", "interrupted", "checkpoint"]) {
+      const entry = restoredRunningRow({
+        runId,
+        execution: { status: "running", transcriptTarget: scope },
+      });
+      const { complete, settled } = settle(entry);
+      expect(await settled).toBe(true);
+      expect(complete.mock.calls[0]?.[0]).toMatchObject(
+        runId === "completed"
+          ? {
+              endedAt: finalAt,
+              outcome: { status: "ok" },
+              terminalReply: { disposition: "visible", text: "saved child answer" },
+            }
+          : {
+              outcome: { status: "error", error: SUBAGENT_RESTART_INTERRUPTED_ERROR },
+              terminalReply: { disposition: "empty" },
+            },
+      );
+    }
+  }));
 
 it.each([
   [

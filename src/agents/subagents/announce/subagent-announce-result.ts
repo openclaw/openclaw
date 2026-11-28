@@ -1,3 +1,4 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { readTerminalSourceReplyDeliveryMirror } from "../../../shared/chat-message-content.js";
@@ -83,7 +84,7 @@ export async function readSubagentRunAnnounceResultUsing(
       isCurrent,
     };
   }
-  return { text: answer, isCurrent };
+  return { text: answer.text, isCurrent };
 }
 
 /**
@@ -94,7 +95,7 @@ export async function readSubagentRunFinalAnswerUsing(
   child: SubagentRunRecord,
   deps: SubagentFinalAnswerDeps,
   assertCurrent?: () => void,
-): Promise<string | undefined> {
+): Promise<{ text: string; completedAt?: number } | undefined> {
   const runId = child.runId;
   const childAgentId = resolveSubagentChildAgentId(child);
   if (!childAgentId) {
@@ -145,7 +146,17 @@ export async function readSubagentRunFinalAnswerUsing(
               ).text,
             ).text,
           ).text;
-    return answer || undefined;
+    return answer
+      ? {
+          text: answer,
+          // An ordinary stop can be a checkpoint or a CLI diagnostic, not the run's final.
+          completedAt:
+            message?.stopReason === "stop" &&
+            asOptionalObjectRecord(message["__openclaw"])?.runTerminal === true
+              ? asFiniteNumber(message.timestamp)
+              : undefined,
+        }
+      : undefined;
   });
 }
 
