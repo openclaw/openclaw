@@ -88,7 +88,7 @@ it("stops the recovered send at the adapter handoff when the plugin is unloaded 
 });
 
 /** Literal `entry_json` written by the v2026.10.9 queue writer (`createQueuedDelivery`). */
-function storedV2026109Row(id: string, extra: Record<string, unknown> = {}) {
+function storedV2026109Row(id: string, extra: Record<string, unknown>) {
   return JSON.stringify({
     id,
     enqueuedAt: 1,
