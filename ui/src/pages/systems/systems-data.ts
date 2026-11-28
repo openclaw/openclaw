@@ -27,6 +27,30 @@ export type SystemsInventoryRow = {
   sessions: SystemsSessionRelation[];
 };
 
+/** Match within the selected worker's scoped relations, not across session IDs globally. */
+export function indexSystemsAttachedSessions(
+  ids: readonly string[] | undefined,
+  relations: readonly SystemsSessionRelation[] | undefined,
+) {
+  if (!ids?.length || !relations?.length) {
+    return undefined;
+  }
+  const matches = new Map<string, GatewaySessionRow | null | undefined>(
+    ids.map((id) => [id, undefined]),
+  );
+  for (const { kind, session } of relations) {
+    if (kind !== "placement" || session.placement?.state !== "active") {
+      continue;
+    }
+    const id = session.sessionId;
+    if (id && matches.has(id)) {
+      // Multiple current rows on this worker don't establish which generation the ID names.
+      matches.set(id, matches.get(id) === undefined ? session : null);
+    }
+  }
+  return matches;
+}
+
 /** The page owner schedules and publishes this canonical membership read. */
 export async function loadSystemsInventory(
   gateway: ApplicationGateway,

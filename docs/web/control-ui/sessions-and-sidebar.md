@@ -425,6 +425,10 @@ keeping the device list and healthy readings available.
 
 System details use reported facts. A connected device is not necessarily the
 device running a session, and unavailable measurements are not shown as zero.
+**Related sessions** links use the same names as the session list. **Attached
+sessions** shows a name when exactly one current session in the loaded list
+matches the attachment on that worker. Otherwise, it shows the recorded
+session ID.
 The telemetry and backup overview reserves its space while those readings load,
 so the desktop and Backups stay in place. It summarizes the three volumes with
 the highest used percentage and reserves unused rows for devices with fewer
