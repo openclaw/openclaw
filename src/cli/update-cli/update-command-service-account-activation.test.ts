@@ -75,8 +75,14 @@ let root: string;
 let accountDir: string;
 
 /** answers: command -> [exit code, stdout]; "health" covers gateway health. */
-function installAccount(answers: Record<string, [number, string]>): void {
+function installAccount(
+  answers: Record<string, [number, string]>,
+  options: { migrationBacksUp?: boolean } = {},
+): void {
   accountDir = dirs.make("service-account-steps-");
+  if (options.migrationBacksUp ?? true) {
+    fs.writeFileSync(path.join(accountDir, "migrate.receipt"), "");
+  }
   for (const [command, [code, stdout]] of Object.entries(answers)) {
     fs.writeFileSync(path.join(accountDir, `${command}.code`), String(code));
     fs.writeFileSync(path.join(accountDir, `${command}.out`), stdout);
@@ -90,6 +96,8 @@ function installAccount(answers: Record<string, [number, string]>): void {
       // -u <account> -- <node> -e <loader> <env file> <entry> <command...>
       'shift 8; command=$1; [ "$command" = gateway ] && command=health; [ "$command" = update ] && command=$2',
       'echo "$command" >> "$dir/calls"',
+      // Like the real command: a migration that got as far as its backup leaves a receipt.
+      '[ "$command" = migrate ] && [ -f "$dir/migrate.receipt" ] && mkdir -p "$(dirname "$4")" && : > "$4.receipt.json"',
       '[ -f "$dir/$command.code" ] || exit 70',
       'cat "$dir/$command.out"',
       'exit $(cat "$dir/$command.code")',
@@ -218,7 +226,8 @@ describe("system service update as the unit's account", () => {
     // The unit restarts only after the installed updater restored the previous package.
     expect(scheduledPayloads()).toMatchObject([
       {
-        mode: "start",
+        // Armed before the migration started.
+        mode: "settle",
         driverPid: process.ppid,
         root,
         candidateVersion: "2026.11.16",
@@ -232,28 +241,26 @@ describe("system service update as the unit's account", () => {
     }
   });
 
-  it.runIf(process.platform === "linux")(
-    "restores instead of keeping an update nothing could roll back",
-    async () => {
-      installAccount({
-        migrate: ok("migrated"),
-        health: [0, "{}"],
-        restore: ok("restored"),
-      });
-      native.scheduleFails = true;
+  it("migrates nothing when the settle step cannot be armed", async () => {
+    installAccount({ migrate: ok("migrated"), restore: ok("restored") });
+    native.scheduleFails = true;
 
-      const result = await activate();
+    const result = await activate();
 
-      expect(result).toMatchObject({ status: "failed", stateRestored: true });
-      expect(result.status === "failed" && result.message).toContain(
-        "Start it with sudo systemctl start",
-      );
-      expect(native.events).toEqual(["stop", "start", "stop"]);
-      // Keeping it would leave nothing to restore the state if the updater later
-      // restores the previous package.
-      expect(calls()).toEqual(["migrate", "health", "restore"]);
-    },
-  );
+    expect(result).toMatchObject({ status: "failed", stateRestored: false });
+    expect(result.status === "failed" && result.message).toContain("nothing was migrated");
+    expect(native.events).toEqual(["stop"]);
+    expect(calls()).toEqual([]);
+  });
+
+  it("reports unchanged state when the migration failed before its backup", async () => {
+    installAccount({ migrate: [1, ""], restore: [1, ""] }, { migrationBacksUp: false });
+
+    const result = await activate();
+
+    expect(result).toMatchObject({ status: "failed", stateRestored: true });
+    expect(result.status === "failed" && result.message).toContain("state was not changed");
+  });
 
   it("keeps the unit stopped and the backup when the account cannot restore", async () => {
     installAccount({ migrate: [1, ""], restore: [1, ok("restored")[1]] });
@@ -262,9 +269,9 @@ describe("system service update as the unit's account", () => {
 
     expect(result).toMatchObject({ status: "failed", stateRestored: false });
     expect(result.status === "failed" && result.message).toContain("update backup is kept");
-    // Restoring re-confirms the stop first.
+    // Restoring re-confirms the stop first; the armed settle step retries after the updater.
     expect(native.events).toEqual(["stop", "stop"]);
-    expect(native.scheduled).toEqual([]);
+    expect(scheduledPayloads()).toMatchObject([{ mode: "settle" }]);
   });
 
   it("keeps the state and the backup when the unit cannot be confirmed stopped", async () => {
@@ -343,6 +350,7 @@ describe("settle step after the installed updater exits", () => {
   type World = {
     version: string;
     buildId?: string;
+    receipt?: boolean;
     active: string;
     controlGroup?: string;
     cgroupEvents?: string;
@@ -391,6 +399,12 @@ describe("settle step after the installed updater exits", () => {
         throw Object.assign(new Error("missing"), { code: "ENOENT" });
       },
       rmSync: (dir: string) => events.push(`rm ${dir}`),
+      lstatSync: (file: string) => {
+        if (file === `${payload.backupRoot}.receipt.json` && world.receipt !== false) {
+          return {};
+        }
+        throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      },
     };
     const fakeChildProcess = {
       spawnSync: (command: string, args: string[]) => {
@@ -481,6 +495,17 @@ describe("settle step after the installed updater exits", () => {
 
     expect(events).not.toContain("systemctl start openclaw-gateway.service");
     expect(events.includes("as openclaw: update restore")).toBe(restoreRuns);
+  });
+
+  it("starts the previous package when the migration never backed anything up", async () => {
+    const events = runSettle(await settleScript(), "settle", {
+      version: "2026.11.10",
+      active: "active",
+      receipt: false,
+      account: { restore: [1, ""] },
+    });
+
+    expect(events).toContain("systemctl start openclaw-gateway.service");
   });
 
   it("treats a same-version package with another build as the restored previous one", async () => {

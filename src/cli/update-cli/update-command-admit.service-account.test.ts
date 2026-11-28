@@ -191,6 +191,10 @@ beforeEach(() => {
   systemd.readCommand.mockReset().mockRejectedValue(mismatch());
   // The account's HOME, which it owns and can write; tests run as that account.
   serviceHome = dirs.make("service-account-home-");
+  if (process.getuid?.() === 0) {
+    // A root test runner stands in for an account with UID 1001, which owns its HOME.
+    fs.chownSync(serviceHome, 1001, process.getgid?.() ?? 0);
+  }
   // Root by default; refusal cases below remove one requirement for switching accounts.
   setEuid(0);
   systemd.readAccount.mockReset().mockResolvedValue({

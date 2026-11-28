@@ -9,6 +9,7 @@ import { isSystemdControlGroupEmpty } from "../../daemon/systemd-cgroup.js";
 import { execSystemctl } from "../../daemon/systemd-exec.js";
 import { startSystemdService, stopSystemdService } from "../../daemon/systemd-lifecycle.js";
 import { captureSystemdServiceIdentity } from "../../daemon/systemd-service-identity.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
@@ -113,7 +114,9 @@ const settle = () => {
   systemctl("stop", p.unit);
   for (let i = 0; i < 90 && !stopped(); i++) spawnSync("/bin/sleep", ["1"]);
   if (!stopped()) { log(p.unit + " did not stop; state not restored, backup kept at " + p.backupRoot); return; }
-  if (asAccount("restored", "update", "restore", "--backup-root", p.backupRoot)) systemctl("start", p.unit);
+  // No receipt means the migration never backed anything up, so the state was never changed.
+  const untouched = () => { try { fs.lstatSync(p.backupRoot + ".receipt.json"); return false; } catch (error) { return Boolean(error && error.code === "ENOENT"); } };
+  if (asAccount("restored", "update", "restore", "--backup-root", p.backupRoot) || untouched()) systemctl("start", p.unit);
   else log("restore did not confirm; " + p.unit + " left stopped, backup kept at " + p.backupRoot);
 };
 const tick = () => {
@@ -338,7 +341,41 @@ async function activateSystemServiceAsAccount(
       );
     };
     const backupKept = `the update backup is kept under ${path.dirname(backupRoot)}`;
+    const stoppedAt = Date.now();
+    if (!(await stopConfirmed())) {
+      // Never start the new package next to processes that may still write the state. Once
+      // the installed updater restores the previous package, the settle step starts it.
+      const startUnit = await scheduleSettle("start", execution, handoff, {
+        root: options.root,
+        candidateVersion: options.candidateVersion,
+        backupRoot,
+        controlGroup,
+      });
+      handoffOwned = startUnit === undefined;
+      return failed(
+        false,
+        `${unitName} did not stop cleanly; nothing was migrated.${startUnit ? ` It starts again once the previous package is restored (${startUnit}).` : ` Start it with sudo systemctl start ${unitName} once the previous package is restored.`}`,
+      );
+    }
+    // Armed before migration: whatever happens to this process afterwards, including the
+    // installed updater's deadline ending it, the settle step reconciles once that updater exits.
+    const settleUnit = await scheduleSettle("settle", execution, handoff, {
+      root: options.root,
+      candidateVersion: options.candidateVersion,
+      backupRoot,
+      controlGroup,
+    });
+    if (!settleUnit) {
+      // Without it nothing could restore the state if the installed updater later put the
+      // previous package back, so nothing is migrated.
+      return failed(
+        false,
+        `The step that settles this update could not be scheduled, so nothing was migrated; ${unitName} is stopped. Start it with sudo systemctl start ${unitName} once the previous package is restored.`,
+      );
+    }
+    handoffOwned = false;
     const restore = async (problem: string): Promise<ServiceAccountActivation> => {
+      const resumes = `${unitName} starts again once the previous package is restored (${settleUnit}).`;
       if (!(await stopConfirmed())) {
         return failed(
           false,
@@ -349,6 +386,14 @@ async function activateSystemServiceAsAccount(
         ["update", "restore", "--backup-root", backupRoot],
         DEFAULT_MIGRATE_TIMEOUT_MS,
       );
+      // No receipt means the migration never backed anything up, so the state was never changed.
+      const untouched = await fs
+        .lstat(`${backupRoot}.receipt.json`)
+        .then(() => false)
+        .catch((error: unknown) => hasErrnoCode(error, "ENOENT"));
+      if (untouched) {
+        return failed(true, `${problem} ${account}'s state was not changed; ${resumes}`);
+      }
       if (
         restored?.termination !== "exit" ||
         restored.code !== 0 ||
@@ -356,39 +401,14 @@ async function activateSystemServiceAsAccount(
       ) {
         return failed(
           false,
-          `${problem} ${account}'s state could not be restored automatically; ${unitName} was left stopped and ${backupKept}.`,
+          `${problem} ${account}'s state could not be restored here; ${backupKept}, and ${settleUnit} retries the restore once the previous package is back.`,
         );
       }
-      const settleUnit = await scheduleSettle("start", execution, handoff, {
-        root: options.root,
-        candidateVersion: options.candidateVersion,
-        backupRoot,
-        controlGroup,
-      });
-      handoffOwned = settleUnit === undefined;
       return failed(
         true,
-        settleUnit
-          ? `${problem} ${account}'s state was restored from the update backup; ${unitName} starts again once the previous package is restored (${settleUnit}).`
-          : `${problem} ${account}'s state was restored from the update backup; ${unitName} is stopped. Start it with sudo systemctl start ${unitName} once the previous package is restored.`,
+        `${problem} ${account}'s state was restored from the update backup; ${resumes}`,
       );
     };
-    const stoppedAt = Date.now();
-    if (!(await stopConfirmed())) {
-      // Never start the new package next to processes that may still write the state. Once
-      // the installed updater restores the previous package, the settle step starts it.
-      const settleUnit = await scheduleSettle("start", execution, handoff, {
-        root: options.root,
-        candidateVersion: options.candidateVersion,
-        backupRoot,
-        controlGroup,
-      });
-      handoffOwned = settleUnit === undefined;
-      return failed(
-        false,
-        `${unitName} did not stop cleanly; nothing was migrated.${settleUnit ? ` It starts again once the previous package is restored (${settleUnit}).` : ` Start it with sudo systemctl start ${unitName} once the previous package is restored.`}`,
-      );
-    }
     const migrated = await asAccount(
       ["update", "migrate", "--backup-root", backupRoot],
       budget(DEFAULT_MIGRATE_TIMEOUT_MS),
@@ -420,22 +440,13 @@ async function activateSystemServiceAsAccount(
     if (!ready) {
       return await restore(`${unitName} did not come ready on ${options.candidateVersion}.`);
     }
-    const notServingMs = Date.now() - stoppedAt;
-    const settleUnit = await scheduleSettle("settle", execution, handoff, {
-      root: options.root,
-      candidateVersion: options.candidateVersion,
-      backupRoot,
-      controlGroup,
-    });
-    if (settleUnit) {
-      handoffOwned = false;
-      return { status: "updated", unitName, account, notServingMs, settleUnit };
-    }
-    // Without the settle unit nothing could restore the state if the installed updater later
-    // put the previous package back, so do not keep the update.
-    return await restore(
-      `${unitName} served ${options.candidateVersion}, but the step that settles this update could not be scheduled.`,
-    );
+    return {
+      status: "updated",
+      unitName,
+      account,
+      notServingMs: Date.now() - stoppedAt,
+      settleUnit,
+    };
   } finally {
     if (handoffOwned) {
       await handoff.remove();
