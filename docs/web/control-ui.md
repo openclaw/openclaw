@@ -799,7 +799,7 @@ Templates are available by default, without a Labs switch. An explicit
 `gateway.controlUi.experimental.templates: false` hides the Templates entry and
 direct visits to discovery or details. The former `/agents` overview is removed.
 
-To browse sessions across agents, choose the **Show all** tile in the agent
+To see your agents in one roster, choose **Show all** in the agent
 switcher. It appears with two or more agents and groups their own avatars: two
 overlap diagonally, three or four form a two-column grid, and five or more show
 three avatars plus a remaining-agent count. This enables **team mode**, a browser
@@ -810,15 +810,9 @@ agent rows with a settings gear on the right. Choosing a gear opens that agent's
 configuration without selecting it. The selected row has an avatar ring. Help
 and its links remain in the account menu. Pinned sessions stay in **Pages**, using
 their agent's avatar as the icon.
-Other sessions appear under collapsible agent headers in configured roster order,
-which stays stable as activity changes. **Home** disappears from Pages: click an agent header's avatar or name to
-open that agent's main chat. The separate collapse control only folds its sessions.
-The accented rail **+** below the workspace mark, labeled **New session**, opens the New session composer directly with your last-selected agent.
-The selection is remembered in this browser for each Gateway; you can choose a
-different agent inside the composer.
-Each group's **+** opens a composer for that specific agent, appearing on hover or keyboard focus and remaining visible on touch devices. Selecting a session switches the active
-agent for chat. Choose a named agent tile in the workspace menu to leave team
-mode with that agent selected, restoring the agent chip and Home row.
+The roster shows one row per agent in configured order. Select an agent row to
+open its main chat. The rail **+**, labeled **New session**, opens the composer
+with your last-selected agent. You can choose a different agent in the composer.
 
 Choosing **Show all** defaults the shared page scope to **All agents**. That scope,
 including an explicit **All agents** selection, is saved in this browser for each
@@ -830,12 +824,13 @@ Automations, Dashboards, Sessions, and Usage support all-agent views, with
 agent identity shown on mixed-agent rows. In Settings, choose an agent below the
 sidebar title to keep the same target across Agents, Models, Memory, and Skills.
 Global settings remain global. Skill Workshop uses the agent selected through
-chat; open an agent's main chat from its group header to select it. Chat actions
+chat; open an agent's main chat from its roster row to select it. Chat actions
 always belong to the conversation's agent.
 
-Choose **All sessions** from an agent group’s options menu to open the Sessions
-page filtered to that agent. See [Sidebar navigation](/web/control-ui/sessions-and-sidebar#sidebar-navigation)
-for group controls and filtering.
+To browse an agent's conversations, open its options menu and choose
+**Sessions**. The Sessions page opens filtered to that agent. See
+[Sidebar navigation](/web/control-ui/sessions-and-sidebar#sidebar-navigation) for
+session filters and grouping.
 
 Agent names and avatars follow agent and identity updates. While a configured avatar image loads,
 the avatar keeps its tinted background with no face or text. The image appears when ready;
