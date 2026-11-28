@@ -40,7 +40,10 @@ struct DashboardGatewaySetupCoordinatorTests {
         let prompt = try #require(prompts.first)
         #expect(!prompt.0.contains(token))
         #expect(!prompt.1.contains(token))
-        #expect(prompt.1.contains("unencrypted private-network connection"))
+        #expect(prompt.0 == "Change the primary Gateway?")
+        #expect(prompt.1 ==
+            "Connect the Mac app directly to \(link.host):\(link.port) " +
+            "using an unencrypted private-network connection?")
         #expect(!prompt.1.localizedCaseInsensitiveContains("loopback"))
         #expect(state.remoteTransport == .ssh)
         #expect(state.remoteUrl == "wss://previous.example:443")
@@ -109,6 +112,10 @@ struct DashboardGatewaySetupCoordinatorTests {
         #expect(promptCount == 0)
         #expect(errors.count == 1)
         let error = try #require(errors.first)
+        #expect(error.0 == "Could Not Change Primary Gateway")
+        #expect(error.1 ==
+            "This Gateway setup information is invalid or expired. " +
+            "Ask your Gateway administrator for a new address or setup code.")
         #expect(!error.0.contains(token))
         #expect(!error.1.contains(token))
         #expect(state.remoteUrl == "wss://previous.example:443")

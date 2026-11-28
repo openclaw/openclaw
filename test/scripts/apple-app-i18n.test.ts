@@ -92,6 +92,50 @@ it("verification and compile-macos reject raw macOS interpolation and retain sha
   }
 });
 
+it("packages the full Gateway alert keys and preserves existing translations", async () => {
+  const output = await mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-locales-"));
+  try {
+    await apple.compileMacosLocalizations(output);
+    const english = await readFile(path.join(output, "en.lproj", "Localizable.strings"), "utf8");
+    for (const key of [
+      "Change Gateway",
+      "Connect the Mac app directly to %@ using %@?",
+      "Set %@ as primary?",
+      "Set as Primary",
+      "This Gateway cannot be set as primary.",
+      "This Gateway setup information is invalid or expired. Ask your Gateway administrator for a new address or setup code.",
+      "This changes the Mac app's primary Gateway and resets its Talk Mode, canvas, and native chat connection. Other saved Gateway windows stay open.",
+    ]) {
+      expect(english).toContain(`${JSON.stringify(key)} = ${JSON.stringify(key)};`);
+    }
+    const catalog = JSON.parse(
+      await readFile("apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings", "utf8"),
+    ) as Parameters<typeof apple.buildMacosCatalog>[0];
+    for (const locale of ["de", "fr"]) {
+      const strings = await readFile(
+        path.join(output, `${locale}.lproj`, "Localizable.strings"),
+        "utf8",
+      );
+      for (const key of [
+        "Cancel",
+        "Change the primary Gateway?",
+        "Could Not Change Primary Gateway",
+        "an unencrypted private-network connection",
+      ]) {
+        const translation = expectDefined(
+          catalog.strings?.[key]?.localizations?.[locale]?.stringUnit,
+          key,
+        );
+        expect(translation.state).toBe("translated");
+        expect(translation.value).not.toBe(key);
+        expect(strings).toContain(`${JSON.stringify(key)} = ${JSON.stringify(translation.value)};`);
+      }
+    }
+  } finally {
+    await rm(output, { recursive: true, force: true });
+  }
+});
+
 it("checks both app catalogs through the public strict and obsolete-warning paths", async () => {
   const stages: Array<{ stage: string; started: number; finished?: number }> = [];
   const startStage = (stage: string) => {

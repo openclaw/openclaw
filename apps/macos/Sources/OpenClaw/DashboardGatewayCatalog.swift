@@ -180,10 +180,12 @@ enum DashboardPrimaryGatewayError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .notPromotable:
-            "This Gateway cannot be set as primary."
+            String(localized: "This Gateway cannot be set as primary.")
         case .invalidSetup:
-            "This Gateway setup information is invalid or expired. " +
-                "Ask your Gateway administrator for a new address or setup code."
+            // swiftlint:disable line_length
+            String(
+                localized: "This Gateway setup information is invalid or expired. Ask your Gateway administrator for a new address or setup code.")
+            // swiftlint:enable line_length
         }
     }
 }
@@ -240,22 +242,22 @@ struct DashboardGatewaySetupCoordinator {
     func handle(_ link: GatewayConnectDeepLink) async {
         guard link.isValidEndpoint else {
             self.presentError(
-                "Could Not Change Primary Gateway",
+                String(localized: "Could Not Change Primary Gateway"),
                 DashboardPrimaryGatewayError.invalidSetup.localizedDescription)
             return
         }
         let snapshot = self.adapter.state.primaryGatewaySnapshot()
         let endpoint = "\(link.host):\(link.port)"
-        let transport = link.tls ? "TLS" : "an unencrypted private-network connection"
+        let transport = link.tls ? "TLS" : String(localized: "an unencrypted private-network connection")
         guard await self.confirm(
-            "Change the primary Gateway?",
-            "Connect the Mac app directly to \(endpoint) using \(transport)?")
+            String(localized: "Change the primary Gateway?"),
+            String(format: String(localized: "Connect the Mac app directly to %@ using %@?"), endpoint, transport))
         else { return }
         do {
             try self.adapter.apply(link: link, replacing: snapshot)
             self.openConnectionSettings()
         } catch {
-            self.presentError("Could Not Change Primary Gateway", error.localizedDescription)
+            self.presentError(String(localized: "Could Not Change Primary Gateway"), error.localizedDescription)
         }
     }
 }

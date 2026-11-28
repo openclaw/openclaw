@@ -130,6 +130,21 @@ const APPLE_LOCALE_DIRECTORIES: Record<string, string> = {
   "zh-TW": "zh-Hant",
 };
 const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
+  "apps/macos/Sources/OpenClaw/DashboardGatewayCatalog.swift": [
+    'String(localized: "This Gateway cannot be set as primary.")',
+    'localized: "This Gateway setup information is invalid or expired.',
+    'String(localized: "Could Not Change Primary Gateway")',
+    'String(localized: "an unencrypted private-network connection")',
+    'String(localized: "Change the primary Gateway?")',
+    'format: String(localized: "Connect the Mac app directly to %@ using %@?")',
+  ],
+  "apps/macos/Sources/OpenClaw/DashboardWindowController+Gateways.swift": [
+    'format: String(localized: "Set %@ as primary?")',
+    'localized: "This changes the Mac app',
+    'alert.addButton(withTitle: String(localized: "Set as Primary"))',
+    'alert.addButton(withTitle: String(localized: "Change Gateway"))',
+    'alert.addButton(withTitle: String(localized: "Cancel"))',
+  ],
   "apps/macos/Sources/OpenClaw/DeviceSettingsPanels.swift": [
     'String(localized: "Quick Chat shortcut")',
     'String(localized: "Microphone Test")',
@@ -227,6 +242,12 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
   ],
 };
 const RAW_LOCALIZATION_BYPASSES: Record<string, readonly string[]> = {
+  "apps/macos/Sources/OpenClaw/DashboardGatewayCatalog.swift": [
+    '"Could Not Change Primary Gateway",',
+  ],
+  "apps/macos/Sources/OpenClaw/DashboardWindowController+Gateways.swift": [
+    'alert.addButton(withTitle: "Cancel")',
+  ],
   "apps/ios/Sources/Design/SettingsProTabSections.swift": [
     "func settingsListRow(\n        icon: String,\n        title: String",
     "func aboutLinkRow(title: String",

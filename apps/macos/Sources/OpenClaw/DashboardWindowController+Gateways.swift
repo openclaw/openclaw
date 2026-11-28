@@ -147,13 +147,13 @@ extension DashboardWindowController {
 
     static func makeSetPrimaryAlert(gatewayName: String) -> NSAlert {
         let alert = NSAlert()
-        alert.messageText = "Set \(gatewayName) as primary?"
-        alert.informativeText =
-            "This changes the Mac app's primary Gateway and resets its Talk Mode, canvas, " +
-            "and native chat connection. " +
-            "Other saved Gateway windows stay open."
-        alert.addButton(withTitle: "Set as Primary")
-        alert.addButton(withTitle: "Cancel")
+        alert.messageText = String(format: String(localized: "Set %@ as primary?"), gatewayName)
+        // swiftlint:disable line_length
+        alert.informativeText = String(
+            localized: "This changes the Mac app's primary Gateway and resets its Talk Mode, canvas, and native chat connection. Other saved Gateway windows stay open.")
+        // swiftlint:enable line_length
+        alert.addButton(withTitle: String(localized: "Set as Primary"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
         return alert
     }
 
@@ -161,8 +161,8 @@ extension DashboardWindowController {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = message
-        alert.addButton(withTitle: "Change Gateway")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: String(localized: "Change Gateway"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
         alert.alertStyle = .warning
         return alert
     }
