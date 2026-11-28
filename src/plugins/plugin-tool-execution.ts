@@ -11,6 +11,11 @@ const ToolExecutionOwner = resolveGlobalSingleton(
   () =>
     class extends PluginHostObject {
       #bind: ToolExecutionBinding;
+      #execution?: {
+        source: Function;
+        bound: Function;
+        assertActive: () => void;
+      };
 
       constructor(tool: object, bind: ToolExecutionBinding) {
         super(tool);
@@ -20,11 +25,40 @@ const ToolExecutionOwner = resolveGlobalSingleton(
       static bindSource<T extends object>(target: object, source: T): T {
         return #bind in target ? target.#bind(source) : source;
       }
+
+      static bindExecution(
+        target: object,
+        source: Function,
+        bound: Function,
+        assertActive: () => void,
+      ): void {
+        if (#execution in target) {
+          target.#execution = { source, bound, assertActive };
+        }
+      }
+
+      static matchesExecution(target: object, source: unknown): boolean {
+        const execution = #execution in target ? target.#execution : undefined;
+        if (
+          !execution ||
+          execution.source !== source ||
+          Reflect.get(target, "execute") !== execution.bound
+        ) {
+          return false;
+        }
+        execution.assertActive();
+        return true;
+      }
     },
 );
 
 export function bindPluginToolExecutionSource<T extends object>(target: object, source: T): T {
   return ToolExecutionOwner.bindSource(target, source);
+}
+
+/** Only a host-created, still-active execution view proves this source callback. */
+export function isPluginToolExecutionSource(target: object, source: unknown): boolean {
+  return ToolExecutionOwner.matchesExecution(target, source);
 }
 
 const SOURCE_TOOL = Symbol.for("openclaw.beforeToolCallSourceTool");
@@ -66,9 +100,14 @@ export function createPluginToolExecutionBinding(context: {
       ) {
         return bind(value);
       }
-      return typeof value === "function"
-        ? (...args: unknown[]) => context.call(value, tool, args)
-        : value;
+      if (typeof value !== "function") {
+        return value;
+      }
+      const bound = (...args: unknown[]) => context.call(value, tool, args);
+      if (key === "execute") {
+        ToolExecutionOwner.bindExecution(view, value, bound, () => context.admit(() => {}));
+      }
+      return bound;
     };
     for (
       let owner: object | null = tool;
