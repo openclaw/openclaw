@@ -240,3 +240,34 @@ A server that manages its own credentials, such as a local stdio server, can ask
 - [MCP CLI reference](/cli/mcp)
 - [Manage plugins](/plugins/manage-plugins)
 - [Tool policies](/tools)
+
+## Large tool catalogs
+
+Prefer a server's search/schema/execute tools, or OpenClaw Tool Search, over
+preloading every action into each model request. Connecting a server does not
+require advertising every schema directly. Tool discovery and execution still
+use the same admitted tool policy and connected-account scope.
+
+On the embedded runner, final OpenAI-style tool descriptions have a 1 MiB UTF-8
+preflight limit. This is a per-description limit, not a limit on the complete
+request or the sum of independent descriptions. Encoded transports check the
+serialized wire view after payload shaping; other observed transports check
+at their final payload callback. Oversized descriptions fail locally with a
+recovery hint instead of buying a predictably rejected request. Compaction and
+side-question requests use this preflight even without a policy plugin.
+Schemas are never truncated into a different callable contract. Custom transports
+that bypass both payload observation and the shared encoder are outside this gate.
+
+Codex constructs its final Code Mode description inside its native app-server.
+For newly prepared catalogs, OpenClaw switches direct catalogs above 768 KiB of
+serialized descriptors to Codex's existing deferred discovery surface. All tool
+executors and exact declarations remain available; no schemas or OAuth scopes
+are removed. The threshold reserves room for native rendering overhead; it is
+not a measurement or hard guarantee of the native final request size. Explicit
+direct-only controls, strict function-only surfaces, and native-owned saved
+thread declarations retain their existing contracts. This mitigation does not
+replace a final description guard inside Codex or migrate old native threads.
+
+Search, schema-lookup, and execution results continue through the existing
+runtime tool-result budgets. If a result is truncated, request a smaller page or
+fewer schemas rather than assuming the omitted data was returned.

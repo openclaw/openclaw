@@ -447,3 +447,82 @@ describe("final model request gate", () => {
     expect(gate).toHaveBeenCalledTimes(3);
   });
 });
+
+it.each([false, true])(
+  "rejects oversized final tool bytes before egress (encoded=%s)",
+  async (encoded) => {
+    let sent = false;
+    const wrapped = observe(state, async (_model, _context, options) => {
+      const payload = {
+        tools: [{ type: "function", name: "large", description: "界".repeat(360_000) }],
+      };
+      if (encoded) {
+        await prepareModelRequestBody(options)(payload);
+      } else {
+        await options?.onPayload?.(payload, model);
+      }
+      sent = true;
+      return createResultStream("stop");
+    });
+    await expect(wrapped(model, context)).rejects.toThrow(
+      "Tool description exceeds the 1 MiB wire budget",
+    );
+    expect(sent).toBe(false);
+  },
+);
+
+it("does not confuse aggregate catalog bytes with the per-description limit", async () => {
+  let sent = false;
+  const wrapped = observe(state, async (_model, _context, options) => {
+    const encode = prepareModelRequestBody(options);
+    const body = await encode({
+      tools: Array.from({ length: 100 }, (_, index) => ({
+        type: "function",
+        name: `tool_${index}`,
+        description: "x".repeat(16_384),
+      })),
+    });
+    expect(body.body.byteLength).toBeGreaterThan(1_048_576);
+    sent = true;
+    return createResultStream("stop");
+  });
+  await wrapped(model, context);
+  expect(sent).toBe(true);
+});
+
+it("checks a Chat Completions description after its wire toJSON projection", async () => {
+  let sent = false;
+  const wrapped = observe(state, async (_model, _context, options) => {
+    const encode = prepareModelRequestBody(options);
+    await encode({
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "large",
+            description: "small",
+            toJSON: () => ({ name: "large", description: "界".repeat(360_000) }),
+          },
+        },
+      ],
+    });
+    sent = true;
+    return createResultStream("stop");
+  });
+  await expect(wrapped({ ...model, api: "openai-completions" }, context)).rejects.toThrow(
+    "Tool description exceeds the 1 MiB wire budget",
+  );
+  expect(sent).toBe(false);
+});
+
+it("leaves non-OpenAI description limits to their transport", async () => {
+  const wrapped = observe(state, async (_model, _context, options) => {
+    await prepareModelRequestBody(options)({
+      tools: [
+        { name: "large", description: "界".repeat(360_000), input_schema: { type: "object" } },
+      ],
+    });
+    return createResultStream("stop");
+  });
+  await expect(wrapped({ ...model, api: "anthropic-messages" }, context)).resolves.toBeDefined();
+});

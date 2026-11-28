@@ -254,11 +254,32 @@ export function createCodexDynamicToolBridge(params: {
   };
   const executionBoundaries = createAgentHarnessToolExecutionBoundaryRegistry();
   const directToolNames = params.directToolNames;
+  // Native Code Mode expands direct tools into one description. Defer large
+  // catalogs through Codex's existing discovery, preserving exact declarations
+  // and executors. Decide once from registration so availability subsets keep
+  // the same namespace/loading contract. Native-owned declarations stay exact.
+  const loading =
+    params.loading === "direct" &&
+    !params.functionToolsOnly &&
+    !inheritedSpecs &&
+    Buffer.byteLength(
+      JSON.stringify(
+        registeredSpecTools.map(({ name, description, inputSchema }) => ({
+          name,
+          description,
+          inputSchema,
+        })),
+      ),
+      "utf8",
+    ) >
+      768 * 1024
+      ? "searchable"
+      : (params.loading ?? "searchable");
   const specs =
     inheritedSpecs ??
     createCodexDynamicToolSpecs({
       entries: registeredSpecTools,
-      loading: params.loading ?? "searchable",
+      loading,
       directToolNames,
       functionToolsOnly: params.functionToolsOnly,
     });
@@ -287,7 +308,7 @@ export function createCodexDynamicToolBridge(params: {
         })
       : createCodexDynamicToolSpecs({
           entries: availableTools,
-          loading: params.loading ?? "searchable",
+          loading,
           directToolNames,
           functionToolsOnly: params.functionToolsOnly,
         }),

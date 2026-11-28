@@ -22,6 +22,7 @@ import type {
 } from "../../sessions/session-fork-context.types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
+import { assertRuntimeToolDescriptionBudget } from "../tool-description-budget.js";
 import { log } from "./logger.js";
 import {
   fingerprintMessage,
@@ -181,6 +182,23 @@ async function recordProviderPrompt(params: {
   effectiveContextTokenBudget: number;
   encode?: boolean;
 }) {
+  const checkToolDescriptions =
+    params.model.api === "openai-responses" ||
+    params.model.api === "openai-completions" ||
+    params.model.api === "azure-openai-responses" ||
+    params.model.api === "openai-chatgpt-responses";
+  if (
+    checkToolDescriptions &&
+    !params.encode &&
+    params.payload &&
+    typeof params.payload === "object"
+  ) {
+    const tools = Reflect.get(params.payload, "tools");
+    if (Array.isArray(tools)) {
+      // Snapshot the wire view; do not inspect caller-owned descriptor getters twice.
+      assertRuntimeToolDescriptionBudget(JSON.stringify(tools));
+    }
+  }
   const scope = stableStringify({
     provider: params.model.provider,
     api: params.model.api,
@@ -191,7 +209,7 @@ async function recordProviderPrompt(params: {
   // Retry admission needs exact content equality, including hook replacements and
   // edits to earlier messages. The shared compute pool owns the full traversal.
   const inputBytes = providerPromptWorkerBytes(params.payload);
-  const task = { payload: params.payload, encode: params.encode === true };
+  const task = { payload: params.payload, encode: params.encode === true, checkToolDescriptions };
   const payload =
     inputBytes !== undefined
       ? await promptHashPool

@@ -114,22 +114,21 @@ function createModelRequestTransformer(
 /**
  * Gates a request path outside the attempt's own transport, such as compaction or a side
  * question. Wrap the resolved stream before provider/config payload wrappers so the gate
- * sees their output, as on a turn. Without a handler the stream is returned as is.
+ * sees their output, as on a turn. Catalog preflight also runs without a plugin handler.
  */
 export function wrapStreamFnWithModelRequestGate(
   streamFn: StreamFn,
   hookContext: PluginHookAgentContext,
   requestKind: PluginHookModelRequestKind,
 ): StreamFn {
-  if (!getGlobalHookRunner()?.hasHooks("before_model_request")) {
-    return streamFn;
-  }
   return wrapStreamFnWithProviderPromptState({
     streamFn,
     // Private state: no caller reads it for context-retry admission.
     state: {},
     effectiveContextTokenBudget: hookContext.contextTokenBudget ?? 0,
-    transformPayload: createModelRequestTransformer(hookContext, requestKind),
+    transformPayload: getGlobalHookRunner()?.hasHooks("before_model_request")
+      ? createModelRequestTransformer(hookContext, requestKind)
+      : undefined,
   });
 }
 
