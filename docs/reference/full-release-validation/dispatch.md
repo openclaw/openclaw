@@ -223,8 +223,20 @@ pnpm ci:full-release \
   -f fail_fast=false
 ```
 
-For an explicitly selected historical qualification, add both inputs before the
-new request is admitted:
+For publish qualification with `rerun_group=all` and `reuse_evidence=true`, the SHA-pinned
+helper checks the ten most recent completed validation runs for an original
+publication plan on the exact candidate commit, with matching release context,
+publication selection, upgrade baselines, and workload inputs. A matching
+failed run can supply its original artifacts, not its verdict. The new
+request freezes the selected run and attempt before admission, so a tooling
+or waiver change does not force a rebuild before candidate-bound evidence can
+be reused. The hosted gate still verifies the exact original package bytes,
+producer receipts, and provenance. An exact-Q successful match keeps the
+existing whole-parent reuse path. This lookup does not run on request resume,
+with an explicit artifact source, or with preflight-first enabled.
+
+For a historical qualification outside that inventory or when deliberately
+pinning an earlier run, add both inputs before the new request is admitted:
 
 - `-f qualification_baselines_json='<original-baseline-object>'` selects exact
   published stable predecessors, validated against C and the release context.
