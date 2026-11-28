@@ -65,7 +65,6 @@ const ChatProviderReviewHost = lazy(() => import("./chat-provider-review-control
 /** One Solid owner publishes, mounts, and retires the synchronous pane runtime. */
 export function createChatPaneView(runtime: ChatPaneRuntime) {
   for (const owner of [
-    runtime.tasks,
     runtime.publication,
     runtime.repository,
     runtime.headerPresentation,
@@ -343,7 +342,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       const cacheProgress = () => {
         const { target, store, options } = runtime.readProgressCardScope();
         if (target && options.admitAutomaticRead()) {
-          runtime.cacheProgressCard(target, store.get(target));
+          runtime.cacheProgressCard(target, store.get(target, "saved"));
         }
       };
       onSettled(() => {

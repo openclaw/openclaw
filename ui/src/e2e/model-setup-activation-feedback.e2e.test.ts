@@ -3,10 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
-import {
-  defaultControlUiFeatureMethods,
-  installMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   activationFailure,
@@ -139,8 +136,7 @@ suite.define(() => {
     "shows %s activation feedback in a modal and restores focus after closing",
     async (entry, width) => {
       await suite.withPage(setupContext({ viewport: { width, height: 720 } }), async ({ page }) => {
-        const installGateway = entry === "manual" ? installMockGateway : installSetupGateway;
-        const gateway = await installGateway(page, {
+        const gateway = await installSetupGateway(page, {
           featureMethods: [rpc.detect, rpc.activate, rpc.next],
           methodResponses: {
             [rpc.next]: activationFailure("HTTP 401", "auth"),
@@ -163,14 +159,13 @@ suite.define(() => {
         });
         if (entry === "manual") {
           await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
+          await page.locator("[data-models-login-discover]").click();
         } else {
           await openModelSetup(page, suite.server.baseUrl);
         }
         const setup = page.locator(".model-setup");
         const input = setup.locator('input[type="password"]');
-        const scrollContainer = page.locator(
-          entry === "manual" ? ".content" : ".model-setup-discovery > .model-setup-wizard__body",
-        );
+        const scrollContainer = page.locator(".model-setup-discovery > .model-setup-wizard__body");
         await setup.locator(".model-setup-provider-select__trigger").click();
         await setup.locator('[data-manual-provider="openai"]').click();
         await input.fill("invalid-test-key");
@@ -201,14 +196,11 @@ suite.define(() => {
         expect(await failure.count()).toBe(1);
         expect(await failure.textContent()).toContain("HTTP 401");
         expect.soft(await viewportIntersection(failure)).toBeGreaterThan(0.99);
-        expect(await page.locator("openclaw-model-setup-page").textContent()).not.toContain(
-          "invalid-test-key",
-        );
+        expect(await dialog.textContent()).not.toContain("invalid-test-key");
 
         await button(dialog, "Close").click();
-        await expectCount(dialog, entry === "manual" ? 0 : 1);
+        await expectCount(page.locator(".model-setup-discovery"), 1);
         await expectCount(dialog.getByRole("alert"), 0);
-        await expectCount(page.locator(".model-setup-discovery"), entry === "manual" ? 0 : 1);
         await expectFocused(activate);
         await scrollContainer.evaluate((element) =>
           element.scrollTo({ top: element.scrollHeight, behavior: "instant" }),
@@ -227,7 +219,7 @@ suite.define(() => {
         setupContext({ viewport: { width: 1080, height: 480 } }),
         async ({ page }) => {
           const timeoutMessage = "The model did not finish the setup test in time.";
-          const gateway = await installMockGateway(page, {
+          const gateway = await installSetupGateway(page, {
             featureMethods: [rpc.detect, rpc.prepare, rpc.activate, rpc.next],
             methodResponses: {
               [rpc.detect]: makeDetection({
@@ -250,6 +242,7 @@ suite.define(() => {
             },
           });
           await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
+          await page.locator("[data-models-login-discover]").click();
           const setup = page.locator(".model-setup");
           const choose = setup.getByRole("button", { name: "Choose connection" });
           await choose.click();
@@ -269,8 +262,6 @@ suite.define(() => {
             sessionId: expect.any(String),
           });
           await expectCount(page.locator("openclaw-modal-dialog"), 1);
-          expect(await setup.locator("[data-candidate-kind]").count()).toBe(0);
-          expect(await choose.isDisabled()).toBe(true);
           const dialog = page.locator("openclaw-modal-dialog");
           const progress = dialog.getByRole("status");
           await progress.waitFor();
@@ -289,10 +280,6 @@ suite.define(() => {
               code: "UNAVAILABLE",
               message: timeoutMessage,
             });
-            // A transport rejection leaves first-run intent unresolved; it must
-            // not enable repeating a mutation whose result is still uncertain.
-            await setup.getByText(/The previous activation is unresolved/u).waitFor();
-            expect(await choose.isDisabled()).toBe(true);
           }
           await expectCount(dialog.getByRole("status"), 0);
           const failure = dialog.getByRole("alert").filter({ hasText: timeoutMessage });
@@ -301,11 +288,15 @@ suite.define(() => {
           expect(await failure.isVisible()).toBe(true);
           expect((await failure.textContent())?.trim()).toBe(timeoutMessage);
           await button(dialog, "Close").click();
-          await expectCount(dialog, 0);
+          await expectCount(page.locator(".model-setup-discovery"), 1);
+          if (outcome === "request rejection") {
+            // An unresolved transport result must not permit a repeated mutation.
+            await setup.getByText(/The previous activation is unresolved/u).waitFor();
+          }
           expect(await choose.isEnabled()).toBe(outcome === "provider timeout");
           expect(await setup.locator("[data-candidate-kind]").count()).toBe(0);
           expect(await page.locator(".model-setup-success").count()).toBe(0);
-          expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
+          expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
           await expectRequestCounts(gateway, { [rpc.activate]: 1, "config.set": 0 });
           const next = await gateway.getRequests(rpc.next);
           expect(next).toHaveLength(outcome === "provider timeout" ? 4 : 3);

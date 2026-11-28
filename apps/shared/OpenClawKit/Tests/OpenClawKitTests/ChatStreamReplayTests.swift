@@ -854,7 +854,7 @@ struct ChatStreamReplayTests {
             vm.pendingRunCount == 0 && vm.messages.contains { $0.transcriptMessageID == "saved-final" }
         }
         let settled = ChatTranscriptRow.collapseCompletedWork(
-            ChatTranscriptRow.build(from: harness.vm.transcriptMessages),
+            ChatTranscriptRow.build(from: harness.vm.transcriptMessages.answeredByOpenAI()),
             runWorking: harness.vm.hasBlockingRunActivity)
         guard settled.count == 3, case let .completedWork(work) = settled[1] else {
             Issue.record("Expected narration and tool work in one disclosure above one final answer")

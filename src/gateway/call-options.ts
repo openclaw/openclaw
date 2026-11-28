@@ -9,7 +9,7 @@ export type GatewayRequestFunction = <T = Record<string, unknown>>(
   opts?: GatewayClientRequestOptions,
 ) => Promise<T>;
 
-export type CallGatewayBaseOptions = Pick<GatewayClientOptions, "caps"> &
+export type CallGatewayBaseOptions = Pick<GatewayClientOptions, "caps" | "onEvent"> &
   GatewayCallDeviceAuthOptions & {
     url?: string;
     /** Require this resolved endpoint without overriding target selection or authentication. */

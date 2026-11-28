@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { wakeUpdateRunWatcher } from "../gateway/update-run-watcher.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { servingGitReleaseSlot } from "../infra/git-release-paths.js";
 import { sendUpdateResultTelemetry } from "../infra/update-result-telemetry.js";
@@ -131,10 +132,7 @@ export async function disarmLegacyTrial(
   return receipt;
 }
 
-export async function recoverLegacyTrialRun(
-  receipt: LegacyTrialReceipt,
-  onCompleted: (runId: string) => void,
-): Promise<boolean> {
+export async function recoverLegacyTrialRun(receipt: LegacyTrialReceipt): Promise<boolean> {
   const context = captureOpenClawStateWorkerContext();
   const result = await persistInterruptedUpdateObservationAsync(context, {
     legacyReady: receipt,
@@ -153,8 +151,8 @@ export async function recoverLegacyTrialRun(
   if (result?.updateResult) {
     void sendUpdateResultTelemetry(result.updateResult, { env: context.environment });
   }
-  if (result?.run) {
-    onCompleted(result.run.runId);
+  if (result?.run && !result.retry) {
+    wakeUpdateRunWatcher(result.run.runId);
   }
   return result !== undefined && !result.retry;
 }

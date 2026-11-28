@@ -142,5 +142,6 @@ describe("firstEnumerableOwnKeys", () => {
     Object.defineProperty(value, "hidden", { enumerable: false, value: true });
 
     expect(firstEnumerableOwnKeys(value, 2)).toEqual(["a", "b"]);
+    expect(firstEnumerableOwnKeys(value, 10)).toEqual(["a", "b", "c"]);
   });
 });

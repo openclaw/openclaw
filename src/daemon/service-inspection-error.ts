@@ -129,14 +129,6 @@ export class ServiceOwnershipRefusalError extends Error {
   }
 }
 
-export const SYSTEMD_STATE_SELECTOR_KEYS = [
-  "HOME",
-  "OPENCLAW_HOME",
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_PROFILE",
-] as const;
-
 /** A loaded system unit observed running under an account other than this process. */
 export type SystemdServiceAccountMismatch = {
   unitName: string;
@@ -144,10 +136,6 @@ export type SystemdServiceAccountMismatch = {
   serviceUser: string;
   programArguments: string[];
   workingDirectory: string;
-  /** State selectors from inline Environment= only; other values, such as tokens, are not kept. */
-  selectors: Partial<Record<(typeof SYSTEMD_STATE_SELECTOR_KEYS)[number], string>>;
-  /** EnvironmentFile= or UnsetEnvironment= may change the selectors and were not read. */
-  selectorsIncomplete: boolean;
 };
 
 /** The same refusal, carrying what was observed so callers can name the unit and its account. */

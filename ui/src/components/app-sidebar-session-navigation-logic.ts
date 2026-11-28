@@ -132,6 +132,7 @@ export type SidebarSessionNavigationState = {
   selectedAgentId: string;
   activeRowKey: string | null;
   visibleSessionRows: GatewaySessionRow[];
+  routeOnlyRow?: GatewaySessionRow;
   toSidebarSession: (row: SessionRow, isChild?: boolean) => SidebarRecentSession;
 };
 
@@ -328,6 +329,7 @@ export function buildSidebarSessionNavigationState(input: {
     selectedAgentId: navigation.selectedAgentId,
     activeRowKey: navigation.activeRowKey,
     visibleSessionRows: navigation.visibleSessions,
+    routeOnlyRow: navigation.routeOnlyRow,
     toSidebarSession,
   };
 }
@@ -605,9 +607,12 @@ export function findSidebarSessionRow(input: {
   sessionKey: string;
   navigationState: SidebarSessionNavigationState;
   sessionResultsByAgent: Readonly<Record<string, SessionsListResult>>;
+  backingOnly?: boolean;
 }): GatewaySessionRow | undefined {
   const active = input.navigationState.visibleSessionRows.find(
-    (candidate) => candidate.key === input.sessionKey,
+    (candidate) =>
+      candidate.key === input.sessionKey &&
+      (!input.backingOnly || candidate !== input.navigationState.routeOnlyRow),
   );
   if (active) {
     return active;

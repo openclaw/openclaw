@@ -111,6 +111,10 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     baselinePath: BASELINE_PATH,
     baselineHeader: BASELINE_HEADER,
     renameSourceRoots: ROOTS,
+    // #206584: one requester-turn comparison moves from callers to its custody owner.
+    approvedTransfers: new Map([
+      ["src/agents/subagents/registry/subagent-requester-turn-custody.ts", 2],
+    ]),
     collectCurrent: ({ staged }) => collectCurrent(root, staged),
     countAtRef: (ref, filePath) =>
       OWNER.test(filePath)

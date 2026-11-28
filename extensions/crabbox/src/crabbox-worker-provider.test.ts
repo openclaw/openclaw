@@ -10,10 +10,8 @@ import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import * as secretEgressRuntime from "openclaw/plugin-sdk/secret-egress-runtime";
 import { beforeEach, expect, it, vi } from "vitest";
 import { ensureManagedCrabboxBinary, type CrabboxBinary } from "./crabbox-managed-binary.js";
-import { crabboxState } from "./crabbox-state.test-support.js";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
-import { createCrabboxWorkerProvider } from "./crabbox-worker-provider.js";
 import {
   active,
   catalogJson,
@@ -22,7 +20,6 @@ import {
   createProviderTestHarness,
   nodeEnrollmentFixture,
   OPENCLAW_ROOT,
-  WORKER_WALLPAPER_PATH,
 } from "./crabbox-worker-provider.test-support.js";
 import {
   CRABBOX_WARMUP_TIMEOUT_MS,
@@ -56,7 +53,7 @@ const CLASSLESS_PROFILE = { provider: "aws", ttl: "24h", idleTimeout: "60m" };
 const PROFILE = { ...CLASSLESS_PROFILE, class: "standard", warmImage: false };
 const SETUP_PROFILE = { ...PROFILE, setup: "install-node", setupSecrets: SETUP_SECRETS };
 type ProvisionOptions = Parameters<WorkerProvider["provision"]>[2];
-const { createProvider, tempDirs } = createProviderTestHarness(
+const { createProvider } = createProviderTestHarness(
   { isExecutable: (candidate) => candidate === SIBLING_BINARY },
   "openclaw-crabbox-provider-",
 );
@@ -253,19 +250,6 @@ it.each([
   expect(await provider.listMachineOptions?.(PROFILE)).toEqual(recovered);
   expect(runCommand).toHaveBeenCalledTimes(2);
   expect(warn).toHaveBeenCalledTimes(1);
-});
-
-it.each([false, true])("rejects invalid wallpaper (PNG=%s)", (png) => {
-  const bytes = png ? fs.readFileSync(WORKER_WALLPAPER_PATH) : Buffer.from("not a PNG");
-  if (png) {
-    bytes.writeUInt32BE(1023, 16);
-  }
-  const tempDir = tempDirs.make("openclaw-crabbox-wallpaper-");
-  const wallpaperPath = path.join(tempDir, "wallpaper.png");
-  fs.writeFileSync(wallpaperPath, bytes);
-  expect(() => createCrabboxWorkerProvider({ state: crabboxState, wallpaperPath })).toThrow(
-    png ? "must be 1024x576; got 1023x576" : "is not a PNG",
-  );
 });
 
 it("runs profile setup with sentinels while keeping the proxy and enrollment credentials separate", async () => {

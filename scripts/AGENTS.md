@@ -12,7 +12,7 @@ Own local tooling, script wrappers, generated-artifact helper rules.
 - PR wrapper lifecycle: `pr` / `pr-lib` own supervision, locks, materialized dependencies. Changing/repairing them: read [PR wrapper tooling](../docs/reference/scripts/pr-tooling.md).
 - GitHub transport: `pr-lib` owns observations + protected dispatch. Changing API/Octopool behavior: read [PR GitHub transport](../docs/reference/scripts/github-transport.md).
 - Merge admission/recovery: `pr-lib` owns policy, retained outcomes, completion. Read [merge admission](../docs/reference/scripts/merge-admission.md), [merge recovery](../docs/reference/scripts/merge-recovery.md), or [prior-CI admin admission](../docs/reference/scripts/prior-ci.md) for that operation.
-- Remote proof: `crabbox-wrapper.mjs` owns source capsules; `.github/actions/prepare-testbox-shell` owns shell/cwd. Changing them: read [remote gate contracts](../docs/reference/scripts/remote-gates.md). Operating boxes: use [Crabbox skill](../.agents/skills/crabbox/SKILL.md).
+- Remote proof: `crabbox-wrapper.mjs` owns source capsules; `.github/actions/prepare-testbox-shell` owns shell/cwd. Changing them: read [remote gate contracts](../docs/reference/scripts/remote-gates.md). Operating boxes: use [Crabbox skill](https://github.com/openclaw/agent-skills/blob/main/skills/crabbox/SKILL.md).
 - Generated artifacts: align source generator, package script, verification command. Prefer `*:gen` / `*:check` pairs over undocumented one-offs.
 
 ## Wrapper Rules

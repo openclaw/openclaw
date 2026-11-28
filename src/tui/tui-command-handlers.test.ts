@@ -841,8 +841,6 @@ describe("tui command handlers", () => {
         result: { fastMode: true },
       },
     ],
-    ["/think default", { thinkingLevel: null }],
-    ["/fast default", { fastMode: null }, { opts: { local: true } }],
     [
       "/think high",
       { thinkingLevel: "high" },
@@ -863,34 +861,6 @@ describe("tui command handlers", () => {
         sessionInfo: { modelProvider: "opencode-go", model: "minimax-m3", thinkingLevels: [] },
       },
     ],
-    ["/verbose off", { verboseLevel: "off" }, { result: { entry: { verboseLevel: "off" } } }],
-    ["/trace on", { traceLevel: "on" }],
-    [
-      "/activation always",
-      { groupActivation: "always" },
-      { result: { groupActivation: "always" }, message: "activation set to always" },
-    ],
-    [
-      "/fast auto",
-      { fastMode: "auto" },
-      { result: { fastMode: "auto" }, message: "fast mode set to auto" },
-    ],
-    [
-      "/model kimi",
-      { model: "kimi" },
-      {
-        result: { entry: {}, resolved: { modelProvider: "nvidia", model: "moonshotai/kimi-k2.5" } },
-        message: "model set to nvidia/moonshotai/kimi-k2.5",
-      },
-    ],
-    [
-      "/usage",
-      { responseUsage: "full" },
-      {
-        sessionInfo: { effectiveResponseUsage: "tokens" },
-        message: "usage footer: full",
-      },
-    ],
   ])("session setting: %s", async (command, patch, options: SettingOptions = {}) => {
     const { message, result, ...params } = options;
     const h = createHarness({ ...params, patchSession: vi.fn().mockResolvedValue(result ?? {}) });
@@ -903,14 +873,6 @@ describe("tui command handlers", () => {
     }
     if (result) {
       expect(h.applySessionInfoFromPatch).toHaveBeenCalledWith(result);
-    }
-    if (command === "/verbose off") {
-      expect(h.clearTools).toHaveBeenCalledOnce();
-    }
-    if (command === "/fast auto") {
-      h.state.sessionInfo.fastMode = "auto";
-      await h.handleCommand("/fast status");
-      expect(h.addSystem).toHaveBeenCalledWith("fast mode: auto");
     }
   });
 

@@ -137,7 +137,8 @@ function streamBedrock(
     const output = buildAssistantMessage({
       model: { api: "bedrock-converse-stream", provider: model.provider, id: model.id },
       content: [],
-      usage: createEmptyTransportUsage(),
+      // A stream without a metadata event measured nothing; handleMetadata replaces this.
+      usage: { ...createEmptyTransportUsage(), contextUsage: { state: "unavailable" } },
       stopReason: "stop",
     });
 

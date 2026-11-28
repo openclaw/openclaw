@@ -126,11 +126,9 @@ describe("approved exec continuation producer", () => {
       expect(source).toBe(outcome.aggregated);
       const result = buildExecForegroundResult({ outcome, session: handle.session });
       const file =
-        result.details && "fullOutputPath" in result.details
-          ? result.details.fullOutputPath
-          : undefined;
+        result.details && "spill" in result.details ? result.details.spill?.path : undefined;
       if (!file) {
-        throw new Error("Expected exec fullOutputPath");
+        throw new Error("Expected exec spill path");
       }
       onTestFinished(() => rm(file, { force: true }));
       const root = await mkdtemp(path.join(tmpdir(), "exec-spill-workspace-"));

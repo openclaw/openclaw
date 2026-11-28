@@ -267,7 +267,7 @@ struct ChatFileAdmissionTests {
         let empty = directory.appendingPathComponent("empty.txt")
         try Data().write(to: empty)
         await model.loadAttachments(urls: [empty, directory])
-        #expect(model.errorText == "Could not attach: empty.txt, \(directory.lastPathComponent)")
+        #expect(model.errorText == "Couldn’t attach empty.txt, \(directory.lastPathComponent).")
         let pngData = try #require(Data(base64Encoded:
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4////GQAJ+wP/2hN8NwAAAABJRU5ErkJggg=="))
         if limits?.maxImageBytes == 2 {

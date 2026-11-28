@@ -557,6 +557,7 @@ export function createCronPromptExecutor(
                   : await resolveLiveProfile();
                 if (trigger === "cron" && !binding && authProfileId) {
                   throw createUnrecordedScheduledAccountRefusal({
+                    jobId: params.job.id,
                     runtime: executionProvider,
                     modelRef: `${providerOverride}/${modelOverride}`,
                     profileId: authProfileId,

@@ -9,7 +9,7 @@ type ToolResultPreparation = {
   cap: (
     message: Extract<AgentMessage, { role: "toolResult" }>,
   ) => Extract<AgentMessage, { role: "toolResult" }>;
-  /** Same budget as `cap`, so a bounded result is a fixed point of the cap. */
+  /** Equal to or stricter than `cap`, so a bounded result is a fixed point of the cap. */
   bound: (
     result: AgentToolResult<unknown>,
     spill?: PrivateTempFileOptions,

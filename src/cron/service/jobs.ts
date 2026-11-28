@@ -250,6 +250,9 @@ export function createJob(
       ? { cyberAccessProgram: input.cyberAccessProgram }
       : {}),
     sessionTarget: input.sessionTarget,
+    ...(input.sessionTarget === "main" && input.payload.kind === "systemEvent"
+      ? { systemEventAccount: "session" as const }
+      : {}),
     wakeMode: input.wakeMode,
     payload:
       input.payload.kind === "script"

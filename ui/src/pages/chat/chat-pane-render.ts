@@ -456,6 +456,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
                 this.history.loadingOlder ||
                 (catalogKey ? this.history.catalogLoading : state.chatLoading),
               onShowEarlier: () => void this.loadOlderMessages(),
+              onSearchEarlier:
+                nativeConversation && !state.chatLoading ? this.searchEarlier : undefined,
             }
           : undefined,
       catalogPreviewImage: catalog ? this.history.catalogPreviewImage : undefined,
@@ -567,7 +569,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       },
       composerControls: composerControls?.composerControls,
       permissionPicker: composerControls?.permissionPicker,
-      ...this.suggestionChatProps(state.connected, selectedSessionArchived, multiIdentity),
+      ...this.sessionSuggestionChatProps(state.connected, selectedSessionArchived, multiIdentity),
       messageReactions: this.collaboration.reactions,
       onReact: this.canReactToCurrentSession() ? this.handleMessageReaction : undefined,
       pullRequests: this.visibleSessionPullRequests,
@@ -622,6 +624,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         state.realtimeTalk.update({ realtimeTalkInputNotice: null }),
       ...sessionActionCallbacks,
       onQueueRemove: state.removeQueuedMessage,
+      onDiscardQueuedMessage: (id) => state.removeQueuedMessage(id, "discard"),
       queuePaused: isChatQueuePaused(state),
       onQueueResume: providerPaused ? undefined : () => resumeChatQueue(state),
       onQueueClear: () => clearChatQueue(state),

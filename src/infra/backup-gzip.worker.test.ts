@@ -83,7 +83,7 @@ it("keeps small hosts on libuv and leaves two cores free past six cores", async 
     cores.available = available;
     pools.created = [];
     const members = await collect(gzipInParallel(Readable.from([])));
-    expect(gunzipSync(Buffer.concat(members)).length).toBe(0);
+    expect(members.map((member) => gunzipSync(member).length)).toEqual([0]);
     widths.push(pools.created);
   }
   expect(widths).toEqual([[], [], [], [], [5], [6], [8], [8], [8], [8]]);

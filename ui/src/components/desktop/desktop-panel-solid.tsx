@@ -223,7 +223,10 @@ function DesktopPresentation(props: {
       return props.view.content.state === "picker" &&
         props.view.content.loading &&
         props.view.content.automaticSource &&
-        props.view.content.hasTarget
+        props.view.content.hasTarget &&
+        (!props.view.content.picker.automatic ||
+          props.view.content.picker.knownTarget ||
+          Boolean(props.view.startup))
         ? "connecting"
         : props.view.content.state;
     },

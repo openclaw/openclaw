@@ -382,10 +382,8 @@ export function observeTranscriptOffset(
       } else {
         owner.endAnchor.clear();
       }
-      // Input can precede projection capture; carry its later native movement.
-      if (scrolling) {
-        owner.prependAnchor.moveWithReader(delta);
-      }
+      // A synchronous or idle read can see reader movement before the scroll event.
+      owner.prependAnchor.moveWithReader(delta);
     }
     publish({
       type: "offset",
@@ -435,6 +433,7 @@ export function observeTranscriptOffset(
     }
   };
   owner.state.syncNativeOffset = syncOffset;
+  owner.prependAnchor.syncBeforeCapture = () => syncOffset(true);
   const finishTouch = (event: TouchEvent) => {
     const wasTouchActive = owner.state.touchActive;
     for (const touch of event.changedTouches) {
@@ -671,6 +670,7 @@ export function observeTranscriptOffset(
     }
     if (owner.state.syncNativeOffset === syncOffset) {
       owner.state.syncNativeOffset = null;
+      owner.prependAnchor.syncBeforeCapture = null;
     }
     if (owner.state.recordProgrammaticScroll === recordVirtualizerScroll) {
       owner.state.recordProgrammaticScroll = null;

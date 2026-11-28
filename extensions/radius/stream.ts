@@ -6,6 +6,7 @@ import {
   type SimpleStreamOptions,
   type StreamFunction,
   type ToolCall,
+  type Usage,
 } from "openclaw/plugin-sdk/llm";
 import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
@@ -103,13 +104,34 @@ export function createRadiusStreamFn(): StreamFunction<string, RadiusStreamOptio
       if (type === "done" || type === "error") {
         const rawUsage = record(event.usage);
         const cost = record(rawUsage.cost);
+        const input = number(rawUsage.input);
+        const output = number(rawUsage.output);
+        const cacheRead = number(rawUsage.cacheRead);
+        const cacheWrite = number(rawUsage.cacheWrite);
+        // An upstream context snapshot is the provider's own fact; otherwise Pi's usage splits
+        // the measured prompt into uncached input and cache reads and writes.
+        const upstream = asOptionalRecord(rawUsage.contextUsage);
+        const promptTokens = input + cacheRead + cacheWrite;
+        const contextUsage: Usage["contextUsage"] =
+          upstream?.state === "unavailable"
+            ? { state: "unavailable" }
+            : upstream?.state === "available"
+              ? {
+                  state: "available",
+                  promptTokens: number(upstream.promptTokens),
+                  totalTokens: number(upstream.totalTokens),
+                }
+              : type === "done" && promptTokens > 0
+                ? { state: "available", promptTokens, totalTokens: promptTokens + output }
+                : { state: "unavailable" };
         partial.usage = {
           ...rawUsage,
-          input: number(rawUsage.input),
-          output: number(rawUsage.output),
-          cacheRead: number(rawUsage.cacheRead),
-          cacheWrite: number(rawUsage.cacheWrite),
+          input,
+          output,
+          cacheRead,
+          cacheWrite,
           totalTokens: number(rawUsage.totalTokens),
+          contextUsage,
           cost: {
             ...cost,
             input: number(cost.input),

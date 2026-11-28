@@ -57,6 +57,9 @@ describe("buildAgentHarnessBasePrompt", () => {
     const minimal = buildAgentHarnessBasePrompt({ toolNames, promptMode: "minimal" });
     expect(minimal).not.toContain("## Execution Bias");
     expect(minimal).not.toContain("## Documentation");
+    expect(sectionBody(minimal, "## Promised Work")).toBe(
+      sectionBody(withTools, "## Promised Work"),
+    );
 
     expect(buildAgentHarnessBasePrompt({ toolNames, promptMode: "none" })).toBe(
       "You are a personal assistant running inside OpenClaw.",

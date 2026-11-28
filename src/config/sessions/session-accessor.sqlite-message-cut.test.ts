@@ -12,6 +12,10 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  buildStatusMessageParts,
+  statusModelRefs,
+} from "../../status/status-message.test-support.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import {
   appendTranscriptEvent as appendEvent,
@@ -28,6 +32,7 @@ import {
   updateSessionEntry as updateEntry,
   upsertSessionEntryCore as upsertEntry,
 } from "./session-accessor.js";
+import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
   agentId,
   sessionKey,
@@ -38,6 +43,7 @@ import { recordSessionParticipant } from "./session-accessor.sqlite-participants
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { refuseInPlaceSessionMessageCutInDatabase } from "./session-message-cut-in-place.kernel.js";
 import { SESSION_MESSAGE_CUT_MAX_BYTES } from "./session-message-cut-read.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "./session-transcript-reconcile.js";
 import type { InternalSessionEntry } from "./types.js";
@@ -64,9 +70,138 @@ const activeMessageIds = (scope: Parameters<typeof readMessages>[0]) =>
   );
 
 /**
- * Install one stored shape whose canonical navigation is not its raw chain, through
- * the append owner: no async writer produces these shapes today.
+ * Extend the fixture transcript past a lossy compaction: assistant-2 is followed
+ * by a degraded compaction, then user-3/assistant-3 become the active leaf.
+ * Appending the compaction marks the entry degraded, mirroring production.
  */
+async function seedDegradedCompaction(scope: Parameters<typeof appendEvent>[0], stateDir: string) {
+  const at = (second: number) =>
+    new Date(Date.parse("2026-07-18T00:00:00Z") + second).toISOString();
+  await appendEvent(scope, {
+    type: "compaction",
+    id: "degraded-compaction",
+    parentId: "assistant-2",
+    timestamp: at(7),
+    details: { readFiles: [], modifiedFiles: [], qualityDegraded: true },
+  });
+  await appendMessage(scope, {
+    eventId: "user-3",
+    parentId: "degraded-compaction",
+    message: { role: "user", content: "third prompt" },
+    now: Date.parse("2026-07-18T00:00:00Z") + 8_000,
+  });
+  await appendMessage(scope, {
+    eventId: "assistant-3",
+    parentId: "user-3",
+    message: { role: "assistant", content: "third answer" },
+    now: Date.parse("2026-07-18T00:00:00Z") + 9_000,
+  });
+  await appendEvent(scope, {
+    type: "leaf",
+    id: "active-leaf-degraded",
+    parentId: "assistant-3",
+    timestamp: at(10),
+    targetId: "assistant-3",
+  });
+  await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
+}
+
+/**
+ * Chain nine ~1 MiB non-degraded compactions after the fixture's active leaf:
+ * a fork cut before them copies a small prefix, so their summaries must never
+ * reach the fork read budget (9 MiB would exceed it).
+ */
+async function seedLargeLaterCompactions(
+  scope: Parameters<typeof appendEvent>[0],
+  stateDir: string,
+) {
+  const at = (second: number) =>
+    new Date(Date.parse("2026-07-18T00:00:00Z") + second).toISOString();
+  let parentId = "assistant-2";
+  for (let index = 1; index <= 9; index++) {
+    const compactionId = `large-compaction-${index}`;
+    await appendEvent(scope, {
+      type: "compaction",
+      id: compactionId,
+      parentId,
+      timestamp: at(20 + index * 3),
+      details: { readFiles: [], modifiedFiles: [], summary: "x".repeat(1024 * 1024) },
+    });
+    await appendMessage(scope, {
+      eventId: `large-user-${index}`,
+      parentId: compactionId,
+      message: { role: "user", content: `after compaction ${index}` },
+      now: Date.parse("2026-07-18T00:00:00Z") + (20 + index * 3 + 1) * 1_000,
+    });
+    await appendMessage(scope, {
+      eventId: `large-assistant-${index}`,
+      parentId: `large-user-${index}`,
+      message: { role: "assistant", content: `answer ${index}` },
+      now: Date.parse("2026-07-18T00:00:00Z") + (20 + index * 3 + 2) * 1_000,
+    });
+    parentId = `large-assistant-${index}`;
+  }
+  await appendEvent(scope, {
+    type: "leaf",
+    id: "active-leaf-large",
+    parentId,
+    timestamp: at(20 + 9 * 3 + 3),
+    targetId: parentId,
+  });
+  await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
+}
+
+/** Append a long off-path branch in one transaction: a full navigation scan would iterate it. */
+async function seedLongOffPathBranch(
+  scope: Awaited<ReturnType<typeof createSession>>["scope"],
+  stateDir: string,
+  count = 240,
+) {
+  const at = (second: number) =>
+    new Date(Date.parse("2026-07-18T00:00:00Z") + second).toISOString();
+  const resolved = resolveSqliteScope(scope);
+  const events: TranscriptEvent[] = [];
+  let parentId: string | null = "assistant-2";
+  for (let index = 0; index < count; index++) {
+    const id = `filler-${index}`;
+    events.push({
+      type: "message",
+      id,
+      parentId,
+      timestamp: at(100 + index),
+      message: {
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `filler ${index}`,
+      },
+    });
+    parentId = id;
+  }
+  runOpenClawAgentWriteTransaction(
+    (database) =>
+      appendTranscriptEventsInTransaction(
+        database,
+        { ...resolved, sessionId: scope.sessionId },
+        events,
+      ),
+    toDatabaseOptions(resolved),
+  );
+  await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
+}
+
+/** The shipped /status Compactions line for a stored entry, or null when it renders none. */
+function statusCompactionLine(entry: InternalSessionEntry | undefined): string | null {
+  const parts = buildStatusMessageParts({
+    sessionEntry: entry,
+    modelRefs: statusModelRefs({ provider: "openai", model: "proof-model" }),
+    agent: { model: "openai/proof-model" },
+    config: { agents: { defaults: { userTimezone: "UTC" } } },
+    sessionKey,
+    sessionScope: "per-sender",
+    queue: { mode: "steer", depth: 0 },
+    modelAuth: "api-key",
+  });
+  return parts.text.match(/🧹 Compactions: (.+)/)?.[1] ?? null;
+}
 async function seedLegacyNavigation(kind: "parentless" | "side-cursor" | "reset-boundary") {
   const stateDir = tempDirs.make(`openclaw-message-cut-${kind}-`);
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -363,7 +498,7 @@ it("rewinds by repointing the active leaf and returns the editor text", async ()
     claudeCliSessionId: undefined,
     cliSessionBindings: undefined,
     cliSessionIds: undefined,
-    compactionCount: undefined,
+    compactionCount: 0,
     transcriptByteCompactionLatch: undefined,
     contextTokens: undefined,
     contextTokensSource: undefined,
@@ -380,6 +515,138 @@ it("rewinds by repointing the active leaf and returns the editor text", async ()
     to: "chat-123",
     accountId: undefined,
   });
+});
+
+it("counts only the selected branch after its last reset", async () => {
+  const { scope, params } = await createSession();
+  const compact = (id: string, parentId: string) =>
+    appendEvent(scope, {
+      type: "compaction",
+      id,
+      parentId,
+      firstKeptEntryId: parentId,
+      summary: id,
+      tokensBefore: 100,
+    });
+  await compact("before-reset", "assistant-2");
+  await appendEvent(scope, { type: "reset", id: "reset", parentId: "before-reset" });
+  await compact("retained", "reset");
+  await appendMessage(scope, {
+    eventId: "edit",
+    parentId: "retained",
+    message: { role: "user", content: "Edit me" },
+  });
+  await compact("original-tip", "edit");
+
+  const cut = await rewind({ ...params, entryId: "edit" });
+  const restored = await switchBranch({ ...params, leafEntryId: "original-tip" });
+  expect([cut, restored]).toMatchObject([
+    { status: "created", entry: { compactionCount: 1 } },
+    { status: "created", entry: { compactionCount: 2 } },
+  ]);
+});
+
+it("clears the degraded flag when switching to a clean branch", async () => {
+  const { env, scope } = await createSession();
+  await seedDegradedCompaction(scope, env.OPENCLAW_STATE_DIR as string);
+  expect(readEntry(scope)?.compactionQualityDegraded).toBe(true);
+
+  const away = await switchBranch({
+    agentId,
+    env,
+    sessionKey,
+    leafEntryId: "off-path-user",
+  });
+  assert(away.status === "created", `switch away refused: ${away.status}`);
+  expect(away.entry.compactionQualityDegraded).toBeUndefined();
+  expect(readEntry(scope)?.compactionQualityDegraded).toBeUndefined();
+});
+
+// A fork cut before later compactions must not pay for their summaries: the fork
+// read charges only the copied prefix, so nine 1 MiB compactions after the fork
+// point cannot trip the 8 MiB navigation budget.
+it("forks before many large later compactions without charging them to the read budget", async () => {
+  const { env, scope, params } = await createSession();
+  await seedLargeLaterCompactions(scope, env.OPENCLAW_STATE_DIR as string);
+
+  const result = await fork({
+    ...params,
+    sessionKey: "agent:main:canonical-message-cut",
+    sessionStoreKey: sessionKey,
+    targetKey: "agent:main:dashboard:message-cut-large-later-fork",
+    entryId: "user-2",
+  });
+  assert(result.status === "created", `fork refused: ${result.status}`);
+  expect(result.entry.compactionQualityDegraded).toBeUndefined();
+});
+
+// An ordinary rewind answers from the active-path projection: the canonical
+// navigation scan (identity_count) must not run for a target already on the
+// active path with no later reset, however long the stored transcript is.
+it("rewinds a long transcript without scanning its navigation", async () => {
+  const { env, scope, params } = await createSession();
+  await seedDegradedCompaction(scope, env.OPENCLAW_STATE_DIR as string);
+  await seedLongOffPathBranch(scope, env.OPENCLAW_STATE_DIR as string);
+  const database = openOpenClawAgentDatabase({ agentId, env });
+  const entry = readEntry(scope);
+  assert(entry);
+
+  const sql = observeHostDataSql();
+  try {
+    const precheck = refuseInPlaceSessionMessageCutInDatabase(database, scope.sessionId, entry, {
+      canonicalSourceKey: sessionKey,
+      sourceKey: sessionKey,
+      targetKey: sessionKey,
+      entryId: "user-2",
+      mode: "rewind",
+      expectedState: sourceExpectedState,
+    });
+    expect(precheck).toBeUndefined();
+    expect(sql.queries.filter((query) => query.includes("identity_count"))).toEqual([]);
+  } finally {
+    sql.restore();
+  }
+
+  // The indexed path still answers the degradation question: the flag clears.
+  const result = await rewind(params);
+  assert(result.status === "created", `rewind refused: ${result.status}`);
+  expect(result.entry.compactionQualityDegraded).toBeUndefined();
+});
+
+it("renders compaction status for the selected history after rewind, switch and fork", async () => {
+  const { env, scope, params } = await createSession();
+  await seedDegradedCompaction(scope, env.OPENCLAW_STATE_DIR as string);
+  expect(statusCompactionLine(readEntry(scope))).toBe("2 · degraded history (details may be lost)");
+
+  const rewound = await rewind(params);
+  assert(rewound.status === "created", `rewind refused: ${rewound.status}`);
+  expect(statusCompactionLine(readEntry(scope))).toBeNull();
+
+  const back = await switchBranch({ agentId, env, sessionKey, leafEntryId: "assistant-3" });
+  assert(back.status === "created", `switch back refused: ${back.status}`);
+  expect(statusCompactionLine(readEntry(scope))).toBe("1 · degraded history (details may be lost)");
+
+  const cleanFork = await fork({
+    ...params,
+    sessionKey: "agent:main:canonical-message-cut",
+    sessionStoreKey: sessionKey,
+    targetKey: "agent:main:dashboard:message-cut-proof-clean-fork",
+    entryId: "user-2",
+  });
+  assert(cleanFork.status === "created", `clean fork refused: ${cleanFork.status}`);
+  expect(statusCompactionLine(readEntry({ ...params, sessionKey: cleanFork.key }))).toBeNull();
+
+  const degradedFork = await fork({
+    ...params,
+    sessionKey: "agent:main:canonical-message-cut",
+    sessionStoreKey: sessionKey,
+    targetKey: "agent:main:dashboard:message-cut-proof-degraded-fork",
+    entryId: "user-3",
+  });
+  assert(degradedFork.status === "created", `degraded fork refused: ${degradedFork.status}`);
+  expect(statusCompactionLine(readEntry({ ...params, sessionKey: degradedFork.key }))).toBe(
+    "0 · degraded history (details may be lost)",
+  );
 });
 
 // Canonical navigation is neither the raw parent chain nor raw child links, and a
@@ -446,6 +713,40 @@ it("repoints oversized history without hydrating it in one transaction", async (
   await expect(rewind({ ...params, entryId: "oversized-branch-tip" })).rejects.toThrow(
     /read budget/,
   );
+});
+
+it("switches to history with an oversized compaction whose stored byte count is missing", async () => {
+  const { env, scope } = await createSession();
+  const now = Date.parse("2026-07-18T02:00:00.000Z");
+  await appendEvent(scope, {
+    type: "compaction",
+    id: "oversized-compaction",
+    parentId: "off-path-user",
+    timestamp: new Date(now).toISOString(),
+    summary: "x".repeat(SESSION_MESSAGE_CUT_MAX_BYTES),
+    details: { readFiles: [], modifiedFiles: [], qualityDegraded: true },
+  });
+  await appendMessage(scope, {
+    eventId: "after-oversized-compaction",
+    parentId: "oversized-compaction",
+    message: { role: "assistant", content: "retained answer" },
+    now: now + 1_000,
+  });
+  runOpenClawAgentWriteTransaction(
+    ({ db }) =>
+      db
+        .prepare(
+          "UPDATE transcript_events SET event_utf8_bytes = NULL WHERE session_id = ? AND json_extract(event_json, '$.id') = ?",
+        )
+        .run(scope.sessionId, "oversized-compaction"),
+    toDatabaseOptions(resolveSqliteScope(scope)),
+  );
+  const select = (leafEntryId: string) => switchBranch({ agentId, env, sessionKey, leafEntryId });
+  expect(await select("assistant-2")).toMatchObject({ status: "created" });
+  expect(await select("after-oversized-compaction")).toMatchObject({
+    status: "created",
+    entry: { compactionQualityDegraded: undefined },
+  });
 });
 
 // The lifecycle revision is the fence that retires a live writer holding pre-rewind

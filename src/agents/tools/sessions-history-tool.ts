@@ -90,7 +90,7 @@ const SessionsHistoryOutputSchema = Type.Union([
       pendingInputs: Type.Optional(
         Type.Object(
           {
-            ...ChatPendingInputsPageSchema.properties,
+            ...Type.Omit(ChatPendingInputsPageSchema, ["hasQueuedInput"]).properties,
             items: Type.Array(
               Type.Omit(
                 ChatPendingInputsPageSchema.properties.items.items,

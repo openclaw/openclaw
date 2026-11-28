@@ -157,7 +157,11 @@ export function resolveConversationCapabilityPolicy(params: ConversationCapabili
     ...params,
     subagentSessionKey,
     agentId: effective.agentId,
-    messageProvider: callerContext.local ? messageProvider : callerContext.channel,
+    // Local scheduled creators use the execution channel only for account lookup.
+    // Keep the run's provider unchanged for independent reply and event routing.
+    messageProvider: callerContext.local
+      ? (messageProvider ?? params.messageChannel)
+      : callerContext.channel,
     groupId: trustedGroup.groupId,
     groupChannel: trustedGroupChannel,
     groupSpace: trustedGroupSpace,

@@ -19,7 +19,7 @@ import * as sessionVerification from "../infra/deferred-plugin-session-verificat
 import * as migrationArtifacts from "../infra/session-sqlite-migration-artifact.js";
 import * as migrationRun from "../infra/session-sqlite-migration-manifest.js";
 import { readOnlySqliteValidationSnapshot } from "../infra/session-sqlite-migration-readers.js";
-import { migrateLegacyAcpSessionMetadata } from "../infra/state-migrations.session-store.js";
+import { migrateLegacyAcpSessionMetadata } from "../infra/state-migrations.acp-session-metadata.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";

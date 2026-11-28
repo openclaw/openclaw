@@ -1,0 +1,5 @@
+# Automatic recovery for stranded 2026-11-17 to 2026-11-19 main checkouts, restored with launchd:
+# the runner, start and readiness tests #205995 deleted (444 lines), plus launchd start, put-back,
+# crash-loop and job rows, and regression rows for each review finding (definition copies,
+# selector env, migrated abandon, unconfirmed switch, foreign state directory, stopped release).
+429

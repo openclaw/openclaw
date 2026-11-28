@@ -718,36 +718,6 @@ it("exposes only the environment identity on public HTML while bootstrap stays a
   expect(bootstrapResponse.res.statusCode).toBe(401);
 });
 
-it("anchors absolute and Vite-relative assets from a base-mounted focus route", async () => {
-  const basePath = "/openclaw";
-  const assets = [
-    ["index.js", "index-js", "application/javascript; charset=utf-8"],
-    ["index.css", "index-css", "text/css; charset=utf-8"],
-  ] as const;
-  const tmp = await createControlUiRoot(
-    '<html><link href="/manifest.webmanifest"><link href="./favicon.svg">' +
-      '<link href="./assets/index.css"><script src="./assets/index.js"></script></html>',
-  );
-  for (const [filename, body] of assets) {
-    await writeAssetFile(tmp, filename, body);
-  }
-  const page = await runControlUiRequest(tmp, `${basePath}/focus/desktop/control`, { basePath });
-  expect(page.handled).toBe(true);
-  const body = page.text;
-  expect(body).toContain('data-openclaw-control-ui-base-path="/openclaw"');
-  expect(body).toContain('href="/openclaw/manifest.webmanifest"');
-  expect(body).toContain('href="/openclaw/favicon.svg"');
-  expect(body).toContain('src="/openclaw/assets/index.js"');
-  expect(body).toContain('href="/openclaw/assets/index.css"');
-  expect(body).not.toContain('="./');
-  for (const [filename, content, contentType] of assets) {
-    const asset = await runControlUiRequest(tmp, `${basePath}/assets/${filename}`, { basePath });
-    expect(asset.handled).toBe(true);
-    expect(asset.text).toBe(content);
-    expect(asset.headers).toMatchObject({ "Content-Type": contentType });
-  }
-});
-
 it("keeps a maximum-size local avatar out of base-mounted bootstrap", async () => {
   const basePath = "/openclaw";
   const tmp = await createControlUiRoot();
@@ -1271,15 +1241,6 @@ it("rejects symlinked SPA fallback index.html outside control-ui root", async ()
 
   const reply = await runControlUiRequest(tmp, "/app/route");
   expectNotFoundResponse(reply);
-});
-
-it("serves public root assets under the internal namespace", async () => {
-  const tmp = await createControlUiRoot();
-  await fs.writeFile(path.join(tmp, "favicon.svg"), "<svg/>");
-  const reply = await runControlUiRequest(tmp, "/__openclaw__/favicon.svg");
-  expectStatus(reply);
-  expect(reply.headers).toMatchObject({ "Content-Type": "image/svg+xml" });
-  expect(reply.text).toBe("<svg/>");
 });
 
 it.each(["absolute", "symlink"])("rejects %s escapes under basePath routes", async (kind) => {

@@ -2,7 +2,6 @@ import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   SessionSuggestionEvent,
   SessionTypingEvent,
-  TaskSuggestionEvent,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { isConversationConfigChange } from "../../../../src/config/read-dependencies.js";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
@@ -327,7 +326,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         void refreshChatMetadata(pageState);
         this.resumeDeferredSessionHydration();
         this.markSessionRead(selectedChatSessionRow(pageState));
-        void this.refreshTaskSuggestions({ automatic: true });
       } else {
         this.retireTranscriptReads(true);
       }
@@ -495,9 +493,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           handleQuestionPromptEvent(this.questionPromptState, event);
         }
         if (state && !parseCatalogSessionKey(state.sessionKey)) {
-          if (event.event === "task.suggestion" && event.payload) {
-            this.handleTaskSuggestionEvent(event.payload as TaskSuggestionEvent);
-          }
           if (event.event === "session.suggestion" && event.payload) {
             this.handleSessionSuggestionEvent(event.payload as SessionSuggestionEvent);
           }
@@ -659,7 +654,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     }
     this.retireArchivedPresentation();
     this.cancelResetConfirmationForSessionChange();
-    this.evaluateHistoryEdge();
+    this.reconcileHistoryAfterRender();
     this.panelActions?.flush();
     this.activeSessionResources.syncPane({
       state: () => this.state,
@@ -731,9 +726,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.retireHeaderSessionDrafts();
     this.retireDeferredSessionHydration();
     this.sessionDiscussionPanels.clear();
-    this.taskSuggestionsRequestVersion += 1;
-    this.setTaskSuggestions([]);
-    this.tasks.operations = new Map();
     this.resetSessionSuggestions();
     this.resetSessionReactions();
     this.clearTypingActors();
