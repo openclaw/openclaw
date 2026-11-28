@@ -411,6 +411,8 @@ const CodeModeSchema = z
       executor: z.enum(["node", "quickjs"]).optional(),
       /** Model-facing mode. Only "only" is supported: expose exec/wait and hide normal tools. */
       mode: z.literal("only").optional(),
+      /** Prompt index character budget. Runtime clamps to 1,000..128,000; default: 8,000. */
+      catalogIndexMaxChars: z.number().int().positive().optional(),
       /** Wall-clock limit in milliseconds for one exec or wait call. */
       timeoutMs: z.number().int().positive().optional(),
       /** QuickJS guest heap limit or best-effort Node worker V8 heap budget in bytes; excludes external buffers and process RSS. */

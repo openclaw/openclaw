@@ -16,19 +16,20 @@ Code Mode object, its activation stays off unless that object explicitly sets
 feature. Shorthand `false` also disables it. Agent and model overrides retain
 their existing precedence.
 
-| Field                 | Default    | Clamp                                           |
-| --------------------- | ---------- | ----------------------------------------------- |
-| `enabled`             | See above  | `false`, `true`, or `"auto"` (per-model)        |
-| `executor`            | `"node"`   | `"node"` or `"quickjs"`                         |
-| `mode`                | `"only"`   | exposes control/direct tools, catalogs the rest |
-| `timeoutMs`           | `10000`    | `100`-`60000`                                   |
-| `memoryLimitBytes`    | `67108864` | `1048576`-`1073741824`                          |
-| `maxOutputBytes`      | `65536`    | `1024`-`10485760`                               |
-| `maxSnapshotBytes`    | `10485760` | `1024`-`268435456`                              |
-| `maxPendingToolCalls` | `16`       | `1`-`128`                                       |
-| `snapshotTtlSeconds`  | `900`      | `1`-`86400`                                     |
-| `searchDefaultLimit`  | `8`        | clamped to `maxSearchLimit`                     |
-| `maxSearchLimit`      | `50`       | `1`-`50`                                        |
+| Field                  | Default    | Clamp                                           |
+| ---------------------- | ---------- | ----------------------------------------------- |
+| `enabled`              | See above  | `false`, `true`, or `"auto"` (per-model)        |
+| `executor`             | `"node"`   | `"node"` or `"quickjs"`                         |
+| `mode`                 | `"only"`   | exposes control/direct tools, catalogs the rest |
+| `catalogIndexMaxChars` | `8000`     | `1000`-`128000`                                 |
+| `timeoutMs`            | `10000`    | `100`-`60000`                                   |
+| `memoryLimitBytes`     | `67108864` | `1048576`-`1073741824`                          |
+| `maxOutputBytes`       | `65536`    | `1024`-`10485760`                               |
+| `maxSnapshotBytes`     | `10485760` | `1024`-`268435456`                              |
+| `maxPendingToolCalls`  | `16`       | `1`-`128`                                       |
+| `snapshotTtlSeconds`   | `900`      | `1`-`86400`                                     |
+| `searchDefaultLimit`   | `8`        | clamped to `maxSearchLimit`                     |
+| `maxSearchLimit`       | `50`       | `1`-`50`                                        |
 
 Code Mode executes JavaScript only. Doctor and eligible Gateway startup
 migrations remove the retired `languages` setting from global and per-agent
@@ -61,6 +62,43 @@ that run; it does not silently expose normal tools as a fallback. This
 holds for `true` and for `"auto"` runs where the model resolves as preferred:
 an engaged run never silently falls back to another executor or broad direct
 tool exposure.
+
+## Catalog index budget
+
+`tools.codeMode.catalogIndexMaxChars` controls the compact tool-signature index
+included in the model's prompt. The default remains 8,000 characters, including
+the index heading and footer. Increase it for a large native tool catalog:
+
+```json5
+{
+  tools: {
+    codeMode: {
+      enabled: "auto",
+      catalogIndexMaxChars: 32000,
+    },
+  },
+}
+```
+
+Override the same field under `agents.entries.<agentId>.tools.codeMode` for one
+agent; omitted fields inherit the global options. Like other Code Mode limits,
+the value must be a positive integer and is clamped at runtime to 1,000-128,000.
+The minimum leaves room for the index's explanatory text.
+
+The budget applies with or without usage-ranked tool selection. Existing core
+tool priorities remain unchanged; this option does not pin memory or wiki tools.
+Tools omitted from the index remain callable through `catalog.search`.
+
+Larger values trade prompt context and input tokens for more visible signatures;
+they do not guarantee faster or more accurate model responses. This limit does
+not cover other Code Mode guidance, MCP namespace declarations, or full tool
+schemas, and does not grant tool permissions.
+
+When evaluating a changed budget, use the refresh points documented in
+[Session prefix stability](/reference/prompt-caching#session-prefix-stability):
+`/new` or `/reset` starts a new session, and `/compact` rebuilds the session prompt.
+Remote worker turns are a documented exception: they render the system prompt
+on each turn. This option does not change those refresh rules.
 
 ## Automatic per-model activation
 

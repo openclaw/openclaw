@@ -24,6 +24,7 @@ import { describeCodeModeNamespacesForPrompt } from "./code-mode-namespaces.js";
 import { markCodeModePermissionChangeResult } from "./code-mode-permission-change.js";
 import { getPreparedCodeModeCatalogBindings } from "./code-mode-prepared-catalog.js";
 import {
+  DEFAULT_CODE_MODE_CATALOG_INDEX_MAX_CHARS,
   isCodeModeEngagedForModel,
   readCode,
   readRunId,
@@ -67,8 +68,6 @@ export {
 export type { CodeModeFailureCode, CodeModeHeadlessResult } from "./code-mode-runtime.js";
 
 type CodeModeToolContext = ToolSearchToolContext & { modelContextWindowTokens?: number };
-
-const MAX_CODE_MODE_CATALOG_INDEX_CHARS = 8_000;
 
 const CODE_MODE_EXEC_PARAMETERS = Type.Object({
   title: Type.Optional(executionTitleSchema({ required: true })),
@@ -117,6 +116,7 @@ function renderCodeModeCatalogIndex(lines: readonly string[], total: number): st
 
 function formatCodeModeCatalogIndex(
   bindings: readonly CodeModeCatalogBinding[],
+  maxChars: number,
   usageRanking?: ToolUsageRankingSnapshot,
 ): string {
   const priority = (entry: CodeModeCatalogBinding) =>
@@ -141,14 +141,14 @@ function formatCodeModeCatalogIndex(
     return "";
   }
   const fullIndex = renderCodeModeCatalogIndex(lines, lines.length);
-  if (fullIndex.length <= MAX_CODE_MODE_CATALOG_INDEX_CHARS) {
+  if (fullIndex.length <= maxChars) {
     return fullIndex;
   }
   if (hasToolUsageRanking(usageRanking)) {
     const selected = selectUsageRankedToolRows(
       rows,
       usageRanking,
-      MAX_CODE_MODE_CATALOG_INDEX_CHARS,
+      maxChars,
       (included) =>
         CODE_MODE_CATALOG_INDEX_HEADING.length +
         2 +
@@ -170,7 +170,7 @@ function formatCodeModeCatalogIndex(
       candidateLineLength +
       2 +
       codeModeCatalogIndexFooter(included.length + 1, lines.length).length;
-    if (candidateLength <= MAX_CODE_MODE_CATALOG_INDEX_CHARS) {
+    if (candidateLength <= maxChars) {
       included.push(line);
       includedLineLength = candidateLineLength;
     }
@@ -186,7 +186,9 @@ export function buildCodeModeCatalogPrompt(
 ): string {
   const { descriptors, prompts } = getToolSearchCatalogDescriptors(catalog);
   const swarmEnabled = isCodeModeSwarmAvailable({ ...ctx, toolExecutionAllow: undefined }, catalog);
-  const cacheKey = `code-mode:${swarmEnabled}:${hasToolUsageRanking(usageRanking) ? JSON.stringify(usageRanking) : ""}`;
+  const { catalogIndexMaxChars: maxChars = DEFAULT_CODE_MODE_CATALOG_INDEX_MAX_CHARS } =
+    resolveCodeModeConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId);
+  const cacheKey = `code-mode:${swarmEnabled}:${maxChars}:${hasToolUsageRanking(usageRanking) ? JSON.stringify(usageRanking) : ""}`;
   const cached = prompts.get(cacheKey);
   if (cached !== undefined) {
     return cached;
@@ -224,7 +226,7 @@ export function buildCodeModeCatalogPrompt(
   // The catalog already reserves built-in namespace globals without constructing their runtimes.
   // MCP tools bind through namespaces, so skip rendering their compact hints here.
   const bindings = getPreparedCodeModeCatalogBindings(catalog);
-  const catalogIndex = formatCodeModeCatalogIndex(bindings, usageRanking);
+  const catalogIndex = formatCodeModeCatalogIndex(bindings, maxChars, usageRanking);
   // Only the effective core binding proves shell capability after client overrides.
   const shellTool = bindings.find((entry) => entry.id === "openclaw:core:exec");
   const shellGuidance = shellTool

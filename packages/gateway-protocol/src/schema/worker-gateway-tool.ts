@@ -34,6 +34,7 @@ export const AgentToolSurfacePresentationSchema = closedObject({
     enabled: Type.Boolean(),
     executor: Type.Enum(["node", "quickjs"]),
     mode: Type.Literal("only"),
+    catalogIndexMaxChars: Type.Optional(Type.Integer({ minimum: 1_000, maximum: 128_000 })),
     timeoutMs: Type.Integer({ minimum: 1 }),
     memoryLimitBytes: Type.Integer({ minimum: 1 }),
     maxOutputBytes: Type.Integer({ minimum: 1 }),

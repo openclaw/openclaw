@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { assert, expect, it, onTestFinished, vi } from "vitest";
 import {
+  AgentToolSurfacePresentationSchema,
   isWorkerGatewayToolFrameWithinBudget,
   WORKER_GATEWAY_MCP_GUEST_RESULT_PROTOCOL_FEATURE,
   WorkerToolSurfaceSchema,
@@ -397,6 +398,44 @@ it("prepares deferred discovery guidance with the model tool projection", async 
   expect(guidance?.split("\n")[0]).toBe("Deferred tools: web_fetch");
   expect(guidance).toContain("not directly callable: call dispatch_action");
   expect(guidance).not.toContain("Call a unique name directly");
+});
+
+it("reconstructs the configured Code Mode index from worker surface definitions", async () => {
+  const targets = Array.from({ length: 100 }, (_, i) => tool(`fixture_${i}_${"x".repeat(100)}`));
+  for (const catalogIndexMaxChars of [undefined, 32_000]) {
+    const serialized = JSON.stringify(
+      createToolSurfacePresentationForTest({
+        tools: { codeMode: { enabled: true, catalogIndexMaxChars } },
+      }),
+    );
+    const wire: unknown = JSON.parse(serialized);
+    assert(Value.Check(AgentToolSurfacePresentationSchema, wire));
+    const { runtime } = fixture(targets, async () => ({
+      tools: targets,
+      policy,
+      presentation: wire,
+    }));
+    const projection = await runtime.getPromptProjection(identity);
+    const prompt = projection.toolSchemaDirectoryPrompt;
+    assert.isDefined(prompt);
+    expect(prompt).toContain("Enabled async tool globals");
+    const index = prompt.slice(prompt.indexOf("Enabled async tool globals"));
+    if (catalogIndexMaxChars === undefined) {
+      expect(index).toContain("additional tools omitted");
+      expect(index.length).toBeLessThanOrEqual(8_000);
+      expect(index).not.toContain(`- ${targets[99]!.name} `);
+    } else {
+      expect(index).not.toContain("additional tools omitted");
+      expect(index.length).toBeGreaterThan(8_000);
+      expect(index.length).toBeLessThanOrEqual(32_000);
+      expect(index.split("\n").filter((line) => line.startsWith("- "))).toHaveLength(
+        targets.length,
+      );
+      for (const target of targets) {
+        expect(index).toContain(`- ${target.name} `);
+      }
+    }
+  }
 });
 
 it("carries the run-granted listing that the cached deferred directory omits", async () => {
