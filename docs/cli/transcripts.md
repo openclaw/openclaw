@@ -123,8 +123,10 @@ openclaw transcripts show '2026-05-22/notes: room/one'
 
 If neither qualified form finds a capture, the complete input is matched as a
 literal raw session ID or export slug, case-sensitively. A date-like prefix in
-a raw ID does not prevent this lookup. Multiple matches require a dated
-selector; no raw ID is sanitized to choose a capture. Default session IDs
+a raw ID does not prevent this lookup. If more than one meeting matches, `show`
+and `path` print dated selectors for recent matches. Run the command again with
+the selector for the meeting you want, or run `openclaw transcripts list` to see
+all selectors. No raw ID is sanitized to choose a capture. Default session IDs
 include a timestamp and random suffix; give a session a fixed ID only when
 that ID is unique within the day.
 

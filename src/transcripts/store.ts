@@ -30,7 +30,11 @@ import {
   transcriptSessionSelector,
   writeTranscriptArtifact,
 } from "./store-artifacts.js";
-import { TranscriptSessionConflictError, TranscriptsSummaryChangedError } from "./store-errors.js";
+import {
+  TranscriptSessionAmbiguousError,
+  TranscriptSessionConflictError,
+  TranscriptsSummaryChangedError,
+} from "./store-errors.js";
 import { writeTranscriptJsonlArtifact } from "./store-export-jsonl.js";
 import {
   assertTranscriptExportPathAvailable,
@@ -455,10 +459,9 @@ export class TranscriptsStore {
     const { qualified, unqualified } = await this.matchSessionEntries(sessionSelector);
     const entries = qualified.length ? qualified : unqualified;
     if (entries.length > 1) {
-      throw new Error(
-        `multiple transcripts sessions match ${sessionSelector}; use one of: ${entries
-          .map((entry) => entry.selector)
-          .join(", ")}`,
+      throw new TranscriptSessionAmbiguousError(
+        sessionSelector,
+        entries.map((entry) => entry.selector),
       );
     }
     const matched = entries[0];
