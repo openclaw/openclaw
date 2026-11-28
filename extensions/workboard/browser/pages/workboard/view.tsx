@@ -6,6 +6,7 @@ import { WorkboardToast } from "../../components/toast.tsx";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { createElementRefs } from "../../lib/element-refs.ts";
+import { matchesWorkboardArchiveFilter } from "../../lib/workboard/card-state.ts";
 import {
   groupWorkboardCardsByStatus,
   workboardCardMatchesHealthKey,
@@ -151,7 +152,7 @@ export function WorkboardView(
     // A deleted board keeps its route filter instead of exposing every board.
     const activeBoardFilter = current.boardFilter;
     const scopedCards = current.cards
-      .filter((card) => current.showArchived || !card.metadata?.archivedAt)
+      .filter((card) => matchesWorkboardArchiveFilter(current, card))
       .filter((card) => matchesWorkboardCardScope(props, card))
       .filter((card) => matchesCardQuery(card, current.query));
     const now = Date.now();
@@ -360,7 +361,16 @@ export function WorkboardView(
   };
   const filterPopover = workboardPopoverRef("end");
   return (
-    <WorkboardCardMenus workboard={props} cards={view().filtered}>
+    <WorkboardCardMenus
+      workboard={props}
+      cards={view().filtered}
+      archiveFocusTarget={(card) => {
+        const peers = view().byStatus.get(card.status) ?? [];
+        const index = peers.findIndex((peer) => peer.id === card.id);
+        const neighbor = peers[index + 1] ?? peers[index - 1];
+        return (neighbor && cardRefs.get(neighbor.id)) ?? filterTrigger;
+      }}
+    >
       {(menu, selectedMenuCardId) => (
         <section class="workboard">
           <div

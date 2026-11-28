@@ -245,7 +245,12 @@ export function CardAction(
         input.workboard.onRequestUpdate?.();
         break;
       case "archive":
-        void archiveWorkboardCard({ ...context, cardId: input.card.id, archived: !input.archived });
+        void archiveWorkboardCard({
+          ...context,
+          cardId: input.card.id,
+          archived: !input.archived,
+          previewFilter: true,
+        });
         break;
       case "stop":
         void stopWorkboardCard({

@@ -12,6 +12,13 @@ export function isActiveWorkboardCard(card: WorkboardCard): boolean {
   return !card.metadata?.archivedAt;
 }
 
+export function matchesWorkboardArchiveFilter(state: WorkboardUiState, card: WorkboardCard) {
+  return (
+    state.showArchived ||
+    !(state.pendingArchives.get(card.id) ?? Boolean(card.metadata?.archivedAt))
+  );
+}
+
 export function nextWorkboardCardPosition(
   cards: readonly WorkboardCard[],
   card: WorkboardCard,
