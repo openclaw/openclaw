@@ -114,6 +114,10 @@ export abstract class NewSessionModelSelection {
     private readonly changed: () => void,
   ) {}
 
+  isRestoringPreference(): boolean {
+    return this.restoringPreference;
+  }
+
   initializeAccessProgram(): void {
     const selected = this.accessProgramForSubmission();
     if (selected !== undefined && this.cyberAccessProgram !== selected) {
@@ -129,6 +133,13 @@ export abstract class NewSessionModelSelection {
     this.markExplicitSelection();
     this.persistSelection();
     this.onDraftSelectionChange?.();
+    this.notify();
+  };
+
+  protected readonly selectContextWindow = (value: string) => {
+    this.selectionGeneration += 1;
+    this.restoringPreference = false;
+    this.contextWindow = value;
     this.notify();
   };
 

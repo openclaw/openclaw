@@ -6,10 +6,10 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { ChatMetadataParams } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { CLAUDE_CLI_PROFILE_ID } from "../../agents/auth-profiles/profile-ids.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { readUserProfileAliasRevision } from "../../state/user-profile-events.js";
-import type { UserModelAccountSelection } from "../model-account-authority.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { prepareOperatorModelPresentation } from "../operator-model-presentation.js";
 import { operatorSessionCap, readOperatorRolePolicyRevision } from "../operator-role-policy.js";
@@ -28,7 +28,10 @@ import { ChatMetadataStartingError } from "./chat-metadata-facts.js";
 import { prepareChatMetadataSessionRead } from "./chat-metadata-session-read.js";
 import { createPreparedReadHandler } from "./prepared-read.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
-import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
+import {
+  preparePersonalModelAccountSelection,
+  prepareUserModelAccountAction,
+} from "./users-model-account-access.js";
 import { prepareAuthenticatedProfile } from "./users-profile-access.js";
 import { assertValidParams } from "./validation.js";
 
@@ -36,10 +39,21 @@ import { assertValidParams } from "./validation.js";
 export async function resolveChatMetadataReadParams(
   options: GatewayRequestHandlerOptions,
   params: ChatMetadataParams,
-  draftAccountSelection?: UserModelAccountSelection,
 ): Promise<ChatMetadataReadParams | undefined> {
   const { respond, context, client, signal } = options;
   const cfg = context.getRuntimeConfig();
+  const profileId = !params.sessionKey ? params.authProfileId : undefined;
+  const native = profileId === CLAUDE_CLI_PROFILE_ID;
+  const draftAccountSelection =
+    profileId && !native
+      ? await preparePersonalModelAccountSelection(options, profileId, SESSION_READ_SCOPE)
+      : undefined;
+  // This fixed, host-owned route has no personal account to look up. Its status
+  // uses operator.read, the same scope as models.authStatus. All other draft
+  // profile IDs still go through the exact self-owned account check above.
+  if (native) {
+    await prepareUserModelAccountAction(options, undefined, "operator.read");
+  }
   draftAccountSelection?.assertCurrent();
   const requester = await prepareAuthenticatedProfile(options);
   requester.assertCurrent();
@@ -169,6 +183,16 @@ export async function resolveChatMetadataReadParams(
     isCurrent: isRequestCurrent,
     assertCurrent: assertRequestCurrent,
     ...(draftAccountSelection ? { draftAccountSelection } : {}),
+    ...(native
+      ? {
+          sessionEntry: {
+            authProfileOverride: CLAUDE_CLI_PROFILE_ID,
+            authProfileOverrideSource: "user",
+            agentRuntimeOverride: "claude-cli",
+            providerOverride: "anthropic",
+          } as const,
+        }
+      : {}),
   };
 }
 
@@ -180,15 +204,7 @@ export const handleChatMetadataRequest = createPreparedReadHandler(
     }
     let scope: ChatMetadataReadParams | undefined;
     try {
-      const draftAccountSelection =
-        !params.sessionKey && params.authProfileId
-          ? await preparePersonalModelAccountSelection(
-              options,
-              params.authProfileId,
-              SESSION_READ_SCOPE,
-            )
-          : undefined;
-      scope = await resolveChatMetadataReadParams(options, params, draftAccountSelection);
+      scope = await resolveChatMetadataReadParams(options, params);
       if (!scope) {
         return undefined;
       }

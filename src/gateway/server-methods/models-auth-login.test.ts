@@ -216,6 +216,33 @@ describe("models.authLogin ownership", () => {
     expect(hooks.login).not.toHaveBeenCalled();
   });
 
+  it("reuses native Claude login without saving a profile or selecting a new default", async () => {
+    const h = harness();
+    hooks.choice.mockReturnValue({
+      pluginId: "anthropic",
+      providerId: "anthropic",
+      methodId: "cli",
+      choiceId: "anthropic-cli",
+      choiceLabel: "Claude CLI",
+    });
+    hooks.login.mockResolvedValue({
+      ...result,
+      providerId: "anthropic",
+      methodId: "cli",
+      profiles: [],
+    });
+    const reply = await h.invoke("models.authLogin", {
+      sessionId: "login",
+      authChoice: "anthropic/anthropic-cli",
+    });
+    expect(reply).toHaveBeenCalledWith(true, expect.anything(), undefined);
+    expect(await h.next()).toMatchObject({ done: true, status: "done" });
+    expect(hooks.login).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "anthropic", method: "cli", credentialOnly: false }),
+    );
+    expect(hooks.activate).not.toHaveBeenCalled();
+  });
+
   it("rejects a wrong local owner before starting a credential wizard", async () => {
     const h = harness();
     const respond = await h.invoke("models.authLogin", {

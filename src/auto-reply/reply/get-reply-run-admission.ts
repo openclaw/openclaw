@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { clearAutoFallbackPrimaryProbeSelection } from "../../agents/agent-scope.js";
 import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
+import { resolveBundledCliBackendAuthPolicy } from "../../agents/cli-runner/cli-backend-auth-policy.js";
 import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
@@ -422,6 +423,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       modelId: model,
       agentId,
       configuredProfileId: params.configuredProfileId,
+      nativeAuthProfileIds:
+        resolveBundledCliBackendAuthPolicy(thinkingRuntime)?.nativeAuthProfileIds,
       agentDir,
       reader:
         providedReplyOperation?.key === authSessionKey

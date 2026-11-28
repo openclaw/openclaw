@@ -160,6 +160,68 @@ function retainedAccountDraft(mode?: "retire" | "permitted-default" | "provider-
   };
 }
 
+it("submits native Claude only after the Gateway confirms a shared pin for the draft", async () => {
+  const nativeId = "anthropic:claude-cli";
+  const agent = { id: "main", model: { primary: "anthropic/model" } };
+  const model = testModel("anthropic", "model", {
+    available: true,
+    agentRuntime: { id: "claude-cli", source: "model" },
+  });
+  const f = setupModel([model], agent);
+  Object.assign(f.context.gateway.snapshot, { selfUser: { id: "person-a" } });
+  const preview = deferred<ModelCatalogResult>();
+  const authReady = deferred<void>();
+  f.request.mockImplementation((method: string, params: { authProfileId?: string }) => {
+    if (method === "models.authStatus") {
+      return authReady.promise.then(() => ({
+        ts: 1,
+        providers: [
+          {
+            provider: "claude-cli",
+            status: "ok",
+            profiles: [],
+            nativeAuth: { kind: "subscription", plan: "Max" },
+          },
+        ],
+      }));
+    }
+    if (method === "users.listModelAccounts") {
+      return Promise.resolve({
+        accounts: [{ authProfileId: "saved", provider: "anthropic", label: "Saved account" }],
+        links: [],
+      });
+    }
+    return params.authProfileId === nativeId
+      ? preview.promise
+      : Promise.resolve({
+          models: [model],
+          accountSelection: { kind: "automatic", label: "Automatic" },
+        });
+  });
+  f.load();
+  await waitForModelControl(f.control, f.context, "main", agent);
+  const menu = f.draw();
+  menu.querySelector<HTMLButtonElement>(".chat-controls__account-trigger")!.click();
+  const nativeOption = () =>
+    menu.querySelector<HTMLButtonElement>('[data-chat-account-option="native"]');
+  await vi.waitFor(() =>
+    expect(menu.querySelector('[data-chat-account-option="account:saved"]')).not.toBeNull(),
+  );
+  expect(nativeOption()).toBeNull();
+  authReady.resolve();
+  await vi.waitFor(() => expect(nativeOption()?.textContent).toContain("Max"));
+  nativeOption()!.click();
+  expect(f.model()).toBe("anthropic/model@anthropic:claude-cli");
+  expect(f.ready()).toBe(false);
+  preview.resolve({
+    models: [model],
+    accountSelection: { kind: "shared", authProfileId: nativeId, label: "Claude CLI" },
+  });
+  await f.control.metadataRead;
+  expect(f.ready()).toBe(true);
+  expect(f.control.agentRuntime).toBe("claude-cli");
+});
+
 it("retires a consumed personal-account model before the next configured draft", async () => {
   const f = retainedAccountDraft("retire");
   await f.connect();

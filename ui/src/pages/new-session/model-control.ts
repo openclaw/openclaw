@@ -1,5 +1,6 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import type { UserModelAccount } from "@openclaw/gateway-protocol";
+import { CLAUDE_CLI_PROFILE_ID } from "../../../../src/agents/auth-profiles/profile-ids.ts";
 import type {
   CyberAccessProgram,
   GatewayAgentRow,
@@ -45,6 +46,12 @@ import {
 import { hasNewSessionModelPreference, type NewSessionPreference } from "./preferences.ts";
 import { createDraftAgentRuntimeResolver } from "./runtime-resolution.ts";
 
+type DraftAccount = Pick<UserModelAccount, "authProfileId" | "provider">;
+const nativeClaudeAccount: DraftAccount = {
+  provider: "anthropic",
+  authProfileId: CLAUDE_CLI_PROFILE_ID,
+};
+
 type NewSessionMetadataClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
 
 export type NewSessionModelRenderOptions = {
@@ -66,9 +73,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
   private metadataIdentityId: string | undefined;
   private metadataGateway: ApplicationContext["gateway"] | undefined;
   private metadataHello: ApplicationContext["gateway"]["snapshot"]["hello"] | undefined;
-  private draftAccount:
-    | (Pick<UserModelAccount, "authProfileId" | "provider"> & { model: string })
-    | undefined;
+  private draftAccount?: DraftAccount & { model: string };
   private pendingPreference: NewSessionPreference | null | undefined;
   private pendingAgent: GatewayAgentRow | undefined;
   private pendingContext: ApplicationContext | undefined;
@@ -258,10 +263,13 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     };
   }
 
-  private selectDraftAccount(account: UserModelAccount, model: string): Promise<boolean> {
+  private selectDraftAccount(account: DraftAccount, model: string): Promise<boolean> {
     const client = this.metadataClient;
     if (!client || !model) {
       return Promise.resolve(false);
+    }
+    if (account.authProfileId === CLAUDE_CLI_PROFILE_ID) {
+      this.agentRuntime = "claude-cli";
     }
     this.selectionGeneration += 1;
     this.restoringPreference = false;
@@ -411,10 +419,6 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     void this.metadataReader.read();
   }
 
-  isRestoringPreference(): boolean {
-    return this.restoringPreference;
-  }
-
   requiresModelSetup(
     state: Omit<Parameters<typeof requiresChatModelSetup>[0], "modelCatalogState">,
   ): boolean {
@@ -474,17 +478,17 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     if (!this.draftAccount) {
       return true;
     }
-    const selection = this.metadataState.accountSelection;
-    if (
-      !this.ownsMetadata() ||
-      this.metadataReader.pending ||
-      this.metadataState.status !== "ready" ||
-      selection?.kind !== "personal" ||
-      selection.authProfileId !== this.draftAccount.authProfileId
-    ) {
-      return false;
-    }
-    return isDraftAccountModelAvailable(this.draftAccount, this.catalog, this.agentRuntime);
+    return (
+      this.ownsMetadata() &&
+      !this.metadataReader.pending &&
+      this.metadataState.status === "ready" &&
+      isDraftAccountModelAvailable(
+        this.draftAccount,
+        this.catalog,
+        this.metadataState.accountSelection,
+        this.agentRuntime,
+      )
+    );
   }
 
   private restorePreference() {
@@ -592,7 +596,12 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     }
     const { target, runtimeChanged } = change;
     this.metadataState.displayOnly = false;
-    if (this.draftAccount && this.draftAccount.provider !== target?.provider) {
+    if (
+      this.draftAccount &&
+      (this.draftAccount.provider !== target?.provider ||
+        (this.draftAccount.authProfileId === CLAUDE_CLI_PROFILE_ID &&
+          this.agentRuntime !== "claude-cli"))
+    ) {
       this.clearDraftAccount();
       this.load(this.pendingContext, this.agentId, true, { agent: this.pendingAgent });
     } else if (this.draftAccount && target) {
@@ -645,7 +654,6 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     const snapshot = options.context?.gateway.snapshot;
     const sessionKey = `new-session:${normalizeAgentId(options.agentId)}`;
     const sourceResult = options.context?.sessions.state.result ?? null;
-    const agentDefaultsAvailable = options.agent !== undefined;
     const { defaultTarget: _defaultTarget, ...modelControls } = resolveDraftModelControls({
       model: this.effectiveModel,
       selection: this,
@@ -659,20 +667,21 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     const ownsAccountScope = () => Boolean(client && scope && this.ownsMetadata(client, scope));
     const ownsSelection = () =>
       ownsAccountScope() && this.metadataState.accountSelection === accountSelection;
+    const inventoryScope = { owner: this, client, ownsScope: ownsAccountScope };
+    const selectAccount = (account: DraftAccount, model: string) =>
+      ownsSelection() ? this.selectDraftAccount(account, model) : Promise.resolve(false);
     return {
       ...modelControls,
       renderAccountSection: (model) =>
         renderChatModelAccountControl({
-          owner: this,
-          client,
-          ownsScope: ownsAccountScope,
+          ...inventoryScope,
           selection: ownsSelection() && snapshot?.selfUser ? accountSelection : undefined,
           model,
           disabled:
             options.sending || !model || !hasOperatorWriteAccess(snapshot?.hello?.auth ?? null),
           ownsSelection,
-          onSelect: (account) =>
-            ownsSelection() ? this.selectDraftAccount(account, model) : Promise.resolve(false),
+          onSelect: (account) => selectAccount(account, model),
+          onSelectNative: (nativeModel) => selectAccount(nativeClaudeAccount, nativeModel),
           onAutomatic: this.draftAccount
             ? () => {
                 if (ownsSelection()) {
@@ -698,7 +707,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       // Drafts display the normalized program they will submit; there is no saved row to repair.
       requestedAccessProgram: this.accessProgramForSubmission(),
       selectedAgentRuntime: this.agentRuntime,
-      sessionsResult: agentDefaultsAvailable ? sourceResult : null,
+      sessionsResult: options.agent ? sourceResult : null,
       stream: null,
       onModelSelect: (value, _sessionKey, agentRuntime) => {
         this.selectModel(value, agentRuntime ?? undefined);
@@ -716,19 +725,14 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       onThinkingSelect: this.selectThinkingLevel,
       onAccessProgramSelect: this.selectAccessProgram,
       onFastModeSelect: this.selectFastMode,
-      onContextWindowSelect: (value) => {
-        this.selectionGeneration += 1;
-        this.restoringPreference = false;
-        this.contextWindow = value;
-        this.notify();
-      },
+      onContextWindowSelect: this.selectContextWindow,
       onModelSetup: (provider) =>
         navigateToModelProvider(options.context, options.agentId, provider, { connect: true }),
       onProviderSettings: (provider) =>
         navigateToModelProvider(options.context, options.agentId, provider),
       onModelPickerOpen: () => {
         if (snapshot?.selfUser && hasOperatorWriteAccess(snapshot.hello?.auth ?? null)) {
-          prefetchChatModelAccounts({ owner: this, client, ownsScope: ownsAccountScope });
+          prefetchChatModelAccounts(inventoryScope, options.agentId);
         }
         if (!this.metadataReader.pending && this.ownsMetadata()) {
           void this.metadataReader.read();

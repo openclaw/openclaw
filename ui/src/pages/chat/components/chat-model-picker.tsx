@@ -80,8 +80,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
         !params.modelCatalogState.pendingProviders?.length &&
         params.modelOptions.length === 0 &&
         // Automatic selection exists even before the first account is configured.
-        (!params.accountSection ||
-          params.accountSection.viewProps(0).selectionKind === "automatic") &&
+        (!params.accountSection || params.accountSection.selectionKind === "automatic") &&
         !params.targetGroups?.length &&
         !params.modelSelectionLocked &&
         params.onModelSetup,

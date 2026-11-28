@@ -198,6 +198,7 @@
   "packages/tool-call-repair/src/grammar.ts",
   "packages/tool-call-repair/src/payload.ts",
   "packages/workboard-contract/src/index.ts",
+  "src/agents/auth-profiles/profile-ids.ts",
   "src/agents/internal-runtime-context.ts",
   "src/agents/model-ref-profile.ts",
   "src/agents/tool-display-config.ts",

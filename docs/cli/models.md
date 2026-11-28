@@ -411,7 +411,8 @@ protected inputs, and status notes. `--provider`, `--method`,
 Omit the provider or method to choose from the available flows. An unavailable
 or ambiguous plugin method is not silently replaced with a different login.
 The menu reads the selected local configuration, including `plugins.load.paths`,
-and honors plugin disablement and allowlists.
+and honors plugin disablement and allowlists. Online sign-in leaves the default
+model unchanged.
 
 Provider menus keep onboarding's preferred providers first, then list other
 providers alphabetically. The Gateway groups sign-in methods by provider and
@@ -423,8 +424,8 @@ the same shell command. Use a trailing backslash to split it across lines.
 For these online logins, `--profile-id`, `--force`, `--set-default`, and Copilot
 `--yes` are refused before starting sign-in because the Gateway login API does
 not represent those options. Stop the Gateway to use those options offline.
-The current default model stays unchanged. Plugin methods that require local
-CLI imports or are not declared as credential-only sign-in remain offline.
+
+To use the existing Claude CLI login on the Gateway host, run `openclaw models auth login --provider anthropic --method cli`. OpenClaw does not copy the native credential into an auth profile. Other methods that require local CLI imports or are not declared as credential-only sign-in remain offline.
 
 The wizard stays on one authenticated connection. Ctrl-C cancels that session;
 disconnecting closes it rather than replaying the login on another connection.
