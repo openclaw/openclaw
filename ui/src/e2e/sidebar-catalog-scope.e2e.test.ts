@@ -4,6 +4,8 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
+  pauseVirtualClock,
+  waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -12,6 +14,42 @@ const suite = createControlUiE2eSuite({ name: "Sidebar catalog scope" });
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
+  it("keeps background catalog reads quiet while the sidebar is collapsed and catches up once on reopen", async () => {
+    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+      await page.clock.install();
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "sessions.catalog.list"],
+        methodResponses: { "sessions.catalog.list": { catalogs: [] } },
+      });
+      const reads = () => gateway.getRequests("sessions.catalog.list", { limitPerHost: 40 });
+      await page.goto(`${suite.server.baseUrl}new`);
+      await waitForControlUiRoute(page, { routeId: "new-session" });
+      const collapse = page.getByRole("button", { name: "Collapse sidebar", exact: true }).first();
+      const advance = async (ms: number) => {
+        await pauseVirtualClock(page);
+        await page.clock.fastForward(ms);
+        await page.clock.resume();
+      };
+      await expect.poll(async () => (await reads()).length).toBe(1);
+      for (const reopened of [2, 3]) {
+        await collapse.click();
+        await expect.poll(() => collapse.isVisible()).toBe(false);
+        // Neither the poll nor tab activation may read rows nobody can see.
+        await page.evaluate(() => {
+          window.dispatchEvent(new Event("focus"));
+          document.dispatchEvent(new Event("visibilitychange"));
+        });
+        await advance(125_001);
+        expect(await reads()).toHaveLength(reopened - 1);
+        await page.keyboard.press("Control+b");
+        await expect.poll(() => collapse.isVisible()).toBe(true);
+        await advance(5_001);
+        await expect.poll(async () => (await reads()).length).toBe(reopened);
+      }
+      expect(await gateway.getSocketCount()).toBe(1);
+    });
+  });
+
   it("discovers and opens ordinary guest sessions without requesting the external catalog", async () => {
     const artifactDir = captureUiProof
       ? createControlUiE2eArtifactDir("sidebar-catalog-scope")

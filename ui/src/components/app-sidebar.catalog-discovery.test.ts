@@ -443,32 +443,43 @@ describe("AppSidebar hidden catalog discovery", () => {
     expect(sidebar.textContent).toContain("Recovered session");
   });
 
-  it("retains an issued discovery page while hidden and resumes from its cursor", async () => {
-    const setVisibility = mockDocumentVisibility();
-    const pending = deferred<ReturnType<typeof catalogPage>>();
-    const request = createGatewayRequestMock((_method, params) => {
-      const cursor = catalogParams(params).cursors?.["gateway:local"];
-      return cursor === "page-2"
-        ? pending.promise
-        : Promise.resolve(
-            cursor === "page-3"
-              ? catalogPage([{ threadId: "found", name: "Visible again" }])
-              : catalogPage([], "page-2"),
-          );
-    });
-    const { sidebar } = await mountDiscovery(request);
-    expect(request).toHaveBeenCalledTimes(2);
-    setVisibility("hidden");
-    pending.resolve(catalogPage([], "page-3"));
-    await settle(sidebar);
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(sidebar.sessionData.sessionCatalogs[0]!.hosts[0]!.nextCursor).toBe("page-3");
-    setVisibility("visible");
-    await advance(sidebar, 5_000);
-    expect(sidebar.textContent).toContain("Visible again");
-    expect(requestedCursors(request).at(-1)).toBe("page-3");
-  });
+  it.each(["document", "navigation"] as const)(
+    "retains an issued discovery page while the %s hides and resumes from its cursor",
+    async (surface) => {
+      const documentVisibility = mockDocumentVisibility();
+      const setVisibility = async (state: "hidden" | "visible") => {
+        if (surface === "document") {
+          documentVisibility(state);
+        } else {
+          sidebar.navigationVisible = state === "visible";
+          await settleLitElement(sidebar);
+        }
+      };
+      const pending = deferred<ReturnType<typeof catalogPage>>();
+      const request = createGatewayRequestMock((_method, params) => {
+        const cursor = catalogParams(params).cursors?.["gateway:local"];
+        return cursor === "page-2"
+          ? pending.promise
+          : Promise.resolve(
+              cursor === "page-3"
+                ? catalogPage([{ threadId: "found", name: "Visible again" }])
+                : catalogPage([], "page-2"),
+            );
+      });
+      const { sidebar } = await mountDiscovery(request);
+      expect(request).toHaveBeenCalledTimes(2);
+      await setVisibility("hidden");
+      pending.resolve(catalogPage([], "page-3"));
+      await settle(sidebar);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(sidebar.sessionData.sessionCatalogs[0]!.hosts[0]!.nextCursor).toBe("page-3");
+      await setVisibility("visible");
+      await advance(sidebar, 5_000);
+      expect(sidebar.textContent).toContain("Visible again");
+      expect(requestedCursors(request).at(-1)).toBe("page-3");
+    },
+  );
 });
 
 const page = (number: number, label = "Original", nextCursor = `page-${number + 1}`) =>

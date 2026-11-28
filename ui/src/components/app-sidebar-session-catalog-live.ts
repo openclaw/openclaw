@@ -92,7 +92,48 @@ export class SessionCatalogLiveState {
   readonly #warnedRequestErrors = new Set<string>();
   #retryAttempts = 0;
   #retryAt = 0;
+  #visible = true;
+  #hiddenRefreshSkipped = false;
+  settledAt = 0;
   startupPending = false;
+
+  /** Retain cached rows while hidden; report whether the catalog surface just returned. */
+  setVisible(visible: boolean): boolean {
+    const reopened = visible && !this.#visible;
+    this.#visible = visible;
+    if (!visible) {
+      if (this.refreshPending || this.#retryAt > 0 || this.#activationRefresh !== null) {
+        this.#hiddenRefreshSkipped = true;
+      }
+      this.cancelScheduledRefreshes();
+      this.refreshPending = false;
+    }
+    return reopened;
+  }
+
+  /** Remember automatic work dropped while hidden, so reopening catches up once. */
+  skipHiddenRefresh() {
+    this.#hiddenRefreshSkipped = true;
+  }
+
+  /**
+   * Refresh once after the catalog surface returns only when hidden time skipped
+   * work or passed the poll deadline; otherwise keep the existing poll cadence.
+   */
+  resume(isConnected: boolean, refresh: () => Promise<void>) {
+    const skipped = this.#hiddenRefreshSkipped;
+    this.#hiddenRefreshSkipped = false;
+    if (this.requestGeneration !== null) {
+      this.refreshPending ||= skipped;
+      return;
+    }
+    const remainingMs = this.settledAt + SESSION_CATALOG_REFRESH_MS - Date.now();
+    if (skipped || remainingMs <= 0) {
+      void refresh();
+      return;
+    }
+    this.schedule(remainingMs, isConnected, () => void refresh());
+  }
 
   get retryDelayMs() {
     return Math.max(0, this.#retryAt - Date.now());
@@ -146,6 +187,8 @@ export class SessionCatalogLiveState {
     this.#latestProgressId = null;
     this.#requestChangedHostKeys.clear();
     this.refreshPending = false;
+    this.#hiddenRefreshSkipped = false;
+    this.settledAt = 0;
     this.discoveryPages.clear();
   }
 
@@ -222,6 +265,7 @@ export class SessionCatalogLiveState {
   beginRequest(generation: number): { progressId: string } {
     this.#eventRefresh.absorb();
     this.#activationRefresh = null;
+    this.#hiddenRefreshSkipped = false;
     this.requestGeneration = generation;
     this.refreshScope = {};
     this.#requestChangedHostKeys.clear();
@@ -361,7 +405,11 @@ export class SessionCatalogLiveState {
     generation: number;
     refresh: () => Promise<void>;
   }) {
-    if (!params.visible || !params.connected) {
+    if (!params.connected) {
+      return;
+    }
+    if (!params.visible) {
+      this.#hiddenRefreshSkipped = true;
       return;
     }
     this.cancelTimer();
@@ -400,6 +448,7 @@ export async function refreshSessionCatalogsLive(params: {
   pageDepths: ReadonlyMap<string, number>;
   connected: () => boolean;
   withdrawPrevious: () => void;
+  visible: () => boolean;
   applyFinal: (catalogs: SessionCatalog[]) => void;
   /** Finish the finite cursor sweep without repeating the root catalog request. */
   continueRefresh: () => Promise<void>;
@@ -412,7 +461,11 @@ export async function refreshSessionCatalogsLive(params: {
   }
   // Events and returning tabs share the same cooldown as the scheduled retry.
   if (live.retryDelayMs > 0) {
-    live.schedule(live.retryDelayMs, params.connected(), () => void params.refresh());
+    live.schedule(
+      live.retryDelayMs,
+      params.connected() && params.visible(),
+      () => void params.refresh(),
+    );
     return;
   }
   const { progressId } = live.beginRequest(generation);
@@ -452,6 +505,8 @@ export async function refreshSessionCatalogsLive(params: {
         profileRelation: params.profileRelation,
         pageDepths,
         isCurrent: requestIsCurrent,
+        // An admitted request finishes its bounded page replay even if the surface
+        // hides meanwhile; stopping here would leave expanded fresh hosts blank.
         canRequestPage: () => requestIsCurrent() && document.visibilityState !== "hidden",
       });
       if (!requestIsCurrent()) {
@@ -488,12 +543,14 @@ export async function refreshSessionCatalogsLive(params: {
       pageDepths = changedDepths;
     } while (pageDepths.size > 0);
     live.resetRetry();
+    live.settledAt = Date.now();
     params.applyFinal(catalogs);
     live.requestGeneration = null;
     await params.continueRefresh();
   } catch (error) {
     // A transient refresh failure must not collapse already visible or expanded pages.
     if (requestIsCurrent()) {
+      live.settledAt = 0;
       retryDelayMs = live.retryRequest(error);
       if (live.startupPending) {
         params.applyError(error);
@@ -506,7 +563,7 @@ export async function refreshSessionCatalogsLive(params: {
     if (requestIsCurrent()) {
       live.requestGeneration = null;
     }
-    if (requestIsCurrent() && params.connected()) {
+    if (requestIsCurrent() && params.connected() && params.visible()) {
       const pending = live.refreshPending;
       live.refreshPending = false;
       live.schedule(retryDelayMs ?? SESSION_CATALOG_REFRESH_MS, params.connected(), () => {
@@ -515,6 +572,13 @@ export async function refreshSessionCatalogsLive(params: {
       if (pending && retryDelayMs === null) {
         live.scheduleActivation(params.refresh);
       }
+    } else if (
+      requestIsCurrent() &&
+      params.connected() &&
+      (live.refreshPending || retryDelayMs !== null)
+    ) {
+      live.refreshPending = false;
+      live.skipHiddenRefresh();
     }
   }
 }
