@@ -54,6 +54,32 @@ describe("encoded transcript archive publication", () => {
     },
   );
 
+  it.each(["EACCES", "EPERM", "EXDEV"] as const)(
+    "publishes the staged archive when link is refused with %s",
+    (code) => {
+      const input = archiveInput();
+      vi.spyOn(fs, "linkSync").mockImplementation(() => {
+        throw Object.assign(new Error(`${code}: link refused`), { code });
+      });
+
+      const archivePath = publishEncodedSessionTranscriptArchive(input);
+
+      expect(fs.readFileSync(archivePath)).toEqual(input.bytes);
+      expect(fs.readdirSync(input.archiveDirectory)).toEqual([input.archiveName]);
+    },
+  );
+
+  it("removes the staging file when link fails for another reason", () => {
+    const input = archiveInput();
+    const failure = Object.assign(new Error("archive storage is full"), { code: "ENOSPC" });
+    vi.spyOn(fs, "linkSync").mockImplementation(() => {
+      throw failure;
+    });
+
+    expect(() => publishEncodedSessionTranscriptArchive(input)).toThrow(failure);
+    expect(fs.readdirSync(input.archiveDirectory)).toEqual([]);
+  });
+
   it("preserves a colliding temporary file that it did not create", () => {
     const input = archiveInput();
     const originalOpen = fs.openSync;
@@ -68,5 +94,28 @@ describe("encoded transcript archive publication", () => {
     expect(() => publishEncodedSessionTranscriptArchive(input)).toThrow(/EEXIST/);
     expect(fs.readFileSync(collisionPath)).toEqual(priorBytes);
     expect(fs.readdirSync(input.archiveDirectory)).toEqual([path.basename(collisionPath)]);
+  });
+
+  it("keeps an archive created while a refused hard link is being published", () => {
+    const input = archiveInput();
+    const archivePath = path.join(input.archiveDirectory, input.archiveName);
+    const priorBytes = Buffer.from("concurrent archive bytes");
+    const originalRename = fs.renameSync;
+    const originalCopy = fs.copyFileSync;
+    vi.spyOn(fs, "linkSync").mockImplementation(() => {
+      throw Object.assign(new Error("EACCES: permission denied, link"), { code: "EACCES" });
+    });
+    vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+      fs.writeFileSync(destination, priorBytes);
+      return originalRename(source, destination);
+    });
+    vi.spyOn(fs, "copyFileSync").mockImplementation((source, destination, mode) => {
+      fs.writeFileSync(destination, priorBytes);
+      return originalCopy(source, destination, mode);
+    });
+
+    expect(() => publishEncodedSessionTranscriptArchive(input)).toThrow(/verification failed/);
+    expect(fs.readFileSync(archivePath)).toEqual(priorBytes);
+    expect(fs.readdirSync(input.archiveDirectory)).toEqual([input.archiveName]);
   });
 });
