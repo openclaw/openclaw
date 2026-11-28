@@ -58,10 +58,20 @@ WebSocket opening-handshake timeouts report a Gateway transport error with
 
 ### `gateway health`
 
+Fetch a health snapshot over WebSocket RPC. The default RPC timeout is
+`10000` milliseconds (10 seconds); pass `--timeout <ms>` to allow a longer wait.
+
 ```bash
 openclaw gateway health --url ws://127.0.0.1:18789
 openclaw gateway health --port 18789
+openclaw gateway health --timeout 60000 --json
 ```
+
+For local Gateway startup checks, use [`openclaw health`](/cli/health). It uses
+a default 60-second readiness budget and reports the observed startup phase,
+including a non-failing `starting` result if startup is still in progress at
+the deadline. Increasing `gateway health --timeout` extends the RPC wait;
+it does not select that startup-readiness workflow.
 
 `/healthz` is a liveness check: it returns as soon as the server can answer HTTP. `/readyz` is stricter and stays red while startup plugin sidecars, channels, or configured hooks are still settling. Local or authenticated detailed `/readyz` responses include an `eventLoop` diagnostic block (delay, utilization, CPU-core ratio, `degraded` flag).
 
