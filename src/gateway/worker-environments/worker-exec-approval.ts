@@ -124,7 +124,13 @@ export function createWorkerExecApprovalOwner(params: {
         if (registration.decision !== undefined) {
           pending.delete(request.id);
         }
-        return { operation: "request", binding, ...registration };
+        return {
+          operation: "request",
+          binding,
+          id: registration.id,
+          expiresAtMs: registration.expiresAtMs,
+          ...(registration.decision !== undefined ? { decision: registration.decision } : {}),
+        };
       } catch (error) {
         pending.delete(request.id);
         throw error;
@@ -150,7 +156,12 @@ export function createWorkerExecApprovalOwner(params: {
       params.turnSource,
     );
     assertCurrent();
-    return { operation: "wait", binding, ...decision };
+    return {
+      operation: "wait",
+      binding,
+      decision: decision.decision,
+      ...(decision.terminalReason !== undefined ? { terminalReason: decision.terminalReason } : {}),
+    };
   };
 }
 

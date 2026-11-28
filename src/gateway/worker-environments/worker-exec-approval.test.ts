@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkerExecApprovalResponseFrame } from "../../../packages/gateway-protocol/src/schema/worker-exec-approval.js";
+import { validateWorkerExecApprovalResponseFrame } from "../../../packages/gateway-protocol/src/worker-response-validators.js";
 import { WORKER_EXEC_DEFAULTS_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resetProcessRegistryForTests } from "../../agents/bash-process-registry.test-support.js";
@@ -175,6 +176,7 @@ describe.skipIf(process.platform === "win32")("worker exec approval boundary", (
           ok: true,
           payload: outcome.result,
         };
+        expect(validateWorkerExecApprovalResponseFrame(frame)).toBe(true);
         options.alterResponse?.(frame);
         return frame;
       },
@@ -344,26 +346,53 @@ describe.skipIf(process.platform === "win32")("worker exec approval boundary", (
       };
       const h = await fixture({ mode: "ask", gatewayContext: context, turnSource });
       source = h.source;
+      const longToolCallId = "call_encrypted_" + "x".repeat(443);
+      const binding = {
+        command: "echo routed",
+        execCommand: "/bin/echo routed",
+        cwd: support.testState.root,
+        environment: "e".repeat(64),
+        pty: false,
+      };
       const registration = await h.workerService.execApproval(h.identity, {
         operation: "request",
         id: "worker-routed-human",
-        toolCallId: "worker-routed-exec",
-        binding: {
-          command: "echo routed",
-          execCommand: "/bin/echo routed",
-          cwd: support.testState.root,
-          environment: "e".repeat(64),
-          pty: false,
-        },
+        toolCallId: longToolCallId,
+        binding,
       });
+      expect(
+        validateWorkerExecApprovalResponseFrame({
+          type: "res",
+          id: "req-1",
+          ok: true,
+          payload: registration.result,
+        }),
+      ).toBe(true);
       expect(registration.result).toMatchObject({ id: "worker-routed-human" });
       const records = await approvals.manager.listPendingRecords();
       expect(records).toHaveLength(1);
       expect(records[0]?.request).toMatchObject({
         ...turnSource,
         command: "/bin/echo routed",
+        toolCallId: longToolCallId,
+      });
+      const waited = h.workerService.execApproval(h.identity, {
+        operation: "wait",
+        id: "worker-routed-human",
+        toolCallId: longToolCallId,
+        binding,
       });
       await approvals.manager.resolve("worker-routed-human", "deny", "operator");
+      const resolution = await waited;
+      expect(
+        validateWorkerExecApprovalResponseFrame({
+          type: "res",
+          id: "wait-1",
+          ok: true,
+          payload: resolution.result,
+        }),
+      ).toBe(true);
+      expect(resolution.result).toMatchObject({ operation: "wait", decision: "deny" });
       expect(callGatewayTool).not.toHaveBeenCalled();
     });
   });
