@@ -1,5 +1,6 @@
 import {
   ErrorCodes,
+  GatewayErrorDetailCodes,
   errorShape,
   validateTemplatesCatalogDetailParams,
   validateTemplatesCatalogPreviewParams,
@@ -25,10 +26,11 @@ function mapClawHubError(error: unknown) {
   if (error instanceof TemplatesDisabledError) {
     return errorShape(ErrorCodes.FORBIDDEN, error.message);
   }
+  const isNotFound = error instanceof ClawHubRequestError && error.status === 404;
   const message =
     error instanceof ClawHubSourceError
       ? error.message
-      : error instanceof ClawHubRequestError && error.status === 404
+      : isNotFound
         ? error.requestPath.includes("/versions/")
           ? "This Template version is not on ClawHub. Choose another version."
           : "This Template is not on ClawHub. Check the name or browse the catalog."
@@ -36,7 +38,13 @@ function mapClawHubError(error: unknown) {
   log.error(
     `ClawHub Template request failed: ${error instanceof Error ? error.message : String(error)}`,
   );
-  return errorShape(ErrorCodes.UNAVAILABLE, message);
+  return errorShape(
+    ErrorCodes.UNAVAILABLE,
+    message,
+    isNotFound
+      ? { retryable: false, details: { code: GatewayErrorDetailCodes.TEMPLATE_NOT_FOUND } }
+      : undefined,
+  );
 }
 
 export const templatesHandlers: GatewayRequestHandlers = {

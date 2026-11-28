@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { GatewayErrorDetailCodes } from "@openclaw/gateway-protocol/gateway-error-details";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
@@ -361,6 +362,56 @@ describe("Templates discovery", () => {
     expect(request).toHaveBeenCalledWith("templates.catalog.detail", {
       packageName: workflowOperator.packageName,
     });
+  });
+
+  it("shows a missing Template error without Retry while keeping catalog navigation", async () => {
+    const { request, setTemplatesEnabled, find } = createDetail({ templatesEnabled: false });
+    const original = request.getMockImplementation()!;
+    request.mockImplementation((method, params, options) => {
+      if (method === "templates.catalog.detail") {
+        return Promise.reject(
+          new GatewayRequestError({
+            code: "UNAVAILABLE",
+            message: "This Template is not on ClawHub. Check the name or browse the catalog.",
+            retryable: false,
+            details: { code: GatewayErrorDetailCodes.TEMPLATE_NOT_FOUND },
+          }),
+        );
+      }
+      return original(method, params, options);
+    });
+    setTemplatesEnabled(true);
+    await waitForSolid(() =>
+      expect(find("[role=alert]")?.textContent).toContain("This Template is not on ClawHub."),
+    );
+    expect(find("[role=alert] button")).toBeNull();
+    expect(find(".plugin-catalog-detail__back")?.getAttribute("href")).toBe("/templates");
+  });
+
+  it("omits Retry on the detail panel when a Template version is not found", async () => {
+    const { request, setPhase, find } = createDetail({ templatesEnabled: true });
+    await waitForSolid(() => expect(find(".plugin-capabilities")).not.toBeNull());
+    const original = request.getMockImplementation()!;
+    request.mockImplementation((method, params, options) => {
+      if (method === "templates.catalog.detail") {
+        throw new GatewayRequestError({
+          code: "UNAVAILABLE",
+          message: "This Template version is not on ClawHub. Choose another version.",
+          retryable: false,
+          details: { code: GatewayErrorDetailCodes.TEMPLATE_NOT_FOUND },
+        });
+      }
+      return original(method, params, options);
+    });
+    setPhase("reconnecting");
+    flush();
+    setPhase("connected");
+    await waitForSolid(() =>
+      expect(find("[role=alert]")?.textContent).toContain(
+        "This Template version is not on ClawHub.",
+      ),
+    );
+    expect(find("[role=alert] button")).toBeNull();
   });
 
   it("retires a pending detail reply when the package route changes", async () => {

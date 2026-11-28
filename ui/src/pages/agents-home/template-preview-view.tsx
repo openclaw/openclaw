@@ -11,6 +11,7 @@ import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import { TemplateArtwork } from "./template-artwork.tsx";
 import { createTemplateAutomationDialog } from "./template-automation-dialog.tsx";
 import { TemplatePluginIcon, TemplatePluginName } from "./template-plugin-icon.tsx";
+import { isTemplateNotFoundFailure } from "./templates-catalog-client.ts";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
 import { TemplateAddFeedback } from "./templates-detail-view.tsx";
 import "../../styles/templates-catalog.css";
@@ -150,9 +151,11 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
               fallback={(error) => (
                 <InlineAlert tone="danger" role="alert">
                   {formatUiError(error())}
-                  <button type="button" class="btn" onClick={() => props.view.onRetryDetail()}>
-                    {t("common.retry")}
-                  </button>
+                  <Show when={!isTemplateNotFoundFailure(error())}>
+                    <button type="button" class="btn" onClick={() => props.view.onRetryDetail()}>
+                      {t("common.retry")}
+                    </button>
+                  </Show>
                 </InlineAlert>
               )}
             >
