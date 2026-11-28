@@ -410,6 +410,11 @@ export abstract class ChatPaneStateOwner {
         getTranscriptState(this.presentationId).transcriptRenderContext.onAsyncQuestionDiscard?.(
           item,
         ),
+      (state) => {
+        if (this.state === state) {
+          getChatComposerState(this.presentationId).dictation?.invalidatePendingSend();
+        }
+      },
     );
   }
 

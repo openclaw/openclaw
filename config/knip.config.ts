@@ -35,6 +35,7 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  "scripts/bench-dictation-writing-profiles.mts!",
   "scripts/perf/ui-e2e-worker-affinity-measure.mts",
   "scripts/perf/isolated-completion-registry-measure.ts!",
   "scripts/perf/audit-retention-fixture.mjs!",

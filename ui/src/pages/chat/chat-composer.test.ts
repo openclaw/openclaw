@@ -241,9 +241,6 @@ it("shows actionable connecting guidance in a visible status region", () => {
 });
 
 it("shows dictation starting at once and microphone guidance only when access is slow", async () => {
-  // Exercise the pending microphone phase with both lazy dictation modules already loaded.
-  await import("./components/composer-dictation-status.tsx");
-  await import("./composer-dictation-session.ts");
   openMicrophoneMock.mockReturnValue(new Promise(() => {}));
   const dismissRecovery = vi.fn();
   const { container, query } = await mountTalk(
@@ -260,6 +257,7 @@ it("shows dictation starting at once and microphone guidance only when access is
   voiceButton(container).dispatchEvent(dictationPointer("pointerdown", 15));
   expect(dismissRecovery).toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(800);
+  await vi.dynamicImportSettled();
   expect(openMicrophoneMock).toHaveBeenCalledOnce();
   const starting = query('.agent-chat__dictation-status[role="status"]');
   expect(starting?.textContent).toBe(t("chat.composer.dictationStarting"));
@@ -460,6 +458,7 @@ it("keeps the dictation button stable through hold progress and latch", async ()
   expect(holdingControl?.querySelector(".chat-talk-input-picker")).not.toBeNull();
   expect(capturedButton!.hasPointerCapture(9)).toBe(true);
   await vi.advanceTimersByTimeAsync(500);
+  await vi.dynamicImportSettled();
 
   const rerenderedButton = query<HTMLButtonElement>(
     ".chat-talk-control > openclaw-tooltip > button",

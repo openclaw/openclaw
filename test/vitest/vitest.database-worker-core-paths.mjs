@@ -12,6 +12,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/state-upgrade.test.ts",
   "src/state/state-upgrade-startup.test.ts",
   "src/state/state-upgrade.postgres.test.ts",
+  "src/state/user-preferences.writing-profiles.test.ts",
   "src/sessions/session-controller-model.test.ts",
   "src/agents/simple-completion-runtime.postgres.test.ts",
   "src/agents/embedded-agent-runner/compact.watched-sessions.postgres.test.ts",

@@ -6,7 +6,6 @@ import { i18n } from "../../i18n/lib/translate.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { mountSolid as mountComponent } from "../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
@@ -21,11 +20,9 @@ import { createTestChatPane, getPaneTestRuntime } from "./chat-pane.test-support
 import { keepVolatileQueuedMessage } from "./chat-queue.ts";
 import { clearSubmittedComposerState, cancelChatDelivery } from "./chat-send-composer.ts";
 import { appendChatAttachmentFiles } from "./components/chat-attachments.ts";
-import { ComposerDictationSendAction } from "./components/chat-composer-controls.tsx";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
-import { ComposerDictationOwner } from "./composer-dictation.ts";
 import { persistChatComposerState } from "./composer-draft-storage.ts";
 import { admitStoredChatComposerQueueItemResult } from "./composer-queue-persistence.ts";
 
@@ -605,33 +602,6 @@ it("keeps the open permission picker through parent updates", async () => {
   expect(picker.querySelector('[role="menu"]')).toBe(surface);
   expect(surface.matches(":popover-open")).toBe(true);
   expect(trigger.getAttribute("aria-expanded")).toBe("true");
-});
-
-it("keeps a pending dictation send bound to the action that started it", async () => {
-  const controller = new ComposerDictationOwner({
-    client: null,
-    connected: false,
-    enabled: false,
-    realtimeTalkActive: false,
-    onCommit: () => {},
-    onError: () => {},
-  });
-  vi.spyOn(controller, "active", "get").mockReturnValue(true);
-  const finish = createDeferred<boolean>();
-  vi.spyOn(controller, "finishActive").mockReturnValue(finish.promise);
-  const firstSend = vi.fn();
-  const laterSend = vi.fn();
-  const view = mountComponent(ComposerDictationSendAction, {
-    readDictation: () => controller,
-    onSend: firstSend,
-  });
-  onTestFinished(() => controller.dispose());
-  view.container.querySelector<HTMLButtonElement>("button")!.click();
-  view.update({ readDictation: () => controller, onSend: laterSend });
-  finish.resolve(true);
-  await Promise.resolve();
-  expect(firstSend).toHaveBeenCalledOnce();
-  expect(laterSend).not.toHaveBeenCalled();
 });
 
 it("preserves keyboard input-history traversal with hydrated member evidence", () => {

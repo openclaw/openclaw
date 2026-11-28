@@ -11,7 +11,7 @@ import {
 } from "../../lib/session-method-access.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import type { SessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
-import { assertUploadsEnabled, uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
+import { assertUploadsEnabled } from "../../lib/uploads.ts";
 import { chatComposerDraftStorageError } from "../chat/composer-persistence-feedback.ts";
 import type { buildLocalUserMessage } from "../chat/user-message-content.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
@@ -139,6 +139,7 @@ export class DraftSubmissionFlow {
       () => this.setError(chatComposerDraftStorageError()),
     );
     this.attachmentDraft = new NewSessionAttachmentDraft(this.draftChanged, () => {
+      this.callbacks.onInputIntent?.();
       this.startedSession.current = null;
       this.draftPersistence.noteUserMutation();
     });
@@ -412,16 +413,6 @@ export class DraftSubmissionFlow {
       return;
     }
     this.blockedSubmitAttempt = false;
-    if (
-      !uploadsEnabled(context.config) &&
-      (this.attachmentDraft.attachments.length ||
-        pending.attachments?.length ||
-        startup?.params.attachments?.length)
-    ) {
-      this.error = uploadsDisabledMessage();
-      this.callbacks.changed();
-      return;
-    }
     const input = prepareDraftSubmission(context, this, this.place, startup, background);
     if (!input) {
       return;

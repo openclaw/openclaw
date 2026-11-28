@@ -1,0 +1,9 @@
+# Bounded writing-profile design draft: deterministic selector/privacy tables,
+# authenticated preference CAS and future-schema export, actual SQLite/worker
+# transactions, settings conflict/reconnect recovery, and delayed Send admission
+# through the main, New Session, and side-rail composer owners.
+# These are distinct authority and persistence boundaries; the existing Send
+# regression is moved, not duplicated. Real worker/native/AT proof stays pending
+# wherever execution could not be qualified, as recorded in the PR evidence.
+# Exact net test growth (1,627) minus the standard 400-line allowance.
+1227

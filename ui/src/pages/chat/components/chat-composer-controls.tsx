@@ -268,9 +268,11 @@ export function ComposerDictationSendAction(props: {
     if (dictation.finalizing) {
       return;
     }
-    await dictation.finishActive();
-    // Keep the initiating input action when asynchronous dictation finishes.
-    send(event);
+    const canSend = dictation.capturePublicationGuard();
+    if ((await dictation.finishActive()) && canSend()) {
+      // Keep the initiating input action only after an accepted dictation publication.
+      send(event);
+    }
   };
   return (
     <Show when={props.readDictation().active}>

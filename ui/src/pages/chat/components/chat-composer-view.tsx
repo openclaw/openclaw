@@ -75,6 +75,9 @@ const GoalComposerMode = lazy(() => import("./chat-composer-goal-mode-view.tsx")
 const ChatActivityPills = lazy(() => import("./chat-activity-pills.tsx"), {
   export: "ChatActivityPills",
 });
+const WritingProfileControls = lazy(() => import("./composer-writing-profile-controls.tsx"), {
+  export: "ComposerWritingProfileControls",
+});
 
 export function renderChatComposerView(
   context: () => ChatComposerViewContext,
@@ -657,6 +660,16 @@ export function renderChatComposerView(
                   }}
                 </Show>
                 <ComposerDictationStatus readDictation={() => context().dictation} />
+                <Show
+                  when={
+                    (context().dictation?.writingProfiles?.catalog.profiles.length ?? 0) > 0 ||
+                    context().dictation?.writingProfiles?.original != null
+                  }
+                >
+                  <ChatLazyBoundary>
+                    <WritingProfileControls readDictation={() => context().dictation} />
+                  </ChatLazyBoundary>
+                </Show>
                 <div class="agent-chat__composer-actions">
                   <ChatPrimaryActions {...context().runControlsProps} />
                 </div>

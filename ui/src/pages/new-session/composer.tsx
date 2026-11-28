@@ -36,13 +36,9 @@ import { connectedElementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import { createChatAttachmentInputHandle } from "../chat/components/chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "../chat/components/chat-attachment-inputs.tsx";
-import {
-  createChatAttachmentDropHandlers,
-  handleChatAttachmentPaste,
-} from "../chat/components/chat-attachments.ts";
+import { handleChatAttachmentPaste } from "../chat/components/chat-attachments.ts";
 import { AttachmentPreview, AttachmentReadStatus } from "../chat/components/chat-attachments.tsx";
 import {
   adjustTextareaHeight,
@@ -64,6 +60,7 @@ import {
   prepareComposerWidthEdge,
 } from "../chat/components/chat-composer-width-ref.tsx";
 import { ChatLazyBoundary } from "../chat/components/chat-lazy-boundary.tsx";
+import { createNewSessionAttachmentControls } from "./composer-attachments.ts";
 import { NewSessionPlusMenu, StartControl } from "./composer-capability-controls.tsx";
 import type { NewSessionComposerOptions } from "./composer-options.ts";
 import { createComposerPlaceholder } from "./composer-placeholder.ts";
@@ -87,8 +84,7 @@ function submitNewSession(
 
 /** Draft message box styled as the chat composer shell so both pickers match. */
 function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessionComposerTextarea) {
-  const { attachmentDraft, context } = options;
-  const readSignal = attachmentDraft.reads.readSignal;
+  const context = options.context;
   const gateway = context?.gateway;
   const commandClient = options.nativeTerminal ? null : (gateway?.snapshot.client ?? null);
   const mentionDirectory = resolveNewSessionMentionDirectory(options);
@@ -212,34 +208,10 @@ function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessio
       }
     }
   };
-  const attachmentProps = {
-    attachmentReads: attachmentDraft.reads,
-    attachmentLimits: resolveChatAttachmentLimits(gateway?.snapshot.hello?.policy),
-    uploadConfig: context?.config,
-    attachments: attachmentDraft.attachments,
-    get disabled() {
-      return (
-        options.submitting || options.messageLocked === true || options.dictationActive === true
-      );
-    },
-    getAttachments: () => attachmentDraft.attachments,
-    draft: options.message,
-    getDraft: () => options.message,
-    onAttachmentsChange: (attachments: typeof attachmentDraft.attachments) => {
-      if (!options.submitting && !options.messageLocked) {
-        attachmentDraft.replace(attachments);
-      }
-    },
-    onDraftChange: options.onInput,
-    onPendingReadsChange: (delta: 1 | -1) => attachmentDraft.reads.updatePending(readSignal, delta),
-    onOpenImage: options.onOpenImage,
-    onOpenSidebar: options.onOpenSidebar,
-    readSignal,
-  };
-  const attachmentDropHandlers = createChatAttachmentDropHandlers({
-    ...attachmentProps,
-    canCompose: !composerLocked && !options.nativeTerminal,
-  });
+  const { attachmentProps, attachmentDropHandlers } = createNewSessionAttachmentControls(
+    options,
+    composerLocked,
+  );
   const visibleMessage = options.dictationPreview ?? options.message;
   textarea.syncDraft(visibleMessage);
   const messagePlaceholder = t(
@@ -381,6 +353,7 @@ function NewSessionComposerInput(props: {
       }}
       onBeforeInput={(event) => {
         handleTextareaOverflowInteraction(event);
+        props.options.onInputIntent?.();
         const target = event.currentTarget;
         textarea.mentionInput = {
           value: target.value,
@@ -423,6 +396,7 @@ function NewSessionComposerInput(props: {
       }}
       onCompositionStart={(event) => {
         handleTextareaOverflowInteraction(event);
+        props.options.onInputIntent?.();
         textarea.composing = true;
         textarea.emojiMenu.close();
         textarea.mentionMenu.close();

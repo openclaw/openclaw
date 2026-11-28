@@ -44,6 +44,7 @@ export type NewSessionComposerOptions = {
   capabilityMenu?: ChatComposerCapabilityMenuSource;
   toolOverrides?: SessionToolOverrides | null;
   onInput: (message: string, mentions?: readonly HumanMention[]) => void;
+  onInputIntent?: () => void;
   onOpenImage?: (item: ImageLightboxItem) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
   onSubmit: () => void;

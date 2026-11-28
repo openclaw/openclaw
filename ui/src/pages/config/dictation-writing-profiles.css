@@ -1,0 +1,42 @@
+.writing-profiles__body {
+  padding: var(--space-4);
+  min-height: 18rem;
+  overflow-wrap: anywhere;
+}
+
+.writing-profiles p {
+  margin: 0;
+}
+
+.writing-profiles .field {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.writing-profiles__controls {
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  border: 0;
+}
+
+.writing-profiles__grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+}
+
+.writing-profiles__picker {
+  flex: 1 1 15rem;
+}
+
+.writing-profiles__save {
+  justify-content: end;
+}
+
+.writing-profiles__disclosure > * + * {
+  margin-top: var(--space-3);
+}
+
+.writing-profiles__selector {
+  min-width: 0;
+  padding: var(--space-3);
+}

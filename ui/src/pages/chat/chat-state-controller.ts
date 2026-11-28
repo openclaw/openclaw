@@ -61,6 +61,7 @@ export function createChatState<TState extends ChatPageHost>(
   },
   onStateChange?: () => void,
   onQueuedMessageDiscarded?: (item: ChatQueueItem) => void,
+  onAttachmentInputIntent?: (state: TState) => void,
 ) {
   let stateValue: TState | undefined;
   const emptyMentions: readonly HumanMention[] = [];
@@ -357,11 +358,13 @@ export function createChatState<TState extends ChatPageHost>(
         getPendingAttachmentReads: () => reads.pendingReads,
         onPendingReadsChange: (delta: 1 | -1) => {
           if (delta === 1 && readSignal === reads.readSignal) {
+            onAttachmentInputIntent?.(state);
             markChatComposerEdit(state);
           }
           reads.updatePending(readSignal, delta);
         },
         onAttachmentsChange: (next: ChatPageHost["chatAttachments"]) => {
+          onAttachmentInputIntent?.(state);
           state.chatAttachments = next;
           attachmentChanged();
         },

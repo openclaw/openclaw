@@ -1,8 +1,13 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationGateway } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
+import type {
+  ComposerDictationProfiles,
+  DictationProfileCapture,
+} from "./composer-dictation-profiles.ts";
 import type {
   ComposerDictationCommits,
   ComposerDictationSession,
@@ -22,6 +27,10 @@ type ComposerDictationFailure = {
 
 type ComposerDictationOwnerOptions = {
   client: GatewayBrowserClient | null;
+  gateway?: ApplicationGateway;
+  readDraft?: () => string;
+  readDraftKey?: () => string;
+  readSendRevision?: () => number;
   sessionKey?: string;
   prepareSession?: () => Promise<string | undefined>;
   draftKey?: string;
@@ -29,7 +38,7 @@ type ComposerDictationOwnerOptions = {
   enabled: boolean;
   dictationAvailable?: boolean;
   realtimeTalkActive: boolean;
-  onCommit: (text: string, late?: true, preservePreview?: true) => void;
+  onCommit: (text: string, late?: true, preservePreview?: true) => boolean;
   onError: (message: string, failure: ComposerDictationFailure) => void;
   onTap?: () => void;
   onDictationUnavailable?: () => void;
@@ -37,6 +46,12 @@ type ComposerDictationOwnerOptions = {
 
 // Gesture and session admission must remain synchronous across pointer and media callbacks.
 export class ComposerDictationOwner extends EventTarget {
+  private profileState: ComposerDictationProfiles | undefined;
+  private sendScope: object = {};
+  private readonly profileCaptures = new WeakMap<
+    ComposerDictationSession,
+    DictationProfileCapture
+  >();
   private readonly playback = new GatewaySpeechPlayback();
   private phase: DictationPhase = "idle";
   private pointerId: number | null = null;
@@ -46,7 +61,7 @@ export class ComposerDictationOwner extends EventTarget {
   private suppressionListeners: AbortController | null = null;
   private cancellationListeners: AbortController | null = null;
   private holdTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  private captureStart: object | undefined;
+  private captureStart: { profile?: DictationProfileCapture } | undefined;
   private session: ComposerDictationSession | null = null;
   private suppressedPointerId: number | null = null;
   private suppressClickTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -56,6 +71,25 @@ export class ComposerDictationOwner extends EventTarget {
 
   constructor(private options: ComposerDictationOwnerOptions) {
     super();
+  }
+
+  get writingProfiles(): ComposerDictationProfiles | undefined {
+    return this.profileState;
+  }
+
+  async prepareWritingProfiles(): Promise<ComposerDictationProfiles | undefined> {
+    const { ComposerDictationProfiles } = await import("./composer-dictation-profiles.ts");
+    if (this.disposed) {
+      return undefined;
+    }
+    const profiles = (this.profileState ??= new ComposerDictationProfiles(
+      () => this.dispatchEvent(new Event("change")),
+      () => this.cancel(),
+      () => this.locksComposer || this.transcribing,
+    ));
+    profiles.sync(this.options);
+    await profiles.ready();
+    return profiles;
   }
 
   subscribe(listener: () => void) {
@@ -108,6 +142,24 @@ export class ComposerDictationOwner extends EventTarget {
     return this.stop({ commit: true });
   }
 
+  /** Sending is a separate effect; a committed insertion cannot authorize a later target. */
+  capturePublicationGuard(): () => boolean {
+    const scope = this.profileState?.publicationScope;
+    const sendScope = this.sendScope;
+    const draftKey = this.options.readDraftKey?.();
+    const sendRevision = this.options.readSendRevision?.();
+    return () =>
+      !this.disposed &&
+      scope === this.profileState?.publicationScope &&
+      sendScope === this.sendScope &&
+      draftKey === this.options.readDraftKey?.() &&
+      sendRevision === this.options.readSendRevision?.();
+  }
+
+  invalidatePendingSend(): void {
+    this.sendScope = {};
+  }
+
   startDirect(): boolean {
     if (this.phase !== "idle" || !this.canHold()) {
       return false;
@@ -126,8 +178,10 @@ export class ComposerDictationOwner extends EventTarget {
       this.options.draftKey !== options.draftKey
     ) {
       this.cancel();
+      this.profileState?.resetSession();
     }
     this.options = options;
+    this.profileState?.sync(options);
     if (!options.connected) {
       this.commits?.markGatewayDisconnected();
     }
@@ -222,9 +276,12 @@ export class ComposerDictationOwner extends EventTarget {
   dispose(): void {
     this.disposed = true;
     this.cancel();
+    this.profileState?.dispose();
   }
 
   cancel(): void {
+    this.invalidatePendingSend();
+    this.profileState?.retire();
     this.clearClickSuppression();
     this.playback.stop();
     if (this.commits?.size) {
@@ -323,7 +380,8 @@ export class ComposerDictationOwner extends EventTarget {
     // Crossing the threshold latches dictation. Recording no longer depends on
     // the pointer, window focus, or page visibility; explicit controls still stop it.
     this.clearPointerGesture();
-    const captureStart = {};
+    this.invalidatePendingSend();
+    const captureStart: { profile?: DictationProfileCapture } = {};
     this.captureStart = captureStart;
     this.setPhase("connecting");
     if (this.captureStart !== captureStart) {
@@ -339,8 +397,13 @@ export class ComposerDictationOwner extends EventTarget {
       const sessionKey = this.options.prepareSession
         ? await this.options.prepareSession()
         : this.options.sessionKey;
-      const { ComposerDictationSession, ComposerDictationCommits, describeDictationStartError } =
-        await import("./composer-dictation-session.ts");
+      const [
+        { ComposerDictationSession, ComposerDictationCommits, describeDictationStartError },
+        profiles,
+      ] = await Promise.all([
+        import("./composer-dictation-session.ts"),
+        this.prepareWritingProfiles(),
+      ]);
       if (
         this.captureStart !== captureStart ||
         this.disposed ||
@@ -349,6 +412,12 @@ export class ComposerDictationOwner extends EventTarget {
       ) {
         return;
       }
+      const profileCapture = profiles?.begin();
+      if (!profileCapture) {
+        await this.stop({ commit: false });
+        return;
+      }
+      captureStart.profile = profileCapture;
       describeStartError = describeDictationStartError;
       const commits = (this.commits ??= new ComposerDictationCommits());
       const session = new ComposerDictationSession(
@@ -378,6 +447,7 @@ export class ComposerDictationOwner extends EventTarget {
         { sessionKey },
       );
       this.session = session;
+      this.profileCaptures.set(session, profileCapture);
       await session.start();
     } catch (error) {
       if (this.captureStart !== captureStart || this.disposed || this.finalizing) {
@@ -390,6 +460,7 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   private stop(options: { commit: boolean }): Promise<boolean> {
+    const profileCapture = this.captureStart?.profile;
     this.captureStart = undefined;
     if (this.phase === "idle" || this.phase === "stopping") {
       return Promise.resolve(false);
@@ -398,6 +469,7 @@ export class ComposerDictationOwner extends EventTarget {
     this.clearPointerGesture();
     const session = this.session;
     if (!session) {
+      this.profileState?.abandon(profileCapture);
       this.setPhase("idle");
       this.releasePlayback();
       return Promise.resolve(false);
@@ -406,6 +478,7 @@ export class ComposerDictationOwner extends EventTarget {
     this.session = null;
     this.setPhase("idle");
     if (!options.commit) {
+      this.profileState?.abandon(profileCapture);
       this.releasePlayback();
       void session.cancel().catch(() => undefined);
       return Promise.resolve(false);
@@ -422,15 +495,14 @@ export class ComposerDictationOwner extends EventTarget {
         !this.options.enabled ||
         this.options.realtimeTalkActive
       ) {
+        this.profileState?.abandon(this.profileCaptures.get(session));
         return false;
       }
-      if (this.active) {
-        this.options.onCommit(lateTranscript, true, true);
-      } else {
-        this.options.onCommit(lateTranscript, true);
-      }
-      this.dispatchEvent(new Event("change"));
-      return true;
+      return this.profileState!.deliver(this.profileCaptures.get(session)!, lateTranscript, () =>
+        this.active
+          ? this.options.onCommit(lateTranscript, true, true)
+          : this.options.onCommit(lateTranscript, true),
+      );
     });
     this.pendingCommitsChanged();
     return committed;

@@ -83,6 +83,7 @@ type DirectDictationOptions = {
   getClient: () => GatewayBrowserClient | null;
   prepareSession?: () => Promise<string | undefined>;
   getSessionKey?: () => string | undefined;
+  readSendRevision?: () => number;
   isConnected: () => boolean;
   canCommit: () => boolean;
   onMessage: (message: string) => void;
@@ -149,6 +150,7 @@ export class DirectDictationControl extends EventTarget {
       client,
       connected,
       enabled,
+      readSendRevision: this.options.readSendRevision,
       prepareSession:
         client?.auth &&
         !roleScopesAllow({
@@ -164,7 +166,7 @@ export class DirectDictationControl extends EventTarget {
         // Owner changes replace draft ownership. Object identity keeps even an
         // A -> B -> A transition from accepting the prior owner's snapshot.
         if (!ownsDraft() || !this.options.canCommit()) {
-          return;
+          return false;
         }
         const next = this.options.textarea.insertTranscript(
           this.place,
@@ -174,7 +176,9 @@ export class DirectDictationControl extends EventTarget {
         );
         if (next !== null) {
           this.options.onMessage(next);
+          return true;
         }
+        return false;
       },
       onError: (message: string) => {
         if (ownsDraft()) {

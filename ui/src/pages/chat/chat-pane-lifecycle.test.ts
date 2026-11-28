@@ -1,7 +1,7 @@
 // The non-isolated runner resets modules between files but preserves customElements.
 // A dedicated jsdom context keeps the registered pane class on this file's module graph.
 import { createComponent, createEffect, createSignal, createRoot, flush } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-lifecycle.test/"} */
 import type {
@@ -47,6 +47,7 @@ import {
 } from "./components/chat-message-confirmation-view.tsx";
 import { ChatSessionSuggestions } from "./components/chat-session-suggestions.solid.tsx";
 import * as chatThread from "./components/chat-thread-interactions.ts";
+import { ComposerDictationOwner } from "./composer-dictation.ts";
 import { handleChatDraftChange } from "./input-history.ts";
 import { beginQueuedMessageEdit, cancelQueuedMessageEdit } from "./queued-message-edit.ts";
 import { cacheChatSessionSnapshot } from "./session-message-cache.ts";
@@ -76,6 +77,39 @@ function barePane(request?: ReturnType<typeof vi.fn>) {
     sessions: {} as SessionCapability,
   });
 }
+
+it("retires dictation Send at pane attachment admission, replacement, and removal", () => {
+  createRoot((dispose) => {
+    onTestFinished(dispose);
+    const { pane, state } = createTestChatPane();
+    const runtime = getPaneTestRuntime(pane);
+    const capture = new ComposerDictationOwner({
+      client: null,
+      connected: false,
+      enabled: false,
+      realtimeTalkActive: false,
+      onCommit: () => false,
+      onError: () => {},
+    });
+    getChatComposerState(pane.presentationId).dictation = capture;
+    const controls = runtime.chatState.attachmentInputProps(state);
+    const attachment = { id: "attachment", mimeType: "image/png" };
+    const admittedSend = capture.capturePublicationGuard();
+    controls.onPendingReadsChange(1);
+    expect(admittedSend()).toBe(false);
+    controls.onAttachmentsChange([attachment]);
+    controls.onPendingReadsChange(-1);
+    expect(admittedSend()).toBe(false);
+    expect(state.chatAttachments).toEqual([attachment]);
+
+    const replacedSend = capture.capturePublicationGuard();
+    controls.onAttachmentsChange([{ ...attachment, id: "replacement" }]);
+    expect(replacedSend()).toBe(false);
+    const removedSend = capture.capturePublicationGuard();
+    controls.onAttachmentsChange([]);
+    expect(removedSend()).toBe(false);
+  });
+});
 
 function runtimePane(sessionKey: string, context = createInitializationContext()) {
   // The shared host forwards the controller surface declared by TestChatPane.

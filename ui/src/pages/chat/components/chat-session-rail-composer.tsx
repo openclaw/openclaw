@@ -76,6 +76,7 @@ export function SessionRailComposer(props: {
   submit: () => void;
   onDraftChange?: (draft: string) => void;
   textareaRef: (element: HTMLTextAreaElement) => void;
+  registerInputIntent?: (listener: () => void) => () => void;
 }) {
   let textarea: HTMLTextAreaElement | undefined;
   let composing = false;
@@ -87,6 +88,7 @@ export function SessionRailComposer(props: {
   const dictationControl = new DirectDictationControl({
     textarea: createDirectDictationTextarea(() => textarea ?? null),
     getClient: () => props.client,
+    readSendRevision: () => props.companion.attachmentReads?.revision ?? 0,
     isConnected: () => props.connected,
     // Follow-ups stay editable while an answer is pending; submit owns that gate.
     canCommit: () => props.connected,
@@ -96,12 +98,16 @@ export function SessionRailComposer(props: {
   });
   const dictation = projectOwner(dictationControl, (owner) => owner);
   onSettled(() => {
+    const releaseInputIntent = props.registerInputIntent?.(() =>
+      dictationControl.dictation?.invalidatePendingSend(),
+    );
     if (textarea) {
       observeTextareaOverflow(textarea);
       scheduleTextareaHeightAdjustment(textarea);
     }
     setSettled(true);
     return () => {
+      releaseInputIntent?.();
       emojiMenu.dispose();
       dictationControl.dispose();
       if (textarea) {
@@ -142,6 +148,7 @@ export function SessionRailComposer(props: {
   // The dictated preview reaches the draft only on commit, so submission finishes it first.
   const submit = () => {
     const active = dictationControl.dictation;
+    active?.invalidatePendingSend();
     if (!active?.active) {
       props.submit();
       return;
@@ -150,8 +157,9 @@ export function SessionRailComposer(props: {
       return;
     }
     const sessionKey = props.sessionKey;
-    void active.finishActive().then(() => {
-      if (props.sessionKey === sessionKey) {
+    const canSend = active.capturePublicationGuard();
+    void active.finishActive().then((accepted) => {
+      if (accepted && canSend() && props.sessionKey === sessionKey) {
         props.submit();
       }
     });
@@ -236,10 +244,12 @@ export function SessionRailComposer(props: {
             }}
             onBeforeInput={(event) => {
               handleTextareaOverflowInteraction(event);
+              dictationControl.dictation?.invalidatePendingSend();
               emojiMenu.complete(event, props.connected && !composing);
             }}
             onCompositionStart={(event) => {
               handleTextareaOverflowInteraction(event);
+              dictationControl.dictation?.invalidatePendingSend();
               composing = true;
               emojiMenu.close();
             }}
@@ -266,6 +276,7 @@ export function SessionRailComposer(props: {
               if (dictationActive()) {
                 return;
               }
+              dictationControl.dictation?.invalidatePendingSend();
               adjustTextareaHeight(event.currentTarget);
               props.onDraftChange?.(event.currentTarget.value);
               emojiMenu.update(event.currentTarget, !composing);

@@ -192,6 +192,7 @@ export function createChatComposerContext(
     );
   };
   const commitMenuDraft = (next: string, mentions?: readonly HumanMention[]) => {
+    state.dictation?.invalidatePendingSend();
     commitComposerDraft(props, next, mentions);
     props.onTypingChange?.(Boolean(next.trim()), next);
   };
@@ -310,6 +311,7 @@ export function createChatComposerContext(
     if (state.composerDraftScope !== draftScope || !canSubmitDraft(draft)) {
       return false;
     }
+    state.dictation?.invalidatePendingSend();
     state.composerComposing = false;
     state.tasks()?.clearAccepted();
     interaction.setComposition(null);
@@ -338,12 +340,14 @@ export function createChatComposerContext(
     if (state.composerComposing || !canCompose) {
       return;
     }
+    state.dictation?.invalidatePendingSend();
     prediction?.acceptInto(state.composerTextarea);
   };
   const acceptProposal = () => {
     if (state.composerComposing || !canCompose) {
       return false;
     }
+    state.dictation?.invalidatePendingSend();
     return state.tasks()?.accept(state.composerTextarea) ?? false;
   };
   const handleKeyDown = createComposerKeyDownHandler({
@@ -373,6 +377,7 @@ export function createChatComposerContext(
       !state.composerComposing && !commandsOpen && !state.mentionMenu.open,
     );
   const syncComposerValue = (target: HTMLTextAreaElement, typedAtSign = false) => {
+    state.dictation?.invalidatePendingSend();
     prediction?.dismiss();
     state.tasks()?.clearAccepted();
     adjustTextareaHeight(target, { nativeInput: true });

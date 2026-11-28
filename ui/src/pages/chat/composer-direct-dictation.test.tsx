@@ -13,6 +13,7 @@ import type * as ComposerDictationModule from "./composer-dictation.ts";
 
 const dictationHarness = vi.hoisted(() => {
   class Controller extends EventTarget {
+    private disposed = false;
     active = false;
     connecting = false;
     finalizing = false;
@@ -62,7 +63,11 @@ const dictationHarness = vi.hoisted(() => {
       harness.options = options;
     }
     dispose() {
+      this.disposed = true;
       this.active = false;
+    }
+    capturePublicationGuard() {
+      return () => !this.disposed;
     }
     handlePointerDown() {
       this.active = true;
