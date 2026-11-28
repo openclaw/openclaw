@@ -1,4 +1,4 @@
-import { createMemo, Errored, For, latest, Loading, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, Errored, For, latest, Loading, onSettled, Show } from "solid-js";
 import type { ProjectRecord } from "../../../../packages/gateway-protocol/src/index.js";
 import { foldSearchCase } from "../../../../src/shared/search-case.js";
 import "../../components/modal-dialog.tsx";
@@ -112,8 +112,9 @@ export function renderProjectsView(model: ProjectsModel, view: () => ProjectsMod
     const snapshot = runtimeConfig.read().state.configSnapshot;
     return snapshot ? readConfiguredRoles(resolveEditableSnapshotConfig(snapshot)) : undefined;
   });
+  const [search, setSearch] = createSignal("");
   const filtered = createMemo(() => {
-    const query = foldSearchCase(view().query.trim().normalize("NFC"));
+    const query = foldSearchCase(search().trim().normalize("NFC"));
     const records = view().displayedRecords;
     return query
       ? records.filter((project) =>
@@ -220,8 +221,8 @@ export function renderProjectsView(model: ProjectsModel, view: () => ProjectsMod
                   type="search"
                   aria-label={t("projectsPage.search")}
                   placeholder={t("projectsPage.search")}
-                  value={view().query}
-                  onInput={(event) => model.update({ query: event.currentTarget.value })}
+                  value={search()}
+                  onInput={(event) => setSearch(event.currentTarget.value)}
                 />
               </div>
             }

@@ -40,7 +40,6 @@ export class ProjectsModel {
   listRead: { result: Promise<void> } = { result: Promise.resolve() };
   error: string | null = null;
   operation: ProjectsOperation | null = null;
-  query = "";
   selectedId: string | null = null;
   browserOpen = false;
   /** The switch a role-access write is saving, shown until the write settles. */
@@ -90,7 +89,6 @@ export class ProjectsModel {
         | "listLoaded"
         | "error"
         | "operation"
-        | "query"
         | "selectedId"
         | "browserOpen"
         | "pendingAccess"
