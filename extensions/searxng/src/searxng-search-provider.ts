@@ -1,5 +1,6 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
+import { buildUnsupportedSearchFilterResponse } from "openclaw/plugin-sdk/provider-web-search";
 import {
   createWebSearchProviderContractFields,
   WEB_SEARCH_QUERY_COUNT_PROPERTIES,
@@ -54,6 +55,18 @@ export function createSearxngWebSearchProvider(): WebSearchProviderPlugin {
         "Search the web using a self-hosted SearXNG instance. Returns titles, URLs, and snippets.",
       parameters: SearxngSearchSchema,
       execute: async (args, context) => {
+        const unsupportedResponse = buildUnsupportedSearchFilterResponse(
+          {
+            country: args.country,
+            freshness: args.freshness,
+            date_after: args.date_after,
+            date_before: args.date_before,
+          },
+          "searxng",
+        );
+        if (unsupportedResponse) {
+          return unsupportedResponse;
+        }
         const { runSearxngSearch } = await loadSearxngClientModule();
         return await runSearxngSearch({
           config: ctx.config,

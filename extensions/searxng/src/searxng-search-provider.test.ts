@@ -51,6 +51,17 @@ describe("searxng web search provider", () => {
     expect(runSearxngSearch).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [{ country: "DE" }, "unsupported_country"],
+    [{ freshness: "week" }, "unsupported_freshness"],
+    [{ date_after: "2026-01-01" }, "unsupported_date_filter"],
+  ])("reports unsupported filter %o instead of searching unfiltered", async (filter, error) => {
+    await expect(
+      createTool().execute({ query: "openclaw docs", ...filter }),
+    ).resolves.toMatchObject({ error });
+    expect(runSearxngSearch).not.toHaveBeenCalled();
+  });
+
   it("persists base URL to plugin config via setConfiguredCredentialValue", () => {
     const provider = createSearxngWebSearchProvider();
     const config: OpenClawConfig = {};
