@@ -20,7 +20,6 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
-  SettingsEmpty,
   SettingsSection,
   SettingsStatus,
   SettingsToggleRow,
@@ -43,6 +42,7 @@ import {
   type ModelProviderRowMessage,
 } from "./config-mutation.ts";
 import type { ModelProviderCard } from "./data.ts";
+import { InstalledAgentsEmpty } from "./installed-agents-empty.tsx";
 
 const INSTALLED_AGENTS_METHOD = "acpx.agents.list";
 
@@ -634,10 +634,6 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
         const detected = createMemo(() =>
           (displayedInventory().agents ?? []).filter((agent) => agent.installation !== "missing"),
         );
-        const missingNames = () =>
-          (displayedInventory().agents ?? [])
-            .flatMap((agent) => (agent.installation === "missing" ? [agent.name] : []))
-            .join(", ");
         const outcome = createMemo(() => {
           const failure = displayedInventory().failure;
           if (failure) {
@@ -672,15 +668,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
               <For
                 each={detected()}
                 keyed={(agent) => agent.id}
-                fallback={
-                  <SettingsEmpty
-                    message={
-                      missingNames()
-                        ? t("modelProviders.installedAgents.notDetected", { names: missingNames() })
-                        : t("modelProviders.installedAgents.empty")
-                    }
-                  />
-                }
+                fallback={<InstalledAgentsEmpty apps={displayedInventory().agents ?? []} />}
               >
                 {(agent) => <AgentRow agent={agent()} />}
               </For>

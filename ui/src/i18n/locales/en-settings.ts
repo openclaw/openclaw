@@ -1405,8 +1405,8 @@ const enSettings = {
       },
       unverifiedHint:
         "Check this app’s custom launch command on the computer running OpenClaw, then check again.",
-      notDetected:
-        "None found on the computer running OpenClaw. Supported apps: {names}. Install one, then check again.",
+      notDetected: "None found on the computer running OpenClaw. Supported apps: {names}.",
+      setupInstructions: "View setup instructions",
       disabledHint: "Enable this app to include its models in the picker.",
       signInHint:
         "Open {name} on the computer running OpenClaw and check its sign-in, then check again.",

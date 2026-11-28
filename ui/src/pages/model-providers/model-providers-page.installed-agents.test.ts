@@ -262,6 +262,27 @@ it.each(["agent", "selection revision", "connection"] as const)(
   },
 );
 
+it("offers setup instructions until a supported coding app is detected", async () => {
+  let installation = "missing";
+  const { context } = createAgentsHarness(async () => ({
+    agents: [agent("opencode", "OpenCode", { installation })],
+  }));
+  const page = appendPage(context);
+  await waitForProviders(page);
+  const section = ".model-providers__installed-agents";
+  const guide = () => page.querySelector<HTMLAnchorElement>(`${section} a`);
+  await waitForSolid(() =>
+    expect(guide()?.href).toBe(
+      "https://docs.openclaw.ai/tools/acp-agents-setup#set-up-a-coding-app",
+    ),
+  );
+
+  installation = "installed";
+  refreshButton(page, section).click();
+  await waitForSolid(() => expect(agentRow(page, "opencode")).not.toBeNull());
+  expect(guide()).toBeNull();
+});
+
 it("lists every reported agent with its installation status only when advertised", async () => {
   const hidden = createHarness("main");
   const hiddenPage = appendPage(hidden.context);
