@@ -298,6 +298,7 @@ async function updateLoadedJob(params: {
       toolsAllowProvenance: opts?.toolsAllowProvenance,
       toolsAllowExecTarget: opts?.toolsAllowExecTarget,
       bindSourceConversation: opts?.bindSourceConversation,
+      watchedCommandExited: opts?.watchedCommandExited,
       captured: false,
     },
   };

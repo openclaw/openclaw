@@ -1083,7 +1083,12 @@ describe("buildGatewayCronService", () => {
       expect(suspensionAdmission?.drain()).toBe(true);
       commandExit.resolve(runExit({ reason: "exit", exitCode: 0 }));
 
-      await vi.waitFor(() => expect(state.cron.getJob(job.id)?.enabled).toBe(false));
+      await vi.waitFor(() =>
+        expect(state.cron.getJob(job.id)).toMatchObject({
+          enabled: false,
+          state: { oneShotEnded: true },
+        }),
+      );
       expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
       expect(mocks.runSession).not.toHaveBeenCalled();
 

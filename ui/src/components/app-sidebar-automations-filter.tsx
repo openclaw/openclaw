@@ -1,6 +1,7 @@
 import type { ApplicationContext } from "../app/context.ts";
 import { registerCronEnglish } from "../i18n/locales/en-cron.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../lib/agents/display.ts";
+import { automationGroups } from "../lib/cron/automation-groups.ts";
 import {
   automationsFilter,
   automationsFiltered,
@@ -94,8 +95,7 @@ function automationFilterOptions(context: ApplicationContext | undefined) {
         : []),
       choice("status", t("cron.runs.status"), [
         { value: "all", label: t("cron.tabs.all") },
-        { value: "active", label: t("cron.tabs.active") },
-        { value: "paused", label: t("cron.tabs.paused") },
+        ...automationGroups.map((value) => ({ value, label: t(`cron.tabs.${value}`) })),
       ]),
       choice("scheduleKind", t("cron.jobs.schedule"), [
         { value: "all", label: t("cron.jobs.all") },

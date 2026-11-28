@@ -3,7 +3,8 @@ import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-con
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import type { CronJobPolicyContext } from "../service/state.js";
-import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
+import { restoreLegacyTimedEnds } from "./legacy-one-shot-receipts.js";
+import { loadedCronStoreFromRows, loadCronRows, updateCronRuntimeRow } from "./row-codec.js";
 import { receiptFromRow, type CronRunReceiptDatabase } from "./run-receipt-read.js";
 import { ensureCronRunReceiptSchema } from "./run-receipt-store.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
@@ -23,6 +24,10 @@ export function recoverCronRunsInWorker(
       ensureCronRunReceiptSchema(db);
       const receiptSchema = prepareCronRunReceiptWriteSchema(db);
       const jobs = loadedCronStoreFromRows(loadCronRows(db, input.storeKey)).store.jobs;
+      // Persist confirmed ends through the runtime codec before the original history expires.
+      for (const job of restoreLegacyTimedEnds(db, input.storeKey, jobs)) {
+        updateCronRuntimeRow(db, input.storeKey, job);
+      }
       // Recovery publishes whole jobs back to the Gateway, including their private authority.
       loadCronRuntimeAuthorities({ db, storeKey: input.storeKey, jobs });
       const liveReceiptIds = new Set(input.liveReceiptIds);

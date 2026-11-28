@@ -263,6 +263,13 @@ it.for([
           expect([jobs[0]?.enabled, jobs[0]?.state.nextRunAtMs]).toEqual([false, undefined]);
         }
       }
+      if (!deleteAfterRun) {
+        const end = cron.getJob(job.id)?.state.oneShotEnded;
+        expect(end).toBe(true);
+        await cron.update(job.id, { enabled: true });
+        await cron.update(job.id, { enabled: false });
+        expect(cron.getJob(job.id)?.state.oneShotEnded).toBe(end);
+      }
     } finally {
       payload.release.resolve();
       cron.stop();

@@ -21,6 +21,8 @@ registerEnglishCatalog(registerCronEnglish);
 const DetailView = lazy(() => import("./view-detail.tsx"), { export: "DetailView" });
 export function CronView(props: CronProps) {
   const mode = () => (props.editingJob ? "job" : props.createOpen ? "create" : "overview");
+  const canCreate = () => props.canCreate ?? props.canManage;
+  const sidebarListsJobs = () => sectionListsItems("automations");
   return (
     <>
       {mode() === "overview" && props.activityOpen ? (
@@ -31,15 +33,14 @@ export function CronView(props: CronProps) {
           <PageAutomations />
         </>
       ) : mode() === "overview" ? (
-        // The sidebar lists every automation; the page waits for one to open, or says why the
-        // list could not be read.
+        // Run history outlives the definitions listed in the sidebar.
         <>
           <OverviewNotices {...props} />
           <div class="cron-overview-empty">
             <PanelEmptyState
               icon={<Icon name="automations" />}
               heading={
-                props.listError || (props.jobs.length > 0 && sectionListsItems("automations"))
+                props.listError || (props.jobs.length > 0 && sidebarListsJobs())
                   ? t("tabs.cron")
                   : t("cron.list.emptyTitle")
               }
@@ -49,15 +50,24 @@ export function CronView(props: CronProps) {
                   <button type="button" class="btn btn--sm" onClick={() => void props.onRefresh()}>
                     {t("common.retry")}
                   </button>
-                ) : (props.canCreate ?? props.canManage) ? (
-                  <button
-                    type="button"
-                    class="btn primary btn--sm"
-                    data-test-id="cron-new-task"
-                    onClick={() => props.onOpenCreate()}
-                  >
-                    <Icon name="plus" /> {t("cron.list.newTask")}
-                  </button>
+                ) : canCreate() || !sidebarListsJobs() ? (
+                  <span class="row">
+                    <Show when={canCreate()}>
+                      <button
+                        type="button"
+                        class="btn primary btn--sm"
+                        data-test-id="cron-new-task"
+                        onClick={() => props.onOpenCreate()}
+                      >
+                        <Icon name="plus" /> {t("cron.list.newTask")}
+                      </button>
+                    </Show>
+                    <Show when={!sidebarListsJobs()}>
+                      <a class="btn btn--sm" href="?activity" data-app-route="">
+                        {t("cron.list.runHistory")}
+                      </a>
+                    </Show>
+                  </span>
                 ) : undefined
               }
             />
@@ -120,7 +130,7 @@ function PageAutomations() {
   );
 }
 
-/** Every automation's runs, opened from the sidebar's Run history. */
+/** Every automation's runs, including retired automations. */
 function ActivityView(props: CronProps) {
   return (
     <section class="cron-page" data-panel-mode="activity">

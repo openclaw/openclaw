@@ -70,6 +70,7 @@ const enCron = {
     },
     tabs: {
       filterLabel: "Automation status",
+      history: "History",
       all: "All",
       active: "Active",
       paused: "Paused",
@@ -390,6 +391,7 @@ const enCron = {
     },
     jobState: {
       nextRelative: "Next {at}",
+      lastRunAt: "Last run {at}",
       waiting: "Waiting: {reason} since {since}",
     },
     runEntry: {
@@ -484,7 +486,7 @@ const enCron = {
       refreshing: "Refreshing...",
       paused: "Paused",
       tasksTab: "Automations",
-      runHistory: "Run history",
+      runHistory: "All runs",
     },
   },
 } satisfies TranslationMap;

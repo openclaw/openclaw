@@ -40,6 +40,7 @@ export type CronCompactJob = Pick<
 > &
   Pick<
     CronJob["state"],
+    | "oneShotEnded"
     | "lastMeaningfulResult"
     | "lastDurationMs"
     | "lastTriggerEvalAtMs"

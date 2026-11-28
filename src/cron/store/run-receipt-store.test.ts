@@ -15,7 +15,9 @@ import {
   bindCronSelfRemovalCommitGuard,
   resetCronActiveJobs,
 } from "../active-jobs.js";
+import { makeCronJob } from "../delivery.test-helpers.js";
 import { prepareCronRunAdmission } from "../run-admission.js";
+import { createCronExecutionId } from "../run-id.js";
 import { TEST_SCHEDULED_EXECUTION } from "../scheduled-occurrence.test-support.js";
 import { CronService } from "../service.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
@@ -29,6 +31,7 @@ import { createCronServiceState } from "../service/state.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob, CronJobPatch, CronStoredJob, CronToolsAllowProvenance } from "../types.js";
 import { cronStoreKey } from "./key.js";
+import { recordCronRunInDatabase } from "./run-history.kernel.js";
 import {
   findActiveCronRunReceiptInDatabase,
   finishCronRunReceiptInDatabase,
@@ -47,6 +50,7 @@ import {
 } from "./run-receipt-trigger-state.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 import type { CronRunReceiptHandle } from "./run-receipt.types.js";
+import { createCronScheduledRunId } from "./run-request-id.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-run-receipt-" });
 
@@ -164,6 +168,85 @@ async function messageRun(job: CronJob, runId: string) {
     throw error;
   }
 }
+
+it("recovers a legacy one-shot end only for its completed scheduled run", async () => {
+  const job = makeCronJob({
+    agentId: "alpha",
+    enabled: false,
+    schedule: { kind: "at", at: new Date(1000).toISOString() },
+    state: { lastRunAtMs: 2010 },
+  });
+  const { storePath } = await storeJob(job);
+  const receipt = claimCronRunReceiptForTest(storePath, job, 1010);
+  await finishOk(receipt, 1020);
+  await finishOk(claimCronRunReceiptForTest(storePath, job, 2010), 2020);
+  const readEnd = async () => (await loadCronStore(storePath)).jobs[0]?.state.oneShotEnded;
+  expect(await readEnd()).toBeUndefined();
+
+  const db = openOpenClawStateDatabase().db;
+  const rawState = () =>
+    db.prepare("SELECT state_json FROM cron_jobs WHERE job_id = ?").get(job.id);
+  const original = rawState();
+  const slot = createCronScheduledRunId(cronStoreKey(storePath), job.id, 1000);
+  db.prepare("UPDATE cron_run_receipts SET receipt_id = ? WHERE receipt_id = ?").run(
+    slot,
+    receipt.receiptId,
+  );
+  db.prepare("UPDATE cron_run_receipts SET status = 'skipped' WHERE receipt_id = ?").run(slot);
+  expect(await readEnd()).toBeUndefined();
+  db.prepare("UPDATE cron_run_receipts SET status = 'error' WHERE receipt_id = ?").run(slot);
+  const storeKey = cronStoreKey(storePath);
+  const runId = `${createCronExecutionId(job.id, 1010)}:${slot}`;
+  const writeSettlement = (nextRunAtMs?: number, preflight = false) =>
+    runOpenClawStateWriteTransaction(({ db: connection }) =>
+      recordCronRunInDatabase(connection, {
+        storeKey,
+        jobId: job.id,
+        runId,
+        startedAt: 1010,
+        endedAt: 1020,
+        status: "failed",
+        detail: {
+          kind: "cron-run",
+          status: preflight ? "skipped" : "error",
+          ...(preflight
+            ? {
+                diagnostics: {
+                  entries: [
+                    {
+                      ts: 1010,
+                      source: "model-preflight",
+                      severity: "warn",
+                      message: "Local model unavailable",
+                    },
+                  ],
+                },
+              }
+            : {}),
+          storeKey,
+          ...(nextRunAtMs === undefined ? {} : { nextRunAtMs }),
+        },
+      }),
+    );
+  writeSettlement(3010);
+  expect(await readEnd()).toBeUndefined();
+  db.prepare("UPDATE task_runs SET detail_json = '{' WHERE run_id = ?").run(runId);
+  expect(await readEnd()).toBeUndefined();
+  writeSettlement();
+  expect(await readEnd()).toBe(true);
+  expect(rawState()).toEqual(original);
+  db.prepare("UPDATE cron_run_receipts SET status = 'skipped' WHERE receipt_id = ?").run(slot);
+  expect(await readEnd()).toBeUndefined();
+  writeSettlement(undefined, true);
+  const service = makeState(storePath);
+  try {
+    await start(service);
+  } finally {
+    stop(service);
+  }
+  db.prepare("DELETE FROM task_runs WHERE run_id = ?").run(runId);
+  expect(await readEnd()).toBe(true);
+});
 
 it("allocates portable cursors inside the claim and reuses a deleted maximum", async () => {
   await withOpenClawTestState({ label: "cron-receipt-cursors" }, async (fixture) => {

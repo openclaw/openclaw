@@ -2,12 +2,14 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, For, latest, onSettled, Show } from "solid-js";
 import type { CronCompactJob } from "../api/types.ts";
 import { pathForRoute } from "../app-route-paths.ts";
+import { readGatewayOperatorAccess } from "../app/operator-access.ts";
 import { registerCronEnglish } from "../i18n/locales/en-cron.ts";
+import { automationGroups, type AutomationGroup } from "../lib/cron/automation-groups.ts";
 import { automationsFilter } from "../lib/cron/automations-filter.ts";
 import { isCronInventoryInvalidation } from "../lib/cron/inventory-connection.ts";
 import { readCronInventory } from "../lib/cron/inventory.ts";
 import { formatUiError } from "../lib/format-error.ts";
-import { createMsFormatter } from "../lib/format.ts";
+import { createCompactMsFormatter, createMsFormatter } from "../lib/format.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { formatCronCadence } from "../lib/presenter.ts";
@@ -25,12 +27,18 @@ import { InlineAlert } from "./solid/inline-alert.tsx";
 
 registerEnglishCatalog(registerCronEnglish);
 
+const formatLastRun = createCompactMsFormatter();
 const formatTimeToday = createMsFormatter({ hour: "numeric", minute: "2-digit" });
 const formatLaterDay = createMsFormatter({ month: "short", day: "numeric" });
 
 /** When it runs next, then how often: "Today 5:05 PM · Every 20 minutes", "Nov 21 · Weekly",
-    or "Paused · Every 5 hours" once paused. */
-function automationByline(job: CronCompactJob): string {
+    or the last run for an ended one-shot. */
+function automationByline(job: CronCompactJob, group: AutomationGroup): string {
+  if (group === "history") {
+    return job.lastRunAtMs == null
+      ? t("cron.form.noNextRun")
+      : t("cron.jobState.lastRunAt", { at: formatLastRun(job.lastRunAtMs) });
+  }
   const cadence = job.schedule ? formatCronCadence({ schedule: job.schedule }) : undefined;
   const nextMs = job.enabled ? job.nextRunAtMs : undefined;
   const next = !job.enabled
@@ -43,8 +51,7 @@ function automationByline(job: CronCompactJob): string {
   return [next, cadence].filter(Boolean).join(" · ");
 }
 
-/** The Automations section: New automation, Activity, then active and (collapsed) paused
-    automations. */
+/** The Automations sidebar also serves as the list in the native embed. */
 export function SidebarAutomations(props: {
   host: Pick<AppSidebarRenderHost, "basePath" | "activeRouteId" | "onNavigate">;
 }): JSX.Element {
@@ -150,10 +157,17 @@ export function SidebarAutomations(props: {
       });
   });
   const failing = (job: CronCompactJob) => job.autoDisabled || job.lastRunStatus === "error";
-  const activeJobs = () =>
-    automationsFilter().status === "paused" ? [] : shown().filter((job) => job.enabled);
-  const pausedJobs = () =>
-    automationsFilter().status === "active" ? [] : shown().filter((job) => !job.enabled);
+  const groups = createMemo(() => {
+    const rows: Record<AutomationGroup, CronCompactJob[]> = { active: [], paused: [], history: [] };
+    const status = automationsFilter().status;
+    for (const job of shown()) {
+      const group = job.enabled ? "active" : job.oneShotEnded ? "history" : "paused";
+      if (status === "all" || status === group) {
+        rows[group].push(job);
+      }
+    }
+    return rows;
+  });
   const groupFailureIndicator = (jobs: CronCompactJob[]) =>
     jobs.some(failing) ? (
       <span
@@ -162,15 +176,13 @@ export function SidebarAutomations(props: {
         aria-label={t("common.failed")}
       />
     ) : undefined;
-  const [activeOpen, setActiveOpen] = createSignal(true);
-  const [pausedOpen, setPausedOpen] = createSignal(false);
   // What the page has open, as the page records it for returning to Automations.
   const opened = () =>
     new URLSearchParams(sectionLocation(app.gateway, "automations")?.options.search ?? "");
   const openedJob = () => opened().get("job");
   const activityCurrent = () => props.host.activeRouteId === "cron" && opened().has("activity");
   const cronPath = () => pathForRoute("cron", props.host.basePath);
-  const Row = (row: { job: CronCompactJob }) => {
+  const Row = (row: { job: CronCompactJob; group: AutomationGroup }) => {
     const href = () => `${cronPath()}?job=${encodeURIComponent(row.job.id)}`;
     const current = () => props.host.activeRouteId === "cron" && openedJob() === row.job.id;
     return (
@@ -186,7 +198,7 @@ export function SidebarAutomations(props: {
       >
         <span class="sidebar-automations__copy">
           <span class="sidebar-automations__name">{row.job.displayName ?? row.job.name}</span>
-          <span class="sidebar-automations__byline">{automationByline(row.job)}</span>
+          <span class="sidebar-automations__byline">{automationByline(row.job, row.group)}</span>
         </span>
         <Show when={failing(row.job)}>
           <span class="sidebar-automations__failed" role="img" aria-label={t("common.failed")} />
@@ -214,18 +226,20 @@ export function SidebarAutomations(props: {
           </InlineAlert>
         )}
       </Show>
-      <a
-        class="nav-item sidebar-automations__new"
-        href={`${cronPath()}?new`}
-        onClick={(event) =>
-          handleNavigationClick(event, () => props.host.onNavigate?.("cron", { search: "?new" }))
-        }
-      >
-        <span class="nav-item__icon" aria-hidden="true">
-          <Icon name="plus" />
-        </span>
-        <span class="nav-item__text">{t("cron.list.newTask")}</span>
-      </a>
+      <Show when={readGatewayOperatorAccess(gateway.read().snapshot).canAdmin}>
+        <a
+          class="nav-item sidebar-automations__new"
+          href={`${cronPath()}?new`}
+          onClick={(event) =>
+            handleNavigationClick(event, () => props.host.onNavigate?.("cron", { search: "?new" }))
+          }
+        >
+          <span class="nav-item__icon" aria-hidden="true">
+            <Icon name="plus" />
+          </span>
+          <span class="nav-item__text">{t("cron.list.newTask")}</span>
+        </a>
+      </Show>
       <a
         class={["nav-item", { "nav-item--active": activityCurrent() }]}
         href={`${cronPath()}?activity`}
@@ -241,31 +255,27 @@ export function SidebarAutomations(props: {
         </span>
         <span class="nav-item__text">{t("cron.list.runHistory")}</span>
       </a>
-      <Show when={activeJobs().length > 0}>
-        <SidebarListGroup
-          label={t("cron.tabs.active")}
-          indicator={groupFailureIndicator(activeJobs())}
-          open={activeOpen()}
-          onToggle={() => setActiveOpen(!activeOpen())}
-        >
-          <For each={activeJobs()} keyed={(job) => job.id}>
-            {(job) => <Row job={job()} />}
-          </For>
-        </SidebarListGroup>
-      </Show>
-      <Show when={pausedJobs().length > 0}>
-        <SidebarListGroup
-          label={t("cron.tabs.paused")}
-          indicator={groupFailureIndicator(pausedJobs())}
-          // Paused is the one group shown when the filter asks for it.
-          open={pausedOpen() || automationsFilter().status === "paused"}
-          onToggle={() => setPausedOpen(!pausedOpen())}
-        >
-          <For each={pausedJobs()} keyed={(job) => job.id}>
-            {(job) => <Row job={job()} />}
-          </For>
-        </SidebarListGroup>
-      </Show>
+      <For each={automationGroups}>
+        {(group) => {
+          const [open, setOpen] = createSignal(group === "active");
+          const filtered = () => automationsFilter().status === group;
+          const [shownOpen, setShownOpen] = createSignal(() => filtered() || open());
+          return (
+            <Show when={groups()[group].length > 0}>
+              <SidebarListGroup
+                label={t(`cron.tabs.${group}`)}
+                indicator={groupFailureIndicator(groups()[group])}
+                open={shownOpen()}
+                onToggle={() => (filtered() ? setShownOpen : setOpen)(!shownOpen())}
+              >
+                <For each={groups()[group]} keyed={(job) => job.id}>
+                  {(job) => <Row job={job()} group={group} />}
+                </For>
+              </SidebarListGroup>
+            </Show>
+          );
+        }}
+      </For>
     </nav>
   );
 }

@@ -173,6 +173,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}cron`);
       await page.locator(".cron-overview-empty").waitFor();
       await expectCount(page, '[data-test-id="cron-new-task"]', 0);
+      await expectCount(page, '.sidebar-automations a[href*="?new"]', 0);
 
       await openAutomation(page, readOnlyJob.id);
       await page.getByRole("note").filter({ hasText: "owner with automation access" }).waitFor();
@@ -483,7 +484,7 @@ suite.define(() => {
     });
   });
 
-  it("shows only the rail beside Automations without an automation", async () => {
+  it("opens run history when no saved automation shows in the sidebar", async () => {
     await suite.withPage(contextOptions, async ({ page }) => {
       await installCronGateway(page, {});
 
@@ -491,6 +492,8 @@ suite.define(() => {
       await page.locator(".cron-overview-empty").getByText("No automations yet").waitFor();
       await page.locator(".shell--nav-page-hidden").waitFor({ state: "attached" });
       expect(await page.locator(".sidebar-automations").isVisible()).toBe(false);
+      await page.getByRole("link", { name: "All runs", exact: true }).click();
+      await page.locator('.cron-page[data-panel-mode="activity"]').waitFor();
     });
   });
 });

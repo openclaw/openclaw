@@ -11,6 +11,7 @@ import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { normalizeCronRuntimeAuthority } from "../runtime-authority.js";
 import type { CronJobState, CronStoredJob, CronStoreFile } from "../types.js";
 import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
+import { restoreLegacyTimedEnds } from "./legacy-one-shot-receipts.js";
 import {
   deleteCronQuarantinedJobsFromDatabase,
   prepareCronQuarantineRegistration,
@@ -137,6 +138,7 @@ export function loadCronStoreForChanges(db: EngineConnection, storeKey: string) 
   const rows = loadCronRows(db, storeKey, undefined, { includeGrantDefinitionProjection: true });
   const store = loadedCronStoreFromRows(rows).store;
   const currentJobs = store.jobs;
+  restoreLegacyTimedEnds(db, storeKey, currentJobs);
   const authority = loadCronRuntimeAuthorities({ db, storeKey, jobs: currentJobs });
   if (authority.repairJobIds.length > 0) {
     repairCronRuntimeAuthorityRows({

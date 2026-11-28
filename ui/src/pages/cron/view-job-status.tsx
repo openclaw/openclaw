@@ -29,7 +29,7 @@ export function describeJobNextRun(job: CronJob, absolute = false): string {
     return t("cron.attention.noNextRun");
   }
   if (!job.enabled) {
-    return t("cron.list.paused");
+    return job.state.oneShotEnded === true ? t("cron.form.noNextRun") : t("cron.list.paused");
   }
   const waiting = job.state?.admissionDeferred;
   if (waiting) {

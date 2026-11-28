@@ -110,16 +110,31 @@ it("keeps its rows while the tab is hidden and reads again when it returns", asy
   expect(sidebar.textContent).not.toContain("no longer presented");
 });
 
-it("keeps failing automations in Active and Paused with collapsed group indicators", async () => {
+it("keeps failures visible and links ended one-shots from History", async () => {
   const pages = inventory.read.getMockImplementation()!;
   inventory.read.mockImplementation(async () => ({
     jobs: [
-      { id: "ok", name: "Healthy", enabled: true, updatedAtMs: 0, lastRunStatus: "ok" },
+      {
+        id: "ok",
+        name: "Healthy",
+        enabled: true,
+        oneShotEnded: true,
+        updatedAtMs: 0,
+        lastRunStatus: "ok",
+      },
       { id: "error", name: "Broken", enabled: true, updatedAtMs: 0, lastRunStatus: "error" },
       { id: "stopped", name: "Stopped", enabled: false, updatedAtMs: 0, autoDisabled: true },
       { id: "paused", name: "Resting", enabled: false, updatedAtMs: 0 },
+      {
+        id: "ended",
+        name: "Release check",
+        enabled: false,
+        updatedAtMs: 2000,
+        oneShotEnded: true,
+        lastRunStatus: "error",
+      },
     ],
-    total: 4,
+    total: 5,
     offset: 0,
     hasMore: false,
     nextOffset: null,
@@ -157,6 +172,11 @@ it("keeps failing automations in Active and Paused with collapsed group indicato
     pausedToggle!.click();
     await waitForSolid(() => expect(groupNames("Paused")).toEqual(["Resting", "Stopped"]));
     expect(group("Paused")?.querySelector(".sidebar-automations__failed")).not.toBeNull();
+    expect(groupFailureIndicator("History")).not.toBeNull();
+    group("History")!.querySelector("button")!.click();
+    await waitForSolid(() =>
+      expect(group("History")?.querySelector("a")?.getAttribute("href")).toContain("?job=ended"),
+    );
   } finally {
     inventory.read.mockImplementation(pages);
   }

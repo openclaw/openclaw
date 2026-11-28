@@ -2,6 +2,7 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion"
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { RETIRED_SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX } from "../system-owned-declaration.js";
+import { restoreLegacyTimedEnds } from "./legacy-one-shot-receipts.js";
 import {
   deleteCronJobRowInDatabase,
   fingerprintCronJobRows,
@@ -59,6 +60,7 @@ export function loadCronStoreFromDatabase(
     rows = loadCronRows(database, storeKey);
   }
   const loaded = loadedCronStoreFromRows(rows);
+  restoreLegacyTimedEnds(database, storeKey, loaded.store.jobs);
   if (rows.length > 0) {
     const authority = loadCronRuntimeAuthorities({
       db: database,

@@ -519,6 +519,29 @@ it.each([
   },
 );
 
+it("replaces the retained end when a manual failure schedules a retry", () => {
+  const { job, apply } = outcomeFixture(startedAt, {
+    schedule: { kind: "at", at: new Date(startedAt - 2_000).toISOString() },
+    state: { oneShotEnded: true },
+  });
+  apply({ status: "error", error: "429 rate limit exceeded" }, { scheduleMode: "preserve" });
+  expect(job.state.nextRunAtMs).toBeGreaterThan(startedAt);
+  expect(job.state.oneShotEnded).toBeUndefined();
+});
+
+it("keeps a future occurrence out of History when an early manual run is permanently refused", () => {
+  const { job, apply } = outcomeFixture(startedAt, {
+    schedule: { kind: "at", at: new Date(startedAt + 60_000).toISOString() },
+    operatorSource: { source: operatorSource, executionRevision: "fixture-revision" },
+  });
+  apply(
+    { status: "error", errorClassification: { kind: "permanent" } },
+    { scheduleMode: "preserve" },
+  );
+  expect(job.enabled).toBe(false);
+  expect(job.state.oneShotEnded).toBeUndefined();
+});
+
 it.each([
   { name: "stale", options: { scheduleOwnership: "stale" } },
   { name: "forced", options: { scheduleMode: "preserve" } },

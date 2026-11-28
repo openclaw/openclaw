@@ -5,11 +5,12 @@ import type {
   CronRunStatus,
   CronSortDir,
 } from "../../api/types.ts";
+import type { AutomationGroup } from "./automation-groups.ts";
 
 export type AutomationsFilter = {
   /** One agent's automations; null is every agent, and unset follows the selected agent. */
   agentId?: string | null;
-  status: "all" | "active" | "paused";
+  status: "all" | AutomationGroup;
   scheduleKind: CronJobsScheduleKindFilter;
   lastRun: "all" | CronRunStatus | "unknown";
   trigger: CronJobsTriggerFilter;

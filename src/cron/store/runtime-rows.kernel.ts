@@ -1,5 +1,6 @@
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { CronStoredJob } from "../types.js";
+import { restoreLegacyTimedEnds } from "./legacy-one-shot-receipts.js";
 import {
   deleteCronJobRowInDatabase,
   loadedCronStoreFromRows,
@@ -42,6 +43,7 @@ export function mutateCronRuntimeRowsInDatabase<T>(params: {
   });
   const rowsByJobId = new Map(rows.map((row) => [row.job_id, row] as const));
   const loadedJobs = loadedCronStoreFromRows(rows).store.jobs;
+  restoreLegacyTimedEnds(db, storeKey, loadedJobs);
   const { repairJobIds } = loadCronRuntimeAuthorities({ db, storeKey, jobs: loadedJobs });
   if (repairJobIds.length > 0) {
     repairCronRuntimeAuthorityRows({
