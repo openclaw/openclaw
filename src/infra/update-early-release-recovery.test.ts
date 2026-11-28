@@ -321,6 +321,10 @@ type Opts = {
   elsewhere?: "unit" | "env";
   /** The install of this build writes its definition, then fails before the manager restarts. */
   publishOnly?: "release" | "checkout";
+  /** A new store appears while the runner waits, before any switch. */
+  newStore?: boolean;
+  /** Resumed after the checkout's definition was published, before the manager restarted it. */
+  finalPublished?: boolean;
 };
 function runner(opts: Opts) {
   const { fail = {}, resumed = false, restarts = 0, supervisor = "systemd" } = opts;
@@ -364,18 +368,30 @@ function runner(opts: Opts) {
   const plan = { ...where, ...managed, driver: { pid: 1, start: "1" }, enabled: "disabled" };
   const full: RecoveryPlan = { ...plan, schema: planned, fromVersion: "1", plannedAt: 1 };
   fs.mkdirSync(release, { recursive: true });
-  fs.writeFileSync(serviceFile, resumed ? unit(release) : original);
+  fs.writeFileSync(
+    serviceFile,
+    resumed ? unit(opts.finalPublished ? checkout : release) : original,
+  );
+  if (opts.finalPublished) {
+    fs.mkdirSync(path.join(checkout, "dist"), { recursive: true });
+    fs.writeFileSync(path.join(checkout, "dist", "build-info.json"), `{"commit":"${target}"}`);
+  }
   if (resumed) {
     fs.writeFileSync(`${serviceFile}.before-update-recovery`, original);
     fs.rmSync(legacy);
   }
   let schema =
-    (opts.migrates && restarts > 2) || (resumed && opts.past && !opts.stopMs) ? migrated : planned;
+    (opts.migrates && restarts > 2) || (resumed && opts.past && !opts.stopMs) || opts.finalPublished
+      ? migrated
+      : planned;
   // A resumed runner can find the release still migrating; it holds state until ready.
   let [migrating, alive, running, enabled, failed] = [resumed, 2, true, false, false];
   let loaded = true;
   // What the manager loaded and the process it runs, as `systemctl show` / `launchctl print`.
-  let [loadedDef, pid] = [fs.readFileSync(serviceFile, "utf8"), 100];
+  let [loadedDef, pid] = [
+    opts.finalPublished ? unit(release) : fs.readFileSync(serviceFile, "utf8"),
+    100,
+  ];
   const startedFrom = () => {
     [loadedDef, pid] = [fs.readFileSync(serviceFile, "utf8"), pid + 1];
   };
@@ -476,7 +492,12 @@ function runner(opts: Opts) {
     driverAlive: () => calls.push("driver alive") > 0 && alive-- > 0,
     restarts: async () => restarts,
     // Another state directory holds other stores, or none.
-    schema: () => (opts.stateDir ? null : schema),
+    schema: () =>
+      opts.stateDir
+        ? null
+        : opts.newStore
+          ? { ...schema, agents: { ...schema.agents, "/c": 1 } }
+          : schema,
     service: gatewayServiceControl(full, run),
     stateDir: () => opts.stateDir ?? stateDir,
     // The migrating Gateway holds the state's maintenance lock.
@@ -515,6 +536,8 @@ function runner(opts: Opts) {
     state,
     link,
     env: () => fs.readFileSync(envFile, "utf8"),
+    runs: () =>
+      loadedDef.includes(release) ? "release" : loadedDef.includes(checkout) ? "checkout" : "other",
   };
 }
 
@@ -527,6 +550,16 @@ const runs: Run[] = [
   ["moves the service to the release, rebuilds, then serves the checkout", {}, "checkout"],
   ["resumes during the boot migration and waits for it", { ...resumed, restarts: 1 }, "checkout"],
   ["changes nothing when the fast-forward fails", f(MERGE), "original"],
+  [
+    "records nothing for a store that appeared before any switch",
+    f(MERGE, { newStore: true }),
+    "original",
+  ],
+  [
+    "switches again when the checkout was published but never started",
+    { ...resumed, restarts: 1, finalPublished: true },
+    "checkout",
+  ],
   ["never builds past the target", { past: true }, "original", "", "moved past"],
   [
     "keeps a migrated release when the checkout moved",
@@ -609,6 +642,10 @@ it.each([...runs, ...launchdRuns])("%s", async (_name, opts, serves, reason, sai
   // The early link is back only with the previous build: its launcher cannot open migrated data,
   // and `gateway install --force` binds the service to it while it exists.
   expect(fx.link()).toBe(serves === "original");
+  // Done means the manager runs the rebuilt checkout, not only that its definition names it.
+  if (done) {
+    expect(fx.runs()).toBe("checkout");
+  }
   const timing = opts.resumed ? {} : { downtimeMs: expect.any(Number) };
   expect(fx.finished).toEqual(done ? [{ runId: "run-1", ...timing }] : []);
   // A Gateway runs at the end, and a disabled autostart ends disabled.

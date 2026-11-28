@@ -286,10 +286,13 @@ export async function runEarlyGitReleaseRecovery(
     }
   };
   let fastForwarded = false;
+  // State the release may have migrated: the definition was saved just before the first switch,
+  // and until then a different inventory (a new or unreadable store) is not a migration.
+  const migratedByRelease = () => fs.existsSync(original) && moved();
   const abandon = async (why: string) => {
     // A resumed runner can stop after the release migrated state; the previous build cannot
     // open it, so the release keeps serving and the outcome names the finishing command.
-    if (moved()) {
+    if (migratedByRelease()) {
       const failed = await fail(
         "early-release-recovery-stopped",
         `The recovery stopped: ${why}. Your databases were already migrated, so the Gateway service keeps ${servesRelease() ? "the new release" : "the checkout"}. ${kept()}`,
@@ -420,7 +423,7 @@ export async function runEarlyGitReleaseRecovery(
     const restarts = await deps.restarts(plan);
     if (restarts > MAX_RESTARTS) {
       const why = `The recovery was interrupted ${MAX_RESTARTS + 1} times`;
-      if (!moved()) {
+      if (!migratedByRelease()) {
         return servesRelease() ? notReady(why) : abandon("it was interrupted repeatedly");
       }
       return fail(
@@ -457,12 +460,14 @@ export async function runEarlyGitReleaseRecovery(
       }
       fastForwarded = true;
     }
-    // Killed after the final switch: only the finishing step is left.
+    // Killed after the final switch: only the finishing step is left, once the manager runs the
+    // rebuilt checkout (a published definition alone does not mean it restarted).
     if (
       !servesRelease() &&
       buildCommit(plan.checkout) === plan.target &&
       moved() &&
-      (await deps.ready(unitPort()))
+      (await deps.ready(unitPort())) &&
+      (await service.loaded()).command.includes(path.join(plan.checkout, "dist"))
     ) {
       runId = (await deps.hold(plan)) ?? undefined;
       await keepEnablement();
@@ -557,7 +562,7 @@ export async function runEarlyGitReleaseRecovery(
     return await recover();
   } catch (error) {
     const why = `The recovery stopped on an unexpected error (${String(error)})`;
-    if (moved()) {
+    if (migratedByRelease()) {
       return fail(
         "early-release-recovery-error",
         `${why}; the Gateway service starts ${servesRelease() ? "the new release" : "the checkout"}.`,
