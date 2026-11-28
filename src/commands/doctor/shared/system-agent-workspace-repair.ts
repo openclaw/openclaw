@@ -1,6 +1,7 @@
 // Doctor repair that records one workspace for a system agent whose turns resolve two.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { listAgentIds } from "../../../agents/agent-roster.js";
 import {
   resolveAgentEntry,
@@ -14,8 +15,9 @@ import {
   DEFAULT_MEMORY_FILENAME,
   GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES,
 } from "../../../agents/workspace.js";
+import { configIncludeOwnsAgentRoster } from "../../../config/agent-roster-provenance.js";
 import { containsEnvVarReference, resolveConfigEnvVars } from "../../../config/env-substitution.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hasErrnoCode, ignoreMissingPath } from "../../../infra/errno.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { lstatIfExists } from "../../../infra/path-existence.js";
@@ -120,6 +122,25 @@ function describeRestore(params: {
     );
   }
   return lines;
+}
+
+/** The roster ownership and authored default workspace the repair reads from the config snapshot. */
+export function resolveSystemAgentWorkspaceRepairOptions(snapshot: ConfigFileSnapshot): {
+  includeOwnsRoster: boolean;
+  authoredDefaultWorkspace: string | undefined;
+} {
+  // authoredConfig keeps include-resolved authored values (env refs intact); parsed only has the
+  // root file, so an agents.defaults $include would otherwise freeze the resolved absolute path.
+  const parsedAgents = isRecord(snapshot.parsed) ? snapshot.parsed.agents : undefined;
+  const parsedDefaults = isRecord(parsedAgents) ? parsedAgents.defaults : undefined;
+  const authoredDefaultWorkspace =
+    snapshot.authoredConfig?.agents?.defaults?.workspace ??
+    (isRecord(parsedDefaults) ? parsedDefaults.workspace : undefined);
+  return {
+    includeOwnsRoster: configIncludeOwnsAgentRoster(snapshot),
+    authoredDefaultWorkspace:
+      typeof authoredDefaultWorkspace === "string" ? authoredDefaultWorkspace : undefined,
+  };
 }
 
 /**

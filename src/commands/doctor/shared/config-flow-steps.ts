@@ -120,6 +120,19 @@ export function applyLegacyCompatibilityStep(params: {
   };
 }
 
+/** Unknown keys the retired-config step removes; deferred plugin migrations keep their paths. */
+export function stripDoctorUnknownConfigKeys(
+  candidate: OpenClawConfig,
+  sourceConfig: OpenClawConfig,
+) {
+  return stripUnknownConfigKeys(
+    candidate,
+    getDeferredPluginMigrationConfigFacts(sourceConfig)?.flatMap((pending) =>
+      (pending.configPaths ?? []).concat(pending.validationExcludedPaths ?? []),
+    ),
+  );
+}
+
 /** Retire heartbeat data before removing unknown configuration keys. */
 export async function applyRetiredConfigStep(params: {
   state: DoctorConfigMutationState;
@@ -157,12 +170,7 @@ export async function applyRetiredConfigStep(params: {
     }
   }
 
-  const unknown = stripUnknownConfigKeys(
-    state.candidate,
-    getDeferredPluginMigrationConfigFacts(params.sourceConfig)?.flatMap((pending) =>
-      (pending.configPaths ?? []).concat(pending.validationExcludedPaths ?? []),
-    ),
-  );
+  const unknown = stripDoctorUnknownConfigKeys(state.candidate, params.sourceConfig);
   if (unknown.removed.length === 0) {
     return state;
   }

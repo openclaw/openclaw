@@ -303,6 +303,7 @@ export async function traceDoctorConfigFlowPending(
   await traceConfigFlowPendingInputs(trace, {
     env: process.env,
     integrityCheck: options.fullIntegrityCheck ? "full" : "quick",
+    modelReplacements: options.modelReplacements,
     agentDatabaseMigrationDiscovery: schemas.agentDatabaseMigrationDiscovery,
   });
 }

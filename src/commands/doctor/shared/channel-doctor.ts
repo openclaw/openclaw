@@ -168,6 +168,25 @@ async function collectChannelDoctorMutations(
   return mutations;
 }
 
+/**
+ * The configured channels whose doctor adapter implements `hook`, resolved as the hook runners
+ * resolve them. `unavailable` means uninspected plugin load paths keep channel config unchanged
+ * and the runners only warn.
+ */
+export async function listChannelDoctorHookOwners(
+  context: ChannelDoctorLookupContext,
+  hook: "runConfigSequence" | "cleanStaleConfig" | "repairConfig",
+): Promise<{ unavailable: boolean; channelIds: string[] }> {
+  if (preserveUnavailableChannelConfig(context)) {
+    return { unavailable: true, channelIds: [] };
+  }
+  const entries = await listChannelDoctorEntries(context);
+  return {
+    unavailable: false,
+    channelIds: entries.filter(({ doctor }) => doctor[hook] !== undefined).map(({ id }) => id),
+  };
+}
+
 /** Build cached empty-allowlist hooks backed by channel doctor adapters. */
 export async function createChannelDoctorEmptyAllowlistPolicyHooks(
   context: ChannelDoctorLookupContext,

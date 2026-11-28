@@ -3,14 +3,18 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import type { LegacyStateDetection } from "../infra/state-migrations.types.js";
 import type { PreparedLegacySessionSurfaces } from "../plugins/legacy-session-surfaces.types.js";
+import { doctorConfigRepairsPendingInputs } from "./doctor-config-repairs-pending.js";
 import type {
   DoctorMaintenancePending,
   DoctorMaintenancePendingCheck,
 } from "./doctor-maintenance-pending.js";
+import type { DoctorModelReplacement } from "./doctor/shared/model-replacement.js";
 
 export type DoctorConfigFlowPendingParams = {
   env: NodeJS.ProcessEnv;
   integrityCheck: "quick" | "full";
+  /** Doctor's `--model-replace` choices, which the repair sequence applies. */
+  modelReplacements?: readonly DoctorModelReplacement[];
   /** The database preflight's discovery, which the flow hands to its agent database pass. */
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
 };
@@ -32,6 +36,7 @@ const decided = (work: boolean): DoctorMaintenancePending => (work ? "work" : "n
  */
 function doctorConfigFlowPendingInputs(
   params: DoctorConfigFlowPendingParams,
+  resources: AsyncDisposableStack,
 ): ReadonlyArray<DoctorConfigFlowPendingInput> {
   const env = params.env;
   let snapshotRead: Promise<ConfigFileSnapshot> | undefined;
@@ -491,9 +496,13 @@ function doctorConfigFlowPendingInputs(
         });
       },
     },
-    // The config repair sequence, channel Doctor sequences and the system agent's workspace
-    // files have no read-only predicate yet.
-    { id: "config-repairs" },
+    ...doctorConfigRepairsPendingInputs({
+      env,
+      modelReplacements: params.modelReplacements,
+      readSnapshot,
+      decideLive: (decide) => decideLive([], decide),
+      resources,
+    }),
   ];
 }
 
@@ -515,7 +524,9 @@ export async function traceConfigFlowPendingInputs(
   params: DoctorConfigFlowPendingParams,
 ): Promise<void> {
   const answers: DoctorMaintenancePending[] = [];
-  for (const input of doctorConfigFlowPendingInputs(params)) {
+  // The config repair checks share one plugin metadata scope across their inputs.
+  await using resources = new AsyncDisposableStack();
+  for (const input of doctorConfigFlowPendingInputs(params, resources)) {
     const check = input.check;
     let answer: DoctorMaintenancePending = "work";
     await trace(
