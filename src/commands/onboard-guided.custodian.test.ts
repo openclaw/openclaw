@@ -1,6 +1,8 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveUserPath } from "../utils.js";
 import type { GuidedOrchestrationFixture as GuidedOnboardingDeps } from "./onboard-guided-runtime.test-support.js";
 import { setupGuidedCustodianTestSuite } from "./onboard-guided.custodian.test-support.js";
 
@@ -17,6 +19,7 @@ describe("runGuidedOnboarding", () => {
     pendingLocalSetup,
     promptAuthChoiceGrouped,
     readConfigFileSnapshot,
+    restoreTerminalState,
     runGuidedOnboarding,
     setupApplyResult,
     setupDeps,
@@ -590,6 +593,61 @@ describe("runGuidedOnboarding", () => {
     expect(localOnboarding.states.get("/tmp/openclaw.json")).toEqual(competing);
     expect(localOnboarding.complete).not.toHaveBeenCalled();
     expect(deps.applySetup).not.toHaveBeenCalled();
+  });
+
+  const fixtureToken = "sk-abcdefghijklmnopqrstuv";
+  it.each([
+    {
+      name: "workspace",
+      result: { workspaceReady: false },
+      detail: "The agent workspace could not be prepared.",
+    },
+    {
+      name: "Gateway",
+      result: {
+        gateway: {
+          status: "failed" as const,
+          error: `Gateway service install failed. Authorization: Bearer ${fixtureToken}`,
+        },
+      },
+      detail: "Gateway service install failed.",
+    },
+  ])("returns a $name apply failure to the terminal with --skip-ui", async ({ result, detail }) => {
+    const prompter = createWizardPrompter();
+    const readSnapshot = expectDefined(
+      readConfigFileSnapshot.getMockImplementation(),
+      "custodian config snapshot fixture",
+    );
+    readConfigFileSnapshot.mockImplementation(async () => {
+      const snapshot = await readSnapshot();
+      return { ...snapshot, path: resolveUserPath(snapshot.path) };
+    });
+    const applySetup = vi.fn<NonNullable<GuidedOnboardingDeps["applySetup"]>>(async () => ({
+      ...setupApplyResult(),
+      ...result,
+    }));
+    const deps = setupDeps({ prompter, applySetup });
+
+    const onboarding = runGuidedOnboarding(
+      { acceptRisk: true, workspace: "/tmp/work", skipUi: true },
+      makeRuntime(),
+      deps,
+    );
+
+    await expect(onboarding).rejects.toThrow(detail);
+    await expect(onboarding).rejects.toThrow("openclaw onboard --skip-ui");
+    await expect(onboarding).rejects.not.toThrow(fixtureToken);
+    expect(deps.activate).toHaveBeenCalledOnce();
+    expect(applySetup).toHaveBeenCalledOnce();
+    expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
+    expect(deps.runBrowserHandoff).not.toHaveBeenCalled();
+    expect(deps.launchHatchTui).not.toHaveBeenCalled();
+    expect(deps.runForegroundGateway).not.toHaveBeenCalled();
+    expect(prompter.outro).not.toHaveBeenCalled();
+    expect(localOnboarding.complete).not.toHaveBeenCalled();
+    expect(restoreTerminalState).toHaveBeenCalledWith("setup finish", {
+      resumeStdinIfPaused: false,
+    });
   });
 
   it("identifies workspace failures and keeps the setup-chat recovery", async () => {

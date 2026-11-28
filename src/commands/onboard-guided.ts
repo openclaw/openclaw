@@ -6,6 +6,7 @@ import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-proven
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatUserCliCommand } from "../daemon/durable-service-entrypoint.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { withConsoleSubsystemsSuppressed } from "../logging/console.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -592,6 +593,13 @@ async function runGuidedOnboardingFlow(
       if (teamCoordinatorId) {
         throw new Error(
           `Onboarding did not complete: ${error instanceof Error ? error.message : String(error)} Run \`openclaw agents list\` to inspect the roster, then retry with the same --workspace after resolving the error.`,
+          { cause: error },
+        );
+      }
+      if (!skippedInference && opts.skipUi === true) {
+        const retryCommand = await formatUserCliCommand("onboard --skip-ui");
+        throw new Error(
+          `${formatErrorMessage(error)}\nAfter resolving the error, rerun \`${retryCommand}\` with your original onboarding options.`,
           { cause: error },
         );
       }
