@@ -152,6 +152,17 @@ struct SwiftUIRenderSmokeTests {
         }
     }
 
+    @Test @MainActor func `transcript skeleton sits on the default rows and grows with dynamic type`() {
+        func height(_ typeSize: DynamicTypeSize) -> CGFloat {
+            let controller = UIHostingController(
+                rootView: ChatTranscriptSkeleton().environment(\.dynamicTypeSize, typeSize))
+            return controller.sizeThatFits(in: CGSize(width: 370, height: CGFloat.greatestFiniteMagnitude)).height
+        }
+        // Bubble, timestamp, three agent lines, bubble, two lines: the List rows measured at Large.
+        #expect(abs(height(.large) - 276.6) < 0.5)
+        #expect(height(.accessibility2) > height(.large) + 100)
+    }
+
     @Test @MainActor func `long user prompt disclosure builds across dynamic type sizes`() {
         let text = Array(repeating: "A long user-authored prompt line.", count: 13).joined(separator: "\n")
         let message = OpenClawChatMessage(
