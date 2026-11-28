@@ -253,7 +253,7 @@ function applyRun({ job, result }: FallbackRun) {
 }
 
 it.each(["removed", "replaced"] as const)(
-  "pauses a recurring job once when its recorded account was %s and nothing else can run it",
+  "auto-disables a recurring job once when its recorded account was %s and nothing else can run it",
   async (primary) => {
     await runSessionFallback({ primary, backup: "none" }, (run) => {
       expect(run.hits.primary).toEqual([]);
@@ -262,6 +262,9 @@ it.each(["removed", "replaced"] as const)(
 
       expect(run.job.enabled).toBe(false);
       expect(run.job.state.nextRunAtMs).toBeUndefined();
+      expect(run.job.state.autoDisabled).toEqual(
+        expect.objectContaining({ reason: "account-unavailable", consecutiveErrors: 1 }),
+      );
       expect(deferredNotifications).toEqual([
         expect.objectContaining({ kind: "auto-disabled", text: expect.any(String) }),
       ]);
@@ -287,5 +290,6 @@ it("keeps retrying when a fallback on another provider failed for a reason that 
     expect(run.job.enabled).toBe(true);
     expect(run.job.state.nextRunAtMs).toBeGreaterThan(startedAt);
     expect(deferredNotifications.filter((item) => item.kind === "auto-disabled")).toEqual([]);
+    expect(run.job.state.autoDisabled).toBeUndefined();
   });
 });

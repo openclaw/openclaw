@@ -7,9 +7,9 @@ import { resolvePacedNextRunAtMs } from "../pacing.js";
 import { isPluginCommandCronJob } from "../plugin-command-schedule.js";
 import { normalizeCronRunDiagnostics, summarizeCronRunDiagnostics } from "../run-diagnostics.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
-import { buildAccountPauseNotice } from "../scheduled-occurrence.js";
 import type { CronRunFinalizationOutcome } from "../store/runtime-worker.types.js";
 import type { CronJob, CronRunStatus, CronStoredJob, CronTriggerEvalOutcome } from "../types.js";
+import { autoDisableCronJob } from "./auto-disable.js";
 import {
   finalizeCronFailureNotifications,
   resolveFailureIncident,
@@ -260,14 +260,15 @@ export function applyJobResult(
       // A failed check has not consumed the paced occurrence; its backoff retry still owns it.
       job.state.pacedNextRunAtMs = job.state.nextRunAtMs;
     }
-    // A removed, signed-out or replaced account can never run this job as written; like a gone
-    // parent, the job pauses once with its own notice, which replaces the failure alert. A forced
-    // run that preserves a one-shot occurrence leaves that occurrence and its enablement alone.
-    const retiredAccount =
+    // A removed, signed-out or replaced account can never run this job as written, so it is
+    // disabled once, with the auto-disable notice in place of the failure alert. A forced run
+    // that preserves a one-shot occurrence leaves that occurrence and its enablement alone.
+    const accountUnavailable =
       runFailed &&
       !preserveOneShotSchedule &&
       result.failureNotificationDetail?.kind === "inference-account-retired";
-    if (!result.parentUnavailable && !retiredAccount) {
+    // A parent pause is not a failure: its own notice below replaces the skipped-run alert.
+    if (!result.parentUnavailable && !accountUnavailable) {
       finalizeCronFailureNotifications(state, {
         job,
         alertConfig,
@@ -279,24 +280,33 @@ export function applyJobResult(
         deferredNotifications: opts.deferredNotifications,
       });
     }
+    // A newer operator edit owns enablement, so a stale result changes nothing.
+    if (accountUnavailable && ownsSchedule && previousScheduleState.enabled) {
+      autoDisableCronJob({
+        job,
+        atMs: result.endedAt,
+        consecutiveErrors: normalizeConsecutiveErrors(job.state.consecutiveErrors),
+        // A replayed outcome records the fact without sending its notice again.
+        deferredNotifications: opts.replay ? [] : opts.deferredNotifications,
+        reason: "account-unavailable",
+        signInCommand:
+          job.inferenceBinding && buildProviderReauthCommand(job.inferenceBinding.provider),
+      });
+    }
     // The notice belongs to the pause, sent once while the job was still enabled.
     // A newer operator edit owns enablement, so a stale pause result changes nothing.
-    if (
-      (result.parentUnavailable || retiredAccount) &&
-      ownsSchedule &&
-      previousScheduleState.enabled
-    ) {
-      // Pause until someone re-enables the job.
+    if (result.parentUnavailable && ownsSchedule && previousScheduleState.enabled) {
+      // The parent conversation is gone; pause until someone re-enables the job.
       job.enabled = false;
       job.state.nextRunAtMs = undefined;
       if (!opts.replay) {
+        // The gone conversation cannot accept the notice; its owning agent gets it instead.
         const notice = cronNotificationJob(job);
         const { agentId, sessionKey } = resolveCronNotificationQueueOwner(notice, "auto-disabled");
         opts.deferredNotifications.push({
           kind: "auto-disabled",
-          // A gone parent conversation cannot accept the notice; its owning agent gets it.
           job:
-            result.parentUnavailable && sessionKey === result.parentUnavailable.parentSessionKey
+            sessionKey === result.parentUnavailable.parentSessionKey
               ? {
                   ...notice,
                   owner: undefined,
@@ -304,12 +314,7 @@ export function applyJobResult(
                   ...(agentId ? { agentId } : {}),
                 }
               : notice,
-          text: retiredAccount
-            ? buildAccountPauseNotice(
-                job,
-                job.inferenceBinding && buildProviderReauthCommand(job.inferenceBinding.provider),
-              )
-            : (result.error ?? "Automation paused: its parent conversation is unavailable."),
+          text: result.error ?? "Automation paused: its parent conversation is unavailable.",
         });
       }
     }

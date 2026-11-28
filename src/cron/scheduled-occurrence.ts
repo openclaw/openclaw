@@ -78,16 +78,15 @@ export function unadmittedScheduledOccurrence(error: string): ScheduledOccurrenc
   return { mint: async () => failedScheduledExecution(error), release() {} };
 }
 
-function pauseNoticeName(job: { id: string; name?: string }): string {
-  return truncateUtf16Safe((job.name || job.id).replace(/\s+/g, " ").trim(), 120);
-}
-
 /** The single notice a paused job sends; names the parent and the repair. */
 export function buildScheduledParentPauseNotice(params: {
   job: { id: string; name?: string };
   pause: CronParentUnavailable;
 }): string {
-  const name = pauseNoticeName(params.job);
+  const name = truncateUtf16Safe(
+    (params.job.name || params.job.id).replace(/\s+/g, " ").trim(),
+    120,
+  );
   const { pause } = params;
   const cause =
     pause.reason === "worktree-missing"
@@ -97,17 +96,5 @@ export function buildScheduledParentPauseNotice(params: {
     `⚠️ Automation "${name}" is paused because the conversation that created it, \`${pause.parentSessionKey}\`, is unavailable: ${cause}.`,
     "Its runs used that conversation's access, and no other access is used in its place.",
     `Restore the conversation and run \`openclaw automations enable ${params.job.id}\`, or recreate the automation from another conversation.`,
-  ].join("\n");
-}
-
-/**
- * The single notice a job sends when its recorded account is gone or replaced. The refusal in
- * automation history names the account; this notice names only the repair.
- */
-export function buildAccountPauseNotice(job: { id: string; name?: string }, signIn?: string) {
-  return [
-    `⚠️ Automation "${pauseNoticeName(job)}" was paused: the account it runs on was removed, signed out or replaced since the automation recorded it.`,
-    `Sign in again if needed${signIn ? ` (\`${signIn}\`)` : ""}, then record the account with \`openclaw automations edit ${job.id} --model <provider/model>@<profileId>\` (list accounts: \`openclaw gateway call models.authStatus\`). To use a key in the environment or provider config instead: \`openclaw automations edit ${job.id} --model <provider/model>\`.`,
-    `Then run \`openclaw automations enable ${job.id}\`.`,
   ].join("\n");
 }
