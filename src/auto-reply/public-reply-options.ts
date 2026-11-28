@@ -9,6 +9,7 @@ type PublicReplyOptions<T> = T extends undefined
       | "onReplyOperationAdmitted"
       | "onReplyOperationOwned"
       | "assertChannelAuthority"
+      | "onTypingHandoff"
     >;
 
 type PublicReplyFunction<T> = T extends (params: infer P) => infer R
@@ -45,6 +46,7 @@ export function publicReplyOptions(
   Reflect.deleteProperty(publicOptions, "internalEventExecution");
   Reflect.deleteProperty(publicOptions, "onReplyOperationAdmitted");
   Reflect.deleteProperty(publicOptions, "onReplyOperationOwned");
+  Reflect.deleteProperty(publicOptions, "onTypingHandoff");
   return publicOptions;
 }
 

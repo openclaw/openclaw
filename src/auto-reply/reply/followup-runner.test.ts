@@ -479,6 +479,20 @@ describe("createFollowupRunner", () => {
     },
   );
 
+  it("completes the executing item's own typing, not the latest enqueuer's", async () => {
+    const ownTyping = createMockTypingController();
+    const laterTyping = createMockTypingController();
+    turn.queued.abortSignal = AbortSignal.abort();
+    turn.queued.typing = ownTyping;
+
+    await createRunner({ typing: laterTyping, typingMode: "instant" })(turn.queued);
+
+    expect(ownTyping.markRunComplete).toHaveBeenCalledOnce();
+    expect(ownTyping.markDispatchIdle).toHaveBeenCalledOnce();
+    expect(laterTyping.markRunComplete).not.toHaveBeenCalled();
+    expect(laterTyping.markDispatchIdle).not.toHaveBeenCalled();
+  });
+
   it.each([
     "unrecorded authority",
     "unrecorded failure",
