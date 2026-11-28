@@ -19,7 +19,7 @@ import {
 } from "../../gateway/cron-creator-authority-grant.js";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../../infra/exec-approvals-core.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
-import { isCronSessionKey, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { isRecord } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import {
@@ -70,6 +70,7 @@ import {
   CRON_TOOL_LIST_MAX_LIMIT,
 } from "./cron-tool-schema.js";
 import { listCronSelfJob } from "./cron-tool-self-list.js";
+import { declareCronTool } from "./cron-tool-stable-management.js";
 import {
   assertCronCreatorAuthorityResolutionAvailable,
   assertNoCronShellExecution,
@@ -153,10 +154,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
   const { activeRun, nextCheckEnabled, assertCurrent: assertCurrentRun } = automation;
   // Trigger-gated surfaces default on, matching cron/service/jobs-validation.ts.
   const triggersEnabled = opts?.config?.cron?.triggers?.enabled !== false;
-  // Conversation continuations keep their catalog; the execution guard still scopes each call.
-  const selfRemoveOnly =
-    Boolean(readCronSelfRemoveOnlyJobId(opts)) &&
-    (!opts?.agentSessionKey?.trim() || isCronSessionKey(opts.agentSessionKey));
+  const { selfRemoveOnly, management } = declareCronTool(opts, config, managementAuthority);
   const tool: AnyAgentTool = {
     label: "Automations",
     name: AUTOMATIONS_TOOL_NAME,
@@ -167,7 +165,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
       selfRemoveOnly,
       activeRun,
       nextCheckEnabled,
-      managementOnly: managementAuthority?.managementOnly,
+      managementOnly: management ? management === "only" : undefined,
       allowCommandJobs,
     }),
     outputSchema: CronToolOutputSchema,
@@ -178,7 +176,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
       selfRemoveOnly,
       activeRun,
       nextCheckEnabled,
-      management: managementAuthority && (managementAuthority.managementOnly ? "only" : "also"),
+      management,
     }),
     prepareArguments: prepareCronToolArguments,
     execute: async (_toolCallId, args, operationSignal) => {

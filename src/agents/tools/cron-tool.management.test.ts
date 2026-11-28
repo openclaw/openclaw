@@ -6,6 +6,7 @@ import {
 } from "../../gateway/cron-creator-authority-grant.js";
 import { consumeCronNextCheckProposal } from "../../infra/agent-run-registry.automation.js";
 import * as runRegistry from "../../infra/agent-run-registry.js";
+import { stableCronManagementDeclaration } from "./cron-tool-stable-management.js";
 import { createCronTool } from "./cron-tool.js";
 import { withCronManagementCaller } from "./cron-tool.management.test-support.js";
 import type { CronToolOptions } from "./cron-tool.types.js";
@@ -25,8 +26,14 @@ function updateCalls(patch: Record<string, unknown>, readsCurrent = false) {
   ];
 }
 
-beforeEach(() => setRuntimeConfigSnapshot({}));
-afterEach(clearRuntimeConfigSnapshot);
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+  stableCronManagementDeclaration.clear();
+});
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+  stableCronManagementDeclaration.clear();
+});
 
 async function withAdminTool(
   origin: "unknown" | "channel-owner",
@@ -265,4 +272,76 @@ describe("cron next_check action", () => {
     expect(consumeCronNextCheckProposal(RUN_ID, JOB_ID)).toBe(15 * 60_000);
     expect(consumeCronNextCheckProposal(RUN_ID, "next-job")).toBe(30 * 60_000);
   });
+});
+
+it("keeps a session's granted Automations declaration on its ungranted turns", async () => {
+  const sessionKey = "agent:main:control-ui";
+  const grantedRunId = "declaration-granted-run";
+  const granted = await withCronManagementCaller(
+    grantedRunId,
+    async () => createCronTool({ runId: grantedRunId, agentSessionKey: sessionKey }),
+    "channel-owner",
+  );
+  const internal = createCronTool({
+    runId: "declaration-internal-run",
+    agentSessionKey: sessionKey,
+  });
+  expect(internal.parameters).toEqual(granted.parameters);
+  expect(internal.description).toBe(granted.description);
+  using gateway = vi.spyOn(gatewayModule, "callGatewayTool");
+  await expect(
+    internal.execute("internal-command-edit", {
+      action: "update",
+      jobId,
+      job: { payload: command },
+    }),
+  ).rejects.toThrow("automation command payloads cannot be created or edited");
+  expect(gateway).not.toHaveBeenCalled();
+});
+
+it("keeps a session's wider declaration on management-only continuations", async () => {
+  const sessionKey = "agent:main:sticky-declaration";
+  const granted = await withCronManagementCaller(
+    "declaration-also-run",
+    async () => createCronTool({ runId: "declaration-also-run", agentSessionKey: sessionKey }),
+    "channel-owner",
+  );
+  await withCronManagementCaller("declaration-only-run", async () => {
+    const continuation = createCronTool({
+      runId: "declaration-only-run",
+      agentSessionKey: sessionKey,
+    });
+    expect(continuation.parameters).toEqual(granted.parameters);
+    expect(continuation.description).toBe(granted.description);
+    using gateway = vi.spyOn(gatewayModule, "callGatewayTool");
+    await expect(
+      continuation.execute("continuation-add", {
+        action: "add",
+        job: {
+          name: "follow up",
+          schedule: { kind: "every", everyMs: 60_000 },
+          payload: { kind: "agentTurn", message: "check" },
+        },
+      }),
+    ).rejects.toThrow("can only list, get, update, run, remove, or bind automations");
+    expect(gateway).not.toHaveBeenCalled();
+  });
+});
+
+it("does not carry a management-only declaration to ungranted turns", async () => {
+  const sessionKey = "agent:main:only-declaration";
+  const continuation = await withCronManagementCaller("declaration-only-first-run", async () =>
+    createCronTool({ runId: "declaration-only-first-run", agentSessionKey: sessionKey }),
+  );
+  const internal = createCronTool({
+    runId: "declaration-after-only-run",
+    agentSessionKey: sessionKey,
+  });
+  const ordinary = createCronTool({
+    runId: "declaration-ordinary-run",
+    agentSessionKey: "agent:main:ordinary-declaration",
+  });
+  expect(continuation.description).not.toBe(ordinary.description);
+  expect(internal.parameters).toEqual(ordinary.parameters);
+  expect(internal.description).toBe(ordinary.description);
 });
