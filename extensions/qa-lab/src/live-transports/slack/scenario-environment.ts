@@ -68,6 +68,7 @@ export function createSlackQaScenarioEnvironment(params: {
       channelId: params.channelId,
       driverClient: params.driverClient,
       gateway: input.gateway as never,
+      sutAccountId: params.accountId,
       sutIdentity: params.sutIdentity,
       sutReadClient: params.sutReadClient,
     } satisfies Omit<SlackQaScenarioContext, "sentTs">;
