@@ -81,6 +81,7 @@ vi.mock("../../infra/restart-sentinel.js", async (importOriginal) => ({
 }));
 
 const { configHandlers } = await import("./config.js");
+const { createGatewayRuntimeSecurityAssertion } = await import("../server-runtime-config.js");
 
 function tokenAuthConfig(token: string): OpenClawConfig {
   return { gateway: { auth: { mode: "token", token } } };
@@ -321,5 +322,169 @@ describe("config shared auth disconnects", () => {
 
     expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
     expect(restartSentinelMocks.writeRestartSentinel).not.toHaveBeenCalled();
+  });
+});
+
+describe("config writes that change gateway auth", () => {
+  beforeEach(() => {
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  const passwordWithoutSecret: OpenClawConfig = { gateway: { auth: { mode: "password" } } };
+  // The serving Gateway's own startup and reload checks, as its request context supplies them.
+  const listenerChecks = (bindHost = "127.0.0.1") =>
+    createGatewayRuntimeSecurityAssertion({
+      port: 18789,
+      bindHost,
+      controlUiEnabled: false,
+      tailscaleMode: "off",
+    });
+  const runAuthWrite = (
+    method: string,
+    raw: unknown,
+    assertRuntimeSecurityConfigForWrite: (config: OpenClawConfig) => void = listenerChecks(),
+  ) => runWrite(method, raw, {}, { assertRuntimeSecurityConfigForWrite });
+
+  it.each([
+    { method: "config.patch", raw: { gateway: { auth: { mode: "password" } } } },
+    { method: "config.set", raw: passwordWithoutSecret },
+    { method: "config.apply", raw: passwordWithoutSecret },
+  ] as const)("$method rejects password mode without a password", async ({ method, raw }) => {
+    mockPreviousConfig(tokenAuthConfig("old-token"));
+
+    const { respond } = await runAuthWrite(method, raw);
+
+    expectRpcError(respond, {
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("no password was configured"),
+      details: { reason: "gateway-auth-unusable" },
+    });
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects trusted-proxy auth without a trusted proxy address", async () => {
+    mockPreviousConfig(tokenAuthConfig("old-token"));
+
+    const { respond } = await runAuthWrite("config.patch", {
+      gateway: {
+        auth: { mode: "trusted-proxy", token: null, trustedProxy: { userHeader: "x-user" } },
+      },
+    });
+
+    expectRpcError(respond, { message: expect.stringContaining("gateway.trustedProxies") });
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects trusted-proxy auth that keeps a shared token without echoing it", async () => {
+    mockPreviousConfig({
+      gateway: { ...tokenAuthConfig("old-token").gateway, trustedProxies: ["10.0.0.1"] },
+    });
+
+    const { respond } = await runAuthWrite("config.patch", {
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          token: "submitted-secret-value",
+          trustedProxy: { userHeader: "x-user" },
+        },
+      },
+    });
+
+    expectRpcError(respond, { message: expect.stringContaining("mutually exclusive") });
+    const error = respond.mock.calls[0]?.[2] as { message?: string } | undefined;
+    expect(error?.message).not.toContain("submitted-secret-value");
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects removing a token the saved config supplies through a SecretRef", async () => {
+    const tokenRef = { source: "env", provider: "default", id: "GATEWAY_TOKEN" } as const;
+    mockPreviousConfig({ gateway: { auth: { mode: "token", token: tokenRef } } });
+
+    const { respond } = await runAuthWrite("config.patch", { gateway: { auth: { token: null } } });
+
+    expectRpcError(respond, { message: expect.stringContaining("no token was configured") });
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects turning auth off on a listener that is not loopback", async () => {
+    mockPreviousConfig(tokenAuthConfig("old-token"));
+
+    const { respond } = await runAuthWrite(
+      "config.patch",
+      { gateway: { auth: { mode: "none" } } },
+      listenerChecks("0.0.0.0"),
+    );
+
+    expectRpcError(respond, { message: expect.stringContaining("without auth") });
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts password mode backed by OPENCLAW_GATEWAY_PASSWORD", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "env-backed-password-value");
+    mockPreviousConfig(tokenAuthConfig("old-token"));
+
+    const { respond } = await runAuthWrite("config.patch", {
+      gateway: { auth: { mode: "password" } },
+    });
+
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
+    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts password mode backed by the Gateway's --password startup override", async () => {
+    mockPreviousConfig(tokenAuthConfig("old-token"));
+    const checks = listenerChecks();
+
+    const { respond } = await runAuthWrite(
+      "config.patch",
+      { gateway: { auth: { mode: "password" } } },
+      // What the Gateway's fixed startup overlay adds for `--password`.
+      (config) =>
+        checks({
+          gateway: {
+            ...config.gateway,
+            auth: { ...config.gateway?.auth, password: "startup-flag-password-value" },
+          },
+        }),
+    );
+
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
+    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts password mode whose SecretRef resolves through the write", async () => {
+    const passwordRef = { source: "env", provider: "default", id: "GATEWAY_PASSWORD" };
+    mockPreviousConfig(tokenAuthConfig("old-token"));
+    prepareSecretsRuntimeSnapshotMock.mockImplementationOnce(
+      async ({ config }: { config: OpenClawConfig }) => ({
+        config: {
+          ...config,
+          gateway: { auth: { mode: "password", password: "resolved-password-value" } },
+        },
+      }),
+    );
+
+    const { respond } = await runAuthWrite("config.patch", {
+      gateway: { auth: { mode: "password", password: passwordRef, token: null } },
+    });
+
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
+  });
+
+  it.each([
+    { name: "unrelated writes", raw: { messages: { ackReaction: "!" } } },
+    {
+      name: "auth edits that leave it in place",
+      raw: { gateway: { auth: { allowTailscale: false } } },
+    },
+  ])("does not block $name on an already incomplete auth config", async ({ raw }) => {
+    mockPreviousConfig(passwordWithoutSecret);
+
+    const { respond } = await runAuthWrite("config.patch", raw);
+
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
+    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
   });
 });

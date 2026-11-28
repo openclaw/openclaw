@@ -1,0 +1,5 @@
+# PR #194538: exact net test-line growth for staging Gateway auth edits outside the
+# autosaved draft (dropdown never writes, one patch, credential handoff, connection
+# and saved-auth binding) and the config-write refusal of auth the Gateway would not
+# start with (set/patch/apply, startup overrides, non-loopback listener).
+601
