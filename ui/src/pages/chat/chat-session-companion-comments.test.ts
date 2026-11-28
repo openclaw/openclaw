@@ -282,7 +282,7 @@ it.each([false, true])(
 );
 
 it.each([false, true])(
-  "keeps plain-text Side chat usable after reported read failure, rejected=%s",
+  "keeps plain-text Side chat usable without a save warning after a read failure, rejected=%s",
   async (rejected) => {
     if (rejected) {
       storage.read.mockRejectedValue(new Error("IndexedDB unavailable"));
@@ -293,7 +293,7 @@ it.each([false, true])(
     current.view();
     current.threads.setDraft(annotation.sessionKey, "My memory-only question", "main");
     await nextEventLoopTurn();
-    expect(current.error).toHaveBeenCalledTimes(1);
+    expect(current.error).not.toHaveBeenCalled();
     const ask = vi.fn(async () => ({ answer: "done", ts: 1 }));
     await current.threads.submit(annotation.sessionKey, "My memory-only question", ask, "main");
     expect(ask).toHaveBeenCalledWith(
@@ -307,11 +307,11 @@ it.each([false, true])(
       turns: [{ status: "answered", answer: "done" }],
     });
     expect(storage.write).not.toHaveBeenCalled();
-    expect(current.error).toHaveBeenCalledTimes(1);
+    expect(current.error).not.toHaveBeenCalled();
   },
 );
 
-it("clears memory-only Side chat after a reported storage read failure", async () => {
+it("warns for edited comments after a failed read and can clear them in memory", async () => {
   storage.read.mockResolvedValue({ status: "storage-failed" });
   const current = owner();
   await current.threads.hydrate(
@@ -337,7 +337,7 @@ it("still cancels a stale account's submission after falling back to memory-only
   const previous = current.view();
   current.threads.setDraft(annotation.sessionKey, "Keep my local input", "main");
   await nextEventLoopTurn();
-  expect(current.error).toHaveBeenCalledTimes(1);
+  expect(current.error).not.toHaveBeenCalled();
   const ask = vi.fn(async () => ({ answer: "done", ts: 1 }));
   const submitted = current.threads.submit(
     annotation.sessionKey,

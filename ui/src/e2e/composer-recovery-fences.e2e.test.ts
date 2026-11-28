@@ -203,6 +203,9 @@ suite.define(() => {
         const alert = notice.getByRole("alert");
         await alert.waitFor();
         expect(await alert.textContent()).toContain("Couldn’t access your saved messages.");
+        const saveWarning = page.getByText("Couldn’t save the previous draft.", { exact: true });
+        expect(await composer.inputValue()).toBe("");
+        expect(await saveWarning.count()).toBe(0);
         expect(await notice.textContent()).not.toContain("Free browser storage");
         expect(await notice.textContent()).not.toContain("older browser");
         expect(await notice.getByRole("button", { name: "Restore", exact: true }).count()).toBe(0);
@@ -231,6 +234,7 @@ suite.define(() => {
         }
         expect(await original!.evaluate((node) => node.isConnected)).toBe(true);
         await page.evaluate(() => window.dispatchEvent(new Event("test:release-storage")));
+        await saveWarning.waitFor();
         await alert.waitFor();
         expect(await original!.evaluate((node) => node.isConnected)).toBe(true);
         await page.evaluate(() => window.dispatchEvent(new Event("test:recover-storage")));

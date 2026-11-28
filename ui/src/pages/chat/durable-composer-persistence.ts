@@ -130,9 +130,13 @@ export class DurableChatComposerPersistence {
   private restoredScopeKey = "";
 
   constructor(
-    private readonly onStorageError: () => void,
+    private readonly onStorageError: (operation: "save" | "restore") => void,
     private readonly onConflict: () => void,
   ) {}
+
+  private reportSaveError(scope: DurableComposerDraftScope) {
+    reportDurableComposerStorageError(scope, () => this.onStorageError("save"));
+  }
 
   resetRestoreScope() {
     this.restoreGeneration += 1;
@@ -144,10 +148,10 @@ export class DurableChatComposerPersistence {
     // draft revisions serialize snapshots without delaying attachment writes behind text.
     const { result, payloadUnavailable } = await writeDurableComposerSnapshot(snapshot);
     if (payloadUnavailable) {
-      reportDurableComposerStorageError(snapshot.scope, this.onStorageError);
+      this.reportSaveError(snapshot.scope);
     }
     if (result.status === "storage-failed" || result.status === "payload-too-large") {
-      reportDurableComposerStorageError(snapshot.scope, this.onStorageError);
+      this.reportSaveError(snapshot.scope);
     } else if (result.status === "conflict") {
       this.resetRestoreScope();
       this.onConflict();
@@ -159,7 +163,7 @@ export class DurableChatComposerPersistence {
     const { retireDurableComposerDraft } = await loadDurableComposerStore();
     const result = await retireDurableComposerDraft(scope, minimumRevision);
     if (result.status === "storage-failed") {
-      reportDurableComposerStorageError(scope, this.onStorageError);
+      this.reportSaveError(scope);
     }
   }
 
@@ -197,13 +201,15 @@ export class DurableChatComposerPersistence {
       if (baseline.scope.scopeKey.startsWith("chat:v3:")) {
         const recovery = await prepareDurableComposerRecovery(baseline.scope);
         if (recovery.status === "storage-failed") {
-          reportDurableComposerStorageError(baseline.scope, this.onStorageError);
+          // The recovery panel reports this access failure. No draft write was attempted.
           return;
         }
       }
       const result = await readDurableComposerDraft(baseline.scope);
       if (result.status === "storage-failed") {
-        reportDurableComposerStorageError(baseline.scope, this.onStorageError);
+        if (isCurrent()) {
+          this.onStorageError("restore");
+        }
         return;
       }
       const revision = result.status === "found" ? result.draft.revision : result.revision;
@@ -225,7 +231,9 @@ export class DurableChatComposerPersistence {
         try {
           attachments = await hydrateDurableComposerAttachments(draft.attachments);
         } catch {
-          reportDurableComposerStorageError(baseline.scope, this.onStorageError);
+          if (isCurrent()) {
+            this.onStorageError("restore");
+          }
           return;
         }
       }
