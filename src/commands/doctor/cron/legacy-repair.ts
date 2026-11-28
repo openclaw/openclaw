@@ -21,7 +21,7 @@ import {
   type QuarantinedCronConfigJob,
 } from "../../../cron/store.js";
 import { fingerprintCronJobRows } from "../../../cron/store/row-codec.js";
-import type { CronJob } from "../../../cron/types.js";
+import type { CronJob, CronStoreFile } from "../../../cron/types.js";
 import {
   collectErrorGraphCandidates,
   formatErrorMessage as errorMessage,
@@ -78,6 +78,7 @@ export type LegacyCronRepairState = {
   invalidConfigRows: QuarantinedCronConfigJob[];
   persistedQuarantine: CronQuarantinedJob[];
   projectedOwnersByJobId: ReadonlyMap<string, CronOwnerProjection>;
+  loadedJobs: CronStoreFile["jobs"];
   rawJobs: Array<Record<string, unknown>>;
   jobsFingerprint: string | undefined;
   ownerRows: Awaited<ReturnType<typeof inspectCronJobOwnersForDoctor>>;
@@ -181,6 +182,7 @@ export async function loadLegacyCronRepairState(params: {
     invalidConfigRows,
     persistedQuarantine,
     projectedOwnersByJobId,
+    loadedJobs: loaded.store.jobs,
     rawJobs: currentJobs,
     jobsFingerprint: loaded.jobsFingerprint,
     ownerRows,

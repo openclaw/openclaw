@@ -1,4 +1,5 @@
 // Doctor cron repair orchestration for legacy stores, run logs, payloads, and warnings.
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
@@ -108,14 +109,32 @@ function dockerStreamInventory(state: LegacyCronRepairState): HealthFinding[] {
       inventory.set(id, status);
     }
   }
-  for (const job of state.rawJobs) {
-    inspect(job, job.enabled === false ? "is paused" : "is configured");
+  for (const job of state.loadedJobs) {
+    if (job.streamSandbox?.backendId === "docker") {
+      inventory.set(job.id, job.enabled === false ? "is paused" : "is configured");
+    }
   }
-  for (const { job, sourceIndex } of state.invalidConfigRows) {
-    inspect(job, "has an invalid definition", state.ownerRows[sourceIndex]?.job_id);
+  if (state.ownerRows.length > state.loadedJobs.length) {
+    // Read the definition and its ID from the same row. The loader can omit retired rows.
+    for (const row of state.ownerRows) {
+      if (!inventory.has(row.job_id)) {
+        inspect(
+          safeParseJsonRecord(row.job_json) ?? undefined,
+          "has a definition the Gateway did not load",
+          row.job_id,
+        );
+      }
+    }
   }
-  for (const { job } of [...state.persistedQuarantine, ...(state.legacyQuarantine?.jobs ?? [])]) {
-    inspect(job, "is quarantined");
+  for (const { job, raw } of [
+    ...state.persistedQuarantine,
+    ...(state.legacyQuarantine?.jobs ?? []),
+  ]) {
+    inspect(
+      job,
+      "is quarantined",
+      isRecord(raw) && typeof raw.jobId === "string" ? raw.jobId : undefined,
+    );
   }
 
   const source = { checkId: LEGACY_CRON_STORE_CHECK_ID, path: resolveOpenClawStateSqlitePath() };

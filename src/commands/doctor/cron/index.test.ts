@@ -5,10 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createSandboxPersistentExecStore } from "../../../agents/sandbox/persistent-exec-store.js";
-import {
-  registryEntry,
-  reservationFor,
-} from "../../../agents/sandbox/persistent-exec.test-helpers.js";
+import * as sandbox from "../../../agents/sandbox/persistent-exec.test-helpers.js";
 import { updateRegistry } from "../../../agents/sandbox/registry.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
@@ -160,19 +157,23 @@ describe("collectLegacyCronStoreHealthFindings", () => {
     const stored = { ...schedule, kind: "sandbox-stream" };
     const streamSandbox = makeCronStreamSandboxTarget();
     const docker = { ...job, id: "docker", schedule: stored, streamSandbox };
-    const quarantined = { ...docker, id: "quarantined", schedule };
-    await writeCronStore([docker, job, { ...docker, id: undefined, streamSandbox: null }]);
+    const quarantined = {
+      job: { ...docker, id: undefined, schedule },
+      raw: { jobId: "quarantined" },
+    };
+    const retired = { ...job, id: "retired", payload: { kind: "skillCollectionReview" } };
+    await writeCronStore([retired, docker, job, { ...docker, id: undefined, streamSandbox: null }]);
     await saveCronQuarantinedJobs({
       storePath,
       nowMs: 1,
-      entries: [{ sourceIndex: 0, reason: "invalid-schedule", job: quarantined }],
+      entries: [{ sourceIndex: 0, reason: "invalid-schedule", ...quarantined }],
     });
-    await updateRegistry(registryEntry);
+    await updateRegistry(sandbox.registryEntry);
     const custody = createSandboxPersistentExecStore();
     const db = openOpenClawStateDatabase().db;
     const storeKey = resolveCronStoreKeyInDatabase(db, storePath);
-    const active = { ...reservationFor(1), ownerKey: `cron:${storeKey}:docker` };
-    const removed = { ...reservationFor(2), ownerKey: "cron:retired:removed" };
+    const active = { ...sandbox.reservationFor(1), ownerKey: `cron:${storeKey}:docker` };
+    const removed = { ...sandbox.reservationFor(2), ownerKey: "cron:retired:removed" };
     await custody.reserve(active, () => {});
     await custody.reserve(removed, () => {});
     // The saved cleanup outcome remains readable even if the Docker target is damaged.
@@ -184,11 +185,11 @@ describe("collectLegacyCronStoreHealthFindings", () => {
     const findings = all.filter((f) => f.requirement?.startsWith("cron-sandbox-stream"));
     expect(findings.map((f) => [f.severity, f.target, f.fixHint])).toEqual([
       ["info", "docker", undefined],
-      ["info", "raw-2", undefined],
+      ["info", "raw-3", undefined],
       ["info", "quarantined", undefined],
       ["warning", removed.ownerKey, expect.stringContaining("original Docker daemon")],
     ]);
-    expect(findings.find((f) => f.target === "raw-2")?.message).toContain("invalid definition");
+    expect(findings.find((f) => f.target === "raw-3")?.message).toContain("did not load");
     expect(JSON.stringify(findings)).not.toMatch(/private-argument|private-detail/);
   });
 
