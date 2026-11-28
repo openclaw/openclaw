@@ -1,9 +1,36 @@
+import { getRuntimeConfig } from "../../config/config.js";
 import {
   assertOperatorModelAllowed,
   readRunOperatorAuthority,
   resolvePreparedRunAdmission,
 } from "../admitted-run-context.js";
 import type { RunCliAgentParams } from "./types.js";
+
+export function normalizeCliRunParams(input: RunCliAgentParams): RunCliAgentParams {
+  const params = {
+    ...input,
+    config: input.config ?? getRuntimeConfig(),
+    messageProvider: input.messageProvider ?? input.messageChannel,
+  };
+  if (!params.sessionManager) {
+    return params;
+  }
+  // Caller-owned memory is authoritative even when empty. Correlation and native
+  // bindings survive; borrowed durable paths, writers, and turn leases do not.
+  return {
+    ...params,
+    sessionFile: `in-memory:${params.sessionManager.getSessionId()}`,
+    sessionTarget: undefined,
+    storePath: undefined,
+    expectedLifecycleRevision: undefined,
+    expectedWriterRunId: undefined,
+    userTurnTranscriptRecorder: undefined,
+    persistAssistantTranscript: undefined,
+    prepareAssistantTranscriptMessage: undefined,
+    contextEngineLogicalTurnLease: undefined,
+    onContextEngineTurnCandidate: undefined,
+  };
+}
 
 /** Keep the logical model ceiling across CLI transport mapping and asynchronous preparation. */
 export function prepareCliRunModelAuthority(params: RunCliAgentParams): RunCliAgentParams {
