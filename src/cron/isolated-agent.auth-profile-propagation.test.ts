@@ -45,7 +45,7 @@ const { resolveAgentDir } = await import("./isolated-agent/run.runtime.js");
 const { captureCronInferenceBinding } = await import("./inference-binding.runtime.js");
 const { prepareCronRunInference } = await import("./run-inference.js");
 const { captureCronUpdatedInferenceBinding } =
-  await import("../gateway/server-methods/cron-input-validation.js");
+  await import("../gateway/server-methods/cron-inference-account.js");
 const platformId = "openai:platform";
 const subscriptionId = "openai:subscription";
 const claudeProfile = "anthropic:default";
@@ -308,7 +308,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
           "Runtime claude-cli would run openai/gpt-4o with stored account claude-cli:personal",
         );
         expect(result.error).toContain(
-          "openclaw automations edit <jobId> --model openai/gpt-4o@claude-cli:personal",
+          "openclaw automations edit test-job --model openai/gpt-4o@claude-cli:personal",
         );
         expect(result.errorClassification).toEqual({ kind: "permanent" });
         expect(result.failureNotificationDetail).toEqual({ kind: "inference-account-unrecorded" });
