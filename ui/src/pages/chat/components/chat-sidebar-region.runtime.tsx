@@ -296,8 +296,6 @@ function Region(props: RegionProps, host: RegionElement) {
                           <button
                             class="side-panel-empty__type"
                             type="button"
-                            onPointerEnter={() => type().prepare?.()}
-                            onFocus={() => type().prepare?.()}
                             onClick={() => {
                               type().prepare?.();
                               props.callbacks?.openSlot(type().slot);

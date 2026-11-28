@@ -125,7 +125,8 @@ it("uses the typed lifecycle path and fails closed when the owning instance clos
     isDispatchAvailable: () => available,
   });
   const { lifecycle } = runtime;
-  expect(getGatewayLifecycleRuntime()).toBe(lifecycle);
+  // Only the listening Gateway kernel claims the process-global lifecycle registration.
+  expect(getGatewayLifecycleRuntime()).toBeUndefined();
 
   await expect(
     lifecycle.dispatchAgent({ message: "test", idempotencyKey: "run-unavailable" }),
@@ -163,7 +164,6 @@ it("uses the typed lifecycle path and fails closed when the owning instance clos
     client: createSyntheticPluginRuntimeClient({ scopes: [WRITE_SCOPE] }),
   });
   runtime.close();
-  expect(getGatewayLifecycleRuntime()).toBeUndefined();
   await expect(lifecycle.waitForAgent({ runId: "run-1" })).rejects.toMatchObject({
     name: "GatewayDispatchUnavailableError",
     message: expect.stringContaining(unavailable),
@@ -274,7 +274,7 @@ it("sends delivery notices through normal outbound without invoking plugin actio
 it("keeps approval subscribers isolated by Gateway instance and unregisters exactly once", async () => {
   const first = createRuntime();
   const second = createRuntime();
-  expect(getGatewayLifecycleRuntime()).toBe(second.lifecycle);
+  expect(getGatewayLifecycleRuntime()).toBeUndefined();
   const onRequested = vi.fn();
   const unsubscribe = subscribe(first, onRequested);
   const request = approvalRequest("approval-1");
@@ -293,9 +293,7 @@ it("keeps approval subscribers isolated by Gateway instance and unregisters exac
   expect(await first.approvalEvents.publishRequestedAsync("exec", request)).toBe(0);
   expect(declined).not.toHaveBeenCalled();
   first.close();
-  expect(getGatewayLifecycleRuntime()).toBe(second.lifecycle);
   second.close();
-  expect(getGatewayLifecycleRuntime()).toBeUndefined();
 });
 
 it("refuses synchronous publication before sending when a subscriber requires async eligibility", async () => {

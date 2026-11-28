@@ -388,14 +388,6 @@ export function describeMinimaxProviderDiscoveryContract(
     });
 
     it("keeps portal oauth marker fallback provider-owned", async () => {
-      setProfile("minimax-portal:default", {
-        type: "oauth",
-        provider: "minimax-portal",
-        access: "access-token",
-        refresh: "refresh-token",
-        expires: Date.now() + 60_000,
-      });
-
       await expectCatalog(
         {
           provider: getProvider("minimax-portal"),

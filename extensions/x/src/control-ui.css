@@ -231,7 +231,7 @@
   margin-top: 3px;
 }
 
-.x-replies td:last-child {
+.x-replies__row-action {
   text-align: right;
 }
 

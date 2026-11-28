@@ -53,16 +53,6 @@ vi.mock("../update/run.js", async (original) => ({
   ...(await original<typeof import("../update/run.js")>()),
   runPluginMaintenance: async () => ({ step: { step: "plugins", status: "completed" as const } }),
 }));
-vi.mock("../cli/update-cli/update-command-post-activation-inspections.js", async (original) => ({
-  ...(await original<
-    typeof import("../cli/update-cli/update-command-post-activation-inspections.js")
-  >()),
-  runPostActivationInspections: async ({
-    result,
-  }: Parameters<
-    typeof import("../cli/update-cli/update-command-post-activation-inspections.js").runPostActivationInspections
-  >[0]) => result,
-}));
 
 it("automatically completes the original Git update when its healthy schema-40 verifier removes the trial before refusing history", async ({
   signal,

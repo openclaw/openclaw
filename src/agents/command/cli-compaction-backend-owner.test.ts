@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
-  createPreparedRuntimeLease,
   prepareCompactionScenario,
   setCliCompactionTestDeps,
 } from "./cli-compaction.test-support.js";
@@ -16,7 +15,6 @@ describe("runCliTurnCompactionLifecycle backend ownership", () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-compaction-owner-"));
     setCliCompactionTestDeps({
       resolveCliBackendConfig: () => null,
-      acquirePreparedModelRuntime: async (input) => createPreparedRuntimeLease(input),
     });
   });
 

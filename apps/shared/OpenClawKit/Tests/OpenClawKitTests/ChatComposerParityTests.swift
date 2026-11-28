@@ -253,22 +253,15 @@ struct ChatComposerStateTests {
     }
 
     @Test func `model selection matches qualified choices after gateway readback`() {
-        let choices = [
-            OpenClawChatModelChoice(
-                modelID: "claude-opus-4-1",
-                name: "Claude Opus 4.1",
-                provider: "anthropic",
-                contextWindow: 200_000),
+        let model = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
+        var session = OpenClawChatSessionEntry(key: "main")
+        session.model = "claude-opus-4-1"
+        model.sessions = [session]
+        model.syncSelectedModel()
+        model.modelChoices = [
+            .init(modelID: "claude-opus-4-1", name: "Claude Opus 4.1", provider: "anthropic", contextWindow: nil),
         ]
-
-        #expect(OpenClawChatViewModel.modelSelectionMatches(
-            selectionID: "anthropic/claude-opus-4-1",
-            currentSelectionID: "claude-opus-4-1",
-            choices: choices))
-        #expect(!OpenClawChatViewModel.modelSelectionMatches(
-            selectionID: OpenClawChatViewModel.defaultModelSelectionID,
-            currentSelectionID: "claude-opus-4-1",
-            choices: choices))
+        #expect(model.canonicalModelSelectionID == "anthropic/claude-opus-4-1")
     }
 
     @Test func `tagless movie metadata stages as video`() async throws {

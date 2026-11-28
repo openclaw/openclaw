@@ -76,6 +76,9 @@ it.each([
       agentId: expected,
       sessionKey: `agent:${expected}:subagent:test-meeting:meeting-1`,
       spawnedBy: `agent:${expected}:main`,
+      contextMode: "fork",
+      // A meeting participant is a guest; the turn runs on the agent's own runtime.
+      runner: "agent-turn",
     }),
   );
   expect(submitToolResult).toHaveBeenCalledTimes(1);

@@ -83,7 +83,10 @@ import {
 import { remapSkillReferencePaths } from "../embedded-agent-runner/sandbox-skills.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import { recordAdmittedModelRoutingDecision } from "../model-routing-decision.js";
-import { resolveRuntimeChannelPromptContext } from "../runtime-capabilities.js";
+import {
+  resolveRuntimeChannelPromptContext,
+  resolveSessionPromptRoute,
+} from "../runtime-capabilities.js";
 import { createUnrecordedScheduledAccountRefusal } from "../scheduled-unrecorded-account.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { resolveStableCliSkillAuthoring } from "../stable-skill-authoring.js";
@@ -426,14 +429,14 @@ async function prepareCliRunContextWithinReadFence(
   // preflight, refresh, or forward OpenClaw's snapshot; the installed Claude
   // process validates and refreshes its own current login.
   const usesNativeAuthProfile =
-    backendAuthPolicy?.nativeAuthProfileIds !== undefined &&
     effectiveAuthProfileId !== undefined &&
-    backendAuthPolicy.nativeAuthProfileIds.includes(effectiveAuthProfileId);
+    backendAuthPolicy?.nativeAuthProfileIds?.includes(effectiveAuthProfileId);
   if (usesNativeAuthProfile) {
     effectiveAuthProfileId = undefined;
     authCredential = undefined;
   } else if (params.nativeAuthOnly && effectiveAuthProfileId) {
     throw createUnrecordedScheduledAccountRefusal({
+      jobId: params.jobId,
       runtime: backendResolved.id,
       modelRef: `${params.modelProvider ?? params.provider}/${params.model ?? "default"}`,
       profileId: effectiveAuthProfileId,
@@ -1307,12 +1310,17 @@ async function prepareCliRunContextWithinReadFence(
       skipSkills: nodeClaudePlacement || claudeSkillsPlugin.args.length > 0,
       moduleUrl: import.meta.url,
     });
+    const promptRoute = resolveSessionPromptRoute(params.sessionEntry?.delivery, {
+      channel: params.messageChannel ?? params.messageProvider,
+      accountId: params.agentAccountId,
+      requester: params,
+      chatType: runtimeChatType,
+    });
     const { runtimeChannel, runtimeCapabilities, customInlineButtonHint, messageToolHints } =
       resolveRuntimeChannelPromptContext({
+        ...promptRoute,
         cfg: params.config,
-        channel: skipsTurnPrefix ? undefined : (params.messageChannel ?? params.messageProvider),
-        accountId: params.agentAccountId,
-        requester: params,
+        channel: skipsTurnPrefix ? undefined : promptRoute.channel,
       });
     const operatorAuthority = readRunOperatorAuthority(params);
     const builtSystemPrompt = isSideQuestion
@@ -1331,7 +1339,7 @@ async function prepareCliRunContextWithinReadFence(
             requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
             silentReplyPromptMode: params.silentReplyPromptMode,
             runtimeChannel,
-            runtimeChatType,
+            runtimeChatType: promptRoute.chatType,
             runtimeCapabilities,
             customInlineButtonHint,
             messageToolHints,

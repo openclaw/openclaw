@@ -5,31 +5,34 @@ import { loadPluginManifest } from "../../plugins/manifest.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
 
-it("offers Meta API keys and Muse device sign-in before the Muse runtime is installed or enabled", () => {
-  const rootDir = path.resolve("extensions/meta");
-  const loaded = loadPluginManifest(rootDir, false);
-  if (!loaded.ok) {
-    throw new Error(loaded.error);
-  }
-  const manifest = loaded.manifest;
+function bundledCapabilities(pluginIds: string[], config: OpenClawConfig) {
   const metadataSnapshot = createPluginMetadataSnapshotFixture({
-    plugins: [
-      {
+    plugins: pluginIds.map((pluginId) => {
+      const rootDir = path.resolve("extensions", pluginId);
+      const loaded = loadPluginManifest(rootDir, false);
+      if (!loaded.ok) {
+        throw new Error(loaded.error);
+      }
+      const { manifest } = loaded;
+      return {
         id: manifest.id,
         rootDir,
-        origin: "bundled",
+        origin: "bundled" as const,
         providers: manifest.providers,
         providerAuthChoices: manifest.providerAuthChoices,
-      },
-    ],
+      };
+    }),
   });
-  const config: OpenClawConfig = {
-    plugins: { entries: { meta: { enabled: true }, muse: { enabled: false } } },
-  };
-  const { capabilities } = resolveModelProviderCapabilities({
+  return resolveModelProviderCapabilities({
     config,
     metadataSnapshot,
     workspaceDir: path.resolve("workspace-fixture"),
+  }).capabilities;
+}
+
+it("offers Meta API keys and Muse device sign-in before the Muse runtime is installed or enabled", () => {
+  const capabilities = bundledCapabilities(["meta"], {
+    plugins: { entries: { meta: { enabled: true }, muse: { enabled: false } } },
   });
 
   expect(capabilities.find((entry) => entry.provider === "meta")).toMatchObject({
@@ -46,4 +49,16 @@ it("offers Meta API keys and Muse device sign-in before the Muse runtime is inst
       }),
     ],
   });
+});
+
+it("tells the catalog which providers share a manifest group", () => {
+  const capabilities = bundledCapabilities(["google", "minimax"], {
+    plugins: { entries: { google: { enabled: true }, minimax: { enabled: true } } },
+  });
+  const groupOf = (provider: string) =>
+    capabilities.find((entry) => entry.provider === provider)?.groupId;
+
+  expect(groupOf("google")).toBe("google");
+  expect(groupOf("minimax")).toBe("minimax");
+  expect(groupOf("minimax-portal")).toBe("minimax");
 });

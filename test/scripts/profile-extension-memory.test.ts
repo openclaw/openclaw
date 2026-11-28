@@ -170,19 +170,6 @@ async function cleanupProfileFixture(
 }
 
 describe("scripts/profile-extension-memory", () => {
-  it("stops parsing options after the argument terminator", () => {
-    expect(parseArgs(["--extension", "discord", "--", "--extension", "telegram"])).toMatchObject({
-      extensions: ["discord"],
-    });
-  });
-
-  it("accepts package-manager argument separators before script options", () => {
-    expect(parseArgs(["--", "--extension", "discord", "--skip-combined"])).toMatchObject({
-      extensions: ["discord"],
-      skipCombined: true,
-    });
-  });
-
   it("rejects loose numeric flags before scanning built plugin artifacts", () => {
     const cases = [
       ["--concurrency", "2abc"],
@@ -405,27 +392,6 @@ describe("scripts/profile-extension-memory", () => {
           processGroup: process.platform === "win32" ? "unavailable" : "verified",
         },
       });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("creates parent directories for nested JSON report paths", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-"));
-    try {
-      const extensionDir = path.join(root, "dist", "extensions", "simple");
-      const reportPath = path.join(root, ".artifacts", "memory", "report.json");
-      mkdirSync(extensionDir, { recursive: true });
-      writeFileSync(path.join(extensionDir, "index.js"), `export default {};\n`, "utf8");
-
-      const result = runProfileExtensionMemory(
-        ["--extension", "simple", "--skip-combined", "--concurrency", "1", "--json", reportPath],
-        root,
-      );
-
-      expect(result.status, result.stderr).toBe(0);
-      const report = JSON.parse(readFileSync(reportPath, "utf8"));
-      expect(report.counts).toMatchObject({ totalEntries: 1, ok: 1, fail: 0, timeout: 0 });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

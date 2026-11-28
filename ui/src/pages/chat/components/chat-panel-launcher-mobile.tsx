@@ -42,8 +42,6 @@ function LauncherOption(props: {
       type="button"
       class="chat-panel-launcher-mobile__option"
       disabled={!props.definition.available}
-      onPointerEnter={() => props.definition.prepare?.()}
-      onFocus={() => props.definition.prepare?.()}
       onClick={() => {
         props.definition.prepare?.();
         props.onOpen(props.definition.slot);

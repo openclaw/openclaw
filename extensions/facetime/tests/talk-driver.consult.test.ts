@@ -255,6 +255,7 @@ describe("FaceTime talk driver consult delivery", () => {
           spawnedBy: "agent:lobster:main",
           contextMode: "fork",
           senderId: "caller@example.com",
+          runner: "agent-turn",
           messageProvider: "voice",
           lane: "facetime:17bc43fd-5800-4b54-86db-698c49253c42",
           runIdPrefix: "facetime:17bc43fd-5800-4b54-86db-698c49253c42",

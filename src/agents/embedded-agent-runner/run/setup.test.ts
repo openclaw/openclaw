@@ -21,7 +21,7 @@ const hookContext = { sessionId: "session-1", workspaceDir: "/tmp/workspace" };
 
 type EffectiveModelInput = Parameters<typeof resolveEmbeddedRunEffectiveModel>[0];
 function effectiveModel(
-  runParams: Partial<EffectiveModelInput["runParams"]> = {},
+  runParams: Partial<EffectiveModelInput["runParams"]>,
   overrides: Partial<Omit<EffectiveModelInput, "runParams">> = {},
 ) {
   return resolveEmbeddedRunEffectiveModel({

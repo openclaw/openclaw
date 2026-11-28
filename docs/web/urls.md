@@ -608,8 +608,8 @@ no route-specific URL parameters.
 | Labs                | `/settings/labs`                               | -                         | Shared settings parameters below                                                                 |
 | About               | `/settings/about`                              | -                         | Shared settings parameters below                                                                 |
 | AI and agents       | `/settings/ai-agents`                          | `/ai-agents`              | Shared settings parameters below                                                                 |
-| Models              | `/settings/model-setup`                        | `/model-setup`            | `?firstRun=1`                                                                                    |
-| Model providers     | `/settings/model-providers`                    | `/model-providers`        | Shared settings parameters below                                                                 |
+| Model setup         | `/settings/model-setup`                        | `/model-setup`            | Redirects to Model providers                                                                     |
+| Model providers     | `/settings/model-providers`                    | `/model-providers`        | `?firstRun=1`; shared settings parameters below                                                  |
 | Import memory       | `/memory-import`                               | `/settings/memory-import` | -                                                                                                |
 | Workboard           | `/workboard`                                   | -                         | `/workboard/<boardId>`                                                                           |
 | Worktrees           | `/worktrees`                                   | `/settings/worktrees`     | -                                                                                                |
@@ -646,7 +646,7 @@ Links to Settings sections that moved to another page replace the old URL with
 the current destination while keeping the setting anchor. Back returns to the
 page before the link, and Forward returns to the current destination.
 
-Model setup links with `?firstRun=1` or `?firstRun=explicit` retain the first-run onboarding flow. Without either marker, `/settings/model-setup` and `/model-setup` redirect to `/settings/model-providers?connect=1`, which opens the connection dialog on Models. The Models page otherwise stays in place while connecting a provider or reviewing Gateway discovery.
+First-run setup opens `/settings/model-providers?firstRun=1`: the Models page with detected ready-to-use models and activation recovery above **Connect a provider**, and **Find local models** for local model servers. Model setup links with `?firstRun=1` or `?firstRun=explicit` redirect there and keep the marker. Without either marker, `/settings/model-setup` and `/model-setup` redirect to `/settings/model-providers?connect=1`, which opens the connection dialog on Models. The Models page otherwise stays in place while connecting a provider or reviewing Gateway discovery.
 
 After provider sign-in, Models refreshes credentials and the shared model catalog
 without reloading its existing rows, usage, or cost requests. If credentials were

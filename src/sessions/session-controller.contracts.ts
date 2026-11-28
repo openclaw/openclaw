@@ -301,6 +301,24 @@ export type ReplyOperation = {
 
 export const REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS = 15_000;
 
+export class AmbiguousSessionControllerError extends Error {
+  readonly #workSessionKeys: string[];
+
+  constructor(matches: readonly SessionControllerEntry[]) {
+    super(
+      "OpenClaw found conflicting session records and couldn’t tell which session to use. Try again in a moment.",
+    );
+    // An owner's original key can outlive its work. Capture the effects' own targets instead.
+    this.#workSessionKeys = matches.flatMap(({ lifecycle }) =>
+      Array.from(lifecycle?.effects ?? [], (effect) => effect.ref.target.sessionKey),
+    );
+  }
+
+  hasWorkFor(sessionKey: string): boolean {
+    return this.#workSessionKeys.includes(sessionKey);
+  }
+}
+
 export class ReplyRunAlreadyActiveError extends Error {
   constructor(sessionKey: string) {
     super(`Reply run already active for ${sessionKey}`);

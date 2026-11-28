@@ -44,6 +44,32 @@ final class OpenClawSnapshotUITests: XCTestCase {
         try super.tearDownWithError()
     }
 
+    func testCappedSearchPreviewStartsUnderFilters() throws {
+        self.launchApp(for: Self.controlScreenshotTarget, additionalArguments: ["--openclaw-group-controls-fixture"])
+        let app = try XCTUnwrap(self.app)
+        app.buttons["Sessions.Search"].tap()
+        let field = app.textFields["Search.Field"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        // The fixture session titles do not contain “i”; the built-in pages exceed the All preview limit.
+        field.typeText("i")
+        let more = app.buttons["Show more"]
+        XCTAssertTrue(more.waitForExistence(timeout: 5))
+        let filters = app.buttons["Search.Tab.all"]
+        let offline = app.staticTexts["Offline. Searching what’s on this device."]
+        let first = offline.exists ? offline : more
+        let gap = first.frame.minY - filters.frame.maxY
+        XCTAssertGreaterThanOrEqual(gap, 0)
+        XCTAssertLessThan(gap, filters.frame.height / 2, "The preview must not leave an empty row under the filters")
+        app.buttons["Search.Tab.pages"].tap()
+        let results = app.scrollViews.containing(.button, identifier: "Skill Workshop").firstMatch
+        XCTAssertLessThan(results.frame.minY, filters.frame.midY)
+        XCTAssertGreaterThan(results.frame.maxY, field.frame.midY)
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.48, dy: 0.41))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.48, dy: 0.29))
+        start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
+        self.attachScreenshot(named: "search-under-filters")
+    }
+
     /// User-made session groups live on the Sessions screen (the drawer lists sessions without group headers
     /// since the prototype snapshot). The header is the shared fold control; its actions sit on a long press.
     func testSessionsGroupHeaderControls() throws {
@@ -130,22 +156,24 @@ final class OpenClawSnapshotUITests: XCTestCase {
             for: Self.chatScreenshotTarget,
             additionalArguments: ["--openclaw-progress-bar-fixture"])
         let app = try XCTUnwrap(self.app)
-        let card = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Plan, ")).firstMatch
-        XCTAssertTrue(card.waitForExistence(timeout: 8))
-        self.attachScreenshot(named: "progress-card-collapsed")
-        card.tap()
+        // Above the phone composer a note without steps is a short pill, never a cut sentence.
+        let pill = app.buttons["chat-activity-pill-progress"]
+        XCTAssertTrue(pill.waitForExistence(timeout: 8))
+        XCTAssertEqual(pill.label, "Task progress")
+        self.attachScreenshot(named: "progress-pill")
+        pill.tap()
         let hasBar = app.progressIndicators.firstMatch.waitForExistence(timeout: 5)
-        self.attachScreenshot(named: "progress-card-expanded")
+        self.attachScreenshot(named: "progress-sheet")
         XCTAssertTrue(hasBar, "Task list has no progress bar")
         XCTAssertTrue(app.staticTexts["Now: reading the sample diff."].exists)
         let rawTag = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "<progress"))
         XCTAssertEqual(rawTag.count, 0, "Task list still displays a raw progress tag")
-        XCTAssertEqual(card.label, "Plan, Now: reading the sample diff.")
     }
 
     func testStreamedReplyIsNotDuplicatedWithSavedRow() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,
+            appearance: "light",
             additionalArguments: ["--openclaw-empty-chat-fixture", "--openclaw-dup-filter-fixture"])
         let app = try XCTUnwrap(self.app)
         let input = self.chatMessageInput(in: app)
@@ -161,13 +189,15 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let userRow = app.staticTexts[prompt]
         XCTAssertTrue(userRow.waitForExistence(timeout: 5), "The explicit fixture send was not accepted")
         // Only dismiss after sending: the empty-chat starter buttons also send on tap.
-        app.scrollViews["chat-transcript"].coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.05)).tap()
+        if app.keyboards.firstMatch.exists { userRow.tap() }
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3), "Fixture keyboard stayed open")
 
-        // This tool row is emitted after both sources, not after deduplication succeeds.
-        let receipt = app.descendants(matching: .any).matching(NSPredicate(
-            format: "value CONTAINS %@", "dup-filter-inputs-received")).firstMatch
-        XCTAssertTrue(receipt.waitForExistence(timeout: 8), "FIFO receipt did not arrive after both reply sources")
+        // This completed call follows both sources; inspect it in the run list, not a separate live row.
+        let tools = app.buttons["chat-working-status"]
+        XCTAssertTrue(tools.waitForExistence(timeout: 8))
+        tools.tap()
+        XCTAssertTrue(app.buttons["chat-tool-step-dup-filter-receipt"].waitForExistence(timeout: 5))
+        app.buttons["chat-tool-sheet-close"].tap()
         let copies = app.staticTexts.matching(NSPredicate(
             format: "label CONTAINS %@", "The cobalt lighthouse is ready."))
         XCTAssertTrue(copies.firstMatch.waitForExistence(timeout: 5), "Fixture reply marker is missing")
@@ -176,16 +206,20 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(retry.waitForExistence(timeout: 5), "Fixture retry status is missing")
         self.attachScreenshot(named: "dup-filter-streaming")
         // The indicator groups accessibility under its phase; inspect its actual pixels for telemetry.
-        let image = try XCTUnwrap(retry.screenshot().image.cgImage)
+        let screenshot = retry.screenshot()
+        let capture = XCTAttachment(screenshot: screenshot)
+        capture.name = "working-row-retry"
+        capture.lifetime = .keepAlways
+        add(capture)
+        let image = try XCTUnwrap(screenshot.image.cgImage)
         let recognition = VNRecognizeTextRequest()
         recognition.recognitionLevel = .accurate
         recognition.recognitionLanguages = ["en-US"]
         try VNImageRequestHandler(cgImage: image, options: [:]).perform([recognition])
         let text = (recognition.results ?? []).compactMap { $0.topCandidates(1).first?.string }
             .joined(separator: " ").lowercased()
-        XCTAssertTrue(
-            text.contains("485 tokens"),
-            "RETRY_TOKENS_MISSING: retry hides cumulative output tokens: \(text)")
+        XCTAssertTrue(text.contains("retrying"), "Retry phase is not visible: \(text)")
+        XCTAssertFalse(text.contains("token"), "Retry phase still shows output tokens: \(text)")
         XCTAssertEqual(copies.count, 1, "Saved and streaming reply render duplicate copies")
 
         let stop = app.buttons["Stop response"]
@@ -208,6 +242,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
     func testExternalRunShowsStatusAndToolsBeforeReplyText() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,
+            appearance: "light",
             additionalArguments: ["--openclaw-external-run-fixture"])
         let app = try XCTUnwrap(self.app)
         let waiting = app.descendants(matching: .any)
@@ -216,10 +251,24 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "external-run-before-reply-status")
         XCTAssertTrue(showsWaiting, "EXTERNAL_RUN_STATUS_MISSING: another client's run shows no startup status")
         XCTAssertTrue(app.buttons["Stop response"].exists)
-        let tool = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "value CONTAINS %@", "external-fixture.txt")).firstMatch
-        XCTAssertTrue(tool.waitForExistence(timeout: 15), "EXTERNAL_RUN_TOOL_MISSING")
+        let tool = app.buttons["chat-working-status"]
+        expectation(for: NSPredicate(format: "label == %@", "Reading external-fixture.txt"), evaluatedWith: tool)
+        waitForExpectations(timeout: 15)
+        let toolFrame = tool.frame
+        let active = XCTAttachment(screenshot: tool.screenshot())
+        active.name = "working-row-tool"
+        active.lifetime = .keepAlways
+        add(active)
         self.attachScreenshot(named: "external-run-before-reply-tool")
+
+        // The fixture emits no reasoning events. After the tool completes, the fallback is still visible.
+        expectation(for: NSPredicate(format: "label == %@", "Thinking"), evaluatedWith: tool)
+        waitForExpectations(timeout: 15)
+        let idle = XCTAttachment(screenshot: tool.screenshot())
+        idle.name = "working-row-no-tool"
+        idle.lifetime = .keepAlways
+        add(idle)
+        XCTAssertEqual(tool.frame, toolFrame, "The row should not move between its tool title and Thinking")
     }
 
     func testStartupStatusShowsWaitingForResponse() throws {
@@ -300,6 +349,10 @@ final class OpenClawSnapshotUITests: XCTestCase {
         for _ in 0..<8 where !gateway.isHittable {
             hub.swipeUp()
         }
+        let chat = hub.buttons["Chat"]
+        let skills = hub.buttons["Skills"]
+        XCTAssertLessThan(chat.frame.minY, skills.frame.minY)
+        XCTAssertLessThan(skills.frame.minY, gateway.frame.minY)
         gateway.tap()
         let details = app.buttons["Connection details"]
         XCTAssertTrue(details.waitForExistence(timeout: 5))
@@ -377,16 +430,11 @@ final class OpenClawSnapshotUITests: XCTestCase {
         ]
         app.launch()
         self.app = app
-        let gatewayBar = app.navigationBars["Gateway"]
-        guard gatewayBar.waitForExistence(timeout: 8) else {
+        let connection = app.staticTexts["Settings.Title.gateway"]
+        guard connection.waitForExistence(timeout: 8) else {
             self.recordHeaderHierarchy(app)
-            XCTFail("Gateway settings did not open")
+            XCTFail("Connection settings did not open")
             return
-        }
-        let statusBarHeight = gatewayBar.frame.minY - app.frame.minY
-        if statusBarHeight > 0 {
-            app.coordinate(withNormalizedOffset: .zero)
-                .withOffset(CGVector(dx: 20, dy: statusBarHeight / 2)).tap()
         }
         self.tapLabeled("Connection details", in: app)
         XCTAssertTrue(app.navigationBars["Connection details"].waitForExistence(timeout: 5))
@@ -399,7 +447,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         }
         host.tap()
         host.typeText("headers.example.com")
-        self.dismissKeyboard(in: app)
         self.tapLabeled("Custom Headers", in: app)
         let name = app.textFields["Header name"]
         guard name.waitForExistence(timeout: 6) else {
@@ -427,7 +474,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(value.waitForExistence(timeout: 4))
         value.tap()
         value.typeText("synthetic-value")
-        self.dismissKeyboard(in: app)
+        self.reveal(add, in: app)
         XCTAssertTrue(add.isEnabled)
         add.tap()
         XCTAssertTrue(app.staticTexts[validName].waitForExistence(timeout: 6))
@@ -464,17 +511,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         }
         self.recordHeaderHierarchy(app)
         XCTFail("Could not tap \(label)")
-    }
-
-    private func dismissKeyboard(in app: XCUIApplication) {
-        guard app.keyboards.firstMatch.waitForExistence(timeout: 2) else { return }
-        let bar = app.navigationBars.firstMatch
-        if bar.exists {
-            bar.tap()
-        }
-        if app.keyboards.firstMatch.exists {
-            app.swipeDown()
-        }
     }
 
     private func recordHeaderHierarchy(_ app: XCUIApplication) {
@@ -700,18 +736,21 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(composer.waitForExistence(timeout: 8))
 
         try self.openChatGatewaySettings()
-        let gateway = app.navigationBars["Gateway"]
-        XCTAssertTrue(gateway.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["RootTabs.Sidebar.Show"].isHittable)
-        XCTAssertFalse(gateway.buttons["BackButton"].exists)
-        self.attachScreenshot(named: "chat-gateway-root")
+        let connection = app.navigationBars.containing(.staticText, identifier: "Settings.Title.gateway").firstMatch
+        XCTAssertTrue(connection.waitForExistence(timeout: 5))
+        let back = connection.buttons["BackButton"]
+        XCTAssertTrue(back.isHittable)
+        self.attachScreenshot(named: "chat-connection-settings")
 
-        try self.selectSidebarDestination("Settings")
+        back.tap()
         let settings = app.descendants(matching: .any)["SettingsHub.Native"]
         XCTAssertTrue(settings.waitForExistence(timeout: 5))
-        XCTAssertTrue(gateway.waitForNonExistence(timeout: 5))
-        try self.openSidebarWithSlowEdgeDrag()
-        try self.selectSidebarDestination("Home")
+        XCTAssertTrue(connection.waitForNonExistence(timeout: 5))
+        app.buttons["SettingsHub.Close"].tap()
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 5))
+        let hideSidebar = app.buttons["RootTabs.Sidebar.Hide"]
+        self.waitForHittable(true, of: hideSidebar)
+        hideSidebar.tap()
         self.waitForHittable(true, of: composer)
     }
 
@@ -896,7 +935,10 @@ extension OpenClawSnapshotUITests {
     func testSelectedAuthFailedModelDisablesOnlineSend() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,
-            additionalArguments: ["--openclaw-selected-model-auth-failure-fixture"])
+            additionalArguments: [
+                "--openclaw-selected-model-auth-failure-fixture",
+                "--openclaw-model-sign-in-fixture", "ordinary",
+            ])
         let app = try XCTUnwrap(self.app)
         let input = self.chatMessageInput(in: app)
         XCTAssertTrue(input.waitForExistence(timeout: 8))
@@ -907,10 +949,16 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(send.waitForExistence(timeout: 3))
         XCTAssertFalse(send.isEnabled)
         XCTAssertTrue(app.staticTexts[
-            "Authentication failed. Review the provider credential or sign-in, then retry.",
+            "Sign-in failed for this model.",
         ].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["chat-model-sign-in"].exists)
+        XCTAssertTrue(app.buttons["Sign in again"].exists)
+        XCTAssertFalse(app.buttons["Model sign-in"].exists)
         self.attachScreenshot(named: "chat-composer-model-auth-failed")
+
+        let modelMenu = self.inlineModelChip(in: app)
+        XCTAssertTrue(modelMenu.waitForExistence(timeout: 5))
+        modelMenu.tap()
+        self.assertModelSignInSheetOpens(in: app)
     }
 
     func testModelSignInMovesToModelMenuWhileSelectedModelCanSend() throws {
@@ -1012,10 +1060,13 @@ extension OpenClawSnapshotUITests {
         let signIn = self.pickerSignInRow(in: app)
         XCTAssertTrue(signIn.isEnabled)
         signIn.tap()
-        XCTAssertTrue(app.staticTexts[
-            "No native sign-in options are available. Open Models in the web app, or update the Gateway.",
-        ].waitForExistence(timeout: 5))
-        app.buttons["Close"].tap()
+        // Provider accounts is a page of the model sheet, with the system back button.
+        XCTAssertTrue(app.navigationBars["Provider accounts"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.buttons["model-auth-provider-openai"].waitForExistence(timeout: 5), app.debugDescription)
+        // A pushed page carries back, not close, as a provider's models page does.
+        app.buttons["BackButton"].tap()
+        XCTAssertTrue(app.buttons["chat-model-picker-close"].waitForExistence(timeout: 5), app.debugDescription)
+        app.buttons["chat-model-picker-close"].tap()
     }
 
     func testModelSelectionTargetVariantsPersistInComposer() throws {
@@ -1093,14 +1144,10 @@ extension OpenClawSnapshotUITests {
         func openOfflineSettings(appearance: String?) throws -> XCUIApplication {
             self.launchApp(for: Self.settingsFallbackTarget, appearance: appearance, screenshotMode: false)
             let app = try XCTUnwrap(self.app)
-            let onboardingClose = app.buttons["Close"]
-            if onboardingClose.waitForExistence(timeout: 3) {
-                onboardingClose.tap()
-                XCTAssertTrue(onboardingClose.waitForNonExistence(timeout: 5))
-            }
-            // A previously onboarded device without a saved Gateway opens Connection first.
-            if app.navigationBars["Gateway"].exists {
-                try self.selectSidebarDestination("Settings")
+            // A previously onboarded device without a saved connection opens its details first.
+            let connection = app.navigationBars.containing(.staticText, identifier: "Settings.Title.gateway").firstMatch
+            if connection.exists {
+                connection.buttons["BackButton"].tap()
             }
             let settings = app.descendants(matching: .any)["SettingsHub.Native"]
             XCTAssertTrue(settings.waitForExistence(timeout: 8))

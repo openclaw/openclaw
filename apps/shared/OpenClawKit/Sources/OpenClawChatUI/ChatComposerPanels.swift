@@ -13,7 +13,6 @@ struct ChatComposerPanelBridge: ViewModifier {
         content
             .anchorPreference(key: ChatComposerSurfaceAnchorKey.self, value: .bounds) { $0 }
             .onChange(of: self.panels?.focusRequest) { _, _ in self.composer.focusDraft() }
-            .onChange(of: self.panels?.signInRequest) { _, _ in self.composer.performModelSignInAction(.open) }
             .onChange(of: self.composer.isFocused) { _, focused in
                 if focused { self.panels?.dismiss() }
             }
@@ -57,12 +56,15 @@ enum ChatComposerPanel: Equatable {
 @Observable
 final class ChatComposerPanelController {
     private(set) var panel: ChatComposerPanel?
+    /// The open effort bar's height, so the status strip can sit above it.
+    var effortBarHeight: CGFloat = 0
+    /// The status strip's surface in global coordinates, kept clear of the bar's tap-outside area.
+    var statusStripFrame: CGRect?
     /// Bumped when the composer should take focus back after the picker closes.
     private(set) var focusRequest = 0
-    /// Bumped when the picker asks for the model sign-in the composer owns.
-    private(set) var signInRequest = 0
+    /// The model sheet opens on Provider accounts; it holds until the sheet is gone.
+    private(set) var opensAccounts = false
     private var returnsFocus = false
-    private var opensSignIn = false
 
     func toggle(_ panel: ChatComposerPanel, composerFocused: Bool) {
         guard self.panel != panel else {
@@ -71,7 +73,14 @@ final class ChatComposerPanelController {
         }
         // The picker opens with the keyboard down; the composer gets it back when the sheet closes.
         self.returnsFocus = panel == .model && composerFocused
+        self.opensAccounts = false
         self.panel = panel
+    }
+
+    /// Opens the effort bar on the strip's behalf ("Change" on a lowered effort).
+    func openEffortBar() {
+        self.returnsFocus = false
+        self.panel = .effort
     }
 
     func dismiss() {
@@ -87,19 +96,19 @@ final class ChatComposerPanelController {
         self.effortChipFocusRequest += 1
     }
 
-    func requestSignIn() {
-        self.opensSignIn = true
-        self.dismiss()
+    /// The composer's sign-in row: the model sheet, opened on Provider accounts.
+    func openAccounts() {
+        self.returnsFocus = false
+        self.opensAccounts = true
+        self.panel = .model
     }
 
-    /// Runs once the picker sheet is gone, however it closed: the sign-in sheet or the keyboard follows.
+    /// Runs once the picker sheet is gone, however it closed: the keyboard follows if it was up.
     func pickerDidDismiss() {
-        if self.opensSignIn {
-            self.signInRequest += 1
-        } else if self.returnsFocus {
+        if self.returnsFocus {
             self.focusRequest += 1
         }
-        self.opensSignIn = false
+        self.opensAccounts = false
         self.returnsFocus = false
     }
 }
@@ -130,6 +139,7 @@ struct ChatComposerPanelHost: ViewModifier {
 
     @State private var controller = ChatComposerPanelController()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.openClawToastPresenter) private var toastPresenter
 
     func body(content: Content) -> some View {
         content
@@ -151,12 +161,17 @@ struct ChatComposerPanelHost: ViewModifier {
                 content: {
                     ChatModelPickerSheet(
                         viewModel: self.viewModel,
+                        opensAccounts: self.controller.opensAccounts,
                         onPick: { self.controller.dismiss() },
-                        onClose: { self.controller.dismiss() },
-                        onSignIn: { self.controller.requestSignIn() })
+                        onClose: { self.controller.dismiss() })
                         .openClawSheetHeaderEdge()
                 })
             .onChange(of: self.viewModel.sessionKey) { _, _ in self.controller.dismiss() }
+            // A change to effort, speed or the model that didn't save says so in the app's toast.
+            .onChange(of: self.viewModel.settingsChangeFailure?.id) { _, _ in
+                guard let failure = self.viewModel.settingsChangeFailure else { return }
+                self.toastPresenter?.post(.failure(failure.text, retry: failure.retry))
+            }
     }
 
     @ViewBuilder
@@ -166,22 +181,43 @@ struct ChatComposerPanelHost: ViewModifier {
         let gap = ChatComposerPanelMetrics.gap
         // The overlay may start under the status bar or below it; either way the bar stays clear of it.
         let top = max(0, proxy.safeAreaInsets.top - origin) + gap
-        Color.clear
-            .contentShape(Rectangle())
-            .frame(width: width, height: max(0, composer.minY + origin))
-            .position(x: width / 2, y: (composer.minY - origin) / 2)
-            .onTapGesture { self.controller.dismiss() }
-            .accessibilityHidden(true)
+        // A tap outside the bar closes it, except on the status strip, whose action stays usable.
+        let strip = self.controller.statusStripFrame.map { $0.offsetBy(dx: 0, dy: -origin) }
+        ForEach(Self.tapOutsideBands(from: -origin, to: composer.minY, sparing: strip), id: \.lowerBound) { band in
+            Color.clear
+                .contentShape(Rectangle())
+                .frame(width: width, height: band.upperBound - band.lowerBound)
+                .position(x: width / 2, y: (band.lowerBound + band.upperBound) / 2)
+                .onTapGesture { self.controller.dismiss() }
+                .accessibilityHidden(true)
+        }
         let room = max(0, composer.minY - gap - top)
         VStack(spacing: 0) {
             Spacer(minLength: 0)
             ChatEffortBar(viewModel: self.viewModel)
                 // VoiceOver's two-finger scrub closes the bar and returns to the effort chip.
                     .accessibilityAction(.escape) { self.controller.escapeEffortBar() }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                        self.controller.effortBarHeight = $0
+                    }
         }
         .frame(width: composer.width, height: room)
         .position(x: composer.midX, y: top + room / 2)
         .transition(.opacity.combined(with: .offset(y: 6)))
+    }
+
+    /// The vertical bands above the composer that close the bar on a tap, leaving out the strip's row.
+    static func tapOutsideBands(
+        from top: CGFloat,
+        to bottom: CGFloat,
+        sparing strip: CGRect?) -> [ClosedRange<CGFloat>]
+    {
+        let bands: [(CGFloat, CGFloat)] = if let strip, strip.minY < bottom, strip.maxY > top {
+            [(top, strip.minY), (strip.maxY, bottom)]
+        } else {
+            [(top, bottom)]
+        }
+        return bands.filter { $0.1 > $0.0 }.map { $0.0...$0.1 }
     }
 }
 

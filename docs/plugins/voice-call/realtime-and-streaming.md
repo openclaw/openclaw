@@ -243,6 +243,11 @@ close and the inactivity backstop remain independent of it.
 
 ### Tool policy
 
+An agent consult runs as a turn of the call's session on the call agent's own
+runtime, including Claude CLI, with its configured fallbacks. The caller is a
+guest. `responseModel` overrides the agent's model only when set, and
+`realtime.consultThinkingLevel` overrides its thinking level only when set.
+
 `realtime.toolPolicy` controls only the consult run. It never disables
 `openclaw_end_call` on models that support function tools:
 

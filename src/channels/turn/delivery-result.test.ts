@@ -12,7 +12,7 @@ import {
   resolveChannelTurnDispatchCounts,
 } from "./dispatch-result.js";
 
-const receipt = (overrides: Partial<MessageReceipt> = {}): MessageReceipt => ({
+const receipt = (overrides: Partial<MessageReceipt>): MessageReceipt => ({
   platformMessageIds: [],
   parts: [],
   sentAt: 123,

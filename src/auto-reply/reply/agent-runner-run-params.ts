@@ -12,6 +12,7 @@ import {
   findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
 } from "../../config/model-provider-config.js";
+import { followsSessionInferenceAccount } from "../../cron/inference-binding.js";
 import { resolveCronFallbacksOverride } from "../../cron/isolated-agent/run-fallback-policy.js";
 import { resolveCronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
@@ -99,13 +100,14 @@ export function buildRunEntrySelection(
     agentDir: selection.agentDir,
     fallbacksOverride: selection.fallbacksOverride,
     cyberAccessProgram: run.cyberAccessProgram,
-    userLockedAuthProfileId: run.scheduledAutomation
-      ? run.scheduledAutomation.job.inferenceBinding?.source === "user"
-        ? run.scheduledAutomation.job.inferenceBinding.profileId
-        : undefined
-      : run.authProfileIdSource === "user"
-        ? run.authProfileId
-        : undefined,
+    userLockedAuthProfileId:
+      run.scheduledAutomation && !followsSessionInferenceAccount(run.scheduledAutomation.job)
+        ? run.scheduledAutomation.job.inferenceBinding?.source === "user"
+          ? run.scheduledAutomation.job.inferenceBinding.profileId
+          : undefined
+        : run.authProfileIdSource === "user"
+          ? run.authProfileId
+          : undefined,
   };
 }
 

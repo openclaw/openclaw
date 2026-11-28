@@ -112,6 +112,9 @@ describe("runCodexAppServerSideQuestion cache-parity fork", () => {
         baseInstructions: "Effective parent base after a cold resume.",
         developerInstructions: "Exact parent generic policy and workspace instructions.",
         config: {
+          "agents.enabled": false,
+          "features.multi_agent": false,
+          "features.multi_agent_v2": false,
           web_search: webSearch,
           "features.code_mode": false,
           "features.computer_use": true,

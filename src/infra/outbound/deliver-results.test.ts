@@ -33,7 +33,7 @@ function deliver(
   send: (
     params: ChannelHandlerParams,
   ) => Partial<Pick<ChannelHandler, "sendText" | "sendFormattedText">>,
-  options: DeliveryOptions = {},
+  options: DeliveryOptions,
 ) {
   vi.mocked(createChannelHandler).mockImplementation(async (params) => ({
     chunker: null,

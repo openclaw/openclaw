@@ -72,12 +72,11 @@ function writerParams(overrides: Partial<RunEmbeddedAgentParams> = {}) {
   } satisfies RunEmbeddedAgentParams;
 }
 
-async function seedWriter(runId = "run-a", extra: Partial<InternalSessionEntry> = {}) {
+async function seedWriter(runId = "run-a") {
   await replaceSessionEntry(writerScope(), {
     activeWriterRunId: runId,
     ...sessionRevision,
     updatedAt: 1,
-    ...extra,
   } as InternalSessionEntry);
 }
 

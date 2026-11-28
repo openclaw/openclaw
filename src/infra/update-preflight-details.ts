@@ -107,6 +107,15 @@ export const UPDATE_PREFLIGHT_DETAILS = {
     "The Gateway process changed during maintenance drain. Run openclaw gateway status --deep to inspect its current service, then retry openclaw update.",
   "task-ownership-unverified":
     "Scheduled Task ownership could not be verified. Inspect the task's autostart state through its service owner, then retry openclaw update.",
+  // Fixed public sentences for causes whose own messages carry paths, owners or plugin IDs.
+  "backup-sqlite-probe-timeout":
+    "Checking backup files for SQLite headers timed out (ETIMEDOUT) before the update. Preserve a verified backup and follow the manual package-manager update: https://docs.openclaw.ai/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun",
+  "backup-sqlite-probe-failed":
+    "Backup files could not be checked for SQLite headers before the update. Check read access to the state directory and close programs using it, then retry.",
+  "plugin-migration-obligations-changed":
+    "Plugin migration obligations changed while Doctor was repairing; retained inputs stay protected. Run openclaw doctor --fix after the other repair finishes.",
+  "update-executor-owned":
+    "Another update executor owns this installation. Run openclaw update status; if no update is running, run openclaw update repair.",
 } as const;
 
 export const UPDATE_HANDOFF_BEFORE_TRANSFER_DETAIL =

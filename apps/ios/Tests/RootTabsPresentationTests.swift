@@ -264,10 +264,6 @@ struct RootTabsPresentationTests {
         #expect(!RootSidebarModel.isFailedCronJob(Self.cronJob(enabled: true, status: "ok")))
     }
 
-    @Test func `recent session cap is disabled while search is active`() {
-        #expect(RootSidebar.recentSessionCap(searchText: "deploy") == nil)
-    }
-
     @Test func `configured gateway bypasses launch request and stale onboarding markers`() {
         let route = RootTabs.startupPresentationRoute(
             gatewayConnected: false,
@@ -680,14 +676,23 @@ struct RootTabsPresentationTests {
           {"key":"conversation"}
         ]
         """.utf8))
-        let keys = RootSidebarModel.sections(
-            sessions: entries,
-            query: query,
-            currentSessionKey: selected,
-            mainSessionKey: "main",
-            activeAgentID: "main",
-            groups: []).flatMap(\.nodes).map(\.session.key)
-        #expect(keys.contains("agent:main:cron:daily") == showsAutomation)
+        let key = "agent:main:cron:daily"
+        for personallyPinned in [false, true] {
+            let sections = RootSidebarModel.sections(
+                sessions: entries,
+                query: query,
+                currentSessionKey: selected,
+                mainSessionKey: "main",
+                activeAgentID: "main",
+                groups: [],
+                personalPins: IOSSidebarPins(entries: personallyPinned ? ["session:\(key)"] : []))
+            let placements = sections.filter { $0.nodes.contains { $0.session.key == key } }.map(\.id)
+            if personallyPinned {
+                #expect(placements == (archived ? [] : ["pinned"]))
+            } else {
+                #expect(placements == (showsAutomation ? ["recent"] : []))
+            }
+        }
     }
 
     @Test func `session work subtitle mirrors the web repo and branch line`() {

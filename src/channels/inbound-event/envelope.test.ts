@@ -15,7 +15,6 @@ const resolveAgentRoute = vi.hoisted(() =>
   vi.fn(() => ({
     agentId: "main",
     sessionKey: "agent:main:telegram:direct:peer",
-    accountId: "default",
   })),
 );
 

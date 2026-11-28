@@ -96,9 +96,8 @@ it.each(["failure", "exhaustion"] as const)("stops automatic fills after %s", as
   }
 });
 
-it("reopens a trimmed cache boundary in compact mode before its single automatic fill", async () => {
+it("reopens a trimmed cache boundary before its single automatic fill", async () => {
   const { pane, state, request, evaluate } = setup();
-  Object.assign(state.settings, { compactSessionOpening: true });
   state.currentSessionId = "current";
   state.chatMessages[0] = { ...nativeHistoryMessage(3), __openclaw: { id: "source-3", seq: 3 } };
   state.chatHistoryPagination = { hasMore: true, needsBoundary: true, totalMessages: 4 };
@@ -121,13 +120,12 @@ it("reopens a trimmed cache boundary in compact mode before its single automatic
 });
 
 it.each([
-  { compact: false, height: 501 },
-  { compact: true, height: 400 },
-])("keeps earlier messages for reader intent (compact $compact)", async ({ compact, height }) => {
+  { cold: false, height: 501 },
+  { cold: true, height: 400 },
+])("keeps earlier messages for reader intent (cold $cold)", async ({ cold, height }) => {
   const { pane, state, thread, request, setHeight, evaluate } = setup();
   const pagination = { hasMore: true as const, olderCursor: "older-2", totalMessages: 4 };
-  Object.assign(state.settings, { compactSessionOpening: compact });
-  if (compact) {
+  if (cold) {
     state.currentSessionId = null;
     state.chatMessages = [];
     request.mockResolvedValueOnce({

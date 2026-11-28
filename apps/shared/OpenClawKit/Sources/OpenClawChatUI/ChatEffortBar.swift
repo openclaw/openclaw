@@ -99,6 +99,7 @@ struct ChatEffortBar: View {
 /// The composer presents these choices inline; the model sheet presents them in a Settings-style row.
 struct ChatEffortSpeedPicker: View {
     let viewModel: OpenClawChatViewModel
+    var showsMenuIcons = false
 
     var body: some View {
         Picker(selection: Binding(
@@ -106,7 +107,12 @@ struct ChatEffortSpeedPicker: View {
             set: { self.viewModel.selectFastMode($0) }))
         {
             ForEach(self.viewModel.composerSpeedOptions, id: \.self) { option in
-                Text(verbatim: ChatEffortBar.speedLabel(option)).tag(option)
+                let title = Text(verbatim: ChatEffortBar.speedLabel(option))
+                if self.showsMenuIcons, let bolt = ChatSpeedBolt(rawValue: option) {
+                    Label { title } icon: { bolt.image }.tag(option)
+                } else {
+                    title.tag(option)
+                }
             }
         } label: {
             Text("Speed").font(OpenClawChatTypography.settingsBody).foregroundStyle(.primary)

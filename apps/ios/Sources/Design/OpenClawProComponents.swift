@@ -6,12 +6,12 @@ enum OpenClawProMetric {
     static let cardRadius: CGFloat = 16
     static let controlRadius: CGFloat = 12
     static let compactControlSize: CGFloat = 36
+    // periphery:ignore - DESIGN.md specifies this shared inset for clearance above persistent navigation.
     static let bottomScrollInset: CGFloat = 96
 }
 
 enum OpenClawRadius {
     static let xs: CGFloat = 8
-    static let sm: CGFloat = 10
     static let md: CGFloat = 12
 }
 
@@ -107,10 +107,6 @@ extension View {
                 .buttonStyle(.glass)
                 .tint(tint)
         }
-    }
-
-    func openClawGlassSurface() -> some View {
-        self.glassEffect(.regular, in: .rect(cornerRadius: OpenClawProMetric.controlRadius))
     }
 }
 
@@ -228,8 +224,22 @@ struct OpenClawSidebarRevealToolbarVisibility: ViewModifier {
     }
 }
 
+struct OpenClawRoundNavigationButton<Glyph: View>: View {
+    let action: () -> Void
+    @ViewBuilder let glyph: () -> Glyph
+
+    var body: some View {
+        Button(action: self.action) {
+            self.glyph().openClawToolbarHitTarget().contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: Circle())
+    }
+}
+
 struct OpenClawSidebarControlButton: View {
     let action: OpenClawSidebarHeaderAction
+    var glass: Glass = .identity
 
     private static let chatMenuGlyph = UIGraphicsImageRenderer(size: CGSize(width: 16, height: 8)).image { _ in
         UIColor.black.setFill()
@@ -239,6 +249,7 @@ struct OpenClawSidebarControlButton: View {
 
     var body: some View {
         self.identified(self.button.buttonStyle(.plain))
+            .glassEffect(self.glass, in: Circle())
             .opacity(self.action.isShown ? 1 : 0)
     }
 
@@ -291,6 +302,7 @@ struct OpenClawSidebarControlButton: View {
 struct OpenClawSidebarToolbarItem: ToolbarContent {
     let action: OpenClawSidebarHeaderAction
     let placement: ToolbarItemPlacement
+    var glass: Glass = .identity
 
     @ToolbarContentBuilder
     var body: some ToolbarContent {
@@ -303,10 +315,9 @@ struct OpenClawSidebarToolbarItem: ToolbarContent {
 
     private var item: some ToolbarContent {
         ToolbarItem(placement: self.placement) {
-            OpenClawSidebarControlButton(action: self.action)
+            OpenClawSidebarControlButton(action: self.action, glass: self.glass)
         }
-        // Sidebar reveal is intentionally background-free in every host;
-        // suppress the toolbar's automatic glass so it cannot reappear.
+        // The button owns its background; do not add a second one in the toolbar.
         .sharedBackgroundVisibility(.hidden)
     }
 }
@@ -554,33 +565,5 @@ struct OpenClawProMark: View {
             .frame(width: self.size, height: self.size)
             .shadow(color: OpenClawBrand.accent.opacity(0.18), radius: self.shadowRadius, y: self.shadowRadius / 3)
             .accessibilityLabel("OpenClaw")
-    }
-}
-
-struct OpenClawGatewayCompactPill: View {
-    @Environment(NodeAppModel.self) private var appModel
-
-    var body: some View {
-        let presentation = GatewayStatusBuilder.build(appModel: self.appModel).statusPresentation
-        OpenClawStatusBadge(label: .verbatim(presentation.title), tone: presentation.tone)
-            .accessibilityLabel(
-                String(
-                    format: String(localized: "Gateway %@"),
-                    presentation.title))
-    }
-}
-
-extension GatewayDisplayState {
-    var statusPresentation: (title: String, tone: OpenClawStatusTone) {
-        switch self {
-        case .connected:
-            (String(localized: "Online"), .ok)
-        case .connecting:
-            (String(localized: "Connecting"), .accent)
-        case .error:
-            (String(localized: "Attention"), .warn)
-        case .disconnected:
-            (String(localized: "Offline"), .muted)
-        }
     }
 }

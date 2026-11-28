@@ -16,6 +16,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 import type { HealthCheck, HealthCheckContext } from "../flows/health-checks.js";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
 import { cleanupSnapshotOperations } from "../infra/sqlite-readonly-location-cleanup.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
@@ -181,6 +182,40 @@ describe("doctor lint state isolation", () => {
         expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
         expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
         expect(process.env.OPENCLAW_PROFILE).toBeUndefined();
+      },
+    );
+  });
+
+  it("gives --all the same credential-reading findings as direct checks on a migrated profile", async () => {
+    await withOpenClawTestState(
+      {
+        prefix: "openclaw-doctor-lint-client-credentials-",
+        env: { OPENCLAW_TEST_FAST: "1", OPENCLAW_PROFILE: undefined },
+      },
+      async (state) => {
+        // A remote Gateway call loads the local device identity before it connects.
+        await state.writeConfig({
+          gateway: { mode: "remote", remote: { url: "wss://192.0.2.1:18789", token: "t" } },
+          memory: { search: { enabled: false } },
+        });
+        // A migrated profile: the shared state database plus its client credential companion.
+        openOpenClawStateDatabase({ env: state.env });
+        loadOrCreateDeviceIdentity({ env: state.env });
+        await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(state.env));
+        const checkIds = ["core/doctor/device-pairing", "core/doctor/gateway-health"];
+        mocks.resolveDoctorContributionHealthChecks.mockResolvedValue(
+          await Promise.all(checkIds.map(realHealthCheck)),
+        );
+        const findings = async (opts: Parameters<typeof runDoctorLintCli>[1]) => {
+          using stdout = captureStdout();
+          await runDoctorLintCli(runtime, { json: true, ...opts });
+          return JSON.parse(String(stdout.mock.calls.at(-1)?.[0])).findings;
+        };
+        const direct = await findings({ onlyIds: checkIds });
+        expect(direct.map((finding: { message: string }) => finding.message)).not.toContainEqual(
+          expect.stringContaining("device identity"),
+        );
+        expect(await findings({ includeAllChecks: true })).toEqual(direct);
       },
     );
   });

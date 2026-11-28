@@ -2,7 +2,6 @@ import { wakeUpdateRunWatcher } from "../gateway/update-run-watcher.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { getUpdateRunAsync, getUpdateRunStatusAsync } from "../infra/update-run-reader.js";
 import type { UpdateRunStep } from "../infra/update-run-record.js";
-import { updateRunStepsFromResultStep } from "../infra/update-run-step.js";
 import {
   finishUpdateRunAsync,
   recordUpdateRunStepAsync,
@@ -126,60 +125,12 @@ export function schedulePluginMaintenance(): void {
       ) {
         await recordUpdateRunStepAsync(lastRun.runId, step);
         wakeUpdateRunWatcher(lastRun.runId);
-      } else if (step.status === "failed" && step.detail) {
+      } else if (step.detail) {
+        // A successful child can defer repair. With no writable history step,
+        // its warning detail is the operator's only recovery guidance.
         log.warn(step.detail);
       }
     }, getAsyncWorkSignal()),
-  );
-}
-
-async function runPostUpdateInspections(runId: string): Promise<void> {
-  const step = "post-activation doctor inspections";
-  try {
-    const [{ runPostActivationInspections }, { resolvePostActivationInspectionCheckIds }] =
-      await Promise.all([
-        import("../cli/update-cli/update-command-post-activation-inspections.js"),
-        import("../flows/doctor-health-contributions.js"),
-      ]);
-    const root = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
-    if (!root) {
-      throw new Error("Running release root not found");
-    }
-    const result = await runPostActivationInspections({
-      root,
-      gatewayReady: true,
-      checkIds: await resolvePostActivationInspectionCheckIds(),
-      timeoutMs: 120_000,
-      result: { status: "ok", mode: "unknown", steps: [], durationMs: 0 },
-    });
-    getAsyncWorkSignal()?.throwIfAborted();
-    for (const projected of result.steps.flatMap(updateRunStepsFromResultStep)) {
-      await recordUpdateRunStepAsync(runId, projected);
-    }
-    if (result.steps.length === 0) {
-      await recordUpdateRunStepAsync(runId, { step, status: "completed" });
-    }
-  } catch (error) {
-    if (getAsyncWorkSignal()?.aborted) {
-      return;
-    }
-    // Advisory inspections cannot change the settled aggregate result.
-    const detail = redactSensitiveText(
-      `Doctor inspections did not run after the update (${String(error)}). Run \`openclaw doctor --lint --all\` to check this install.`,
-      { mode: "tools" },
-    ).slice(0, 2000);
-    await recordUpdateRunStepAsync(runId, { step, status: "completed", detail });
-    await recordUpdateRunStepAsync(runId, {
-      step: `warning:${step}`,
-      status: "completed",
-      detail,
-    });
-  }
-}
-
-function schedulePostUpdateInspections(runId: string): void {
-  wakeUpdateRunWatcher(runId, () =>
-    withCommandProcessScope(() => runPostUpdateInspections(runId), getAsyncWorkSignal()),
   );
 }
 
@@ -255,9 +206,7 @@ async function settleRunFromTrial(trial: Trial | null, prefix = resolvePrefix())
             reason: `${outcome.reason ?? "The new version did not start"}; v${VERSION} is still running`,
           },
     );
-    if (outcome.status === "succeeded") {
-      schedulePostUpdateInspections(trial.runId);
-    }
+    wakeUpdateRunWatcher(trial.runId);
     if (finished.steps.some((step) => step.step === "notice:ack" && step.status === "completed")) {
       const { createUpdateRunNotifier } = await import("../gateway/update-run-notice.runtime.js");
       await (
@@ -294,7 +243,7 @@ export async function observeLegacyTrialReadiness(
 ): Promise<(() => Promise<boolean>) | undefined> {
   const { disarmLegacyTrial, recoverLegacyTrialRun } = await import("./legacy-trial.js");
   const receipt = await disarmLegacyTrial(runningRoot, buildId, captured);
-  return receipt && (() => recoverLegacyTrialRun(receipt, schedulePostUpdateInspections));
+  return receipt && (() => recoverLegacyTrialRun(receipt));
 }
 
 /** Called after the listener is serving, including the old release after a rollback. */
