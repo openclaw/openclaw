@@ -37,6 +37,7 @@ import {
   closePreparedModelRuntimeSnapshots,
   registerPreparedModelRuntimeClose,
 } from "./prepared-model-runtime.lifecycle.js";
+import { resolvePreparedModelRuntimeOwnerBySnapshot } from "./prepared-model-runtime.owner.js";
 import { createCatalogFleetFixture } from "./test-helpers/prepared-model-catalog-fleet-fixture.js";
 import {
   loadCompletedFullCatalog,
@@ -305,6 +306,60 @@ describe("Gateway catalog worker pool", () => {
     } finally {
       vi.useRealTimers();
       await work[Symbol.asyncDispose]();
+      unregister();
+    }
+  });
+
+  it("backs off expiry reads across consecutive real worker failures", async ({ signal }) => {
+    const observed = observeWorkers();
+    const fixture = await createFleetFixture(observed.subscribe, true, { agentCount: 1 });
+    await loadFleetCatalogs(fixture);
+    const inventory = () =>
+      resolvePreparedModelRuntimeOwnerBySnapshot(currentRuntime(fixture))!.catalogInventory!;
+    const { failures, unregister } = observeFailures();
+    const hold = `${fixture.marker}.hold`;
+    fs.writeFileSync(hold, "");
+    await using work = pendingCatalogWork(hold);
+    // Worker transport keeps real timers; only the expiry-read clock advances.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(1_000_000);
+      inventory().providers.get(PROVIDER_ID)!.expiresAt = 999_999;
+      currentRuntime(fixture).refreshExpiredModelCatalog!();
+      for (const [attempt, delay] of [
+        [1, 30_000],
+        [2, 60_000],
+        [3, 120_000],
+      ] as const) {
+        await withinTest(receipts.waitFor(fixture.marker, "start", attempt + 1), signal);
+        const replaced = createDeferredCore();
+        const unlisten = registerPreparedModelRuntimePublicationListener((event) => {
+          if (event.phase === "published") {
+            replaced.resolve();
+          }
+        });
+        try {
+          await observed.spawned.at(-1)!.terminate();
+          await work.track(withinTest(replaced.promise, signal));
+        } finally {
+          unlisten();
+        }
+        expect(inventory().providers.get(PROVIDER_ID)).toMatchObject({
+          discoveryFailures: attempt,
+          expiresAt: Date.now() + delay,
+        });
+        expect(currentRuntime(fixture).readFullModelCatalog!()?.pendingProviders).toBeUndefined();
+        expect(failures).toHaveLength(1);
+        vi.setSystemTime(Date.now() + delay - 1);
+        currentRuntime(fixture).refreshExpiredModelCatalog!();
+        expect(observed.spawned).toHaveLength(attempt);
+        if (attempt < 3) {
+          vi.setSystemTime(Date.now() + 1);
+          currentRuntime(fixture).refreshExpiredModelCatalog!();
+        }
+      }
+    } finally {
+      vi.useRealTimers();
       unregister();
     }
   });

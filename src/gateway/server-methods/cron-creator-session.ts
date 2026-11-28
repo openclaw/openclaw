@@ -16,11 +16,13 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 export async function prepareCronCreatorSession(
   params: Pick<
     GatewayRequestHandlerOptions,
-    "context" | "client" | "sessionMutationCommitGuard" | "hasCurrentClientAuthority"
-  > & { callerScope: CronCallerScope | undefined; retainExecutionPolicy?: boolean },
+    "context" | "client" | "sessionMutationCommitGuard"
+  > & {
+    callerScope: CronCallerScope | undefined;
+    retainExecutionPolicy?: boolean;
+  },
 ) {
-  const { context, client, callerScope, sessionMutationCommitGuard, hasCurrentClientAuthority } =
-    params;
+  const { context, client, callerScope, sessionMutationCommitGuard } = params;
   const operatorActor = callerScope ? undefined : resolveOperatorSessionCreation(client).actor;
   const creatorConfig = context.getRuntimeConfig();
   const creatorStore = creatorConfig.session?.store;
@@ -34,9 +36,6 @@ export async function prepareCronCreatorSession(
   const assertCreatorReadCurrent = () => {
     sessionMutationCommitGuard?.();
     assertCreatorStoreCurrent();
-    if (hasCurrentClientAuthority?.() === false) {
-      throw new TypeError("Gateway caller authority is no longer active.");
-    }
   };
   const creatorTarget = callerScope?.sessionKey
     ? await resolveGatewaySessionStoreTargetInWorker({

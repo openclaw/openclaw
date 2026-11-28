@@ -59,7 +59,11 @@ class ChatControllerSteeringRecoveryTest {
     runTest {
       val f = Fixture(this)
       runCurrent()
-      assertEquals("Working", f.controller.streamingAssistantText.value)
+      assertEquals(
+        "Working",
+        f.controller.streamingAssistant.value
+          ?.text,
+      )
       val send = async { f.controller.sendMessageAwaitAcceptance("Follow-up input", "off", emptyList(), idempotencyKey = "steer") }
       f.sendStarted.await()
       val pendingAfterSend = f.controller.pendingRunCount.value
@@ -77,7 +81,11 @@ class ChatControllerSteeringRecoveryTest {
       assertEquals(1, pendingAfterOriginalStopped)
       assertEquals("Idle history cannot settle the outstanding submission", 1, pendingDuringRecovery)
       f.delta()
-      assertEquals("Follow-up", f.controller.streamingAssistantText.value)
+      assertEquals(
+        "Follow-up",
+        f.controller.streamingAssistant.value
+          ?.text,
+      )
       assertEquals(
         ChatOutboxStatus.Accepted,
         f.controller.outboxItems.value
@@ -96,7 +104,10 @@ class ChatControllerSteeringRecoveryTest {
       f.controller.refresh()
       runCurrent()
       assertEquals(0, f.controller.pendingRunCount.value)
-      assertNull(f.controller.streamingAssistantText.value)
+      assertNull(
+        f.controller.streamingAssistant.value
+          ?.text,
+      )
     }
 
   @Test
@@ -119,7 +130,11 @@ class ChatControllerSteeringRecoveryTest {
       assertEquals("Reconnect must preserve the request still awaiting its transport result", 1, pendingDuringRecovery)
       runCurrent()
       f.delta()
-      assertEquals("Follow-up", f.controller.streamingAssistantText.value)
+      assertEquals(
+        "Follow-up",
+        f.controller.streamingAssistant.value
+          ?.text,
+      )
       assertEquals(
         "steer",
         f.controller.outboxItems.value
@@ -153,7 +168,10 @@ class ChatControllerSteeringRecoveryTest {
       assertEquals(0, pendingAfterCancellation)
       f.delta()
       assertEquals(0, f.controller.pendingRunCount.value)
-      assertNull(f.controller.streamingAssistantText.value)
+      assertNull(
+        f.controller.streamingAssistant.value
+          ?.text,
+      )
       assertEquals(1, f.gateway.callCount("chat.send"))
     }
 }

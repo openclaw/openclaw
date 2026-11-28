@@ -173,7 +173,7 @@ export function resolveColor(
   }
 
   const mix = color.match(
-    /^color-mix\(in srgb,\s*(var\(--[\w-]+\))\s+([\d.]+)%,\s*(var\(--[\w-]+\)|white|transparent)\s*\)$/u,
+    /^color-mix\(\s*in srgb,\s*(var\(--[\w-]+\))\s+([\d.]+)%,\s*(var\(--[\w-]+\)|white|transparent)\s*\)$/u,
   );
   if (mix) {
     return mixColors(

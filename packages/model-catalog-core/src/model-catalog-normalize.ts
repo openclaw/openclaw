@@ -301,6 +301,11 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "requiresOpenAiAnthropicToolPayload",
     "adaptiveThinking",
     "thinkingRequired",
+    "emitsDsmlToolCalls",
+    "requiresTypedUnionBranches",
+    "requiresNonEmptyUserOrAssistantMessage",
+    "cacheControlSystemOnly",
+    "cacheControlSharedSystem",
   ] as const;
   for (const field of booleanFields) {
     if (typeof value[field] === "boolean") {
@@ -362,6 +367,9 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
   const maxTokensField = normalizeOptionalString(value.maxTokensField) ?? "";
   if (maxTokensField === "max_completion_tokens" || maxTokensField === "max_tokens") {
     compat.maxTokensField = maxTokensField;
+  }
+  if (value.seedField === "seed" || value.seedField === "random_seed") {
+    compat.seedField = value.seedField;
   }
 
   const thinkingFormat = normalizeOptionalString(value.thinkingFormat) ?? "";

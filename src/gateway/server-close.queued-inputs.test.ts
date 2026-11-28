@@ -114,7 +114,7 @@ it("preserves accepted ingress input through real Gateway restart", async ({ sig
             runId,
             message,
             recoverySource: source,
-            assertCurrent: retained.authority.assertCurrent,
+            assertCurrent: () => retained?.authority?.signal?.throwIfAborted(),
           });
           assert(pending);
           registration.entry.adapter.onSettled = async () => {
@@ -167,7 +167,7 @@ it("preserves accepted ingress input through real Gateway restart", async ({ sig
       awaitGateBeforeSettlement(markerEntered.promise, closing, "Gateway skipped restart markers"),
       signal,
     );
-    expect(() => authority.assertCurrent()).not.toThrow();
+    expect(authority.signal?.aborted).not.toBe(true);
     await expect(binding.request(method, {})).rejects.toMatchObject({ name: "AbortError" });
     await expect(factory.bindPrincipal(principal)).rejects.toMatchObject({
       name: "AbortError",

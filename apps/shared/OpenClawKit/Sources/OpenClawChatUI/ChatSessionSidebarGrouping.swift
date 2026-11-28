@@ -59,7 +59,7 @@ extension ChatSessionSidebarModel {
             } else if grouping == .project, let path = self.projectPath(row) {
                 id = "project:\(path)"
                 projects[id] = path
-                titles[id] = path.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? path
+                titles[id] = self.projectName(fromPath: path)
             } else if grouping == .person, let actor = row.owner?.actor,
                       let identity = actor.identity, let ownerID = self.identityField(identity, "id"), !ownerID.isEmpty
             {
@@ -178,6 +178,15 @@ extension ChatSessionSidebarModel {
               !parts[1].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         return parts.dropFirst(2).joined(separator: ":").trimmingCharacters(in: .whitespacesAndNewlines)
             .hasPrefix("acp:")
+    }
+
+    /// The same project label shown when grouping sessions in the sidebar.
+    public static func projectName(for session: OpenClawChatSessionEntry) -> String? {
+        self.projectPath(session).map(self.projectName(fromPath:))
+    }
+
+    private static func projectName(fromPath path: String) -> String {
+        path.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? path
     }
 
     static func projectPath(_ row: OpenClawChatSessionEntry) -> String? {

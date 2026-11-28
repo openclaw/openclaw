@@ -21,6 +21,7 @@ import {
 } from "./account-usage.tsx";
 import { modelProviderErrorMessage } from "./config-mutation.ts";
 import type { ModelProviderCard, ModelProviderPendingLogout } from "./data.ts";
+import { ProfileNameEditor } from "./profile-name-editor.tsx";
 import { reorderByArrow, startProfileRowDrag } from "./profile-reorder.ts";
 import {
   needsOAuthSignIn,
@@ -68,6 +69,7 @@ export type ProviderProfilesViewProps = {
   mutationBlockedReason: string | null;
   profileOrders: Record<string, string[]>;
   onProfileOrderChange: (cardId: string, provider: string, profileIds: string[] | null) => void;
+  onRenameProfile: (profileId: string, displayName: string) => Promise<boolean>;
   onRequestLogout: (pending: ModelProviderPendingLogout) => void;
   /** A provider sign-in is open or settling; only one runs at a time. */
   loginBusy?: boolean;
@@ -82,6 +84,7 @@ export type ProviderProfilesViewProps = {
 
 const PROFILE_SOURCE_LABELS = new Map([
   ["config", "modelProviders.profiles.sourceConfig"],
+  ["external", "modelProviders.profiles.sourceExternal"],
   ["inherited", "modelProviders.profiles.sourceInherited"],
   ["saved", "modelProviders.profiles.sourceSaved"],
 ]);
@@ -101,17 +104,14 @@ export function apiKeySource(card: ModelProviderCard): string | undefined {
 function profileMeta(profile: ProviderProfile): string {
   const parts: string[] = [];
   const sourceKey = PROFILE_SOURCE_LABELS.get(profile.source ?? "");
-  const source =
-    profile.source === "external"
-      ? profile.displayName || t("modelProviders.profiles.sourceExternal")
-      : sourceKey
-        ? t(sourceKey)
-        : undefined;
-  if (source && profile.source !== "saved") {
-    parts.push(source);
+  if (sourceKey && profile.source !== "saved") {
+    parts.push(t(sourceKey));
   }
-  if (profile.email && profile.displayName && profile.displayName !== source) {
-    parts.push(profile.displayName);
+  if (profile.email && profile.displayName && profile.email !== profile.displayName) {
+    parts.push(profile.email);
+  }
+  if (profile.nameManagedByConfig) {
+    parts.push(t("modelProviders.profiles.nameManagedByConfig"));
   }
   if (profile.expiry) {
     parts.push(
@@ -256,7 +256,7 @@ export function profileIdentity(
   profile: ProviderProfile,
   profiles: readonly ProviderProfile[],
 ): string {
-  const named = profile.email || profile.displayName;
+  const named = profile.displayName || profile.email;
   if (named) {
     return named;
   }
@@ -282,7 +282,12 @@ function ProfileIdentity(props: { profile: ProviderProfile; identity: string; av
         </span>
       </Show>
       <div class="model-providers__profile-copy">
-        <strong title={props.profile.profileId}>{props.identity}</strong>
+        <div class="filters">
+          <strong title={props.profile.profileId}>{props.identity}</strong>
+          <Show when={props.profile.planLabel}>
+            {(label) => <span class="chip">{label()}</span>}
+          </Show>
+        </div>
         {meta() ? <span>{meta()}</span> : undefined}
         {isAccessTokenExpiry(props.profile) ? (
           <span>{t("modelProviders.accessTokenExpiryHelp")}</span>
@@ -399,6 +404,7 @@ export function ProviderProfiles(
           () => entry().profile.profileId,
         ),
         name,
+        planLabel: () => entry().profile.planLabel,
         status: () =>
           profileStatus(entry().profile, card().catalogStatus === "auth-rejected", true),
       };
@@ -509,6 +515,14 @@ function ProviderProfileRow(
   let rowElement!: HTMLElement;
   const drag = createPointerDrag({ cancelOnEscape: true });
   const profile = () => props.row.profile;
+  const [draft, setDraft] = createSignal<string>();
+  const renaming = () => draft() !== undefined && props.canMutate && profile().renameSupported;
+  const renameBusy = () => Boolean(props.busy["rename:" + profile().profileId]);
+  let renameButton: HTMLButtonElement | undefined;
+  const closeRename = () => {
+    setDraft(undefined);
+    queueMicrotask(() => renameButton?.focus());
+  };
   const group = () => props.row.group;
   const provider = () => group().provider;
   const order = () => group().order;
@@ -530,13 +544,33 @@ function ProviderProfileRow(
   const firstApiKey = () =>
     profile().type === "api_key" &&
     props.card.profiles.find((candidate) => candidate.type === "api_key") === profile();
-  const logoutProvider = () =>
-    props.card.logoutTargets.find((target) => target.profileIds.includes(profile().profileId))
-      ?.provider;
+  const logoutTarget = () =>
+    props.card.logoutTargets.find((target) => target.profileIds.includes(profile().profileId));
+  const logoutProvider = () => logoutTarget()?.provider;
+  // Providers that declare account actions get the device/provider split as text actions.
+  const accountActions = () =>
+    profile().type === "oauth" && profile().logoutSupported === true
+      ? logoutTarget()?.oauthAccountActions
+      : undefined;
   const logoutLabel = () => t("modelProviders.logout.actionFor", { account: props.identity });
   const canSignInAgain = () => needsOAuthSignIn(profile()) && props.canSignInAgain?.() === true;
   const logoutBlocked = () =>
     !props.canMutate ? (props.mutationBlockedReason ?? "") : logoutLabel();
+  const logoutDisabled = () =>
+    props.logoutSaving?.[props.card.id] ||
+    !props.canMutate ||
+    props.busy[`logout:${props.card.id}`];
+  const requestLogout = (disconnect?: { label: string }) => {
+    const targetProvider = logoutProvider();
+    if (targetProvider) {
+      props.onRequestLogout({
+        cardId: props.card.id,
+        label: props.identity,
+        target: { provider: targetProvider, profileIds: [profile().profileId] },
+        ...(disconnect ? { disconnect } : {}),
+      });
+    }
+  };
   const reorderBlocked = () =>
     !props.canMutate ? (props.mutationBlockedReason ?? "") : (group().explanation ?? "");
   const reorder = (targetId: string) => {
@@ -600,7 +634,27 @@ function ProviderProfileRow(
           ) : undefined}
         </span>
       </Show>
-      <ProfileIdentity profile={profile()} identity={props.identity} />
+      <Show
+        when={renaming()}
+        fallback={<ProfileIdentity profile={profile()} identity={props.identity} />}
+      >
+        <ProfileNameEditor
+          name={draft() ?? ""}
+          saving={renameBusy()}
+          onInput={setDraft}
+          onCancel={closeRename}
+          onSave={() => {
+            const name = draft();
+            if (name !== undefined) {
+              void props.onRenameProfile(profile().profileId, name).then((saved) => {
+                if (saved) {
+                  closeRename();
+                }
+              });
+            }
+          }}
+        />
+      </Show>
       <span class="model-providers__profile-status">
         {(props.grouped && props.usageRead) || providerStatusCoversAccount(props.card)
           ? undefined
@@ -627,6 +681,18 @@ function ProviderProfileRow(
           />
         </Show>
         {firstApiKey() ? props.keyAction?.() : undefined}
+        <Show when={profile().renameSupported && !renaming()}>
+          <button
+            type="button"
+            class="btn btn--sm btn--ghost"
+            ref={(element) => (renameButton = element)}
+            disabled={!props.canMutate}
+            aria-label={t("modelProviders.profiles.renameAccountFor", { account: props.identity })}
+            onClick={() => setDraft(profile().displayName ?? "")}
+          >
+            {t("modelProviders.profiles.renameAccount")}
+          </button>
+        </Show>
         {canSignInAgain() ? (
           <button
             type="button"
@@ -640,27 +706,14 @@ function ProviderProfileRow(
             {t("modelProviders.profiles.signInAgain")}
           </button>
         ) : undefined}
-        {profile().logoutSupported === true && logoutProvider() ? (
+        {profile().logoutSupported === true && logoutProvider() && !accountActions() ? (
           <button
             type="button"
             class="model-providers__profile-logout"
             aria-label={logoutLabel()}
             title={logoutBlocked()}
-            disabled={
-              props.logoutSaving?.[props.card.id] ||
-              !props.canMutate ||
-              props.busy[`logout:${props.card.id}`]
-            }
-            onClick={() => {
-              const targetProvider = logoutProvider();
-              if (targetProvider) {
-                props.onRequestLogout({
-                  cardId: props.card.id,
-                  label: props.identity,
-                  target: { provider: targetProvider, profileIds: [profile().profileId] },
-                });
-              }
-            }}
+            disabled={logoutDisabled()}
+            onClick={() => requestLogout()}
           >
             <StrokeIcon>
               <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
@@ -670,6 +723,53 @@ function ProviderProfileRow(
           </button>
         ) : undefined}
       </span>
+      <Show when={logoutProvider() ? accountActions() : undefined}>
+        {(actions) => {
+          const disconnectLabel = () =>
+            actions().disconnect?.label || t("modelProviders.disconnect.action");
+          return (
+            <div class="model-providers__profile-account-actions">
+              <button
+                type="button"
+                class="btn btn--sm"
+                aria-label={t("modelProviders.logout.deviceActionFor", { account: props.identity })}
+                title={!props.canMutate ? (props.mutationBlockedReason ?? "") : ""}
+                disabled={logoutDisabled()}
+                onClick={() => requestLogout()}
+              >
+                {t("modelProviders.logout.deviceAction")}
+              </button>
+              <Show when={actions().disconnect}>
+                <button
+                  type="button"
+                  class="btn btn--sm danger"
+                  aria-label={t("modelProviders.disconnect.actionFor", {
+                    action: disconnectLabel(),
+                    account: props.identity,
+                  })}
+                  title={!props.canMutate ? (props.mutationBlockedReason ?? "") : ""}
+                  disabled={logoutDisabled()}
+                  onClick={() => requestLogout({ label: disconnectLabel() })}
+                >
+                  {disconnectLabel()}
+                </button>
+              </Show>
+              <Show when={actions().manage}>
+                {(manage) => (
+                  <a
+                    class="model-providers__profile-manage"
+                    href={manage().url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {manage().label || t("modelProviders.disconnect.manage")}
+                  </a>
+                )}
+              </Show>
+            </div>
+          );
+        }}
+      </Show>
       <Show when={props.usageRead}>
         {(read) => <AccountLimits read={read()} grouped={props.grouped} />}
       </Show>

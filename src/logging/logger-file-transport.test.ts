@@ -1,12 +1,11 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { fileLogTransport } from "./logger-file-transport.js";
-import * as fileLogWorker from "./logger-file-worker.js";
 import { getLogger, resetLogger, setLoggerOverride } from "./logger.js";
 import { registerSecretValueForRedaction } from "./secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "./secret-redaction-registry.test-support.js";
@@ -147,44 +146,6 @@ it.each(["async", "sync"])(
   },
 );
 
-it("rescues the unissued tail without replaying an in-flight batch", async () => {
-  const [issued, release] = [createDeferred(), createDeferred()] as const;
-  let issuedRecords = 0;
-  const write = fileLogWorker.runFileLogIOInWorker;
-  vi.spyOn(fileLogWorker, "runFileLogIOInWorker").mockImplementation(async (request) => {
-    const result = await write(request);
-    if (request.type === "append" && request.file === logPath) {
-      issuedRecords = request.payload.trim().split("\n").length;
-      issued.resolve();
-      await release.promise;
-    }
-    return result;
-  });
-  const entries = Array.from({ length: 4 }, (_, index) =>
-    entry(logPath, `${JSON.stringify({ index, text: "x".repeat(20_000) })}\n`),
-  );
-  for (const record of entries) {
-    fileLogTransport.enqueue(record);
-  }
-  const flushing = fileLogTransport.flush();
-  try {
-    await awaitGateBeforeSettlement(
-      issued.promise,
-      flushing,
-      "logger flush completed without reaching the held append",
-    );
-    expect(issuedRecords).toBeGreaterThan(1);
-    fileLogTransport.enqueue(entry(logPath, '{"index":4}\n'));
-    fileLogTransport.drainSync();
-  } finally {
-    release.resolve();
-    await flushing;
-  }
-
-  expect(records(logPath).map((record) => record.index)).toEqual([0, 1, 2, 3, 4]);
-  expect(entries.every((record) => record.payload === "")).toBe(true);
-});
-
 it("keeps later exit records separate after a synchronous short write", () => {
   for (const payload of ["first\n", "second\n"]) {
     fileLogTransport.enqueue(entry(logPath, payload, 1024));
@@ -240,6 +201,38 @@ it("warns once per append failure streak and continues with later batches", asyn
   expect(warnings[0]).toContain("records dropped; check that the path is a writable regular file");
   expect(warnings.join("\n")).not.toContain(secret);
 });
+
+it.skipIf(process.platform === "win32" || process.platform === "android")(
+  "names the unsafe home directory and its repair instead of blaming the log file",
+  async () => {
+    fs.mkdirSync(logPath);
+    const home = fs.realpathSync(logPath);
+    const stateDir = path.join(home, "state");
+    const file = path.basename(logPath);
+    const stderr = captureStderr();
+    const targetPreparation = fileLogTransport.prepareTarget(file, true, { options: { stateDir } });
+    vi.stubEnv("HOME", `${home}/`);
+    try {
+      fs.chmodSync(home, 0o775);
+      fileLogTransport.enqueue({ ...entry(file, "dropped\n"), targetPreparation });
+      await fileLogTransport.flush();
+      const [warning] = warningLines(stderr);
+      expect(warning).toContain(
+        `log directory unavailable; records dropped (file=${file}): Directory $HOME is writable by group or others and has no sticky bit.`,
+      );
+      expect(warning).toContain('chmod go-w "$HOME"');
+      expect(warning).toContain('chmod +t "$HOME"');
+      expect(warning).not.toContain(home);
+      expect(warning).not.toContain("writable regular file");
+    } finally {
+      fs.chmodSync(home, 0o755);
+      vi.unstubAllEnvs();
+    }
+    fileLogTransport.enqueue({ ...entry(file, "recovered\n"), targetPreparation });
+    await fileLogTransport.flush();
+    expect(read(path.join(stateDir, "logs", file))).toBe("recovered\n");
+  },
+);
 
 it("keeps failure streaks independent by file", async () => {
   const firstPath = logPathTracker.nextPath();

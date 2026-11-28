@@ -87,6 +87,8 @@ export type CodexStartOrResumeThreadParams = Omit<
   dynamicTools: CodexDynamicToolSpec[];
   persistentWebSearchAllowed?: boolean;
   agentWorkspaceDeveloperInstructions?: string;
+  /** Per-turn plugin system context; thread-carried only when no relay owns the request. */
+  turnRefreshableInstructions?: string;
   buildFinalConfigPatch?: (
     decision: CodexThreadFinalConfigPatchDecision,
     client: CodexAppServerClient,
@@ -122,5 +124,6 @@ export type CodexThreadResumePreparation = {
   assertCurrent: () => void;
   dispose: () => void;
   settledSystemError: boolean;
+  releaseFailedRemoteRuntime: (releasedOnCurrentClient: boolean) => Promise<void>;
   waitForUnload: (requireClosed?: boolean) => Promise<boolean>;
 };

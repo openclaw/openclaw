@@ -146,7 +146,15 @@ describe.runIf(process.platform === "darwin")("native npm staging under Seatbelt
         );
       const succeeded = async (argv: string[], sandbox = false, cwd = root) => {
         const result = await command(argv, sandbox, cwd);
-        expect(result.code, result.stdout + result.stderr).toBe(0);
+        let diagnostic = "";
+        if (result.code !== 0) {
+          try {
+            diagnostic = `seatbelt command: ${result.termination}; cleanup=${result.cleanup ?? "unknown"}`;
+          } catch {
+            // Diagnostic capture must not replace the command assertion.
+          }
+        }
+        expect(result.code, diagnostic).toBe(0);
         return result.stdout;
       };
 

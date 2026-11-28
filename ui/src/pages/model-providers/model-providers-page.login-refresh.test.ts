@@ -86,7 +86,10 @@ it("keeps the credential step disabled until its configuration refresh settles",
     // The provider's only way in starts straight from its catalog row.
     await openPicker(page);
     await selectProvider(page, "example");
-    await waitForSolid(() => expect(refreshing).toBe(true));
+    await waitForSolid(() => {
+      expect(refreshing).toBe(true);
+      expect(page.querySelector('input[name="wizard-text"]')).not.toBeNull();
+    });
     const input = page.querySelector<HTMLInputElement>('input[name="wizard-text"]')!;
     const submit = page.querySelector<HTMLButtonElement>(
       '.wizard-step__form button[type="submit"]',

@@ -110,4 +110,39 @@ describe("re-login identity boundaries", () => {
       "identity changed",
     );
   });
+
+  it.each([false, true])("keeps a verified same-account name (force=%s)", (force) => {
+    const existing = { ...credential("a"), displayName: "Personal" };
+    const result = resolveReloginProfileIdentity({
+      profiles,
+      existingProfiles: { "fixture:work": existing },
+      method: { matchesSharedAccount: matchesPersonalAccount, matchesPersonalAccount: () => false },
+      allowMissingReusedProfile: force,
+    });
+    expect(result.profiles).toEqual([
+      {
+        profileId: "fixture:work",
+        credential: { ...profiles[0]!.credential, displayName: "Personal" },
+      },
+    ]);
+    if (force) {
+      expect(() => result.validateCurrentCredential?.("fixture:work", undefined)).not.toThrow();
+    } else {
+      expect(() => result.validateCurrentCredential?.("fixture:work", existing)).not.toThrow();
+    }
+  });
+
+  it.each([
+    ["a", "Personal"],
+    ["b", undefined],
+  ])("keeps a name in an explicit slot only for the same account (%s)", (account, displayName) => {
+    const existing = { ...credential(account), displayName: "Personal" };
+    const result = resolveReloginProfileIdentity({
+      profiles,
+      existingProfiles: { "fixture:new": existing },
+      requestedProfileId: "fixture:new",
+      method: { matchesSharedAccount: matchesPersonalAccount },
+    });
+    expect(result.profiles[0]?.credential.displayName).toBe(displayName);
+  });
 });

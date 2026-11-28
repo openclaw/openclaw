@@ -187,6 +187,7 @@ describe("AppSidebar catalog row lifecycle", () => {
         row!.dispatchEvent(event);
         await sidebar.updateComplete;
         const menu = query("openclaw-session-menu");
+        expect(menu).not.toBeNull();
         expect(menu?.querySelector('[data-value="rename"]')).not.toBeNull();
         expect(menu?.querySelector('[data-value="toggle-archived"]')).not.toBeNull();
         expect(query("openclaw-catalog-session-menu")).toBeNull();

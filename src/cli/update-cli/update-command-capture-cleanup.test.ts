@@ -320,8 +320,8 @@ it.each(["current", "pre-migration"] as const)(
       const preview = await runCleanup({ dryRun: true });
       for (const [index, directory] of doctors.entries()) {
         expect(preview.captures[directory]).toMatchObject({
-          outcome: index < 2 ? "candidate" : "protected",
-          reason: index < 2 ? "superseded-doctor-capture" : "retained-doctor-capture",
+          outcome: index < 4 ? "candidate" : "protected",
+          reason: index < 4 ? "superseded-doctor-capture" : "retained-doctor-capture",
         });
         expect(preview.captures[directory]!.bytes).toBeGreaterThan(1000);
         expect(fs.existsSync(directory)).toBe(true);
@@ -330,8 +330,8 @@ it.each(["current", "pre-migration"] as const)(
       expect(doctors.map((directory) => fs.existsSync(directory))).toEqual([
         false,
         false,
-        true,
-        true,
+        false,
+        false,
         true,
       ]);
     }, location);
@@ -377,7 +377,7 @@ it("reclaims historical incomplete captures only after a verified successor and 
       outcome: "protected",
       reason: "orphan-update-capture",
     });
-    // The older expired Doctor original retired above; the newest sealed copy stays.
+    // The older Doctor original retired above; the newest sealed copy stays.
     expect(fs.existsSync(doctors[0]!)).toBe(false);
     expect(preview.captures[doctors[1]!]).toMatchObject({
       outcome: "protected",

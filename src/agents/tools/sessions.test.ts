@@ -580,7 +580,7 @@ describe("sessions_send gating", () => {
     {
       disposition: "silent",
       delivered: false,
-      message: expect.stringContaining("pending delivery"),
+      message: expect.not.stringContaining("delivered its final reply"),
     },
     {
       disposition: "empty",

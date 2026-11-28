@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../styles.css";
 import { cleanupSkillsViews, renderSkills } from "./view.solid.test-support.tsx";
 import { createProps, createReport, createSkill } from "./view.test-support.ts";
@@ -25,6 +25,7 @@ function showInstalled(skill: Parameters<typeof createSkill>[0], messages = {}) 
 }
 
 async function renderedPage() {
+  await vi.dynamicImportSettled();
   await expect
     .poll(() => container!.querySelector(".skill-page h1, .skill-page__absent"))
     .not.toBeNull();
@@ -90,6 +91,74 @@ describe.runIf(browserMode)("skill page layout", () => {
       expect(skillPage.scrollWidth).toBeLessThanOrEqual(skillPage.clientWidth);
     },
   );
+
+  it.each([390, 1440])(
+    "shows a long homepage and its arrow inside the fact column at %ipx",
+    async (width) => {
+      const { page } = await import("vitest/browser");
+      await page.viewport(width, 844);
+      createContainer();
+      const homepage =
+        "https://example.test/skills/international-research-operations-weekly-regulatory-reporting-and-validation";
+      showInstalled({ homepage });
+      const link = query(".skill-page__facts a[href]", await renderedPage());
+      expect(link.getAttribute("href")).toBe(homepage);
+      const arrow = query("svg", link).getBoundingClientRect();
+      expect(arrow.width).toBeGreaterThan(0);
+      const label = document.createRange();
+      label.selectNodeContents(link.firstElementChild!);
+      for (const line of label.getClientRects()) {
+        expect(line.right).toBeLessThanOrEqual(arrow.left + 1);
+      }
+      expect(link.scrollWidth).toBeLessThanOrEqual(link.clientWidth + 1);
+      link.focus();
+      const labelText = document.createRange();
+      labelText.selectNodeContents(link.closest("dd")!.previousElementSibling!);
+      const style = getComputedStyle(link);
+      const outlineTop =
+        link.getBoundingClientRect().top -
+        Number.parseFloat(style.outlineWidth) -
+        Number.parseFloat(style.outlineOffset);
+      expect(outlineTop).toBeGreaterThanOrEqual(labelText.getBoundingClientRect().bottom);
+    },
+  );
+
+  it("keeps the publisher name and handle readable beside Import", async () => {
+    const { page } = await import("vitest/browser");
+    await page.viewport(390, 844);
+    createContainer();
+    const selected: string[] = [];
+    const owner = {
+      displayName: "InternationalResearchOperationsAndRegulatoryReporting",
+      handle: "international-research-operations-team",
+    };
+    renderSkills(
+      createProps({
+        onClawHubInstall: (ref) => selected.push(ref),
+        clawhubDetailRef: "@" + owner.handle + "/field-notebook",
+        clawhubDetail: {
+          skill: {
+            slug: "field-notebook",
+            displayName: "Field Notebook",
+            createdAt: 1,
+            updatedAt: 2,
+          },
+          owner,
+        },
+      }),
+      container!,
+    );
+    const detail = await renderedPage();
+    const publisher = query(".skill-page__publisher", detail);
+    const summary = query("summary", publisher);
+    expect(summary.textContent).toBe("@" + owner.handle);
+    summary.click();
+    expect(publisher.hasAttribute("open")).toBe(true);
+    expect(query("strong", publisher).textContent).toBe(owner.displayName);
+    expect(query("span:last-child", publisher).textContent).toBe("@" + owner.handle);
+    query("button.skill-page__cta", detail).click();
+    expect(selected).toEqual(["@" + owner.handle + "/field-notebook"]);
+  });
 
   it.each(["success", "error"] as const)(
     "shows %s install feedback in the reading column under the header's action",

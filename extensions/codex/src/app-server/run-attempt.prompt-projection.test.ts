@@ -16,6 +16,10 @@ import {
   userMessage,
 } from "./run-attempt-test-harness.js";
 import {
+  createStartedThreadHarness as createInputRecordingHarness,
+  getRequestInputText,
+} from "./run-attempt.context-engine.test-support.js";
+import {
   appendSqliteHistoryMessage,
   attachSqliteSessionTarget,
 } from "./sqlite-session.test-helpers.js";
@@ -71,4 +75,96 @@ it("freezes only the hook-enriched current user projection before native dispatc
     content: "hello",
     __openclaw: { modelPromptProjection: { version: 1, text: expected } },
   });
+});
+
+it("keeps a projection an earlier embedded fallback attempt froze", async () => {
+  setRuntimeConfigSnapshot({});
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([
+      {
+        hookName: "before_prompt_build",
+        handler: () => ({ prependContext: "codex attempt context" }),
+      },
+    ]),
+  );
+  const params = createParams(path.join(tempDir, "frozen.jsonl"), tempDir);
+  const target = {
+    agentId: "main",
+    sessionId: "frozen",
+    sessionKey: "agent:main:frozen",
+    storePath: path.join(tempDir, "frozen.sqlite"),
+  };
+  await attachSqliteSessionTarget(params, target.storePath, target.sessionId);
+  const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
+  const recorder = createRecorder({
+    input: {
+      text: params.prompt,
+      idempotencyKey: "frozen:user",
+      provenance: { kind: "internal_system", sourceTool: "test" },
+    },
+    target: { ...target, sessionEntry: undefined },
+  });
+  await recorder.persistApproved();
+  // The embedded candidate froze its own prompt before the provider rejected it.
+  const frozen = "embedded attempt context\n\nhello";
+  await recorder.captureModelPromptProjection!(frozen, () => {});
+  params.userTurnTranscriptRecorder = recorder;
+  params.prompt = `[Retry after the previous model attempt failed or timed out]\n\n${params.prompt}`;
+  await bindProductionHarnessHostCapabilitiesForTest(params);
+  const harness = createInputRecordingHarness();
+  const run = runCodexAppServerAttempt(params);
+  await run.waitForTurnAccepted();
+  await harness.completeTurn();
+  await run;
+  const sentText = getRequestInputText(harness);
+  // Codex sends the frozen bytes in place of its retry-marked request; this attempt's hook
+  // context stays around them, as embedded fallback runtime context does.
+  expect(sentText.endsWith(`codex attempt context\n\n${frozen}`)).toBe(true);
+  expect(sentText).not.toContain("Retry after");
+  expect(recorder.getPersistedMessage?.()?.["__openclaw"]?.modelPromptProjection).toEqual({
+    version: 1,
+    text: frozen,
+  });
+});
+
+// Production (1 turn): an embedded primary dispatched the turn without a projection and failed;
+// this Codex fallback then tried to freeze its own text after dispatch and refused the turn.
+it("runs after an earlier candidate dispatched the turn without a projection", async () => {
+  setRuntimeConfigSnapshot({});
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([
+      {
+        hookName: "before_prompt_build",
+        handler: () => ({ prependContext: "codex attempt context" }),
+      },
+    ]),
+  );
+  const params = createParams(path.join(tempDir, "dispatched.jsonl"), tempDir);
+  const target = {
+    agentId: "main",
+    sessionId: "dispatched",
+    sessionKey: "agent:main:dispatched",
+    storePath: path.join(tempDir, "dispatched.sqlite"),
+  };
+  await attachSqliteSessionTarget(params, target.storePath, target.sessionId);
+  const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
+  const recorder = createRecorder({
+    input: {
+      text: params.prompt,
+      idempotencyKey: "dispatched:user",
+      provenance: { kind: "internal_system", sourceTool: "test" },
+    },
+    target: { ...target, sessionEntry: undefined },
+  });
+  await recorder.persistApproved();
+  recorder.markSentToProvider?.();
+  params.userTurnTranscriptRecorder = recorder;
+  await bindProductionHarnessHostCapabilitiesForTest(params);
+  const harness = createInputRecordingHarness();
+  const run = runCodexAppServerAttempt(params);
+  await run.waitForTurnAccepted();
+  await harness.completeTurn();
+  await run;
+  expect(getRequestInputText(harness)).toContain(params.prompt);
+  expect(recorder.getPersistedMessage?.()?.["__openclaw"]?.modelPromptProjection).toBeUndefined();
 });

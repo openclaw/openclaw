@@ -8,6 +8,8 @@ import {
   findServiceOwnershipRefusal,
   ServiceInspectionError,
   ServiceOwnershipRefusalError,
+  SystemdServiceAccountRefusalError,
+  type SystemdServiceAccountMismatch,
 } from "./service-inspection-error.js";
 import type {
   GatewayServiceEnv,
@@ -25,14 +27,19 @@ import { openSystemdBroker, openSystemdMachineBroker } from "./systemd-peer-nati
 import { SYSTEMD_DEFAULT_STOP_TIMEOUT_MS } from "./systemd-time-span.js";
 import { resolveSystemdUserTransport } from "./systemd-user-transport.js";
 
-export function assertSystemdServiceAccount(user: string) {
+export function assertSystemdServiceAccount(
+  user: string,
+  describe?: () => SystemdServiceAccountMismatch,
+) {
   const account = os.userInfo();
   if (
     user !== account.username &&
     user !== String(account.uid) &&
     !(user === "" && account.uid === 0)
   ) {
-    throw new ServiceOwnershipRefusalError("systemd-account-refused");
+    throw describe
+      ? new SystemdServiceAccountRefusalError(describe())
+      : new ServiceOwnershipRefusalError("systemd-account-refused");
   }
   return account;
 }
@@ -200,7 +207,7 @@ export async function activateSystemdServiceIdentity(params: {
   identity: SystemdServiceIdentity;
   action: "start" | "stop" | "restart";
   assertCurrent?: () => void;
-  beforeMutation?: () => Promise<void>;
+  beforeMutation?: () => void | Promise<void>;
   beforeEffect?: () => void;
   prepareEffect?: () => Promise<void>;
   warn: (message: string) => void;

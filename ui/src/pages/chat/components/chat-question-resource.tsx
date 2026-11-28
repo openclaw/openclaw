@@ -309,8 +309,8 @@ export function ChatQuestionResource(props: ResourceProps) {
           )}
           <For each={uploaded.filter((entry) => props.selected.has(entry.uri))}>
             {(entry) => (
-              <div>
-                {entry.name}
+              <div class="chat-question-panel__selected-resource">
+                <span title={entry.name}>{entry.name}</span>
                 <button
                   class="btn btn--sm"
                   type="button"

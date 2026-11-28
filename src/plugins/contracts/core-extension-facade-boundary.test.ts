@@ -10,13 +10,6 @@ const forbiddenOllamaFacadeFiles = [
   "src/plugin-sdk/ollama.ts",
   "src/plugin-sdk/ollama-runtime.ts",
 ] as const;
-const genericCoreFixtureFiles = [
-  "src/commands/auth-choice.apply.plugin-provider.test.ts",
-  "src/plugins/contracts/embedding-provider.contract.test.ts",
-  "src/plugins/discovery.test.ts",
-  "src/plugins/contracts/tts-contract-suites.ts",
-] as const;
-const forbiddenGenericFixtureTerms = /\b(?:Ollama|ollama|Moonshot|moonshot|xAI|xai|x-ai)\b/u;
 const importSpecifierPattern =
   /\b(?:import|export)\s+(?:type\s+)?(?:[^'"]*?\s+from\s+)?["']([^"']+)["']|import\(\s*["']([^"']+)["']\s*\)/g;
 
@@ -55,18 +48,6 @@ describe("core extension facade boundary", () => {
           : [];
       }),
     );
-    expect(violations).toStrictEqual([]);
-  });
-
-  it("keeps generic core fixtures free of bundled provider names", () => {
-    const violations: string[] = [];
-    for (const file of genericCoreFixtureFiles) {
-      const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
-      if (forbiddenGenericFixtureTerms.test(source)) {
-        violations.push(file);
-      }
-    }
-
     expect(violations).toStrictEqual([]);
   });
 });

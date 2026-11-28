@@ -13,12 +13,12 @@ type UnlinkOpts = GatewayRpcOpts & { json?: boolean; yes?: boolean };
 const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
 
 /** The name part of `<name>-<account tag>.<domain>`, the claw name that is retired. */
-export function clawNameOf(hostname: string): string {
+function clawNameOf(hostname: string): string {
   return (hostname.split(".")[0] ?? hostname).replace(/-[0-9a-hjkmnp-tv-z]{5}$/, "");
 }
 
 /** The warning shown before unlinking, with the live counts. */
-export function describeUnlinkWarning(preview: UnlinkPreview): string {
+function describeUnlinkWarning(preview: UnlinkPreview): string {
   const host = sanitizeTerminalText(preview.hostname);
   const parts = [
     preview.ownerDevices ? plural(preview.ownerDevices, "owner device", "owner devices") : "",
@@ -35,7 +35,7 @@ export function describeUnlinkWarning(preview: UnlinkPreview): string {
 }
 
 /** What happened, and what the owner should do next. */
-export function describeUnlinkResult(result: UnlinkResult): string {
+function describeUnlinkResult(result: UnlinkResult): string {
   const host = sanitizeTerminalText(result.hostname);
   const lines = [`Unlinked ${host}.`];
   if (result.discovery === "confirmed") {

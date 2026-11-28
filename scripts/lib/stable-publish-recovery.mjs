@@ -19,6 +19,7 @@ import {
   inspectActionsArtifactZipWithPolicy,
 } from "./actions-artifact-archive.mjs";
 import { verifyNpmRegistrySignatures } from "./npm-registry-signatures.mjs";
+import { releaseEvidenceProducerTuple } from "./release-evidence-identity.mjs";
 
 const REPOSITORY = "openclaw/openclaw";
 const PUBLISH_WORKFLOW = ".github/workflows/openclaw-release-publish.yml";
@@ -603,9 +604,10 @@ export async function verifyStablePublishRecovery({ evidence, manifest, sourceSh
     WORKFLOW_FULL_REF: originalDispatch.value.toolingFullRef,
   });
   requireValue(npm.head_branch === original.head_branch, "npm tooling ref mismatch.");
+  const qualificationProducer = releaseEvidenceProducerTuple(manifest);
   const validationInputs = {
-    FULL_RELEASE_VALIDATION_RUN_ID: id(manifest.runId),
-    FULL_RELEASE_VALIDATION_RUN_ATTEMPT: id(manifest.runAttempt),
+    FULL_RELEASE_VALIDATION_RUN_ID: id(qualificationProducer.runId),
+    FULL_RELEASE_VALIDATION_RUN_ATTEMPT: id(qualificationProducer.runAttempt),
     RELEASE_TAG: evidence.releaseTag,
   };
   expectInputs(
@@ -699,7 +701,10 @@ export async function verifyStablePublishRecovery({ evidence, manifest, sourceSh
       releaseTag: tag,
       sourceSha,
       toolingSha: npm.head_sha,
-      fullReleaseValidation: { runId: id(manifest.runId), runAttempt: id(manifest.runAttempt) },
+      fullReleaseValidation: {
+        runId: id(qualificationProducer.runId),
+        runAttempt: id(qualificationProducer.runAttempt),
+      },
       originalParent: {
         runId: originalId,
         runAttempt: originalAttempt,

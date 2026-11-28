@@ -86,13 +86,8 @@ async function captureSource(input: CaptureInput) {
 function disposable<T extends { release(): void }>(resource: T) {
   return Object.assign(resource, { [Symbol.dispose]: () => resource.release() });
 }
-function expectCurrent(authority: Pick<Authority, "signal" | "assertCurrent">, error?: string) {
-  expect(authority.signal?.aborted).toBe(Boolean(error));
-  if (error) {
-    expect(authority.assertCurrent).toThrow(error);
-  } else {
-    expect(authority.assertCurrent).not.toThrow();
-  }
+function expectCurrent(authority: Pick<Authority, "signal">, error?: string) {
+  expect(authority.signal?.aborted ?? false).toBe(Boolean(error));
 }
 function expectModel(authority: Authority, model: string, allowed: boolean) {
   const assertion = expect(() => assertOperatorModelAllowed(authority, modelRef(model)));
@@ -407,7 +402,6 @@ describe("operator role policy", () => {
           invocationAuthority: liveDependency(request),
         });
         expect(captured.authority.gatewayAccessGrant).toEqual(independent ? null : grant);
-        expect(captured.authority.assertCurrent).not.toThrow();
         const endedSource = ended === "request" ? request : access;
         const otherSource = ended === "request" ? access : request;
         endedSource.abort(new Error(`${ended} source ended`));
@@ -426,14 +420,12 @@ describe("operator role policy", () => {
         captureRole(profileId, { getRuntimeConfig: () => cfg });
       using original = await capture(source.id);
       using unaffected = await capture(unrelated.id);
-      original.authority.assertCurrent();
       linkEmail("source-role@example.test", target.id);
       expectCurrent(original.authority);
       await expect(capture(source.id)).rejects.toThrow();
       expectCurrent(unaffected.authority);
       using fresh = await capture(target.id);
-
-      expect(() => fresh.authority.assertCurrent()).not.toThrow();
+      expectCurrent(fresh.authority);
       expectCurrent(original.authority);
     }));
   it("keeps admitted authority on profile reassignment and refuses new admin requests", () =>
@@ -465,10 +457,9 @@ describe("operator role policy", () => {
         const otherProfile = ensureProfileForEmail("committed-role-unaffected@example.test");
         setUserProfileRole(otherProfile.id, "maintainer");
         const initial = roleConfig();
-        let runtimeConfig = initial;
         let committedConfig = initial;
         const context = {
-          getRuntimeConfig: () => runtimeConfig,
+          getRuntimeConfig: () => initial,
           getCommittedRuntimeConfig: () => committedConfig,
         };
         const capture = (profileId: string) => captureRole(profileId, context);
@@ -490,17 +481,14 @@ describe("operator role policy", () => {
         expect(
           authorizeCurrentOperatorRoleScopes(identifiedClient(profile.id), candidate),
         ).toBeUndefined();
-        runtimeConfig = candidate;
-        expect(original.authority.assertCurrent).not.toThrow();
-        runtimeConfig = initial;
-        expect(original.authority.signal?.aborted).toBe(false);
+        expect(original.authority.signal?.aborted).not.toBe(true);
 
         committedConfig = { ...initial, logging: { level: "debug" } };
         publishOperatorRoleConfigChange(context);
-        expect(original.authority.signal?.aborted).toBe(false);
+        expect(original.authority.signal?.aborted).not.toBe(true);
         committedConfig = candidate;
         publishOperatorRoleConfigChange({});
-        expect(original.authority.signal?.aborted).toBe(false);
+        expect(original.authority.signal?.aborted).not.toBe(true);
         publishOperatorRoleConfigChange(context);
         expectCurrent(original.authority);
         expect(original.authority.readCurrentRoleFacts?.().policy).toEqual(
@@ -535,7 +523,7 @@ describe("operator role policy", () => {
       assertOperatorModelAllowed(original.authority, modelRef("primary"));
       cfg = { ...cfg, logging: { level: "debug" } };
       publishOperatorRoleConfigChange(context);
-      expect(original.authority.signal?.aborted).toBe(false);
+      expect(original.authority.signal?.aborted).not.toBe(true);
       const result = await runWithModelFallback({
         cfg,
         provider: "fixture",

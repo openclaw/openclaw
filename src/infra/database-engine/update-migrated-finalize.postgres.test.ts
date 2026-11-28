@@ -132,7 +132,12 @@ describe.skipIf(!connection)("migrated PostgreSQL update finalization", () => {
                 }),
               { json: true },
             );
-            await expect(completion).rejects.toBeInstanceOf(UpdateCommandFailure);
+            await assert.rejects(completion, (error) => {
+              if (finalized === undefined) {
+                throw error;
+              }
+              return error instanceof UpdateCommandFailure;
+            });
             expect(finalized).toMatchObject({
               result: { status: "error", runId: run.runId, reason: "state-migrated-no-rollback" },
               exitCode: 1,

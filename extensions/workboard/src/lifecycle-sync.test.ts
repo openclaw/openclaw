@@ -303,6 +303,34 @@ describe("Workboard gateway lifecycle sync", () => {
     });
   });
 
+  it("dispatches a card again after its failed worker ended", async () => {
+    const card = await store.create({ title: "Retry after failure", status: "ready" });
+    const start = async (runId: string) =>
+      (
+        await dispatchAndStartWorkboardCards({
+          store,
+          subagent: { run: async (input) => ({ sessionKey: input.sessionKey, runId }) },
+          options: { maxStarts: 1 },
+        })
+      ).started;
+    await start("run-failed");
+    await syncWorkboardSubagentEnded({
+      store,
+      event: {
+        targetSessionKey: workboardSessionKeyForCard(card),
+        runId: "run-failed",
+        outcome: "error",
+      },
+    });
+    expect((await store.get(card.id))?.status).toBe("blocked");
+
+    await store.move(card.id, "ready", undefined);
+
+    expect(await start("run-retry")).toEqual([
+      expect.objectContaining({ cardId: card.id, runId: "run-retry" }),
+    ]);
+  });
+
   it("settles a running execution without reopening a manually completed card", async () => {
     const sessionKey = "agent:main:done";
     const { card, read, sweep } = await linked({

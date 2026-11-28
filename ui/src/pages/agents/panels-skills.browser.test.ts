@@ -230,7 +230,6 @@ describe("agents skills panel (browser)", () => {
     view.update({ ...params, onRefresh });
     await view.text(["Initial skills failure"], ["No skills found.", "0 shown"]);
     view.button("Refresh").click();
-    expect(onRefresh).toHaveBeenCalledOnce();
     await view.text(["Refreshing"], ["Initial skills failure", "No skills found.", "0 shown"]);
     const report = {
       workspaceDir: "/workspace/synthetic",

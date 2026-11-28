@@ -7,7 +7,12 @@ import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import "../../styles/usage.css";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { isUsageCacheIncomplete } from "./cache-status.ts";
-import { buildPeakErrorHours, formatHeadlineCost, formatUsageTokens } from "./metrics.ts";
+import {
+  buildPeakErrorHours,
+  formatHeadlineCost,
+  formatUsageTokens,
+  usageThroughputStats,
+} from "./metrics.ts";
 import { UsageEmptyState } from "./page-shell.tsx";
 import { createUsagePhoneLayout } from "./phone-layout.ts";
 import { buildProviderSeries } from "./provider-series.ts";
@@ -59,11 +64,6 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
   // Retain presentation only within the owner's strict scope while its text query changes.
   const analyticsData = createMemo(() => retainedChartSnapshot() ?? props.data);
   const analyticsTotals = () => analyticsData().totals;
-  const analyticsSessionCount = () =>
-    analyticsData().overview?.selectedSessionCount ??
-    analyticsData().overview?.total ??
-    analyticsData().aggregates?.sessionCount ??
-    analyticsData().sessions.length;
   const analyticsTotalSessions = () =>
     analyticsData().overview?.unfilteredSessionCount ??
     analyticsData().aggregates?.sessionCount ??
@@ -126,22 +126,24 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
     const sessions = displaySessionCount();
     return [
       [totals ? formatUsageTokens(totals.totalTokens) : empty, t("usage.metrics.tokens")],
-      [totals ? formatHeadlineCost(totals) : empty, t("usage.metrics.cost")],
+      // Usage without a known price is excluded from the total, so say so beside it.
+      [
+        totals ? formatHeadlineCost(totals) : empty,
+        t("usage.metrics.cost"),
+        (totals?.missingCostEntries ?? 0) > 0,
+      ],
       [totals ? sessions.toLocaleString() : empty, t("usage.overview.sessions")],
-    ];
+    ] as const;
   });
   const insightStats = createMemo(() => {
     const durationMs = analyticsData().overview?.durationMs ?? 0;
     const durationCount = analyticsData().overview?.durationCount ?? 0;
-    const totals = analyticsTotals();
-    const messages = activeAggregates().messages;
+    const aggregates = activeAggregates();
+    const messages = aggregates.messages;
     return {
       durationCount,
       avgDurationMs: durationCount ? durationMs / durationCount : 0,
-      throughputTokensPerMin:
-        totals && durationMs > 0 ? totals.totalTokens / (durationMs / 60000) : undefined,
-      throughputCostPerMin:
-        totals && durationMs > 0 ? totals.totalCost / (durationMs / 60000) : undefined,
+      ...usageThroughputStats(analyticsData().aggregates ?? {}, props.filters.selectedDays),
       errorRate: messages.total ? messages.errors / messages.total : 0,
     };
   });
@@ -168,10 +170,27 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
 
             {/* Carapace summary strip: fixed cells, so placeholders and loaded totals share one layout. */}
             <div class="usage-summary-strip">
-              <For each={metricBadges()}>
-                {([value, label]) => (
+              <For each={metricBadges()} keyed={false}>
+                {(badge) => (
                   <div class="usage-metric-badge">
-                    <strong>{value}</strong> <small>{label}</small>
+                    <strong>{badge()[0]}</strong>{" "}
+                    <small>
+                      {badge()[1]}
+                      <Show when={badge()[2]}>
+                        <openclaw-tooltip open-on-click>
+                          <button
+                            id="usage-summary-hint-cost"
+                            type="button"
+                            class="usage-summary-hint"
+                            aria-label={badge()[1]}
+                            onClick={(event) => event.currentTarget.focus()}
+                          >
+                            ?
+                          </button>
+                          <span slot="content">{t("usage.overview.missingCostHint")}</span>
+                        </openclaw-tooltip>
+                      </Show>
+                    </small>
                   </div>
                 )}
               </For>
@@ -287,13 +306,10 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
               totals={analyticsTotals()}
               aggregates={activeAggregates()}
               stats={insightStats()}
-              showCostHint={(analyticsTotals()?.missingCostEntries ?? 0) > 0}
               errorHours={buildPeakErrorHours(
                 analyticsData().overview?.hourlyMessages ?? [],
                 analyticsData().overview?.hourlyErrors ?? [],
               )}
-              sessionCount={analyticsSessionCount()}
-              totalSessions={analyticsTotalSessions()}
             />
             <CostWindowComparison
               daily={analyticsData().aggregates?.costDaily ?? props.data.costDaily}

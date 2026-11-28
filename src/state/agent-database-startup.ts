@@ -115,13 +115,6 @@ class AgentDatabaseStartupAdmission {
     return this.stopped;
   }
 
-  private startProgress(): void {
-    this.progressTimer ??= startAgentDatabasePreparationProgress(
-      this.pending,
-      () => this.publishingAgentId,
-    );
-  }
-
   /** Bootstrap reuses this startup's compatibility headers; writable opens retain admission. */
   prepareSchemaHeaders(env: NodeJS.ProcessEnv) {
     const prepared: PreparedSchemaHeaders = {
@@ -129,16 +122,16 @@ class AgentDatabaseStartupAdmission {
       headers: new Map(),
     };
     this.preparedSchemaHeaders = prepared;
-    return (pathname: string) =>
-      ({ version, writerAppVersion, agentSchemaMeta }: PreparedSchemaHeader) => {
-        if (
-          !this.stopped &&
-          this.preparedSchemaHeaders === prepared &&
-          version === OPENCLAW_AGENT_SCHEMA_VERSION
-        ) {
-          prepared.headers.set(pathname, { version, writerAppVersion, agentSchemaMeta });
-        }
-      };
+    return (pathname: string) => (header: PreparedSchemaHeader) => {
+      if (
+        !this.stopped &&
+        this.preparedSchemaHeaders === prepared &&
+        header.version >= OPENCLAW_AGENT_SCHEMA_VERSION &&
+        (header.minReader ?? header.version) <= OPENCLAW_AGENT_SCHEMA_VERSION
+      ) {
+        prepared.headers.set(pathname, header);
+      }
+    };
   }
 
   takePreparedSchemaHeaders(env: NodeJS.ProcessEnv) {
@@ -148,7 +141,9 @@ class AgentDatabaseStartupAdmission {
       const header = prepared?.headers.get(pathname);
       return !this.stopped &&
         prepared?.statePath === resolveOpenClawStateSqlitePath(env) &&
-        header?.version === supportedVersion
+        header !== undefined &&
+        header.version >= supportedVersion &&
+        (header.minReader ?? header.version) <= supportedVersion
         ? header
         : undefined;
     };
@@ -168,6 +163,10 @@ class AgentDatabaseStartupAdmission {
     if (schema && identity) {
       prepared.state = { identity, schemaAdmissionId: schema.admissionId };
     }
+  }
+
+  hasPreparedStateSchema(): boolean {
+    return this.preparedSchemaHeaders?.state !== undefined;
   }
 
   takePreparedStateSchema(env: NodeJS.ProcessEnv): (() => void) | undefined {
@@ -330,7 +329,10 @@ class AgentDatabaseStartupAdmission {
         recovery.phaseStartedAt = now;
       };
       this.pending.set(agentId, recovery);
-      this.startProgress();
+      this.progressTimer ??= startAgentDatabasePreparationProgress(
+        this.pending,
+        () => this.publishingAgentId,
+      );
       refusals.push(refusal);
       log.info(refusal.reason, { agentId, paths });
       const witnesses = paths.map((pathname) => {

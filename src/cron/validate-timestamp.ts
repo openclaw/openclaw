@@ -8,6 +8,7 @@ import { parseAbsoluteTimeMs } from "./parse.js";
 import type { CronSchedule } from "./types.js";
 
 const ONE_MINUTE_MS = 60 * 1000;
+const ONE_DAY_MS = 24 * 60 * ONE_MINUTE_MS;
 const TEN_YEARS_MS = 10 * 365.25 * 24 * 60 * 60 * 1000;
 
 type TimestampValidationError = {
@@ -34,15 +35,16 @@ export function validateScheduleTimestamp(
 
   const atRaw = normalizeOptionalString(schedule.at) ?? "";
   const atMs = atRaw ? parseAbsoluteTimeMs(atRaw) : null;
+  const referenceNowMs = asDateTimestampMs(nowMs) ?? asDateTimestampMs(Date.now()) ?? 0;
 
   if (atMs === null || !Number.isFinite(atMs)) {
+    const example = resolveTimestampMsToIsoString(referenceNowMs + ONE_DAY_MS);
     return {
       ok: false,
-      message: `Invalid schedule.at: expected ISO-8601 timestamp (got ${schedule.at})`,
+      message: `OpenClaw couldn’t read the scheduled time. Enter a future date and time, such as ${example}.`,
     };
   }
 
-  const referenceNowMs = asDateTimestampMs(nowMs) ?? asDateTimestampMs(Date.now()) ?? 0;
   const diffMs = atMs - referenceNowMs;
 
   // Allow a one-minute grace window so creation and validation races do not
@@ -50,20 +52,18 @@ export function validateScheduleTimestamp(
   if (diffMs < -ONE_MINUTE_MS) {
     const nowDate = resolveTimestampMsToIsoString(referenceNowMs);
     const atDate = resolveTimestampMsToIsoString(atMs);
-    const minutesAgo = Math.floor(-diffMs / ONE_MINUTE_MS);
     return {
       ok: false,
-      message: `schedule.at is in the past: ${atDate} (${minutesAgo} minutes ago). Current time: ${nowDate}`,
+      message: `That time is in the past (${atDate}). Choose a time after ${nowDate}.`,
     };
   }
 
   // Bound far-future one-shot jobs so mistyped years do not persist forever.
   if (diffMs > TEN_YEARS_MS) {
     const atDate = resolveTimestampMsToIsoString(atMs);
-    const yearsAhead = Math.floor(diffMs / (365.25 * 24 * 60 * 60 * 1000));
     return {
       ok: false,
-      message: `schedule.at is too far in the future: ${atDate} (${yearsAhead} years ahead). Maximum allowed: 10 years`,
+      message: `The scheduled time (${atDate}) is more than 10 years away. Choose an earlier date and time.`,
     };
   }
 

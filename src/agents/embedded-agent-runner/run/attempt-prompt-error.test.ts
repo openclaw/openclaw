@@ -27,7 +27,7 @@ import { handleEmbeddedAttemptPromptError as handleError } from "./attempt-promp
 
 type PromptErrorInput = Parameters<typeof handleError>[0];
 
-function createInput(overrides: Partial<PromptErrorInput> = {}): PromptErrorInput {
+function createInput(overrides: Partial<PromptErrorInput>): PromptErrorInput {
   return {
     activeSession: {
       sendCustomMessage: hoisted.sendCustomMessage,

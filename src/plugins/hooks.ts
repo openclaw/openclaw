@@ -162,15 +162,13 @@ export function createHookRunner(
     token?: ExecutionIdentityAdmissionToken;
     result?: PluginHookBeforeToolCallResult;
     failOpen?: boolean;
-    receiptAuthority?: () => boolean | void;
+    receiptAuthority?: () => void;
   }): void => {
     if (!params.receiptAuthority) {
       return;
     }
     try {
-      if (params.receiptAuthority() === false) {
-        return;
-      }
+      params.receiptAuthority();
     } catch {
       return;
     }
@@ -732,7 +730,7 @@ export function createHookRunner(
     const token = { active: true };
     const assertActive = () => {
       if (!token.active) {
-        throw new Error("prompt tool authority is no longer active");
+        throw new Error("Prompt build ended. Start a new turn to retry.");
       }
       params.assertHostActive();
     };
@@ -870,7 +868,7 @@ export function createHookRunner(
     ctx: PluginHookToolContext,
     receipt?: Readonly<{
       token: ExecutionIdentityAdmissionToken;
-      assertAuthority: () => boolean | void;
+      assertAuthority: () => void;
       markOwnerDecision?: () => void;
     }>,
   ): Promise<PluginHookBeforeToolCallResult | undefined> {

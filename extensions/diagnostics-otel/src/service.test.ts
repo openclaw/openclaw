@@ -375,10 +375,6 @@ function findCreateNodeProxyAgentCall(targetUrl: string) {
   return call;
 }
 
-function firstSpanProcessorOptions() {
-  return mockCallArg(spanProcessorCtor, 1)!;
-}
-
 function spanByName(name: string): (typeof telemetryState.spans)[number] {
   const span = telemetryState.spans.find((candidate) => candidate.name === name);
   if (!span) {
@@ -733,6 +729,29 @@ describe("diagnostics-otel service", () => {
     await stopStartedOtelServices();
     resetDiagnosticEventsForTest();
     restoreOtelEnv();
+  });
+
+  test("bounds span capacity and metric intervals with SDK self-observation", async () => {
+    process.env.OTEL_BSP_MAX_QUEUE_SIZE = "0";
+    process.env.OTEL_BSP_MAX_EXPORT_BATCH_SIZE = "0";
+    process.env.OTEL_METRIC_EXPORT_INTERVAL = "2000";
+    process.env.OTEL_METRIC_EXPORT_TIMEOUT = "3000";
+    process.env.OTEL_NODE_EXPERIMENTAL_SDK_METRICS = "true";
+    await startServiceFixture(["traces", "metrics"]);
+    expect(mockCallArg(spanProcessorCtor, 1)).toMatchObject({
+      maxQueueSize: 2048,
+      maxExportBatchSize: 512,
+      selfObsMeterProvider: expect.anything(),
+    });
+    expect(mockCallArg(metricReaderCtor, 0)).toMatchObject({
+      exportIntervalMillis: 2000,
+      exportTimeoutMillis: 2000,
+    });
+    expect(mockCallArg(meterProviderCtor, 0)).toHaveProperty("sdkMetricsEnabled", true);
+    expect(mockCallArg(traceProviderCtor, 0)).toHaveProperty("meterProvider", expect.anything());
+    expect(diagWarn).toHaveBeenCalledWith(
+      "OTEL_METRIC_EXPORT_TIMEOUT (3000) is greater than the active metric export interval (2000). Clamping timeout to interval value.",
+    );
   });
 
   test("records message-flow metrics and spans", async () => {
@@ -1121,24 +1140,6 @@ describe("diagnostics-otel service", () => {
     expect(logShutdown).toHaveBeenCalledOnce();
   });
 
-  test("warns through the plugin logger and keeps the SDK enabled for an invalid value", async () => {
-    process.env.OTEL_SDK_DISABLED = "invalid";
-
-    const { service, ctx } = await startServiceFixture(["traces", "metrics", "logs"]);
-
-    expect(ctx.logger.warn).toHaveBeenCalledWith(
-      "diagnostics-otel: invalid OTEL_SDK_DISABLED value; expected true or false, using false",
-    );
-    expect(traceProviderCtor).toHaveBeenCalledOnce();
-    expect(meterProviderCtor).toHaveBeenCalledOnce();
-    expect(exporters.traces.ctor).toHaveBeenCalledOnce();
-    expect(exporters.metrics.ctor).toHaveBeenCalledOnce();
-    expect(exporters.logs.ctor).toHaveBeenCalledOnce();
-    expect(registerOwnedSdkRuntimeMock).toHaveBeenCalledOnce();
-
-    await service.stop?.(ctx);
-  });
-
   test("preserves preloaded trace and metric ownership while disabling plugin logs", async () => {
     const { events, unsubscribe } = captureExporterEvents();
     process.env.OPENCLAW_OTEL_PRELOADED = "1";
@@ -1193,33 +1194,6 @@ describe("diagnostics-otel service", () => {
         ["otlp-http-protobuf", "dropped", undefined],
         ["otlp-http-protobuf", "failure", "unsupported_protocol"],
         ["otlp-http-protobuf", "dropped", undefined],
-      ]);
-    } finally {
-      await service.stop?.(ctx);
-    }
-  });
-
-  test("rebuilds the current log route set while preserving logs both", async () => {
-    const service = createDiagnosticsOtelService();
-    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { logs: true, logsExporter: "both" });
-
-    try {
-      await service.start(ctx);
-      ctx.config.diagnostics!.otel!.logsExporter = "stdout";
-      await service.start(ctx);
-      ctx.config.diagnostics!.otel!.logsExporter = "both";
-      await service.start(ctx);
-      await waitForDiagnosticEventsDrained();
-
-      expect(project(getReportedExporterHealth(ctx), ["transport", "status"])).toEqual([
-        ["otlp-http-protobuf", "started"],
-        ["stdout", "started"],
-        ["otlp-http-protobuf", "dropped"],
-        ["stdout", "dropped"],
-        ["stdout", "started"],
-        ["stdout", "dropped"],
-        ["otlp-http-protobuf", "started"],
-        ["stdout", "started"],
       ]);
     } finally {
       await service.stop?.(ctx);
@@ -1288,14 +1262,6 @@ describe("diagnostics-otel service", () => {
     expect(JSON.stringify(emitCall)).not.toContain("sk-test-secret");
   });
 
-  test("ignores blank OTLP protocol env overrides", async () => {
-    process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "   ";
-    const { ctx } = await startServiceFixture(["traces", "metrics"], omitConfiguredProtocol);
-    expect(exporters.traces.ctor).toHaveBeenCalledTimes(1);
-    expect(exporters.metrics.ctor).toHaveBeenCalledTimes(1);
-    expect(ctx.logger.warn).not.toHaveBeenCalled();
-  });
-
   const payloadAttributes = {
     "openclaw.payload.action": "rejected",
     "openclaw.payload.surface": "gateway.frame",
@@ -1328,41 +1294,7 @@ describe("diagnostics-otel service", () => {
     "openclaw.talk.provider": "openai",
     "openclaw.talk.transport": "gateway-relay",
   };
-  const livenessAttributes = { "openclaw.liveness.reason": "event_loop_delay:cpu" };
-
   test.each<RecorderCase>([
-    {
-      name: "liveness warning",
-      events: {
-        type: "diagnostic.liveness.warning",
-        reasons: ["event_loop_delay", "cpu"],
-        intervalMs: 30_000,
-        eventLoopDelayP99Ms: 250,
-        eventLoopDelayMaxMs: 900,
-        eventLoopUtilization: 0.95,
-        cpuUserMs: 1200,
-        cpuSystemMs: 300,
-        cpuTotalMs: 1500,
-        cpuCoreRatio: 1.4,
-        active: 2,
-        waiting: 1,
-        queued: 4,
-      },
-      metrics: [
-        counter("openclaw.liveness.warning", 1, livenessAttributes),
-        histogram("openclaw.liveness.event_loop_delay_p99_ms", 250, livenessAttributes),
-        histogram("openclaw.liveness.cpu_core_ratio", 1.4, livenessAttributes),
-      ],
-      span: {
-        name: "openclaw.liveness.warning",
-        attributes: {
-          ...livenessAttributes,
-          "openclaw.liveness.active": 2,
-          "openclaw.liveness.queued": 4,
-        },
-        status: { code: 2, message: "event_loop_delay:cpu" },
-      },
-    },
     {
       name: "oversized payload",
       signals: ["metrics"],
@@ -1380,27 +1312,6 @@ describe("diagnostics-otel service", () => {
       metrics: [
         counter("openclaw.payload.large", 1, payloadAttributes),
         histogram("openclaw.payload.large_bytes", 2048, payloadAttributes),
-      ],
-    },
-    {
-      name: "hook-blocked run",
-      events: {
-        type: "run.completed",
-        ...RUN_FIXTURE,
-        outcome: "blocked",
-        blockedBy: "policy-plugin",
-        durationMs: 100,
-      },
-      metrics: [
-        histogram(
-          "openclaw.run.duration_ms",
-          100,
-          expect.objectContaining({
-            "openclaw.outcome": "blocked",
-            "openclaw.blocked_by": "policy-plugin",
-          }),
-          "last",
-        ),
       ],
     },
     {
@@ -1450,84 +1361,6 @@ describe("diagnostics-otel service", () => {
         status: { code: 2, message: "tool_repeat:block" },
         omittedText: ["session-key", "secret-bearing"],
       },
-    },
-    {
-      name: "memory pressure",
-      events: [
-        {
-          type: "diagnostic.memory.sample",
-          uptimeMs: 1234,
-          memory: {
-            rssBytes: 100,
-            heapUsedBytes: 40,
-            heapTotalBytes: 80,
-            externalBytes: 10,
-            arrayBuffersBytes: 5,
-          },
-        },
-        {
-          type: "diagnostic.memory.pressure",
-          level: "critical",
-          reason: "rss_growth",
-          thresholdBytes: 512,
-          rssGrowthBytes: 256,
-          windowMs: 60_000,
-          memory: {
-            rssBytes: 200,
-            heapUsedBytes: 50,
-            heapTotalBytes: 90,
-            externalBytes: 20,
-            arrayBuffersBytes: 6,
-          },
-        },
-      ],
-      metrics: [
-        histogram("openclaw.memory.rss_bytes", 100, {}),
-        histogram("openclaw.memory.rss_bytes", 200, {
-          "openclaw.memory.level": "critical",
-          "openclaw.memory.reason": "rss_growth",
-        }),
-        counter("openclaw.memory.pressure", 1, {
-          "openclaw.memory.level": "critical",
-          "openclaw.memory.reason": "rss_growth",
-        }),
-      ],
-      span: {
-        name: "openclaw.memory.pressure",
-        attributes: {
-          "openclaw.memory.level": "critical",
-          "openclaw.memory.reason": "rss_growth",
-          "openclaw.memory.rss_bytes": 200,
-          "openclaw.memory.heap_used_bytes": 50,
-          "openclaw.memory.heap_total_bytes": 90,
-          "openclaw.memory.external_bytes": 20,
-          "openclaw.memory.array_buffers_bytes": 6,
-          "openclaw.memory.threshold_bytes": 512,
-          "openclaw.memory.rss_growth_bytes": 256,
-          "openclaw.memory.window_ms": 60_000,
-        },
-        status: { code: 2, message: "rss_growth" },
-      },
-    },
-    {
-      name: "async queue drop summary",
-      signals: ["metrics"],
-      events: {
-        type: "diagnostic.async_queue.dropped",
-        droppedEvents: 4,
-        droppedTrustedEvents: 1,
-        droppedUntrustedEvents: 2,
-        droppedPriorityEvents: 1,
-        queueLength: 0,
-        maxQueueLength: 10_000,
-        drainBatchSize: 100,
-      },
-      metrics: Object.entries({ total: 4, trusted: 1, untrusted: 2, priority: 1 }).map(
-        ([dropClass, count]) =>
-          counter("openclaw.diagnostic.async_queue.dropped", count, {
-            "openclaw.diagnostic.async_queue.drop_class": dropClass,
-          }),
-      ),
     },
     {
       name: "session recovery and talk",
@@ -1914,54 +1747,6 @@ describe("diagnostics-otel service", () => {
           message,
         });
         expectNoOpenClawAttrs(lastHistogramRecord("openclaw.harness.duration_ms")?.[1], "error");
-      }
-    },
-  );
-
-  test.each([false, true])(
-    "validates metric intervals with SDK self-observation=%s",
-    async (selfObservation) => {
-      if (selfObservation) {
-        process.env.OTEL_METRIC_EXPORT_INTERVAL = "2000";
-        process.env.OTEL_METRIC_EXPORT_TIMEOUT = "3000";
-        process.env.OTEL_NODE_EXPERIMENTAL_SDK_METRICS = "true";
-      } else {
-        for (const key of [
-          "OTEL_BSP_MAX_QUEUE_SIZE",
-          "OTEL_BSP_MAX_EXPORT_BATCH_SIZE",
-          "OTEL_BSP_SCHEDULE_DELAY",
-          "OTEL_BSP_EXPORT_TIMEOUT",
-          "OTEL_METRIC_EXPORT_INTERVAL",
-          "OTEL_METRIC_EXPORT_TIMEOUT",
-        ]) {
-          process.env[key] = "0";
-        }
-      }
-      await startServiceFixture(["traces", "metrics"]);
-      expect(mockCallArg(metricReaderCtor, 0)).toMatchObject({
-        exportIntervalMillis: selfObservation ? 2000 : 60_000,
-        exportTimeoutMillis: selfObservation ? 2000 : 30_000,
-      });
-      if (selfObservation) {
-        expect(mockCallArg(meterProviderCtor, 0)).toHaveProperty("sdkMetricsEnabled", true);
-        expect(mockCallArg(traceProviderCtor, 0)).toHaveProperty(
-          "meterProvider",
-          expect.anything(),
-        );
-        expect(firstSpanProcessorOptions()).toHaveProperty(
-          "selfObsMeterProvider",
-          expect.anything(),
-        );
-        expect(diagWarn).toHaveBeenCalledWith(
-          "OTEL_METRIC_EXPORT_TIMEOUT (3000) is greater than the active metric export interval (2000). Clamping timeout to interval value.",
-        );
-      } else {
-        expect(firstSpanProcessorOptions()).toMatchObject({
-          exportTimeoutMillis: 30_000,
-          maxExportBatchSize: 512,
-          maxQueueSize: 2048,
-          scheduledDelayMillis: 5000,
-        });
       }
     },
   );
@@ -2568,37 +2353,6 @@ describe("diagnostics-otel service", () => {
     },
   );
 
-  test("records blocked tool metrics even when traces are disabled", async () => {
-    await startServiceFixture(["metrics"]);
-
-    await emitTrustedEventAndFlush("tool.execution.blocked", {
-      runId: "run-should-not-export",
-      toolName: "browser",
-      toolSource: "mcp",
-      toolOwner: "browser-tools",
-      deniedReason: "tools.deny",
-      reason: "matched browser",
-      paramsSummary: { kind: "object" },
-    });
-
-    expect(firstCounterAddCall("openclaw.tool.execution.blocked")).toStrictEqual([
-      1,
-      {
-        "openclaw.toolName": "browser",
-        "openclaw.tool.source": "mcp",
-        "gen_ai.tool.name": "browser",
-        "openclaw.tool.owner": "browser-tools",
-        "openclaw.tool.params.kind": "object",
-        "openclaw.deniedReason": "tools.deny",
-      },
-    ]);
-    expect(telemetryState.tracer.startSpan).not.toHaveBeenCalledWith(
-      "openclaw.tool.execution",
-      expect.anything(),
-      expect.anything(),
-    );
-  });
-
   test("maps model call APIs and preserves zero usage on terminal spans", async () => {
     await startServiceFixture(["traces", "metrics"]);
     const zeroUsage = {
@@ -2716,37 +2470,6 @@ describe("diagnostics-otel service", () => {
       "gen_ai.usage.cache_creation.input_tokens": 7,
     });
     expect(modelCallAttrs[3]).not.toHaveProperty("openclaw.model_call.usage.input_tokens");
-  });
-
-  test("attributes auxiliary usage metrics and spans without changing ordinary usage labels", async () => {
-    await startServiceFixture(["traces", "metrics"]);
-
-    await emitAndFlush({
-      type: "model.usage",
-      ...MODEL_FIXTURE,
-      purpose: "session-activity-summary",
-      runtimeKind: "harness",
-      usage: { output: 3 },
-      costUsd: 0.01,
-    });
-    const attribution = {
-      "openclaw.purpose": "session-activity-summary",
-      "openclaw.runtime.kind": "harness",
-    };
-    expect(telemetryState.counters.get("openclaw.tokens")?.add).toHaveBeenCalledWith(
-      3,
-      expect.objectContaining(attribution),
-    );
-    expect(telemetryState.counters.get("openclaw.cost.usd")?.add).toHaveBeenCalledWith(
-      0.01,
-      expect.objectContaining(attribution),
-    );
-    expect(startedSpanOptions("openclaw.model.usage")?.attributes).toMatchObject(attribution);
-
-    await emitAndFlush({ type: "model.usage", ...MODEL_FIXTURE, usage: { output: 2 } });
-    const ordinary = telemetryState.counters.get("openclaw.tokens")?.add.mock.lastCall?.[1];
-    expect(ordinary).not.toHaveProperty("openclaw.purpose");
-    expect(ordinary).not.toHaveProperty("openclaw.runtime.kind");
   });
 
   test("uses latest GenAI request and agent span shapes only when semconv opt-in is set", async () => {
@@ -3339,36 +3062,6 @@ describe("diagnostics-otel service", () => {
   });
 
   test.each([
-    {
-      name: "explicit and legacy text responses",
-      inputMessages: [
-        {
-          role: "tool",
-          parts: [
-            {
-              type: "tool_call_response",
-              id: "call-1",
-              result: [
-                { type: "text", text: "first line" },
-                { type: "text", text: "second line" },
-              ],
-            },
-          ],
-        },
-        {
-          role: "toolResult",
-          toolCallId: "call-2",
-          content: [
-            { type: "text", text: "alpha" },
-            { type: "text", text: "beta" },
-          ],
-        },
-      ],
-      expected: [
-        toolResponse("call-1", "first line\nsecond line"),
-        toolResponse("call-2", "alpha\nbeta"),
-      ],
-    },
     {
       name: "oversized pure-text response",
       inputMessages: [

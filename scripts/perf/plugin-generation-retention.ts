@@ -21,6 +21,7 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { queryObjects } from "node:v8";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const [mode = "retention", rawGenerations = "25", rawPlugins = "40", scenario = "modules"] =
   process.argv.slice(2);
@@ -290,12 +291,7 @@ try {
   const totalStarted = performance.now();
   const totalCpuStarted = process.threadCpuUsage();
   if (mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const hostLoad = loadavg();
   let wallMs = 0;

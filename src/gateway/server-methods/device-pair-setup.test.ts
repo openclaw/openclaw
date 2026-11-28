@@ -278,12 +278,10 @@ describe("device.pair.setupCode", () => {
     });
   });
 
-  it("retains the original requester authority while resolving a join setup", async () => {
+  it("does not register a join code after pairing configuration changes", async () => {
     const entered = createDeferred();
     const release = createDeferred();
-    let current = true;
     const { options, respond } = createOptions({ includeQr: false, joinUrl: true });
-    options.hasCurrentClientAuthority = () => current;
     mocks.resolvePairingSetupFromConfig.mockImplementationOnce(async () => {
       entered.resolve();
       await release.promise;
@@ -300,8 +298,7 @@ describe("device.pair.setupCode", () => {
     );
     try {
       await awaitGateBeforeSettlement(entered.promise, pending, "setup resolution was not reached");
-      current = false;
-      options.hasCurrentClientAuthority = () => true;
+      vi.mocked(options.context.getRuntimeConfig).mockReturnValue({ gateway: { mode: "remote" } });
     } finally {
       release.resolve();
       await pending;
@@ -311,7 +308,9 @@ describe("device.pair.setupCode", () => {
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
-      expect.objectContaining({ message: expect.stringContaining("requester authority changed") }),
+      expect.objectContaining({
+        message: expect.stringContaining("Device pairing setup configuration changed"),
+      }),
     );
   });
 

@@ -2,10 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
+import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect, it, vi } from "vitest";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { buildCodexSelectedHistoryItems } from "./context-engine-history-items.js";
 import { isJsonObject, type JsonValue } from "./protocol.js";
 import {
@@ -24,6 +26,11 @@ import {
   writeCodexAppServerBinding,
 } from "./run-attempt.context-engine.test-support.js";
 import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
+import {
+  attachSqliteSessionTarget,
+  appendSqliteHistoryMessage,
+  readTranscriptMessagesByIdentity,
+} from "./sqlite-session.test-helpers.js";
 import { isCodexTurnContextHandoff } from "./test-support.js";
 
 setupRunAttemptTestHooks();
@@ -225,6 +232,132 @@ it.each([false, true])("prepares only fresh native history (engine: %s)", async 
   await expect(readCodexAppServerBinding(params.sessionFile)).resolves.toMatchObject({
     threadId: "thread-selected-1",
   });
+});
+
+it.each([
+  { engine: false, boundedSeed: true },
+  { engine: true, boundedSeed: true },
+  { engine: false, boundedSeed: false },
+])(
+  "recovers a resumed relay size rejection without replaying work (engine: $engine, bounded seed: $boundedSeed)",
+  async ({ engine, boundedSeed }) => {
+    const { params } = seedParams();
+    delete params.authoredContextTokenCap;
+    if (!engine) {
+      delete params.contextEngine;
+    }
+    if (!boundedSeed) {
+      await attachSqliteSessionTarget(
+        params,
+        path.join(tempDir, "unconfigured-recovery.sqlite"),
+        params.sessionId,
+      );
+      await appendSqliteHistoryMessage(params, userMessage("PRESERVED_HISTORY", 1));
+    }
+    const harness = selectedHarness();
+    const prepareBoundedSeed = vi.fn(async () => [userMessage("PRESERVED_HISTORY", 1)]);
+    await openFileBackedSessionManagerForTest(params.sessionFile, {
+      sessionId: params.sessionId,
+    }).appendMessageAsync(userMessage("PRESERVED_HISTORY", 1));
+    const image = {
+      type: "image" as const,
+      mimeType: "image/png",
+      data: Buffer.concat([
+        Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+          "base64",
+        ),
+        Buffer.alloc(2_250_000),
+      ]).toString("base64"),
+    };
+    params.hostCapabilities = {
+      ...params.hostCapabilities,
+      prepareBoundedSeed: boundedSeed ? prepareBoundedSeed : undefined,
+      prepareContextMedia: async ({ message }) => ({
+        images:
+          !boundedSeed &&
+          message.role === "user" &&
+          JSON.stringify(message.content).includes("PRESERVED_HISTORY")
+            ? Array.from({ length: 12 }, () => image)
+            : [],
+      }),
+    };
+    await runTurn(params, harness, "before-size-rejection");
+    const transcriptBefore = await fs.readFile(params.sessionFile, "utf8");
+    const storedBefore = !boundedSeed ? await readTranscriptMessagesByIdentity(params) : [];
+    const offset = harness.requests.length;
+    const run = runCodexAppServerAttempt({ ...params, runId: "relay-size-rejection" });
+    await run.waitForTurnAccepted();
+    const failure =
+      '{"type":"error","status":400,"error":{"type":"invalid_request_error","code":"request_too_large","message":"Request exceeds the maximum size accepted by the Codex inference relay (33554432 bytes)."}}';
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-selected-1",
+        turn: {
+          id: "turn-1",
+          status: "failed",
+          items: [],
+          error: { message: failure, codexErrorInfo: "badRequest" },
+        },
+      },
+    });
+    const result = await run;
+    expect(readAttemptTerminal(result).promptError).toBeTruthy();
+    expect(
+      harness.requests.slice(offset).filter(({ method }) => method === "turn/start"),
+    ).toHaveLength(1);
+    expect(harness.requests.slice(offset).some(({ method }) => method === "thread/start")).toBe(
+      false,
+    );
+    expect((await fs.readFile(params.sessionFile, "utf8")).startsWith(transcriptBefore)).toBe(true);
+    await expect(readCodexAppServerBinding(params.sessionFile)).resolves.toBeUndefined();
+    const next = await runTurn(
+      params,
+      harness,
+      "continue-after-size-rejection",
+      "thread-selected-2",
+    );
+    if (boundedSeed) {
+      expect(prepareBoundedSeed).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(selectedItems(next))).toContain("PRESERVED_HISTORY");
+    } else {
+      expect(prepareBoundedSeed).not.toHaveBeenCalled();
+      const turn = next.find(({ method }) => method === "turn/start");
+      const input =
+        isJsonObject(turn?.params) && Array.isArray(turn.params.input) ? turn.params.input : [];
+      expect(input.some((part) => isJsonObject(part) && part.type === "image")).toBe(false);
+      expect(JSON.stringify(input)).toContain("Attachment images omitted: context budget exceeded");
+      expect(JSON.stringify(input)).toContain("CURRENT_REQUEST $current");
+      expect(JSON.stringify(input)).toContain("PRESERVED_HISTORY");
+      expect(
+        (await readTranscriptMessagesByIdentity(params)).slice(0, storedBefore.length),
+      ).toEqual(storedBefore);
+    }
+    expect(next.some(({ method }) => method === "thread/delete")).toBe(false);
+  },
+);
+
+it("rejects restored media that exceeds selected-history bytes despite fitting image tokens", async () => {
+  await expect(
+    buildCodexSelectedHistoryItems({
+      messages: [userMessage("Earlier image question", 1)],
+      tokenBudget: 100_000,
+      prepareFileContext: async () => ({
+        images: Array.from({ length: 12 }, () => ({
+          type: "image" as const,
+          mimeType: "image/png",
+          data: Buffer.concat([
+            Buffer.from(
+              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+              "base64",
+            ),
+            Buffer.alloc(75_000),
+          ]).toString("base64"),
+        })),
+      }),
+    }),
+  ).rejects.toThrow("Selected history or restored attachments exceed their rendered allowance");
 });
 
 it("installs >1,048,576 characters in UTF-8-bounded quotes with ordered media before readiness", async () => {

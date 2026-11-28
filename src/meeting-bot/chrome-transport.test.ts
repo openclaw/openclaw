@@ -172,6 +172,23 @@ const cases = [
 ] as const;
 
 describe("meeting Chrome transport", () => {
+  it.each([false, true])(
+    "checks tab ownership for launch-disabled leave (openedByPlugin=%s)",
+    async (openedByPlugin) => {
+      const { transport } = mockTransport();
+      await transport.leaveInBrowser({
+        runtime: createPluginRuntime(),
+        config: { ...config, chrome: { ...config.chrome, launch: false } },
+        meetingSessionId: launchParams.meetingSessionId,
+        meetingUrl: launchParams.url,
+        tab: { targetId: "tracked-tab", openedByPlugin },
+      });
+      expect(browserMocks.leave).toHaveBeenCalledWith(
+        expect.objectContaining({ launch: !openedByPlugin }),
+      );
+    },
+  );
+
   it.each(cases)("preserves $name rollback ownership for tracked calls", async (testCase) => {
     const { transport, engine, createBindings, startAgent, dispose } = mockTransport({
       meetingLabel: `${testCase.name} meeting`,
@@ -367,8 +384,17 @@ describe("Chrome configured audio input contract", () => {
       let nodeDelivered = false;
       let browserDelivered = false;
       let inputProcess: InputContractProcess | undefined;
-      const sendAudio = vi.fn();
-      const session = { connect: async () => {}, close() {}, isConnected: () => true, sendAudio };
+      const sendAudio = vi.fn<(audio: Buffer) => void>();
+      const receivedAudio = () => Buffer.concat(sendAudio.mock.calls.map(([audio]) => audio));
+      let audioAtClose: Buffer | undefined;
+      const session = {
+        connect: async () => {},
+        close() {
+          audioAtClose = receivedAudio();
+        },
+        isConnected: () => true,
+        sendAudio,
+      };
       const providers = [
         {
           id: "test",
@@ -465,15 +491,20 @@ describe("Chrome configured audio input contract", () => {
         mode,
         runtime,
       });
+      const input = customInput ? nativeAudio : browserAudio;
+      const expected = mode === "agent" ? convertPcmToMulaw8k(input, 24000) : input;
       try {
         releaseAudio.resolve();
         inputProcess?.stdout.write(nativeAudio);
-        const expected = customInput ? nativeAudio : browserAudio;
-        await vi.waitFor(() =>
-          expect(sendAudio).toHaveBeenCalledWith(
-            mode === "agent" ? convertPcmToMulaw8k(expected, 24000) : expected,
-          ),
-        );
+        await vi.waitFor(() => {
+          if (mode === "bidi") {
+            expect(sendAudio).toHaveBeenCalledWith(expected);
+          } else {
+            const live = receivedAudio();
+            expect(live.length).toBeGreaterThan(0);
+            expect(live).toEqual(expected.subarray(0, live.length));
+          }
+        });
         if (customInput) {
           expect(callBrowser).not.toHaveBeenCalled();
         } else {
@@ -493,6 +524,7 @@ describe("Chrome configured audio input contract", () => {
         releaseAudio.resolve();
         await result.audioBridge?.stop();
       }
+      expect(audioAtClose).toEqual(expected);
     },
   );
 });

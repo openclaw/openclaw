@@ -30,6 +30,26 @@ export type PluginSettingsEditorModel = {
   onBack: () => void;
 };
 
+/** Only an absent list means no blocks; never overwrite an unreadable policy. */
+export function pluginToolBlockEntries(
+  config: Readonly<Record<string, unknown>> | null,
+): string[] | null {
+  if (!config) {
+    return null;
+  }
+  const tools = asNullableRecord(config.tools);
+  if (!tools && config.tools !== undefined) {
+    return null;
+  }
+  const entries = tools?.deny;
+  if (entries === undefined) {
+    return [];
+  }
+  return Array.isArray(entries) && entries.every((entry) => typeof entry === "string")
+    ? entries
+    : null;
+}
+
 function schemaProperty(schema: JsonSchema | null, key: string): JsonSchema | null {
   const properties = schema?.properties;
   return properties && Object.hasOwn(properties, key) ? (properties[key] ?? null) : null;

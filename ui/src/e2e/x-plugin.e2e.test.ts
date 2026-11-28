@@ -48,6 +48,33 @@ function snapshot(accountId = "primary", enabled = false) {
 }
 
 suite.define(() => {
+  it("uses one registered page heading in a native embed without an advertised tab", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, serviceWorkers: "block" },
+      async ({ page }) => {
+        await page.addInitScript(() =>
+          Object.assign(window, {
+            __OPENCLAW_NATIVE_EMBED__: { platform: "ios", formFactor: "phone" },
+          }),
+        );
+        await installNativePluginMockGateway(page, {
+          nativePlugins: [{ pluginId: "x", rootDir: pluginRoot, source: "src/control-ui.tsx" }],
+          controlUiTabs: [],
+          featureMethods: [...defaultControlUiFeatureMethods, "x.allowlist.list"],
+          methodResponses: { "x.allowlist.list": snapshot() },
+        });
+        await page.goto(`${suite.server.baseUrl}plugin?plugin=x&id=replies`);
+        await page.getByText("@example_maint", { exact: true }).waitFor();
+        await page
+          .locator(".native-embed-header")
+          .getByRole("heading", { name: "X replies", level: 1 })
+          .waitFor();
+        expect(await page.getByRole("heading", { name: "X replies", level: 1 }).count()).toBe(1);
+        await page.getByRole("heading", { name: "Guest mode", exact: true }).waitFor();
+      },
+    );
+  });
+
   it("builds and mounts X, manages accounts, and retires pending reads with their authority", async () => {
     await suite.withPage(
       { viewport: desktop, locale: "en-US", serviceWorkers: "block" },
@@ -78,7 +105,7 @@ suite.define(() => {
             ...fields,
           });
         };
-        const account = surface.getByRole("combobox", { name: "Bot account" });
+        const account = surface.getByRole("combobox", { name: "X account" });
         const handle = surface.getByRole("textbox", { name: "Add by X handle" });
         const guestMode = surface.getByRole("switch", { name: "Guest mode" });
         await surface.getByText("@example_maint", { exact: true }).waitFor();
@@ -94,12 +121,10 @@ suite.define(() => {
 
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
           for (const viewport of [desktop, { width: 390, height: 844 }]) {
-            const frame = await takeControlUiScreenshotFrame(
-              page,
-              surface,
-              [surface.getByRole("heading", { name: "X replies", exact: true }), handle, guestMode],
-              { animations: "disabled", viewport },
-            );
+            const frame = await takeControlUiScreenshotFrame(page, surface, [handle, guestMode], {
+              animations: "disabled",
+              viewport,
+            });
             await writeFile(
               path.join(suite.artifactDir, `x-replies-${viewport.width}.png`),
               frame.png,
@@ -107,6 +132,37 @@ suite.define(() => {
           }
           await page.setViewportSize(desktop);
         }
+
+        const badHandle = await gateway.deferNext("x.allowlist.add");
+        await handle.fill("@example-bad");
+        await button("Add account").click();
+        await gateway.waitForRequest("x.allowlist.add", { after: badHandle });
+        await gateway.rejectDeferred("x.allowlist.add", {
+          code: "INVALID_REQUEST",
+          message: "Synthetic diagnostic that should not appear on the page",
+          details: { xHandleRequired: true },
+        });
+        const invalidHandle = surface.getByRole("alert");
+        await expect
+          .poll(() => invalidHandle.textContent())
+          .toBe(
+            "OpenClaw didn’t add the account. Enter an X handle with up to 15 letters, numbers, or underscores.",
+          );
+        await expect.poll(() => handle.inputValue()).toBe("@example-bad");
+
+        const addRequest = { accountId: "primary", username: "@example_new" };
+        const budget = await gateway.deferNext("x.allowlist.add", addRequest);
+        await handle.fill("@example_new");
+        await button("Add account").click();
+        await gateway.waitForRequest("x.allowlist.add", { after: budget, match: addRequest });
+        await gateway.rejectDeferred("x.allowlist.add", {
+          code: "UNAVAILABLE",
+          message: "Synthetic X API details",
+          details: { xBudgetResumesAt: Date.UTC(2030, 0, 2, 3) },
+        });
+        await expect
+          .poll(() => surface.getByRole("alert").textContent())
+          .toContain("The X API budget is spent. Paid lookups can resume at ");
 
         const added = snapshot();
         added.entries.push({
@@ -119,7 +175,10 @@ suite.define(() => {
         await gateway.setMethodResponse("x.allowlist.add", added);
         await handle.fill("@example_new");
         await button("Add account").click();
-        await expectMutation("x.allowlist.add", { username: "@example_new" });
+        await gateway.waitForRequest("x.allowlist.add", {
+          after: budget + 1,
+          match: addRequest,
+        });
         await surface.getByText("@example_new", { exact: true }).waitFor();
         expect(await retainedRow?.evaluate((element) => element.isConnected)).toBe(true);
         await expect.poll(() => handle.inputValue()).toBe("");
@@ -146,7 +205,7 @@ suite.define(() => {
         await gateway.waitForRequest("x.allowlist.list", { after: pending });
         await gateway.setOperatorScopes(["operator.read"]);
         await reconnectMockGateway(page, gateway);
-        const denied = surface.getByText("Administrator access is required to manage X replies.");
+        const denied = surface.getByText("You need admin access to manage X replies.");
         await denied.waitFor();
         await gateway.resolveDeferred("x.allowlist.list", added);
         expect(await handle.count()).toBe(0);

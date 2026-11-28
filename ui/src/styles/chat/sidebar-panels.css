@@ -1664,13 +1664,17 @@ openclaw-session-diff:has(> .session-diff--desktop) {
   background: var(--bg-hover);
 }
 
-.session-diff--desktop .chat-diff__row--skip > .chat-diff__text {
-  flex: 1;
-}
+.session-diff--desktop .chat-diff__row--skip {
+  min-width: 0;
 
-.session-diff--desktop .chat-diff__row--skip > .chat-diff__gutter,
-.session-diff--desktop .chat-diff__row--skip > .chat-diff__sign {
-  display: none;
+  & > .chat-diff__text {
+    flex: 1;
+  }
+
+  & > .chat-diff__gutter,
+  & > .chat-diff__sign {
+    display: none;
+  }
 }
 
 @container review-reader (max-width: 640px) {
@@ -1711,40 +1715,8 @@ openclaw-session-diff:has(> .session-diff--desktop) {
   border-inline-start-style: dashed;
 }
 
-.session-diff--desktop .chat-diff__row--skip {
-  min-width: 0;
-}
-
 .session-diff--desktop .session-diff-split__row--skip {
   padding-inline-start: 0;
-}
-
-/* Keep the destination name: the narrow tree can only show a fragment. */
-@container review-reader (max-width: 400px) {
-  .session-diff__tree-sidebar[data-open="true"] + .session-diff__files .session-diff__badge {
-    display: none;
-  }
-  .session-diff__file-toggle:has(.session-diff__old-path) {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    row-gap: 4px;
-  }
-  .session-diff__file-toggle:has(.session-diff__old-path) .session-diff__path {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    row-gap: 2px;
-  }
-  .session-diff__old-path {
-    grid-column: 1 / -1;
-    max-width: none;
-    white-space: normal;
-    overflow-wrap: anywhere;
-  }
-  .session-diff__file-toggle:has(.session-diff__old-path) .chat-diffstat {
-    grid-column: 2;
-    justify-self: start;
-    margin: 0;
-  }
 }
 
 .session-diff--desktop .session-diff__context-short {
@@ -1752,8 +1724,38 @@ openclaw-session-diff:has(> .session-diff--desktop) {
 }
 
 @container review-reader (max-width: 400px) {
-  .session-diff__context-toggle:has(.session-diff__context-short) .session-diff__context-full,
-  .session-diff__context-label:has(.session-diff__context-short) .session-diff__context-full {
+  /* Keep the destination name: the narrow tree can only show a fragment. */
+  .session-diff__tree-sidebar[data-open="true"] + .session-diff__files .session-diff__badge {
+    display: none;
+  }
+
+  .session-diff__file-toggle:has(.session-diff__old-path) {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    row-gap: 4px;
+
+    & .session-diff__path {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      row-gap: 2px;
+    }
+
+    & .chat-diffstat {
+      grid-column: 2;
+      justify-self: start;
+      margin: 0;
+    }
+  }
+
+  .session-diff__old-path {
+    grid-column: 1 / -1;
+    max-width: none;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  :is(.session-diff__context-toggle, .session-diff__context-label):has(.session-diff__context-short)
+    .session-diff__context-full {
     display: none;
   }
 

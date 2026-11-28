@@ -1,7 +1,6 @@
 import type { ModelCostConfig } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js";
 import { sha256Base64Url } from "./crypto-digest.js";
 import {
   selectBilledUsageEntries,
@@ -138,6 +137,7 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
         pricingFingerprint: priced ? params.pricingFingerprint : USAGE_COST_UNPRICED_FINGERPRINT,
         checkpoint,
         scannedAt: Date.now(),
+        includesTimedUsage: true,
         parsedRecords: (previous?.parsedRecords ?? 0) + parsedRecords,
         countedRecords: (previous?.countedRecords ?? 0) + countedRecords,
         rollup,
@@ -169,9 +169,8 @@ export async function scanMemoryUsageCostRollup(params: {
     return record;
   });
   const scan = createUsageRollupScan({ ...params, appendOnly: false });
-  const billed = selectBilledUsageEntries(records);
-  await scan.addEntries(billed.entries, billed.timing);
-  const visibleLeafId = scanSessionTranscriptTree(records).leafId;
+  const { entries, timing, visibleLeafId } = selectBilledUsageEntries(records);
+  await scan.addEntries(entries, timing);
   return scan.finish({
     kind: "sqlite",
     maxSeq: params.file.maxSeq ?? 0,

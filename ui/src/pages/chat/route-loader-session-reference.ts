@@ -34,11 +34,14 @@ type PendingSessionReference = {
 
 const resolutionCache = new WeakMap<GatewayBrowserClient, Map<string, PendingSessionReference>>();
 
-export function missingSessionRouteData(
+export async function missingSessionRouteData(
   context: ApplicationContext,
   face: BoardFace,
   agentId: string,
-): MissingSessionRouteData {
+): Promise<MissingSessionRouteData> {
+  const { registerSessionNotFoundEnglish } =
+    await import("../../i18n/locales/en-session-not-found.ts");
+  registerSessionNotFoundEnglish();
   const mainKey = resolveUiConfiguredMainKey({
     agentsList: context.agents.state.agentsList,
     hello: context.gateway.snapshot.hello,

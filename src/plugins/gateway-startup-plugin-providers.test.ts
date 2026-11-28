@@ -5,7 +5,10 @@ import { fileURLToPath } from "node:url";
 import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { materializePluginAutoEnableCandidates } from "../config/plugin-auto-enable.js";
+import {
+  detectPluginAutoEnableCandidates,
+  materializePluginAutoEnableCandidates,
+} from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadGatewayPlugins } from "../gateway/server-plugins.js";
 import { resolveGatewayStartupPluginPlanFromRegistry } from "./gateway-startup-plugin-plan.js";
@@ -90,6 +93,39 @@ function plan(
     manifestRegistry: registry,
   }).pluginIds;
 }
+
+it.each(["auto-enable", "Gateway startup"])(
+  "skips unselected worker, storage and decision declarations during %s",
+  (route) => {
+    const read = vi.fn((id: string) => [id]);
+    const manifestRegistry = startupRegistry({
+      id: "fixture",
+      contracts: {
+        get workerProviders() {
+          return read("worker");
+        },
+        get storageProviders() {
+          return read("archive");
+        },
+        get decisionProviders() {
+          return read("judge");
+        },
+      },
+    });
+    const index = createInstalledPluginIndexFixture(manifestRegistry);
+    read.mockClear();
+    const config = {
+      models: { providers: { fixture: { baseUrl: "https://example.test", models: [] } } },
+    };
+    const input = { config, env: {}, manifestRegistry };
+    const selected =
+      route === "auto-enable"
+        ? detectPluginAutoEnableCandidates(input)
+        : resolveGatewayStartupPluginPlanFromRegistry({ ...input, index }).pluginIds;
+    expect(selected).toEqual([]);
+    expect(read).not.toHaveBeenCalled();
+  },
+);
 
 describe("auto-enabled plugin startup", () => {
   const manifestRegistry = startupRegistry(acpxManifest);

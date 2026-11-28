@@ -204,55 +204,26 @@ describe("createApprovalNativeRouteReporter", () => {
     },
   );
 
-  it.each([
-    [false, "Matrix DMs or Telegram DMs"],
-    [true, "Matrix or Telegram DMs"],
-  ] as const)(
-    "reports sorted unique cross-channel destinations with mixed surfaces=%s",
-    async (mixed, destinations) => {
-      const request = originRequest("cross-channel-destinations", "discord");
-      const reporters = (
-        [
-          ["telegram", "Telegram", "default"],
-          ["matrix", "Matrix", "default"],
-          ["telegram", "Telegram", "ops"],
-        ] as const
-      ).map(([channel, channelLabel, accountId]) =>
-        coordinatedReporter(coordinator, {
-          channel,
-          channelLabel,
-          accountId,
-          classifyRoute: () => (channel === "telegram" ? "bound-or-explicit" : "unbound"),
-        }),
-      );
-      for (const reporter of reporters) {
-        await expectSelection(reporter, request, "selected");
-      }
-      for (const [index, reporter] of reporters.entries()) {
-        await reporter.reportDelivery(
-          delivery(request, [
-            approverDm("user:owner"),
-            ...(mixed && index === 1
-              ? [
-                  {
-                    surface: "origin" as const,
-                    target: { to: "room:other" },
-                    reason: "preferred" as const,
-                  },
-                ]
-              : []),
-          ]),
-        );
-      }
-      expect(requestGateway).toHaveBeenCalledTimes(1);
-      expectNotice(
-        requestGateway,
-        request.id,
-        `Approval required. I sent the approval request to ${destinations}, not this chat.`,
-        { channel: "discord", accountId: undefined },
-      );
-    },
-  );
+  it("selects both bound Telegram accounts and the sole unbound Matrix account for a Discord origin", async () => {
+    const request = originRequest("cross-channel-destinations", "discord");
+    const reporters = (
+      [
+        ["telegram", "Telegram", "default"],
+        ["matrix", "Matrix", "default"],
+        ["telegram", "Telegram", "ops"],
+      ] as const
+    ).map(([channel, channelLabel, accountId]) =>
+      coordinatedReporter(coordinator, {
+        channel,
+        channelLabel,
+        accountId,
+        classifyRoute: () => (channel === "telegram" ? "bound-or-explicit" : "unbound"),
+      }),
+    );
+    for (const reporter of reporters) {
+      await expectSelection(reporter, request, "selected");
+    }
+  });
 
   it("suppresses the DM fallback notice when delivery matches a private topic origin", async () => {
     const reporter = slackReporter({

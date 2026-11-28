@@ -1,18 +1,21 @@
+import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { verifyPackageUpdateRecovery } from "../../infra/update-global.js";
 import type { PluginCohortRecoveryPair } from "../../infra/update-plugin-cohort-schema.js";
 import { withUpdateRunRead } from "../../infra/update-run-read-admission.js";
-import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import {
-  decodeUpdateRecovery,
-  isUpdateRecoveryPending,
-} from "../../infra/update-run-recovery-schema.js";
+  assertUpdateRecoveryAdmission,
+  readUpdateRecoveryAdmissionFactsAsync,
+} from "../../infra/update-run-recovery-admission.js";
+import { isUpdateRecoveryPending } from "../../infra/update-run-recovery-schema.js";
 import {
-  inspectPluginCohortRecoveryRows,
-  inspectRecoveryRows,
+  loadPluginCohortRecovery,
+  readPluginCohortRecoveryInDatabase,
+  readRecovery,
 } from "../../infra/update-run-recovery-store.js";
 import {
-  assertNoPendingUpdateRecovery,
+  assertPluginCohortRecoveryContinuation,
+  assertUpdateRecoveryAdmissionFacts,
   loadUpdateRecovery,
   pluginCohortRecoveryMatchesSource,
   UpdateRecoveryRequiredError,
@@ -49,12 +52,16 @@ export function assertUpdateCommandRecoveryState(
   if (current) {
     const run = opts.run;
     if (run?.executorFence) {
-      const pair = assertNoPendingUpdateRecovery({
+      const pair = loadPluginCohortRecovery(run.runId, {
         env: run.env,
         allowNativeRead: true,
-        pluginCohort: { runId: run.runId, fence: run.executorFence },
       });
       if (pair) {
+        assertPluginCohortRecoveryContinuation(
+          pair,
+          { runId: run.runId, fence: run.executorFence },
+          { env: run.env },
+        );
         return {
           installKey: captureUpdateCommandExecutorAuthority(run.executorFence, run.runId)
             .installKey,
@@ -89,29 +96,24 @@ export function assertUpdateCommandRecoveryObservation(
   }
   const pending = withUpdateRunRead(
     ({ db }) => {
-      const cohorts = inspectPluginCohortRecoveryRows(db);
-      return inspectRecoveryRows(db).find((entry) => {
-        if (!isUpdateRecoveryPending(entry.record)) {
-          return false;
-        }
-        const pair =
-          entry.record.runId === run.runId
-            ? cohorts.find(({ cohort }) => cohort.runId === run.runId)
-            : undefined;
-        return (
-          !pair ||
-          admittedInstallKey !== pair.cohort.installKey ||
-          (originalPair !== undefined &&
-            originalPair.cohort.transactionId !== pair.cohort.transactionId) ||
-          !pluginCohortRecoveryMatchesSource(pair, options)
-        );
-      });
+      const current = readRecovery(db, run.runId);
+      if (!current || !isUpdateRecoveryPending(current)) {
+        return undefined;
+      }
+      const pair = readPluginCohortRecoveryInDatabase(db, run.runId);
+      return !pair ||
+        admittedInstallKey !== pair.cohort.installKey ||
+        (originalPair !== undefined &&
+          originalPair.cohort.transactionId !== pair.cohort.transactionId) ||
+        !pluginCohortRecoveryMatchesSource(pair, options)
+        ? current
+        : undefined;
     },
     options,
     openDoctorStateSchemaReadAdmission,
   );
   if (pending) {
-    throw new UpdateRecoveryRequiredError(decodeUpdateRecovery(pending.raw, pending.record.runId));
+    throw new UpdateRecoveryRequiredError(pending);
   }
 }
 
@@ -129,14 +131,26 @@ export async function assertUpdateCommandPackageFinalization(
         "Full-state checkpoint recovery is deferred; retained state was left unchanged.",
       );
     }
-    const env = params.ownedManagedUpdateEnv ?? params.opts.run?.env;
+    const env = cloneEnvWithPlatformSemantics(
+      params.ownedManagedUpdateEnv ?? params.opts.run?.env ?? process.env,
+    );
     // Keep the first target stable if selectors change during admission.
     const targetPath = resolveOpenClawStateSqlitePath(env);
     const pluginCohort = run && executor ? { runId: run.runId, fence: executor } : undefined;
-    await assertUpdateRecoveryAdmission({ env, path: targetPath, pluginCohort });
+    const selected = { env, path: targetPath, pluginCohort };
+    await assertUpdateRecoveryAdmission(selected);
+    assertUpdateRecoveryAdmissionFacts(
+      await readUpdateRecoveryAdmissionFactsAsync(selected),
+      selected,
+    );
     assertCurrent();
     if (run && resolveOpenClawStateSqlitePath(run.env) !== targetPath) {
-      await assertUpdateRecoveryAdmission({ env: run.env, pluginCohort });
+      const history = { env: cloneEnvWithPlatformSemantics(run.env ?? process.env), pluginCohort };
+      await assertUpdateRecoveryAdmission(history);
+      assertUpdateRecoveryAdmissionFacts(
+        await readUpdateRecoveryAdmissionFactsAsync(history),
+        history,
+      );
       assertCurrent();
     }
   } catch (cause) {

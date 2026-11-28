@@ -40,7 +40,7 @@ function nativeOcclusion() {
   const values: boolean[] = [];
   onTestFinished(
     subscribeNativeOverlayOcclusion(
-      (value) => values.push(value),
+      (value) => values.push(value !== "live"),
       () => new DOMRect(0, 0, innerWidth, innerHeight),
     ),
   );
@@ -273,7 +273,9 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await expect.poll(occlusionTail).toEqual([false, true, false, true]);
       // The phone sheet covers the toolbar; its backdrop dismisses it instead.
       if (width < 560) {
+        const panel = query(".sidebar-session-filter-panel");
         query(".sidebar-session-filter-panel__backdrop")!.click();
+        await finishAnimations(panel);
       } else {
         await trigger.click();
       }

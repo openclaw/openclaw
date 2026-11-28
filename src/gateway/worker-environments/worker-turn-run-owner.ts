@@ -156,7 +156,7 @@ export async function createWorkerTurnRunOwner(params: {
         !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
         !claimAuthority.isCurrent()
       ) {
-        throw new Error("Worker turn authority changed while preparing its run owner");
+        throw new Error("Worker turn ended while preparing its run owner. Start a new turn.");
       }
     };
     assertCurrent();

@@ -3,7 +3,7 @@ import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
 import * as ledger from "../../infra/update-run-ledger.js";
-import * as reports from "../../infra/update-run-report.js";
+import { renderUpdateRunSummary } from "../../infra/update-run-notice.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
@@ -114,7 +114,7 @@ function expectReportedAction(run: ReturnType<typeof createRun>) {
   expect(vi.mocked(defaultRuntime.writeJson).mock.calls[0]?.[0]).toMatchObject({
     run: { origin: { nextAction: action } },
   });
-  expect(stored && reports.renderUpdateRunReport(stored).markdown).toContain(action);
+  expect(stored && renderUpdateRunSummary(stored)).toContain(action);
   return { stored, action };
 }
 
@@ -209,15 +209,15 @@ it.each(["unsettled", "foreign"] as const)(
     const nextAction = guidance(result, {
       environment: { container: false, stateDir: "/fixture/state" },
     });
-    const input = reports.updateRunReportInputFromResult(result, { origin: { nextAction } });
-    const report = reports.renderUpdateRunReport(input, {
-      currentHealth: { kind: "responding", version: "2026.9.2" },
-    });
-    expect(report.lines.join("\n")).toContain(nextAction);
-    expect(report.markdown).not.toContain("saved runtime verification failure no longer applies");
     expect(nextAction).toContain("This update recorded possible data at risk (active-mutation)");
     if (unsettled) {
-      expect(report.lines.join("\n")).toContain("doctor-processes-unsettled");
+      expect(result.steps).toContainEqual(
+        expect.objectContaining({
+          failureFacts: expect.arrayContaining([
+            expect.objectContaining({ code: "doctor-processes-unsettled" }),
+          ]),
+        }),
+      );
     } else {
       expect(result.recovery).toMatchObject({ serviceRestartSafe: false });
     }

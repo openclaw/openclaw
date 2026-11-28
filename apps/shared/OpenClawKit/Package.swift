@@ -84,6 +84,7 @@ let package = Package(
             path: "Sources/OpenClawChatUI",
             resources: [
                 .copy("Resources/Mermaid"),
+                .process("Resources/ChatIcons.xcassets"),
             ],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),

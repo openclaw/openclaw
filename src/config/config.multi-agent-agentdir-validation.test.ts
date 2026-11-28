@@ -3,12 +3,63 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import * as roster from "../agents/agent-roster.js";
+import * as agentDirs from "./agent-dirs.js";
 import { createConfigIO } from "./io.factory.js";
 import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 import type { OpenClawConfig } from "./types.js";
-import { validateConfigObject } from "./validation.js";
+import { validateConfigObject, validateConfigObjectRaw } from "./validation.js";
 
 describe("multi-agent agentDir validation", () => {
+  it("finds a binding-only directory collision without scanning the parsed roster per agent", () => {
+    const stateDir = path.join(tmpdir(), "openclaw-agentdir-validation");
+    const entries = Object.fromEntries(
+      Array.from({ length: 16 }, (_, index) => [`agent-${index}`, {}]),
+    );
+    entries["agent-0"] = { agentDir: path.join(stateDir, "agents", "main", "agent") };
+    using check = vi.spyOn(agentDirs, "findDuplicateAgentDirs");
+    using scans = vi.spyOn(roster, "readAgentRosterProperty");
+
+    const result = validateConfigObjectRaw(
+      {
+        agents: { ownership: "explicit", entries },
+        bindings: [{ agentId: "main", match: { channel: "forum" } }],
+      },
+      { env: { OPENCLAW_STATE_DIR: stateDir } },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      issues: [{ path: "agents.entries", message: expect.stringContaining('"agent-0", "main"') }],
+    });
+    expect(check).toHaveBeenCalledTimes(1);
+    const parsed = check.mock.calls[0]?.[0];
+    expect(scans.mock.calls.filter(([cfg]) => cfg === parsed).length).toBeLessThanOrEqual(2);
+  });
+
+  it("keeps caller mutations separate from the parsed roster during directory checks", () => {
+    const home = path.join(tmpdir(), "openclaw-roster-home");
+    const alphaDir = path.join(home, ".openclaw", "agents", "alpha", "agent");
+    const beta = { agentDir: path.join(home, "beta") };
+    const config: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { alpha: {}, beta } },
+    };
+    const deps = {
+      env: {},
+      homedir: () => {
+        beta.agentDir = alphaDir;
+        return home;
+      },
+    };
+
+    expect(validateConfigObjectRaw(config, deps).ok).toBe(true);
+    expect(beta.agentDir).toBe(alphaDir);
+    beta.agentDir = path.join(home, "beta");
+    expect(agentDirs.findDuplicateAgentDirs(config, deps)).toEqual([
+      { agentDir: alphaDir, agentIds: ["alpha", "beta"] },
+    ]);
+  });
+
   it("validates one referenced agent without resolving its filesystem identity", () => {
     const agentDir = path.join(tmpdir(), "openclaw-single-agentdir");
     using realpath = vi.spyOn(syncFs.realpathSync, "native");

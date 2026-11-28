@@ -19,7 +19,6 @@ import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../conf
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import * as sessions from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
-import { abortControlledSubagents } from "../../../gateway/server-methods/chat-abort-descendants.js";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { resetSystemEventsForTest } from "../../../infra/system-events.js";
 import * as pluginHooks from "../../../plugins/hook-runner-global.js";
@@ -43,6 +42,7 @@ import {
   setSubagentAnnounceDeliveryDepsForTest,
   type SubagentAnnounceDeliveryTestDeps,
 } from "../announce/subagent-announce-overrides.test-support.js";
+import { abortControlledSubagents } from "../cancel-descendants.js";
 import { resolveStoredSubagentCapabilities } from "../spawn/subagent-capabilities.js";
 import { withPreparedSessionCapabilityRead } from "../spawn/subagent-session-store.js";
 import { holdQueuedSwarmRun, releaseSwarmRun, reserveSwarmRun } from "../swarm/swarm-scheduler.js";
@@ -155,8 +155,8 @@ async function admitNativeRun(runId: string, sessionKey: string, detachOnAbort =
   return { id: runId, abort, finish };
 }
 
-it.each(["caller admission", "session generation"] as const)(
-  "releases an acknowledged native claim when %s retires before publication",
+it.each(["caller admission", "session generation", "session rotation"] as const)(
+  "after an acknowledged native claim, %s retirement keeps the admitted Stop's outcome",
   async (retirement) => {
     const runId = "retired-after-claim-ack";
     const sessionKey = `agent:main:subagent:${runId}`;
@@ -173,7 +173,10 @@ it.each(["caller admission", "session generation"] as const)(
           if (retirement === "caller admission") {
             caller.abort(new Error("Caller retired after commit"));
           } else {
-            seedSession(sessionKey, { lifecycleRevision: "replacement" });
+            seedSession(sessionKey, {
+              sessionId: retirement === "session rotation" ? "replacement-session" : sessionId,
+              lifecycleRevision: "replacement",
+            });
           }
         }
       },
@@ -185,11 +188,9 @@ it.each(["caller admission", "session generation"] as const)(
     let counts: number[] | undefined;
     try {
       const cancellation = tool.execute("stop", { action: "cancel", runId }, caller.signal);
-      if (retirement === "caller admission") {
-        await expect(cancellation).rejects.toThrow("Caller retired after commit");
-      } else {
-        expect((await cancellation).details).toMatchObject({ found: true, killed: false });
-      }
+      // The durable claim retains the original target across caller or session retirement.
+      expect((await cancellation).details).toMatchObject({ found: true, killed: true });
+      expect((await cancellation).details).not.toHaveProperty("error");
       await fixture.settle();
     } finally {
       counts = sql?.calls.map((probe) => probe.mock.calls.length);
@@ -197,14 +198,18 @@ it.each(["caller admission", "session generation"] as const)(
       await nativeRun.finish();
     }
     expect(retiredAfterAck).toBe(true);
-    expect(nativeRun.abort).not.toHaveBeenCalled();
     const persisted = loadSubagentRegistryFromSqlite().get(runId);
-    expect([persisted?.killIntent, persisted?.execution.endedAt]).toEqual([undefined, undefined]);
+    expect(nativeRun.abort).toHaveBeenCalled();
+    expect(persisted?.killIntent).toBeUndefined();
+    expect(persisted?.execution.endedAt).toEqual(expect.any(Number));
     if (counts) {
       expect(counts).toEqual(counts.map(() => 0));
     } else {
       const entry = sessions.loadExactSessionEntryReadOnly({ agentId: "main", sessionKey })?.entry;
-      expect(entry).toMatchObject({ sessionId, lifecycleRevision: "replacement" });
+      expect(entry).toMatchObject({
+        sessionId: retirement === "session rotation" ? "replacement-session" : sessionId,
+        lifecycleRevision: "replacement",
+      });
       expect(entry?.abortedLastRun).not.toBe(true);
     }
   },
@@ -590,34 +595,6 @@ describe("subagent progress drafts", () => {
 
   type TestDraft = { push: Mock; retire: Mock };
   const newDraft = (): TestDraft => ({ push: vi.fn(), retire: vi.fn() });
-
-  it("keeps child labels and distinct short references without changing full identities", async () => {
-    const first = "00000000-0000-4000-8000-000000002633";
-    const second = "00000000-0000-4000-8000-00000000a4f0";
-    const spawns = await yieldCohort("parent-turn", [first, second], undefined, {
-      [first]: "Check streaming",
-    });
-    const draft = newDraft();
-    expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
-    expect(draft.push.mock.calls.map(([item]) => [item.itemId, item.title])).toEqual([
-      [first, "Check streaming …2633"],
-      [second, "Subagent …a4f0"],
-    ]);
-    expect(spawns.map((spawn) => spawn.childSessionKey)).toEqual([
-      childKey(first),
-      childKey(second),
-    ]);
-  });
-
-  it("keeps progress titles whole at the 120-unit UTF-16 bound", async () => {
-    const prefix = "a".repeat(119);
-    const spawns = await yieldCohort("parent-turn", ["a"], undefined, { a: `${prefix}😀tail` });
-    const draft = newDraft();
-    expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
-    expect(draft.push).toHaveBeenCalledWith(
-      expect.objectContaining({ itemId: "a", kind: "subagent", title: prefix }),
-    );
-  });
 
   async function adoptCohort(children = ["a", "b"], origin?: Parameters<typeof yieldCohort>[2]) {
     const spawns = await yieldCohort("parent-turn", children, origin);

@@ -1,12 +1,10 @@
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
-import { ok } from "@openclaw/normalization-core/result";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
-import { isMediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
 import { formatDecisionSummary } from "../../packages/media-understanding-common/src/format.js";
 import {
   normalizeMediaExecutionProviderId,
@@ -19,12 +17,10 @@ import type {
   MediaAttachmentProcessing,
   MediaUnderstandingCapability,
   MediaUnderstandingDecision,
-  MediaUnderstandingModelDecision,
   MediaUnderstandingOutput,
 } from "../../packages/media-understanding-common/src/types.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { isMinimaxVlmModel, isMinimaxVlmProvider } from "../agents/minimax-vlm.js";
-import { isProviderAuthError } from "../agents/model-auth-runtime-shared.js";
 import { configuredModelSupportsNativeVideo } from "../agents/model-input.js";
 import {
   buildModelAliasIndex,
@@ -53,12 +49,7 @@ import {
   resolveConfiguredMediaEntryCapabilities,
 } from "./entry-capabilities.js";
 import { inspectLocalAudioSelection } from "./local-audio.js";
-import { failedAttachmentDisposition } from "./media-attachment-outcomes.js";
-import {
-  assertMediaExecutionCurrent,
-  hasProviderAuthAvailable,
-  type MediaExecutionContext,
-} from "./provider-execution.js";
+import { hasProviderAuthAvailable, type MediaExecutionContext } from "./provider-execution.js";
 import {
   resolveAutoMediaKeyProvidersFromRegistry,
   resolveDefaultMediaModelFromRegistry,
@@ -73,12 +64,8 @@ import {
   resolveScopeDecision,
   type ResolvedMediaModelEntry,
 } from "./resolve.js";
-import {
-  buildModelDecision,
-  runCliEntry,
-  runProviderEntry,
-  type MediaRequestOverrides,
-} from "./runner.entries.js";
+import { runAttachmentEntries } from "./runner.attachment.js";
+import type { MediaRequestOverrides } from "./runner.entries.js";
 
 export {
   createMediaAttachmentCache,
@@ -467,110 +454,6 @@ async function resolveAutoProviderModelEntry(
   };
 }
 
-async function runAttachmentEntries(
-  params: Omit<
-    Parameters<typeof runProviderEntry>[0],
-    "entry" | "attachmentIndex" | "secretOwnerId"
-  > & {
-    ctx: MsgContext;
-    attachment: MediaAttachment;
-    entries: Iterable<ResolvedMediaModelEntry> | AsyncIterable<ResolvedMediaModelEntry>;
-    automaticAudio: boolean;
-  },
-): Promise<{
-  output: MediaUnderstandingOutput | null;
-  attempts: MediaUnderstandingModelDecision[];
-  processing: MediaAttachmentProcessing;
-  failed?: MediaAttachmentDisposition;
-}> {
-  const { entries, capability } = params;
-  const attachmentIndex = params.attachment.index;
-  const attempts: MediaUnderstandingModelDecision[] = [];
-  let processing: MediaAttachmentProcessing = "omitted";
-  // The first failure is the one the operator summary reports, so the marker keeps the same one.
-  let failed: MediaAttachmentDisposition | undefined;
-  const recordFailure = (
-    entry: MediaUnderstandingModelConfig,
-    entryType: "provider" | "cli",
-    error: unknown,
-  ) => {
-    failed ??= failedAttachmentDisposition(error);
-    attempts.push(
-      buildModelDecision({ entry, entryType, outcome: "failed", reason: String(error) }),
-    );
-  };
-  for await (const candidate of entries) {
-    const { entry } = candidate;
-    const entryType = entry.type ?? (entry.command ? "cli" : "provider");
-    try {
-      const attempt =
-        entryType === "cli"
-          ? ok(await runCliEntry({ ...params, entry }))
-          : await runProviderEntry({
-              ...params,
-              entry,
-              attachmentIndex,
-              secretOwnerId: candidate.secretOwnerId,
-            });
-      assertMediaExecutionCurrent(params.execution);
-      if (!attempt.ok) {
-        if (
-          !(params.automaticAudio && isProviderAuthError(attempt.error, "missing-provider-auth"))
-        ) {
-          recordFailure(entry, entryType, attempt.error);
-        }
-        continue;
-      }
-      const result = attempt.value;
-      // Successful empty CLI/API output was processed; unavailable auth was not.
-      processing = "completed";
-      if (result?.text) {
-        const decision = buildModelDecision({ entry, entryType, outcome: "success" });
-        if (result.provider) {
-          decision.provider = result.provider;
-        }
-        decision.model = result.model;
-        if (result.requestedBackend) {
-          decision.requestedBackend = result.requestedBackend;
-        }
-        if (result.observedBackend) {
-          decision.observedBackend = result.observedBackend;
-        }
-        attempts.push(decision);
-        return { output: result, attempts, processing };
-      }
-      attempts.push(
-        buildModelDecision({ entry, entryType, outcome: "skipped", reason: "empty output" }),
-      );
-    } catch (err) {
-      assertMediaExecutionCurrent(params.execution);
-      if (isMediaUnderstandingSkipError(err)) {
-        attempts.push(
-          buildModelDecision({
-            entry,
-            entryType,
-            outcome: "skipped",
-            reason: `${err.reason}: ${err.message}`,
-          }),
-        );
-        if (shouldLogVerbose()) {
-          logVerbose(`Skipping ${capability} model due to ${err.reason}: ${err.message}`);
-        }
-      } else {
-        recordFailure(entry, entryType, err);
-        if (shouldLogVerbose()) {
-          logVerbose(`${capability} understanding failed: ${String(err)}`);
-        }
-      }
-    }
-    if (params.automaticAudio && entryType === "provider") {
-      break;
-    }
-  }
-
-  return { output: null, attempts, processing, failed };
-}
-
 export async function runCapability(
   params: Omit<AutoModelSelectionParams, "providerRegistry"> & {
     ctx: MsgContext;
@@ -816,4 +699,3 @@ export async function runCapability(
   }
   return result;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
