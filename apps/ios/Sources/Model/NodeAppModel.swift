@@ -1,3 +1,4 @@
+import Combine
 import CoreLocation
 import Observation
 import OpenClawChatUI
@@ -833,7 +834,7 @@ final class NodeAppModel {
     }
 
     /// Gateway identity the transcript cache is scoped to: the active
-    /// connection's stableID, or the keychain-persisted active gateway on
+    /// connection's stableID, or the saved active gateway on
     /// cold open before the gateway session is up. Nil for fixture transports
     /// and unpaired installs so demo or foreign rows can never leak into a
     /// real gateway's transcript.
@@ -841,7 +842,7 @@ final class NodeAppModel {
         guard !self.isLocalGatewayFixtureEnabled else { return nil }
         let stableID = self.activeGatewayConnectConfig?.effectiveStableID
             ?? self.connectedGatewayID
-            ?? GatewaySettingsStore.activeGatewayEntry()?.stableID
+            ?? self.savedChatGatewayKey?.rawValue
         guard let stableID, !stableID.isEmpty else { return nil }
         return stableID
     }
@@ -880,6 +881,8 @@ final class NodeAppModel {
     }
 
     private var chatTranscriptCacheGeneration = 0
+    private var savedChatGatewayKey: GatewayStableIdentifier.Key?
+    @ObservationIgnored private var gatewayRegistryObservation: AnyCancellable?
     private var quarantinedChatOfflineGatewayIDs: Set<GatewayStableIdentifier.Key> = []
     #if DEBUG
     @ObservationIgnored var testRemoveAllChatDatabaseFilesHandler: (() throws -> Void)?
@@ -1203,7 +1206,9 @@ final class NodeAppModel {
         restoringSavedGatewayRoute: Bool = false,
         mediaAuthorizationProvider: @escaping @MainActor () -> MediaAuthorizationSnapshot = { .current() })
     {
-        if restoringSavedGatewayRoute, let stableID = GatewaySettingsStore.activeGatewayEntry()?.stableID {
+        let savedGatewayID = GatewaySettingsStore.activeGatewayEntry()?.stableID
+        self.savedChatGatewayKey = GatewayStableIdentifier.key(savedGatewayID)
+        if restoringSavedGatewayRoute, let stableID = savedGatewayID {
             // A cold launch opens this agent’s main chat. Only an in-app Gateway switch restores its focused chat.
             self.connectedGatewayID = stableID
             self.selectedAgentId = GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: stableID)
@@ -1227,6 +1232,20 @@ final class NodeAppModel {
         self.watchMessagingService = watchMessagingService
         self.talkMode = talkMode
         self.voiceNoteRecorder = voiceNoteRecorder
+        // Apply committed registry changes before another UI action can resolve chat ownership.
+        let center = NotificationCenter.default
+        let registryChanged = GatewaySettingsStore.gatewayRegistryDidChange
+        let observer = center
+            .addObserver(forName: registryChanged, object: nil, queue: .main) { [weak self] notification in
+                let key = GatewayStableIdentifier.key(notification.object as? String)
+                MainActor.assumeIsolated {
+                    guard let self, self.savedChatGatewayKey != key else { return }
+                    self.savedChatGatewayKey = key
+                }
+            }
+        self.gatewayRegistryObservation = AnyCancellable {
+            center.removeObserver(observer)
+        }
         if !audioAdmissionInitiallyAllowed {
             // The production scene has not reported its initial phase yet. Keep
             // every microphone owner closed until SwiftUI explicitly admits it.

@@ -848,6 +848,7 @@ extension GatewaySettingsStore {
 
 extension GatewaySettingsStore {
     /// Invalidates read-only UI projections after the registry owner commits a mutation.
+    /// The notification's object is the committed active stable ID, or nil if there is none.
     static let gatewayRegistryDidChange = Notification.Name("GatewaySettingsStore.gatewayRegistryDidChange")
 
     static func clearGatewayRegistry() {
@@ -882,7 +883,7 @@ extension GatewaySettingsStore {
             service: self.gatewayService,
             account: self.gatewayRegistryAccount)
         else { return false }
-        NotificationCenter.default.post(name: self.gatewayRegistryDidChange, object: nil)
+        NotificationCenter.default.post(name: self.gatewayRegistryDidChange, object: normalized.activeStableID)
         return true
     }
 }
