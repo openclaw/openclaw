@@ -196,6 +196,8 @@ it("keeps every wrapped page's frame when several blocks are joined", async () =
       const markers = [
         ...result.output.matchAll(/<<<(END_)?EXTERNAL_UNTRUSTED_CONTENT id="([a-f0-9]{16})">>>/gu),
       ].map((match) => `${match[1] ? "end" : "start"}:${match[2]}`);
+      // The 128k window's per-result budget; the adapter's own cap never had to cut.
+      expect(result.output.length).toBeLessThanOrEqual(32_000);
       expect(markers).toHaveLength(4);
       expect(markers[1]).toBe(markers[0]!.replace("start:", "end:"));
       expect(markers[3]).toBe(markers[2]!.replace("start:", "end:"));

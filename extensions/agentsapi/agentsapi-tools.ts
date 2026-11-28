@@ -77,12 +77,19 @@ export type AgentsApiToolSurface = {
   readonly lastToolError: AgentHarnessAttemptResult["lastToolError"];
 };
 
-/** The function output: each text block, and a placeholder for each other block, one per line. */
-function serializeFunctionOutput(content: readonly unknown[]): string {
+/**
+ * The function output: each text block, and a placeholder for each other block, one per line.
+ * Without `withText` it is only what serialization adds, which the result bound reserves. The
+ * bound never adds a block (a cut notice replaces the first omitted text block), so the reserve
+ * computed before the cut covers the output after it.
+ */
+function serializeFunctionOutput(content: readonly unknown[], withText = true): string {
   return content
     .map((block) =>
       isRecord(block) && block.type === "text" && typeof block.text === "string"
-        ? block.text
+        ? withText
+          ? block.text
+          : ""
         : "[Image result omitted from Agents API function output]",
     )
     .join("\n");
@@ -416,12 +423,7 @@ export async function buildAgentsApiToolSurface(
         resultBound: {
           contextWindowTokens: contextTokens,
           spill: false,
-          reservedChars: (content) =>
-            serializeFunctionOutput(
-              content.map((block) =>
-                isRecord(block) && block.type === "text" ? { type: "text", text: "" } : block,
-              ),
-            ).length,
+          reservedChars: (content) => serializeFunctionOutput(content, false).length,
         },
         prepareArguments: (args) => {
           if (!isRecord(args)) {
