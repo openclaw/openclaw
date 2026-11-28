@@ -36,7 +36,8 @@ export function isMcpHttpSessionExpired(
     session.transport instanceof OpenClawStreamableHTTPClientTransport &&
     session.transport.sessionId !== undefined &&
     error instanceof SdkHttpError &&
-    error.status === 404
+    (error.status === 404 ||
+      (error.status >= 400 && error.status < 500 && /\binvalid session\b/i.test(error.message)))
   );
 }
 
