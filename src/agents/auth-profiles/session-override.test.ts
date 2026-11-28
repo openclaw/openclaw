@@ -427,6 +427,52 @@ describe("session auth-profile rotation", () => {
       expect(sessionEntry.authProfileOverrideCompactionCount).toBe(1);
     }));
 
+  // Agent-local profiles record a success in lastUsed and lastProbeAt; profiles
+  // inherited from the shared store record only lastProbeAt.
+  it.each([
+    [
+      "returns to the preferred profile after it outlived the fallback's failure",
+      "lastUsed",
+      -60_000,
+      API_PRIMARY,
+    ],
+    ["keeps the fallback when its latest outcome succeeded", "lastUsed", -20_000, API_BACKUP],
+    [
+      "returns to a shared-store preferred profile after it outlived the fallback's failure",
+      "lastProbeAt",
+      -60_000,
+      API_PRIMARY,
+    ],
+    [
+      "keeps a shared-store fallback when its latest outcome succeeded",
+      "lastProbeAt",
+      -20_000,
+      API_BACKUP,
+    ],
+  ] as const)("%s", (_name, successField, backupSuccessOffset, expected) =>
+    withAuthState(async (state) => {
+      const agentDir = await prepareMixedAuth(state);
+      const cfg = { auth: { order: { openai: [API_PRIMARY, API_BACKUP] } } };
+      const now = Date.now();
+      // The fallback rejected the session model 40s ago; its cooldown has expired.
+      // The preferred profile then served that turn and carries no rate-limit record.
+      authStoreMocks.state.store.usageStats = {
+        [API_BACKUP]: { lastFailureAt: now - 40_000, [successField]: now + backupSuccessOffset },
+        [API_PRIMARY]: { [successField]: now - 30_000 },
+      };
+      const sessionEntry = automaticSession({
+        model: MODEL,
+        authProfileOverride: API_BACKUP,
+        compactionCount: 0,
+        authProfileOverrideCompactionCount: 0,
+      });
+
+      expect(await resolveSession({ agentDir, sessionEntry, cfg })).toBe(expected);
+      expect(sessionEntry.authProfileOverride).toBe(expected);
+      expect(sessionEntry.authProfileOverrideSource).toBe("auto");
+    }),
+  );
+
   it("keeps a healthy automatic profile across compaction when auth order is implicit", () =>
     withAuthState(async (state) => {
       const agentDir = await prepareMixedAuth(state);
