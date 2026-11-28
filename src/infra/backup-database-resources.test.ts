@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createBackupResourcePlan } from "../commands/backup-resource-inventory.js";
 import { resolveActivatedPluginBackupInventory } from "../plugins/manifest-backup-resources.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -16,6 +16,40 @@ import { statePortProvider } from "./database-engine/state-port.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { discoverUpdateStateSchemaInspectionInProcess } from "./update-candidate-state.js";
 import { createUpdateDatabaseBackup } from "./update-database-backup.js";
+
+it("discovers core databases without walking agent trees outside plugin resource roots", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const config = { plugins: { enabled: false } };
+    await state.writeConfig(config);
+    await fs.mkdir(state.agentDir(), { recursive: true });
+    const file = path.join(state.agentDir(), "openclaw-agent.sqlite");
+    {
+      using database = openNodeSqliteDatabase(file);
+      database.exec("CREATE TABLE retained (value TEXT)");
+    }
+    await state.writeText("agents/main/agent/unrelated/nested/payload.txt", "ordinary data");
+    const readdir = vi.spyOn(fs, "readdir");
+    try {
+      expect(
+        await discoverBackupDatabasePaths({
+          stateDir: state.stateDir,
+          config,
+          env: state.env,
+          agentRegistry: [],
+        }),
+      ).toEqual([file]);
+      expect(
+        readdir.mock.calls.filter(
+          ([directory]) =>
+            String(directory).startsWith(`${state.agentDir()}${path.sep}`) ||
+            String(directory) === state.agentDir(),
+        ),
+      ).toEqual([]);
+    } finally {
+      readdir.mockRestore();
+    }
+  });
+});
 
 it("captures every retained account and token database under a disabled plugin's declared state resource", async () => {
   await withOpenClawTestState(

@@ -8,6 +8,45 @@ import {
   sealBackupResourceInventory,
 } from "./backup-resource-inventory.js";
 
+it("scoped plugin discovery preserves temporary exclusions, protected children, and custom roots", async () => {
+  await withTempDir("backup-resource-scope-", async (stateDir) => {
+    const pluginRoot = path.join(stateDir, "agents/main/agent/plugin");
+    const temporaryRoot = path.join(pluginRoot, "tmp");
+    const customRoot = path.join(pluginRoot, "custom");
+    await fs.mkdir(path.join(temporaryRoot, "kept"), { recursive: true });
+    await fs.mkdir(path.join(customRoot, "tmp"), { recursive: true });
+    const resources = await createBackupResourcePlan({
+      stateDir,
+      configPaths: [],
+      oauthDirs: [],
+      workspaceDirs: [],
+      excludedWorkspaceDirs: [],
+      agentRoots: [
+        {
+          agentId: "custom",
+          sourcePath: customRoot,
+          databasePath: path.join(customRoot, "openclaw-agent.sqlite"),
+        },
+      ],
+      pluginResources: ["agents/main/agent/plugin", "agents/main/agent/plugin/tmp/kept"].map(
+        (relativePath) => ({
+          pluginId: "retained",
+          disposition: "include",
+          scope: "state",
+          relativePath,
+        }),
+      ),
+      pluginRoots: [],
+      temporaryRootScope: "plugin-resources",
+    });
+    expect(resources.isIncluded(temporaryRoot)).toBe(false);
+    expect(resources.isTraversable(temporaryRoot)).toBe(true);
+    expect(resources.isIncluded(path.join(temporaryRoot, "kept", "retained.sqlite"))).toBe(true);
+    expect(resources.isIncluded(path.join(temporaryRoot, "discarded.sqlite"))).toBe(false);
+    expect(resources.isIncluded(path.join(customRoot, "tmp", "retained.sqlite"))).toBe(true);
+  });
+});
+
 it.each(["plan", "inventory"] as const)(
   "%s checks privacy once per traversal and observes later markers",
   async (kind) => {
