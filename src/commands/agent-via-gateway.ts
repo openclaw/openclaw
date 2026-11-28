@@ -679,6 +679,7 @@ async function agentViaGatewayCommand(
           onEvent: (event) => follower.onEvent(event),
           onResponse: async (_request, connection, result) =>
             await follower.follow({
+              // SAFETY: the same final `agent` response this call returns as `response` below.
               response: result as GatewayAgentResponse,
               sessionKey: runContext.accepted?.sessionKey,
               connection,

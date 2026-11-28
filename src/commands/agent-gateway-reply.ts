@@ -113,10 +113,11 @@ function messageText(message: unknown): string | undefined {
  * cap; see server-broadcast.transport.test.ts "visits only the session audience"), so it
  * already receives `agent` lifecycle and `chat` events for the session and its children.
  * They are observed from the first frame: no subscription, no gap before the yield.
- * Session runs are serialized, so the follow-up is the first run that starts in the session
- * after one of the turn's children ends. Accepted edge: another turn (heartbeat, inbound
- * message) starting in that idle window, or after a follow-up that yields again, is taken
- * for the follow-up. Exact matching needs the settle run id, which the protocol does not carry.
+ * A session runs one turn at a time, so the follow-up is the run that starts in the session
+ * after one of the turn's children ends, and its terminal `chat` event is the next one there.
+ * Accepted edge: another turn (heartbeat, inbound message) starting in that idle window, or
+ * after a follow-up that yields again, is taken for the follow-up. Exact matching needs the
+ * settle run's identity, which the `agent` response does not carry.
  */
 export function createYieldFollower(params: {
   json?: boolean;
@@ -128,9 +129,12 @@ export function createYieldFollower(params: {
   let observe: ((event: EventFrame) => void) | undefined;
   let printed = false;
   let outcome: YieldFollowUp | undefined;
+  let following: GatewayAgentResponse | undefined;
   const follower = {
     /** The yielded turn whose follow-up the connection is waiting for. */
-    following: undefined as GatewayAgentResponse | undefined,
+    get following() {
+      return following;
+    },
     onEvent(event: EventFrame) {
       const payload = asOptionalRecord(event.payload);
       const relevant =
@@ -157,7 +161,6 @@ export function createYieldFollower(params: {
       if (
         json ||
         !input.sessionKey ||
-        !response.runId ||
         response.result?.meta?.yielded !== true ||
         !hasCompletionMessageSessionSpawn(spawns)
       ) {
@@ -167,7 +170,7 @@ export function createYieldFollower(params: {
       const children = new Set(
         spawns?.filter((spawn) => spawn.expectsCompletionMessage).map((spawn) => spawn.runId),
       );
-      follower.following = response;
+      following = response;
       // A live spinner redraws over lines printed beneath it; stop it before the reply.
       input.progress.done();
       printed = true;
@@ -178,38 +181,28 @@ export function createYieldFollower(params: {
       });
       const done = Promise.withResolvers<YieldFollowUp>();
       let childEnded = false;
-      let followUpRunId: string | undefined;
+      let followUpStarted = false;
       observe = (event) => {
         const payload = asOptionalRecord(event.payload);
-        const runId = payload?.runId;
-        if (typeof runId !== "string") {
-          return;
-        }
         const phase = asOptionalRecord(payload?.data)?.phase;
-        if (event.event === "agent" && payload?.stream === "lifecycle") {
-          if (children.has(runId) && (phase === "end" || phase === "error")) {
+        if (event.event === "agent") {
+          if (children.has(String(payload?.runId)) && (phase === "end" || phase === "error")) {
             childEnded = true;
-          } else if (
-            phase === "start" &&
-            childEnded &&
-            !followUpRunId &&
-            runId !== response.runId &&
-            payload.sessionKey === input.sessionKey
-          ) {
-            followUpRunId = runId;
+          } else if (phase === "start" && childEnded && payload?.sessionKey === input.sessionKey) {
+            followUpStarted = true;
           }
           return;
         }
-        if (event.event !== "chat" || runId !== followUpRunId) {
+        if (!followUpStarted || !payload || payload.sessionKey !== input.sessionKey) {
           return;
         }
-        if (payload?.state === "final") {
+        if (payload.state === "final") {
           if (payload.yielded === true) {
-            followUpRunId = undefined;
+            followUpStarted = false;
           } else {
             done.resolve({ kind: "reply", text: messageText(payload.message) });
           }
-        } else if (payload?.state === "error" || payload?.state === "aborted") {
+        } else if (payload.state === "error" || payload.state === "aborted") {
           const reason = payload.errorMessage;
           done.resolve({
             kind: "failed",

@@ -9,6 +9,7 @@ const config = vi.hoisted(() => ({
   session: { mainKey: "main" },
 }));
 
+// mock-isolation: the CLI must dispatch with this fixture config, not the operator's.
 vi.mock("../config/gateway-dispatch-config.js", () => ({
   readGatewayDispatchConfig: () => config,
   readGatewayDispatchConfigWithShellEnvFallback: async () => config,
@@ -92,7 +93,9 @@ function mockYieldedGatewayTurn(events: unknown[], later: unknown[] = []) {
       // The wait is armed once the turn's own reply has printed.
       await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledWith("Checking with a helper."));
       // One zero-length timer turn: a zero deadline (the --timeout 0 bug) would fire first.
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
     }
     for (const event of later) {
       request.onEvent?.(event);
