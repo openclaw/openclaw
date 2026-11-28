@@ -71,6 +71,46 @@ class ChatControllerTerminalAckTest {
     }
 
   @Test
+  fun automationResultMessagePublishesItsDestinationConversation() =
+    runTest {
+      val finalized = mutableListOf<Triple<ChatComposerOwner, String, String>>()
+      val controller =
+        createChatController(
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
+          currentDefaultAgentId = { "main" },
+          onAssistantReplyFinalized = { owner, runId, text ->
+            finalized += Triple(owner, runId, text)
+          },
+        ) { method, _ -> emptyChatGatewayResponse(method) }
+      controller.prepareMainSessionKey("agent:main:main")
+      controller.load(controller.sessionKey.value)
+      runCurrent()
+
+      fun sessionMessage(
+        text: String,
+        automation: String = "",
+      ) = """{"sessionKey":"agent:main:node-phone","agentId":"main","message":{"role":"assistant",""" +
+        """"content":[{"type":"text","text":"$text"}]$automation}}"""
+      controller.handleGatewayEvent("session.message", sessionMessage("Mirrored reply"))
+      controller.handleGatewayEvent(
+        "session.message",
+        sessionMessage("Security report", ""","openclawAutomation":{"kind":"cron","jobId":"job-1","runId":"cron:job-1:1000"}"""),
+      )
+      runCurrent()
+
+      assertEquals(
+        listOf(
+          Triple(
+            ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:node-phone"),
+            "cron:job-1:1000",
+            "Security report",
+          ),
+        ),
+        finalized,
+      )
+    }
+
+  @Test
   fun finalAssistantEventPublishesOriginalOwnerAfterSessionSwitch() =
     runTest {
       val finalized = mutableListOf<Triple<ChatComposerOwner, String, String>>()
