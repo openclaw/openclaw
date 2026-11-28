@@ -165,12 +165,13 @@ it("reads unbound ACP requester delivery from memory", async () => {
     parentSessionKey: parentKey,
     requesterAgentId: parent.agentId,
     ownerAgentId: sibling.agentId,
+    spawnMode: "run",
+    requestThreadBinding: false,
+    streamToParentRequested: false,
     ctx: {},
   });
   expect(requester).toMatchObject({
-    isSubagentSession: false,
-    hasActiveSubagentBinding: false,
-    hasThreadContext: false,
+    streamToParent: false,
   });
 });
 

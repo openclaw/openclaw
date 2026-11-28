@@ -23,7 +23,8 @@ struct RootSidebarStabilityTests {
         await model.refreshSessions(appModel: appModel)
         let root = RootSidebar(
             model: model, selectedDestination: .chat,
-            isSidebarVisible: true, selectDestination: { _ in }, selectSession: { _ in }, openPagesEditor: {})
+            isSidebarVisible: true, selectDestination: { _ in }, selectSession: { _ in }, openPagesEditor: {},
+            openSearch: {})
             .environment(appModel)
             .environment(gatewayController)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 340, height: 700))

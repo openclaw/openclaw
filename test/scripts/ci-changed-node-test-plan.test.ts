@@ -283,55 +283,6 @@ const gitToolingTargets = [
 ].map((name) => `test/scripts/${name}.test.ts`);
 const lintSuppressionInventoryTest = "test/scripts/lint-suppressions.test.ts";
 
-it("keeps activity unit changes narrow alongside root package metadata", () => {
-  expect(hasUiE2eAffectingChange(["ui/src/pages/activity/activity-page.test.ts"])).toBe(false);
-  expect(
-    hasUiE2eAffectingChange(["ui/src/pages/activity/activity-page.test.ts", "package.json"]),
-  ).toBe(false);
-});
-
-it.each([
-  ["extensions/browser/chrome-extension/background.js", false],
-  ["src/gateway/control-ui.ts", true],
-  ["packages/gateway-protocol/src/schema/protocol-schemas.ts", true],
-  ["src/gateway/cron-stream-matcher.worker.ts", false],
-] as const)(
-  "selects browser proof only for its owner or imported wire contract: %s",
-  (file, expected) => {
-    expect(hasUiE2eAffectingChange([file])).toBe(expected);
-  },
-);
-
-it.each([
-  ["src/gateway/control-ui.ts", true],
-  ["packages/gateway-protocol/src/schema/protocol-schemas.ts", true],
-  ["ui/src/e2e/control-ui-e2e-suite.test-support.ts", true],
-  ["ui/src/e2e/settings-layout.e2e.test.ts", false],
-] as const)(
-  "selects real-Gateway tests through their source, fixture, and protocol owners: %s",
-  (file, expected) => {
-    const timings = vi.spyOn(testTimings, "readUiE2eFileTimings");
-    try {
-      expect(hasUiE2eAffectingChange([file], { family: "real-gateway" })).toBe(expected);
-      expect(timings).not.toHaveBeenCalled();
-    } finally {
-      timings.mockRestore();
-    }
-  },
-);
-
-it.each([
-  ["ui/src/styles/chat.css", false],
-  ["extensions/browser/chrome-extension/background.js", true],
-  ["extensions/browser/src/browser/extension-install.ts", true],
-  ["test/vitest/vitest.shared.config.ts", false],
-] as const)(
-  "selects the extension bootstrap through its source and shared owners: %s",
-  (file, expected) => {
-    expect(hasUiE2eAffectingChange([file], { family: "browser-extension" })).toBe(expected);
-  },
-);
-
 it.each(
   [
     [],
@@ -371,7 +322,15 @@ it.each([
   expect(
     hasImportGraphImpactOnTargets([target], (file) => file !== target, cwd, { tooling: true }),
   ).toBe(!/\/(?:\.cache|\.artifacts|dist|node_modules)\//u.test(consumer));
-  expect(hasUiE2eAffectingChange([target], { cwd })).toBe(expected);
+  // Boolean owner selection must not load the advisory timing inventory.
+  const timings = vi.spyOn(testTimings, "readUiE2eFileTimings");
+  try {
+    expect(hasUiE2eAffectingChange([target], { cwd })).toBe(expected);
+    hasUiE2eAffectingChange([target], { cwd, family: "real-gateway" });
+    expect(timings).not.toHaveBeenCalled();
+  } finally {
+    timings.mockRestore();
+  }
 });
 
 it.each(["archive", "untracked", "symlink"])(

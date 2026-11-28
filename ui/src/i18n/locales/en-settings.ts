@@ -1949,6 +1949,8 @@ const enSettings = {
       testAllBrowsersHint: "Tests include browsers registered by other people on this Gateway.",
       sendingTest: "Sending test…",
       updateFailed: "Couldn’t complete the notification request. Try again.",
+      retryAgentSelection: "Couldn’t confirm the selection. Reopen to review and retry.",
+      reviewAgentSelection: "Couldn’t confirm your last save. Review your selection and try again.",
       testError: "Not sent",
       testOutcome: "Test notification",
       testQueued: "Test notification queued",
@@ -2132,9 +2134,6 @@ const enSettings = {
       textSize: "Text size",
     },
     chatPrefs: {
-      compactSessionOpening: "Open with 24 messages",
-      compactSessionOpeningHint:
-        "Fetch the latest 24 messages when opening a conversation without saved history. Scroll up to read earlier messages.",
       title: "Chat",
       devices: "Microphone and camera",
       messageWidth: "Message width",
