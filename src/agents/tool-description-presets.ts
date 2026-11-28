@@ -94,7 +94,7 @@ export function describeSessionsListTool(
 export function describeSessionsHistoryTool(options?: SessionLinkDescriptionOptions): string {
   return [
     "Read sanitized visible-session history.",
-    "Before reply/debug/resume. Use messageId for anchored history; sessionId selects its transcript and requires messageId. Omit both for the latest tail. offset pages unanchored history and is ignored with messageId. limit bounds either mode. Include tool messages with includeTools.",
+    "Before reply/debug/resume. Use messageId for anchored history; sessionId selects its transcript and requires messageId. Omit both for the latest tail. offset pages unanchored history and is ignored with messageId. limit bounds either mode. Use includeTools to include structured tool calls and results.",
     "For memory session hits, use the sessionKey, messageId and sessionId returned by sessions_search. Without search, use a known session key or transcript ID, a small limit, and paginate. Search line numbers are not history offsets; never read raw transcript files.",
     "pendingInputs are accepted inputs outside model history; page with pendingBefore=nextBefore. Cancelled inputs never replay; interrupted means saved without an active retry. Eligible durable peer sends can regain queued custody on startup. Lower limit for richer pending previews.",
     ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
