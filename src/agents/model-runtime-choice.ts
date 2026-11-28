@@ -454,7 +454,10 @@ export async function preparePublishedModelRuntimeChoice(params: {
       params.sessionEntry?.authProfileOverrideSource === "user"
         ? params.sessionEntry.authProfileOverride
         : undefined,
-    profileProvider: params.sessionEntry?.providerOverride ?? params.sessionEntry?.modelProvider,
+    profileProvider:
+      params.sessionEntry?.providerOverride ??
+      params.sessionEntry?.modelProvider ??
+      params.provider,
   });
   const { resolveCatalogDecisionRuntime } = await loadCatalogDecisionRuntime();
   const configuredRuntime = (entry: ModelCatalogEntry, variants?: readonly ModelCatalogEntry[]) =>

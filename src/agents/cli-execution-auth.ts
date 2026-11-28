@@ -18,6 +18,27 @@ export class CliExecutionAuthProfileError extends Error {
   override name = "CliExecutionAuthProfileError";
 }
 
+/** Forwarding admission is independent of credential freshness and CLI-owned OAuth refresh. */
+export function evaluateCliExecutionAuthProfileAdmission(params: {
+  cliExecutionProvider: string;
+  canonicalProvider?: string;
+  credential?: AuthProfileCredential;
+  explicitSelection: boolean;
+}): { kind: "missing" } | { kind: "accepted" | "incompatible"; credential: AuthProfileCredential } {
+  const { credential, cliExecutionProvider, canonicalProvider, explicitSelection } = params;
+  if (!credential) {
+    return { kind: "missing" };
+  }
+  const accepted =
+    (credential.provider === cliExecutionProvider &&
+      (cliExecutionProvider !== GOOGLE_GEMINI_CLI_PROVIDER_ID || credential.type !== "token")) ||
+    (credential.provider === canonicalProvider &&
+      (cliExecutionProvider === CLAUDE_CLI_PROVIDER_ID
+        ? explicitSelection || credential.type !== "api_key"
+        : cliExecutionProvider === GOOGLE_GEMINI_CLI_PROVIDER_ID && credential.type === "api_key"));
+  return { kind: accepted ? "accepted" : "incompatible", credential };
+}
+
 export function cliBackendAcceptsAuthProfileForwarding(params: {
   provider: string;
   config: OpenClawConfig;
@@ -79,21 +100,22 @@ export function selectCliExecutionAuthProfile(params: {
     includeSetupRegistry: true,
     metadataSnapshot: params.metadataSnapshot,
   });
-  const acceptsCredential = (credential: AuthProfileCredential, explicitSelection: boolean) =>
-    credential.provider === params.cliExecutionProvider ||
-    (credential.provider === canonicalProvider &&
-      (params.cliExecutionProvider === CLAUDE_CLI_PROVIDER_ID
-        ? explicitSelection || credential.type !== "api_key"
-        : params.cliExecutionProvider === GOOGLE_GEMINI_CLI_PROVIDER_ID &&
-          credential.type === "api_key"));
+  const admission = (credential: AuthProfileCredential | undefined, explicitSelection: boolean) =>
+    evaluateCliExecutionAuthProfileAdmission({
+      cliExecutionProvider: params.cliExecutionProvider,
+      canonicalProvider,
+      credential,
+      explicitSelection,
+    });
   if (retainedProfileId) {
-    const credential = store.profiles[retainedProfileId];
-    if (!credential) {
+    const decision = admission(store.profiles[retainedProfileId], true);
+    if (decision.kind === "missing") {
       throw new CliExecutionAuthProfileError(
         `No credentials found for profile "${retainedProfileId}".`,
       );
     }
-    if (acceptsCredential(credential, true)) {
+    const { credential } = decision;
+    if (decision.kind === "accepted") {
       return { kind: "stored", profileId: retainedProfileId, provider: credential.provider };
     }
     throw new CliExecutionAuthProfileError(
@@ -123,7 +145,7 @@ export function selectCliExecutionAuthProfile(params: {
       const credential = store.profiles[profileId];
       if (
         credential &&
-        acceptsCredential(credential, false) &&
+        admission(credential, false).kind === "accepted" &&
         !nativeAuthProfileIds?.includes(profileId)
       ) {
         return { kind: "stored", profileId, provider: credential.provider };
