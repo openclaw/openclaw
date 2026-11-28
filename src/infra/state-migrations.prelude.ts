@@ -169,6 +169,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
   agentDatabaseTargets: readonly { agentId: string; path: string }[];
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
   integrityCheck?: "quick" | "full";
+  reuseCleanCloseIntegrity?: boolean;
   inspectedSessionEntryPaths?: readonly string[];
   orphanSessionStores?: ReturnType<typeof inspectOrphanSessionStoreEndpoints>;
   pluginSessionStoreAgentIds: readonly string[];
@@ -275,6 +276,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
       sharedStep("media-persistence", agentPersistence, agentPersistence, () =>
         migrateLegacyMediaPersistence({
           ...agentMigrationOptions,
+          reuseCleanCloseIntegrity: params.reuseCleanCloseIntegrity,
           isSessionEntryStatePrepared: (target) =>
             inspectedEntryStatePaths.has(normalizeDatabasePath(target.realPath)),
           prepareSessionEntryState: async (target) => {
