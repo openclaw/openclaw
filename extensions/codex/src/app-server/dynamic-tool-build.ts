@@ -192,6 +192,21 @@ export async function buildDynamicTools(
       input.nativeToolSurfaceEnabled,
       params.requireWorkspaceOnly,
     );
+    const skillLibraryAuthoring = params.skillLibraryAuthoring;
+    // The single-profile catalog can list workspace authoring even when this
+    // caller defaults to personal. Only the separate per-turn build can run it.
+    const catalogSkillLibraryAuthoring =
+      input.ignoreRuntimePlan &&
+      skillLibraryAuthoring?.defaultTarget === "personal" &&
+      !skillLibraryAuthoring.multipleProfiles
+        ? {
+            ...skillLibraryAuthoring,
+            defaultTarget: "workspace" as const,
+            assertWorkspaceCurrent: () => {
+              throw new Error("Workspace authoring is not available on this turn.");
+            },
+          }
+        : skillLibraryAuthoring;
     const options: OpenClawCodingToolsOptions = {
       agentId: input.sessionAgentId,
       policyAgentId: input.policyAgentId,
@@ -243,8 +258,8 @@ export async function buildDynamicTools(
             }),
       config: params.config,
       skillsSnapshot: params.skillsSnapshot,
-      ...(params.skillLibraryAuthoring
-        ? { skillLibraryAuthoring: params.skillLibraryAuthoring }
+      ...(catalogSkillLibraryAuthoring
+        ? { skillLibraryAuthoring: catalogSkillLibraryAuthoring }
         : {}),
       authProfileStore: params.toolAuthProfileStore ?? params.authProfileStore,
       abortSignal: input.runAbortController.signal,

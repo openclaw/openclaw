@@ -21,7 +21,11 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import { registerMemoryCapability } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
-import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  activatePluginForTest,
+  createMockPluginRegistry,
+  getActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
@@ -1311,6 +1315,129 @@ describe("runCodexAppServerAttempt", () => {
       "thread/unsubscribe",
     ]);
   });
+  it("retains the settled thread across fresh personal and workspace skill-authoring grants", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const config = {
+      plugins: { enabled: true, allow: ["skill-workshop"] },
+      tools: { web: { search: { enabled: false } } },
+    };
+    onTestFinished(await activatePluginForTest({ config, pluginId: "skill-workshop" }));
+    const registration = getActivePluginRegistry()?.tools.find(
+      (tool) => tool.pluginId === "skill-workshop" && tool.names.includes("skill_workshop"),
+    );
+    assert(registration, "expected the registered Workshop tool");
+    // Stub only the plugin executor, below the host grant guard.
+    const executeWorkshop = vi.fn(async (_callId: string) => ({
+      content: [{ type: "text" as const, text: "Synthetic Workshop result" }],
+      details: {},
+    }));
+    const createWorkshop = registration.factory;
+    vi.spyOn(registration, "factory").mockImplementation((context) => {
+      const tool = createWorkshop(context);
+      if (tool && !Array.isArray(tool)) {
+        tool.execute = executeWorkshop;
+      }
+      return tool;
+    });
+
+    let threadStarts = 0;
+    let turnStarts = 0;
+    const harness = createStartedThreadHarness(
+      async (method, request) => {
+        if (method === "thread/start") {
+          return threadStartResult(`skill-thread-${++threadStarts}`);
+        }
+        if (method === "thread/resume") {
+          return threadStartResult((request as CodexThreadResumeParams).threadId);
+        }
+        if (method === "turn/start") {
+          return turnStartResult(`skill-turn-${++turnStarts}`);
+        }
+        return undefined;
+      },
+      // Use the owned native transport, starting with no persisted threads.
+      { persistedThreads: [] },
+    );
+    const threadIds: string[] = [];
+    let workshopNamespace: string | null = null;
+    const turns = [
+      { name: "initial", defaultTarget: "workspace", revoked: false },
+      { name: "personal", defaultTarget: "personal", revoked: false },
+      { name: "revoked", defaultTarget: "workspace", revoked: true },
+      { name: "regranted", defaultTarget: "workspace", revoked: false },
+    ] as const;
+    for (const [index, { name, defaultTarget, revoked }] of turns.entries()) {
+      const params = createParams(sessionFile, workspaceDir, { runId: `authoring-${name}` });
+      params.config = config;
+      enableRuntimeTools(params);
+      let workspaceCurrent = true;
+      const assertWorkspaceCurrent = vi.fn(() => {
+        if (!workspaceCurrent) {
+          throw new Error("Workspace authoring requires current administrator authority.");
+        }
+      });
+      params.skillLibraryAuthoring = {
+        target: "personal",
+        defaultTarget,
+        multipleProfiles: false,
+        bind: () => {},
+        assertWorkspaceCurrent,
+        invoke: async () => ({ entries: [] }),
+      };
+      setCodexTestToolFactory(params, (options) =>
+        createOpenClawCodingTools(options).filter((tool) =>
+          ["skill_library", "skill_workshop"].includes(tool.name),
+        ),
+      );
+      const requestOffset = harness.requests.length;
+      const run = runCodexAppServerAttempt(params);
+      await run.waitForTurnAccepted();
+      const requests = harness.requests.slice(requestOffset);
+      const { threadId } = getRequestParams(requests, "turn/start")!;
+      const turnId = `skill-turn-${index + 1}`;
+      threadIds.push(threadId);
+      if (index === 0) {
+        const catalog = getRequestParams(requests, "thread/start")?.dynamicTools ?? [];
+        expect(specNames(catalog)).toContain("skill_library");
+        const workshop = flattenSpecsWithNamespace(catalog).find(
+          (tool) => tool.name === "skill_workshop",
+        );
+        assert(workshop, "expected Workshop in the native catalog");
+        workshopNamespace = workshop.namespace ?? null;
+      }
+      workspaceCurrent = !revoked;
+      const response = await harness.handleServerRequest({
+        id: `workshop-rpc-${name}`,
+        method: "item/tool/call",
+        params: {
+          threadId,
+          turnId,
+          callId: `workshop-${name}`,
+          namespace: workshopNamespace,
+          tool: "skill_workshop",
+          arguments: { action: "list" },
+        },
+      });
+      await harness.completeTurn({ threadId, turnId });
+      await run;
+
+      expect(response, name).toMatchObject({ success: defaultTarget === "workspace" && !revoked });
+      expect(assertWorkspaceCurrent, name).toHaveBeenCalledTimes(
+        defaultTarget === "workspace" ? 1 : 0,
+      );
+    }
+    expect(executeWorkshop.mock.calls.map(([callId]) => callId)).toEqual([
+      "workshop-initial",
+      "workshop-regranted",
+    ]);
+    expect(threadIds).toEqual([
+      "skill-thread-1",
+      "skill-thread-1",
+      "skill-thread-1",
+      "skill-thread-1",
+    ]);
+  });
+
   it("disables Codex native tool surfaces when runtime toolsAllow is empty", async () => {
     const params = createRunParams();
     setCodexTestToolFactory(params, () => [
