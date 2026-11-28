@@ -28,6 +28,7 @@ import type { WidgetPresenter } from "./plugin-registration.types.js";
 import type { LearnContribution } from "./registry-contribution-types.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
+import { addPluginServiceRegistration } from "./service-registration.js";
 import { hasKind } from "./slots.js";
 import type {
   OpenClawGatewayDiscoveryService,
@@ -378,17 +379,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     if (!id) {
       return;
     }
-    record.services.push(id);
-    registry.services.push({
-      id,
-      pluginId: record.id,
-      pluginName: record.name,
-      service,
-      source: record.source,
-      origin: record.origin,
-      trustedOfficialInstall: record.trustedOfficialInstall,
-      rootDir: record.rootDir,
-    });
+    addPluginServiceRegistration(registry, record, id, service);
   };
 
   const registerGatewayDiscoveryService = (

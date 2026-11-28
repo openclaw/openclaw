@@ -22,3 +22,4 @@ export {
   parseTopicPath,
   resolveGmailHookRuntimeConfig,
 } from "./src/gmail.js";
+export { createGmailWatcherService } from "./src/watcher-service.js";

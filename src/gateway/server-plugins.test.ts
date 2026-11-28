@@ -10,6 +10,7 @@ import {
   getOwnedSessionTranscriptWriterFence,
   withOwnedSessionTranscriptWrites,
 } from "../config/sessions/transcript-write-context.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getGlobalPluginRegistry,
   initializeGlobalHookRunner,
@@ -445,6 +446,37 @@ afterEach(() => {
 });
 
 describe("loadGatewayPlugins", () => {
+  test("keeps only the shipped Gmail watch service with general plugin loading off", async () => {
+    const cfg = {
+      hooks: { enabled: true, gmail: { account: "reader@example.test" } },
+      plugins: { enabled: false, allow: ["other"] },
+    };
+    const load = (config: OpenClawConfig, env: NodeJS.ProcessEnv = {}) =>
+      serverPluginsModule.loadGatewayPlugins({
+        cfg: config,
+        env,
+        loadIntent: "startup",
+        autoEnabledReasons: {},
+        baseMethods: [],
+      });
+
+    loadPluginLookUpTable.mockReturnValue({ startup: { pluginIds: [] } });
+    const { pluginRegistry } = await load(cfg);
+    expect(pluginRegistry.services.map(({ id, origin }) => [id, origin])).toEqual([
+      ["gmail-watch", "bundled"],
+    ]);
+    expect(loadPluginLookUpTable).not.toHaveBeenCalled();
+    expect(loadOpenClawPlugins).not.toHaveBeenCalled();
+    for (const policy of [{ deny: ["Gmail"] }, { entries: { gmail: { enabled: false } } }]) {
+      expect(
+        (await load({ ...cfg, plugins: { ...cfg.plugins, ...policy } })).pluginRegistry.services,
+      ).toEqual([]);
+    }
+    expect((await load(cfg, { OPENCLAW_SKIP_GMAIL_WATCHER: "1" })).pluginRegistry.services).toEqual(
+      [],
+    );
+  });
+
   test("does not re-log a quarantined plugin verification diagnostic", async () => {
     const diagnostic: PluginDiagnostic = {
       level: "error",

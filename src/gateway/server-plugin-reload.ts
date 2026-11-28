@@ -18,7 +18,6 @@ import { PluginLoadFailureError } from "../plugins/loader-shared.js";
 import type { prepareMemoryRuntimeReload } from "../plugins/memory-runtime.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { runAfterPluginLifecycleCommit } from "../plugins/plugin-lifecycle-lease.js";
-import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import { withPluginRegistryPreparationScope } from "../plugins/registry-lifecycle.js";
 import { getPluginRegistryVersion } from "../plugins/runtime-state.js";
 import { waitForPluginRegistryRetirement } from "../plugins/runtime.js";
@@ -30,7 +29,10 @@ import {
   waitForGatewayRestartFenceSettlement,
 } from "../process/gateway-work-admission.js";
 import { broadcastPluginRegistryChanged } from "./events.js";
-import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
+import {
+  loadEnabledGatewayPluginLookUpTable,
+  resolveGatewayStartupPluginActivationConfig,
+} from "./plugin-activation-runtime-config.js";
 import { preparePluginNodeCapabilityPublication } from "./plugin-node-capability.js";
 import type * as PluginBootstrap from "./server-plugin-bootstrap.js";
 import { createPluginReloadChannels } from "./server-plugin-reload-channels.js";
@@ -220,7 +222,7 @@ export async function reloadGatewayPlugins(
           ambientEnvTriggers,
         });
         const lookup = withPluginCache(cache, () =>
-          loadPluginLookUpTable({
+          loadEnabledGatewayPluginLookUpTable({
             config: activationConfig,
             workspaceDir: pluginWorkspaceDir,
             env: params.env,
