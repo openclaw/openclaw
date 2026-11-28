@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   getAdmittedRunDelegatedAuthority,
@@ -360,6 +360,117 @@ it.each([
       cfg: { ...scope.cfg, tools: { ...scope.cfg.tools, deny: ["ls"] } },
     });
     expect(toolNames(denied)).toEqual(expected.filter((name) => name !== "ls"));
+  },
+);
+
+it.each([
+  {
+    label: "explicit policy cap",
+    resolve: resolveMcpLoopbackPolicyTools,
+    toolsAllow: ["message", "read"],
+    denyMessage: false,
+    denyGatewayMessage: false,
+    providerCodingProfile: false,
+    expected: ["message", "read"],
+  },
+  {
+    label: "explicit exact cap",
+    resolve: resolveMcpLoopbackScopedTools,
+    toolsAllow: ["message", "read"],
+    denyMessage: false,
+    denyGatewayMessage: false,
+    providerCodingProfile: false,
+    expected: ["message", "read"],
+  },
+  {
+    label: "messaging group policy cap",
+    resolve: resolveMcpLoopbackPolicyTools,
+    toolsAllow: ["group:messaging", "read"],
+    denyMessage: false,
+    denyGatewayMessage: false,
+    providerCodingProfile: false,
+    expected: ["message", "read"],
+  },
+  {
+    label: "explicit message denial",
+    resolve: resolveMcpLoopbackPolicyTools,
+    toolsAllow: ["message", "read"],
+    denyMessage: true,
+    denyGatewayMessage: false,
+    providerCodingProfile: false,
+    expected: ["read"],
+  },
+  {
+    label: "read-only policy cap",
+    resolve: resolveMcpLoopbackPolicyTools,
+    toolsAllow: ["read"],
+    denyMessage: false,
+    denyGatewayMessage: false,
+    providerCodingProfile: false,
+    expected: ["read"],
+  },
+  {
+    label: "Gateway message denial",
+    resolve: resolveMcpLoopbackPolicyTools,
+    toolsAllow: ["message", "read"],
+    denyMessage: false,
+    denyGatewayMessage: true,
+    providerCodingProfile: false,
+    expected: ["read"],
+  },
+  {
+    label: "provider coding profile",
+    resolve: resolveMcpLoopbackPolicyTools,
+    toolsAllow: ["message", "read"],
+    denyMessage: false,
+    denyGatewayMessage: false,
+    providerCodingProfile: true,
+    expected: ["message", "read"],
+  },
+])(
+  "preserves message requests and configured denials through $label",
+  async ({
+    resolve,
+    toolsAllow,
+    denyMessage,
+    denyGatewayMessage,
+    providerCodingProfile,
+    expected,
+  }) => {
+    const registry = captureActivePluginRegistrySnapshot();
+    onTestFinished(() => restoreActivePluginRegistrySnapshot(registry));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "telegram" }),
+            outbound: createDirectOutboundTestAdapter({ channel: "telegram" }),
+          },
+        },
+      ]),
+    );
+    const result = await resolve({
+      cfg: {
+        plugins: { enabled: false },
+        tools: {
+          profile: providerCodingProfile ? "full" : "coding",
+          ...(providerCodingProfile ? { byProvider: { anthropic: { profile: "coding" } } } : {}),
+          ...(denyMessage ? { deny: ["message"] } : {}),
+        },
+        ...(denyGatewayMessage ? { gateway: { tools: { deny: ["message"] } } } : {}),
+      },
+      context: {
+        sessionKey: "agent:main:cron:explicit-message",
+        workspaceDir: os.tmpdir(),
+        messageProvider: "telegram",
+        modelProvider: "anthropic",
+        senderIsOwner: true,
+        toolsAllow,
+      },
+    });
+    expect(toolNames(result).toSorted()).toEqual(expected);
   },
 );
 
