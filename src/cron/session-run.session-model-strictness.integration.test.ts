@@ -35,7 +35,9 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import type { ReplyOperationPhase } from "../sessions/session-controller.contracts.js";
 import { closeSessionControllerAdmission } from "../sessions/session-controller.lifecycle.js";
+import { resolveActiveReplyOperationForSessionId } from "../sessions/session-controller.queries.js";
 import { resetSessionControllerStateForTest } from "../sessions/session-lifecycle-admission.test-support.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -233,7 +235,7 @@ describe("stored session model selections in scheduled session turns", () => {
       const requests: string[] = [];
       const controller = new AbortController();
       const timeouts: string[] = [];
-      let summaryRequests = 0;
+      const summaryPhases: Array<ReplyOperationPhase | undefined> = [];
       const watchdog = params.preflightCompactionWatchdog
         ? createCronAgentWatchdog({
             deferUntilRunner: true,
@@ -337,7 +339,7 @@ describe("stored session model selections in scheduled session turns", () => {
         const raw = await request.text();
         const body = JSON.parse(raw) as { model?: string };
         if (params.preflightCompactionWatchdog && isCompactionSummaryRequest(raw)) {
-          summaryRequests++;
+          summaryPhases.push(resolveActiveReplyOperationForSessionId("pinned-conversation")?.phase);
           await vi.advanceTimersByTimeAsync(60_001);
         }
         const route = Object.entries(providerUrls).find(([, url]) =>
@@ -384,7 +386,14 @@ describe("stored session model selections in scheduled session turns", () => {
             },
             ...(modelAllow ? { modelPolicy: { allow: modelAllow } } : {}),
             ...(params.preflightCompactionWatchdog
-              ? { compaction: { keepRecentTokens: 2_000, memoryFlush: { enabled: false } } }
+              ? {
+                  compaction: {
+                    // An explicit model keeps this scenario in preflight, not warm compaction.
+                    model: "primary/model-a",
+                    keepRecentTokens: 2_000,
+                    memoryFlush: { enabled: false },
+                  },
+                }
               : {}),
             models: Object.fromEntries(
               ["pinned/model-x", "primary/model-a", "fallback/model-b", "jobfallback/model-c"].map(
@@ -603,7 +612,7 @@ describe("stored session model selections in scheduled session turns", () => {
             }
           }),
           timeouts,
-          summaryRequests,
+          summaryPhases,
           requests,
           preparations,
           publications,
@@ -653,16 +662,16 @@ describe("stored session model selections in scheduled session turns", () => {
       }
       expect((await activeResult).status).toBe("ok");
       const result = await pending;
-      return { result, requests, summaryRequests, timeouts };
+      return { result, requests, summaryPhases, timeouts };
     });
   }
 
   it("lets scheduled preflight compaction finish beyond the setup watchdog", async () => {
-    const { result, summaryRequests, timeouts, requests } = await runWithFailingPinnedModel({
+    const { result, summaryPhases, timeouts, requests } = await runWithFailingPinnedModel({
       storedPin: null,
       preflightCompactionWatchdog: true,
     });
-    expect(summaryRequests).toBe(1);
+    expect(summaryPhases).toEqual(["preflight_compacting"]);
     expect(requests).toEqual(["primary/model-a", "primary/model-a"]);
     expect(timeouts).toEqual([]);
     expect(result).toMatchObject({ status: "ok", executionStarted: true });
