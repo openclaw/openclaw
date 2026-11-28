@@ -49,7 +49,11 @@ import {
   buildFallbackStateMismatchError,
   resolveLocalPairingFallback,
 } from "./devices-cli-fallback.js";
-import { callDevicesGateway as callGatewayCli, readUnlessAborted } from "./devices-cli-gateway.js";
+import {
+  callDevicesGateway as callGatewayCli,
+  readUnlessAborted,
+  type DevicesRpcOpts,
+} from "./devices-cli-gateway.js";
 import {
   findPairedDevicePendingNodeApprovalNotices,
   formatKeptOpenClawIdNote,
@@ -63,22 +67,6 @@ import { ExpectedCliError } from "./expected-cli-error.js";
 import { prepareCliGatewayStateAccess } from "./gateway-rpc.runtime.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { formatPairingApproveCommand } from "./pairing-command-format.js";
-
-type DevicesRpcOpts = {
-  url?: string;
-  token?: string;
-  password?: string;
-  timeout?: string;
-  json?: boolean;
-  latest?: boolean;
-  yes?: boolean;
-  pending?: boolean;
-  device?: string;
-  role?: string;
-  scope?: string[];
-  scopes?: boolean;
-  name?: string;
-};
 
 type ApprovePairingGatewayContext = {
   originalRequest: PendingDevice | null;
@@ -654,7 +642,12 @@ export async function runDevicesDeleteCommand(
   }
   let result: unknown;
   try {
-    result = await callGatewayCli(`device.pair.${operation}`, opts, { [field]: trimmed });
+    result = await callGatewayCli(
+      `device.pair.${operation}`,
+      opts,
+      { [field]: trimmed },
+      operation === "remove" ? { removedLocalDeviceId: trimmed } : undefined,
+    );
   } catch (error) {
     if (!isUnknownRequestIdError(error, field)) {
       throw error;
@@ -690,7 +683,12 @@ export async function runDevicesClearCommand(opts: DevicesRpcOpts): Promise<void
     if (!deviceId || device.managedBy === "openclaw-id") {
       continue;
     }
-    await callGatewayCli("device.pair.remove", opts, { deviceId });
+    await callGatewayCli(
+      "device.pair.remove",
+      opts,
+      { deviceId },
+      { removedLocalDeviceId: deviceId },
+    );
     removedDeviceIds.push(deviceId);
   }
   if (opts.pending) {
