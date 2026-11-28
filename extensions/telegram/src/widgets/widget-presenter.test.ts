@@ -256,6 +256,37 @@ describe("Telegram widget presenter", () => {
     expect(sendTelegramWidget).not.toHaveBeenCalled();
   });
 
+  it("keeps Telegram's refusal code and tells the agent to answer in plain text", async () => {
+    sendTelegramWidget.mockRejectedValue(
+      new Error("Call to 'sendWidget' failed! (400: Bad Request: INPUT_MEDIA_WIDGET_NOT_ALLOWED)"),
+    );
+    const result = await registerPresenter().present({
+      document: { kind: "html", html: "", source: SOURCE },
+      title: "Vote",
+      name: "vote",
+      context: dm,
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "presentation_error",
+        message: expect.stringContaining("INPUT_MEDIA_WIDGET_NOT_ALLOWED"),
+      },
+    });
+    expect(result.ok ? "" : result.error.message).toMatch(/plain text/);
+  });
+
+  it("gives no plain-text advice for other delivery failures", async () => {
+    sendTelegramWidget.mockRejectedValue(new Error("Call to 'sendWidget' failed! (500: oops)"));
+    const result = await registerPresenter().present({
+      document: { kind: "html", html: "", source: SOURCE },
+      title: "Vote",
+      name: "vote",
+      context: dm,
+    });
+    expect(result.ok ? "" : result.error.message).not.toMatch(/plain text/);
+  });
+
   it("reports Telegram's compressed size limit before sending", async () => {
     const presenter = registerPresenter();
     const random = Array.from({ length: 6000 }, (_, i) => ((i * 7919) % 9973).toString(36)).join(

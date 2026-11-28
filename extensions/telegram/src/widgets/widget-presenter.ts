@@ -45,6 +45,8 @@ type TelegramWidgetRoute = {
   chatId: string;
 };
 
+const WIDGET_NOT_ALLOWED_PATTERN = /\bINPUT_MEDIA_WIDGET_NOT_ALLOWED\b/u;
+
 const unavailable = (message: string) => ({
   ok: false as const,
   error: { code: "unavailable" as const, message },
@@ -253,7 +255,13 @@ export function registerTelegramWidgetPresenter(api: OpenClawPluginApi): void {
       try {
         return await presentTelegramWidget(route, params);
       } catch (error) {
-        return presentationError(`Telegram widget delivery failed: ${formatErrorMessage(error)}`);
+        const detail = formatErrorMessage(error);
+        // Production Bot API refuses widgets for some bots even in private chats; the card cannot be fixed.
+        return presentationError(
+          WIDGET_NOT_ALLOWED_PATTERN.test(detail)
+            ? `Telegram widget delivery failed: ${detail}. Telegram refused widgets for this bot or chat, so editing the card or sending it again will not help. Answer the current request in plain text instead.`
+            : `Telegram widget delivery failed: ${detail}`,
+        );
       }
     },
   });
