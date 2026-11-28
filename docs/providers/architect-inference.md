@@ -1,21 +1,21 @@
 ---
-summary: "Connect Liquid Inference as a custom OpenAI-compatible provider"
-title: "Liquid Inference"
+summary: "Connect Architect Inference as a custom OpenAI-compatible provider"
+title: "Architect Inference"
 read_when:
-  - You want to use Liquid Inference with OpenClaw
+  - You want to use Architect Inference with OpenClaw
   - You want to configure a per-request price cap
 ---
 
-[Liquid Inference](https://inference.ai.exchange) is an inference exchange with an
+[Architect Inference](https://inference.ai.exchange) is an inference exchange with an
 OpenAI-compatible endpoint. Configure it with OpenClaw's existing custom-provider
 support and the `openai-completions` API.
 
-| Property    | Value                                       |
-| ----------- | ------------------------------------------- |
-| Provider id | `liquid` (custom)                           |
-| Auth        | Liquid Inference API key with `spend` scope |
-| API         | `openai-completions`                        |
-| Base URL    | `https://router.inference.ai.exchange/v1`   |
+| Property    | Value                                          |
+| ----------- | ---------------------------------------------- |
+| Provider id | `liquid` (custom)                              |
+| Auth        | Architect Inference API key with `spend` scope |
+| API         | `openai-completions`                           |
+| Base URL    | `https://router.inference.ai.exchange/v1`      |
 
 ## Quick start
 
@@ -96,10 +96,10 @@ uses the context window when deciding when to compact a session.
 
 ## Request headers and spending
 
-| Header             | Purpose                                           |
-| ------------------ | ------------------------------------------------- |
-| `X-Title`          | Identifies OpenClaw on Liquid Inference receipts. |
-| `x-liquid-cap-usd` | Maximum charge for one request, in USD.           |
+| Header             | Purpose                                              |
+| ------------------ | ---------------------------------------------------- |
+| `X-Title`          | Identifies OpenClaw on Architect Inference receipts. |
+| `x-liquid-cap-usd` | Maximum charge for one request, in USD.              |
 
 The configured headers accompany requests to this provider, including compaction
 requests. A turn can make several requests, so a per-request cap does not cap the
@@ -118,7 +118,7 @@ See [Model failover](/concepts/model-failover), including
 [Billing disables](/concepts/model-failover#billing-disables) for `402` responses.
 
 A fallback at another provider can answer a refused request and bill you there.
-If you want requests to remain on Liquid Inference, use only `liquid/` fallback
+If you want requests to remain on Architect Inference, use only `liquid/` fallback
 models or clear the fallback list:
 
 ```bash

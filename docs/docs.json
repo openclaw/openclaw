@@ -1333,6 +1333,10 @@
     {
       "source": "/plugins/webhooks",
       "destination": "/automation#background-execution-and-workflows"
+    },
+    {
+      "source": "/providers/liquid-inference",
+      "destination": "/providers/architect-inference"
     }
   ],
   "navigation": {
@@ -2336,12 +2340,12 @@
                   {
                     "group": "Gateways and routers",
                     "pages": [
+                      "providers/architect-inference",
                       "providers/bifrost",
                       "providers/claude-max-api-proxy",
                       "providers/clawrouter",
                       "providers/cloudflare-ai-gateway",
                       "providers/kilocode",
-                      "providers/liquid-inference",
                       "providers/litellm",
                       "providers/neon",
                       "providers/openrouter",
