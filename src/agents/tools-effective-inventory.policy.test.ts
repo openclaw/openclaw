@@ -11,6 +11,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
+import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import { resolveConfiguredToolAccess } from "./tool-access-diagnostics.js";
 import { attachToolAllowlistIntersection } from "./tool-policy-shared.js";
 import { resolveEffectiveToolInventory } from "./tools-effective-inventory.js";
@@ -81,6 +82,30 @@ describe("tool access diagnostics", () => {
       expect([ids.has("exec"), ids.has("process")]).toEqual([exec, process]);
     },
   );
+
+  it.each([
+    { name: "default", tools: undefined, available: true },
+    { name: "explicit allowlist", tools: { allow: ["read"] }, available: false },
+    { name: "explicit deny", tools: { deny: ["group:media"] }, available: false },
+  ])("keeps sandbox media generation under $name policy", async ({ tools, available }) => {
+    const cfg: OpenClawConfig = {
+      tools: { profile: "coding", ...(tools ? { sandbox: { tools } } : {}) },
+    };
+    const result = await resolveEffectiveToolInventory({
+      cfg,
+      agentId: "main",
+      workspaceDir: "/tmp/tool-access-workspace",
+      agentDir: "/tmp/tool-access-agent",
+      modelApi: null,
+      sandboxToolPolicy: resolveSandboxToolPolicyForAgent(cfg, "main"),
+    });
+    const ids = new Set(result.groups.flatMap((group) => group.tools.map((tool) => tool.id)));
+    for (const name of ["image_generate", "music_generate", "video_generate"]) {
+      expect(ids.has(name), name).toBe(available);
+    }
+    expect(ids.has("gateway")).toBe(false);
+    expect(ids.has("nodes")).toBe(false);
+  });
 
   it("explains local exclusion and repair for a normalized explicit agent key", () => {
     const agents: NonNullable<OpenClawConfig["agents"]> = {
