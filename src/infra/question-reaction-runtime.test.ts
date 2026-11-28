@@ -6,7 +6,7 @@ const hoisted = vi.hoisted(() => ({ callGateway: vi.fn() }));
 vi.mock("../gateway/call.js", () => ({ callGateway: hoisted.callGateway }));
 
 const questionId = "ask_0123456789abcdef0123456789abcdef";
-function prepare(labels = ["Staging", "Production"], customInput = false) {
+function prepare(labels: string[], customInput = false) {
   const buttons: MessagePresentationButton[] = labels.map((label) => ({
     label,
     action: { type: "question", questionId, optionValue: label },

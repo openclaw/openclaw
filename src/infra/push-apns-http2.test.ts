@@ -94,7 +94,7 @@ vi.mock("@openclaw/proxyline", () => ({
   openProxyConnectTunnel: tunnelSpy,
 }));
 
-function connect(overrides: Partial<Parameters<typeof connectApnsHttp2Session>[0]> = {}) {
+function connect(overrides: Partial<Parameters<typeof connectApnsHttp2Session>[0]>) {
   return connectApnsHttp2Session({
     authority: "https://api.push.apple.com",
     timeoutMs: 10_000,
@@ -102,7 +102,7 @@ function connect(overrides: Partial<Parameters<typeof connectApnsHttp2Session>[0
   });
 }
 
-function probe(overrides: Partial<Parameters<typeof probeApnsHttp2ReachabilityViaProxy>[0]> = {}) {
+function probe(overrides: Partial<Parameters<typeof probeApnsHttp2ReachabilityViaProxy>[0]>) {
   return probeApnsHttp2ReachabilityViaProxy({
     authority: "https://api.sandbox.push.apple.com",
     proxyUrl: "http://proxy.example:8080",

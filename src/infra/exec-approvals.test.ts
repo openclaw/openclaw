@@ -5,7 +5,7 @@ import { evaluateExecAllowlist } from "./exec-approvals.js";
 
 function segment(
   argv: [string, ...string[]],
-  paths: { resolvedPath?: string; resolvedRealPath?: string; executableName?: string } = {},
+  paths: { resolvedPath?: string; resolvedRealPath?: string; executableName?: string },
 ) {
   const execution = mock.makeMockExecutableResolution({
     rawExecutable: argv[0],

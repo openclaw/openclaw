@@ -23,7 +23,7 @@ function makePlugin(
     accountIds?: string[];
     defaultAccountId?: string;
     sourceAccount?: FixtureAccount;
-  } = {},
+  },
 ): ChannelPlugin {
   const id = options.id ?? label.toLowerCase();
   const getAccount = (_cfg: unknown, accountId?: string | null) => ({

@@ -112,13 +112,12 @@ async function registerPendingApproval(
   deliver.mockClear();
 }
 
-function makePluginResolved(overrides?: Partial<PluginApprovalResolved>): PluginApprovalResolved {
+function makePluginResolved(): PluginApprovalResolved {
   return {
     id: "plugin-req-1",
     decision: "allow-once",
     resolvedBy: "telegram:user123",
     ts: 2000,
-    ...overrides,
   };
 }
 
