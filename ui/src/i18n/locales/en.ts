@@ -1532,6 +1532,8 @@ const startupEnglish = {
     },
     agentDatabaseWarming: "This agent is still starting. Retry in a moment.",
     historyRequestTimedOut: "Couldn’t load the conversation in time. Try again.",
+    historySessionChanged:
+      "This session changed before OpenClaw could finish checking for updates. Try again.",
     clawhub: {},
     modelAccounts: {
       section: "Account",
