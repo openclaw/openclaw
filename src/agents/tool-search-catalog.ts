@@ -235,38 +235,21 @@ export function isOnDemandCatalogTool(tool: CatalogTool): boolean {
  * Core file/shell primitives, caller-required names (e.g. message when it is
  * the only reply path) and tools that poll by design stay visible while
  * remaining searchable. A polling tool behind dispatch_action would hide its
- * `repeatable` declaration from the repeat guard. A core catalog family is
- * shown or deferred as one unit: when one member is visible, the model reads
- * the visible members as the whole capability and misses a deferred sibling.
- * All must resolve to trusted OpenClaw tools: an MCP lookalike must never
- * become a direct delivery or core-coding tool.
+ * `repeatable` declaration from the repeat guard. All must resolve to trusted
+ * OpenClaw tools: an MCP lookalike must never become a direct delivery or
+ * core-coding tool.
  */
-export function createDirectVisibleCatalogTool(
-  tools: readonly AnyAgentTool[],
+export function isDirectVisibleCatalogTool(
+  tool: AnyAgentTool,
   directToolNames: ReadonlySet<string>,
-): (tool: AnyAgentTool) => boolean {
-  const coreFamily = (tool: AnyAgentTool) => {
-    const classified = classifyAgentToolSource(tool);
-    return classified.source === "openclaw" && classified.sourceName === "core"
-      ? resolveCoreToolFacts(tool.name)?.catalogFamily
-      : undefined;
-  };
-  const visibleAlone = (tool: AnyAgentTool) => {
-    const classified = classifyAgentToolSource(tool);
-    return (
-      classified.source === "openclaw" &&
-      (directToolNames.has(tool.name) ||
-        (tool.repeatable !== undefined && !isOnDemandCatalogTool(tool)) ||
-        (isCoreCodingSurfaceToolName(tool.name) && classified.sourceName === "core"))
-    );
-  };
-  const visibleFamilies = new Set(
-    tools.filter(visibleAlone).flatMap((tool) => coreFamily(tool) ?? []),
+): boolean {
+  const classified = classifyAgentToolSource(tool);
+  return (
+    classified.source === "openclaw" &&
+    (directToolNames.has(tool.name) ||
+      (tool.repeatable !== undefined && !isOnDemandCatalogTool(tool)) ||
+      (isCoreCodingSurfaceToolName(tool.name) && classified.sourceName === "core"))
   );
-  return (tool) => {
-    const family = coreFamily(tool);
-    return family === undefined ? visibleAlone(tool) : visibleFamilies.has(family);
-  };
 }
 
 /**
@@ -676,6 +659,36 @@ export function applyToolCatalogCompaction(
     isOnDemandCatalogTool(tool) &&
     (catalogRef.loadsOnDemandTools !== true ||
       catalogRef.promotedToolNames?.has(tool.name) === true);
+  const catalogsTool = (tool: AnyAgentTool) =>
+    shouldCatalogTool(tool) &&
+    !keepOnDemandDirect(tool) &&
+    (params.shouldCatalogTool?.(tool) ?? true) &&
+    selected({ ...classifyAgentToolSource(tool), name: tool.name });
+  // A core tool family is shown or deferred as one unit: a visible member reads as the
+  // whole capability, so a deferred sibling looks unavailable (`sessions_spawn` beside
+  // `subagents`). A member shown for its family never shadows a same-named tool.
+  const coreFamily = (tool: AnyAgentTool) => {
+    const { source, sourceName } = classifyAgentToolSource(tool);
+    return source === "openclaw" && sourceName === "core"
+      ? resolveCoreToolFacts(tool.name)?.catalogFamily
+      : undefined;
+  };
+  const nameCounts = new Map<string, number>();
+  const visibleFamilies = new Set<string>();
+  for (const tool of tools) {
+    nameCounts.set(tool.name, (nameCounts.get(tool.name) ?? 0) + 1);
+    const family = coreFamily(tool);
+    if (family && catalogsTool(tool) && params.isVisibleCatalogTool?.(tool) === true) {
+      visibleFamilies.add(family);
+    }
+  }
+  const isDirectVisible = (tool: AnyAgentTool) => {
+    const family = coreFamily(tool);
+    return (
+      params.isVisibleCatalogTool?.(tool) === true ||
+      (family !== undefined && visibleFamilies.has(family) && nameCounts.get(tool.name) === 1)
+    );
+  };
   for (const tool of tools) {
     if (params.isVisibleControlTool(tool)) {
       visible.push(
@@ -688,13 +701,8 @@ export function applyToolCatalogCompaction(
     if (TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)) {
       continue;
     }
-    if (
-      shouldCatalogTool(tool) &&
-      !keepOnDemandDirect(tool) &&
-      (params.shouldCatalogTool?.(tool) ?? true) &&
-      selected({ ...classifyAgentToolSource(tool), name: tool.name })
-    ) {
-      const directVisible = params.isVisibleCatalogTool?.(tool) === true;
+    if (catalogsTool(tool)) {
+      const directVisible = isDirectVisible(tool);
       catalog.push({ ...toCatalogEntry(tool, undefined, toolHookContext), directVisible });
       if (!directVisible) {
         continue;

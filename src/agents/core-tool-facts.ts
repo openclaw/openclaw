@@ -116,7 +116,7 @@ export const CORE_TOOL_DEFINITIONS = [
     ["github_publish", { profiles: ["coding"] }],
     ["session_project"],
     ["agents_wait", { profiles: ["coding"], catalogFamily: "delegation" }],
-    ["sessions_yield", { catalogFamily: "delegation" }],
+    ["sessions_yield"],
     ["subagents", { catalogFamily: "delegation" }],
     ["session_status", { profiles: ["minimal", "coding", "messaging"] }],
     // Offered only when the requesting operator UI can act on suggestion cards.

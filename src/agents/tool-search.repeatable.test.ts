@@ -10,7 +10,6 @@ import {
 } from "../../packages/agent-core/src/tool-repeat-guard.js";
 import { CORE_TOOL_DEFINITIONS } from "./core-tool-facts.js";
 import { createReadTool } from "./sessions/tools/read.js";
-import { createDirectVisibleCatalogTool } from "./tool-search-catalog.js";
 import type { ToolSearchCatalogRef } from "./tool-search-types.js";
 import {
   applyToolSchemaDirectoryCatalog,
@@ -35,7 +34,21 @@ const turns = (count: number, name: string, args: Record<string, unknown>) =>
     { ...makeCall(name, `${name}-${index}`), arguments: args },
   ]);
 
-function surface(mode: "tools" | "directory", executed: string[] = []) {
+// Real declarations and schemas; only the run lifecycle is replaced.
+const familyFactories: Record<string, () => AnyAgentTool> = {
+  agents_wait: () => createAgentsWaitTool({}),
+  sessions_spawn: () => createSessionsSpawnTool({ config: {} }),
+  subagents: () => createSubagentsTool(),
+};
+const delegationFamily = CORE_TOOL_DEFINITIONS.filter(
+  (tool) => tool.catalogFamily === "delegation",
+).map((tool) => tool.id);
+
+function surface(
+  mode: "tools" | "directory",
+  executed: string[] = [],
+  members: readonly string[] = delegationFamily,
+) {
   const catalogRef = createToolSearchCatalogRef();
   refs.push(catalogRef);
   const ctx = { config: { tools: { toolSearch: { mode } } }, catalogRef };
@@ -43,8 +56,6 @@ function surface(mode: "tools" | "directory", executed: string[] = []) {
     executed.push(name);
     return { content: [{ type: "text" as const, text: `${name} ok` }], details: {} };
   };
-  // The real declaration and schema; only the run lifecycle is replaced.
-  const agentsWait: AnyAgentTool = { ...createAgentsWaitTool({}), execute: record("agents_wait") };
   const lookup: AnyAgentTool = {
     name: "lookup",
     label: "Lookup",
@@ -57,9 +68,7 @@ function surface(mode: "tools" | "directory", executed: string[] = []) {
     tools: [
       ...createToolSearchTools(ctx),
       createReadTool("/tmp/repeatable"),
-      agentsWait,
-      createSubagentsTool(),
-      createSessionsSpawnTool({ config: {} }),
+      ...members.map((name) => ({ ...familyFactories[name](), execute: record(name) })),
       lookup,
     ],
   });
@@ -75,35 +84,22 @@ it.each(["tools", "directory"] as const)(
   },
 );
 
-const familyMembers = Map.groupBy(
-  CORE_TOOL_DEFINITIONS.filter((tool) => tool.catalogFamily),
-  (tool) => tool.catalogFamily,
-);
-
-it.each([...familyMembers])("the %s family always has one visibility", (_family, members) => {
-  const stub = (name: string, repeatable?: true): AnyAgentTool => ({
-    name,
-    label: name,
-    description: name,
-    parameters: Type.Object({}),
-    ...(repeatable ? { repeatable } : {}),
-    execute: async () => ({ content: [], details: {} }),
-  });
-  const names = members.map((member) => member.id);
-  // No member visible, each member polling, and each member required by the caller.
-  const cases = [
-    { polling: undefined, required: [] },
-    ...names.map((name) => ({ polling: name, required: [] })),
-    ...names.map((name) => ({ polling: undefined, required: [name] })),
-  ];
-  for (const { polling, required } of cases) {
-    const tools = names.map((name) => stub(name, name === polling ? true : undefined));
-    const visible = createDirectVisibleCatalogTool(tools, new Set(required));
-    expect(tools.map(visible)).toEqual(
-      names.map(() => polling !== undefined || required.length > 0),
+it.each(["tools", "directory"] as const)(
+  "%s: the delegation family always has one visibility",
+  (mode) => {
+    expect(Object.keys(familyFactories).toSorted()).toEqual(delegationFamily.toSorted());
+    // Every non-empty subset a tool policy can leave enabled.
+    const subsets = Array.from({ length: 2 ** delegationFamily.length - 1 }, (_, index) =>
+      delegationFamily.filter((_name, bit) => ((index + 1) >> bit) & 1),
     );
-  }
-});
+    for (const members of subsets) {
+      const sent = surface(mode, [], members).sent.filter((name) => members.includes(name));
+      expect([0, members.length]).toContain(sent.length);
+    }
+    // With no polling member left, the spawner stays deferred.
+    expect(surface(mode, [], ["sessions_spawn"]).sent).not.toContain("sessions_spawn");
+  },
+);
 
 it("lets 25 identical agents_wait polls run with no note and no stop", async () => {
   const executed: string[] = [];

@@ -45,10 +45,10 @@ full schemas on demand, so descriptions are not repeated on every request.
 Setting `tools.toolSearch: true` or an object without a mode selects this
 structured surface. Direct-only tools remain visible alongside the controls, and so
 do OpenClaw tools that poll by design (such as `agents_wait` and `subagents`), so
-the tool repeat guard sees their own repeat exemption. A tool family is shown or
-deferred as one unit: the delegation family (`sessions_spawn`, `subagents`,
-`agents_wait`, `sessions_yield`) is visible together, so the model never mistakes
-the visible members for the whole capability. On
+the tool repeat guard sees their own repeat exemption. Their family follows them:
+while `agents_wait` or `subagents` is visible, `sessions_spawn` is too, so the
+model never takes the status tools for the whole subagent capability. When tool
+policy leaves only `sessions_spawn`, it stays deferred. On
 the default OpenClaw runner, an admitted `progress_card` also appears with its
 full schema in the first model request, so the agent can update the card
 without searching.

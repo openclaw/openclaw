@@ -35,10 +35,7 @@ import { executionTitleSchema } from "./schema/typebox.js";
 import { isCoreCodingSurfaceToolName } from "./tool-catalog.js";
 import { describeRequiredHumanActionTool } from "./tool-description-presets.js";
 import { resolveToolResultBudget } from "./tool-result-limits.js";
-import {
-  applyToolCatalogCompaction,
-  createDirectVisibleCatalogTool,
-} from "./tool-search-catalog.js";
+import { applyToolCatalogCompaction, isDirectVisibleCatalogTool } from "./tool-search-catalog.js";
 import { getToolSearchCatalogDescriptors } from "./tool-search-prepared-catalog.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
@@ -385,7 +382,6 @@ export function applyCodeModeCatalog(params: {
         tool.name !== TOOL_CALL_RAW_TOOL_NAME),
   );
   const directToolNames = new Set(params.directToolNames);
-  const isDirectVisible = createDirectVisibleCatalogTool(tools, directToolNames);
   const compacted = applyToolCatalogCompaction({
     ...params,
     tools,
@@ -393,7 +389,8 @@ export function applyCodeModeCatalog(params: {
     isVisibleControlTool: isCodeModeControlTool,
     // Code mode never exposes core shell/file tools just because structured
     // search does; only explicitly required, trusted direct tools may remain.
-    isVisibleCatalogTool: (tool) => directToolNames.has(tool.name) && isDirectVisible(tool),
+    isVisibleCatalogTool: (tool) =>
+      directToolNames.has(tool.name) && isDirectVisibleCatalogTool(tool, directToolNames),
     shouldCatalogTool: (tool) => !isCodeModeControlTool(tool),
   });
   return compacted;
