@@ -5,8 +5,18 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { loginOption } from "../../test-helpers/model-providers.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { chooseLogin, loginHarness } from "./model-providers-page.login.test-support.ts";
-import { appendPage, createAuthStatus, unmountPage } from "./model-providers-page.test-support.tsx";
+import {
+  chooseLogin,
+  loginHarness,
+  openPicker,
+  selectProvider,
+} from "./model-providers-page.login.test-support.ts";
+import {
+  appendPage,
+  clickLoginChoice,
+  createAuthStatus,
+  unmountPage,
+} from "./model-providers-page.test-support.tsx";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -15,6 +25,69 @@ afterEach(() => {
 });
 
 describe("Models provider login", () => {
+  it("connects either member of a combined provider card through its own auth owner", async () => {
+    vi.spyOn(window, "open").mockReturnValue(null);
+    const { context, request, cancel } = loginHarness({
+      capabilities: [
+        {
+          provider: "gemini",
+          apiKeySupported: false,
+          quickApiKeySetup: false,
+          groupId: "google",
+          loginOptions: [
+            loginOption("gemini-oauth", "gemini", "Sign in with Google (AI Ultra)", "oauth", {
+              groupLabel: "Google AI Ultra plan",
+              featured: true,
+            }),
+          ],
+        },
+        {
+          provider: "google",
+          apiKeySupported: true,
+          quickApiKeySetup: true,
+          quickApiKeyGroupLabel: "Gemini API key",
+          groupId: "google",
+        },
+      ],
+    });
+    const page = appendPage(context);
+    const methods = () =>
+      [...page.querySelectorAll(".model-provider-login__methods button strong")].map((label) =>
+        label.textContent?.trim(),
+      );
+    try {
+      await openPicker(page);
+      const card = page.querySelector('[data-models-catalog-provider="google"]');
+      expect(card?.querySelector("h3")?.textContent).toBe("Google");
+      expect(card?.querySelector(".installed-plugins-card__summary")?.textContent).toBe(
+        "Sign in with browser · API key",
+      );
+      expect(page.querySelector('[data-models-catalog-provider="gemini"]')).toBeNull();
+
+      await selectProvider(page, "google");
+      await waitForSolid(() =>
+        expect(methods()).toEqual(["Sign in with Google (AI Ultra)", "API key"]),
+      );
+      page.querySelector<HTMLButtonElement>("[data-models-login-api-key]")!.click();
+      await waitForSolid(() => expect(page.view.props.addProviderId).toBe("google"));
+
+      page.view.props.onAddProviderToggle();
+      await selectProvider(page, "google");
+      await waitForSolid(() => expect(methods()).toHaveLength(2));
+      clickLoginChoice(page, "Sign in with Google (AI Ultra)");
+      await waitForSolid(() =>
+        expect(
+          (request.mock.calls as unknown[][]).find(
+            ([method]) => method === "models.authLogin",
+          )?.[1],
+        ).toMatchObject({ authChoice: "gemini-oauth" }),
+      );
+    } finally {
+      cancel.resolve({ status: "cancelled" });
+      unmountPage(page);
+    }
+  });
+
   it("resumes once while admission is pending and can resume a later disconnect", async () => {
     vi.spyOn(window, "open").mockReturnValue(null);
     const { context, request, answer, cancel, publishPhase, notifySelection, snapshot } =

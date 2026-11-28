@@ -35,8 +35,9 @@ export function buildLoginProviders({
   allowQuickApiKey: boolean;
 }): LoginProvider[] {
   const groups = new Map<string, LoginProvider>();
+  const labels = new Map<string, Set<string>>();
   const choices = new Set<string>();
-  const ensureGroup = (id: string, authProvider: string) => {
+  const ensureGroup = (id: string, authProvider: string, label: string | undefined) => {
     const group: LoginProvider = groups.get(id) ?? {
       id,
       label: "",
@@ -46,6 +47,10 @@ export function buildLoginProviders({
     if (!group.authProviders.includes(authProvider)) {
       group.authProviders.push(authProvider);
     }
+    const name = label?.trim();
+    if (name) {
+      labels.set(id, (labels.get(id) ?? new Set()).add(name));
+    }
     groups.set(id, group);
     return group;
   };
@@ -53,28 +58,30 @@ export function buildLoginProviders({
     if (providers && !providers.includes(capability.provider)) {
       continue;
     }
+    // Providers that declare one manifest group share one card; each keeps its own auth owner.
+    const groupId = capability.groupId?.trim();
     const loginOptions = capability.loginOptions ?? [];
     for (const option of loginOptions) {
       if (pluginId && option.pluginId !== pluginId) {
         continue;
       }
-      const group = ensureGroup(option.brandId, capability.provider);
-      group.label ||= option.groupLabel?.trim() ?? "";
+      const group = ensureGroup(groupId || option.brandId, capability.provider, option.groupLabel);
       if (!choices.has(option.id)) {
         choices.add(option.id);
         group.choices.push({ ...option, authProvider: capability.provider });
       }
     }
     const brands = new Set(
-      loginOptions.length ? loginOptions.map((option) => option.brandId) : [capability.provider],
+      loginOptions.length && !groupId
+        ? loginOptions.map((option) => option.brandId)
+        : [groupId || capability.provider],
     );
     // Quick-key support is independent of wizard choices. Keep the exact
     // capability owner for the key form even when its login brand is an alias.
     if (!pluginId && capability.quickApiKeySetup && allowQuickApiKey) {
       for (const id of brands) {
-        const group = ensureGroup(id, capability.provider);
+        const group = ensureGroup(id, capability.provider, capability.quickApiKeyGroupLabel);
         group.apiKeyProvider ??= capability.provider;
-        group.label ||= capability.quickApiKeyGroupLabel ?? "";
       }
     }
     for (const id of brands) {
@@ -85,7 +92,9 @@ export function buildLoginProviders({
     }
   }
   for (const group of groups.values()) {
-    group.label ||= providerDisplayLabel(group.id);
+    // One declared name labels the card; providers declaring different names share the brand name.
+    const names = labels.get(group.id);
+    group.label = names?.size === 1 ? [...names][0]! : providerDisplayLabel(group.id);
   }
   // Browser sign-in needs no key to paste, so those providers lead.
   return [...groups.values()].toSorted(
