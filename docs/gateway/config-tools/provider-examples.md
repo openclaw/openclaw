@@ -1,5 +1,5 @@
 ---
-summary: "Worked custom-provider configurations for Cerebras, Kimi, llama.cpp, LM Studio, MiniMax, Moonshot, OpenCode, Synthetic, and Z.AI"
+summary: "Worked custom-provider configurations for Cerebras, Kimi, llama.cpp, LM Studio, MiniMax, Moonshot, OpenCode, Plugsky, Synthetic, and Z.AI"
 read_when:
   - Copying a working config for a specific provider
   - Pointing a custom provider id at a local llama-server
@@ -252,6 +252,48 @@ Worked `models.providers` configurations. For what each field means, see [Custom
     - The default `zai-api-key` auth choice checks your key and auto-detects which endpoint it belongs to (falling back to a prompt, defaulting to Global, if detection is inconclusive). Dedicated CN and Coding-Plan auth choices are also available for explicit selection.
     - For the general endpoint, define a custom provider with the base URL override.
 
+  </Accordion>
+  <Accordion title="Plugsky">
+    OpenAI-compatible API at `https://api.plugsky.com/v1`. This snippet targets the Free plan: two model IDs (`plugsky-micro`, `plugsky-lite`) with no card, 100 requests/day, 50K tokens/day, 1 concurrent request, 32K input and 2K output. The Free plan is for evaluation, not sustained agent loops; use Hobby at $8/month or higher for tool-enabled agents. Hobby raises the limits to 1,000 requests/day, 2M tokens/day, 4 concurrent and 64K input / 8K output. Create a key at https://plugsky.com/.
+
+    ```json5
+    {
+      env: { vars: { PLUGSKY_API_KEY: "sk-..." } },
+      agents: {
+        defaults: {
+          model: { primary: "plugsky/plugsky-lite" },
+          models: { "plugsky/plugsky-lite": { alias: "Plugsky Lite" } },
+        },
+      },
+      models: {
+        mode: "merge",
+        providers: {
+          plugsky: {
+            baseUrl: "https://api.plugsky.com/v1",
+            apiKey: "${PLUGSKY_API_KEY}",
+            api: "openai-completions",
+            models: [
+              {
+                id: "plugsky-lite",
+                name: "Plugsky Lite",
+                contextWindow: 32768,
+                maxTokens: 2048,
+                input: ["text", "image"],
+              },
+              {
+                id: "plugsky-micro",
+                name: "Plugsky Micro",
+                contextWindow: 32768,
+                maxTokens: 2048,
+              },
+            ],
+          },
+        },
+      },
+    }
+    ```
+
+    Plugsky is OpenAI-compatible; no plugin is required.
   </Accordion>
 </AccordionGroup>
 
