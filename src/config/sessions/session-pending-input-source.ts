@@ -103,11 +103,13 @@ export type SubmittedInputWithSource = {
   };
 };
 
-/** Read one admitted source for explicit retry comparison; this never authorizes replay. */
+type SubmittedInputReadOptions = { includeSource: true; strictRetryComparison?: true };
+
+/** Read one admitted source without authorizing replay. Chat retries require a conclusive read. */
 export function readSessionSubmittedInput(
   scope: PendingInputScope,
   idempotencyKey: string,
-  options: { includeSource: true },
+  options: SubmittedInputReadOptions,
 ): Promise<SubmittedInputWithSource | undefined>;
 export function readSessionSubmittedInput(
   scope: PendingInputScope,
@@ -116,11 +118,11 @@ export function readSessionSubmittedInput(
 export async function readSessionSubmittedInput(
   scope: PendingInputScope,
   idempotencyKey: string,
-  options?: { includeSource: true },
+  options?: SubmittedInputReadOptions,
 ) {
   return readPendingInputSource(scope, idempotencyKey, false, (snapshot) => {
     if (!snapshot.current) {
-      if (options?.includeSource) {
+      if (options?.strictRetryComparison) {
         throw new SessionTranscriptProjectionUnavailableError(scope.sessionId, "window-changed");
       }
       return undefined;
@@ -128,7 +130,7 @@ export async function readSessionSubmittedInput(
     const { pending, committed, committedMessageSeq } = snapshot;
     const message = pending ? parseSessionPendingInputMessage(pending.message_json) : committed;
     if (!message || readMessageIdempotencyKey(message) !== idempotencyKey) {
-      if (options?.includeSource && pending) {
+      if (options?.strictRetryComparison && pending) {
         throw new Error("Retained pending input does not match its idempotency key");
       }
       return undefined;

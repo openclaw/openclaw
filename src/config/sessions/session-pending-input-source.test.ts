@@ -65,6 +65,22 @@ it("does not create missing storage for a submitted-input lookup", async () => {
   expect(fs.existsSync(storePath)).toBe(false);
 });
 
+it("fails closed on a non-current session only for strict chat retry comparison", async () => {
+  await stage("current-source", true);
+  const staleScope = { ...scope(), sessionId: "previous-session" };
+  await readOnly(async () => {
+    expect(
+      await readSessionSubmittedInput(staleScope, "current-source:user", { includeSource: true }),
+    ).toBeUndefined();
+    await expect(
+      readSessionSubmittedInput(staleScope, "current-source:user", {
+        includeSource: true,
+        strictRetryComparison: true,
+      }),
+    ).rejects.toMatchObject({ reason: "window-changed" });
+  });
+});
+
 it.each(["user stop", "hidden dismissal"] as const)(
   "reads the legacy %s disposition without modifying retained bytes",
   async (ending) => {

@@ -44,7 +44,7 @@ export function readChatSendRetryComparison(session: ComparisonSession) {
   return readSessionSubmittedInput(
     { agentId, storePath, sessionKey, sessionId },
     `${clientRunId}:user`,
-    { includeSource: true },
+    { includeSource: true, strictRetryComparison: true },
   ).then(
     (submitted): ChatSendRetryComparison => ({
       agentId,
