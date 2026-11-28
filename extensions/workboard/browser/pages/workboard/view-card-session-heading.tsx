@@ -10,7 +10,12 @@ import {
   CardAction,
   type getCardActionState,
 } from "./view-card-actions.tsx";
-import { formatLifecycle, renderLifecycleIcon, type WorkboardProps } from "./view-helpers.tsx";
+import {
+  formatLifecycle,
+  renderLifecycleIcon,
+  workboardLinkedSessionTitle,
+  type WorkboardProps,
+} from "./view-helpers.tsx";
 import { getSessionStatus, SessionStatusBadge } from "./view-session-status.tsx";
 
 const workboardCardDetailDescriptionId = "workboard-card-detail-description";
@@ -46,9 +51,9 @@ export function CardSessionHeading(props: {
           >
             {sessionEmpty()
               ? t("workboard.detailNoSessionYet")
-              : (props.lifecycle.session?.displayName ??
-                props.lifecycle.session?.label ??
-                (props.action.linkedSessionKey ? t("workboard.fieldSession") : formatted().label))}
+              : props.lifecycle.session || props.action.linkedSessionKey
+                ? workboardLinkedSessionTitle(props.lifecycle.session)
+                : formatted().label}
           </span>
           {!sessionEmpty() && sessionStatus().detail ? (
             <p class="workboard-detail__session-description" textContent={sessionStatus().detail} />

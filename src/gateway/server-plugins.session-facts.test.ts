@@ -59,6 +59,7 @@ afterAll(async () => {
 
 async function withFixture(
   run: (fixture: Fixture, facts: ReturnType<typeof bindFacts>) => Promise<void>,
+  initialSessionPatch?: Parameters<typeof createFixture>[2],
 ) {
   state ??= await createOpenClawTestState({ scenario: "minimal" });
   state.applyEnv();
@@ -73,6 +74,7 @@ async function withFixture(
         status: "done",
         lastActivityAt: 1,
         observerDigest: { ...observerDigest, sessionKey, updatedAt: 10 },
+        ...initialSessionPatch,
       });
       const methodRegistry = createRequestGatewayMethodRegistry();
       fixture.context.getGatewayMethodRegistry = () => methodRegistry;
@@ -356,34 +358,40 @@ describe("trusted plugin selected session facts", () => {
     }));
 
   it("distinguishes failed facts acquisition from an omitted current identity", () =>
-    withFixture(async (fixture, { selected, getProjection }) => {
-      await selected();
-      const projection = getProjection();
-      using acquisition = vi.spyOn(projection, "withPreparedExactRows");
-      using describeRow = vi.spyOn(projection, "describe");
-      sessionChanges.emit({ agentId: "main", sessionKey, scope: "runtime" });
-      acquisition.mockRejectedValueOnce(
-        new Error("Synthetic facts read failed: API_TOKEN = computeToken()"),
-      );
-      const failed = await selected();
-      expect(failed.sessions).toMatchObject([
-        {
-          key: sessionKey,
-          sessionId: fixture.sessionId,
-          unavailable: "Error: Synthetic facts read failed: API_TOKEN = computeToken()",
-        },
-      ]);
-      expect(failed.missingSessionKeys).toBeUndefined();
-      describeRow.mockReturnValueOnce(undefined);
-      const missing = await selected();
-      expect(missing.sessions).toEqual([]);
-      expect(missing.missingSessionKeys).toEqual([sessionKey]);
-      expect(missing.revision).not.toBe(failed.revision);
-      const recovered = await selected();
-      expect(recovered.sessions).toMatchObject([{ key: sessionKey, sessionId: fixture.sessionId }]);
-      expect(recovered.missingSessionKeys).toBeUndefined();
-      expect(recovered.sessions[0]?.unavailable).toBeUndefined();
-    }));
+    withFixture(
+      async (fixture, { selected, getProjection }) => {
+        await selected();
+        const projection = getProjection();
+        using acquisition = vi.spyOn(projection, "withPreparedExactRows");
+        using describeRow = vi.spyOn(projection, "describe");
+        sessionChanges.emit({ agentId: "main", sessionKey, scope: "runtime" });
+        acquisition.mockRejectedValueOnce(
+          new Error("Synthetic facts read failed: API_TOKEN = computeToken()"),
+        );
+        const failed = await selected();
+        expect(failed.sessions).toMatchObject([
+          {
+            key: sessionKey,
+            sessionId: fixture.sessionId,
+            label: "Review the incident",
+            unavailable: "Error: Synthetic facts read failed: API_TOKEN = computeToken()",
+          },
+        ]);
+        expect(failed.missingSessionKeys).toBeUndefined();
+        describeRow.mockReturnValueOnce(undefined);
+        const missing = await selected();
+        expect(missing.sessions).toEqual([]);
+        expect(missing.missingSessionKeys).toEqual([sessionKey]);
+        expect(missing.revision).not.toBe(failed.revision);
+        const recovered = await selected();
+        expect(recovered.sessions).toMatchObject([
+          { key: sessionKey, sessionId: fixture.sessionId },
+        ]);
+        expect(recovered.missingSessionKeys).toBeUndefined();
+        expect(recovered.sessions[0]?.unavailable).toBeUndefined();
+      },
+      { label: undefined, displayName: "Review the incident" },
+    ));
 
   it("expires cached people at the inclusive activity boundary", () =>
     withFixture(async (fixture, { selected }) => {

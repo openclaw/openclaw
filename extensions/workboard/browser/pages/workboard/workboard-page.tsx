@@ -13,6 +13,7 @@ import { workboardCardBoardId } from "../../lib/workboard/board-filter.ts";
 import { workboardBoardName } from "../../lib/workboard/board-presentation.ts";
 import type { WorkboardCapability } from "../../lib/workboard/capability.ts";
 import { resetDraftState, workboardCardSessionKey } from "../../lib/workboard/card-state.ts";
+import { indexWorkboardSessions } from "../../lib/workboard/lifecycle.ts";
 import {
   configureWorkboardLiveRefresh,
   handleWorkboardChanged,
@@ -102,6 +103,8 @@ export function createWorkboardPage(
     let redirectedBoard = "";
     const client = host;
     const state = workboard.state;
+    let roster: typeof host.sessions.rows | undefined;
+    let sessions = indexWorkboardSessions([]);
     const publishPresentation = () => {
       if (disposed || queued) {
         return;
@@ -278,15 +281,13 @@ export function createWorkboardPage(
           ? sessionResolution.error
           : undefined;
       const pageError = [metadataError, sessionError].filter(Boolean).join("\n") || undefined;
-      const candidates =
-        sessionResolution?.status === "resolved"
-          ? [sessionResolution.session]
-          : (sessionResolution?.candidates ?? []);
-      const sessions = [
-        ...new Map(
-          [...host.sessions.rows, ...candidates].map((session) => [session.key, session]),
-        ).values(),
-      ];
+      // Use only the window the host already holds. Session boards bring their own rows.
+      const nextRoster =
+        connected && selectedBoard?.kind !== "sessions" ? host.sessions.rows : undefined;
+      if (nextRoster !== roster) {
+        roster = nextRoster;
+        sessions = indexWorkboardSessions(roster ?? []);
+      }
       const onNewBoard = () => {
         boardDraft = createNewBoardDraft();
         publishPresentation();

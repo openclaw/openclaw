@@ -97,7 +97,7 @@ export function createWorkboardSessionResolver(host: ControlUiHost, notify: () =
             configuredAgentsOnly: false,
             includeGlobal: false,
             includeUnknown: false,
-            includeDerivedTitles: false,
+            includeDerivedTitles: true,
             includeLastMessage: false,
           },
           ({ result, error }) => {

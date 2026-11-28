@@ -50,7 +50,7 @@ export type WorkboardProps = {
   canModelOverride?: boolean;
   agentsList: WorkboardAgentsList | null;
   defaultAgentId?: string | null;
-  sessions: GatewaySessionRow[];
+  sessions: ReadonlyMap<string, GatewaySessionRow>;
   sessionResolution?: WorkboardSessionResolution;
   scopeAgentId?: string | null;
   onClearAgentScope?: () => void;
@@ -284,8 +284,41 @@ export function matchesCardQuery(card: WorkboardCard, search: string): boolean {
     .some((value) => value.toLowerCase().normalize("NFC").includes(query));
 }
 
-export function isWorkboardSessionChoice(session: GatewaySessionRow): boolean {
-  if (session.archived || isReservedSessionKey(session.key)) {
+export function workboardSessionName(
+  session:
+    | {
+        key: string;
+        label?: string;
+        displayName?: string;
+        derivedTitle?: string;
+      }
+    | null
+    | undefined,
+): string | undefined {
+  if (!session) {
+    return undefined;
+  }
+  for (const title of [session.label, session.displayName, session.derivedTitle]) {
+    const name = title?.trim();
+    if (name && name !== session.key) {
+      return name;
+    }
+  }
+  return undefined;
+}
+
+export function workboardLinkedSessionTitle(session: Parameters<typeof workboardSessionName>[0]) {
+  return (
+    workboardSessionName(session) ??
+    t(session ? "workboard.untitledSession" : "workboard.linkedSession")
+  );
+}
+
+export function isWorkboardSessionChoice(
+  session: GatewaySessionRow,
+  alreadyLinked: boolean,
+): boolean {
+  if ((!alreadyLinked && session.archived) || isReservedSessionKey(session.key)) {
     return false;
   }
   const raw = [session.key, session.label, session.displayName]

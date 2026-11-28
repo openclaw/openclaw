@@ -7,6 +7,8 @@ import type {
 } from "openclaw/plugin-sdk/control-ui";
 import { createEffect, createMemo, createSignal, flush } from "solid-js";
 import { afterEach, vi } from "vitest";
+import type { GatewaySessionRow } from "../../api/types.ts";
+import { indexWorkboardSessions } from "../../lib/workboard/lifecycle.ts";
 import { getWorkboardState, subscribeWorkboard } from "../../lib/workboard/runtime.ts";
 import { workboardTestHost } from "../../test/host.setup.ts";
 import { waitForFast } from "../../test/wait-for.ts";
@@ -27,6 +29,9 @@ export type SelectPicker = HTMLElement & ControlUiSelectPickerProps;
 export type AgentPicker = HTMLElement & ControlUiAgentPickerProps;
 
 type WorkboardRenderProps = Parameters<typeof WorkboardView>[0];
+type WorkboardRenderOverrides = Partial<Omit<WorkboardRenderProps, "sessions">> & {
+  sessions?: readonly GatewaySessionRow[];
+};
 export function createLoadedWorkboardState() {
   const host = {};
   const state = getWorkboardState(host);
@@ -36,14 +41,14 @@ export function createLoadedWorkboardState() {
 
 export function createWorkboardRenderProps(
   host: WorkboardRenderProps["host"],
-  overrides: Partial<WorkboardRenderProps> = {},
+  { sessions = [], ...overrides }: WorkboardRenderOverrides = {},
 ): WorkboardRenderProps {
   return {
     host,
     client: null,
     connected: true,
     agentsList: null,
-    sessions: [],
+    sessions: indexWorkboardSessions(sessions),
     onOpenSession: () => undefined,
     onRefresh: () => undefined,
     ...overrides,
@@ -100,15 +105,19 @@ export function renderInto(container: HTMLElement, props: WorkboardRenderProps) 
 }
 
 export function createWorkboardView(
-  overrides: Partial<WorkboardRenderProps> = {},
+  overrides: WorkboardRenderOverrides = {},
   host: WorkboardRenderProps["host"] = {},
 ) {
   const state = getWorkboardState(host);
   state.loaded = true;
   const container = document.createElement("div");
   const props = createWorkboardRenderProps(host, overrides);
-  const renderView = (next: Partial<WorkboardRenderProps> = {}) =>
-    renderInto(container, { ...props, ...next });
+  const renderView = ({ sessions, ...next }: WorkboardRenderOverrides = {}) =>
+    renderInto(container, {
+      ...props,
+      ...next,
+      sessions: sessions ? indexWorkboardSessions(sessions) : props.sessions,
+    });
   return { host, state, container, renderView };
 }
 
