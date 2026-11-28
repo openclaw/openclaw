@@ -92,3 +92,16 @@ it("records messaging tool side effects", () => {
     },
   ]);
 });
+
+it.each([
+  ["add", 1],
+  ["list", 0],
+])("counts an mcp__openclaw__automations %s as %i cron add(s) (#193958)", (action, count) => {
+  const telemetry = recordTelemetry({
+    toolName: "mcp__openclaw__automations",
+    result: textToolResult("done", {}),
+    args: { action },
+  });
+
+  expect(telemetry.successfulCronAdds ?? 0).toBe(count);
+});
