@@ -169,6 +169,19 @@ beforeEach(() => {
 });
 
 describe("prepared WhatsApp inbound boundary", () => {
+  it("keeps group history limited to messages since its last confirmed reply", async () => {
+    const group = await prepare({
+      msg: message({ admission: { conversation: { kind: "group", id: "123@g.us" } } }),
+      groupHistoryLimit: 4,
+    });
+    const direct = await prepare({ groupHistoryLimit: 4 });
+    expect(group.ctxPayload.SessionTranscriptContext).toMatchObject({
+      historyLimit: 4,
+      historyKind: "recent",
+    });
+    expect(direct.ctxPayload.SessionTranscriptContext).toBeUndefined();
+  });
+
   it("projects portable group facts and self identity without transport callbacks", async () => {
     const command = { kind: "text-slash", body: "/status", authorized: false } as const;
     const msg = message({
