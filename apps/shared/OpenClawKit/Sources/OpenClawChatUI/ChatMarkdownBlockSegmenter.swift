@@ -11,6 +11,7 @@ enum ChatMarkdownBlock: Equatable {
     case table(ChatMarkdownTable)
     case list(ChatMarkdownList)
     case disclosure(ChatMarkdownDisclosure)
+    case quote([ChatMarkdownBlock])
     case thematicBreak
 }
 
@@ -203,11 +204,12 @@ enum ChatMarkdownBlockSegmenter {
     static let maxListItems = 100
     static let maxListDepth = 6
     static let maxDisclosureDepth = 32
+    static let maxQuoteDepth = 6
 
     /// Extracts top-level structural blocks. The parser owns CommonMark
     /// container and reference semantics; nested list content stays attached
     /// to its owning list item.
-    static func segments(markdown: String, isComplete: Bool) -> [ChatMarkdownBlock] {
+    static func segments(markdown: String, isComplete: Bool, quoteDepth: Int = 0) -> [ChatMarkdownBlock] {
         let (source, document) = self.parsedSourcePreservingDisclosureReferences(markdown)
         let mathResult = self.mathExtractions(
             source: source,
@@ -233,8 +235,16 @@ enum ChatMarkdownBlockSegmenter {
                 continue
             }
 
-            if let html = self.htmlBlockSource(child, source: source, lineRange: lineRange) {
-                extractions.append(Extraction(lineRange: lineRange, html: html))
+            if let extraction = self.htmlBlockSource(child, source: source, lineRange: lineRange)
+                .map({ Extraction(lineRange: lineRange, html: $0) })
+                ?? self.quoteExtraction(
+                    child,
+                    source: source,
+                    lineRange: lineRange,
+                    isComplete: isComplete,
+                    quoteDepth: quoteDepth)
+            {
+                extractions.append(extraction)
                 continue
             }
 
@@ -309,8 +319,10 @@ enum ChatMarkdownBlockSegmenter {
         let unfolded = self.unfold(extractions, source: source, proseEnd: proseEnd, isComplete: isComplete)
         let blocks = self.foldDisclosures(unfolded)
         let reparsesListContent = blocks.contains { block in
-            if case .list = block { return true }
-            return false
+            switch block {
+            case .list, .quote: true
+            default: false
+            }
         }
         if blocks.count > 1 || reparsesListContent,
            self.containsReferenceLink(document, source: source)
@@ -475,6 +487,29 @@ enum ChatMarkdownBlockSegmenter {
             language: code.language?.split(whereSeparator: \.isWhitespace).first.map { $0.lowercased() },
             code: code.code.hasSuffix("\n") ? String(code.code.dropLast()) : code.code,
             isComplete: isComplete)
+    }
+
+    /// A block quote's content, segmented again from its lines without their `>` markers so the
+    /// quote holds the same blocks as a message. Lazy continuation lines keep their text.
+    private static func quoteExtraction(
+        _ child: any Markup,
+        source: SourceBuffer,
+        lineRange: Range<Int>,
+        isComplete: Bool,
+        quoteDepth: Int) -> Extraction?
+    {
+        guard child is Markdown.BlockQuote, quoteDepth < self.maxQuoteDepth else { return nil }
+        let inner = source.lines[lineRange].map { line in
+            let indent = line.prefix { $0 == " " }
+            guard indent.count < 4, line.dropFirst(indent.count).first == ">" else { return line }
+            let rest = line.dropFirst(indent.count + 1)
+            return String(rest.first == " " || rest.first == "\t" ? rest.dropFirst() : rest)
+        }
+        let blocks = self.segments(
+            markdown: inner.joined(separator: "\n"),
+            isComplete: isComplete,
+            quoteDepth: quoteDepth + 1)
+        return blocks.isEmpty ? nil : Extraction(lineRange: lineRange, block: .quote(blocks))
     }
 
     private static func htmlBlockSource(

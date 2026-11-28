@@ -295,6 +295,14 @@ same binding. Do not infer a missing value from outer configuration, credentials
 or usage. Host-auth ownership requires this tuple before credential preparation;
 native-auth pending branches may omit it until their native owner selects a model.
 
+Declare `promptProjection: "captures"` only when the harness calls
+`userTurnTranscriptRecorder.captureModelPromptProjection(text, assertCurrent)` before
+every provider dispatch of the user turn, then `markSentToProvider()`. After such a
+dispatch, a later capture on the same turn is an error, so a fallback candidate can
+never store different model-facing text. Omit the field (default `"external"`) when the
+native runtime builds its own prompt: a later fallback then keeps the stored transcript
+text for a turn this harness sent without a projection.
+
 Declare `nativeModelPolicySupport: "exact"` only when the harness binds the actual
 native selection before every inference dispatch, including after resume. Use
 `hostCapabilities.bindModelExecution({ provider, model })` or the retained-source

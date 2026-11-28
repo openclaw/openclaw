@@ -12,6 +12,11 @@ import {
 import * as execRunner from "../process/exec-runner.js";
 import { collectCheckoutDiff, collectCheckoutDiffBaseline } from "./session-diff.runtime.js";
 
+// mock-isolation: a read-only checkout baseline must work without the workspace mutation module.
+vi.mock("../agents/workspace-filesystem.js", () => {
+  throw new Error("Read-only Git loaded workspace mutation support");
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();

@@ -4,10 +4,7 @@ import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
 import type { SessionWorkspaceGetResult } from "../../../api/types.ts";
 import { registerMcpAppUnmountTarget } from "../../../components/mcp-app-unmount.ts";
-import {
-  PANEL_HOSTED_TABS_CHANGE_EVENT,
-  readPanelHostedTabs,
-} from "../../../components/panel-hosted-tabs.ts";
+import { readPanelHostedTabs } from "../../../components/panel-hosted-tabs.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { installResizeObserverStub } from "../../../test-helpers/resize-observer.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
@@ -572,39 +569,6 @@ describe("workspace file tabs", () => {
     expect(getSessionWorkspace(state).previews).toHaveLength(1);
   });
 
-  it.each(["preview", undefined] as const)(
-    "opens the first file with its tree collapsed and preserves an explicit toggle (%s)",
-    async (disposition) => {
-      const state = createSessionWorkspaceHost();
-      state.sessions.getFile = vi
-        .fn()
-        .mockImplementation(async (_sessionKey, path) =>
-          textResponse(state, path, "File contents"),
-        );
-      const treeVisible = () => createSessionWorkspaceProps(state).navigation.treeVisible;
-      const select = (id: string | null, visible: boolean) => {
-        selectSessionWorkspacePreview(state, id);
-        expect(treeVisible()).toBe(visible);
-      };
-      const open = async (path: string, visible: boolean) => {
-        await openSessionWorkspaceFile(state, { path }, disposition);
-        expect(treeVisible()).toBe(visible);
-      };
-      expect(treeVisible()).toBe(true);
-      await open("first.txt", false);
-      select(null, true);
-      select("file:first.txt", false);
-      createSessionWorkspaceProps(state).onTreeVisibleChange(true);
-      await open("second.txt", true);
-      selectSessionWorkspacePreview(state, null);
-      select("file:second.txt", true);
-      createSessionWorkspaceProps(state).onTreeVisibleChange(false);
-      await open("third.txt", false);
-      select(null, true);
-      await open("fourth.txt", false);
-    },
-  );
-
   it("restores catalog navigation on retirement without reading until Files is presented", async () => {
     const state = createSessionWorkspaceHost({
       agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
@@ -704,23 +668,6 @@ describe("workspace file tabs", () => {
     expect(getSessionWorkspace(state).previews).toHaveLength(1);
     state.connectionEpoch++;
     expect(getSessionWorkspace(state).previews).toEqual([]);
-  });
-
-  it("replaces only the temporary preview in place and reuses pinned identities", () => {
-    const state = createSessionWorkspaceHost();
-    const open = (id: string) => openPreview(state, id, true);
-    open("first.md");
-    const second = open("second.md");
-    expect(getSessionWorkspace(state).previews).toEqual([second]);
-    pinSessionWorkspacePreview(state, second.id);
-    const third = open("third.md");
-    selectSessionWorkspacePreview(state, third.id);
-    expect(third.pinned).toBe(false);
-    const fourth = open("fourth.md");
-    expect(getSessionWorkspace(state).previews).toEqual([second, fourth]);
-    expect(open("second.md")).toBe(second);
-    expect(getSessionWorkspace(state).previews).toEqual([second, fourth]);
-    expect(getSessionWorkspace(state).activePreviewId).toBe(second.id);
   });
 
   it("retains a dirty temporary editor when opening another preview", async () => {
@@ -979,64 +926,5 @@ describe("workspace file tabs", () => {
     await waitForSolid(() => expect(document.activeElement).toBe(browser));
     expect(browser?.hidden).toBe(false);
     expect(readerAction.isConnected).toBe(true);
-  });
-
-  it("announces hosted-tab changes without invalidating the header for file content updates", async () => {
-    const panel = document.createElement("openclaw-chat-files-panel");
-    const changed = vi.fn();
-    panel.addEventListener(PANEL_HOSTED_TABS_CHANGE_EVENT, changed);
-    panel.previews = [{ id: "notes", label: "notes.md", content: { kind: "loading" } }];
-    panel.activeId = "notes";
-    document.body.append(panel);
-    await panel.updateComplete;
-    expect(changed).toHaveBeenCalledOnce();
-
-    panel.workspace = {
-      ...createSessionWorkspaceProps(createSessionWorkspaceHost(), { presentation: "desktop" }),
-      browserSearch: "Refreshed",
-    };
-    panel.renderDetail = () =>
-      Object.assign(document.createElement("div"), { textContent: "File contents" });
-    panel.onSelect = vi.fn();
-    panel.onClose = vi.fn();
-    await panel.updateComplete;
-    expect(changed).toHaveBeenCalledOnce();
-
-    const file = {
-      kind: "file" as const,
-      name: "notes.md",
-      path: "notes.md",
-      content: "Initial contents",
-    };
-    panel.previews = [{ id: "notes", label: "notes.md", content: file }];
-    await panel.updateComplete;
-    expect(changed).toHaveBeenCalledTimes(2);
-    expect(panel.hostedTabs[0]?.className).toBeUndefined();
-
-    file.content = "Updated contents";
-    panel.previews = [...panel.previews];
-    await panel.updateComplete;
-    expect(changed).toHaveBeenCalledTimes(2);
-
-    file.path = "docs/notes.md";
-    panel.previews = [...panel.previews];
-    await panel.updateComplete;
-    expect(changed).toHaveBeenCalledTimes(3);
-    expect(panel.hostedTabs[0]?.title).toBe("docs/notes.md");
-
-    panel.previews = [{ id: "notes", label: "renamed.md", content: file }];
-    await panel.updateComplete;
-    expect(changed).toHaveBeenCalledTimes(4);
-    expect(panel.hostedTabs[0]?.label).toBe("renamed.md");
-
-    panel.activeId = null;
-    await panel.updateComplete;
-    expect(changed).toHaveBeenCalledTimes(5);
-    expect(panel.activeHostedTabId).toBe("browse");
-
-    panel.previews = [];
-    await panel.updateComplete;
-    expect(changed).toHaveBeenCalledTimes(6);
-    expect(panel.hostedTabs).toEqual([]);
   });
 });

@@ -158,7 +158,6 @@ export async function preparePackage(params: {
     const buildId = await readBuiltGatewayBuildId(releaseRoot);
     return { ok: true, releaseRoot, version, ...(buildId ? { buildId } : {}) };
   } catch (error) {
-    await fs.rm(params.staging, { recursive: true, force: true });
     return {
       ok: false,
       reason,

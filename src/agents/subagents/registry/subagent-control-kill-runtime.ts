@@ -179,7 +179,7 @@ export async function mutateSubagentRunForKill(
         !operation.abortSignal.aborted,
     );
   let capturedQueued: SubagentKillInputSnapshot[] = [];
-  let runtime: Awaited<ReturnType<typeof subagentKillRuntimeLoader.load>> | undefined;
+  let preparationResult: SubagentRunKillResult | undefined;
   let admission: "ready" | "declined" | "busy" = "ready";
   let diagnosticPhase: "prepare" | "run" = "prepare";
   const { subphaseDurationsMs, observeWait } = createLifecycleDiagnosticWaitRecorder(
@@ -203,35 +203,33 @@ export async function mutateSubagentRunForKill(
             params.cancellationControl.assertCurrent();
           },
         });
+        killClaim = claim;
         if (claim) {
-          return { claim };
+          return;
         }
         const accepted = currentEntry();
         if (!accepted || accepted.runId === selected.runId) {
-          return { claim: undefined };
+          return;
         }
         // Only the same owner's acknowledged queued-to-running rekey can reselect admission.
         selected = accepted;
       }
-      return { claim: undefined };
     } catch (error) {
       if (hasSqliteWorkerOutcomeUnknown(error)) {
         throw error;
       }
       if (isSessionDeliveryGenerationRevokedError(error)) {
-        return { failure: { killed: false, superseded: true as const } };
-      }
-      return {
-        failure: {
+        preparationResult = { killed: false, superseded: true };
+      } else {
+        preparationResult = {
           killed: false,
           error: `Failed to persist subagent kill intent: ${formatErrorMessage(
             error instanceof SubagentRegistryWriteError ? error.cause : error,
           )}`,
-        },
-      };
+        };
+      }
     }
   };
-  let preparationResult: Awaited<ReturnType<typeof mutateSubagentRunForKill>> | undefined;
   const releaseKillClaim = (claim: NonNullable<typeof killClaim>) => {
     const selected = currentEntry();
     return selected
@@ -376,12 +374,10 @@ export async function mutateSubagentRunForKill(
       ) {
         // Active completion must see cancellation before admission interruption.
         // Pending launch/recovery owners first need the drain to commit their identity.
-        const claimed = await observeWait("kill-intent", claimSelectedRunKill());
-        if (claimed.failure) {
-          preparationResult = claimed.failure;
+        await observeWait("kill-intent", claimSelectedRunKill());
+        if (preparationResult) {
           return;
         }
-        killClaim = claimed.claim;
         if (killClaim) {
           if (!killSettlement.isCurrent()) {
             preparationResult = { killed: false, superseded: true };
@@ -457,12 +453,7 @@ export async function mutateSubagentRunForKill(
         !resolveSubagentKillTargetState(afterInterruption) &&
         isCurrent()
       ) {
-        const claimed = await observeWait("kill-intent", claimSelectedRunKill());
-        if (claimed.failure) {
-          preparationResult = claimed.failure;
-        } else {
-          killClaim = claimed.claim;
-        }
+        await observeWait("kill-intent", claimSelectedRunKill());
       }
     }),
     run: async (): Promise<Awaited<ReturnType<typeof mutateSubagentRunForKill>>> => {
@@ -475,11 +466,13 @@ export async function mutateSubagentRunForKill(
           ? await observeWait("registry-settlement", killSettlement.settle(killClaim))
           : { killed: false };
       }
-      if (admission === "declined") {
-        return { killed: false, declined: true as const };
-      }
-      if (admission === "busy") {
-        return stillActive();
+      switch (admission) {
+        case "ready":
+          break;
+        case "declined":
+          return { killed: false, declined: true as const };
+        case "busy":
+          return stillActive();
       }
       let readFailure: { error: unknown } | undefined;
       try {
@@ -525,11 +518,10 @@ export async function mutateSubagentRunForKill(
         );
       }
       if (!killClaim) {
-        const claimed = await observeWait("kill-intent", claimSelectedRunKill());
-        if (claimed.failure) {
-          return claimed.failure;
+        await observeWait("kill-intent", claimSelectedRunKill());
+        if (preparationResult) {
+          return preparationResult;
         }
-        killClaim = claimed.claim;
       }
       if (!killClaim) {
         return {
@@ -545,26 +537,19 @@ export async function mutateSubagentRunForKill(
             "registry-settlement",
             killSettlement.settle(claimedKill),
           );
-          return readFailure
-            ? {
-                ...settled,
-                error: [settled.error, formatErrorMessage(readFailure.error)]
-                  .filter(Boolean)
-                  .join(" "),
-              }
-            : settled;
+          return {
+            ...settled,
+            error: [settled.error, formatErrorMessage(readFailure.error)].filter(Boolean).join(" "),
+          };
         }
-        if (!runtime) {
-          try {
-            runtime = await observeWait("runtime-load", subagentKillRuntimeLoader.load());
-          } catch (error) {
-            if (hasSqliteWorkerOutcomeUnknown(error)) {
-              throw error;
-            }
-            return cancellationFailure(error);
+        let runtime: Awaited<ReturnType<typeof subagentKillRuntimeLoader.load>>;
+        try {
+          runtime = await observeWait("runtime-load", subagentKillRuntimeLoader.load());
+        } catch (error) {
+          if (hasSqliteWorkerOutcomeUnknown(error)) {
+            throw error;
           }
-          // Continue through the native and caller guards below without reopening
-          // pre-claim admission, which could release an already committed kill intent.
+          return cancellationFailure(error);
         }
         const active = capturedStop?.operations.some((operation) => !operation.result) === true;
         if (!killSettlement.isCurrent()) {

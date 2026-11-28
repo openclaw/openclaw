@@ -52,11 +52,13 @@ function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolea
       id: "gemini",
       defaultModel: "gemini-embedding-001",
       transport: "remote",
-      supportsMultimodalEmbeddings: ({ model }) =>
+      mediaModalities: ({ model }) =>
         model
           .trim()
           .replace(/^models\//, "")
-          .replace(/^(gemini|google)\//, "") === "gemini-embedding-2-preview",
+          .replace(/^(gemini|google)\//, "") === "gemini-embedding-2-preview"
+          ? ["image", "audio"]
+          : [],
       create: async () => ({ provider: null }),
     };
     registerEmbeddingProvider(adapter);
@@ -345,19 +347,65 @@ describe("memory search config", () => {
     });
   });
 
-  it.each<[string, Search, RegExp]>([
+  it.each(["gemini-embedding-2-preview", "gemini-embedding-001"])(
+    "rejects a fallback with configured media even if %s skips them",
+    (model) => {
+      expect(() =>
+        resolve(
+          multimodalSearch({
+            model,
+            fallback: "openai",
+            multimodal: { enabled: true, allowPartial: true, modalities: ["image"] },
+          }),
+        ),
+      ).toThrow(/memory\.search\.multimodal does not support memory\.search\.fallback/);
+    },
+  );
+
+  it.each<[string, Search, string[], string[]]>([
     [
-      "unsupported provider",
+      "a text-only model",
       { provider: "openai", model: "text-embedding-3-small" },
-      /memory\.search\.multimodal requires a provider adapter that supports multimodal embeddings/,
+      [],
+      ["image", "audio"],
     ],
+    ["an image-only model", { provider: "vision", model: "vision-embed" }, ["image"], ["audio"]],
     [
-      "fallback",
-      { fallback: "openai" },
-      /memory\.search\.multimodal does not support memory\.search\.fallback/,
+      "a plugin with the deprecated boolean",
+      { provider: "legacy", model: "eg2" },
+      ["image", "audio"],
+      [],
     ],
-  ])("rejects multimodal memory with %s", (_name, overrides, error) => {
-    expect(() => resolve(multimodalSearch(overrides))).toThrow(error);
+  ])("indexes only the media %s embeds", (_name, overrides, modalities, skippedModalities) => {
+    registerEmbeddingProvider({
+      id: "vision",
+      transport: "remote",
+      mediaModalities: () => ["image"],
+      create: async () => ({ provider: null }),
+    });
+    const legacy: MemoryEmbeddingProviderAdapter = {
+      id: "legacy",
+      transport: "remote",
+      supportsMultimodalEmbeddings: () => true,
+      create: async () => ({ provider: null }),
+    };
+    registerEmbeddingProvider(legacy);
+    const resolved = resolve(
+      multimodalSearch({
+        ...overrides,
+        multimodal: {
+          enabled: true,
+          allowPartial: skippedModalities.length > 0,
+          modalities: ["all"],
+        },
+      }),
+    );
+    expect(resolved?.multimodal).toEqual({
+      enabled: true,
+      modalities,
+      maxFileBytes: 10 * 1024 * 1024,
+      ...(skippedModalities.length ? { skippedModalities } : {}),
+    });
   });
 
   it("accepts Gemini multimodal memory even when the runtime registry has not registered Gemini yet", () => {

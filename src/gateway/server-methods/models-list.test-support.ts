@@ -9,6 +9,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { PreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   type PreparedGatewayModelCatalogSnapshot,
   registerGatewayModelCatalogPrivateAccess,
@@ -22,6 +23,7 @@ export function requestModelsList(params: {
   sessionKey?: string;
   agentId?: string;
   runtimeConfig?: OpenClawConfig;
+  metadataSnapshot?: PluginMetadataSnapshot;
   loadGatewayModelCatalog: (params?: {
     agentId?: string;
     agentDir?: string;
@@ -55,7 +57,8 @@ export function requestModelsList(params: {
       authStore:
         getPreparedRuntimeAuthProfileStoreSnapshot(agentDir) ??
         loadAuthProfileStoreWithoutExternalProfiles(agentDir, { allowKeychainPrompt: false }),
-      metadataSnapshot: loadManifestMetadataSnapshot({ config, env: process.env }),
+      metadataSnapshot:
+        params.metadataSnapshot ?? loadManifestMetadataSnapshot({ config, env: process.env }),
       ...(params.pluginRegistry ? { pluginRegistry: params.pluginRegistry } : {}),
     };
   };
@@ -143,4 +146,17 @@ export async function listModels(params: Parameters<typeof requestModelsList>[0]
   const { request, respond } = requestModelsList(params);
   await request;
   return respond;
+}
+
+export function catalogLoader(entries: Array<Record<string, unknown>>) {
+  return vi.fn(async () => entries);
+}
+
+export function createModelsListClient(metadataSnapshot: PluginMetadataSnapshot) {
+  return {
+    requestModelsList: (params: Parameters<typeof requestModelsList>[0]) =>
+      requestModelsList({ ...params, metadataSnapshot }),
+    listModels: (params: Parameters<typeof listModels>[0]) =>
+      listModels({ ...params, metadataSnapshot }),
+  };
 }

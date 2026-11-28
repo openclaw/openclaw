@@ -203,23 +203,16 @@ export async function withSubagentKillScope<T>(
       );
       retirements.push(retirement);
       const selectedEntry = () => retirement.observation.entry;
-      const ownsRun = () => {
-        const observed = retirement.observation;
-        const current = observed.entry;
-        return (
-          current !== undefined &&
-          isSameSubagentRunOwner(current, entry) &&
-          isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
-          (isSameSubagentRunOwner(getCurrentSubagentRunOwner(subagentRuns, current), current) ||
-            observed.state === "retired")
-        );
-      };
+      // The retirement owner exposes only this run (including its accepted rekey),
+      // or no entry once it is superseded/released.
+      const ownsRun = () =>
+        selectedEntry() !== undefined &&
+        isAgentEventLifecycleGenerationCurrent(lifecycleGeneration);
       const isCurrent = (candidate: SubagentRunRecord) => {
         const current = getCurrentSubagentRunOwner(subagentRuns, entry);
         return (
           current !== undefined &&
           isSameSubagentRunOwner(candidate, entry) &&
-          isSameSubagentRunOwner(current, entry) &&
           ownsRun() &&
           ownerCurrent(current) &&
           (exact || isCurrentSubagentRun(current, params.cfg))
@@ -254,7 +247,7 @@ export async function withSubagentKillScope<T>(
         session,
         children: [],
         errors,
-        discoveryFailed: errors.size > 0,
+        discoveryFailed: false,
       };
       hold(tree);
       // Publish each captured hold before another candidate's authority read can throw.

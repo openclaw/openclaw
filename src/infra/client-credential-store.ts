@@ -85,6 +85,50 @@ function assertPrivateAcl(pathname: string): void {
   }
 }
 
+/**
+ * Read-only: whether opening the existing store for migration custody would refuse it (an
+ * unsafe directory or file, a missing store, a wrong journal mode, schema or version, or
+ * failed integrity), the checks the custody below runs before admitting it. When it would
+ * admit, `inspect` decides from the same committed rows. Opens the file read-only and never
+ * creates, locks for writing or changes it.
+ */
+export function hasClientCredentialStoreMigrationWork(
+  env: NodeJS.ProcessEnv,
+  inspect: (database: DatabaseSync) => boolean,
+): boolean {
+  const pathname = resolveClientCredentialStorePath(env);
+  const directory = path.dirname(pathname);
+  const unsafe = (stat: fs.Stats) =>
+    (process.getuid !== undefined && stat.uid !== process.getuid()) ||
+    (process.platform !== "win32" && (stat.mode & 0o077) !== 0);
+  const parent = fs.lstatSync(directory, { throwIfNoEntry: false });
+  const file = fs.lstatSync(pathname, { throwIfNoEntry: false });
+  if (!parent?.isDirectory() || unsafe(parent) || !file?.isFile() || unsafe(file)) {
+    return true;
+  }
+  try {
+    assertPrivateAcl(directory);
+    assertPrivateAcl(pathname);
+  } catch {
+    return true;
+  }
+  using database = openNodeSqliteDatabase(pathname, { readOnly: true });
+  if (
+    // sqlite-allow-raw -- Read native journal policy, as custody admission does.
+    database.prepare("PRAGMA journal_mode").get()?.journal_mode !== "delete" ||
+    readSqliteUserVersion(database) !== CLIENT_CREDENTIAL_SCHEMA_VERSION
+  ) {
+    return true;
+  }
+  try {
+    assertSqliteSchemaContains(database, "Client credentials", CLIENT_CREDENTIAL_SCHEMA_SQL);
+    assertSqliteIntegrity(database, "Client credentials");
+  } catch {
+    return true;
+  }
+  return inspect(database);
+}
+
 export type ClientCredentialCustody = {
   database: DatabaseSync;
   path: string;
