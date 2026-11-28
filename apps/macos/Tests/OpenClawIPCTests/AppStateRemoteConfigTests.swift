@@ -584,7 +584,9 @@ struct AppStateRemoteConfigTests {
             let root = OpenClawConfigFile.loadDict()
             let expectedHost = interruption == "cancel" || interruption == "observed-file-round-trip" ? "previous" :
                 canPromote ? "delayed" : "newer"
-            #expect(GatewayRemoteConfig.resolveUrlString(root: root) == "wss://\(expectedHost).example:443")
+            // Setup links omit the default TLS port; direct profile and file writes retain it.
+            let expectedPort = interruption == "selection" ? "" : ":443"
+            #expect(GatewayRemoteConfig.resolveUrlString(root: root) == "wss://\(expectedHost).example\(expectedPort)")
             #expect(GatewayRemoteConfig.resolveTokenString(root: root) == "\(expectedHost)-token")
             if interruption != "cancel", interruption != "selection" {
                 #expect((root["agents"] as? [String: [String: String]])?["defaults"]?["workspace"] ==
