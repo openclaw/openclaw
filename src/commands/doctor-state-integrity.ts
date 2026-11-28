@@ -657,7 +657,7 @@ export async function noteStateIntegrity(
         `- Found ${countLabel(orphanAgentDirs.length, "agent directory", "agent directories")} on disk without a matching ${authoredAgentRosterPath} entry.`,
         "  These agents can still have sessions/auth state on disk, but config-driven routing, identity, and model selection will ignore them.",
         `  Examples: ${labels.join(", ")}${remaining > 0 ? `, and ${remaining} more` : ""}`,
-        `  Restore the missing ${authoredAgentRosterPath} entries or remove stale dirs after confirming they are no longer needed: ${shortenHomePath(path.join(stateDir, "agents"))}`,
+        `  Restore the missing ${authoredAgentRosterPath} entries, or retire an agent that is no longer needed with ${formatCliCommand(`openclaw agents delete ${orphanAgentDirs[0]!.agentId}`, env)}, which also removes its database registration. If that reports the agent not found, it has no registration and its directory can be removed by hand from ${shortenHomePath(path.join(stateDir, "agents"))}.`,
       ].join("\n"),
     );
   }

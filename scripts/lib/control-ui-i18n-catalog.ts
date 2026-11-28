@@ -92,6 +92,7 @@ import { registerSessionMachineEnglish } from "../../ui/src/i18n/locales/en-sess
 import { registerSessionMenuPermissionsEnglish } from "../../ui/src/i18n/locales/en-session-menu-permissions.ts";
 import { registerSessionMenuEnglish } from "../../ui/src/i18n/locales/en-session-menu.ts";
 import { registerSessionNavigationEnglish } from "../../ui/src/i18n/locales/en-session-navigation.ts";
+import { registerSessionNotFoundEnglish } from "../../ui/src/i18n/locales/en-session-not-found.ts";
 import { registerSessionOrganizationEnglish } from "../../ui/src/i18n/locales/en-session-organization.ts";
 import { registerSessionPeopleEnglish } from "../../ui/src/i18n/locales/en-session-people.ts";
 import { registerSessionPlacementEnglish } from "../../ui/src/i18n/locales/en-session-placement.ts";
@@ -215,6 +216,7 @@ const sourceFiles = [
   "en-session-menu.ts",
   "en-session-menu-permissions.ts",
   "en-session-navigation.ts",
+  "en-session-not-found.ts",
   "en-session-organization-shared.ts",
   "en-session-organization.ts",
   "en-session-deletion.ts",
@@ -637,6 +639,10 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         ...registerChatSessionEnglish.catalog.chat,
         ...registerChatSessionOptionalEnglish.catalog.chat,
         ...registerSessionNavigationEnglish.catalog.chat,
+        sessionRoute: {
+          ...registerSessionNavigationEnglish.catalog.chat.sessionRoute,
+          ...registerSessionNotFoundEnglish.catalog.chat.sessionRoute,
+        },
         workspaceConflict,
         sessionDetails,
         sessionSharing,

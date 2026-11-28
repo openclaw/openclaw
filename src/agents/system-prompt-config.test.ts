@@ -135,17 +135,21 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     };
     const config = { agents: { entries: { main: { workspace: workspace.repoRoot } } } };
     const catalog = vi.spyOn(projects, "listProjectRegistry").mockResolvedValue([workspace]);
-    const prompt = (projectId?: string, toolNames = ["session_project"]) =>
+    const prompt = (
+      projectId?: string,
+      toolNames = ["session_project"],
+      sessionKey = "agent:main:chat",
+    ) =>
       buildPrompt({
         config,
         agentId: "main",
-        runtimeInfo: { sessionKey: "agent:main:chat" },
+        runtimeInfo: { sessionKey },
         toolNames,
         prepareSessionProjectGuidance: sessionProjectGuidanceSource({
           workspaceDir: workspace.repoRoot,
           config,
           agentId: "main",
-          sessionKey: "agent:main:chat",
+          sessionKey,
           entry: { sessionId: "chat", updatedAt: 1, projectId },
           senderIsOwner: true,
         }),
@@ -157,6 +161,11 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     expect(eligible).toContain(hint);
     expect(eligible).toContain('{"id":"website","name":"Website"}');
     expect(eligible).toContain("as your first tool call");
+    const home = await prompt(workspace.id, ["session_project"], "agent:main:main");
+    expect(home).toContain("separate project session");
+    expect(home.split("## Session project")[1]?.split("\n## ")[0]).not.toContain("sessions_spawn");
+    expect(home).toContain('{"id":"website","name":"Website"}');
+    expect(home).not.toContain("call session_project with action move");
     expect(await prompt(workspace.id)).toContain(hint);
     expect(await prompt("workspace:another-agent")).not.toContain(hint);
     expect(await prompt(website.id)).not.toContain(hint);

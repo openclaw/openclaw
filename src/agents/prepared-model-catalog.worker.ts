@@ -10,10 +10,11 @@ import { installDatabaseEngineSelection } from "../infra/database-engine/context
 import { installDirectoryWatchPort } from "../infra/directory-watch-host.js";
 import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import type { Model } from "../llm/types.js";
+import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import {
-  captureRemoteModelCatalogStartupSnapshot,
-  withRemoteModelCatalogSnapshot,
-} from "../model-catalog/remote-overlay.js";
+  decodeRemoteModelCatalogWorkerBytes,
+  readRemoteModelCatalogStartupPublication,
+} from "../model-catalog/remote-startup-snapshot.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -565,7 +566,22 @@ if (parentPort) {
       const { request, context } = task;
       let value: PreparedModelCatalogWorkerInput;
       if ("pluginMetadataSnapshot" in task.value) {
-        value = task.value;
+        const captured = task.value.remoteCatalog;
+        // Reuse only the captured source and content revision, including after the parent rotates.
+        const remoteCatalog =
+          captured &&
+          (readRemoteModelCatalogStartupPublication(captured) ??
+            Array.from(
+              contexts.values(),
+              ({ prepared }) => prepared.pluginGeneration.remoteCatalog,
+            ).find(
+              (catalog) =>
+                catalog?.sourceUrl === captured.sourceUrl && catalog.revision === captured.revision,
+            ) ??
+            ("sharedBytes" in captured
+              ? decodeRemoteModelCatalogWorkerBytes(captured.sharedBytes)
+              : captured));
+        value = { ...task.value, remoteCatalog };
       } else {
         const retained = contexts.get(context.workspaceDir);
         if (retained?.fingerprint !== context.fingerprint) {
@@ -576,24 +592,6 @@ if (parentPort) {
           remoteCatalog: retained.prepared.pluginGeneration.remoteCatalog,
           pluginMetadataSnapshot: retained.prepared.pluginGeneration.pluginMetadataSnapshot,
         };
-      }
-      if (value.remoteCatalog) {
-        // Transport clones share the publisher's content revision. Reuse an existing owner
-        // before registry callbacks capture the request scope; keep no extra revision cache.
-        const retained = [
-          captureRemoteModelCatalogStartupSnapshot(),
-          ...Array.from(
-            contexts.values(),
-            ({ prepared }) => prepared.pluginGeneration.remoteCatalog,
-          ),
-        ].find(
-          (catalog) =>
-            catalog?.sourceUrl === value.remoteCatalog?.sourceUrl &&
-            catalog?.revision === value.remoteCatalog?.revision,
-        );
-        if (retained) {
-          value = { ...value, remoteCatalog: retained };
-        }
       }
       activeRequest = value;
       let reportAfter = 0;

@@ -18,7 +18,7 @@ import {
   type DatabasePathIdentity,
 } from "../../infra/sqlite-worker-identity.js";
 import type { ChatRef } from "../../sessions/chat-ref.js";
-import { isSessionMutationActive } from "../../sessions/session-controller.lifecycle.js";
+import { collectDeliveryFencingMutationKinds } from "../../sessions/session-controller.lifecycle.js";
 import {
   isSessionStoreTopologyChange,
   sessionChangeScopeAffectsStoredRows,
@@ -528,18 +528,18 @@ async function prepareSessionGenerationLease(
     const assertCurrent = (delivery = false): void => {
       try {
         assertActive();
-        if (
-          delivery &&
-          [...paths].some((scope) =>
-            isSessionMutationActive(
-              scope,
-              generation.sessionId
-                ? [generation.sessionKey, generation.sessionId]
-                : [generation.sessionKey],
-            ),
-          )
-        ) {
-          throw diag.unavailable("delivery-mutation");
+        const fencing = delivery
+          ? [...paths].flatMap((scope) =>
+              collectDeliveryFencingMutationKinds(
+                scope,
+                generation.sessionId
+                  ? [generation.sessionKey, generation.sessionId]
+                  : [generation.sessionKey],
+              ),
+            )
+          : [];
+        if (fencing.length) {
+          throw diag.unavailable("delivery-mutation", undefined, [...new Set(fencing)]);
         }
         readCurrent();
       } catch (error) {
@@ -722,7 +722,7 @@ export async function prepareChatLeaseBatch(chats: readonly ChatRef[]) {
   return Promise.all(prepared);
 }
 
-/** Delivery remains unavailable while any lifecycle mutation owns the chat. */
+/** Delivery remains unavailable while any mutation other than a background-result append owns the chat. */
 export async function prepareChatDeliveryLease(chat: ChatRef) {
   const lease = await prepareSessionGenerationLease(chatFacts(chat));
   try {

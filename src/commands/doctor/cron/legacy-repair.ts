@@ -33,6 +33,7 @@ import { backupLegacyStateSource } from "../../../infra/state-migrations.source-
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { captureOpenClawStateReadContext } from "../../../state/openclaw-state-worker-context.js";
 import { shortenHomePath } from "../../../utils.js";
+import type { DoctorMaintenancePending } from "../../doctor-maintenance-pending.js";
 import { countLabel as pluralize } from "../../doctor-state-integrity-format.js";
 import type { LegacyCodexModelIdentity } from "../shared/codex-route-model-ref.js";
 import { rewriteModelReferenceSlot } from "../shared/codex-route-model-slots.js";
@@ -444,6 +445,43 @@ export async function collectCronCodexRuntimePolicyTargetsReadOnly(params: {
       ],
     };
   }
+}
+
+/**
+ * Read-only: whether Doctor's config preflight has cron work. Decides, from the same
+ * configs the preflight passes, the partition selection, what
+ * {@link repairLegacyCronStoreWithoutPrompt} imports, archives or repairs, and the Codex
+ * runtime policy targets its config repair consumes.
+ */
+export async function checkDoctorPreflightCronPending(params: {
+  /** The authored config the partition selection is read from. */
+  selectionConfig: OpenClawConfig;
+  /** The legacy store repair's config (retained cron locators restored). */
+  repairConfig: OpenClawConfig;
+  /** The config the Codex runtime policy scan reads. */
+  migrationConfig: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Promise<DoctorMaintenancePending> {
+  if (
+    (await readCronStoreSelectionForDoctor(params.selectionConfig, params.env)).status !== "ready"
+  ) {
+    return "work";
+  }
+  const storePath = resolveCronJobsStorePath(
+    normalizeOptionalString(readLegacyCronStorePath(params.repairConfig)),
+    params.env,
+  );
+  if (
+    listExistingRetiredStateFiles(await listRetiredCronStateFiles(storePath)).length > 0 ||
+    (await loadLegacyCronQuarantineForMigration(storePath)) !== undefined
+  ) {
+    return "work";
+  }
+  const codex = await collectCronCodexRuntimePolicyTargetsReadOnly({ cfg: params.migrationConfig });
+  if (codex.warnings.length > 0) {
+    return "undecidable";
+  }
+  return codex.targets.length > 0 ? "work" : "none";
 }
 
 /** Commit Codex cron refs only after their model-scoped config policy is durable. */

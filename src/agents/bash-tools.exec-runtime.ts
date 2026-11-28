@@ -72,7 +72,7 @@ import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.j
 import type { ExecApprovalTransport } from "./exec-approval-transport.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
-import { openPrivateTempFileStream } from "./sessions/tools/private-temp-file.js";
+import { openPrivateTempFileStream, type SpillOwner } from "./sessions/tools/private-temp-file.js";
 import { createStreamingBinaryOutputSanitizer } from "./shell-utils.js";
 import {
   getGatewayToolCallerIdentity,
@@ -208,6 +208,7 @@ export async function runExecProcess({
   ...opts
 }: {
   command: string;
+  spillOwner?: SpillOwner;
   durable?: DurableExecOptions;
   sessionId?: string;
   // Execute this instead of `command` (which is kept for display/session/logging).
@@ -625,7 +626,9 @@ export async function runExecProcess({
 
   // Sandboxed reads cannot reach host temp files, and durable commands keep their own log.
   if (!opts.sandbox && !opts.durable) {
-    session.outputFile = openPrivateTempFileStream("openclaw-exec", EXEC_OUTPUT_FILE_MAX_BYTES);
+    session.outputFile = openPrivateTempFileStream("openclaw-exec", EXEC_OUTPUT_FILE_MAX_BYTES, {
+      owner: opts.spillOwner,
+    });
   }
   try {
     releaseOperatorAuthority = operatorAuthority?.retain?.();

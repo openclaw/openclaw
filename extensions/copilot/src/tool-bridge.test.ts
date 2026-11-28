@@ -429,6 +429,23 @@ describe("createCopilotToolBridge", () => {
 });
 
 describe("createCopilotToolBridge tool conversion", () => {
+  // The SDK forwards content unbounded; the shared bound keeps head, tail and a saved file.
+  it("bounds an oversized tool result before the SDK sees it", async () => {
+    const full = [...Array.from({ length: 6_000 }, (_, i) => `row ${i}`), "LAST-ROW"].join("\n");
+    const sourceTool = makeTool({}, { content: [{ type: "text", text: full }], details: {} });
+    const result = await invoke(await toSdk(sourceTool, {}), {});
+    const field = (result as { textResultForLlm?: unknown }).textResultForLlm;
+    const text = typeof field === "string" ? field : "";
+    const spillPath = /chars omitted\. Full output: (\S+)\]/u.exec(text)?.[1];
+
+    expect(text.length).toBeLessThan(full.length);
+    expect(text).toContain("row 0");
+    expect(text).toContain("LAST-ROW");
+    expect(spillPath).toBeDefined();
+    expect(await fs.readFile(spillPath!, "utf8")).toBe(full);
+    await fs.rm(spillPath!, { force: true });
+  });
+
   it("returns a failure result when prepareArguments throws", async () => {
     const error = new Error("bad args");
     const sourceTool = makeTool({

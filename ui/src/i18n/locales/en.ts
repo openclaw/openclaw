@@ -443,7 +443,7 @@ const startupEnglish = {
     running: "Running",
     queued: "Queued",
     completed: "Completed",
-    cancelled: "Cancelled",
+    cancelled: "Canceled",
     linked: "Linked",
     mode: "Mode",
     system: "System",
@@ -1532,6 +1532,8 @@ const startupEnglish = {
     },
     agentDatabaseWarming: "This agent is still starting. Retry in a moment.",
     historyRequestTimedOut: "Couldn’t load the conversation in time. Try again.",
+    historySessionChanged:
+      "This session changed before OpenClaw could finish checking for updates. Try again.",
     clawhub: {},
     modelAccounts: {
       section: "Account",
@@ -1585,10 +1587,11 @@ const startupEnglish = {
     sessionsPausedNote: "{count} sessions are paused",
     handoffResumed: "Resumed · {duration} later",
     continuationSource: {
-      exec: "Background command finished",
-      restart: "Gateway restarted",
-      subagent: "Agent finished",
+      exec: "A background command finished",
+      restart: "The Gateway restarted",
+      subagent: "Picked up after an agent finished",
     },
+    continuationDelay: "{duration} later",
     handoffSessionsOne: "1 session",
     handoffSessions: "{count} sessions",
     handoffSessionStatus: {

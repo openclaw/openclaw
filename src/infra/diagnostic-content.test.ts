@@ -8,9 +8,7 @@ const MAX_DIAGNOSTIC_CONTENT_CHARS = 128 * 1024;
 it("never splits a surrogate pair when truncating a single field", () => {
   const oversized = `${"x".repeat(MAX_DIAGNOSTIC_CONTENT_CHARS - 1)}🚀tail`;
   const truncated = truncateDiagnosticContent(oversized);
-  expect(truncated.length).toBeLessThanOrEqual(MAX_DIAGNOSTIC_CONTENT_CHARS);
-  // A trailing high surrogate would mean the emoji was cut in half.
-  expect(truncated.charCodeAt(truncated.length - 1)).not.toBe(0xd83d);
+  expect(truncated).toBe("x".repeat(MAX_DIAGNOSTIC_CONTENT_CHARS - 1));
 });
 
 it("redacts secret material before bounding so truncation cannot split it", () => {

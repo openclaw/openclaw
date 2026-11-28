@@ -731,6 +731,18 @@ export interface OpenAICompletionsCompat {
   supportsPromptCacheKey?: boolean;
   /** Whether the provider supports long prompt cache retention (`prompt_cache_retention: "24h"` or Anthropic-style `cache_control.ttl: "1h"`, depending on format). Default: true. */
   supportsLongCacheRetention?: boolean;
+  /** Name of the sampling seed field: `seed`, or Mistral's `random_seed`. Default: `seed`. */
+  seedField?: "seed" | "random_seed";
+  /** Whether streamed text may carry DeepSeek DSML tool-call markup that must be parsed out. Default: true for the `deepseek` thinking format. */
+  emitsDsmlToolCalls?: boolean;
+  /** Whether tool schemas must give every union branch an explicit `type`. Default: false. */
+  requiresTypedUnionBranches?: boolean;
+  /** Whether every request must carry a non-empty user or assistant message. Default: false. */
+  requiresNonEmptyUserOrAssistantMessage?: boolean;
+  /** With `cacheControlFormat: "anthropic"`, mark only the system prompt. Default: false. */
+  cacheControlSystemOnly?: boolean;
+  /** With `cacheControlFormat: "anthropic"`, place the system marker on one shared system block. Default: false. */
+  cacheControlSharedSystem?: boolean;
 }
 
 /** Compatibility settings for OpenAI Responses APIs. */
@@ -923,3 +935,44 @@ export type CompleteSimpleFn = (
 ) => Promise<AssistantMessage>;
 
 export type ValidateToolArgumentsFn = (tool: Tool, toolCall: ToolCall) => unknown;
+
+export type RuntimeContextDataRange = { start: number; end: number };
+
+const dataRanges = Symbol("openclaw.runtimeContextDataRanges");
+type RuntimeContextDataCarrier = {
+  content: unknown;
+  [dataRanges]?: { text: string; ranges: readonly RuntimeContextDataRange[] };
+};
+
+/** The exact text of a string or a single text-block message. */
+export function getRuntimeContextDataText(message: RuntimeContextDataCarrier): string | undefined {
+  const { content } = message;
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content) && content.length === 1 && content[0]?.type === "text") {
+    const text: unknown = content[0].text;
+    return typeof text === "string" ? text : undefined;
+  }
+  return undefined;
+}
+
+/** In-memory only. A copy with different text must not inherit the old offsets. */
+export function setRuntimeContextDataRanges(
+  message: RuntimeContextDataCarrier,
+  ranges: readonly RuntimeContextDataRange[],
+) {
+  const text = getRuntimeContextDataText(message);
+  if (text !== undefined && ranges.length) {
+    message[dataRanges] = { text, ranges };
+  } else {
+    delete message[dataRanges];
+  }
+}
+
+export function getRuntimeContextDataRanges(message: RuntimeContextDataCarrier) {
+  const binding = message[dataRanges];
+  return binding && binding.text === getRuntimeContextDataText(message)
+    ? binding.ranges
+    : undefined;
+}

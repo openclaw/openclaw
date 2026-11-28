@@ -331,14 +331,19 @@ function migrateLegacyStateDirRoot(params: StateDirMigrationParams): StateDirMig
   return result();
 }
 
+/** Read-only: whether {@link renameLegacyConfigFile} would rename `clawdbot.json`. */
+export function hasPendingLegacyConfigFileRename(stateDir: string): boolean {
+  return (
+    Boolean(lstatIfPresent(path.join(stateDir, "clawdbot.json"))) &&
+    !lstatIfPresent(path.join(stateDir, "openclaw.json")) &&
+    !lstatIfPresent(path.join(path.dirname(stateDir), ".clawdbot"))
+  );
+}
+
 export function renameLegacyConfigFile(stateDir: string): string[] {
   const source = path.join(stateDir, "clawdbot.json");
   const target = path.join(stateDir, "openclaw.json");
-  if (
-    !lstatIfPresent(source) ||
-    lstatIfPresent(target) ||
-    lstatIfPresent(path.join(path.dirname(stateDir), ".clawdbot"))
-  ) {
+  if (!hasPendingLegacyConfigFileRename(stateDir)) {
     return [];
   }
   renameLegacyPath(source, target, "file");

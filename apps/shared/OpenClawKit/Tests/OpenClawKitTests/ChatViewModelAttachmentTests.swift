@@ -8,11 +8,13 @@ import XCTest
 
 private actor AttachmentSendCapture {
     private(set) var attachments: [OpenClawChatAttachmentPayload] = []
+    private(set) var message: String?
     private(set) var sends = 0
     let sent = AttachmentGate()
 
-    func store(_ attachments: [OpenClawChatAttachmentPayload]) async {
+    func store(_ attachments: [OpenClawChatAttachmentPayload], message: String) async {
         self.attachments = attachments
+        self.message = message
         self.sends += 1
         await self.sent.signalEntered()
     }
@@ -131,12 +133,12 @@ private struct AttachmentProcessingTransport: OpenClawChatTransport {
 
     func sendMessage(
         sessionKey _: String,
-        message _: String,
+        message: String,
         thinking _: String,
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
-        await self.capture?.store(attachments)
+        await self.capture?.store(attachments, message: message)
         if self.failsAmbiguously {
             throw NSError(
                 domain: "ChatViewModelAttachmentTests",
@@ -542,15 +544,20 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         let capturedPayload = await capture.first()
         let payload = try XCTUnwrap(capturedPayload)
         XCTAssertEqual(payload.content, Data("fixture-voice-note".utf8).base64EncodedString())
+        // An attachment-only send carries no text the person did not write, as the Control UI sends it.
+        let sentMessage = await capture.message
+        XCTAssertEqual(sentMessage, "")
         let state = await MainActor.run {
             (
                 viewModel.attachments.isEmpty,
                 viewModel.errorText,
-                viewModel.messages.last?.content.first { $0.mimeType == "audio/mp4" }?.durationSeconds)
+                viewModel.messages.last?.content.first { $0.mimeType == "audio/mp4" }?.durationSeconds,
+                viewModel.messages.last.map(ChatMessageVisibleText.visibleText(in:)))
         }
         XCTAssertTrue(state.0)
         XCTAssertNil(state.1)
         XCTAssertEqual(state.2, 4)
+        XCTAssertEqual(state.3, "")
     }
 
     func testHealthyLegacyGatewayUsesLiveAttachmentPath() async throws {
@@ -627,7 +634,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         }
 
         let routeError =
-            "Could not verify this attachment's delivery route. Reconnect, then try again."
+            "Couldn’t send this attachment. Reconnect, then try again."
         await viewModel.send()?.value
         let errorText = await MainActor.run { viewModel.errorText }
         XCTAssertEqual(errorText, routeError)
@@ -718,7 +725,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
 
         await viewModel.send()?.value
         let errorText = await MainActor.run { viewModel.errorText }
-        XCTAssertEqual(errorText, "Connection lost")
+        XCTAssertEqual(errorText, "Couldn’t send your message.")
 
         let state = await MainActor.run {
             (
@@ -757,6 +764,8 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         XCTAssertEqual(payload.mimeType, "audio/mp4")
         XCTAssertEqual(payload.fileName, "voice-note-20260706-120001.m4a")
         XCTAssertEqual(payload.content, data.base64EncodedString())
+        let sentMessage = await capture.message
+        XCTAssertEqual(sentMessage, "")
 
         let optimisticAudio = await MainActor.run {
             viewModel.messages.last?.content.first { $0.mimeType == "audio/mp4" }

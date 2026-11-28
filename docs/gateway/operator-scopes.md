@@ -854,10 +854,16 @@ not establish which model a native runtime actually uses. Isolated prompt-only
 completions keep their separate exact-route contract and bind the selected model
 through completion and cleanup.
 
-Bounded automatic metadata, operator-configured
-inbound media preprocessing, and host-owned execution approval keep their
-existing service authority. Omitting `modelPolicy` preserves the role's existing
-model access, and shared-secret System access is unchanged.
+Progress narration uses the turn's role: execution skips utility models the role
+refuses, and a role that refuses every utility model gets no narration. Session
+observer digests use the session owner's role, resolved once when a run's
+observation starts. An owner role that refuses every utility model or excludes
+the agent turns observation off for that run. A session whose owner profile was
+deleted, or that has no assigned human owner or authenticated profile creator, is
+observed on Gateway service authority. Automatically generated session and thread
+titles, operator-configured inbound media preprocessing, and host-owned execution
+approval keep their existing service authority. Omitting `modelPolicy` preserves
+the role's existing model access, and shared-secret System access is unchanged.
 
 Activity recaps use the owning agent's utility route under the session's assigned
 human owner's model policy, or its authenticated profile creator's policy when

@@ -357,9 +357,7 @@ export async function streamAgentResponse(
       stream,
       async () => {
         const response = await stream;
-        const repetitionGuard = config.repetitionGuard?.(config.model)
-          ? new AssistantRepetitionGuard()
-          : undefined;
+        const repetitionGuard = new AssistantRepetitionGuard();
         const whitespaceRuns = new Map<number, number>();
         let partialMessage: AssistantMessage | null = null;
         let partialIndex: number | undefined;
@@ -430,7 +428,7 @@ export async function streamAgentResponse(
               if (partialMessage) {
                 // Only updates assembled here prove appends; provider snapshots can correct text.
                 let append: { offset: number; delta: string } | undefined;
-                if (repetitionGuard && event.type === "text_delta" && event.partial === undefined) {
+                if (event.type === "text_delta" && event.partial === undefined) {
                   const priorBlock = partialMessage.content[event.contentIndex];
                   append = {
                     offset: priorBlock?.type === "text" ? priorBlock.text.length : 0,
@@ -462,16 +460,28 @@ export async function streamAgentResponse(
                         code: DEGENERATE_OUTPUT_ERROR_CODE,
                       }),
                     );
+                    const block = message.content[event.contentIndex];
                     return await finalizeAssistantMessage({
                       ...message,
                       stopReason: "error",
                       errorCode: DEGENERATE_OUTPUT_ERROR_CODE,
                       errorMessage: DEGENERATE_OUTPUT_ERROR_MESSAGE,
+                      // The partial call is dropped; keep attribution without its arguments.
+                      diagnostics: [
+                        ...(message.diagnostics ?? []),
+                        {
+                          type: DEGENERATE_OUTPUT_ERROR_CODE,
+                          timestamp: Date.now(),
+                          details: {
+                            toolName: block?.type === "toolCall" ? block.name : undefined,
+                          },
+                        },
+                      ],
                     });
                   }
                   whitespaceRuns.set(event.contentIndex, run);
                 }
-                const stopped = repetitionGuard?.check(
+                const stopped = repetitionGuard.check(
                   message,
                   committedContentCount,
                   event.type === "toolcall_end" ? undefined : event.contentIndex,
@@ -552,7 +562,7 @@ export async function streamAgentResponse(
             terminal?.errorCode === REPETITIVE_OUTPUT_ERROR_CODE ||
             terminal?.errorCode === DEGENERATE_OUTPUT_ERROR_CODE
               ? terminal
-              : terminal && repetitionGuard?.check(terminal, committedContentCount);
+              : terminal && repetitionGuard.check(terminal, committedContentCount);
           if (stoppedTerminal) {
             modelAbort.abort(new Error(REPETITIVE_OUTPUT_ERROR_MESSAGE));
           }
@@ -560,7 +570,7 @@ export async function streamAgentResponse(
           abortFailedResponse(stoppedTerminal ?? terminal);
           const providerResult = await response.result();
           const stopped =
-            stoppedTerminal ?? repetitionGuard?.check(providerResult, committedContentCount);
+            stoppedTerminal ?? repetitionGuard.check(providerResult, committedContentCount);
           if (stopped) {
             modelAbort.abort(new Error(REPETITIVE_OUTPUT_ERROR_MESSAGE));
           }

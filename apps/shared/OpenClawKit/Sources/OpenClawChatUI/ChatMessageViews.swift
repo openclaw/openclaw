@@ -19,13 +19,16 @@ struct ChatSystemNoticeRow: View {
                     systemImage: self.notice.systemImage,
                     label: self.notice.label,
                     metric: nil)
+                    #if os(iOS)
+                        .labelContent
+                    #endif
             }
             .foregroundStyle(.secondary)
             .tint(.secondary)
             #if os(iOS)
             // Inside the iOS List a default DisclosureGroup turns into an outline row that the
             // label tap does not toggle; keep the inline label + chevron behaviour.
-            .disclosureGroupStyle(ChatInlineDisclosureStyle())
+            .disclosureGroupStyle(ChatInlineDisclosureStyle(header: .systemNotice))
             #endif
             .padding(.vertical, 4)
         } else {
@@ -52,15 +55,14 @@ struct ChatSystemNoticeRow: View {
 /// chevron, 44 pt target) that never moves, with content easing in below it. A default
 /// DisclosureGroup there turns into an outline row that the label tap does not toggle.
 struct ChatInlineDisclosureStyle: DisclosureGroupStyle {
-    enum Chevron {
-        case tint
-        case secondary
-    }
+    enum Header { case plain, toolGroup, systemNotice }
 
-    var chevron: Chevron = .tint
+    var header: Header = .plain
 
     func makeBody(configuration: Configuration) -> some View {
-        ChatInlineDisclosure(configuration: configuration, chevron: self.chevron)
+        ChatInlineDisclosure(
+            configuration: configuration,
+            header: self.header)
     }
 }
 
@@ -68,7 +70,7 @@ private struct ChatInlineDisclosure: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openClawReadingPosition) private var readingPosition
     let configuration: DisclosureGroupStyleConfiguration
-    let chevron: ChatInlineDisclosureStyle.Chevron
+    let header: ChatInlineDisclosureStyle.Header
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -84,16 +86,20 @@ private struct ChatInlineDisclosure: View {
                     readingPosition?.disclosureDidSettle()
                 }
             } label: {
-                HStack(alignment: .center, spacing: 8) {
+                let label = ChatToolRowLabel(
+                    asset: self.header == .toolGroup ? "wrench" : nil,
+                    disclosure: .degrees(self.configuration.isExpanded ? 90 : 0))
+                {
                     self.configuration.label
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    Image(systemName: "chevron.right")
-                        .font(.caption)
-                        .foregroundStyle(self.chevronStyle)
-                        .rotationEffect(.degrees(self.configuration.isExpanded ? 90 : 0))
-                        .accessibilityHidden(true)
                 }
-                .frame(minHeight: 44)
+                Group {
+                    if self.header == .systemNotice {
+                        ChatSystemRules { label }
+                    } else {
+                        label
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -111,13 +117,6 @@ private struct ChatInlineDisclosure: View {
             .clipped()
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
-    }
-
-    private var chevronStyle: AnyShapeStyle {
-        switch self.chevron {
-        case .tint: AnyShapeStyle(.tint)
-        case .secondary: AnyShapeStyle(.secondary)
-        }
     }
 }
 #endif
@@ -151,48 +150,115 @@ struct ChatHistoryDividerRow: View {
     }
 }
 
-private struct ChatSystemLine: View {
-    let systemImage: String
-    let label: String
-    let metric: String?
+private enum ChatUIConstants {
+    #if os(iOS)
+    static let bubbleCorner: CGFloat = 16
+    /// The gap below a user bubble when it has a delivery status.
+    static let userFooterSpacing: CGFloat = 4
+    /// How far a reactions pill reaches into the user bubble. Less than the bubble's 14-point
+    /// leading padding, so it never covers text.
+    static let reactionOverlap: CGFloat = 8
+    /// A user's attachments sit above the bubble, outside it, as in the Control UI: images 8 pt
+    /// above the text (`--space-2`, ui/src/styles/chat/text.css:1578-1584), any other block one
+    /// block gap away (`--chat-block-gap`, 14 px at the default size; text.css:1548-1575,
+    /// base.css:311 and 322).
+    static let userMediaToTextSpacing: CGFloat = 8
+    static let userBlockSpacing: CGFloat = 14
+    /// Several images become square tiles, three to a row (two for two or four images), 4 pt apart,
+    /// at most 128 pt: `--chat-user-image-grid-size` in ui/src/styles/chat/message-layout.css:563-603.
+    static let userImageTileMax: CGFloat = 128
+    static let userImageTileGap: CGFloat = 4
+    /// A user message (bubble and attachments) that has not been confirmed yet.
+    static let pendingOpacity: Double = 0.5
+    #else
+    /// Web `--radius-md` (ui/src/styles/base.css:366) on the user bubble.
+    static let bubbleCorner: CGFloat = 10
+    #endif
+    static let onboardingBubbleCorner: CGFloat = 18
 
-    var body: some View {
-        HStack(spacing: 8) {
-            Rectangle()
-                .fill(OpenClawChatTheme.divider)
-                .frame(height: 1)
-            HStack(spacing: 5) {
-                Image(systemName: self.systemImage)
-                    .font(.system(size: 11, weight: .medium))
-                    .accessibilityHidden(true)
-                Text(self.label.uppercased())
-                    .font(OpenClawChatTypography.captionSemiBold)
-                    .tracking(0.5)
-                if let metric {
-                    Text("·")
-                        .font(OpenClawChatTypography.caption)
-                        .accessibilityHidden(true)
-                    Text(metric)
-                        .font(OpenClawChatTypography.caption)
-                        .monospacedDigit()
-                }
-            }
-            .lineLimit(1)
-            .minimumScaleFactor(0.75)
-            // The rules take what the label leaves; equal thirds truncated any label longer than a third of the row.
-            .layoutPriority(1)
-            Rectangle()
-                .fill(OpenClawChatTheme.divider)
-                .frame(height: 1)
-        }
+    /// The images past the four a message shows.
+    static func imagesNotShown(_ count: Int) -> String {
+        count == 1 ? String(localized: "1 more image not shown")
+            : String(format: String(localized: "%lld more images not shown"), Int64(count))
     }
 }
 
-private enum ChatUIConstants {
-    /// Web `--radius-md` (ui/src/styles/base.css:366) on the user bubble.
-    static let bubbleCorner: CGFloat = 10
-    static let onboardingBubbleCorner: CGFloat = 18
+#if os(iOS)
+extension ChatColumnLayout {
+    /// A gallery tile: three tiles and their gaps fit the user bubble's measure, at most 128 pt.
+    var userImageTileSide: CGFloat {
+        let gap = ChatUIConstants.userImageTileGap
+        return min(ChatUIConstants.userImageTileMax, ((self.bubbleAndMediaMaxWidth - 2 * gap) / 3).rounded(.down))
+    }
 }
+
+/// What the transcript attaches to a user bubble: its long-press menu, its reactions pill, and
+/// where it is on its way to the Gateway.
+struct ChatUserBubbleAccessories {
+    let menu: () -> AnyView
+    let reactions: () -> AnyView
+    var send: ChatUserSendPresentation?
+}
+
+/// The user bubble's long-press menu and reactions pill. The pill hangs on the bubble's lower-left
+/// corner: it reaches `reactionOverlap` into the bubble and grows outward without moving the next message. Beside a
+/// bubble as
+/// wide as the column it grows inward instead. The menu lifts the bubble and its pill as one shape,
+/// like Messages lifts a bubble with its tapback: never the entire row.
+private struct ChatUserBubbleDecorations<Bubble: View>: View {
+    @Environment(\.openClawChatColumn) private var column
+    let bubble: Bubble
+    let shape: ChatBubbleShape
+    let accessories: ChatUserBubbleAccessories
+    @State private var bubbleWidth: CGFloat = 0
+    @State private var pill: CGSize = .zero
+
+    var body: some View {
+        let reach = self.pill == .zero ? 0
+            : min(self.pill.width - ChatUIConstants.reactionOverlap, max(0, self.column.columnWidth - self.bubbleWidth))
+        let drop = self.pill == .zero ? 0 : ChatUIConstants.userFooterSpacing
+        // Pad the bubble's frame out to the pill so the menu's preview holds all of it, then take the
+        // padding back so the layout stays the bubble's alone.
+        self.bubble
+            .onGeometryChange(for: CGFloat.self, of: \.size.width) { self.bubbleWidth = $0 }
+            .padding(.leading, reach)
+            .padding(.bottom, drop)
+            .overlay(alignment: .bottomLeading) {
+                self.accessories.reactions()
+                    .environment(\.openClawReactionPillOnUserBubble, true)
+                    .fixedSize()
+                    .onGeometryChange(for: CGSize.self, of: \.size) { self.pill = $0 }
+            }
+            .contentShape(
+                .contextMenuPreview,
+                ChatBubbleWithReactionsShape(bubble: self.shape, reach: reach, drop: drop, pill: self.pill))
+            .chatActionContextMenu { self.accessories.menu() }
+            .padding(.leading, -reach)
+            .padding(.bottom, -drop)
+    }
+}
+
+private struct ChatBubbleWithReactionsShape: Shape {
+    let bubble: ChatBubbleShape
+    let reach: CGFloat
+    let drop: CGFloat
+    let pill: CGSize
+
+    func path(in rect: CGRect) -> Path {
+        let bubble = self.bubble.path(in: CGRect(
+            x: rect.minX + self.reach,
+            y: rect.minY,
+            width: rect.width - self.reach,
+            height: rect.height - self.drop))
+        guard self.pill != .zero else { return bubble }
+        return bubble.union(Capsule().path(in: CGRect(
+            x: rect.minX,
+            y: rect.maxY - self.pill.height,
+            width: self.pill.width,
+            height: self.pill.height)))
+    }
+}
+#endif
 
 struct ChatAgentAvatar: View {
     let text: String?
@@ -393,6 +459,22 @@ struct ChatMessageBubble: View, @MainActor Equatable {
     let onToggleUserMessageExpanded: @MainActor () -> Void
     let inlineWidgetScope: ChatInlineWidgetScope
     let mediaPlaybackAllowed: @MainActor @Sendable () -> Bool
+    #if os(iOS)
+    /// Compared by send phase only: SwiftUI diffs this Equatable view with `==` even without the
+    /// render gate, so a phase left out of it would keep a confirmed message dimmed.
+    var userBubbleAccessories: ChatUserBubbleAccessories?
+    @Environment(\.chatInlineVideos) private var inlineVideos
+    @Environment(\.locale) private var locale
+    @Environment(\.timeZone) private var timeZone
+
+    private var clock: ChatMessageClock? {
+        guard self.isUser || self.message.role.lowercased() == "assistant" else { return nil }
+        return ChatMessageClock(
+            timestamp: self.isUser ? self.message.timestamp : self.metadata?.timestamp,
+            locale: self.locale,
+            timeZone: self.timeZone)
+    }
+    #endif
 
     var canUseIOSRenderGate: Bool {
         guard self.message.role.lowercased() == "assistant" else { return false }
@@ -407,6 +489,9 @@ struct ChatMessageBubble: View, @MainActor Equatable {
         // The iOS gate excludes media rows, so `mediaPlaybackAllowed` cannot affect its subtree.
         // Comparing closure identity would defeat the gate because ChatView rebuilds them each pass.
         guard self.styleValue(lhs.style) == self.styleValue(rhs.style) else { return false }
+        #if os(iOS)
+        guard lhs.userBubbleAccessories?.send?.phase == rhs.userBubbleAccessories?.send?.phase else { return false }
+        #endif
         return lhs.message == rhs.message &&
             lhs.liveToolCalls == rhs.liveToolCalls &&
             lhs.metadata == rhs.metadata &&
@@ -434,8 +519,19 @@ struct ChatMessageBubble: View, @MainActor Equatable {
             self.messageBody
                 .contentShape(.accessibility, Rectangle())
                 .accessibilityElement(children: .contain)
+                // The speaker, as agent rows name theirs.
+                .accessibilityLabel(Text("You"))
                 .accessibilityIdentifier("chat-user-message-body")
-                .frame(maxWidth: self.column.userBubbleMaxWidth, alignment: .trailing)
+                #if os(iOS)
+                .accessibilityValue(Text(verbatim: self.clock?.spoken ?? ""))
+                .accessibilityValue(
+                    Text("Sending") + Text(verbatim: self.clock.map { ", " + $0.spoken } ?? ""),
+                    isEnabled: self.userBubbleAccessories?.send?.phase == .sending)
+                #endif
+                #if !os(iOS)
+                // On iOS the text bubble and attachments are measured separately.
+                .frame(maxWidth: self.column.bubbleAndMediaMaxWidth, alignment: .trailing)
+                #endif
                 .frame(maxWidth: .infinity, alignment: .trailing)
         } else {
             // Replies span the reading column; only the avatar gutter (wide panes) narrows them.
@@ -456,6 +552,9 @@ struct ChatMessageBubble: View, @MainActor Equatable {
                 }
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("chat-assistant-message-body")
+                #if os(iOS)
+                .accessibilityValue(Text(verbatim: self.clock?.spoken ?? ""))
+                #endif
                 .assistantSpeakerLabel(
                     avatarHidden: !self.showsAssistantAvatar && !self.isRunContent)
             }
@@ -485,7 +584,7 @@ enum ChatUserMessageDisclosurePolicy {
             lineCount += 1
         }
         guard end < text.endIndex else { return nil }
-        return String(text[..<end]).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
+        return String(text[..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func stringIndex(atUTF16Offset offset: Int, in text: String) -> String.Index {
@@ -501,6 +600,45 @@ enum ChatUserMessageDisclosurePolicy {
     }
 }
 
+/// Resolve the last rendered text line, including text nested in a Markdown quote.
+private struct ChatPreviewTailFade: ViewModifier {
+    let isCollapsed: Bool
+
+    func body(content: Content) -> some View {
+        if self.isCollapsed {
+            content.overlayPreferenceValue(Text.LayoutKey.self) { layouts in
+                if let tail = layouts.last, let line = tail.layout.last {
+                    GeometryReader { proxy in
+                        let origin = proxy[tail.origin]
+                        Canvas { context, _ in
+                            context.translateBy(x: origin.x, y: origin.y)
+                            let bounds = line.typographicBounds.rect
+                            let rtl = line.first?.layoutDirection == .rightToLeft
+                            let end = rtl ? bounds.minX : bounds.maxX
+                            let length = min(bounds.width / 2, bounds.height * 3)
+                            // Erase ink, not the quote bar or the space between glyphs.
+                            context.clipToLayer { ink in
+                                ink.addFilter(.alphaThreshold(min: 0.001, color: .white))
+                                ink.draw(line)
+                            }
+                            context.fill(Path(bounds), with: .linearGradient(
+                                Gradient(colors: [.clear, .white]),
+                                startPoint: CGPoint(x: rtl ? end + length : end - length, y: bounds.midY),
+                                endPoint: CGPoint(x: end, y: bounds.midY)))
+                        }
+                    }
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                    .blendMode(.destinationOut)
+                }
+            }
+            .compositingGroup()
+        } else {
+            content
+        }
+    }
+}
+
 extension ChatMessageBubble {
     @ViewBuilder
     private var messageBody: some View {
@@ -512,19 +650,30 @@ extension ChatMessageBubble {
         VStack(alignment: .leading, spacing: 6) {
             if shouldRenderBubble {
                 if self.isUser {
-                    self.messageContent(text: text, textColor: textColor)
-                        .padding(self.bubblePadding)
-                        .background { ChatUserBubbleSurface() }
-                        .clipShape(self.bubbleShape)
-                        .overlay {
-                            if self.style == .onboarding {
-                                // A mitred join keeps the tail's point sharp inside the bubble's bounds.
-                                self.bubbleShape.strokeBorder(
-                                    Color.white.opacity(0.12),
-                                    style: StrokeStyle(lineWidth: 0.5, lineJoin: .miter))
-                            }
+                    #if os(iOS)
+                    let bubbleText = self.userBubbleText(text)
+                    let hasBubble = !bubbleText.isEmpty
+                    let send = self.userBubbleAccessories?.send
+                    VStack(alignment: .trailing, spacing: ChatUIConstants.userFooterSpacing) {
+                        if !self.visibleInlineAttachments.isEmpty {
+                            self.userAttachments(hasBubble: hasBubble)
+                                .modifier(ChatClockAnchor(clock: hasBubble ? nil : self.clock, isMediaOnly: true))
+                                .padding(.bottom, hasBubble ? self.userAttachmentsToTextSpacing : 0)
                         }
-                        .padding(.trailing, self.style == .onboarding ? 8 : 0)
+                        if hasBubble {
+                            self.userBubble(text: bubbleText, textColor: textColor)
+                                .background(ChatReadingBubbleMarker(textInset: self.bubblePadding))
+                                .frame(maxWidth: self.column.bubbleAndMediaMaxWidth, alignment: .trailing)
+                                .opacity(send?.isPending == true ? ChatUIConstants.pendingOpacity : 1)
+                        }
+                        if let status = ChatUserMessageStatus(send: send) {
+                            status
+                                .padding(.trailing, self.style == .onboarding ? 8 : 0)
+                        }
+                    }
+                    #else
+                    self.userBubble(text: text, textColor: textColor)
+                    #endif
                 } else {
                     // Assistant replies are plain text on the column, like the web chat.
                     self.messageContent(text: text, textColor: textColor)
@@ -533,13 +682,40 @@ extension ChatMessageBubble {
             }
 
             if !toolActivityItems.isEmpty {
-                ChatToolActivityList(items: toolActivityItems, isNestedToolActivity: self.message.isNestedToolActivity)
+                ChatToolActivityList(items: toolActivityItems)
             }
 
             if !shouldRenderBubble {
                 self.footer
             }
         }
+    }
+
+    private func userBubble(text: String, textColor: Color) -> some View {
+        let bubble = self.messageContent(text: text, textColor: textColor)
+            .padding(self.bubblePadding)
+            .background { ChatUserBubbleSurface() }
+            .clipShape(self.bubbleShape)
+            .overlay {
+                if self.style == .onboarding {
+                    // A mitred join keeps the tail's point sharp inside the bubble's bounds.
+                    self.bubbleShape.strokeBorder(
+                        Color.white.opacity(0.12),
+                        style: StrokeStyle(lineWidth: 0.5, lineJoin: .miter))
+                }
+            }
+        #if os(iOS)
+        return Group {
+            if let accessories = self.userBubbleAccessories {
+                ChatUserBubbleDecorations(bubble: bubble, shape: self.bubbleShape, accessories: accessories)
+            } else {
+                bubble
+            }
+        }
+        .padding(.trailing, self.style == .onboarding ? 8 : 0)
+        #else
+        return bubble.padding(.trailing, self.style == .onboarding ? 8 : 0)
+        #endif
     }
 
     private var textColor: Color {
@@ -551,9 +727,19 @@ extension ChatMessageBubble {
     }
 
     private func messageContent(text: String, textColor: Color) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        #if os(iOS)
+        // A user's attachments sit above the bubble; the bubble keeps only the text.
+        let attachments = self.isUser ? [] : self.visibleInlineAttachments
+        let omittedImageAttachmentCount = self.isUser ? 0 : self.omittedImageAttachmentCount
+        #else
+        let attachments = self.visibleInlineAttachments
+        let omittedImageAttachmentCount = self.omittedImageAttachmentCount
+        #endif
+        return VStack(alignment: .leading, spacing: 10) {
             if self.isUser {
-                self.userMessageText(text: text, textColor: textColor)
+                VStack(alignment: .leading, spacing: 4) {
+                    self.userMessageText(text: text, textColor: textColor)
+                }
             } else {
                 ChatAssistantTextBody(
                     text: text,
@@ -566,24 +752,26 @@ extension ChatMessageBubble {
                 ChatSourcePreviewsView(sources: self.sourcePreviews)
             }
 
+            #if os(macOS)
             if let previewURL = self.linkPreviewURL {
                 ChatLinkPreview(url: previewURL)
             }
+            #endif
 
-            if !self.visibleInlineAttachments.isEmpty {
-                ForEach(self.visibleInlineAttachments.indices, id: \.self) { idx in
+            if !attachments.isEmpty {
+                let imageGallery = ChatImageViewerItem.gallery(in: attachments)
+                ForEach(attachments.indices, id: \.self) { idx in
                     AttachmentRow(
-                        att: self.visibleInlineAttachments[idx],
+                        att: attachments[idx],
+                        imageGallery: imageGallery,
                         isUser: self.isUser,
                         textColor: textColor,
                         playbackAllowed: self.mediaPlaybackAllowed)
                 }
             }
 
-            if self.omittedImageAttachmentCount > 0 {
-                Text(String(
-                    format: String(localized: "Additional images hidden: %lld"),
-                    Int64(self.omittedImageAttachmentCount)))
+            if omittedImageAttachmentCount > 0 {
+                Text(ChatUIConstants.imagesNotShown(omittedImageAttachmentCount))
                     .font(OpenClawChatTypography.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -594,30 +782,30 @@ extension ChatMessageBubble {
                         .id(self.inlineWidgetScope)
             }
 
+            #if !os(iOS)
             self.footer
+            #endif
         }
         .textSelection(.enabled)
         .foregroundStyle(textColor)
+        #if os(iOS)
+        .modifier(ChatClockAnchor(clock: self.clock, isMediaOnly: text.isEmpty && !attachments.isEmpty))
+        #endif
     }
 
     @ViewBuilder
     private func userMessageText(text: String, textColor: Color) -> some View {
         let preview = ChatUserMessageDisclosurePolicy.collapsedPreview(text)
 
-        if let preview, !self.userMessageExpanded {
-            Text(preview)
-                .font(OpenClawChatTypography.body)
-                .foregroundStyle(textColor)
-                .fixedSize(horizontal: false, vertical: true)
-        } else {
-            ChatMarkdownRenderer(
-                text: text,
-                context: .user,
-                variant: self.markdownVariant,
-                typography: .response,
-                textColor: textColor)
-                .chatMarkdownFileLinks()
-        }
+        // The web clamps the rendered Markdown, so a collapsed prompt keeps its quotes and formatting.
+        ChatMarkdownRenderer(
+            text: (self.userMessageExpanded ? nil : preview) ?? text,
+            context: .user,
+            variant: self.markdownVariant,
+            typography: .response,
+            textColor: textColor)
+            .chatMarkdownFileLinks()
+            .modifier(ChatPreviewTailFade(isCollapsed: preview != nil && !self.userMessageExpanded))
 
         if preview != nil {
             Button {
@@ -625,17 +813,18 @@ extension ChatMessageBubble {
                     self.onToggleUserMessageExpanded()
                 }
             } label: {
-                Text(String(localized: self.userMessageExpanded ? "Show less" : "Show more"))
-                    .font(OpenClawChatTypography.caption)
-                    .foregroundStyle(textColor.opacity(self.isDesktopLayout ? 1 : 0.78))
-                    .padding(.horizontal, 10)
-                    .frame(minHeight: 30)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.white.opacity(self.isDesktopLayout ? 0.04 : 0.14)))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(Color.white.opacity(0.12), lineWidth: 0.5))
+                // Grow the tap target, not the visible gap or the bubble's bottom inset.
+                HStack(spacing: 2) {
+                    Text(String(localized: self.userMessageExpanded ? "Show less" : "Show more"))
+                    Image(systemName: self.userMessageExpanded ? "chevron.up" : "chevron.down")
+                        .imageScale(.small)
+                        .fontWeight(.semibold)
+                }
+                .font(OpenClawChatTypography.footnote)
+                .foregroundStyle(.secondary)
+                .padding(EdgeInsets(top: 18, leading: 0, bottom: 10, trailing: 0))
+                .contentShape(Rectangle())
+                .padding(EdgeInsets(top: -18, leading: 0, bottom: -10, trailing: 0))
             }
             .buttonStyle(.plain)
             .accessibilityValue(String(
@@ -646,18 +835,23 @@ extension ChatMessageBubble {
 
     @ViewBuilder
     private var footer: some View {
+        #if os(iOS)
+        if self.isUser {
+            ChatUserMessageStatus(send: self.userBubbleAccessories?.send)
+        }
+        #else
         let usage = self.usagePresentation
         if self.metadata != nil || usage != nil {
             ChatMessageFooter(metadata: self.metadata, usage: usage)
         }
+        #endif
     }
 
     private var shouldRenderBubble: Bool {
         guard !self.message.isToolResult else { return false }
         return !self.primaryText.isEmpty ||
             !self.inlineAttachments.isEmpty ||
-            !self.inlineWidgets.isEmpty ||
-            self.linkPreviewURL != nil
+            !self.inlineWidgets.isEmpty
     }
 
     private var toolActivityItems: [ChatToolActivityItem] {
@@ -665,6 +859,7 @@ extension ChatMessageBubble {
         return ChatToolActivity.items(message: self.message, liveTools: self.liveToolCalls)
     }
 
+    #if os(macOS)
     private var linkPreviewURL: URL? {
         let role = self.message.role.lowercased()
         guard role == "user" || role == "assistant",
@@ -673,6 +868,7 @@ extension ChatMessageBubble {
         else { return nil }
         return url
     }
+    #endif
 
     private var primaryText: String {
         ChatMessageVisibleText.displayText(
@@ -733,19 +929,247 @@ extension ChatMessageBubble {
     }
 }
 
+#if os(iOS)
+/// A user's attachments, above the bubble and outside it, aligned to the trailing edge as in the
+/// Control UI at phone width: one image at its own preview size, several as square tiles, other
+/// files as cards.
+extension ChatMessageBubble {
+    /// The bubble's text. An attachment-only send from an older build carries its wire fallback,
+    /// which the person did not write, so it draws no bubble.
+    fileprivate func userBubbleText(_ text: String) -> String {
+        OpenClawChatViewModel.isLegacyAttachmentOnlyText(text, in: self.message) ? "" : text
+    }
+
+    fileprivate var userAttachmentsToTextSpacing: CGFloat {
+        let others = self.visibleInlineAttachments.filter { !AttachmentRow.rendersImage($0) }
+        let lastIsCard = others.indices.last.map { index in
+            ChatInlineVideoSource(others[index], local: self.sentVideo(in: others, at: index)) == nil
+        } ?? false
+        let last = lastIsCard ? ChatUIConstants.userBlockSpacing : ChatUIConstants.userMediaToTextSpacing
+        return last - ChatUIConstants.userFooterSpacing
+    }
+
+    /// Each part lifts on its own with the message's menu: a press on the attachments lifts them, a
+    /// press on the bubble lifts the bubble. Without a bubble, the reactions pill hangs on the
+    /// attachments instead.
+    @ViewBuilder
+    fileprivate func userAttachments(hasBubble: Bool) -> some View {
+        let shape = ChatBubbleShape(cornerRadius: ChatUIConstants.bubbleCorner)
+        let group = self.userAttachmentGroup
+        if let accessories = self.userBubbleAccessories {
+            if hasBubble {
+                group
+                    .contentShape(.contextMenuPreview, shape)
+                    .chatActionContextMenu { accessories.menu() }
+            } else {
+                ChatUserBubbleDecorations(bubble: group, shape: shape, accessories: accessories)
+            }
+        } else {
+            group
+        }
+    }
+
+    /// A photo still preparing in a message on its way out has no bytes yet; it takes a photo's place.
+    private func rendersUserImage(_ att: OpenClawChatMessageContent) -> Bool {
+        AttachmentRow.rendersImage(att) || self.userBubbleAccessories?.send != nil && att.mediaKind == .image
+    }
+
+    private var userAttachmentGroup: some View {
+        let attachments = self.visibleInlineAttachments
+        let images = attachments.filter(self.rendersUserImage)
+        let others = attachments.filter { !self.rendersUserImage($0) }
+        return VStack(alignment: .trailing, spacing: ChatUIConstants.userBlockSpacing) {
+            if images.count == 1 {
+                self.userAttachmentRow(images[0])
+            } else if images.count > 1 {
+                self.userImageTiles(images)
+            }
+            ForEach(others.indices, id: \.self) { index in
+                let att = others[index]
+                let local = self.sentVideo(in: others, at: index)
+                let isVideo = ChatInlineVideoSource(att, local: local) != nil
+                self.userAttachmentRow(att, localVideo: local)
+                    .frame(maxWidth: isVideo ? nil : self.column.bubbleAndMediaMaxWidth, alignment: .trailing)
+            }
+            if self.omittedImageAttachmentCount > 0 {
+                Text(ChatUIConstants.imagesNotShown(self.omittedImageAttachmentCount))
+                    .font(OpenClawChatTypography.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func sentVideo(in attachments: [OpenClawChatMessageContent], at index: Int) -> OpenClawPendingAttachment? {
+        guard attachments[index].mediaKind == .video else { return nil }
+        return self.inlineVideos?.attachment(
+            messageKey: self.message.idempotencyKey,
+            index: attachments[..<index].filter { $0.mediaKind == .video }.count)
+    }
+
+    /// Three tiles to a row, two for two or four images; the last row keeps to the trailing edge.
+    /// The rows fit the text bubble's measure, as every attachment above the bubble does.
+    private func userImageTiles(_ images: [OpenClawChatMessageContent]) -> some View {
+        let gap = ChatUIConstants.userImageTileGap
+        let columns = images.count == 2 || images.count == 4 ? 2 : 3
+        let side = self.column.userImageTileSide
+        let rows = stride(from: 0, to: images.count, by: columns).map {
+            Array(images[$0..<min($0 + columns, images.count)])
+        }
+        return VStack(alignment: .trailing, spacing: gap) {
+            ForEach(rows.indices, id: \.self) { row in
+                HStack(spacing: gap) {
+                    ForEach(rows[row].indices, id: \.self) { index in
+                        self.userAttachmentRow(rows[row][index], tileSide: side)
+                    }
+                }
+            }
+        }
+    }
+
+    private func userAttachmentRow(
+        _ att: OpenClawChatMessageContent, tileSide: CGFloat? = nil, localVideo: OpenClawPendingAttachment? = nil)
+        -> some View
+    {
+        let send = self.userBubbleAccessories?.send
+        let isImage = self.rendersUserImage(att) || ChatInlineVideoSource(att, local: localVideo) != nil
+        return AttachmentRow(
+            att: att,
+            imageGallery: ChatImageViewerItem.gallery(in: self.visibleInlineAttachments, sentPhotos: true),
+            isUser: true,
+            textColor: self.textColor,
+            playbackAllowed: self.mediaPlaybackAllowed,
+            imageTileSide: tileSide,
+            messageAttachments: self.visibleInlineAttachments,
+            localVideo: localVideo,
+            isSending: send != nil)
+            .opacity(send?.isPending == true ? ChatUIConstants.pendingOpacity : 1)
+            .overlay(alignment: isImage ? .center : .trailing) {
+                if let send {
+                    ChatAttachmentSendOverlay(send: send)
+                        .padding(.trailing, isImage ? 0 : 4)
+                }
+            }
+    }
+}
+#endif
+
 /// The media leaf: it reads resolver readiness from the Gateway resources, so a health flip
 /// updates attachments and not the row that holds them.
 private struct AttachmentRow: View {
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
+    @Environment(\.openClawChatColumn) private var column
     @Environment(\.openClawChatGateway) private var gateway
 
     let att: OpenClawChatMessageContent
+    let imageGallery: [ChatImageViewerItem]
     let isUser: Bool
     let textColor: Color
     let playbackAllowed: @MainActor @Sendable () -> Bool
+    /// A square gallery tile for an image, when a user message carries several.
+    var imageTileSide: CGFloat?
+    /// A user message's attachments, so the viewer can load any of its sent photos, not only this one.
+    var messageAttachments: [OpenClawChatMessageContent] = []
+    #if os(iOS)
+    var localVideo: OpenClawPendingAttachment?
+    /// The message is on its way out, so a photo without bytes is still preparing.
+    var isSending = false
+    #endif
+
+    /// Whether a user's attachment draws as an image (a managed artifact, or a sent photo) rather
+    /// than a card.
+    static func rendersImage(_ att: OpenClawChatMessageContent) -> Bool {
+        #if os(iOS)
+        if ChatUserImageSource.isRenderable(att) { return true }
+        #endif
+        return att.mediaKind == .image && self.fetchableArtifactId(att) != nil
+    }
 
     var body: some View {
-        if let artifactId = self.fetchableArtifactId, let kind = self.att.mediaKind {
+        #if os(iOS)
+        if self.att.mediaKind == .video {
+            if let video = ChatInlineVideoSource(att, local: localVideo) {
+                ChatInlineVideo(
+                    source: video,
+                    title: self.attachmentLabel,
+                    maxWidth: self.column.bubbleAndMediaMaxWidth,
+                    resolverReady: video.local != nil || self.gateway?.isResolverReady() == true,
+                    playbackAllowed: self.playbackAllowed,
+                    load: {
+                        guard let id = video.artifactID else { return nil }
+                        return try await self.loadMedia(id, .video, self.att.playback ?? .transcode)
+                    }, fallback: { self.videoFileCard })
+                    .id(video.local?.id.uuidString ?? video.artifactID)
+            } else {
+                self.videoFileCard
+            }
+        } else if self.isUser, self.isSending, self.att.mediaKind == .image,
+                  !ChatUserImageSource.isRenderable(self.att)
+        {
+            // Still preparing: the photo's box, still, until the bytes arrive.
+            ChatMediaImageAttachment(
+                artifactId: "pending:\(self.att.fileName ?? "")",
+                label: String(localized: "Photo"),
+                width: nil,
+                height: nil,
+                tileSide: self.imageTileSide,
+                maxWidth: self.column.bubbleAndMediaMaxWidth,
+                loadingLabel: String(localized: "Loading photo"),
+                resolverReady: false,
+                load: { _ in nil })
+        } else if self.isUser, let image = ChatUserImageSource(att) {
+            ChatMediaImageAttachment(
+                artifactId: image.loadID,
+                // A sent photo's name is the picker's ("photo-1A2B.jpg"), not something to read aloud.
+                label: self.nonEmptyAlt ?? String(localized: "Photo"),
+                width: self.att.width,
+                height: self.att.height,
+                tileSide: self.imageTileSide,
+                maxWidth: self.column.bubbleAndMediaMaxWidth,
+                memoryAlias: image.memoryAlias,
+                loadingLabel: String(localized: "Loading photo"),
+                resolverReady: image.local != nil || self.gateway?.isResolverReady() == true,
+                gallery: self.imageGallery,
+                load: { id in
+                    if let local = image.local { return .data(local) }
+                    return try await self.loadMedia(id, .image, nil)
+                },
+                viewerLoad: { [messageAttachments] id in
+                    // The viewer pages through the message's photos with this one loader. The bytes
+                    // the phone holds are the original; otherwise it asks for the upload as is
+                    // (`.native`), not the transcript's thumbnail.
+                    let page = messageAttachments.first { ChatUserImageSource.pageID($0) == id }
+                    let local = page.flatMap(ChatUserImageSource.init)?
+                        .local ?? (id == image.loadID ? image.local : nil)
+                    if let local { return .data(local) }
+                    return try await self.loadMedia(id, .image, .native)
+                })
+        } else {
+            self.gatewayMedia
+        }
+        #else
+        self.gatewayMedia
+        #endif
+    }
+
+    #if os(iOS)
+    @ViewBuilder private var videoFileCard: some View {
+        if let id = Self.fetchableArtifactId(att) {
+            ChatFileAttachment(
+                artifactId: id,
+                label: self.attachmentLabel,
+                fileName: self.att.fileName ?? self.attachmentLabel,
+                mimeType: self.att.mimeType ?? "",
+                resolverReady: self.gateway?.isResolverReady() == true,
+                load: { try await self.loadMedia($0, .file, nil) })
+        } else {
+            self.fallbackRow
+        }
+    }
+    #endif
+
+    @ViewBuilder
+    private var gatewayMedia: some View {
+        if let artifactId = Self.fetchableArtifactId(self.att), let kind = self.att.mediaKind {
             let resolverReady = self.gateway?.isResolverReady() == true
             switch kind {
             case .file:
@@ -753,13 +1177,19 @@ private struct AttachmentRow: View {
                     artifactId: artifactId,
                     label: self.attachmentLabel,
                     fileName: self.att.fileName ?? self.attachmentLabel,
+                    mimeType: self.att.mimeType ?? "",
                     resolverReady: resolverReady,
                     load: { try await self.loadMedia($0, .file, nil) })
             case .image:
                 ChatMediaImageAttachment(
                     artifactId: artifactId,
                     label: self.attachmentLabel,
+                    width: self.att.width,
+                    height: self.att.height,
+                    tileSide: self.imageTileSide,
+                    maxWidth: self.column.bubbleAndMediaMaxWidth,
                     resolverReady: resolverReady,
+                    gallery: self.imageGallery,
                     load: { try await self.loadMedia($0, .image, nil) })
             case .audio:
                 // A busy Gateway inspector can omit playback metadata. Let its
@@ -772,6 +1202,9 @@ private struct AttachmentRow: View {
                     playbackAllowed: self.playbackAllowed,
                     load: { try await self.loadMedia($0, .audio, self.att.playback ?? .transcode) })
             case .video:
+                #if os(iOS)
+                self.videoFileCard
+                #else
                 ChatMediaVideoAttachment(
                     artifactId: artifactId,
                     label: self.attachmentLabel,
@@ -780,6 +1213,7 @@ private struct AttachmentRow: View {
                     resolverReady: resolverReady,
                     playbackAllowed: self.playbackAllowed,
                     load: { try await self.loadMedia($0, .video, self.att.playback ?? .transcode) })
+                #endif
             }
         } else {
             self.fallbackRow
@@ -797,9 +1231,10 @@ private struct AttachmentRow: View {
 
     private var fallbackRow: some View {
         HStack(spacing: 8) {
-            Image(systemName: OpenClawChatPickerAttachmentMetadata.fileIcon(
+            OpenClawChatPickerAttachmentMetadata.glyph(
                 mimeType: self.att.mimeType ?? "",
-                fileName: self.att.fileName ?? ""))
+                fileName: self.att.fileName ?? "")
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(self.isAudio && self.att.durationSeconds != nil && self.att.url == nil
                     ? String(localized: "Voice note") : self.attachmentLabel)
@@ -821,20 +1256,35 @@ private struct AttachmentRow: View {
             Spacer()
         }
         .padding(10)
-        .background(self.isUser
-            ? Color.white.opacity(self.isDesktopLayout ? 0.04 : 0.2)
-            : Color.black.opacity(0.04))
+        .background(self.fallbackRowSurface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        // Name and size read as one card.
+        .accessibilityElement(children: .combine)
+    }
+
+    private var fallbackRowSurface: Color {
+        #if os(iOS)
+        // A user's cards sit on the canvas above the bubble, in the image placeholder's ink.
+        if self.isUser { return OpenClawChatTheme.assistantText.opacity(0.07) }
+        #endif
+        return self.isUser
+            ? Color.white.opacity(self.isDesktopLayout ? 0.04 : 0.2)
+            : Color.black.opacity(0.04)
     }
 
     private var isAudio: Bool {
         self.att.mediaKind == .audio
     }
 
-    private var fetchableArtifactId: String? {
-        guard let kind = self.att.mediaKind else { return nil }
-        let value = self.att.artifactId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    private static func fetchableArtifactId(_ att: OpenClawChatMessageContent) -> String? {
+        guard let kind = att.mediaKind else { return nil }
+        let value = att.artifactId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return !value.isEmpty && kind.acceptsManagedArtifactID(value) ? value : nil
+    }
+
+    private var nonEmptyAlt: String? {
+        let alt = self.att.alt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return alt.isEmpty ? nil : alt
     }
 
     private var attachmentLabel: String {
@@ -842,65 +1292,6 @@ private struct AttachmentRow: View {
         return values.lazy
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty } ?? String(localized: "Attachment")
-    }
-}
-
-@MainActor
-struct ChatTypingIndicatorBubble: View {
-    @Environment(\.openClawAssistantRunContent) private var isRunContent
-    let showsAssistantAvatar: Bool
-    let runIdentity: String
-    let outputTokens: Int?
-    var status: String?
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 8) {
-            if self.showsAssistantAvatar, !self.isRunContent {
-                ChatAssistantAvatar(size: 28)
-            }
-
-            HStack(spacing: 9) {
-                ChatWorkingIndicatorContent(
-                    runIdentity: self.runIdentity,
-                    outputTokens: self.outputTokens,
-                    status: self.status)
-                    .id(self.runIdentity)
-            }
-            .padding(.vertical, 5)
-            .fixedSize(horizontal: true, vertical: false)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .focusable(false)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(
-            Text(verbatim: self.status ?? String(localized: "Writing"))
-                .font(OpenClawChatTypography.caption))
-    }
-}
-
-private struct ChatWorkingIndicatorContent: View {
-    @State private var startedAt: Date
-    let seed: String
-    let outputTokens: Int?
-
-    let status: String?
-
-    init(runIdentity: String, outputTokens: Int?, status: String? = nil) {
-        _startedAt = State(initialValue: Date())
-        self.seed = runIdentity
-        self.outputTokens = outputTokens
-        self.status = status
-    }
-
-    var body: some View {
-        HStack(spacing: 9) {
-            ChatWorkingClawView(seed: self.seed)
-            ChatWorkingStatusText(
-                startedAt: self.startedAt,
-                seed: self.seed,
-                outputTokens: self.outputTokens,
-                status: self.status)
-        }
     }
 }
 
@@ -935,6 +1326,13 @@ struct ChatSpeechStatusChip: View {
 /// Status footer for a user bubble awaiting durable delivery or confirmation.
 @MainActor
 struct ChatOutboxStatusLabel: View {
+    // iOS shows delivery issues under the user message instead.
+    #if os(iOS)
+    static let isShownUnderMessages = false
+    #else
+    static let isShownUnderMessages = true
+    #endif
+
     let state: OpenClawChatOutboxMessageState
     var queueMode: OpenClawChatQueueMode?
 
@@ -986,15 +1384,6 @@ struct ChatOutboxStatusLabel: View {
         case .failed:
             ("Not sent", "exclamationmark.circle", "Not sent, touch and hold to retry or delete")
         }
-    }
-}
-
-extension ChatTypingIndicatorBubble: @MainActor Equatable {
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.showsAssistantAvatar == rhs.showsAssistantAvatar &&
-            lhs.runIdentity == rhs.runIdentity &&
-            lhs.outputTokens == rhs.outputTokens &&
-            lhs.status == rhs.status
     }
 }
 

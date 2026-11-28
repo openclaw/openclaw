@@ -174,13 +174,18 @@ export class DraftRepositoryStateOwner {
 
   get currentCheckoutUnavailableReason(): string | undefined {
     const reason = this.currentCheckoutUnavailable;
+    if (reason === "unavailable") {
+      return t(
+        this.checkoutOptions === "error"
+          ? "newSession.checkoutCheckUnavailable"
+          : "newSession.checkoutProjectUnavailable",
+      );
+    }
     return reason === "checking"
       ? t("newSession.checkingPlace")
       : reason === "worktree"
         ? t("newSession.checkoutRequiresWorktree")
-        : reason === "unavailable"
-          ? t("newSession.checkoutCheckUnavailable")
-          : undefined;
+        : undefined;
   }
 
   synchronizeProjectCheckout() {

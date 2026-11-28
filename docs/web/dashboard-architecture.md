@@ -505,6 +505,10 @@ order. Agent vocabulary:
   (single-widget tab)
 - `after: <widgetName>` optional ordering anchor. Omitted = append
 - User drags/resizes freely. The same order+size model round-trips.
+- With a widget focused, use **Alt + Arrow** to move it one place, or an arrow
+  alone to focus its neighbor. Keyboard moves and menu size changes appear while
+  they save. Auto height uses the widget’s reported content height when available.
+  If the save fails, the board shows the last confirmed layout.
 
 ## Data model (per-agent DB)
 

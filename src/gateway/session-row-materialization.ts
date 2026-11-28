@@ -24,7 +24,12 @@ export function materializeSessionRowIfChanged(
     membership === record.membership &&
     previous.source.entry === input.entry &&
     previous.source.cfg === input.cfg;
-  const materialized = deepCompared && isDeepStrictEqual(previous, next) ? previous : next;
+  const materialized =
+    deepCompared &&
+    isDeepStrictEqual(previous.row, next.row) &&
+    isDeepStrictEqual(previous.source, next.source)
+      ? previous
+      : next;
   if (
     recordSessionRowMaterialization(
       !previous ? "created" : materialized === previous ? "reused" : "rebuilt",

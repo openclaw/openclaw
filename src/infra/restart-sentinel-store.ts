@@ -1,11 +1,5 @@
 import { safeParseJson } from "@openclaw/normalization-core";
-import {
-  isRecord as isPlainRecord,
-  omitUndefinedFields,
-} from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
-import { z } from "zod";
-import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import { classifyUpdateOutcome } from "../shared/update-outcome-classification.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -13,19 +7,12 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import {
+  buildRestartSentinelRow,
+  parseRestartSentinelPayload,
+  type RestartSentinelPayload,
+} from "./restart-sentinel-codec.js";
 import type { EngineConnection } from "./sql-connection.js";
-import { updateRecoverySchema } from "./update-recovery.js";
-import { UpdateFailureFactSchema } from "./update-run-schema.js";
-
-type RestartSentinelStats = z.infer<typeof restartSentinelStatsSchema>;
-type RestartSentinelContinuation = z.infer<typeof restartSentinelContinuationSchema>;
-
-export type RestartSentinelPayload = SchemaContract<
-  Omit<z.input<typeof restartSentinelPayloadSchema>, "stats" | "continuation">
-> & {
-  continuation?: RestartSentinelContinuation | null;
-  stats?: RestartSentinelStats | null;
-};
 
 export type RestartSentinel = {
   version: 1;
@@ -73,96 +60,6 @@ type RestartSentinelRow = Omit<
 
 function isSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value);
-}
-
-// Optional properties are absent from the canonical payload, including when an
-// input explicitly supplies undefined. Keep nested diagnostic records untouched.
-const restartSentinelLogSchema = z
-  .object({
-    stdoutTail: z.string().nullish(),
-    stderrTail: z.string().nullish(),
-    exitCode: z.number().int().nullish(),
-  })
-  .transform(omitUndefinedFields);
-const restartSentinelStepSchema = z
-  .object({
-    name: z.string(),
-    command: z.string(),
-    failureFacts: UpdateFailureFactSchema.array().max(5).optional().catch(undefined),
-    cwd: z.string().nullish(),
-    durationMs: z.number().finite().nullish(),
-    log: restartSentinelLogSchema.nullish(),
-    advisory: z.boolean().optional(),
-  })
-  .transform(omitUndefinedFields);
-const restartSentinelStepsSchema = z.custom<unknown[]>(Array.isArray).transform((steps, ctx) =>
-  steps.map((step) => {
-    const parsed = restartSentinelStepSchema.safeParse(step);
-    if (parsed.success) {
-      return parsed.data;
-    }
-    ctx.addIssue({ code: "custom", message: "Invalid restart sentinel step" });
-    return z.NEVER;
-  }),
-);
-const restartSentinelStatsSchema = z
-  .object({
-    // Unsupported recovery metadata must not suppress the restart notice.
-    recovery: updateRecoverySchema.optional().catch(undefined),
-    mode: z.string().optional(),
-    root: z.string().optional(),
-    target: z.string().optional(),
-    requiresRestart: z.boolean().optional(),
-    handoffId: z.string().optional(),
-    runId: z.string().optional(),
-    before: z.custom<Record<string, unknown>>(isPlainRecord).nullish(),
-    after: z.custom<Record<string, unknown>>(isPlainRecord).nullish(),
-    steps: restartSentinelStepsSchema.optional(),
-    reason: z.string().nullish(),
-    durationMs: z.number().finite().nullish(),
-  })
-  .transform(omitUndefinedFields);
-
-const restartSentinelContinuationSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("systemEvent"), text: z.string() }),
-  z.object({ kind: z.literal("agentTurn"), message: z.string() }),
-]);
-export const restartSentinelPayloadSchema = z
-  .object({
-    kind: z.enum(["config-apply", "config-auto-recovery", "config-patch", "update", "restart"]),
-    status: z.enum(["ok", "error", "skipped"]),
-    ts: z.number().int(),
-    sessionKey: z.string().optional(),
-    deliveryContext: z
-      .object({
-        channel: z.string().optional(),
-        to: z.string().optional(),
-        accountId: z.string().optional(),
-      })
-      .transform(omitUndefinedFields)
-      .transform((value) => (Object.keys(value).length > 0 ? value : undefined))
-      .optional(),
-    threadId: z.string().optional(),
-    message: z
-      .string()
-      .nullish()
-      .transform((value) => value ?? undefined),
-    continuation: restartSentinelContinuationSchema
-      .nullish()
-      .transform((value) => value ?? undefined),
-    doctorHint: z
-      .string()
-      .nullish()
-      .transform((value) => value ?? undefined),
-    stats: restartSentinelStatsSchema.nullish().transform((value) => value ?? undefined),
-  })
-  // SQL NULL is canonical absence for optional top-level columns. Keep legacy
-  // nulls and empty routes consistent between writes and typed-column reads.
-  .transform(omitUndefinedFields);
-
-function parseRestartSentinelPayload(value: unknown): RestartSentinelPayload | null {
-  const parsed = restartSentinelPayloadSchema.safeParse(value);
-  return parsed.success ? parsed.data : null;
 }
 
 function parseRequiredJson(value: string | null): unknown {
@@ -234,7 +131,7 @@ function decodeRestartSentinelRowState(
   return sentinel ? { kind: "valid", sentinel } : { kind: "invalid", revision: row.updated_at_ms };
 }
 
-export function readRestartSentinelRowForKeySync(
+function readRestartSentinelRowForKeySync(
   db: EngineConnection,
   sentinelKey: string,
 ): RestartSentinelRowState {
@@ -263,7 +160,7 @@ function requireValidPayload(payload: RestartSentinelPayload): RestartSentinelPa
   return parsed;
 }
 
-export function nextRevision(currentRevision: number | null): number {
+function nextRevision(currentRevision: number | null): number {
   if (currentRevision !== null && !Number.isSafeInteger(currentRevision)) {
     throw new Error("Restart sentinel revision is outside the safe integer range");
   }
@@ -308,32 +205,6 @@ function maxRevision(left: number | null, right: number | null): number | null {
   return Math.max(left, right);
 }
 
-export function buildRestartSentinelRow(
-  payload: RestartSentinelPayload,
-  revision: number,
-  sentinelKey = RESTART_SENTINEL_KEY,
-) {
-  return {
-    sentinel_key: sentinelKey,
-    version: 1,
-    kind: payload.kind,
-    status: payload.status,
-    ts: payload.ts,
-    session_key: payload.sessionKey ?? null,
-    thread_id: payload.threadId ?? null,
-    delivery_channel: payload.deliveryContext?.channel ?? null,
-    delivery_to: payload.deliveryContext?.to ?? null,
-    delivery_account_id: payload.deliveryContext?.accountId ?? null,
-    message: payload.message ?? null,
-    continuation_json: payload.continuation ? JSON.stringify(payload.continuation) : null,
-    doctor_hint: payload.doctorHint ?? null,
-    stats_json: payload.stats ? JSON.stringify(payload.stats) : null,
-    // Debug shadow only. Reads reconstruct exclusively from typed columns above.
-    payload_json: JSON.stringify(payload),
-    updated_at_ms: revision,
-  };
-}
-
 function upsertRestartSentinelRowSync(
   db: EngineConnection,
   row: ReturnType<typeof buildRestartSentinelRow>,
@@ -366,7 +237,7 @@ export function writeRestartSentinelRowSync(
 ): RestartSentinel {
   const payload = requireValidPayload(rawPayload);
   const revision = nextRevision(previousRevision);
-  const row = buildRestartSentinelRow(payload, revision);
+  const row = buildRestartSentinelRow(payload, revision, RESTART_SENTINEL_KEY);
   upsertRestartSentinelRowSync(db, row);
   advanceRestartSentinelRevisionFloorSync(db, revision);
   return { version: 1, payload, revision };
@@ -568,7 +439,7 @@ export function writeRestartSentinelRowIfRevisionSync(
 ): RestartSentinel | null {
   const payload = requireValidPayload(rawPayload);
   const revision = nextRevision(maxRevision(expectedRevision, previousRevision));
-  const row = buildRestartSentinelRow(payload, revision);
+  const row = buildRestartSentinelRow(payload, revision, RESTART_SENTINEL_KEY);
   const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
   const result = executeSqliteQuerySync(
     db,

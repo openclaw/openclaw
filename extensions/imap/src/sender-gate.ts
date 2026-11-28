@@ -42,6 +42,50 @@ function matchesImapSender(sender: string, entries: readonly string[]): boolean 
   });
 }
 
+// A domain URL parsing treats as structure rather than host spelling is compared as the
+// raw lowercased text, the strict direction, instead of being normalized through URL.
+const UNNORMALIZED_DOMAIN = /[/\\%?#@:\s]/u;
+
+function mailboxDomainKey(domain: string): string {
+  if (UNNORMALIZED_DOMAIN.test(domain)) {
+    return domain.toLowerCase();
+  }
+  try {
+    return new URL(`https://${domain}`).hostname.toLowerCase();
+  } catch {
+    return domain.toLowerCase();
+  }
+}
+
+// An RFC 5322/6531 quoted local part whose content is a dot-atom, with or without
+// the UTF-8 that RFC 6532 allows, names the same mailbox as its unquoted spelling.
+// mailparser drops these optional quotes while mailauth keeps them, so both sides are
+// compared without them. Quotes hiding anything a local part cannot carry unquoted
+// (whitespace, "@", specials, control characters, escapes) stay as they are written.
+const QUOTED_DOT_ATOM = /^"([^.\s"(),:;<@[\\\]\p{Cc}]+(?:\.[^.\s"(),:;<@[\\\]\p{Cc}]+)*)"$/u;
+
+function unquotedLocalPart(local: string): string {
+  return QUOTED_DOT_ATOM.exec(local)?.[1] ?? local;
+}
+
+function authenticatesSenderMailbox(result: AuthenticateResult, sender: string): boolean {
+  const [mailbox] = result.dkim.headerFrom;
+  if (mailbox === undefined || result.dkim.headerFrom.length !== 1) {
+    return false;
+  }
+  const mailboxAt = mailbox.lastIndexOf("@");
+  const senderAt = sender.lastIndexOf("@");
+  // mailparser hands the allowlist a Unicode domain, mailauth keeps the header spelling,
+  // so both are compared as their punycode A-label form
+  return (
+    mailboxAt > 0 &&
+    senderAt > 0 &&
+    unquotedLocalPart(mailbox.slice(0, mailboxAt)) ===
+      unquotedLocalPart(sender.slice(0, senderAt)) &&
+    mailboxDomainKey(mailbox.slice(mailboxAt + 1)) === mailboxDomainKey(sender.slice(senderAt + 1))
+  );
+}
+
 function recipientAddresses(mail: ParsedMail): string[] {
   const to = mail.to ? (Array.isArray(mail.to) ? mail.to : [mail.to]) : [];
   const delivered = mail.headers.get("delivered-to");
@@ -210,6 +254,17 @@ export async function evaluateImapSender(params: {
   const evidence = mapImapAuthStrength(result, authenticationHeaders(params.mail), params.account);
   if (!meetsIdentifierAuthentication(evidence.strength, params.account.senderAuth.min)) {
     return { accepted: false as const, sender, ...evidence };
+  }
+  // The allowlist matched the mailbox mailparser read, DMARC aligned the one mailauth
+  // read; only an exact single-mailbox match proves the allowlisted sender was signed.
+  if (!authenticatesSenderMailbox(result, sender)) {
+    return {
+      accepted: false as const,
+      sender,
+      strength: evidence.strength,
+      reason: "sender-mismatch" as const,
+      transient: false as const,
+    };
   }
   return { accepted: true as const, sender, strength: evidence.strength, reason: evidence.reason };
 }
