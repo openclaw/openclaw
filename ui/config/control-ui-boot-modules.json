@@ -1302,6 +1302,7 @@
   "node_modules/mdurl/lib/format.mjs",
   "node_modules/mdurl/lib/parse.mjs",
   "node_modules/punycode.js/punycode.es6.js",
+  "node_modules/remend/dist/index.js",
   "node_modules/typebox/build/guard/globals.mjs",
   "node_modules/typebox/build/guard/guard.mjs",
   "node_modules/typebox/build/guard/index.mjs",
@@ -1389,15 +1390,18 @@
   "ui/src/components/markdown-link-boundary.ts",
   "ui/src/components/markdown-link-display.ts",
   "ui/src/components/markdown-live-loader.ts",
+  "ui/src/components/markdown-live.ts",
   "ui/src/components/markdown-parser.ts",
   "ui/src/components/markdown-raw-content.ts",
   "ui/src/components/markdown-render-options.ts",
   "ui/src/components/markdown-sanitizer.ts",
   "ui/src/components/markdown-session-links.ts",
   "ui/src/components/markdown-streaming-state.ts",
+  "ui/src/components/markdown-streaming.ts",
   "ui/src/components/markdown-tables.ts",
   "ui/src/components/markdown-text-replacements.ts",
   "ui/src/components/markdown-text.ts",
+  "ui/src/components/markdown-tokens.ts",
   "ui/src/components/markdown-visible-text.ts",
   "ui/src/components/markdown-windows-paths.ts",
   "ui/src/components/markdown.ts",
@@ -2004,6 +2008,7 @@
   ],
   "chat": [
    "ui/src/lib/sessions/swarm-roster.ts",
+   "ui/src/pages/chat/route-entry.ts",
    "ui/src/pages/chat/route-loader.ts"
   ]
  }

@@ -314,8 +314,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/components/chat-message-attachment-availability.ts":
     case "ui/src/pages/chat/components/chat-media-playback.ts":
     case "ui/src/pages/chat/components/chat-message-image-loading.ts":
-      // Transcript media and live events already load with the Chat route.
-      return "chat-route-entry";
+      return "chat-transcript-runtime";
     case "ui/src/pages/chat/chat-provider-review-controller.tsx":
       return "chat-provider-review";
     // Keep optional compression groups separate from code evaluated by text-only Chat.
@@ -343,12 +342,14 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/lib/nodes/device-signing.noble.ts":
     case "ui/src/lib/nodes/device-signing.runtime.ts":
       return "device-signing-runtime";
+    case "src/shared/assistant-display-content.ts":
     case "ui/src/pages/chat/chat-live-events.runtime.ts":
     case "ui/src/pages/chat/chat-gateway.ts":
     case "ui/src/pages/chat/tool-stream.ts":
     case "ui/src/pages/chat/tool-stream-status.ts":
     case "ui/src/pages/chat/tool-stream-preamble.ts":
-      return "chat-route-entry";
+      // Chat loads events and media together; keep both out of the route entry.
+      return "chat-transcript-runtime";
     case "ui/src/pages/chat/chat-mobile-host.runtime.tsx":
     case "ui/src/pages/chat/chat-mobile-scroll-fades.runtime.ts":
     case "ui/src/pages/chat/components/chat-mobile-people-grid.tsx":
@@ -519,7 +520,8 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/markdown-live.ts":
     case "ui/src/components/markdown-streaming.ts":
     case "ui/src/components/markdown-tokens.ts":
-      return "markdown-streaming-runtime";
+      // Only live Chat uses these; static Markdown still loads its own parser.
+      return "chat-transcript-runtime";
     case "ui/src/styles/session-panel-rail.css":
       // Inline consumers keep their text; the raw sheet shares the cross-route style group.
       return /[?&]inline(?:[=&]|$)/u.test(id) ? "session-panel-rail-inline" : undefined;
@@ -558,7 +560,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return "markdown-highlight-runtime";
   }
   if (moduleIdIncludesPackage(id, "remend")) {
-    return "markdown-streaming-runtime";
+    return "chat-transcript-runtime";
   }
   if (
     moduleIdIncludesPackage(id, "dompurify") ||
@@ -650,6 +652,7 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 // Cross-route labels must not pull the New Session or Chat renderers.
                 modules.add("ui/src/i18n/locales/en-chat-welcome.ts");
                 modules.add("ui/src/i18n/locales/en-session-people.ts");
+                modules.add("ui/src/i18n/locales/en-session-organization-shared.ts");
                 // Placement and delivery share retries without importing either route's bundle.
                 modules.add("ui/src/pages/chat/chat-outbox-retry.ts");
                 // Chat sends and New Session creation quote selections identically.
