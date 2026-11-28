@@ -332,10 +332,12 @@ to another model or provider. Credentialless models remain usable without an acc
 
 Unbound CLI-runtime automations need no inference binding when the CLI account
 selector chooses native login. If it selects a stored profile, scheduled runs refuse
-to borrow that account: Doctor, lint, and startup name the job and its explicit
-`openclaw automations edit <jobId> --model <provider/model>@<profileId>` recovery
-command. This edit also sets the primary model; Doctor never adopts CLI accounts
-automatically. To explicitly choose Claude CLI's native login, use
+to borrow that account. For an agent-turn job, Doctor, lint, and startup give the
+explicit `openclaw automations edit <jobId> --model <provider/model>@<profileId>`
+recovery command. This edit also sets the primary model. For a system event, keep
+the reminder as-is: select a model with an eligible host-managed account in the
+owning agent’s main session, then run `openclaw doctor --fix`. Other turns in that
+session also use the selected model. Doctor never adopts CLI accounts automatically. To explicitly choose Claude CLI's native login for an agent-turn job, use
 `anthropic/<model>@anthropic:claude-cli` with the same edit command.
 OpenClaw does not forward a stored inference profile on the native-only path.
 Jobs with a saved inference binding keep using that account.
