@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withSetupHealthGateway } from "../../test/helpers/setup-health-gateway.js";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type * as AuthChoiceModelCheck from "../commands/auth-choice.model-check.js";
+import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
 
 type DefaultModelAuthStatus = Awaited<
@@ -430,5 +431,22 @@ describe("finalizeSetupWizard", () => {
 
     const noted = note.mock.calls.map((call) => String(call[0]));
     expect(noted.join("\n")).not.toMatch(/auth-token --show|generate-gateway-token/);
+  });
+
+  it("waits for a freshly installed gateway when --skip-health is set", async () => {
+    gatewayServiceIsLoaded.mockResolvedValue(false);
+    const prompter = buildWizardPrompter(undefined, { defaultSelect: "restart" });
+
+    await finalizeSetupWizard(
+      createFinalizeArgs("quickstart", {
+        opts: { installDaemon: true, skipHealth: true, skipUi: true },
+        prompter,
+      }),
+    );
+
+    expect(waitForGatewayReachable).toHaveBeenCalledOnce();
+    const timing = mockCall(waitForGatewayReachable)[0] as { deadlineMs?: number };
+    expect(timing.deadlineMs).toBe(resolveGatewayStartupTiming().deadlineMs);
+    expect(probeGatewayReachable).not.toHaveBeenCalled();
   });
 });

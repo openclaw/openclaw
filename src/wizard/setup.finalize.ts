@@ -15,7 +15,6 @@ import { gatewayInstallErrorHint } from "../commands/daemon-install-helpers.js";
 import { resolveGatewayInstallToken } from "../commands/gateway-install-token.js";
 import { prepareGatewayServiceInstall } from "../commands/gateway-service-setup.js";
 import { resolveGatewaySetupRuntime } from "../commands/gateway-setup-runtime.js";
-import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import { formatHealthCheckFailure } from "../commands/health-format.js";
 import { healthCommandNonExiting } from "../commands/health.js";
 import {
@@ -24,7 +23,6 @@ import {
 } from "../commands/onboard-gateway-process.js";
 import {
   probeGatewayReachable,
-  waitForGatewayReachable,
   resolveAdvertisedControlUiLinks,
   resolveLocalControlUiProbeLinks,
 } from "../commands/onboard-helpers.js";
@@ -57,6 +55,7 @@ import {
   gatewayAuthUsesLocalPassword,
   resolveGatewayLocalPassword,
 } from "./setup.finalize-gateway-auth.js";
+import { probeFinalizeGateway } from "./setup.finalize-probe.js";
 import { resolveWebSearchCredentialSummary } from "./setup.finalize-search.js";
 import { getLocalizedGatewayDaemonRuntimeOptions } from "./setup.service-runtime.js";
 import type { GatewayWizardSettings, WizardFlow } from "./setup.types.js";
@@ -480,7 +479,11 @@ export async function finalizeSetupWizard(
   }
 
   try {
-    if (!opts.skipHealth || sessionGateway) {
+    if (
+      !opts.skipHealth ||
+      sessionGateway ||
+      (gateway.status === "ready" && gateway.action !== "reused")
+    ) {
       const showHealthCheckHelp = () =>
         prompter.note(
           [
@@ -497,32 +500,14 @@ export async function finalizeSetupWizard(
         basePath: undefined,
         tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
       });
-      const probeOptions = {
-        signal: readinessAbort.signal,
+      gatewayProbe = await probeFinalizeGateway({
+        sessionGateway,
+        gateway,
         url: probeLinks.wsUrl,
         token: settings.authMode === "token" ? settings.gatewayToken : undefined,
         password: probePassword,
-      };
-      // Nothing started (declined or failed install): probe once. A reused running
-      // Gateway keeps a bounded wait because the config just written can make it
-      // reload; started Gateways use the full startup timing.
-      const readiness =
-        gateway.status === "failed" || (gateway.status === "skipped" && !sessionGateway)
-          ? probeGatewayReachable(probeOptions)
-          : waitForGatewayReachable({
-              ...probeOptions,
-              ...(sessionGateway || (gateway.status === "ready" && gateway.action !== "reused")
-                ? resolveGatewayStartupTiming()
-                : { deadlineMs: 15_000 }),
-            });
-      gatewayProbe = await (sessionGateway
-        ? Promise.race([
-            readiness,
-            sessionGateway.wait.then(() => {
-              throw new Error("Temporary Gateway exited before becoming reachable");
-            }),
-          ])
-        : readiness);
+        signal: readinessAbort.signal,
+      });
       if (gatewayProbe.ok && !opts.skipHealth) {
         try {
           const healthConfig: OpenClawConfig =
@@ -606,7 +591,11 @@ export async function finalizeSetupWizard(
     };
     const displayLinks = await resolveAdvertisedControlUiLinks(controlUiLinkOptions);
     const probeLinks = resolveLocalControlUiProbeLinks(controlUiLinkOptions);
-    if ((opts.skipHealth && !sessionGateway) || (!gatewayProbe.ok && gateway.status !== "failed")) {
+    const freshStart = gateway.status === "ready" && gateway.action !== "reused";
+    if (
+      (opts.skipHealth && !sessionGateway && !freshStart) ||
+      (!gatewayProbe.ok && gateway.status !== "failed")
+    ) {
       gatewayProbe = await probeGatewayReachable({
         url: probeLinks.wsUrl,
         token: settings.authMode === "token" ? settings.gatewayToken : undefined,
