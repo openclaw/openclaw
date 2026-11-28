@@ -6,9 +6,6 @@ type ScenarioFixture = Awaited<ReturnType<typeof createPromptCompositionScenario
 
 function countOccurrences(text: string, needle: string): number {
   // Avoid regex escaping when checking exact prompt-body duplication.
-  if (!needle) {
-    return 0;
-  }
   return text.split(needle).length - 1;
 }
 

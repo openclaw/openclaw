@@ -35,7 +35,7 @@ const { resolveSession } = await import("./session.js");
 const DAY_MS = 24 * 60 * 60 * 1000;
 const sessionKey = "agent:main:cli";
 
-function seedSession(sessionId: string, age: number, fields: Partial<SessionEntry> = {}): void {
+function seedSession(sessionId: string, age: number, fields: Partial<SessionEntry>): void {
   hoisted.terminalTranscriptNewer = false;
   const startedAt = Date.now() - age;
   hoisted.store = {
