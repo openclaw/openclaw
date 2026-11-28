@@ -454,7 +454,7 @@ describe("gateway run option collisions", () => {
   });
 
   function runtimeSnapshot(
-    config: Record<string, unknown> = {},
+    config: Record<string, unknown>,
     overrides: Record<string, unknown> = {},
   ) {
     return {

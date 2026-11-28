@@ -94,6 +94,10 @@ final class AdaptiveLayoutUITests: XCTestCase {
         self.capture("chat-toolbar-current-window", in: app)
         try self.assertToolbarPainted([showSidebar, actions], in: app.windows.firstMatch)
         actions.tap()
+        let pin = app.buttons["Pin"].firstMatch
+        XCTAssertTrue(pin.waitForExistence(timeout: 5))
+        XCTAssertTrue(pin.isHittable)
+        XCTAssertTrue(app.windows.firstMatch.frame.contains(pin.frame))
         input.tap()
         showSidebar.tap()
         let gatewaySettings = app.buttons["RootTabs.Sidebar.GatewaySettings"].firstMatch
@@ -190,6 +194,7 @@ final class AdaptiveLayoutUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
         app.launchArguments = [
+            "-sidebar.pinnedPages", "sessions",
             "--openclaw-initial-destination", "chat",
             "--openclaw-appearance", "light",
             "--openclaw-ui-test-readiness",
@@ -221,26 +226,21 @@ final class AdaptiveLayoutUITests: XCTestCase {
         self.capture("iphone-landscape-compact-chat", in: app)
         self.rotateWindow(in: app, portrait: true)
         show.tap()
-        let overview = app.buttons["RootTabs.Sidebar.Destination.overview"]
-        XCTAssertTrue(overview.waitForExistence(timeout: 5))
-        overview.tap()
+        let sessions = app.buttons["RootTabs.Sidebar.Destination.sessions"]
+        XCTAssertTrue(sessions.waitForExistence(timeout: 5))
+        sessions.tap()
         let readiness = app.descendants(matching: .any)["RootTabs.Ready"].firstMatch
-        self.expectation(for: NSPredicate(format: "value == %@", "ready:overview"), evaluatedWith: readiness)
+        self.expectation(for: NSPredicate(format: "value == %@", "ready:sessions"), evaluatedWith: readiness)
         self.waitForExpectations(timeout: 10)
         XCTAssertTrue(show.waitForExistence(timeout: 5), "Selecting a drawer row must navigate and close it")
-        let viewport = app.scrollViews.containing(.button, identifier: "Gateway settings").firstMatch
-        XCTAssertTrue(viewport.waitForExistence(timeout: 5))
-        let detailFrame = viewport.frame
-        let window = app.windows.firstMatch
-        let windowFrame = window.frame
-        // Save the visible detail's trailing edge before the drawer hides its accessibility tree.
-        let dismissalPoint = window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
-            dx: detailFrame.maxX - windowFrame.minX - 8,
-            dy: detailFrame.midY - windowFrame.minY))
+        let search = app.buttons["Sessions.Search"]
+        XCTAssertTrue(search.isHittable)
         show.tap()
-        XCTAssertTrue(overview.waitForExistence(timeout: 5))
-        dismissalPoint.tap()
+        XCTAssertTrue(sessions.waitForExistence(timeout: 5))
+        // The trailing edge of the window still shows the detail beside the open phone drawer.
+        app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)).tap()
         XCTAssertTrue(show.waitForExistence(timeout: 5), "Tapping exposed detail must dismiss the drawer")
+        XCTAssertTrue(search.isHittable)
     }
 
     /// Synthetic conversation content is used only to exercise native interaction.

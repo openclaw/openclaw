@@ -24,6 +24,8 @@ import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withLocalGatewayRequestScope } from "./local-request-context.js";
+import type { GatewayLifecycleRuntime } from "./server-instance-runtime.types.js";
+import { registerGatewayLifecycleRuntime } from "./server-lifecycle-runtime-context.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   dispatchGatewayMethodInProcess,
@@ -150,6 +152,26 @@ describe("local gateway request context", () => {
         expect.any(Function),
       );
     });
+  });
+
+  it("owns dispatch facts and lifecycle reads only when no Gateway hosts the process", async () => {
+    await withConfig({}, async () => {
+      const oneShot = localContext();
+      expect(oneShot.loadReplyDispatchRuntime).toBeTypeOf("function");
+      expect(oneShot.lifecycleRuntime).toBeDefined();
+    });
+    // BOOT.md runs a local command inside a Gateway: that Gateway keeps both.
+    const hosting = { waitForAgent: vi.fn() } as unknown as GatewayLifecycleRuntime;
+    const release = registerGatewayLifecycleRuntime(hosting);
+    try {
+      await withConfig({}, async () => {
+        const hosted = localContext();
+        expect(hosted.loadReplyDispatchRuntime).toBeUndefined();
+        expect(hosted.lifecycleRuntime).toBe(hosting);
+      });
+    } finally {
+      release();
+    }
   });
 
   it("defaults local model catalog snapshot reads to read-only", async () => {
@@ -330,6 +352,34 @@ it("retires the session projection before its database maintenance scope closes"
       await maintenance.close();
       // Late fact publications re-enter the drain; a live projection would read closed state.
       await expect(projection.ensureMaterialized()).resolves.toBeUndefined();
+    } finally {
+      await host.close();
+    }
+  });
+});
+
+it("closes the database scope when the disposed projection's last refresh loses its read", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      assertOwnerCurrent: () => {},
+      assertDatabaseAccess: () => {},
+    });
+    const host = new LegacyPluginSdkResourceHost();
+    try {
+      const projection = await maintenance.run(() =>
+        host.run(() =>
+          withConfig({ agents: { defaults: {} } }, async () => {
+            const context = localContext();
+            await context.ensureSessionRowProjection?.();
+            return requireSessionRowProjection(context);
+          }),
+        ),
+      );
+      // The agent databases close in the same phase and revoke the refresh's history read.
+      vi.spyOn(projection, "ensureMaterialized").mockRejectedValue(
+        new Error("Session history database read was revoked"),
+      );
+      await expect(maintenance.close()).resolves.toBeUndefined();
     } finally {
       await host.close();
     }

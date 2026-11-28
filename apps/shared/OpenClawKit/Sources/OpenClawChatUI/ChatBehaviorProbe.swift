@@ -41,6 +41,7 @@ public enum ChatBehaviorProbe {
 /// user-visible copy to the native i18n inventory.
 enum ChatBehaviorProbeTarget {
     case composer
+    case runTail
     case live
     case row(ChatTranscriptRow)
 
@@ -48,6 +49,7 @@ enum ChatBehaviorProbeTarget {
     var key: String {
         switch self {
         case .composer: "composer"
+        case .runTail: "run-tail"
         case .live: "live"
         case let .row(.message(message)): "\(message.role.lowercased())/\(message.presentationID)"
         case let .row(row): "other/\(row.id)"

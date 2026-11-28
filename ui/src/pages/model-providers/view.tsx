@@ -209,7 +209,12 @@ export function ModelProviders(props: ModelProvidersViewProps) {
       connected={connected()}
       first={first() === true}
       agentLabel={props.credentialAgentLabel}
-      disabled={configMutationDisabled(props) || props.loginBusy || props.addProviderOpen}
+      disabled={
+        configMutationDisabled(props) ||
+        props.loginBusy ||
+        props.addProviderOpen ||
+        props.firstRunUnresolved === true
+      }
       loading={props.loading}
       initialQuery={first() ? props.providerQuery : undefined}
       searchRef={props.catalogSearchRef}
@@ -222,6 +227,7 @@ export function ModelProviders(props: ModelProvidersViewProps) {
     <>
       <SettingsPage carapace>
         {props.accountRecovery}
+        {props.firstRunSetup}
         <Show when={signedInNoModels()}>
           <InlineAlert tone="warning" role="status" data-model-readiness="no-models">
             {t("modelProviders.readiness.signedInNoModels")}

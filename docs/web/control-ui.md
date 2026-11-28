@@ -137,8 +137,8 @@ along its bottom edge or with **Tab** from its main input, without losing text.
 Search finds commands and sessions; Compose prepares a new background session.
 While you are in Search, text of 60 characters or more, a second line, or a file
 moves the palette to Compose; emptying that draft returns it to Search. Choosing
-Search again keeps it for the current draft. Reopening the palette returns to the
-mode you last chose, not to an automatic switch. That choice is remembered in this
+Search again keeps it for the current draft. An empty palette reopens in the
+mode you last chose, not an automatic one. That choice is remembered in this
 browser, including after a reload, when browser storage is available.
 **Cmd/Ctrl+Enter** starts a new background session from either mode using the
 current text and attachments; plain **Enter** still selects a search result.
@@ -159,9 +159,9 @@ explains the failure and only that file is removed. You can manually start a
 session with the remaining text and files; a rejected file cancels a pending
 automatic start. File admission and size limits match the chat composer.
 
-Closing the palette keeps its attachment draft in memory for the same Gateway
-and account. When files moved the palette to Compose, removing them and clearing
-the instructions returns it to Search.
+Closing the palette keeps unsent Compose text and attachments in memory for the
+same Gateway and account. When files moved the palette to Compose, removing them
+and clearing the instructions returns it to Search.
 Reloading or leaving the app does not preserve this in-memory draft.
 
 ## Choose a session workspace
@@ -292,6 +292,8 @@ After the connection and saved conversation are ready, chat fetches updates whil
 
 The saved sidebar also retains the session rows for its initial viewport, along with unread marks, activity and attention glyphs, pull-request badges, and the Inbox count. Reload starts at the top of the sidebar. Live facts replace this display projection together with the rows; pins outside the roster retain their saved presentation until their own details arrive. The Inbox button reserves its place while connecting.
 
+In the Inbox, select an approval's session title to open the chat that requested it. Opening the chat leaves the approval pending.
+
 The Online sidebar loads people's open and running session counts when you open it. Switching to Sessions or Pages stops those count refreshes; opening Online again loads current counts. Restoring a Sessions sidebar does not wait for Online counts.
 
 Message reactions appear in a compact tab on the message bubble. Flat agent replies have no bubble, so their tab leads the row under the reply and stays in place while the name, time and actions appear on hover. Open the tab to see each emoji count, including in read-only sessions. Desktop Chat Details lists automations after session information and task progress so arriving automation results keep those sections in place. The mobile composer reserves one activity row so arriving task and subagent status does not move the transcript.
@@ -304,9 +306,9 @@ Saved desktop Details also restores session attribution, participant counts, and
 
 The saved Details snapshot also retains the running-process preview while reconnecting, so Processes does not appear later and push Automations down. Saved process rows cannot stop processes. Live process reads refresh the preview, remove finished processes, and hide it if access is denied.
 
-A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen. A reader action checks up to three consecutive pages when entries are empty, overlapping, or hidden by display preferences; longer hidden intervals remain available through another action. Transient read failures retry within the existing one-minute history-recovery budget, honoring the server’s backoff. Permission denials are not automatically retried. The touch-friendly history control keeps keyboard focus during loading and ignores repeated activation. Failed reads show **Retry earlier messages** at that same boundary without removing the loaded conversation. The **Show earlier** label stays steady while reconnecting or loading. The control exposes its busy and unavailable state to assistive technology and ignores activation until ready.
+A chat without saved history opens with up to 24 messages. Scroll up or choose **Show earlier** to read older messages, even if the transcript fits on screen. Find also loads earlier pages as you type. Reopening a chat can reuse its saved messages.
 
-In **Appearance → Chat**, enable **Open with 24 messages** to fetch a smaller history window when opening a chat without saved history. Reopening a chat can reuse its saved messages. Scroll up or choose **Show earlier** to load preceding messages. With this option on, typing in Find also loads earlier pages to search the conversation.
+If the opening page has no visible messages, or a restored transcript does not fill the screen, the chat can load one older page automatically. It does not fill the backscroll buffer. A reader action checks up to three consecutive pages when entries are empty, overlapping, or hidden by display preferences; longer hidden intervals remain available through another action. Transient read failures retry within the existing one-minute history-recovery budget, honoring the server’s backoff. Permission denials are not automatically retried. The touch-friendly history control keeps keyboard focus during loading and ignores repeated activation. Failed reads show **Retry earlier messages** at that same boundary without removing the loaded conversation. The **Show earlier** label stays steady while reconnecting or loading. The control exposes its busy and unavailable state to assistive technology and ignores activation until ready.
 
 Earlier history is offered only when the Gateway provides a cursor or a loaded transcript entry can anchor the request. Tool activity summaries do not prevent loading older messages. If neither boundary exists, the control stays hidden and automatic loading stops without an error.
 

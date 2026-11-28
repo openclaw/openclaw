@@ -13,6 +13,7 @@ import { shouldUseGatewayOwnerProfile } from "./gateway-owner-profile.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
+import { registerGatewayLifecycleRuntime } from "./server-lifecycle-runtime-context.js";
 import { attachInitialGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
 import { readPreparedServerMethodModelCatalogs } from "./server-methods/optional-model-catalog.js";
 import type { GatewayHostLifecycle } from "./server-public.js";
@@ -209,7 +210,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     "gateway.instance-runtime-import",
     () => import("./server-instance-runtime.js"),
   );
-  const gatewayInstanceRuntime = createGatewayInstanceRuntime({
+  const instanceRuntime = createGatewayInstanceRuntime({
     getContext: () => gatewayRequestContext,
     getMethodRegistry: () => getAttachedGatewayMethodRegistry(),
     // Request entry fences new calls during the prelude. Retained principals
@@ -217,6 +218,16 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     isDispatchAvailable: () => startupState.dispatchReady,
     logError: (message) => log.error(message),
   });
+  // The listening Gateway is the process-global lifecycle owner; embedded hosts build the
+  // same runtime for their own context without claiming it.
+  const releaseLifecycleRuntime = registerGatewayLifecycleRuntime(instanceRuntime.lifecycle);
+  const gatewayInstanceRuntime = {
+    ...instanceRuntime,
+    close: () => {
+      instanceRuntime.close();
+      releaseLifecycleRuntime();
+    },
+  };
   gatewayInstanceRuntimeRef.current = gatewayInstanceRuntime;
   gatewayRequestContext.resolveGatewayContext = () =>
     gatewayInstanceRuntime.isAvailable() ? gatewayRequestContext : undefined;

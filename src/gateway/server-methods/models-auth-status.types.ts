@@ -21,6 +21,12 @@ export type ModelAuthStatusProfile = Pick<
   /** Where the effective credential came from. */
   source?: "config" | "external" | "inherited" | "saved";
   displayName?: string;
+  /** Admin-only presentation label for a known stored subscription tier. */
+  planLabel?: string;
+  /** Only emitted for an account the selected agent and caller can rename. */
+  renameSupported?: true;
+  /** The name is controlled by configuration, not the saved account. */
+  nameManagedByConfig?: true;
   email?: string;
   lastUsedAt?: number;
 };
@@ -99,5 +105,11 @@ export type ModelAuthOrderSetResult = {
   provider: string;
   profileIds: string[] | null;
   /** The order was saved, but its runtime publication could not complete. */
+  warning?: string;
+};
+
+export type ModelAuthProfileRenameResult = {
+  profileId: string;
+  displayName: string | null;
   warning?: string;
 };

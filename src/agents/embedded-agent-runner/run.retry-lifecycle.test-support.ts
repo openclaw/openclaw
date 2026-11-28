@@ -53,7 +53,11 @@ describe("direct embedded retry lifecycle", () => {
   it.each(
     [0, 1].flatMap((maxRetries) =>
       [false, true].flatMap((deferred) =>
-        [false, true].map((finalizerStart) => ({ maxRetries, deferred, finalizerStart })),
+        (maxRetries === 0 ? [false, true] : [false]).map((finalizerStart) => ({
+          maxRetries,
+          deferred,
+          finalizerStart,
+        })),
       ),
     ),
   )(

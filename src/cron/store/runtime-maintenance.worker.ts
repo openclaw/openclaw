@@ -159,6 +159,7 @@ export function scheduleUnownedCronJobsInWorker(
           outcome.changed = true;
         }
       }
+      loadCronRuntimeAuthorities({ db, storeKey: input.storeKey, jobs: outcome.jobs });
       return { outcome };
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },

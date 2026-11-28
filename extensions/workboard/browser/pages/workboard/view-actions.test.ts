@@ -388,6 +388,54 @@ describe("WorkboardView", () => {
     expect(container.querySelector(".workboard-column--drop-target")).toBeNull();
   });
 
+  it("previews a dense drop but keeps only confirmed placements after a conflict", async () => {
+    const moving = createWorkboardCard({ id: "moving", status: "backlog" });
+    const peer = createWorkboardCard({ id: "peer", position: 0 });
+    const firstReceipt = createDeferred<unknown>();
+    const secondReceipt = createDeferred<unknown>();
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(firstReceipt.promise)
+      .mockReturnValueOnce(secondReceipt.promise);
+    const { state, container, renderView } = createWorkboardView({
+      canWrite: true,
+      client: { request },
+    });
+    state.cards = [peer, moving];
+    state.draggedCardId = moving.id;
+    renderView();
+    const rows = (status: string) =>
+      Array.from(
+        container.querySelectorAll<HTMLElement>(`.workboard-column--${status} [data-card-id]`),
+        (row) => row.dataset.cardId,
+      );
+    const target = expectDefined(
+      container.querySelector<HTMLElement>('[data-card-id="peer"]'),
+      "peer",
+    );
+    target.dispatchEvent(new MouseEvent("drop", { bubbles: true, cancelable: true, clientY: -1 }));
+    await waitForFast(() => expect(rows("todo")).toEqual([moving.id, peer.id]));
+    expect(rows("backlog")).toEqual([]);
+    expect(state.cards).toEqual([peer, moving]);
+    expect(request).toHaveBeenCalledTimes(1);
+    const shifted = { ...peer, position: 1999, updatedAt: 2 };
+    firstReceipt.resolve({ card: shifted });
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    const newer = { ...moving, title: "Already moved elsewhere", status: "review", updatedAt: 3 };
+    secondReceipt.reject(
+      new GatewayProtocolRequestError({
+        code: "workboard_conflict",
+        message: "Card changed. Review and retry.",
+        details: { type: "workboard_card_conflict", card: newer },
+      }),
+    );
+    await waitForFast(() => expect(rows("todo")).toEqual([peer.id]));
+    expect(rows("review")).toEqual([moving.id]);
+    expect(state.cards).toEqual([newer, shifted]);
+    expect(state.error).toContain("Card changed. Review and retry.");
+    expect(state.busyCardIds.size).toBe(0);
+  });
+
   it("places variable-height card drops without measuring unrelated rows", async () => {
     const request = vi.fn().mockResolvedValue({
       card: createWorkboardCard({ id: "dragged", position: 1500 }),
@@ -453,6 +501,7 @@ describe("WorkboardView", () => {
     await waitForFast(() => {
       expect(request).toHaveBeenCalledWith("workboard.cards.move", {
         id: "dragged",
+        expectedUpdatedAt: 1,
         status: "todo",
         position: 1500,
       });
@@ -785,6 +834,7 @@ describe("WorkboardView", () => {
     } else {
       expect(request).toHaveBeenCalledWith("workboard.cards.move", {
         id: movingCard.id,
+        ...(route === "drop" ? { expectedUpdatedAt: movingCard.updatedAt } : {}),
         status,
         position,
       });

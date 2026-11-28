@@ -8,6 +8,20 @@ private let chatSessionActionsLogger = Logger(
 extension OpenClawChatViewModel {
     static let sessionListFetchLimit = 200
 
+    /// Shows plain words for an action that failed and keeps the error itself for the log, so a
+    /// server or transport message never reaches the screen.
+    func reportFailure(_ text: String, _ error: Error, while action: String) {
+        chatUILogger.error("chat \(action, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+        self.errorText = text
+    }
+
+    /// A lost connection keeps its own wording, which the first-connection notice recognizes.
+    func reportChatLoadFailure(_ errorDescription: String) {
+        chatUILogger.error("chat load failed: \(errorDescription, privacy: .public)")
+        self.errorText = chatErrorIsDisconnected(errorDescription)
+            ? errorDescription : String(localized: "Couldn’t load this chat.")
+    }
+
     public func deleteSession(_ sessionKey: String, agentID: String? = nil) {
         let target = self.sessionMutationTarget(key: sessionKey, agentID: agentID)
         let transport = self.transport
@@ -21,7 +35,7 @@ extension OpenClawChatViewModel {
                 }
                 try await routeLease.deleteSession(key: sessionKey, agentID: target.agentID)
             } catch {
-                self.errorText = error.localizedDescription
+                self.reportFailure(String(localized: "Couldn’t delete this chat."), error, while: "delete chat")
                 return
             }
             if let owner {
@@ -182,7 +196,7 @@ extension OpenClawChatViewModel {
                 // silently resetting the current session.
                 guard requestedAgentID == nil, !worktree else {
                     chatUILogger.error("sessions.create unsupported; advanced options not honored")
-                    self.errorText = error.localizedDescription
+                    self.reportFailure(String(localized: "Couldn’t start a new chat."), error, while: "start new chat")
                     return false
                 }
                 guard self.canCreateSessionForImmediateSwitch() else { return false }
@@ -190,8 +204,7 @@ extension OpenClawChatViewModel {
                 await self.performReset()
                 return self.isCurrentSession(initiatingSession)
             }
-            chatUILogger.error("sessions.create failed \(error.localizedDescription, privacy: .public)")
-            self.errorText = error.localizedDescription
+            self.reportFailure(String(localized: "Couldn’t start a new chat."), error, while: "start new chat")
             return false
         }
         guard self.isCurrentSession(initiatingSession), self.canCreateSessionForImmediateSwitch() else {
@@ -539,7 +552,7 @@ extension OpenClawChatViewModel {
                 owner?.finishMutation(token, receipt: nil)
                 guard self.isCurrentSession(presentation) else { return }
                 if owner == nil { self.sessions = self.applyingLocalUnreadOverrides(to: previous) }
-                self.errorText = error.localizedDescription
+                self.reportFailure(String(localized: "Couldn’t update this chat."), error, while: "update chat")
                 let failure = error.localizedDescription
                 chatSessionActionsLogger.error(
                     "sessions.patch(\(field.rawValue, privacy: .public)) failed \(failure, privacy: .public)")
@@ -567,7 +580,7 @@ extension OpenClawChatViewModel {
             self.switchSession(to: createdKey)
         } catch {
             guard self.isCurrentSession(initiatingSession) else { return }
-            self.errorText = error.localizedDescription
+            self.reportFailure(String(localized: "Couldn’t fork this chat."), error, while: "fork chat")
             chatSessionActionsLogger.error(
                 "sessions.create(fork) failed \(error.localizedDescription, privacy: .public)")
         }
@@ -612,7 +625,7 @@ extension OpenClawChatViewModel {
         } catch {
             await self.cancelOutboxSessionMutation(initiatingSession)
             guard self.isCurrentSession(initiatingSession) else { return }
-            self.errorText = error.localizedDescription
+            self.reportFailure(String(localized: "Couldn’t go back to this message."), error, while: "rewind")
             chatSessionActionsLogger.error(
                 "sessions.rewind failed \(error.localizedDescription, privacy: .public)")
         }
@@ -806,7 +819,7 @@ extension OpenClawChatViewModel {
         } catch {
             await self.cancelOutboxSessionMutation(initiatingSession)
             guard self.isCurrentSessionBranchSwitchActivity(switchActivity) else { return }
-            self.errorText = error.localizedDescription
+            self.reportFailure(String(localized: "Couldn’t switch branches."), error, while: "switch branch")
             chatSessionActionsLogger.error(
                 "sessions.branches.switch failed \(error.localizedDescription, privacy: .public)")
         }
@@ -850,7 +863,7 @@ extension OpenClawChatViewModel {
         } catch {
             await self.cancelOutboxSessionMutation(initiatingSession)
             guard self.isCurrentSession(initiatingSession) else { return }
-            self.errorText = error.localizedDescription
+            self.reportFailure(String(localized: "Couldn’t fork from this message."), error, while: "fork at message")
             chatSessionActionsLogger.error(
                 "sessions.fork failed \(error.localizedDescription, privacy: .public)")
         }
@@ -918,7 +931,10 @@ extension OpenClawChatViewModel {
                     self.sessions[index].unread = rollbackUnread
                 }
                 self.refreshSessions()
-                self.errorText = error.localizedDescription
+                self.reportFailure(
+                    String(localized: "Couldn’t change this chat’s unread mark."),
+                    error,
+                    while: "set unread")
                 chatSessionActionsLogger.error(
                     "sessions.patch(unread) failed \(error.localizedDescription, privacy: .public)")
             }
@@ -941,7 +957,7 @@ extension OpenClawChatViewModel {
                 color: .some(color))
             self.refreshSessions(limit: Self.sessionListFetchLimit)
         } catch {
-            self.errorText = error.localizedDescription
+            self.reportFailure(String(localized: "Couldn’t change this chat’s color."), error, while: "set color")
         }
     }
 
@@ -982,7 +998,7 @@ extension OpenClawChatViewModel {
             return
         }
         guard let expectedSessionID = ChatPayloadDecoding.trimmedNonEmptyString(session.sessionId) else {
-            self.errorText = "Session lifecycle action requires a durable session identity."
+            self.errorText = String(localized: "Couldn’t archive this chat.")
             return
         }
         self.mutateSessionOptimistically(
@@ -1015,7 +1031,7 @@ extension OpenClawChatViewModel {
     public func restoreSession(_ session: OpenClawChatSessionEntry) async -> Bool {
         let target = self.sessionMutationTarget(key: session.key, agentID: session.agentId)
         guard let expectedSessionID = ChatPayloadDecoding.trimmedNonEmptyString(session.sessionId) else {
-            self.errorText = "Session lifecycle action requires a durable session identity."
+            self.errorText = String(localized: "Couldn’t restore this chat.")
             return false
         }
         let owner = self.sidebarData
@@ -1036,9 +1052,7 @@ extension OpenClawChatViewModel {
             self.refreshSessions()
             return true
         } catch {
-            self.errorText = error.localizedDescription
-            chatSessionActionsLogger.error(
-                "sessions.patch(archived=false) failed \(error.localizedDescription, privacy: .public)")
+            self.reportFailure(String(localized: "Couldn’t restore this chat."), error, while: "restore chat")
             return false
         }
     }
@@ -1189,6 +1203,7 @@ extension OpenClawChatViewModel {
         }
         guard self.isCurrentSession(session) else { return false }
         guard self.healthOK else {
+            self.errorText = String(localized: "Connect to send with these chat settings.")
             return false
         }
         do {
@@ -1202,6 +1217,12 @@ extension OpenClawChatViewModel {
             self.newChatDraft?.settingsApplied = true
             return true
         } catch {
+            if self.isCurrentSession(session) {
+                self.reportFailure(
+                    String(localized: "Couldn’t apply this chat’s settings."),
+                    error,
+                    while: "apply new chat settings")
+            }
             return false
         }
     }

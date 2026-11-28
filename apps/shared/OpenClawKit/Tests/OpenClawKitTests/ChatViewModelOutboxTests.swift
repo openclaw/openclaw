@@ -179,6 +179,7 @@ actor OutboxTransportState {
     var historyRequestAgentIDs: [String?] = []
     var sentThinkingLevels: [String] = []
     var sentQueueModes: [OpenClawChatQueueMode?] = []
+    var sentAttachmentFileNames: [[String]] = []
     var sentSessionSettings: [OpenClawChatSessionSettingsExpectation?] = []
 
     init(healthy: Bool, sendFails: Bool) {
@@ -527,8 +528,9 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
         let transport = self
         return .available(OpenClawChatTransportRouteLease(
             sendTargetedMessage: {
-                sessionKey, target, message, thinking, idempotencyKey, _ in
-                try await transport.sendMessage(
+                sessionKey, target, message, thinking, idempotencyKey, attachments in
+                await transport.state.update { $0.sentAttachmentFileNames.append(attachments.map(\.fileName)) }
+                return try await transport.sendMessage(
                     sessionKey: sessionKey,
                     agentID: target.agentID,
                     message: message,
@@ -1021,6 +1023,10 @@ struct ChatViewModelBusySendTests {
             vm.sessions[0].effectiveQueueMode = mode
             #expect(vm.sendModeChoices == [.steer, .followup])
         }
+        vm.defaultFollowUpMode = .followup
+        #expect(vm.sendModeChoices == [.steer])
+        vm.defaultFollowUpMode = .steer
+        #expect(vm.sendModeChoices == [.followup])
         vm.input = "/steer use the shorter approach"
         #expect(vm.sendModeChoices.isEmpty)
         vm.input = "use the shorter approach"
@@ -1100,10 +1106,13 @@ struct ChatViewModelBusySendTests {
         #expect(vm.pendingToolCalls.map(\.toolCallId) == ["tool-1"])
     }
 
-    @Test(arguments: [OpenClawChatQueueMode.steer, .followup])
+    @Test(
+        arguments: [OpenClawChatQueueMode.steer, .followup],
+        ["explicit", "preference", "override"])
     @MainActor
-    func `per message send mode survives reopening and reaches the route lease`(
-        mode: OpenClawChatQueueMode) async throws
+    func `send mode survives reopening and explicit choices override the host preference`(
+        mode: OpenClawChatQueueMode,
+        source: String) async throws
     {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
@@ -1113,8 +1122,13 @@ struct ChatViewModelBusySendTests {
         await vm.bootstrapTask?.value
         await waitForObservedState { vm.hasRestoredOutboxMessages }
         vm.input = "use the shorter approach"
-        let send = try #require(vm.send(queueMode: mode))
-        #expect(vm.send(queueMode: mode) == nil)
+        if source != "explicit" {
+            vm.hasActiveSessionRunWithoutChatSnapshot = true
+            vm.defaultFollowUpMode = source == "preference" ? mode : (mode == .steer ? .followup : .steer)
+        }
+        let explicitMode: OpenClawChatQueueMode? = source == "preference" ? nil : mode
+        let send = try #require(vm.send(queueMode: explicitMode))
+        #expect(vm.send(queueMode: explicitMode) == nil)
         await send.value
         #expect(vm.input.isEmpty)
         #expect(await offline.state.sentMessages.isEmpty)
@@ -1195,7 +1209,7 @@ struct ChatViewModelBusySendTests {
     }
 
     @Test @MainActor
-    func `busy admission still rejects branch switches and attachments`() async throws {
+    func `busy admission still rejects branch switches`() async throws {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
         let transport = OutboxTestTransport(healthy: true)
@@ -1208,18 +1222,54 @@ struct ChatViewModelBusySendTests {
         #expect(!vm.canSend)
         #expect(vm.send() == nil)
         vm.endSessionBranchSwitchActivity(branchSwitch)
-        vm.attachments = [OpenClawPendingAttachment(
-            url: nil,
-            data: Data([1]),
-            fileName: "note.txt",
-            mimeType: "text/plain",
-            preview: nil)]
-        #expect(!vm.canSend)
-        #expect(vm.send() == nil)
-        #expect(vm.send(queueMode: .steer) == nil)
+        #expect(vm.canSend)
         #expect(vm.input == "next task")
         #expect(await store.loadCommands().isEmpty)
         #expect(await transport.state.sentMessages.isEmpty)
+    }
+
+    /// A photo sent while a reply runs goes out behind it, or steers it, like text: the outbox keeps
+    /// its bytes and its mode, and the Gateway gets both.
+    @Test(arguments: [
+        (OpenClawChatQueueMode?.none, "look at this"),
+        (.followup, ""),
+        (.steer, "use this one instead"),
+    ])
+    @MainActor
+    func `busy attachment drafts go out with their queue mode`(
+        mode: OpenClawChatQueueMode?,
+        text: String) async throws
+    {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let transport = OutboxTestTransport(healthy: true)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        vm.load()
+        await vm.bootstrapTask?.value
+        await waitForObservedState { vm.hasRestoredOutboxMessages }
+        vm.hasActiveSessionRunWithoutChatSnapshot = true
+        vm.defaultFollowUpMode = .followup
+        vm.input = text
+        vm.attachments = [OpenClawPendingAttachment(
+            url: nil,
+            data: Data([1, 2, 3]),
+            fileName: "photo.jpg",
+            mimeType: "image/jpeg",
+            preview: nil)]
+        #expect(vm.canSend)
+        #expect(vm.canChooseSendMode)
+        let send = try #require(vm.send(queueMode: mode))
+        await send.value
+        #expect(vm.input.isEmpty)
+        #expect(vm.attachments.isEmpty)
+        if let flush = vm.outboxFlushTask { await flush.value }
+        var waits = 0
+        while await transport.state.sentAttachmentFileNames.isEmpty, waits < 500 {
+            waits += 1
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await transport.state.sentAttachmentFileNames == [["photo.jpg"]])
+        #expect(await transport.state.sentQueueModes == [mode ?? .followup])
     }
 
     @Test @MainActor
@@ -1813,7 +1863,7 @@ struct ChatViewModelOutboxTests {
         let previousError = await MainActor.run { vm.errorText }
         await MainActor.run { vm.retryOutboxMessage(messageID) }
         try await waitForOutboxState { vm.errorText != nil && vm.errorText != previousError }
-        #expect(await MainActor.run { vm.errorText == "Select an agent before retrying this message." })
+        #expect(await MainActor.run { vm.errorText == "Choose an agent first." })
         let command = await store.loadCommands().first
         #expect(command?.status == .failed)
         #expect(command?.agentID == nil)
@@ -2064,7 +2114,7 @@ struct ChatViewModelOutboxTests {
             vm.send()
         }
         try await waitForOutboxState { !vm.isSubmittingDraft }
-        #expect(await MainActor.run { vm.errorText == "Connect to the gateway to run this command." })
+        #expect(await MainActor.run { vm.errorText == "Connect to run this command." })
         #expect(await MainActor.run { vm.input } == "/new")
         #expect(await store.loadCommands().isEmpty)
         #expect(await transport.state.sentMessages.isEmpty)

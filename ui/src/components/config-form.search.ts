@@ -195,15 +195,12 @@ export function matchesConfigSectionSearch(params: {
   schema: JsonSchema;
   value: unknown;
   hints: ConfigUiHints;
-  query: string;
+  criteria: ConfigSearchCriteria;
   label?: string;
   description?: string;
   textMatcher?: ConfigSearchTextMatcher;
 }): boolean {
-  if (!params.query) {
-    return true;
-  }
-  const criteria = parseConfigSearchQuery(params.query);
+  const { criteria } = params;
   const metadataMatches =
     criteria.tags.length === 0 &&
     criteria.text.length > 0 &&

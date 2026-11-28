@@ -25,7 +25,9 @@ export async function openModelSetup(page: Page, baseUrl?: string) {
   // Preserve coverage of old bookmarks while subsequent visits use the actual
   // Models entry point without replacing the current document or connection.
   const response = baseUrl ? await page.goto(`${baseUrl}settings/model-setup`) : null;
-  await page.locator("[data-models-login-discover]").click();
+  if (!(await page.locator(".model-setup-discovery").isVisible())) {
+    await page.locator("[data-models-login-discover]").click();
+  }
   await page.locator('.oc-dialog__header h2:text-is("Available models")').waitFor();
   expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
   return response;

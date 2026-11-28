@@ -37,6 +37,8 @@ export {
   createGatewayToolPolicyAssertion,
 } from "../agents/gateway-tool-policy.js";
 export { runAgentHarnessToolInvocation } from "../agents/harness/tool-invocation.js";
+/** The one fresh tool-result bound for routes that execute tools outside the invocation owner. */
+export { boundToolResult as boundAgentHarnessToolResult } from "../agents/embedded-agent-runner/tool-result-bound.js";
 export { runWithToolExecutionValidation } from "../agents/agent-tools.execution-validation.js";
 export {
   createAgentHarnessToolExecutionRegistry,

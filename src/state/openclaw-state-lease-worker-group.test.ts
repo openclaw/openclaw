@@ -54,6 +54,7 @@ function sourceContext(): OpenClawStateWorkerContext {
       coordinationKey: "file:1:2",
       databasePath: "/synthetic-alias/state.sqlite",
       identity: { key: "file:1:2", canonicalPath: "/synthetic-state/state.sqlite" },
+      isCurrent: () => true,
       assertCurrent: noop,
     },
   };

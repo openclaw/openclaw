@@ -315,7 +315,7 @@ async function deliverOwedNoticeAfterRestart(params: {
     await recover();
     await settle();
     expect(received).toEqual([
-      "The Gateway stopped before this subagent finished. Its run did not survive the restart; inspect its saved work before retrying.",
+      "The Gateway restarted without confirming this subagent's result. Remote work may still be running or may have finished. Check the original worker and its saved work before retrying.",
     ]);
     expect(subagentRuns.get(child.runId)?.delivery?.status).toBe("delivered");
     return wokenAs;

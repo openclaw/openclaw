@@ -223,8 +223,11 @@ verification, recovery, and compaction keep their existing checks. See
 [migration integrity checks](/install/updating#migration-integrity-checks) for
 the coverage and installed-updater boundary.
 
-Update-time Doctor runs startup-required repairs before optional inspections.
-When the installed updater supports post-restart inspections, Doctor moves
+Native release updates settle at Gateway readiness without running a post-activation
+Doctor subprocess. Run `openclaw doctor --lint` to inspect the running install.
+
+Legacy update-time Doctor runs startup-required repairs before optional inspections.
+When the installed legacy updater supports post-restart inspections, Doctor moves
 lint-backed, inspection-only checks out of the stopped Gateway window. The
 updater runs them after restart and saves their findings in the
 `post-activation doctor inspections` result step. Planned deferrals are progress,

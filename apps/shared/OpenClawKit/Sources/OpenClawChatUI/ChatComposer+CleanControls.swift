@@ -18,46 +18,16 @@ extension OpenClawChatComposer {
         .accessibilityIdentifier("chat-attachment-picker")
         .disabled(!self.isAttachmentInputEnabled)
         #else
-        Menu {
-            Button {
-                self.photoPickerPresentation.wrappedValue = true
-            } label: {
-                chatActionLabel(Text("Photo Library"), systemImage: "photo.on.rectangle")
-            }
-            .disabled(!self.isAttachmentInputEnabled)
-
-            #if canImport(UIKit)
-            Button {
-                self.cameraPickerPresentation.wrappedValue = true
-            } label: {
-                chatActionLabel(Text("Camera"), systemImage: "camera")
-            }
-            .disabled(
-                !self.isAttachmentInputEnabled ||
-                    !UIImagePickerController.isSourceTypeAvailable(.camera))
-            #endif
-
-            Button {
-                self.fileImporterPresentation.wrappedValue = true
-            } label: {
-                chatActionLabel(Text("File"), systemImage: "folder")
-            }
-            .disabled(!self.isAttachmentInputEnabled)
-
-            Divider()
-            if self.viewModel.sessionBranches.count > 1 {
-                self.branchMenu
-            }
-            self.verbosityPicker
-                .disabled(!self.viewModel.composerVerboseMutationAvailable)
-            self.cleanComposerCapabilityItems
+        // The phone opens the "+" sheet (ChatComposerAddSheet).
+        Button {
+            self.openAddSheet()
         } label: {
             CompactChatAttachmentLabel()
         }
-        .help("Composer options")
-        .accessibilityLabel("Composer options")
+        .accessibilityLabel("Add")
         .accessibilityIdentifier("chat-attachment-picker")
         .buttonStyle(.plain)
+        // The shield beside it and the sheet read the same capabilities.
         .task(id: self.viewModel.composerCapabilityOwnerID) {
             await self.viewModel.loadComposerCapabilities()
         }
@@ -401,7 +371,7 @@ extension OpenClawChatComposer {
             HStack(spacing: 3) {
                 CleanChatEffortGauge(
                     angle: self.viewModel.composerInlineEffortAngle,
-                    fastModeEnabled: self.viewModel.fastModeIsEnabled,
+                    speedBolt: ChatSpeedBolt(rawValue: self.viewModel.composerSpeedSelection),
                     accentProgress: self.viewModel.thinkingLevel == "ultra",
                     width: CleanChatComposerMetrics.effortGaugeWidth,
                     ink: CleanChatComposerMetrics.footerInk,
@@ -431,7 +401,7 @@ extension OpenClawChatComposer {
         } label: {
             CleanChatEffortGauge(
                 angle: self.viewModel.composerInlineEffortAngle,
-                fastModeEnabled: self.viewModel.fastModeIsEnabled,
+                speedBolt: self.viewModel.fastModeIsEnabled ? .fast : nil,
                 accentProgress: self.viewModel.thinkingLevel == "ultra",
                 width: 20,
                 ink: .secondary,
@@ -483,11 +453,12 @@ extension OpenClawChatComposer {
         #endif
     }
 
-    /// Keep recovery visible when authentication blocks send or capture UI replaces the model menu.
+    /// Keep recovery visible when authentication blocks send or a voice note replaces the model menu.
+    /// Talk hides the model chip too, but a working chat needs no sign-in link under it.
     var showsModelSignInRow: Bool {
         #if os(iOS)
         guard self.composerChrome == .clean else { return true }
-        return self.viewModel.composerModelAvailabilityMessage != nil || self.cleanShowsCameraFlip ||
+        return self.viewModel.composerModelAvailabilityMessage != nil ||
             self.voiceNoteControl?.recorder.isRecording == true
         #else
         !self.usesDesktopModelMenu

@@ -185,7 +185,7 @@ export function findSettingsSearchBlocks(params: {
           schema: tierSchema,
           value: value[key],
           hints: params.uiHints,
-          query: params.query,
+          criteria,
           label: meta?.label,
           description: meta?.description,
           textMatcher: settingsSearchTextMatches,

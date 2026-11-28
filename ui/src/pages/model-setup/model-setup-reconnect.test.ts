@@ -13,6 +13,7 @@ import {
   running,
   callsFor,
   authButton,
+  candidate,
   waitForElement,
   waitForText,
   createFirstRunContext,
@@ -80,9 +81,6 @@ async function mountPage(context: ApplicationContext, visit = true): Promise<Tes
   return page;
 }
 
-const selectedModelDetail = (page: TestModelSetupPage) =>
-  page.querySelector(".model-setup__current-copy > .muted")?.textContent?.trim();
-
 describe("ModelSetupPage detection ownership", () => {
   let fixture: ReturnType<typeof createFixture>;
   beforeEach(async () => {
@@ -136,7 +134,10 @@ describe("ModelSetupPage detection ownership", () => {
     });
     request.mockImplementation(async (method) =>
       method === "openclaw.setup.detect"
-        ? { ...detection, configuredModel: "provider/current-model", setupComplete: true }
+        ? {
+            ...detection,
+            candidates: [candidate("openai-api-key", "provider/current-model", true)],
+          }
         : {},
     );
     const page = await mountPage(context);
@@ -148,12 +149,16 @@ describe("ModelSetupPage detection ownership", () => {
     page.routeData = { firstRun: false };
     provider.append(page);
     mountModelSetupPage(page);
-    await vi.waitFor(() => expect(selectedModelDetail(page)).toBe("current-model"));
+    await waitForText(page, "provider/current-model");
     expect(signal?.aborted).toBe(true);
-    stale.resolve({ ...detection, configuredModel: "provider/stale-model", setupComplete: true });
+    stale.resolve({
+      ...detection,
+      candidates: [candidate("openai-api-key", "provider/stale-model", true)],
+    });
     await vi.waitFor(() => expect(request.mock.settledResults[0]?.type).toBe("fulfilled"));
     await page.updateComplete;
-    expect(selectedModelDetail(page)).toBe("current-model");
+    expect(page.textContent).toContain("provider/current-model");
+    expect(page.textContent).not.toContain("provider/stale-model");
   });
 
   it("replaces failed detection with loading while the agent roster is pending", async () => {

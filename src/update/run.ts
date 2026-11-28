@@ -12,7 +12,6 @@ import {
   UpdatePreMutationError,
 } from "../cli/update-cli/shared.js";
 import type { PostCorePluginUpdateResult } from "../cli/update-cli/update-command-plugins-internals.js";
-import { resolveStateDir } from "../config/paths.js";
 import { isBunRuntime } from "../daemon/runtime-binary.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
@@ -323,7 +322,6 @@ export async function prepareUpdate(params: {
         kind: install.kind,
         target,
         prefix,
-        stateDir: resolveStateDir(env),
         node,
         env,
       });

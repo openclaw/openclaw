@@ -12,11 +12,13 @@ type TranscriptMessageKeys = Pick<ReadonlySet<string>, "keys" | "has">;
 /** Own the message anchor across projection capture, measurement, and restoration. */
 export class TranscriptPrependAnchor {
   messageKeys: TranscriptMessageKeys = new Set();
-  committedMessageRows: ReadonlyMap<string, string> = new Map();
+  syncBeforeCapture: (() => void) | null = null;
+  private committedMessageRows: ReadonlyMap<string, string> = new Map();
   private searchProjection: TranscriptSearchProjection = null;
   private searchReturn: ChatTranscriptPrependAnchor | "end" | null = null;
   private searchPlacement: "reader" | "end" | null = null;
   private firstMessageKey: string | undefined;
+  private committedToolVisibility?: boolean;
   private source?: TranscriptProjectionSource;
   private firstSourceMessage: unknown;
   private pending:
@@ -114,6 +116,15 @@ export class TranscriptPrependAnchor {
     );
   }
 
+  /** Tool visibility can move a message inside a run without changing any row keys. */
+  commitRows(rows: ReadonlyMap<string, string>): boolean {
+    this.committedMessageRows = rows;
+    const tools = this.source?.showToolCalls;
+    const previous = this.committedToolVisibility;
+    this.committedToolVisibility = tools;
+    return previous !== undefined && previous !== tools;
+  }
+
   /** Retain a reader through committed history or row-projection changes. */
   capture(
     element: HTMLDivElement | null,
@@ -136,6 +147,10 @@ export class TranscriptPrependAnchor {
     // original reader target rather than recapturing an already shifted bubble.
     const retained =
       this.pending && this.messageKeys.has(this.pending.messageKey) ? this.pending : null;
+    if (!retained && element) {
+      // The DOM can include wheel travel that the offset observer has not delivered yet.
+      this.syncBeforeCapture?.();
+    }
     const anchor =
       retained ??
       captureTranscriptPrependAnchor(element, this.messageKeys, this.messageElements.values());
@@ -208,6 +223,7 @@ export class TranscriptPrependAnchor {
     this.searchReturn = null;
     this.searchProjection = null;
     this.firstMessageKey = undefined;
+    this.committedToolVisibility = undefined;
     this.firstSourceMessage = undefined;
     this.source = undefined;
     this.messageKeys = new Set();

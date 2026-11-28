@@ -917,6 +917,8 @@ extension OpenClawChatViewModel {
         retainedMessageIDs.formUnion(self.outboxCommandIDsByMessageID.keys)
         retainedMessageIDs.formUnion(self.pendingLocalUserEchoMessageIDsByRunID.values)
         retainedMessageIDs.formUnion(self.historyRouteLocalUserEchoIDs)
+        // The message shown at the Send tap, still on its way to the outbox or a run.
+        retainedMessageIDs.formUnion(optimisticSendMessageID.map { [$0] } ?? [])
         var nextMessages = if isDelta {
             // The canonical prefix and ordered delta precede local/live-only rows retained by anchor.
             Self.insertingRetainedMessages(

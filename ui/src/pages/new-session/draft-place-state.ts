@@ -303,6 +303,16 @@ export class DraftPlaceState {
     );
   }
 
+  get savedProjectLookupFailed(): boolean {
+    const { preferredProjectRestore, preferredRemoteProjectRestore } = this.selection;
+    return (
+      Boolean(preferredProjectRestore || preferredRemoteProjectRestore) &&
+      !this.browser.projectsReady &&
+      !this.browser.projectsLoading &&
+      this.browser.projectCatalogError != null
+    );
+  }
+
   get placementPreferenceReady(): boolean {
     return (
       Boolean(this.deviceFolder) ||

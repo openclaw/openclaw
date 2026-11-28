@@ -19,32 +19,24 @@ function resolveAgentsRouteLocation(sourceLocation: RouteLocation, basePath = ""
   const location = restoreBridgedRouteLocation(sourceLocation, INTERNAL_AGENT_PATH_PARAM);
   const pathRoute = agentRouteFromPath(location.pathname, basePath);
   const params = new URLSearchParams(location.search);
-  const hadLegacyAgent = params.has("agent");
   const legacyAgentId = params.get("agent")?.trim() ?? "";
   const legacyAgent =
     legacyAgentId && !legacyAgentId.includes("/") && legacyAgentId !== "." && legacyAgentId !== ".."
       ? legacyAgentId
       : null;
-  params.delete("agent");
-  const search = params.toString();
   const requestedAgentId = pathRoute?.agentId ?? legacyAgent;
-  const canonicalPath = pathRoute
-    ? pathForAgentPanel(
-        pathRoute.agentId,
-        pathRoute.invalidPanel ? null : pathRoute.panelSegment,
-        basePath,
-      )
-    : requestedAgentId
-      ? pathForAgentPanel(requestedAgentId, null, basePath)
-      : pathForRoute("agents", basePath);
-  const canonicalLocation =
-    hadLegacyAgent || pathRoute?.invalidPanel
-      ? {
-          pathname: canonicalPath,
-          search: search ? `?${search}` : "",
-          hash: location.hash,
-        }
-      : undefined;
+  let canonicalLocation: RouteLocation | undefined;
+  if (params.has("agent") || pathRoute?.invalidPanel) {
+    params.delete("agent");
+    const search = params.toString();
+    canonicalLocation = {
+      pathname: requestedAgentId
+        ? pathForAgentPanel(requestedAgentId, pathRoute?.panelSegment ?? null, basePath)
+        : pathForRoute("agents", basePath),
+      search: search ? `?${search}` : "",
+      hash: location.hash,
+    };
+  }
   return {
     location,
     requestedAgentId,
@@ -61,7 +53,7 @@ export const page = defineSolidPage<"agents", ApplicationContext, AgentsRouteDat
     gcTime: 0,
     preloadGcTime: 0,
     loaderDeps: (context: ApplicationContext, location: RouteLocation) => {
-      const route = resolveAgentsRouteLocation(location, context.basePath).location;
+      const route = restoreBridgedRouteLocation(location, INTERNAL_AGENT_PATH_PARAM);
       return `${route.pathname}\u0000${route.search}\u0000${route.hash}\u0000${context.settingsAgentSelection.intentRevision}`;
     },
     // Cached selections must settle without a module-loading delay that retains stale controls.

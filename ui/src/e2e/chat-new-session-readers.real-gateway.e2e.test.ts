@@ -11,6 +11,7 @@ import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses
 import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import { assertServedUi, chatControls, pairFixture } from "./chat-lifecycle.test-support.ts";
 import { createChatGatewayInstance } from "./chat-real-gateway.test-support.ts";
 import {
@@ -75,13 +76,12 @@ suite.define(() => {
     suite.runScenario(test, {
       retainedState: () => instance.stateDir,
       run: () =>
-        // Wide enough for session Details, whose Processes section reads with the chat. The
-        // service worker serves a reload's shell before the Gateway answers, as for users.
+        // The service worker serves a reload's shell before the Gateway answers, as for users.
         suite.withPage(
           {
             ...createControlUiE2eContextOptions(),
             serviceWorkers: "allow",
-            viewport: { width: 1600, height: 900 },
+            viewport: { width: 1100, height: 900 },
           },
           async ({ page }) => {
             const pending = new Map<string, RequestFrame>();
@@ -128,13 +128,17 @@ suite.define(() => {
             await page.reload();
             await waitForControlUiGatewayReady(page);
             await expect.poll(historyAnswers).toBeGreaterThan(answered);
-            await page
-              .locator("openclaw-chat-details-session")
-              .first()
-              .waitFor({ state: "attached" });
+            // Automatic Details can wait for the transcript we are holding. Open it explicitly,
+            // then dock it so its readers stay mounted through the first send.
+            const details = await openChatDetails(pane);
+            await details.locator("openclaw-chat-details-session").waitFor({ state: "attached" });
+            await page.setViewportSize({ width: 1600, height: 900 });
             historyHold = undefined;
             release.resolve();
             await composer.fill("Hello for the first time");
+            expect([...pending.values()].map((req) => req.method)).not.toContain(
+              "sessions.processes.list",
+            );
             await send.click();
             await pane
               .locator(".chat-bubble")

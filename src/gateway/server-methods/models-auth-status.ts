@@ -22,6 +22,7 @@ import {
   resolveAuthProfileMetadata,
   resolveExplicitAuthOrderSelection,
 } from "../../agents/auth-profiles.js";
+import { resolveAuthProfileDisplayNameTarget } from "../../agents/auth-profiles/display-name.js";
 import { refreshRuntimeAuthProfileStoreSources } from "../../agents/auth-profiles/runtime-snapshots.js";
 import type { RuntimeAuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
@@ -61,6 +62,17 @@ import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const log = createSubsystemLogger("models-auth-status");
+// Known presentation labels only. Never project arbitrary provider or token metadata.
+const PROFILE_PLAN_LABELS = new Map([
+  ["free", "Free"],
+  ["plus", "Plus"],
+  ["pro", "Pro"],
+  ["team", "Business"],
+  ["business", "Business"],
+  ["enterprise", "Enterprise"],
+  ["edu", "Edu"],
+]);
+
 const PROVIDER_REVOKE_TIMEOUT_MS = 30_000;
 
 /**
@@ -579,8 +591,34 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
                 prof.expiresAt,
               ),
             };
-            if (includeProfileIdentity && metadata.displayName) {
-              profile.displayName = metadata.displayName;
+            if (includeProfileIdentity) {
+              const credential = store.profiles[prof.profileId];
+              const planLabel =
+                credential?.type === "oauth"
+                  ? (PROFILE_PLAN_LABELS.get(credential.chatgptPlanType?.toLowerCase() ?? "") ??
+                    PROFILE_PLAN_LABELS.get(credential.subscriptionType?.toLowerCase() ?? ""))
+                  : undefined;
+              const renameTarget = resolveAuthProfileDisplayNameTarget({
+                cfg,
+                store,
+                agentDir,
+                profileId: prof.profileId,
+                configBound: configBoundProfileIds.has(prof.profileId),
+              });
+              if (metadata.displayName) {
+                profile.displayName = metadata.displayName;
+              }
+              if (planLabel) {
+                profile.planLabel = planLabel;
+              }
+              if (renameTarget === "local" || renameTarget === "shared") {
+                profile.renameSupported = true;
+                profile.source = "saved";
+              } else if (renameTarget === "config") {
+                profile.nameManagedByConfig = true;
+              } else if (renameTarget === "external") {
+                profile.source = "external";
+              }
             }
             if (prof.reasonCode === "setup_inactive") {
               profile.displayName = "Saved sign-in (inactive)";

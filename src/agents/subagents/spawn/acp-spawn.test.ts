@@ -223,7 +223,7 @@ function gatewayResponse(method?: string) {
 
 type BindingInput = Parameters<NonNullable<SessionBindingAdapter["bind"]>>[0];
 
-function bindingMetadata(input: BindingInput, agentId = "codex", webhookId?: string) {
+function bindingMetadata(input: BindingInput, agentId: string, webhookId?: string) {
   return {
     boundBy: typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "system",
     agentId,
@@ -262,7 +262,7 @@ function configureAgents(entries: NonNullable<OpenClawConfig["agents"]>["entries
 function channelContext(
   agentChannel: string,
   agentTo: string,
-  overrides: Partial<SpawnContext> = {},
+  overrides: Partial<SpawnContext>,
 ): SpawnContext {
   return {
     agentSessionKey: "agent:main:main",
@@ -281,7 +281,7 @@ const requesterContext: SpawnContext = {
   agentThreadId: "1",
 };
 
-async function workspaceFixture(agent = "claude-code", exists = true) {
+async function workspaceFixture(agent: string, exists: boolean) {
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-spawn-"));
   const mainWorkspace = path.join(workspaceRoot, "main");
   const targetWorkspace = path.join(workspaceRoot, "claude-code");
@@ -971,8 +971,6 @@ describe("spawnAcpDirect", () => {
     expectRecordFields(hoisted.startAcpSpawnParentStreamRelayMock.mock.calls[0]?.[0], {
       parentSessionKey: "agent:main:subagent:parent",
       agentId: "codex",
-      ownerAgentId: "main",
-      childSessionId: "sess-123",
       deliveryContext: { channel: "discord", to: "channel:parent-channel", accountId: "default" },
     });
     const dispatchOrder = expectDefined(

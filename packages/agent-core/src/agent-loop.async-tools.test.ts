@@ -30,6 +30,7 @@ import { runAgentLoop } from "./agent-loop.js";
 import * as fixtures from "./agent-loop.test-support.js";
 import { streamAgentResponse } from "./agent-stream-response.js";
 import { Agent } from "./agent.js";
+import { RepetitionWatch } from "./repetition-guard.js";
 import { distinctRecordOutputs, variedRows } from "./repetition-guard.test-fixtures.js";
 import { getAgentToolExecutionContext } from "./tool-execution-context.js";
 import type { AgentEvent, AgentMessage, AgentTool, AgentToolCall, StreamFn } from "./types.js";
@@ -721,6 +722,78 @@ describe("repetition stop at the stream owner", () => {
     );
     expect(JSON.stringify(replay)).not.toContain("Please provide more input.");
     expect(JSON.stringify(replay)).toContain(marker);
+  });
+
+  it("watches a queued reasoning stream exactly once, in linear work", async () => {
+    const prefix = "QUEUED_REASONING:";
+    const chunks = Array.from(
+      { length: 2048 },
+      (_, index) =>
+        `${index === 0 ? prefix : ""}step ${index} ${index * 7919}`.padEnd(63, ".") + "\n",
+    );
+    const thinking = chunks.join("");
+    const content: AssistantMessage["content"] = [{ type: "thinking", thinking }];
+    const prefixWork = vi.spyOn(String.prototype, "startsWith");
+    const watched = vi.spyOn(RepetitionWatch.prototype, "feed");
+    try {
+      const response = await fixtures.captureToolLoop({
+        prompt: fixtures.user(),
+        tools: [],
+        // Every event is queued before the loop reads one: each snapshot already holds all chunks.
+        streamFn: () => {
+          const message = fixtures.makeAssistantMessage(content);
+          return fixtures.reply(message, [
+            { type: "start", partial: message },
+            ...chunks.map((delta) => ({
+              type: "thinking_delta" as const,
+              contentIndex: 0,
+              delta,
+              partial: message,
+            })),
+          ]);
+        },
+      }).run;
+      expect(response.at(-1)).toMatchObject({ stopReason: "stop", content });
+      let compared = 0;
+      for (const [index, [search]] of prefixWork.mock.calls.entries()) {
+        const text = String(prefixWork.mock.contexts[index]);
+        if (text.slice(0, prefix.length) === prefix && search.length > prefix.length) {
+          compared += search.length;
+        }
+      }
+      expect(compared).toBeLessThan(thinking.length * 4);
+      expect(watched.mock.calls.map(([text]) => text).join("")).toBe(thinking);
+    } finally {
+      prefixWork.mockRestore();
+      watched.mockRestore();
+    }
+  });
+
+  it("quarantines a same-length rewrite that a delta event carries", async () => {
+    const head = variedRows.slice(0, 20_000);
+    const tail = variedRows.slice(20_000, loop.length);
+    // The provider rewrites earlier text into a loop; only the length matches an append.
+    const rewritten = fixtures.makeAssistantMessage([{ type: "thinking", thinking: loop }]);
+    const { run, events } = fixtures.captureToolLoop({
+      prompt: fixtures.user(),
+      tools: [],
+      streamFn: () =>
+        fixtures.reply(rewritten, [
+          { type: "start", partial: fixtures.makeAssistantMessage([]) },
+          {
+            type: "thinking_delta",
+            contentIndex: 0,
+            delta: head,
+            partial: fixtures.makeAssistantMessage([{ type: "thinking", thinking: head }]),
+          },
+          { type: "thinking_delta", contentIndex: 0, delta: tail, partial: rewritten },
+        ]),
+    });
+    expectResponse(
+      { result: await run, events, requests: 1 },
+      [{ type: "text", text: marker }],
+      true,
+    );
   });
 
   it.each(["unadmitted snapshot", "delta", "error snapshot"])(

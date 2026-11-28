@@ -5,9 +5,7 @@ import { startAcpSpawnParentStreamRelay } from "./acp-spawn-parent-stream.js";
 
 const { enqueueSessionEventMock } = vi.hoisted(() => ({
   enqueueSessionEventMock: vi.fn((_text: string, _options: Record<string, unknown>) => ({
-    id: "occurrence",
-    cancel: vi.fn(() => true),
-    settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: true }),
+    settled: Promise.resolve({ status: "completed" }),
   })),
 }));
 // mock-isolation: Capture parent relay events without starting reply turns or session lookups.

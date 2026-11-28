@@ -433,13 +433,10 @@ describe("channel ingress queue", () => {
       eventId: string,
       overrides: Partial<{
         payload_json: string;
-        metadata_json: string | null;
-        completed_metadata_json: string | null;
         status: string;
         claim_token: string;
         claim_owner: string;
         claimed_at: number;
-        completed_at: number;
       }>,
     ) {
       const { db } = openIngressStateDatabase(stateDir);
@@ -455,15 +452,15 @@ describe("channel ingress queue", () => {
           status: overrides.status ?? "pending",
           lane_key: null,
           payload_json: overrides.payload_json ?? "null",
-          metadata_json: overrides.metadata_json ?? null,
-          completed_metadata_json: overrides.completed_metadata_json ?? null,
+          metadata_json: null,
+          completed_metadata_json: null,
           received_at: 100,
           updated_at: 200,
           attempts: 0,
           claim_token: claimValue,
           claim_owner: overrides.claim_owner ?? null,
           claimed_at: overrides.claimed_at ?? null,
-          completed_at: overrides.completed_at ?? null,
+          completed_at: null,
         } as Insertable<OpenClawStateKyselyDatabase["channel_ingress_events"]>),
       );
     }

@@ -1849,8 +1849,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
         "features.deferred_executor": true,
         "features.hooks": true,
         "features.image_generation": true,
-        "features.multi_agent": true,
-        "features.multi_agent_v2": true,
         "features.plugins": true,
         "features.skill_search": true,
         "features.shell_tool": true,
@@ -1921,8 +1919,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
         "features.deferred_executor",
         "features.hooks",
         "features.image_generation",
-        "features.multi_agent",
-        "features.multi_agent_v2",
         "features.plugins",
         "features.standalone_web_search",
         "features.token_budget",
@@ -1932,7 +1928,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       ]) {
         expect(threadConfig?.[disabledFeature]).toBe(false);
       }
-      expect(typedThreadRequest.developerInstructions).not.toContain("`spawn_agent`");
       expect(typedThreadRequest.developerInstructions).not.toContain("`tool_search`");
     }
     for (const [, startRequest] of threadRequests) {
@@ -2684,14 +2679,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       "thread/start",
       ...PREFLIGHT_METHODS,
     ]);
-    expect(
-      request.mock.calls.filter(([method]) => method === "thread/start")[1]?.[1],
-    ).toMatchObject({
-      config: {
-        "features.multi_agent": false,
-        "features.multi_agent_v2": false,
-      },
-    });
   });
 
   it("preserves the native-search binding when provider capability support is unknown", async () => {
