@@ -26,7 +26,7 @@ beforeEach(() => {
 
 async function executeWithBlockReply(
   onBlockReply: (payload: ReplyPayload) => Promise<void>,
-  options: { payload?: ReplyPayload; afterReply?: () => void; final?: ReplyPayload[] } = {},
+  options: { payload?: ReplyPayload; afterReply?: () => void; final?: ReplyPayload[] },
 ) {
   const decision: { allowed?: boolean; error?: unknown } = {};
   state.runWithModelFallbackMock.mockImplementationOnce(async (params: DeliveryFallbackParams) => {
