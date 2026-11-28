@@ -18,7 +18,6 @@ import { inboxMention } from "./sidebar-inbox.test-support.ts";
 import {
   SidebarIssueItem,
   renderSidebarMentionItem as SidebarMentionItem,
-  renderSidebarScopeUpgradeItem,
   renderSidebarUpdateSurface,
 } from "./sidebar-issue-item.tsx";
 
@@ -71,19 +70,6 @@ it("renders a dismiss control only when the producer supplies the action", () =>
   expect(dismiss?.hasAttribute("title")).toBe(false);
   dismiss?.click();
   expect(onDismiss).toHaveBeenCalledOnce();
-});
-
-it("shows the exact approval command for the pending access request", () => {
-  const requestId = "request-1";
-  render(() =>
-    renderSidebarScopeUpgradeItem({
-      state: { phase: "pending", requestId },
-      onCancel: vi.fn(),
-      onRequest: vi.fn(),
-      onRetry: vi.fn(),
-    }),
-  );
-  expect(find('[role="status"]')?.textContent).toContain(`openclaw devices approve ${requestId}`);
 });
 
 describe("renderSidebarMentionItem", () => {

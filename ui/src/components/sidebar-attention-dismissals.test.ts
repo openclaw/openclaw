@@ -4,7 +4,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { client as mockClient, createGatewayHarness } from "../app/overlays-access.test-support.ts";
 import { createStorageMock as createTestStorageMock } from "../test-helpers/storage.ts";
 import {
-  clearSidebarAttentionDismissal,
   dismissSidebarAttention,
   isSidebarAttentionDismissed,
   loadDismissals,
@@ -13,7 +12,6 @@ import {
   resolveUpdateAttentionDismissal,
   type SidebarAttentionKind,
 } from "./sidebar-attention-dismissals.ts";
-import { buildScopeUpgradeInboxEntry } from "./sidebar-attention-entries.ts";
 
 const ATTENTION_KEY = 'openclaw.control.sidebarAttention.v2:["ws://gateway.test","alice"]';
 
@@ -57,18 +55,6 @@ it("does not re-arm an immutable recovery use while the owner history is absent"
   ).toBe(false);
 });
 
-it.each([
-  [{ phase: "pending", requestId: "request-1" }, null],
-  [{ phase: "guidance" }, '["guidance","operator.read","operator.write"]'],
-  [{ phase: "available" }, '["available","operator.read","operator.write"]'],
-] as const)("binds dismissal to the actionable upgrade phase: %j", (state, signature) => {
-  const entry = buildScopeUpgradeInboxEntry({
-    scopes: ["operator.write", "operator.read"],
-    state,
-  });
-  expect(entry).toMatchObject({ type: "scopeUpgrade" });
-  expect(entry?.dismissal).toEqual(signature === null ? null : { kind: "scopeUpgrade", signature });
-});
 it("merges with the persisted map so another tab's dismissal survives", () => {
   localStorage.setItem(ATTENTION_KEY, JSON.stringify({ modelAuthExpired: ["alpha"] }));
   const next = dismissSidebarAttention(ATTENTION_KEY, {
@@ -86,7 +72,7 @@ it("leaves unknown-owner legacy dismissals untouched and unadopted", () => {
   localStorage.setItem(legacyKey, legacy);
   expect(loadDismissals(ATTENTION_KEY)).toEqual({});
   dismissSidebarAttention(ATTENTION_KEY, { kind: "modelAuthExpired", signature: "new-incident" });
-  clearSidebarAttentionDismissal(ATTENTION_KEY, "modelAuthExpired");
+  reconcileSidebarAttentionDismissals({ key: ATTENTION_KEY, active: [] });
   expect(localStorage.getItem(legacyKey)).toBe(legacy);
   expect(localStorage.length).toBe(1);
 });
@@ -105,7 +91,7 @@ it("does not read or write snoozes without a current authenticated profile", () 
     expect(dismissSidebarAttention(key, { kind: "modelAuthExpired", signature: "other" })).toEqual(
       {},
     );
-    clearSidebarAttentionDismissal(key, "modelAuthExpired");
+    reconcileSidebarAttentionDismissals({ key, active: [] });
     expect(loadDismissals(ATTENTION_KEY)).toEqual({ modelAuthExpired: ["incident"] });
   }
 });

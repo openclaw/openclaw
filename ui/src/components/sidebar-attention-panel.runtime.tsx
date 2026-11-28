@@ -45,7 +45,6 @@ import {
   renderSidebarApprovalItem as SidebarApprovalItem,
   SidebarIssueItem,
   renderSidebarMentionItem as SidebarMentionItem,
-  renderSidebarScopeUpgradeItem as SidebarScopeUpgradeItem,
   renderSidebarUpdateSurface as SidebarUpdateSurface,
 } from "./sidebar-issue-item.tsx";
 import { ISSUE_TABS, type IssueTab } from "./sidebar-issues-tabs.ts";
@@ -56,7 +55,6 @@ import { Menu, type MenuItem } from "./solid/menu.tsx";
 import "./menu-surface.ts";
 
 registerEnglishCatalog(registerSidebarAttentionEnglish);
-export { ScopeUpgradeOwner } from "../app/device-scope-upgrade-owner.runtime.ts";
 export type SidebarAttentionPanelPosition = { left: number } & (
   | { anchor: "top"; top: number }
   | { anchor: "bottom"; bottom: number }
@@ -258,17 +256,6 @@ function SidebarInboxItem(props: {
             )}
             onDismiss={() => props.dismissMentions([entry().mention.id])}
             onNavigate={(route, options) => props.panel.onNavigate(route, options)}
-          />
-        )}
-      </Match>
-      <Match when={props.entry.type === "scopeUpgrade" ? props.entry : null}>
-        {(entry) => (
-          <SidebarScopeUpgradeItem
-            state={entry().state}
-            onCancel={() => props.readContext().scopeUpgrade.cancel()}
-            onDismiss={props.entry.dismissal ? dismiss : undefined}
-            onRequest={() => props.readContext().scopeUpgrade.request()}
-            onRetry={() => props.readContext().scopeUpgrade.retry()}
           />
         )}
       </Match>

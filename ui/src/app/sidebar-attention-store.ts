@@ -1,16 +1,10 @@
 import { createChangeListeners } from "../../../src/shared/listeners.js";
-import {
-  clearSidebarAttentionDismissal,
-  resolveSidebarAttentionKey,
-  resolveScopeUpgradeDismissal,
-  type SidebarAttentionDismissal,
-} from "../components/sidebar-attention-dismissals.ts";
+import type { SidebarAttentionDismissal } from "../components/sidebar-attention-dismissals.ts";
 import type { SidebarInboxEntry } from "../components/sidebar-attention-entries.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
 import type { ApplicationConfigCapability } from "./config.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
-import type { ScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import type { MentionsCapability } from "./mentions.ts";
 import type { ApplicationOverlays } from "./overlays-types.ts";
@@ -21,7 +15,6 @@ export type SidebarAttentionStoreSources = {
   agentSelection: AgentSelectionCapability;
   agents: AgentCapability;
   overlays: ApplicationOverlays;
-  scopeUpgrade: ScopeUpgradeCapability;
   connectionBootstrap?: ConnectionBootstrapCoordinator;
 };
 
@@ -45,22 +38,8 @@ export type SidebarAttentionStore = ReturnType<typeof createSidebarAttentionStor
 export function createSidebarAttentionStore(sources: SidebarAttentionStoreSources) {
   const listeners = createChangeListeners();
   let owner: SidebarAttentionStoreOwner | null = null;
-  // Retire dismissals even when no Inbox presenter is mounted, such as mobile Settings.
-  const synchronizeScopeUpgradeDismissal = () => {
-    const snapshot = sources.gateway.snapshot;
-    const scopes = snapshot.hello?.auth?.scopes;
-    if (
-      snapshot.phase === "connected" &&
-      scopes &&
-      !resolveScopeUpgradeDismissal({ scopes, state: sources.scopeUpgrade.state })
-    ) {
-      clearSidebarAttentionDismissal(resolveSidebarAttentionKey(sources.gateway), "scopeUpgrade");
-    }
-    owner?.syncDismissals();
-  };
-  const stopGateway = sources.gateway.subscribe(synchronizeScopeUpgradeDismissal);
-  const stopScopeUpgrade = sources.scopeUpgrade.subscribe(synchronizeScopeUpgradeDismissal);
-  synchronizeScopeUpgradeDismissal();
+  // Reconcile account state before any lazy Inbox source can publish the new snapshot.
+  const stopGateway = sources.gateway.subscribe(() => owner?.syncDismissals());
   return {
     get entries() {
       return owner?.entries ?? [];
@@ -81,7 +60,6 @@ export function createSidebarAttentionStore(sources: SidebarAttentionStoreSource
     subscribe: listeners.subscribe,
     dispose() {
       stopGateway();
-      stopScopeUpgrade();
       owner?.dispose();
       owner = null;
       listeners.clear();

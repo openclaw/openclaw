@@ -440,30 +440,6 @@ describe("sidebar attention source publication", () => {
     await waitForFast(() => expect(store?.hasFailedAutomation).toBe(true));
   });
 
-  it("retires only the current account's scope-upgrade snooze before the Inbox mounts", () => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    const alice = 'openclaw.control.sidebarAttention.v2:["ws://gateway.test","alice"]';
-    const bob = 'openclaw.control.sidebarAttention.v2:["ws://gateway.test","bob"]';
-    const dismissal = { kind: "scopeUpgrade" as const, signature: "available" };
-    dismissSidebarAttention(alice, dismissal);
-    dismissSidebarAttention(bob, dismissal);
-    const legacyKey = "openclaw.control.sidebarAttention.v1:ws://gateway.test";
-    const legacy = JSON.stringify({ scopeUpgrade: ["unknown-owner"] });
-    localStorage.setItem(legacyKey, legacy);
-    const harness = gateway(async () => ({}));
-    harness.update({
-      selfUser: { id: "alice", name: "Alice" },
-      hello: {
-        ...harness.gateway.snapshot.hello!,
-        auth: { role: "operator", scopes: ["operator.admin"] },
-      },
-    });
-    store = createStore(harness.gateway);
-    expect(loadDismissals(alice)).toEqual({});
-    expect(loadDismissals(bob)).toEqual({ scopeUpgrade: ["available"] });
-    expect(localStorage.getItem(legacyKey)).toBe(legacy);
-  });
-
   it("shows a finishing restart over a dismissed run and keeps that dismissal for later", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     const request = inventoryRequest(() => cronPage());

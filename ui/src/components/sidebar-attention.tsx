@@ -108,7 +108,6 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     if (!isCurrentPanel(generation, scope)) {
       return;
     }
-    context.scopeUpgrade.activate(runtime.ScopeUpgradeOwner);
     panelRuntime = runtime;
     setPanelPosition(runtime.sidebarAttentionPanelPosition(trigger));
     setPanelOpen(true);

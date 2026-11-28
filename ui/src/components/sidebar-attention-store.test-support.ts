@@ -4,7 +4,6 @@ import { createApplicationConfigCapability } from "../app/config.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { client as mockClient, createGatewayHarness } from "../app/overlays-access.test-support.ts";
 import { createSidebarAttentionStore } from "../app/sidebar-attention-store.ts";
-import { hiddenScopeUpgradeCapability } from "../test-helpers/application-context.ts";
 import { SidebarAttentionStoreOwner } from "./sidebar-attention-store.ts";
 
 export type CompactCronPage = CronJobsListResult<CronCompactJob>;
@@ -66,7 +65,6 @@ export function createStore(
       subscribe: () => () => undefined,
     } as unknown as ApplicationContext["agents"],
     overlays,
-    scopeUpgrade: hiddenScopeUpgradeCapability,
     connectionBootstrap,
   });
 }

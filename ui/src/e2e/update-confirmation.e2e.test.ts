@@ -449,10 +449,6 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.messages.subscribe");
 
       await page.locator(".sidebar-issues-button").click();
-      const scopeGuidance = page.locator('[data-attention-kind="scopeUpgrade"]');
-      await scopeGuidance.hover();
-      await scopeGuidance.locator(".sidebar-issues-panel__dismiss").click();
-      await scopeGuidance.waitFor({ state: "detached" });
       const updateIssue = updateCard(page);
       await updateIssue.waitFor();
       expect(await updateIssue.locator(".sidebar-issues-panel__dismiss").count()).toBe(0);

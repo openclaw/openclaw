@@ -633,11 +633,7 @@ export function ProfilePage(route: { routeData?: string | null }) {
                   {(current) => (
                     <SettingsRow
                       title={t("profilePage.access.adminRequest")}
-                      description={
-                        current().phase === "available"
-                          ? t("profilePage.access.adminRequestHint")
-                          : scopeUpgradeText(current())
-                      }
+                      description={scopeUpgradeText(current())}
                       stackedOnNarrow
                       control={
                         <ScopeUpgradeActions

@@ -71,7 +71,6 @@ function inboxEntries(attention: SidebarAttentionItem[], mentions: MentionInboxI
     approvals: [],
     attention,
     mentions,
-    scopeUpgrade: null,
     update: null,
   });
 }

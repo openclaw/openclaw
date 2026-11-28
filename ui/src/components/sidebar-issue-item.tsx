@@ -3,7 +3,6 @@ import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/in
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import { hasNativeUpdateBridge } from "../app/native-link-routing.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
@@ -16,7 +15,6 @@ import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { SidebarApprovalRow } from "./exec-approval-card-solid.tsx";
-import { ScopeUpgradeActions, scopeUpgradeText } from "./scope-upgrade-actions.tsx";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
 import {
@@ -225,65 +223,6 @@ export function renderSidebarUpdateSurface(params: {
       onReviewUpdate={params.onNavigate}
       onDismiss={params.onDismiss}
     />
-  );
-}
-
-export function renderSidebarScopeUpgradeItem(params: {
-  state: Exclude<ScopeUpgradeState, { phase: "hidden" }>;
-  onCancel: () => void;
-  onDismiss?: () => void;
-  onRequest: () => void;
-  onRetry: () => void;
-}) {
-  const text = () => scopeUpgradeText(params.state);
-  const summary = () =>
-    t(
-      params.state.phase === "guidance" && params.state.reason === "role"
-        ? "connection.scopeUpgrade.roleState"
-        : "connection.scopeUpgrade.inboxState",
-    );
-  return (
-    <details
-      class={[
-        "sidebar-issues-panel__details",
-        `sidebar-issues-panel__details--${params.state.phase === "error" || params.state.phase === "rejected" ? "error" : "warning"}`,
-      ]}
-      data-attention-kind="scopeUpgrade"
-    >
-      <summary
-        ref={sidebarAttentionFocusRef("row")}
-        class="sidebar-issues-panel__summary"
-        data-issue-row-focus
-      >
-        <span class="sidebar-issues-panel__icon" aria-hidden="true">
-          <Icon name="shieldQuestion" />
-        </span>
-        <span class="sidebar-issues-panel__content">
-          <SidebarRowHeading title={t("connection.scopeUpgrade.status")} />
-          <span class="sidebar-issues-panel__state" title={summary()}>
-            {summary()}
-          </span>
-        </span>
-        <SidebarDismissButton
-          itemLabel={t("connection.scopeUpgrade.status")}
-          onDismiss={params.onDismiss}
-        />
-      </summary>
-      <div class="sidebar-issues-panel__body" role="status" aria-live="polite">
-        <div>{text()}</div>
-        <Show when={params.state.phase !== "guidance"}>
-          <div class="sidebar-issues-panel__actions">
-            <ScopeUpgradeActions
-              state={params.state}
-              inbox
-              onRequest={() => params.onRequest()}
-              onRetry={() => params.onRetry()}
-              onCancel={() => params.onCancel()}
-            />
-          </div>
-        </Show>
-      </div>
-    </details>
   );
 }
 

@@ -5,14 +5,8 @@ import { en } from "./en.ts";
 const enSidebarAttention = {
   connection: {
     scopeUpgrade: {
-      limited: "This browser has limited access.",
       guidance: "Ask an admin to approve this browser in Devices.",
       roleGuidance: "Only admins can manage access. Ask an admin for access.",
-      roleState: "Access follows your role",
-      status: "Limited access",
-      inboxState: "Admin access required",
-      showDetails: "Show limited access details",
-      closeDetails: "Close limited access details",
       request: "Request admin",
       requesting: "Requesting admin access…",
       requestingAction: "Requesting…",

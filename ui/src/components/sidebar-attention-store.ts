@@ -3,7 +3,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { CronCompactJob, CronJob, ModelAuthStatusResult } from "../api/types.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { createMentionsCapability, type MentionsCapability } from "../app/mentions.ts";
-import { hasOperatorReadAccess, isRestrictedSessionGuest } from "../app/operator-access.ts";
+import { hasOperatorReadAccess } from "../app/operator-access.ts";
 import type {
   SidebarAttentionStoreOwner as StoreOwner,
   SidebarAttentionStoreSources,
@@ -28,11 +28,7 @@ import {
   type SidebarAttentionDismissals,
   type SidebarAttentionDismissal,
 } from "./sidebar-attention-dismissals.ts";
-import {
-  buildScopeUpgradeInboxEntry,
-  buildSidebarInboxEntries,
-  type SidebarInboxEntry,
-} from "./sidebar-attention-entries.ts";
+import { buildSidebarInboxEntries, type SidebarInboxEntry } from "./sidebar-attention-entries.ts";
 import { buildSidebarAttentionEntries } from "./sidebar-attention-items.ts";
 import type { OpenClawIdAttention } from "./sidebar-attention-openclaw-id.ts";
 import {
@@ -286,13 +282,6 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
     const overlay = this.sources.overlays.snapshot;
     const update = resolveSidebarUpdateAttention(this.sources);
     const historicalUpdate = resolveSidebarHistoricalUpdateAttention(this.sources);
-    // Expected guest permissions are not a browser-repair incident. Profile keeps the explicit request.
-    const scopeUpgrade = isRestrictedSessionGuest(gateway.hello?.auth ?? null)
-      ? null
-      : buildScopeUpgradeInboxEntry({
-          scopes: gateway.hello?.auth?.scopes,
-          state: this.sources.scopeUpgrade.state,
-        });
     const attention = buildSidebarAttentionEntries({
       modelAuthStatus: this.#modelAuthStatus,
       modelAuthAgentId: this.#modelAuthAgentId,
@@ -310,7 +299,6 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       mentions: this.mentions.snapshot.items.filter(
         (item) => !this.mentions.snapshot.dismissing.includes(item.id),
       ),
-      scopeUpgrade,
       update,
     });
   }
@@ -689,7 +677,6 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
   };
 
   syncDismissals(): void {
-    // The eager facade can run before this controller's Gateway subscription.
     // Retire old-account health and dismissal state before publishing its storage refresh.
     this.#synchronizeGateway();
     this.#dismissed = loadDismissals(this.#dismissalKey);

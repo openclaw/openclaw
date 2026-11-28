@@ -24,7 +24,6 @@ export function inboxEntryIdentity(
         connectionRevision,
         recoveryScope,
       ]);
-    case "scopeUpgrade":
     case "update":
       return entry.type;
   }
