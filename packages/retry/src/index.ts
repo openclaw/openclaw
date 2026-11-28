@@ -1,4 +1,9 @@
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
+const NATIVE_TIMER_MAX_MS = 2_147_483_647;
+
+function resolveRaceTimeoutMs(timeoutMs: number): number {
+  return timeoutMs > NATIVE_TIMER_MAX_MS ? MAX_TIMER_TIMEOUT_MS : timeoutMs;
+}
 
 export function createAbortError(message: string, options?: ErrorOptions): Error {
   const error = new Error(message, options);
@@ -60,7 +65,7 @@ export async function raceWithTimeout<T, F>(
           reject(error);
         }
       };
-      timer = setTimeout(() => settle(onTimeout), timeoutMs);
+      timer = setTimeout(() => settle(onTimeout), resolveRaceTimeoutMs(timeoutMs));
       if (options.ref === false) {
         timer.unref?.();
       }
