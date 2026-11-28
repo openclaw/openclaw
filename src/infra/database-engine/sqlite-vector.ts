@@ -25,14 +25,17 @@ function compileStatement(source: { toOperationNode(): RootOperationNode }): Sql
   return { sql: statement, parameters: parameters as SQLInputValue[] };
 }
 
-/** The query side of the unit-norm path; undefined for a zero vector, which has no direction. */
+/**
+ * The query side of the unit-norm path; undefined for a query without a usable
+ * direction (zero, too small, nonfinite or overflowing), which scores zero similarity.
+ */
 function toUnitNorm(vector: readonly number[]): readonly number[] | undefined {
   let squared = 0;
   for (const value of vector) {
     squared += value * value;
   }
   const norm = Math.sqrt(squared);
-  return norm < 1e-10 ? undefined : vector.map((value) => value / norm);
+  return norm >= 1e-10 && Number.isFinite(norm) ? vector.map((value) => value / norm) : undefined;
 }
 
 /** Native L2 candidates, cosine reranking, and the existing bounded underfill decision. */
@@ -122,7 +125,10 @@ export function bindSqliteVectorCapability(
         ? request.vector.map((value) => (Number.isFinite(value) ? value + 0 : 0))
         : request.vector;
       const unitQuery = request.unitNormVectors ? toUnitNorm(vector) : undefined;
-      const blob = vectorToBlob(unitQuery ?? vector);
+      // Without a direction the score is constant; match with a well-defined (zero) vector.
+      const blob = vectorToBlob(
+        request.unitNormVectors ? (unitQuery ?? vector.map(() => 0)) : vector,
+      );
       const query = compileStatement(
         request.query({
           match: /* kysely-allow-raw: sqlite-vec candidate matching binds both vector and candidate limit. */ sql<boolean>`${embedding} MATCH ${blob} AND k = ${candidate}`,

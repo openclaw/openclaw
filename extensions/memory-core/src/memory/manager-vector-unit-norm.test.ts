@@ -9,12 +9,14 @@ import {
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it } from "vitest";
+import { advanceMemoryIndexRevision } from "../memory-index-revision.worker.js";
+import { readMemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import { admitMemoryVectorIndex, searchMemoryVectorIndex } from "./manager-search-knn.js";
 import { vectorToBlob } from "./manager-search-knn.test-support.js";
+import { normalizeMemoryVectorsInPlace } from "./manager-vector-unit-norm-migration.worker.js";
 import {
   clearMemoryVectorsUnitNorm,
   markMemoryVectorsUnitNorm,
-  normalizeMemoryVectorsInPlace,
   normalizeStoredEmbedding,
   readMemoryVectorsUnitNorm,
 } from "./manager-vector-unit-norm.js";
@@ -48,9 +50,8 @@ async function createVectorDb(
     expect(loaded.ok, loaded.error).toBe(true);
     ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
     for (const table of tables) {
-      db.exec(`CREATE VIRTUAL TABLE ${table} USING vec0(
-        id TEXT PRIMARY KEY, embedding FLOAT[${DIMS}]
-      )`);
+      const vector = admitMemoryVectorIndex(db, table);
+      vector.capability.create(vector.index, DIMS);
     }
     return db;
   } catch (error) {
@@ -85,6 +86,33 @@ function readVector(db: DatabaseSync, table: string, id: string): Float32Array {
   new Uint8Array(vector.buffer).set(blob);
   return vector;
 }
+
+/** Runs the migration in a write transaction, as the publication worker does. */
+function normalizeIndex(db: DatabaseSync, table = "memory_index_chunks_vec", dimensions = DIMS) {
+  return normalizeMemoryVectorsInPlace(
+    db,
+    { ...admitMemoryVectorIndex(db, table), dimensions },
+    (run) => {
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        const result = run();
+        db.exec("COMMIT");
+        return result;
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+    },
+  );
+}
+
+/** Changes whenever the vec0 table is rebuilt. */
+const chunksRoot = (db: DatabaseSync) =>
+  (
+    db
+      .prepare("SELECT rootpage FROM sqlite_master WHERE name = 'memory_index_chunks_vec_chunks'")
+      .get() as { rootpage: number }
+  ).rootpage;
 
 function knn(db: DatabaseSync, table: string, queryVec: number[], unitNormVectors: boolean) {
   const search = admitMemoryVectorIndex(db, table);
@@ -127,6 +155,25 @@ describe("unit-norm vector search", () => {
     }
   });
 
+  it("scores from vec0's L2 distance, not the stored vectors, when flagged", async () => {
+    using db = await createVectorDb();
+    // Deliberately non-unit rows: the flagged path must not reread them.
+    const vectors = seededVectors(6);
+    vectors.forEach((vector, index) => {
+      insertChunk(db, `chunk-${index}`, vector);
+      insertVector(db, "memory_index_chunks_vec", `chunk-${index}`, vector);
+    });
+    const [query] = seededVectors(1, 5);
+    const unitQuery = query!.map((value) => value / norm(query!));
+    const result = await knn(db, "memory_index_chunks_vec", query!, true);
+    expect(result.rows).toHaveLength(6);
+    for (const row of result.rows) {
+      const stored = vectors[Number(row.id.slice("chunk-".length))]!;
+      const l2Squared = stored.reduce((sum, value, i) => sum + (value - unitQuery[i]!) ** 2, 0);
+      expect(row.dist).toBeCloseTo(l2Squared / 2, 4);
+    }
+  });
+
   it("gives a zero query vector zero similarity, as the fallback scorer does", async () => {
     using db = await createVectorDb();
     seededVectors(4).forEach((vector, index) => {
@@ -150,10 +197,36 @@ describe("unit-norm vector search", () => {
     }
   });
 
-  it("does not store zero vectors, which have no direction", () => {
+  it.each([
+    ["NaN", [Number.NaN, ...Array.from({ length: DIMS - 1 }, () => 0)]],
+    ["overflowing", Array.from({ length: DIMS }, () => 1e200)],
+    ["tiny", [1e-12, ...Array.from({ length: DIMS - 1 }, () => 0)]],
+  ])("gives a %s query vector zero similarity", async (_name, query) => {
+    using db = await createVectorDb();
+    seededVectors(3).forEach((vector, index) => {
+      insertChunk(db, `chunk-${index}`, vector);
+      insertVector(
+        db,
+        "memory_index_chunks_vec",
+        `chunk-${index}`,
+        normalizeStoredEmbedding(vector),
+      );
+    });
+    const result = await knn(db, "memory_index_chunks_vec", query, true);
+    expect(result.rows).toHaveLength(3);
+    for (const row of result.rows) {
+      expect(row.dist).toBe(1);
+    }
+  });
+
+  it("does not store vectors without a usable direction", () => {
     expect(normalizeStoredEmbedding([0, 0, 0])).toEqual([]);
     expect(normalizeStoredEmbedding([Number.NaN, 0])).toEqual([]);
+    // Too small for sanitizeAndNormalizeEmbedding to normalize; stored as is it would score 0.5.
+    expect(normalizeStoredEmbedding([1e-12, 0])).toEqual([]);
+    expect(normalizeStoredEmbedding([1e200, 1e200])).toEqual([]);
     expect(normalizeStoredEmbedding([3, 4])).toEqual([0.6, 0.8]);
+    expect(normalizeStoredEmbedding([Number.POSITIVE_INFINITY, 2])).toEqual([0, 1]);
   });
 });
 
@@ -179,7 +252,7 @@ describe("normalizeMemoryVectorsInPlace", () => {
       );
       expect(readMemoryVectorsUnitNorm(db)).toBe(false);
 
-      expect(normalizeMemoryVectorsInPlace(db)).toEqual({ scanned: 4, rewritten: 3 });
+      expect(normalizeIndex(db)).toBe(true);
       expect(readMemoryVectorsUnitNorm(db)).toBe(true);
       for (const id of ["raw-a", "raw-b", "unit"]) {
         expect(norm(readVector(db, table, id))).toBeCloseTo(1, 5);
@@ -202,13 +275,60 @@ describe("normalizeMemoryVectorsInPlace", () => {
       expect(hits.rows[0]?.id).toBe("raw-a");
       expect(hits.rows[0]?.dist).toBeCloseTo(0, 5);
 
-      expect(normalizeMemoryVectorsInPlace(db)).toEqual({ scanned: 3, rewritten: 0 });
+      // Already unit length: marked again without a rebuild.
+      const root = chunksRoot(db);
+      clearMemoryVectorsUnitNorm(db);
+      expect(normalizeIndex(db)).toBe(true);
+      expect(chunksRoot(db)).toBe(root);
+      expect(readMemoryVectorsUnitNorm(db)).toBe(true);
     },
   );
 
+  it("drops stored vectors without a direction and repairs NaN coordinates", async () => {
+    using db = await createVectorDb();
+    const table = "memory_index_chunks_vec";
+    const zeros = Array.from({ length: DIMS }, () => 0);
+    insertVector(db, table, "tiny", [1e-12, ...zeros.slice(1)]);
+    insertVector(db, table, "nan", [Number.NaN, 2, ...zeros.slice(2)]);
+    insertVector(db, table, "unit", [1, ...zeros.slice(1)]);
+    expect(normalizeIndex(db)).toBe(true);
+    expect(db.prepare(`SELECT id FROM ${table} WHERE id = 'tiny'`).get()).toBeUndefined();
+    expect(Array.from(readVector(db, table, "nan"))).toEqual([0, 1, ...zeros.slice(2)]);
+    expect(Array.from(readVector(db, table, "unit"))).toEqual([1, ...zeros.slice(1)]);
+    expect(readMemoryVectorsUnitNorm(db)).toBe(true);
+  });
+
+  it("writes large indexes in bounded batches", async () => {
+    using db = await createVectorDb();
+    const vectors = seededVectors(600);
+    vectors.forEach((vector, index) =>
+      insertVector(db, "memory_index_chunks_vec", `v-${index}`, vector),
+    );
+    expect(normalizeIndex(db)).toBe(true);
+    const ids = db.prepare("SELECT id FROM memory_index_chunks_vec").all() as { id: string }[];
+    expect(ids).toHaveLength(600);
+    const sample = readVector(db, "memory_index_chunks_vec", "v-599");
+    expect(norm(sample)).toBeCloseTo(1, 5);
+    const scale = norm(vectors[599]!);
+    vectors[599]!.forEach((value, index) => expect(sample[index]).toBeCloseTo(value / scale, 5));
+  });
+
+  it("leaves a table that is not FLOAT[dimensions] untouched and unmarked", async () => {
+    using db = await createVectorDb();
+    const table = "memory_index_chunks_vec";
+    const [raw] = seededVectors(2);
+    insertVector(db, table, "raw", raw!);
+    const root = chunksRoot(db);
+    // The index metadata claims another width: never reinterpret the stored bytes.
+    expect(normalizeIndex(db, table, DIMS / 2)).toBe(false);
+    expect(chunksRoot(db)).toBe(root);
+    expect(Array.from(readVector(db, table, "raw"))).toEqual(Array.from(new Float32Array(raw!)));
+    expect(readMemoryVectorsUnitNorm(db)).toBe(false);
+  });
+
   it("marks a database without a vector table", async () => {
     using db = await createVectorDb([]);
-    expect(normalizeMemoryVectorsInPlace(db)).toEqual({ scanned: 0, rewritten: 0 });
+    expect(normalizeIndex(db)).toBe(true);
     expect(readMemoryVectorsUnitNorm(db)).toBe(true);
   });
 
@@ -219,5 +339,23 @@ describe("normalizeMemoryVectorsInPlace", () => {
     expect(readMemoryVectorsUnitNorm(db)).toBe(true);
     clearMemoryVectorsUnitNorm(db);
     expect(readMemoryVectorsUnitNorm(db)).toBe(false);
+  });
+
+  it("carries the marker across this release's revisions and drops it for foreign writers", async () => {
+    using db = await createVectorDb([]);
+    markMemoryVectorsUnitNorm(db);
+    advanceMemoryIndexRevision(db);
+    advanceMemoryIndexRevision(db);
+    expect(readMemoryVectorsUnitNorm(db)).toBe(true);
+    expect(readMemoryDatabaseFacts(db).vectorUnitNorm).toBe(true);
+    // An earlier release advances the revision without carrying the marker.
+    db.exec("UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1");
+    expect(readMemoryVectorsUnitNorm(db)).toBe(false);
+    expect(readMemoryDatabaseFacts(db).vectorUnitNorm).toBe(false);
+    // A stale marker is not revived by later revisions of this release.
+    advanceMemoryIndexRevision(db);
+    expect(readMemoryVectorsUnitNorm(db)).toBe(false);
+    markMemoryVectorsUnitNorm(db);
+    expect(readMemoryVectorsUnitNorm(db)).toBe(true);
   });
 });

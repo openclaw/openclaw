@@ -1,6 +1,8 @@
 // Memory Core tests cover the unit-norm vector path through real managers:
 // full reindex publication and the one-time migration of an earlier index.
-import { DatabaseSync } from "node:sqlite";
+import fs from "node:fs/promises";
+import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import {
   ensureSqliteLibrarySelected,
   loadSqliteVecExtension,
@@ -12,7 +14,10 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { expect, it } from "vitest";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
-import { VECTOR_UNIT_NORM_META_KEY } from "./manager-vector-unit-norm.js";
+import {
+  readMemoryVectorsUnitNorm,
+  VECTOR_UNIT_NORM_META_KEY,
+} from "./manager-vector-unit-norm.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 const fixture = createManagerIndexFixture({ getMemorySearchManager, closeAllMemorySearchManagers });
@@ -86,7 +91,7 @@ it("publishes unit vectors with the marker, and migrates an unmarked earlier ind
 
   // A full reindex written by this release: unit vectors and the marker.
   const afterPublish = await withVectorDb(dbPath, readState);
-  expect(afterPublish.marker).toBe("1");
+  expect(await withVectorDb(dbPath, (db) => readMemoryVectorsUnitNorm(db))).toBe(true);
   expect(afterPublish.norms.length).toBeGreaterThan(0);
   for (const norm of afterPublish.norms) {
     expect(norm).toBeCloseTo(1, 5);
@@ -122,11 +127,73 @@ it("publishes unit vectors with the marker, and migrates an unmarked earlier ind
   await upgraded.sync({ reason: "watch" });
   expect(fixture.provider.embedBatchCalls).toBe(embedded);
   const migrated = await withVectorDb(dbPath, readState);
-  expect(migrated.marker).toBe("1");
+  expect(await withVectorDb(dbPath, (db) => readMemoryVectorsUnitNorm(db))).toBe(true);
   expect(migrated.norms).toHaveLength(afterPublish.norms.length);
   for (const norm of migrated.norms) {
     expect(norm).toBeCloseTo(1, 5);
   }
   expectSameResults(await searchResults(upgraded), published);
+
+  // The rebuilt table keeps serving the same connection: incremental writes and search.
+  await fs.writeFile(path.join(fixture.paths.memory, "2026-01-13.md"), "# Log\nBeta beta note.");
+  // What the file watcher does on a change.
+  (upgraded as unknown as { markMemoryWatchDirty: () => void }).markMemoryWatchDirty();
+  await upgraded.sync({ reason: "watch" });
+  const afterWrite = await withVectorDb(dbPath, readState);
+  expect(await withVectorDb(dbPath, (db) => readMemoryVectorsUnitNorm(db))).toBe(true);
+  expect(afterWrite.norms.length).toBeGreaterThan(migrated.norms.length);
+  for (const norm of afterWrite.norms) {
+    expect(norm).toBeCloseTo(1, 5);
+  }
+  const withNote = await searchResults(upgraded);
+  expect(withNote.map((entry) => entry.path)).toContain("memory/2026-01-13.md");
+  expect(upgraded.status().vector?.index?.state).toBe("complete");
   await closeManager(upgraded);
+
+  // And after reopening: no second migration, same results.
+  const reopened = await fixture.getFreshManager(cfg);
+  await reopened.sync({ reason: "watch" });
+  expectSameResults(await searchResults(reopened), withNote);
+  expect(reopened.status().vector?.index?.state).toBe("complete");
+
+  // Search really uses the unit-norm path: it scores from vec0's L2 distance, so a
+  // vector scaled behind its back (marker still current) changes the score; the
+  // exact cosine path would not notice.
+  const scale = (factor: number) =>
+    withVectorDb(dbPath, (db) => {
+      const row = db
+        .prepare(`SELECT id, embedding FROM ${VECTOR_TABLE} ORDER BY id LIMIT 1`)
+        .get() as { id: string; embedding: Uint8Array };
+      db.prepare(`DELETE FROM ${VECTOR_TABLE} WHERE id = ?`).run(row.id);
+      db.prepare(`INSERT INTO ${VECTOR_TABLE} (id, embedding) VALUES (?, ?)`).run(
+        row.id,
+        Buffer.from(readFloat32(row.embedding).map((value) => value * factor).buffer),
+      );
+    });
+  await scale(3);
+  const scaledFast = await searchResults(reopened);
+  expect(
+    scaledFast.some(
+      (entry, index) => Math.abs(entry.score - (withNote[index]?.score ?? Number.NaN)) > 1e-6,
+    ) || scaledFast.length !== withNote.length,
+  ).toBe(true);
+  // A writer that does not normalize advances the revision without carrying the
+  // marker: search falls back to the exact path at once.
+  await withVectorDb(dbPath, (db) =>
+    db.exec("UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1"),
+  );
+  expect((await withVectorDb(dbPath, readState)).marker).toBeDefined();
+  expectSameResults(await searchResults(reopened), withNote);
+  await closeManager(reopened);
+
+  // The next manager verifies the vectors again and restores the fast path.
+  const verified = await fixture.getFreshManager(cfg);
+  await verified.sync({ reason: "watch" });
+  const reverified = await withVectorDb(dbPath, readState);
+  for (const norm of reverified.norms) {
+    expect(norm).toBeCloseTo(1, 5);
+  }
+  expect(await withVectorDb(dbPath, (db) => readMemoryVectorsUnitNorm(db))).toBe(true);
+  expectSameResults(await searchResults(verified), withNote);
+  await closeManager(verified);
 });

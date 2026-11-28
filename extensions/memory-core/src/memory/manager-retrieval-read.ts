@@ -25,6 +25,7 @@ import {
   VECTOR_REBUILD_META_KEY,
 } from "./manager-vector-rebuild-state.js";
 import {
+  isCurrentMemoryVectorsUnitNorm,
   readMemoryVectorsUnitNorm,
   VECTOR_UNIT_NORM_META_KEY,
 } from "./manager-vector-unit-norm.js";
@@ -41,7 +42,7 @@ export type MemoryDatabaseFacts = {
   hasVectorTable: boolean;
   vectorState: ReturnType<typeof resolveMemoryVectorIndexState>;
   embeddingRefusal: MemoryEmbeddingRefusal | null;
-  /** Every stored SQLite vector has unit L2 norm (see manager-vector-unit-norm). */
+  /** Every stored SQLite vector has unit L2 norm at this revision (see manager-vector-unit-norm). */
   vectorUnitNorm?: boolean;
 };
 
@@ -156,7 +157,7 @@ export function readMemoryDatabaseFacts(
       hasSemanticChunks: Boolean(row.hasSemanticChunks),
     }),
     embeddingRefusal: parseMemoryEmbeddingRefusal(row.embeddingRefusal),
-    vectorUnitNorm: row.unitNormMarker === "1",
+    vectorUnitNorm: isCurrentMemoryVectorsUnitNorm(row.unitNormMarker, row.revision),
   };
 }
 

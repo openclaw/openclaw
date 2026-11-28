@@ -1,156 +1,68 @@
 // Memory Core plugin module owns the unit-norm guarantee for stored vectors.
-import type { DatabaseSync } from "node:sqlite";
 import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import { sanitizeAndNormalizeEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import {
-  MEMORY_INDEX_META_TABLE,
-  MEMORY_INDEX_VECTOR_TABLE,
-} from "openclaw/plugin-sdk/memory-core-host-engine-schema";
-import { tableExists } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { MEMORY_INDEX_META_TABLE } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 
 /**
- * Present ('1') when every row of the SQLite vector table has unit L2 norm.
+ * Holds the memory index revision at which every row of the SQLite vector
+ * table was known to have unit L2 norm; any other value means "unknown".
  *
  * Cosine distance is scale-invariant, so normalizing a stored vector never
  * changes search results. With unit vectors, cosine distance equals
  * L2² / 2, which vec0 returns with each KNN candidate: search can then skip
  * rereading every candidate's embedding (`vec_distance_cosine`).
  *
- * Writers of this release normalize every vector. The marker is set only by
- * the in-place pass or by publishing a full reindex, and cleared by any path
- * that inserts vectors without normalizing them.
+ * Writers of this release normalize every vector, and this release's
+ * `advanceMemoryIndexRevision` carries a current marker to the new revision.
+ * Writers that do not normalize (an earlier release, after a downgrade or
+ * beside a newer one) advance the revision without carrying the marker, so
+ * it goes stale and search falls back to the exact cosine expression until
+ * the next sync verifies the vectors again. The marker is set by publishing
+ * a full reindex or by that verification
+ * (manager-vector-unit-norm-migration.worker.ts), and cleared by doctor's
+ * legacy import, which copies vectors without normalizing them.
  */
 export const VECTOR_UNIT_NORM_META_KEY = "memory_vector_unit_norm_v1";
 
-/** Stored vectors whose norm differs from 1 by more than this are rewritten. */
-const UNIT_NORM_TOLERANCE = 1e-5;
-
 /**
- * Vectors stored by this release: sanitized and L2-normalized. A zero vector
- * has no direction and no cosine similarity to anything, so it is not stored:
- * an empty result, which writers already treat as "no vector for this chunk".
+ * Vectors stored by this release: sanitized and L2-normalized. A vector with
+ * no usable direction (zero, too small to normalize, or overflowing) has no
+ * cosine similarity to anything, so it is not stored: an empty result, which
+ * writers already treat as "no vector for this chunk".
  */
-export function normalizeStoredEmbedding(embedding: number[]): number[] {
-  const normalized = sanitizeAndNormalizeEmbedding(embedding);
-  return normalized.some((value) => value !== 0) ? normalized : [];
+export function normalizeStoredEmbedding(embedding: readonly number[]): number[] {
+  const normalized = sanitizeAndNormalizeEmbedding([...embedding]);
+  let squared = 0;
+  for (const value of normalized) {
+    squared += value * value;
+  }
+  return Math.abs(Math.sqrt(squared) - 1) <= 1e-6 ? normalized : [];
 }
 
+/** The marker is current: it names the index revision this connection reads. */
 export function readMemoryVectorsUnitNorm(db: EngineConnection): boolean {
   const row = db
-    .prepare(`SELECT value FROM ${MEMORY_INDEX_META_TABLE} WHERE key = ?`)
-    .get(VECTOR_UNIT_NORM_META_KEY) as { value?: unknown } | undefined;
-  return row?.value === "1";
+    .prepare(
+      `SELECT value, (SELECT revision FROM memory_index_state WHERE id = 1) AS revision
+       FROM ${MEMORY_INDEX_META_TABLE} WHERE key = ?`,
+    )
+    .get(VECTOR_UNIT_NORM_META_KEY) as { value?: unknown; revision?: unknown } | undefined;
+  return isCurrentMemoryVectorsUnitNorm(row?.value, row?.revision);
 }
 
+export function isCurrentMemoryVectorsUnitNorm(marker: unknown, revision: unknown): boolean {
+  return typeof marker === "string" && marker === String(revision);
+}
+
+/** Records that every stored vector is unit length at the current index revision. */
 export function markMemoryVectorsUnitNorm(db: EngineConnection): void {
   db.prepare(
-    `INSERT INTO ${MEMORY_INDEX_META_TABLE} (key, value) VALUES (?, '1')
+    `INSERT INTO ${MEMORY_INDEX_META_TABLE} (key, value)
+     VALUES (?, CAST((SELECT revision FROM memory_index_state WHERE id = 1) AS TEXT))
      ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
   ).run(VECTOR_UNIT_NORM_META_KEY);
 }
 
 export function clearMemoryVectorsUnitNorm(db: EngineConnection): void {
   db.prepare(`DELETE FROM ${MEMORY_INDEX_META_TABLE} WHERE key = ?`).run(VECTOR_UNIT_NORM_META_KEY);
-}
-
-/** A copy: the driver's blob need not be 4-byte aligned for a Float32Array view. */
-function readFloat32(blob: Uint8Array): Float32Array {
-  const vector = new Float32Array(blob.byteLength / 4);
-  new Uint8Array(vector.buffer).set(blob);
-  return vector;
-}
-
-function l2Norm(vector: Float32Array): number {
-  let squared = 0;
-  for (const value of vector) {
-    squared += value * value;
-  }
-  return Math.sqrt(squared);
-}
-
-/** A stored vector that the unit-norm path cannot score exactly as stored. */
-function needsNormalization(vector: Float32Array): boolean {
-  // Zero vectors are dropped: unit-norm scoring would rank them at similarity 0.5.
-  return Math.abs(l2Norm(vector) - 1) > UNIT_NORM_TOLERANCE;
-}
-
-/** The blob to store again, or undefined for a vector with no direction. */
-function toStoredBlob(vector: Float32Array): Buffer | undefined {
-  if (!needsNormalization(vector)) {
-    return Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength);
-  }
-  const normalized = normalizeStoredEmbedding(Array.from(vector));
-  return normalized.length > 0 ? Buffer.from(new Float32Array(normalized).buffer) : undefined;
-}
-
-/**
- * Make every stored vector unit length (dropping zero vectors, which have no
- * direction), then set the marker. The caller holds
- * the write transaction and has sqlite-vec loaded on *db*.
- *
- * When some vectors need it, the vec0 table is rebuilt from its own DDL
- * rather than rewritten row by row. Rewriting rows, or recreating the table
- * on top of the pages it just freed, scatters vec0's chunk blobs across the
- * file: a cold KNN scan then turns into random reads, 4–10x slower than on
- * the original layout. With incremental auto_vacuum, the freed pages are
- * returned before the new table is written, so its chunks are contiguous at
- * the end of the file.
- */
-export function normalizeMemoryVectorsInPlace(
-  db: DatabaseSync,
-  table = MEMORY_INDEX_VECTOR_TABLE,
-): { scanned: number; rewritten: number } {
-  if (!tableExists(db, table)) {
-    markMemoryVectorsUnitNorm(db);
-    return { scanned: 0, rewritten: 0 };
-  }
-  let scanned = 0;
-  let rewritten = 0;
-  for (const row of db.prepare(`SELECT embedding FROM ${table}`).iterate()) {
-    scanned += 1;
-    const blob = (row as { embedding?: unknown }).embedding;
-    if (
-      blob instanceof Uint8Array &&
-      blob.byteLength % 4 === 0 &&
-      needsNormalization(readFloat32(blob))
-    ) {
-      rewritten += 1;
-    }
-  }
-  if (rewritten === 0) {
-    // Providers that already normalize: nothing to rewrite, the layout stays.
-    markMemoryVectorsUnitNorm(db);
-    return { scanned, rewritten };
-  }
-  const ddl = (
-    db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as
-      | { sql?: unknown }
-      | undefined
-  )?.sql;
-  if (typeof ddl !== "string") {
-    throw new Error(`Memory vector table ${table} has no stored definition`);
-  }
-  const stage = `${table}_unit_norm_stage`;
-  db.exec(`DROP TABLE IF EXISTS ${stage}`);
-  db.exec(`CREATE TABLE ${stage} (id TEXT NOT NULL, embedding BLOB NOT NULL)`);
-  db.exec(`INSERT INTO ${stage} (id, embedding) SELECT id, embedding FROM ${table}`);
-  db.exec(`DROP TABLE ${table}`);
-  const autoVacuum = (db.prepare("PRAGMA auto_vacuum").get() as { auto_vacuum?: unknown })
-    ?.auto_vacuum;
-  if (autoVacuum === 2) {
-    // sqlite-allow-raw -- Return the dropped table's pages so the rebuilt chunks are contiguous.
-    db.prepare("PRAGMA incremental_vacuum").all();
-  }
-  db.exec(ddl);
-  const insert = db.prepare(`INSERT INTO ${table} (id, embedding) VALUES (?, ?)`);
-  for (const row of db.prepare(`SELECT id, embedding FROM ${stage} ORDER BY rowid`).iterate()) {
-    const { id, embedding } = row as { id: string; embedding: Uint8Array };
-    const blob = embedding.byteLength % 4 === 0 ? toStoredBlob(readFloat32(embedding)) : embedding;
-    if (blob) {
-      insert.run(id, blob);
-    }
-  }
-  db.exec(`DROP TABLE ${stage}`);
-  markMemoryVectorsUnitNorm(db);
-  return { scanned, rewritten };
 }
