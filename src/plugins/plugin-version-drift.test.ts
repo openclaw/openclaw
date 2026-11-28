@@ -282,15 +282,14 @@ describe("resolvePluginVersionDriftTargets for ClawHub installs", () => {
         rejectedPluginIds: new Map([["whatsapp-alias", "fixture ownership rejection"]]),
       }),
     ).toEqual({ pluginIds: [], error: "fixture ownership rejection" });
-    expect(
-      resolveClawHubUpdateSpecs({
-        record,
-        officialSpec: entry.clawhubOfficialSpec,
-        updateChannel: entry.clawhubUpdateChannel,
-        officialPackageName: entry.clawhubPackage,
-        coreVersion: entry.gatewayVersion,
-      }).installSpec,
-    ).toBe("clawhub:@openclaw/whatsapp");
+    const specs = await resolveClawHubUpdateSpecs({
+      record,
+      officialSpec: entry.clawhubOfficialSpec,
+      updateChannel: entry.clawhubUpdateChannel,
+      officialPackageName: entry.clawhubPackage,
+      coreVersion: entry.gatewayVersion,
+    });
+    expect(specs.installSpec).toBe("clawhub:@openclaw/whatsapp");
     // Diagnostic guidance cannot bypass current owner/alias admission.
     for (const rejectedId of ["whatsapp", "whatsapp-alias"]) {
       expect(

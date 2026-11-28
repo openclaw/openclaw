@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { fetchClawHubPackageDetail } from "../infra/clawhub-packages.js";
 import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import {
@@ -8,9 +9,19 @@ import {
 } from "./install-channel-specs.js";
 
 vi.mock("../infra/install-source-utils.js", () => ({ resolveNpmSpecMetadata: vi.fn() }));
+vi.mock("../infra/clawhub-packages.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/clawhub-packages.js")>()),
+  fetchClawHubPackageDetail: vi.fn(),
+}));
 beforeEach(() => {
   vi.mocked(resolveNpmSpecMetadata).mockReset();
+  vi.mocked(fetchClawHubPackageDetail).mockReset().mockRejectedValue(new Error("offline"));
 });
+function clawHubTags(tags: Record<string, string>) {
+  vi.mocked(fetchClawHubPackageDetail).mockResolvedValue({
+    package: { tags, latestVersion: tags.latest },
+  } as Awaited<ReturnType<typeof fetchClawHubPackageDetail>>);
+}
 
 const npmName = "@openclaw/codex";
 const clawHubName = "@openclaw/discord";
@@ -165,7 +176,7 @@ it.each([
   ["extended-stable", false, false, false, undefined, undefined, false],
 ] as const)(
   "ClawHub %s (bound=%s, preferCore=%s, official=%s, selector=%s) -> %s",
-  (
+  async (
     updateChannel,
     versionBoundToCore,
     preferCoreVersion,
@@ -177,7 +188,7 @@ it.each([
     for (const suffix of selector ? [selector] : [undefined, "latest"]) {
       const spec = suffix ? clawSpec + "@" + suffix : clawSpec;
       const installSpec = expected ? clawSpec + "@" + expected : spec;
-      expect(
+      await expect(
         resolveClawHubInstallSpecsForUpdateChannel({
           spec,
           updateChannel,
@@ -186,7 +197,7 @@ it.each([
           officialPackageName: official ? clawHubName : undefined,
           coreVersion: "2026.7.33",
         }),
-      ).toEqual({
+      ).resolves.toEqual({
         installSpec,
         recordSpec: spec,
         ...(fallback ? { fallbackSpec: spec, fallbackLabel: installSpec } : {}),
@@ -194,3 +205,24 @@ it.each([
     }
   },
 );
+
+it.each([
+  ["a newer latest", { beta: "2026.7.33-beta.3", latest: "2026.7.33" }, false],
+  ["an older latest", { beta: "2026.8.1-beta.1", latest: "2026.7.33" }, true],
+])("ClawHub beta channel with %s installs the newer release", async (_case, tags, beta) => {
+  clawHubTags(tags);
+  for (const spec of [clawSpec, clawSpec + "@latest"]) {
+    await expect(
+      resolveClawHubInstallSpecsForUpdateChannel({ spec, updateChannel: "beta" }),
+    ).resolves.toEqual(
+      beta
+        ? {
+            installSpec: clawSpec + "@beta",
+            recordSpec: spec,
+            fallbackSpec: spec,
+            fallbackLabel: clawSpec + "@beta",
+          }
+        : { installSpec: spec, recordSpec: spec },
+    );
+  }
+});

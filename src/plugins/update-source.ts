@@ -519,7 +519,7 @@ export function resolveNpmUpdateTarget(params: {
   };
 }
 
-export function resolveClawHubUpdateSpecs(params: {
+export async function resolveClawHubUpdateSpecs(params: {
   record: PluginInstallRecord;
   officialSpec?: string;
   officialSpecOverride?: string;
@@ -527,13 +527,14 @@ export function resolveClawHubUpdateSpecs(params: {
   officialPackageName?: string;
   coreVersion?: string;
   versionBoundToCore?: boolean;
-}): {
+  timeoutMs?: number;
+}): Promise<{
   installSpec?: string;
   recordSpec?: string;
   fallbackSpec?: string;
   fallbackLabel?: string;
   minimumStableVersion?: string;
-} {
+}> {
   const clawhubPackage =
     params.record.clawhubPackage ??
     parseClawHubPluginSpec(params.record.spec ?? "")?.name ??
@@ -563,9 +564,11 @@ export function resolveClawHubUpdateSpecs(params: {
           coreVersion: params.coreVersion,
         })
       : undefined;
-  return resolveClawHubInstallSpecsForUpdateChannel({
+  return await resolveClawHubInstallSpecsForUpdateChannel({
     spec: stableSpec || unpinnedSpec ? `clawhub:${stableSpec ?? unpinnedSpec}` : recordSpec,
     updateChannel: params.updateChannel,
+    baseUrl: params.record.clawhubUrl,
+    timeoutMs: params.timeoutMs,
     officialPackageName: params.officialPackageName,
     coreVersion: params.coreVersion ?? (stableSpec ? resolveCompatibilityHostVersion() : undefined),
     versionBoundToCore: params.versionBoundToCore,

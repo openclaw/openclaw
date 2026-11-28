@@ -261,9 +261,11 @@ async function syncPluginsForUpdateChannelWithLease(
       }
       const effectiveNpmSpec = channelNpmSpecs?.installSpec ?? npmSpec;
       const channelClawHubSpecs = clawhubSpec
-        ? resolveClawHubInstallSpecsForUpdateChannel({
+        ? await resolveClawHubInstallSpecsForUpdateChannel({
             spec: clawhubSpec,
             updateChannel: params.channel,
+            baseUrl: bridge.clawhubUrl,
+            timeoutMs: params.timeoutMs,
             officialPackageName: trustedSourceLinkedOfficialInstall
               ? parseClawHubPluginSpec(clawhubSpec)?.name
               : undefined,

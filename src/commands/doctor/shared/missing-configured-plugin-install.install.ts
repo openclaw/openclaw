@@ -134,9 +134,11 @@ async function installCandidatePackage(
     parseRegistryNpmSpec(params.records[candidate.pluginId]?.spec ?? "")?.selectorKind ===
       "exact-version";
   const clawhubSpecs = candidate.clawhubSpec
-    ? resolveClawHubInstallSpecsForUpdateChannel({
+    ? await resolveClawHubInstallSpecsForUpdateChannel({
         spec: candidate.clawhubSpec,
         updateChannel: params.updateChannel,
+        ...(recordedSource === "clawhub" ? { baseUrl: record?.clawhubUrl } : {}),
+        timeoutMs: params.timeoutMs,
         officialPackageName: candidate.trustedSourceLinkedOfficialInstall
           ? parseClawHubPluginSpec(candidate.clawhubSpec)?.name
           : undefined,

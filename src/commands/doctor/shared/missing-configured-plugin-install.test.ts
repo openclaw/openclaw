@@ -801,7 +801,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     });
 
     const clawHubCall = expectRecordFields(mockCallArg(installClawHub), {
-      spec: expectedClawHubInstallSpec("clawhub:@openclaw/plugin-matrix@stable"),
+      spec: await expectedClawHubInstallSpec("clawhub:@openclaw/plugin-matrix@stable"),
       expectedPluginId: "matrix",
       config: cfg,
     });

@@ -160,7 +160,7 @@ type SourceInstallerResult =
 async function resolveOfficialManagedInstallSpec(params: {
   request: Extract<ManagedPluginSourceInstallRequest, { source: "npm" | "clawhub" }>;
   config: OpenClawConfig;
-}): Promise<ReturnType<typeof resolveClawHubInstallSpecsForUpdateChannel> | null> {
+}): Promise<Awaited<ReturnType<typeof resolveClawHubInstallSpecsForUpdateChannel>> | null> {
   const { request } = params;
   const trustedSourceLinkedOfficialInstall = request.trustedSourceLinkedOfficialInstall === true;
   if (
@@ -193,9 +193,10 @@ async function resolveOfficialManagedInstallSpec(params: {
   }
   const clawhub =
     request.source === "clawhub"
-      ? resolveClawHubInstallSpecsForUpdateChannel({
+      ? await resolveClawHubInstallSpecsForUpdateChannel({
           spec: request.recordSpec ?? request.spec,
           updateChannel,
+          baseUrl: request.clawhubUrl,
           officialPackageName: packageName,
           coreVersion: resolveCompatibilityHostVersion(),
           preferCoreVersion: true,

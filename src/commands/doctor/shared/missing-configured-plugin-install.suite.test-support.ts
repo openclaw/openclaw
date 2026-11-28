@@ -24,11 +24,12 @@ export function expectedNpmInstallSpec(spec: string): string {
     : spec;
 }
 
-export function expectedClawHubInstallSpec(spec: string): string {
-  return resolveClawHubInstallSpecsForUpdateChannel({
+export async function expectedClawHubInstallSpec(spec: string): Promise<string> {
+  const specs = await resolveClawHubInstallSpecsForUpdateChannel({
     spec,
     updateChannel: resolveRegistryUpdateChannel({ currentVersion: VERSION }),
-  }).installSpec;
+  });
+  return specs.installSpec;
 }
 
 export function expectedCodexInstallSpec(): string {

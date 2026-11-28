@@ -653,7 +653,7 @@ export async function ensureOnboardingPluginInstalled(
     currentVersion: VERSION,
   });
   const clawhubSpecs = clawhubSpec
-    ? resolveClawHubInstallSpecsForUpdateChannel({
+    ? await resolveClawHubInstallSpecsForUpdateChannel({
         spec: clawhubSpec,
         updateChannel,
         officialPackageName: entry.trustedSourceLinkedOfficialInstall
