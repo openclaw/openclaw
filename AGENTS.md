@@ -6,9 +6,9 @@ Keep this file under 20,000 characters, the size OpenClaw loads whole. Put long 
 
 `decideOperatorAdmission` (`src/gateway/operator-admission.ts`) decides authority once per turn or request into a frozen `TurnGrant`; tools, methods, continuations, retries and replays consume it. Stored tokens, signatures, expiry and IDs are not authority.
 
-- Without Ayaan's (@obviyus) explicit buy-in, never add: role, owner, scope, source or policy re-reads after start; `assertCurrent()`-style re-checks; revocation generations; tool-time owner checks (`senderIsOwner`, `ownerAllowFrom`, socket scopes); refusal text outside `src/gateway/operator-refusal.ts`.
-- Allowed after start: data fences (revision, `expectedHead`, `requestId`, compare-and-swap) and the run's abort signal. A revoked person's started turn finishes.
-- Why: OA2 found 242 authority refusal strings in 186 files; one person got different answers by entry or timing (#203464, `portal` refused after restart #206665).
+- Without explicit maintainer buy-in, never add: role, owner, scope, source or policy re-reads after start; `assertCurrent()`-style re-checks; revocation generations; tool-time owner checks (`senderIsOwner`, `ownerAllowFrom`, socket scopes); refusal text outside `src/gateway/operator-refusal.ts`.
+- Allowed after start: data fences (revision, `expectedHead`, `requestId`, CAS) and the run's abort signal. Check authority one time, when work starts. A writer that removes a named person's access stops the work that person started. All other changes apply to the next request.
+- Why: a person got different answers by entry or timing (#203464, #206665).
 - Details, new permissions, lint: [Gateway admission](src/gateway/AGENTS.md#operator-admission).
 
 ## Choose good compromises
@@ -23,8 +23,8 @@ Design trades correctness against complexity and performance. Choose deliberatel
 
 Task defines scope and authorization; chosen workflow owns execution, review, publication, recovery, and cleanup.
 Explicit user instructions override skill guidelines and workflow defaults; host limits and required authorization boundaries still apply.
-Read nearest scoped `AGENTS.md` and matching guides below in full, including for callers outside owner's directory.
-Update instructions at owner; no competing rules here.
+Read scoped `AGENTS.md` and relevant guides in full, including outside callers.
+Edit the owning guide, without competing rules here. [Skill setup](.agents/skills/AGENTS.md).
 
 ## Design priorities
 

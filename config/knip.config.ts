@@ -127,6 +127,8 @@ const repositoryScriptEntries = [
   // Package scripts execute these maintained generators, whose inputs are production contracts.
   "scripts/generate-runtime-script-assets.mjs!",
   "scripts/generate-static-validators.mts!",
+  // ToolOperationCatalog.swift consumes this CLI's generated wording catalog.
+  "scripts/tool-operations.ts!",
   // src/daemon/systemd-directives.ts documents this node regeneration command.
   "scripts/generate-systemd-directives.mjs!",
   // ui:validators:gen/check compile canonical payload schemas into browser runtime guards.
@@ -422,6 +424,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/backup-rollback.mjs!",
   // run.sh invokes the backup schedule upgrade scenario through this CLI.
   "scripts/e2e/lib/upgrade-survivor/backup-schedule.mjs!",
+  // run.sh launches the boot-convergence fixture and probes as separate Node processes.
+  "scripts/e2e/lib/upgrade-survivor/boot-plugin-convergence.mjs!",
   "scripts/e2e/lib/upgrade-survivor/channel-owner-policy.mjs!",
   "scripts/e2e/lib/upgrade-survivor/config-parking.mjs!",
   // run.sh invokes this CLI and preloads it into updater/Doctor children.

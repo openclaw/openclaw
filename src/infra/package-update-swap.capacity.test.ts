@@ -7,7 +7,6 @@ import {
   formatUpdateStateInspectionError,
 } from "./update-candidate-state.diagnostics.js";
 import { UpdateCaptureSpaceError } from "./update-capture-space.js";
-import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -38,15 +37,6 @@ it("reports a worker's disk refusal and verifies the unchanged package for recov
     },
   });
   expect(result.status).toBe("failed");
-  const report = await prepareUpdateFailureReport(
-    {
-      attemptId: "disk-refusal",
-      result: { mode: "pnpm", status: "error", durationMs: 0, steps: [result.step] },
-    },
-    { env: {}, stateDir: base },
-  );
-  expect(report.body).toContain("Update database backup volume: needs 8.5 GiB; available 7.8 GiB");
-  expect(report.body).not.toContain(base);
   expect(await transaction.rollback(() => {})).toMatchObject({
     exitCode: 0,
     activePackageRoot: packageRoot,

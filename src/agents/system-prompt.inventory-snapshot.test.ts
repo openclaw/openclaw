@@ -1,9 +1,6 @@
 // Byte snapshots and budgets of the whole system prompt for the two measured install shapes.
 import { describe, expect, it } from "vitest";
-import {
-  FRESH_INSTALL_SYSTEM_PROMPT_BUDGET_BYTES,
-  SYSTEM_PROMPT_SECTIONS,
-} from "./system-prompt-manifest.js";
+import { PROMPT_BUDGET_BYTES, SYSTEM_PROMPT_SECTIONS } from "./system-prompt-manifest.js";
 import {
   buildAgentSystemPrompt,
   measureAgentSystemPromptSections,
@@ -151,7 +148,7 @@ describe("system prompt inventory snapshots", () => {
 
   it("keeps the fresh-install prompt and every section within budget", () => {
     expect(Buffer.byteLength(buildAgentSystemPrompt(freshParams), "utf8")).toBeLessThanOrEqual(
-      FRESH_INSTALL_SYSTEM_PROMPT_BUDGET_BYTES,
+      PROMPT_BUDGET_BYTES.freshInstallSystemPrompt,
     );
     for (const params of [freshParams, configuredParams]) {
       const bytes = measureAgentSystemPromptSections(params);

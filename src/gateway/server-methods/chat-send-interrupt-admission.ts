@@ -27,7 +27,6 @@ export async function prepareChatSendInterruptAdmission(params: {
     (sharing
       ? {
           assertCurrent: sharing.assertAdmittedInputCurrent ?? sharing.assertCurrent,
-          signal: sharing.participationSignal,
           release: sharing.retain?.(),
         }
       : undefined);

@@ -303,10 +303,7 @@ it.each(["guidance", "staging"])(
             }),
           ]),
         );
-        const preview = await prepareUpdateFailureReport(
-          { attemptId: run.runId, result: terminal.result, recordedRun: recorded },
-          { env },
-        );
+        const preview = await prepareUpdateFailureReport(recorded!, { env });
         expect(preview.body).toContain("package-install");
         expect(preview.body).toContain("package-install-omit-optional");
         expect(preview.body).toContain("ERESOLVE");

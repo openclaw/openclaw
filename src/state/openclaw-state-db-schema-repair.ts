@@ -173,12 +173,18 @@ export const STATE_SCHEMA_MIGRATION_READ_TABLES: Record<StateMigrationKind, read
   }),
 };
 
+// Unreleased transient history, and retired node pairing tables that never had a shipped writer.
+export const LEGACY_STATE_TABLES = [
+  ["database", "verifications"].join("_"),
+  "node_pairing_pending",
+  "node_pairing_paired",
+] as const;
+
 export function dropLegacyStateTables(db: DatabaseSync): void {
-  // Unreleased transient history; drop, do not migrate.
-  const transientHistoryTable = ["database", "verifications"].join("_");
-  db.exec(`DROP TABLE IF EXISTS ${transientHistoryTable};`);
-  // Retired node pairing tables never had a shipped writer.
-  db.exec("DROP TABLE IF EXISTS node_pairing_pending; DROP TABLE IF EXISTS node_pairing_paired;");
+  // Drop, do not migrate.
+  for (const table of LEGACY_STATE_TABLES) {
+    db.exec(`DROP TABLE IF EXISTS ${table};`);
+  }
 }
 
 export function migrateWorkerPlacementExecutionModeSchema(

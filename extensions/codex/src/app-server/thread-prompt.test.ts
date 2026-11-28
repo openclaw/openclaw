@@ -243,12 +243,11 @@ describe("buildDeveloperInstructions delegation guidance", () => {
 
       expect(instructions).toContain("`openclaw.sessions_create`");
       expect(instructions).toContain(
-        "independent persistent visible session, not a supervised child",
+        "Explicit requests to start a session or task: `openclaw.sessions_create`",
       );
-      expect(instructions).toContain("no completion event or yield");
       const helperRoute = instructions
         .split("\n")
-        .find((line) => line.startsWith("- Delegated helpers:"));
+        .find((line) => line.startsWith("Delegated helpers:"));
       expect(helperRoute).toContain("hidden native `spawn_agent`");
       expect(helperRoute).toContain('`sessions_spawn` with `runtime="subagent"`');
       expect(instructions).toContain("unrequested follow-up proposals use `openclaw.suggest_task`");
@@ -272,9 +271,9 @@ describe("buildDeveloperInstructions UI presentation guidance", () => {
     const instructions = render({}, { dynamicTools });
 
     expect(instructions).toContain("## UI Presentation");
-    expect(instructions).toContain('`openclaw.screen(action="browser_show")`');
+    expect(instructions).toContain("Control UI panels: `openclaw.screen`");
     for (const uiTool of uiTools) {
-      expect(instructions).toContain(`\`openclaw.${uiTool.name}\``);
+      expect(instructions).toContain(`openclaw.${uiTool.name}`);
     }
     expect(instructions).toContain(
       '`openclaw.message(action="send", clawhub={query:"capability"})`',

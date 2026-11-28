@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { appendRegularFileSync } from "@openclaw/fs-safe/advanced";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { resolveStateDir } from "../config/state-dir.js";
 import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -195,7 +196,11 @@ function warnAboutRotationFailure(entry: FileLogQueueEntry, synchronous: boolean
   writeFileTransportWarning(message, synchronous);
 }
 
-function warnAboutAppendFailure(entry: FileLogQueueEntry, synchronous: boolean): void {
+function warnAboutDroppedRecords(
+  entry: FileLogQueueEntry,
+  synchronous: boolean,
+  resolutionError?: unknown,
+): void {
   if (warnedAppendFiles.has(entry.file)) {
     return;
   }
@@ -205,7 +210,9 @@ function warnAboutAppendFailure(entry: FileLogQueueEntry, synchronous: boolean):
   }
   const message = saturated
     ? "[openclaw] log file append failure diagnostics saturated; suppressing new file targets"
-    : `[openclaw] log file append failed; records dropped; check that the path is a writable regular file; file=${entry.file}`;
+    : resolutionError !== undefined
+      ? `[openclaw] log directory unavailable; records dropped (file=${entry.file}): ${coerceErrorMessage(resolutionError)}`
+      : `[openclaw] log file append failed; records dropped; check that the path is a writable regular file; file=${entry.file}`;
   if (!writeFileTransportWarning(message, synchronous)) {
     return;
   }
@@ -287,8 +294,8 @@ async function writeEntries(entries: FileLogQueueEntry[]): Promise<void> {
     let file: string;
     try {
       file = entry.targetPreparation ? await resolveTarget(entry.targetPreparation) : entry.file;
-    } catch {
-      warnAboutAppendFailure(entry, false);
+    } catch (error) {
+      warnAboutDroppedRecords(entry, false, error);
       entry.payload = "";
       activeIndex = ++index;
       continue;
@@ -326,12 +333,12 @@ async function writeEntries(entries: FileLogQueueEntry[]): Promise<void> {
         cursor.bytes += batch.payloadBytes;
         clearAppendFailure(entry);
       } else {
-        warnAboutAppendFailure(entry, false);
+        warnAboutDroppedRecords(entry, false);
       }
     } catch {
       // A lost worker result leaves the file size unknown; the next batch observes it once.
       cursors.delete(file);
-      warnAboutAppendFailure(entry, false);
+      warnAboutDroppedRecords(entry, false);
     } finally {
       // Drains share entries; release settled text even while a later append is still pending.
       for (const written of entries.slice(index, batch.nextIndex)) {
@@ -352,8 +359,8 @@ function writeEntriesSync(entries: FileLogQueueEntry[]): void {
     let file: string;
     try {
       file = entry.targetPreparation ? resolveTarget(entry.targetPreparation, true) : entry.file;
-    } catch {
-      warnAboutAppendFailure(entry, true);
+    } catch (error) {
+      warnAboutDroppedRecords(entry, true, error);
       entry.payload = "";
       index++;
       continue;
@@ -381,7 +388,7 @@ function writeEntriesSync(entries: FileLogQueueEntry[]): void {
       clearAppendFailure(entry);
     } catch {
       // Match the old best-effort transport: a failed append must not stop later records.
-      warnAboutAppendFailure(entry, true);
+      warnAboutDroppedRecords(entry, true);
     }
     entry.payload = "";
     index = batch.nextIndex;

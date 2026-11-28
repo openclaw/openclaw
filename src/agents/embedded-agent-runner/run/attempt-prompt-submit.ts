@@ -4,7 +4,9 @@ import {
   type SessionSourceAssertion,
 } from "../../../config/sessions/session-source-authority.js";
 import type { ImageContent } from "../../../llm/types.js";
+import { readModelPromptProjection } from "../../../sessions/user-turn-transcript.message.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
+import { isTextContentBlock } from "../../content-blocks.js";
 import { isOpenClawSystemUpdateMessage } from "../../internal-runtime-context.js";
 import type { Agent, AgentMessage } from "../../runtime/index.js";
 import type { NextUserMessagePersistence } from "../../session-tool-result-guard.js";
@@ -172,6 +174,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
       };
     };
     activeSession.agent.prepareNextTurnWithContext = prepareNextTurn;
+    let attemptDispatched = false;
     const persistThenStream: StreamFn = async (model, context, options) =>
       runWithSessionSourceScope(
         input.assertHostActive,
@@ -238,7 +241,25 @@ export async function submitEmbeddedAttemptPrompt(input: {
           }
           assertRequestCurrent();
           input.assertHostActive?.();
+          // A capturing harness never dispatches unfrozen: before this attempt's first send, a
+          // turn the prompt transform could not project (it left the request) freezes as its own
+          // transcript text.
+          const sent =
+            foregroundRequest && !attemptDispatched
+              ? projectionRecorder?.getPersistedMessage?.()
+              : undefined;
+          const capture = projectionRecorder?.captureModelPromptProjection;
+          if (sent && capture && readModelPromptProjection(sent) === undefined) {
+            const text =
+              typeof sent.content === "string"
+                ? sent.content
+                : (sent.content.find(isTextContentBlock)?.text ?? "");
+            const freeze = () => capture(text, assertRequestCurrent);
+            await (input.withTranscriptWrite ? input.withTranscriptWrite(freeze) : freeze());
+            assertRequestCurrent();
+          }
           if (foregroundRequest) {
+            attemptDispatched = true;
             projectionRecorder?.markSentToProvider?.();
           }
           const stream = await baseStreamFn(model, requestContext, options);

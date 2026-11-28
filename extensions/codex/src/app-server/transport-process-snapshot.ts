@@ -15,6 +15,7 @@ export type PosixProcess = {
   pgid: number;
   state: string;
   startedAt: string;
+  startTimeMicros?: number;
 };
 
 /** A zombie leader can still own running threads, reported by the ps-style l flag. */
@@ -109,6 +110,7 @@ export async function readCodexAppServerProcess(
 export async function readCodexAppServerProcessCommand(
   observed: PosixProcess,
   deadline: number,
+  purpose?: "startup",
 ): Promise<string> {
   let output: string;
   if (process.platform === "linux") {
@@ -141,7 +143,10 @@ export async function readCodexAppServerProcessCommand(
       }
     } while (pending);
   } else if (process.platform === "darwin") {
-    output = await readDarwinProcessCommandLine(observed.pid, deadline).catch((error: unknown) => {
+    output = await readDarwinProcessCommandLine(
+      purpose === "startup" ? observed : observed.pid,
+      deadline,
+    ).catch((error: unknown) => {
       throw inspectionFailure(error);
     });
   } else {
@@ -168,12 +173,13 @@ function readProcesses(
   if (process.platform === "darwin") {
     return readDarwinProcessSnapshot(deadline, pids)
       .then((rows) =>
-        rows.map(({ pid, ppid, pgid, state, startedAt }) => ({
+        rows.map(({ pid, ppid, pgid, state, startedAt, startTimeMicros }) => ({
           pid,
           ppid,
           pgid,
           state,
           startedAt,
+          startTimeMicros,
         })),
       )
       .catch((error: unknown) => {

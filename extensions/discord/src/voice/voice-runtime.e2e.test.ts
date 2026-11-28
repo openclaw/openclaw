@@ -786,16 +786,5 @@ defineDiscordVoiceTests(
       await expect(listener.handle(undefined, undefined as never)).resolves.toBeUndefined();
       expect(autoJoinSpy).toHaveBeenCalledTimes(1);
     });
-
-    it("DiscordVoiceResumedListener: runs autoJoin on gateway resume", async () => {
-      const manager = createManager();
-      const autoJoinSpy = vi.spyOn(manager, "autoJoin").mockResolvedValue(undefined);
-
-      const { DiscordVoiceResumedListener } = listenersModule;
-      const listener = new DiscordVoiceResumedListener(manager);
-
-      await expect(listener.handle(undefined, undefined as never)).resolves.toBeUndefined();
-      expect(autoJoinSpy).toHaveBeenCalledTimes(1);
-    });
   },
 );

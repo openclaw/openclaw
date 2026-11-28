@@ -581,6 +581,25 @@ export function compactToolInputHint(schema: unknown): string {
   return hint.text.length <= INPUT_LIMITS.maxChars ? hint.text : "unknown";
 }
 
+/**
+ * Compact one object input schema only when the text shows its whole required structure, so a
+ * caller can build valid arguments from it alone. Root compositions (`allOf`, unions, `not`,
+ * references) and open or truncated objects are not representable here.
+ */
+export function compactCompleteToolInputHint(schema: unknown): string | undefined {
+  if (
+    !isRecord(schema) ||
+    schema.type !== "object" ||
+    ["anyOf", "oneOf", "not", ...UNSUPPORTED_SHAPE_KEYWORDS].some((key) =>
+      Object.hasOwn(schema, key),
+    )
+  ) {
+    return undefined;
+  }
+  const hint = compactObjectHint(schema, 0, INPUT_LIMITS);
+  return hint.complete && hint.text.length <= INPUT_LIMITS.maxChars ? hint.text : undefined;
+}
+
 /** Compact one trusted output schema. Omit incomplete hints instead of inviting field guesses. */
 export function compactToolOutputHint(schema: unknown): string | undefined {
   const hint = compactSchemaType(schema, 0, OUTPUT_LIMITS);

@@ -306,6 +306,7 @@ export async function resolvePostActivationInspectionCheckIds(): Promise<string[
 async function runDoctorHealthContributionList(
   ctx: DoctorHealthFlowContext,
   contributions: readonly DoctorHealthContribution[],
+  afterRestart = false,
 ): Promise<void> {
   const signal = resolveCommandProcessSignal(getAsyncWorkSignal());
   const retirementOnly = ctx.retirementOnly === true;
@@ -363,6 +364,10 @@ async function runDoctorHealthContributionList(
   try {
     for (const contribution of ordered) {
       signal?.throwIfAborted();
+      if (!afterRestart && contribution.placement && ctx.afterRestartContributions) {
+        ctx.afterRestartContributions.push(contribution);
+        continue;
+      }
       const inspectionIds = postActivationInspections.get(contribution);
       if (inspectionIds) {
         deferredCheckIds = recordUpdateDoctorDeferredInspectionChecks(inspectionIds);
@@ -399,7 +404,7 @@ async function runDoctorHealthContributionList(
             // turn their recorded refusal into permission for later repairs.
             throwIfDoctorStateMigrationRefused(ctx.configResult.stateMigrationStepReceipts);
           }
-          if (ctx.configWriteRefusal) {
+          if (ctx.configWriteRefusal && !afterRestart) {
             await reportDeferredLegacyState(ctx);
           }
         };
@@ -420,7 +425,7 @@ async function runDoctorHealthContributionList(
         if (retirementOnly && (ctx.healthFindings?.length || ctx.updateWarnings?.length)) {
           ctx.retirementOnly = false;
         }
-        if (ctx.configWriteRefusal) {
+        if (ctx.configWriteRefusal && !afterRestart) {
           // Later repairs consume the candidate. Stop before they persist state
           // derived from config that the writer deliberately left non-durable.
           return;
@@ -481,6 +486,20 @@ async function runDoctorHealthContributionList(
         "Run `openclaw doctor --fix` after activation to complete deferred checks and repairs.",
       );
     }
+  }
+}
+
+/**
+ * Runs the after-restart contributions the stopped pass reached. A refused pass would have
+ * reached them before its refusal, so they run as they did there, without refusal handling.
+ */
+export async function runDoctorAfterRestartContributions(
+  ctx: DoctorHealthFlowContext,
+): Promise<void> {
+  const deferred = ctx.afterRestartContributions ?? [];
+  ctx.afterRestartContributions = undefined;
+  if (deferred.length > 0) {
+    await runDoctorHealthContributionList(ctx, deferred, true);
   }
 }
 

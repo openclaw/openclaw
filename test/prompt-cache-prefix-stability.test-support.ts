@@ -71,57 +71,6 @@ function noisePng(side: number): Buffer {
   ]);
 }
 
-/** True when `current` is `previous` with each changed message passing `changed`, plus new ones. */
-function onlyMessagesChanged(
-  previous: WireRequest,
-  current: WireRequest,
-  changed: (before: string, after: string) => boolean,
-): boolean {
-  return (
-    previous.system === current.system &&
-    previous.tools === current.tools &&
-    current.messages.length >= previous.messages.length &&
-    previous.messages.every(
-      (message, index) =>
-        current.messages[index] === message || changed(message, current.messages[index]!),
-    )
-  );
-}
-
-type GeminiParts = { parts?: Array<{ functionResponse?: { response?: { output?: unknown } } }> };
-
-/** True when `after` is `before` with only shortened, truncation-marked tool outputs. */
-function outputTrimmed(before: string, after: string): boolean {
-  const original = JSON.parse(before) as GeminiParts;
-  const trimmed = JSON.parse(after) as GeminiParts;
-  let changed = false;
-  for (const [index, part] of (trimmed.parts ?? []).entries()) {
-    const response = part.functionResponse?.response;
-    const full = original.parts?.[index]?.functionResponse?.response?.output;
-    const output = response?.output;
-    // The kept text around the notice must be the original's head and tail. The notice itself
-    // can be cut short at the end of the output.
-    const notice =
-      typeof output === "string"
-        ? /\s*\[\.\.\. \d+ more characters truncated(?:[^\]]*\]\s*|[^\]]*$)/.exec(output)
-        : null;
-    if (
-      response &&
-      notice &&
-      typeof output === "string" &&
-      typeof full === "string" &&
-      output.length < full.length &&
-      full.startsWith(output.slice(0, notice.index)) &&
-      full.endsWith(output.slice(notice.index + notice[0].length))
-    ) {
-      // Restore the known change; everything else in the message must still match.
-      response.output = full;
-      changed = true;
-    }
-  }
-  return changed && JSON.stringify(trimmed) === before;
-}
-
 // Breaks that main still has. Each entry checks the whole request, so its known change cannot hide
 // another one. Remove an entry when its owner lands; the journey then fails until it goes.
 export const KNOWN_BREAKS: ReadonlyArray<{
@@ -129,15 +78,7 @@ export const KNOWN_BREAKS: ReadonlyArray<{
   chat: "target" | "other";
   accepts: (previous: WireRequest, current: WireRequest) => boolean;
   owner: string;
-}> = [
-  {
-    // The pre-request pressure check trims tool results that earlier requests already sent.
-    api: "google-generative-ai",
-    chat: "other",
-    accepts: (previous, current) => onlyMessagesChanged(previous, current, outputTrimmed),
-    owner: "https://github.com/openclaw/openclaw/pull/199530",
-  },
-];
+}> = [];
 
 /** Requests that do not extend the previous request in the same session, with the first change. */
 function prefixBreaks(
@@ -791,7 +732,7 @@ export function usePrefixStabilityJourney() {
         for (const { at } of otherBreaks) {
           // The summary leads the rebuilt history (after the instructions item on Responses).
           expect(otherRequests[at]!.messages.slice(0, 2).join("\n"), otherMessage).toContain(
-            "compacted into the following summary",
+            "Compressed history from earlier turns",
           );
         }
         expect(unclassified).toEqual([]);

@@ -35,10 +35,10 @@ Detail for the root rule [decide authority once](../../AGENTS.md#decide-authorit
 - `decideOperatorAdmission` (`operator-admission.ts`) decides once per turn or request from prepared owners and committed config. `decideTurnGrant` is the only producer of `TurnGrant` (`owner`, `automations`, `skillAuthoring`, `questionReplace`, `commands`; type in `src/agents/admitted-run-operator-authority.types.ts`).
 - Queued, retried, replayed and continuation turns (exec wake, restart resume, tool handoff, cron) re-enter admission from their recorded source. Turn kind and provenance never widen or narrow the grant (#206665).
 - Consumers read the grant (`grant.owner`), never `senderIsOwner` producers, `ownerAllowFrom`, socket scopes or turn kind. Owner-only tools rely on the turn tool gate (`resolveTurnToolSurface` → `gateAgentToolExecution`); tools add no local owner refusal.
-- Run and turn-claim liveness checks are fences, not authority. Multi-phase admission and mid-run "no longer active" refusals fall under the root ban. Revocation, removal and reload apply to the next request.
+- Run and turn-claim liveness checks are fences, not authority. Multi-phase admission and mid-run "no longer active" refusals fall under the root ban. Stop on access loss: a permission writer whose committed write lowers or removes a named person's access (`session.members.remove`, `session.members.setAccess`, `users.setRole`) calls `stopWorkStartedBy` (`chat-abort-stop-work.ts`), which selects work by the recorded requester and never reads authority (lint). Config reloads and role policy edits apply to the next request.
 - Refusals: `operatorRefusalText` or `OperatorRefusalError` with a cause from `operator-refusal.ts`. A new cause goes in that table with one next step; never inline refusal text.
 - New permission: add the fact to admission and the field in `decideTurnGrant`, then a cell per entry kind in `operator-admission.table.test.ts` (continuations: `owed-exec-requester.test.ts`). Same principal, same grant by every entry.
-- Lint: `openclaw-boundaries/no-operator-permission-read` and `no-turn-authority-derivation` (`scripts/lib/`). Their allowlists only shrink: fix a finding by reading the grant, never by adding a file.
+- Lint: `openclaw-boundaries/no-operator-permission-read` (live permission reads, run-authority minting, access re-checks; per-file counts) and `no-turn-authority-derivation` (`scripts/lib/`). Their lists only shrink: fix a finding by reading the grant, never by adding a file or raising a count.
 
 ## Run Authority And Worker Upgrades
 

@@ -55,28 +55,9 @@ warm a fresh box from current `main`, or switch to Package Acceptance.
 
 ## Existing Baseline
 
-Run or verify these before inventing new coverage:
-
-```bash
-OPENCLAW_TESTBOX=1 pnpm check:changed
-pnpm run test:extensions:package-boundary:canary
-pnpm run test:extensions:package-boundary:compile
-pnpm test:docker:plugins
-OPENCLAW_PLUGINS_E2E_CLAWHUB=0 pnpm test:docker:plugins
-pnpm test:docker:plugin-update
-```
-
-For full bundled install/uninstall proof, shard the packaged sweep:
-
-```bash
-OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL=8 \
-OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX=<0-7> \
-pnpm test:docker:bundled-plugin-install-uninstall
-```
-
-This example partitions the selected package's plugin inventory over shards `0-7`.
-Private QA plugins are source-mode only unless a package explicitly includes
-them.
+Before planning, running, extending, or accepting lifecycle, doctor/fix, gateway,
+config, or external SDK proof, read
+[the lifecycle matrix](references/lifecycle-matrix.md) in full.
 
 ## Confidence Matrix
 
@@ -97,185 +78,47 @@ package SHA/version, and skipped-live reason.
 
 ## Package Acceptance Plan
 
-Full Release Validation owns final candidate qualification with admitted Q
-(default Q=C, or an explicit reviewed exact Q) and the
-exact publication tarballs. Use standalone Package Acceptance for diagnostics
-or postpublish confidence, not as a replacement candidate qualification:
-
-```bash
-gh workflow run package-acceptance.yml \
-  --repo openclaw/openclaw \
-  --ref main \
-  -f workflow_ref=main \
-  -f source=ref \
-  -f package_ref=<branch-or-sha> \
-  -f suite_profile=custom \
-  -f docker_lanes='plugins-offline plugin-update doctor-switch update-channel-switch config-reload mcp-channels npm-onboard-channel-agent' \
-  -f telegram_mode=mock-openai
-```
-
-Use `source=npm -f package_spec=openclaw@beta` for published beta proof. These
-standalone diagnostic/confidence runs may use trusted current harness code;
-candidate qualification must retain its exact admitted Q instead, without
-changing C's source, package bytes, version, or baselines.
-
-For extended-stable shared publication, require complete exact-target Full
-Release Validation from the admitted `release-ci/*` harness at the exact Q,
-with trusted P admission and publication tooling separate. Direct
-canonical-branch or `main` producers do not satisfy the protected publisher.
-Package Acceptance is a post-publish selector smoke:
-
-```bash
-gh workflow run package-acceptance.yml \
-  --repo openclaw/openclaw \
-  --ref main \
-  -f workflow_ref=main \
-  -f source=npm \
-  -f package_spec=openclaw@extended-stable \
-  -f suite_profile=package \
-  -f telegram_mode=mock-openai
-```
-
-Record the resolved version. Still verify every package and selector in the
-tag's `all-publishable` inventory; one smoke is not registry readback.
+Full Release Validation owns candidate qualification at admitted Q and the exact
+publication tarballs. Standalone Package Acceptance supplies diagnostics or
+postpublish confidence. Before running or accepting it, read
+[the Package Acceptance procedure](references/package-acceptance.md) in full.
 
 ## Plugin npm Artifact Qualification
 
-For a publication candidate, Full Release Validation owns plugin npm artifact
-qualification. Supply its publication selection at dispatch; the all-group
-parent invokes `plugin-npm-release.yml` in artifact-only mode against the exact
-Release SHA, requires successful tarball readback, and records the immutable
-aggregate descriptor in `publicationArtifacts.pluginNpm`. Release Prepare and
-publication must adopt that exact descriptor rather than repacking plugins.
-
-Use a standalone trusted-workflow preflight only for a focused diagnostic or a
-selected-plugin repair that is outside a regular publication candidate:
-
-```bash
-release_sha="$(git rev-parse origin/release/2026.7.1)"
-gh workflow run plugin-npm-release.yml \
-  --repo openclaw/openclaw \
-  --ref main \
-  -f preflight_only=true \
-  -f publish_scope=selected \
-  -f plugins=@openclaw/meta-provider \
-  -f ref="${release_sha}" \
-  -f npm_dist_tag=default
-```
-
-Do not pass `release_publish_run_id`. Require the workflow to finish
-`verify_plugin_npm_preflight` successfully. Record the run URL, workflow SHA,
-and source SHA. The workflow first creates the staging/readback artifact
-`plugin-npm-package-source-<source-sha>-<extension-id>` containing
-`npm-pack.json`, `preflight-manifest.json`, and the tarball. It then uploads the
-final consumer artifact
-`plugin-npm-package-<extension-id>-<version>-<route>-<run-id>-<attempt>` containing
-the tarball and `plugin-publication-manifest.json`.
-
-Record the final artifact name and digest separately. The manifest uses
-`openclaw.plugin-publication-artifact/v1` and records the target SHA, package
-manifest hashes, publication route and policy, and tarball hashes and inventory.
-This standalone proof is validation-only; it does not authorize or stage
-publication and cannot replace Full Release Validation's manifest-bound
-descriptor. The artifact inventory, rather than the unpacked source tree, is
-the security and package-content boundary: source-only fixtures are irrelevant.
-Package-owned test and fixture paths outside shipped runtime and skill assets
-fail qualification; shipped runtime remains security-scanned. Bundled
-`node_modules` stays with dependency evidence rather than plugin-source policy.
-The separate `trusted_publisher_preflight=true` OIDC check requires a protected
-`release-publish/<tooling-sha12>-<epoch>` dispatch tag and runs in `npm-publish`.
-Real publication also requires that tooling tag; a direct human dispatch waits
-for its `npm-release` approval job before publishing.
-For an already-published version,
-require npm `dist.integrity` and `dist.shasum` to match the verified tarball.
-Treat only missing or provably older dist-tags as repairable; newer or
-incomparable selectors are a blocker.
+Full Release Validation owns candidate plugin npm qualification and the immutable
+publication descriptor; standalone preflights are validation-only. Before
+running or accepting this proof, read
+[the plugin artifact procedure](references/plugin-npm-artifacts.md) in full.
 
 ## New Testbox Harness Plan
 
-If more certainty is needed, add or run a `plugin-lifecycle-matrix` Docker lane
-that uses one package tarball and sharded plugin lists. Per plugin:
-
-1. Start with a clean `HOME`.
-2. Capture `plugins list --json`.
-3. `plugins install <id>`.
-4. `plugins inspect <id> --json`.
-5. `plugins disable <id>`, then assert disabled visibility.
-6. `plugins enable <id>`, except config-required plugins without config.
-7. `plugins registry --refresh`.
-8. `doctor --non-interactive`.
-9. `plugins uninstall <id> --force`.
-10. Assert the plugin's `plugins.entries` value is exactly `{ enabled: false }`,
-    while its allow/deny entries, install record, managed directory, and bundled
-    runtime load paths are gone. Use the existing harness's source-qualified
-    uninstall expectations for historical targets.
-11. Assert diagnostics contain no `level: "error"` and output redacts
-    secret-looking values.
-
-Keep `memory-lancedb` special: it is config-required. First assert install does
-not enable it without embedding config, then run a second configured case.
+Before planning, running, extending, or accepting lifecycle, doctor/fix, gateway,
+config, or external SDK proof, read
+[the lifecycle matrix](references/lifecycle-matrix.md) in full.
 
 ## Doctor/Fix Matrix
 
-Seed bad states and require `doctor --fix --non-interactive` to repair them,
-then run doctor again and require idempotence:
-
-- stale `plugins.allow`
-- stale `plugins.entries`
-- stale channel config for missing channel plugin
-- invalid `plugins.entries.<id>.config`
-- packaged bundled path in `plugins.load.paths`
-- legacy `plugins.installs`
-- disabled channel/plugin config that must not stage runtime deps
-- root-owned global package tree that must remain unmodified
+Before planning, running, extending, or accepting lifecycle, doctor/fix, gateway,
+config, or external SDK proof, read
+[the lifecycle matrix](references/lifecycle-matrix.md) in full.
 
 ## Gateway Bootstrap Matrix
 
-Start packaged OpenClaw in Docker with clean state:
-
-- provider plugins enabled, no credentials: ready with warnings, no crash
-- channel plugins configured disabled: no runtime deps staged
-- startup-activation plugins enabled: ready and reflected in status
-- invalid single plugin config: bad plugin skipped/quarantined, others remain
-
-Assert:
-
-- gateway reaches ready
-- `openclaw status --json` includes plugin diagnostics
-- `openclaw plugins inspect --all --json` is parseable
-- package tree is not mutated
-- logs contain no raw tokens
+Before planning, running, extending, or accepting lifecycle, doctor/fix, gateway,
+config, or external SDK proof, read
+[the lifecycle matrix](references/lifecycle-matrix.md) in full.
 
 ## Config Round-Trip Representatives
 
-Use representative plugin families instead of every plugin for deep config
-round-trip:
-
-- providers: `openai`, `anthropic`, `mistral`, `openrouter`
-- channels: `telegram`, `discord`, `slack`, `whatsapp`
-- memory: `memory-lancedb`
-- feature/runtime: `browser`, `acpx`, `tokenjuice`
-
-For each representative:
-
-1. Write config through CLI when possible.
-2. Read it back through `config get` or JSON.
-3. Run `plugins inspect`.
-4. Run `doctor --non-interactive`.
-5. Trigger gateway config reload if applicable.
-6. Compare config hash before/after no-op commands.
+Before planning, running, extending, or accepting lifecycle, doctor/fix, gateway,
+config, or external SDK proof, read
+[the lifecycle matrix](references/lifecycle-matrix.md) in full.
 
 ## External SDK Smoke
 
-In a package Docker lane, create tiny external plugins and install them from:
-
-- local directory
-- `.tgz`
-- `file:` npm spec
-
-Cover CJS and ESM shapes, plus at least one plugin importing focused
-`openclaw/plugin-sdk/*` subpaths. Assert `plugins inspect` sees its tool,
-gateway method, CLI command, or service.
+Before planning, running, extending, or accepting lifecycle, doctor/fix, gateway,
+config, or external SDK proof, read
+[the lifecycle matrix](references/lifecycle-matrix.md) in full.
 
 ## Live-Ish Probe Rules
 

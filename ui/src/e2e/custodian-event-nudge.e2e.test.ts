@@ -251,7 +251,8 @@ suite.define(() => {
   });
 
   it("keeps nudges out of a closed question and sends a parseable skip answer", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+    const options = { ...createControlUiE2eContextOptions(), reducedMotion: "reduce" as const };
+    await suite.withPage(options, async ({ page }) => {
       const gateway = await install(page, {
         methodResponses: {
           "openclaw.chat": {
@@ -274,11 +275,7 @@ suite.define(() => {
       await skip.waitFor();
       await expectBlockedNudge(page, gateway);
 
-      await gateway.setMethodResponse("openclaw.chat", {
-        sessionId: "e2e-wizard-custodian",
-        reply: "Moving on.",
-        action: "none",
-      });
+      await gateway.deferNext("openclaw.chat");
       await skip.click();
 
       await expect.poll(async () => (await gateway.getRequests("openclaw.chat")).length).toBe(2);
@@ -288,6 +285,26 @@ suite.define(() => {
         sessionId: "e2e-wizard-custodian",
       });
       await page.locator(".chat-group.user", { hasText: "Skip for now" }).waitFor();
+      const card = page.locator("openclaw-option-card");
+      await expect.poll(() => card.count()).toBe(0);
+      const composer = page.locator(".custodian-surface textarea");
+      expect(await composer.evaluate((element) => element === document.activeElement)).toBe(true);
+      await composer.fill("Tell me about scheduling.");
+      await gateway.rejectDeferred("openclaw.chat", {
+        code: "INVALID_REQUEST",
+        message: "Please choose again.",
+      });
+      await skip.waitFor();
+      await page.getByRole("alert").filter({ hasText: "Please choose again." }).waitFor();
+      expect(await composer.inputValue()).toBe("Tell me about scheduling.");
+      await gateway.deferNext("openclaw.chat");
+      await skip.click();
+      await expect.poll(async () => (await gateway.getRequests("openclaw.chat")).length).toBe(3);
+      await gateway.resolveDeferred("openclaw.chat", {
+        sessionId: "e2e-wizard-custodian",
+        reply: "Moving on.",
+        action: "none",
+      });
       await page.getByText("Moving on.").waitFor();
       expect(await page.locator("openclaw-option-card").count()).toBe(0);
     });

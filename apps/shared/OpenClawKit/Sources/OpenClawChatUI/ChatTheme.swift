@@ -1,3 +1,4 @@
+import OpenClawKit
 import SwiftUI
 
 extension EnvironmentValues {
@@ -58,12 +59,33 @@ public enum OpenClawChatTheme {
     /// (ui/src/lib/chat/participant-colors.ts:97-100). Bound the accent contribution so even its
     /// lightest/darkest extremes retain reading contrast for label-coloured text.
     static func userBubbleSurface(in colorScheme: ColorScheme, accent: Color?) -> Color {
+        #if os(iOS)
+        Color(uiColor: colorScheme == .dark ? IOSPalette.darkCanvas : IOSPalette.lightCanvas)
+            .mix(with: accent ?? Color(uiColor: OpenClawIOSBrand.accent), by: 0.15, in: .device)
+        #else
         self.desktopCanvas(in: colorScheme)
             .mix(with: accent ?? self.desktopAccent(in: colorScheme), by: 0.15, in: .device)
+        #endif
     }
 
     #if !os(macOS)
     private enum IOSPalette {
+        #if os(iOS)
+        // Mirrors the app palette; the shared chat package cannot import the iOS app.
+        static let lightCanvas = UIColor(red: 247 / 255.0, green: 246 / 255.0, blue: 245 / 255.0, alpha: 1)
+        static let darkCanvas = UIColor(red: 27 / 255.0, green: 27 / 255.0, blue: 26 / 255.0, alpha: 1)
+        static let lightMutedSurface = UIColor(red: 239 / 255.0, green: 238 / 255.0, blue: 237 / 255.0, alpha: 1)
+        static let lightRaisedSurface = UIColor(red: 251 / 255.0, green: 250 / 255.0, blue: 250 / 255.0, alpha: 1)
+        static let darkRaisedSurface = UIColor(red: 43 / 255.0, green: 43 / 255.0, blue: 41 / 255.0, alpha: 1)
+        static let lightBorder = UIColor(red: 233 / 255.0, green: 232 / 255.0, blue: 231 / 255.0, alpha: 1)
+        static let darkBorder = UIColor(red: 50 / 255.0, green: 50 / 255.0, blue: 49 / 255.0, alpha: 1)
+        static let lightText = UIColor(red: 53 / 255.0, green: 53 / 255.0, blue: 49 / 255.0, alpha: 1)
+        static let darkText = UIColor(red: 221 / 255.0, green: 221 / 255.0, blue: 215 / 255.0, alpha: 1)
+        static let lightSecondaryText = UIColor(red: 94 / 255.0, green: 94 / 255.0, blue: 88 / 255.0, alpha: 1)
+        static let darkSecondaryText = UIColor(red: 160 / 255.0, green: 159 / 255.0, blue: 152 / 255.0, alpha: 1)
+        static let lightTertiaryText = UIColor(red: 139 / 255.0, green: 138 / 255.0, blue: 132 / 255.0, alpha: 1)
+        static let darkTertiaryText = UIColor(red: 133 / 255.0, green: 132 / 255.0, blue: 126 / 255.0, alpha: 1)
+        #else
         static let lightCanvasTop = UIColor(red: 246 / 255.0, green: 247 / 255.0, blue: 249 / 255.0, alpha: 1)
         static let lightCanvasMiddle = UIColor(red: 250 / 255.0, green: 251 / 255.0, blue: 252 / 255.0, alpha: 1)
         static let lightCanvasBottom = UIColor.white
@@ -75,6 +97,7 @@ public enum OpenClawChatTheme {
         static let darkPanelRaised = UIColor(red: 17 / 255.0, green: 18 / 255.0, blue: 21 / 255.0, alpha: 1)
         static let darkComposer = UIColor(red: 24 / 255.0, green: 25 / 255.0, blue: 28 / 255.0, alpha: 1)
         static let darkAccent = UIColor(red: 198 / 255.0, green: 49 / 255.0, blue: 42 / 255.0, alpha: 1)
+        #endif
     }
 
     private static func adaptiveColor(
@@ -108,6 +131,8 @@ public enum OpenClawChatTheme {
         // (or the anchored panel's effect view) supplies the vibrancy.
         Rectangle()
             .fill(.ultraThinMaterial)
+        #elseif os(iOS)
+        self.adaptiveColor(light: IOSPalette.lightCanvas, dark: IOSPalette.darkCanvas)
         #else
         ZStack {
             LinearGradient(
@@ -131,6 +156,8 @@ public enum OpenClawChatTheme {
     static var subtleCard: AnyShapeStyle {
         #if os(macOS)
         AnyShapeStyle(.ultraThinMaterial)
+        #elseif os(iOS)
+        AnyShapeStyle(self.adaptiveColor(light: IOSPalette.lightMutedSurface, dark: IOSPalette.darkRaisedSurface))
         #else
         AnyShapeStyle(self.adaptiveColor(light: .tertiarySystemBackground, dark: IOSPalette.darkPanelRaised))
         #endif
@@ -141,6 +168,8 @@ public enum OpenClawChatTheme {
         // Follow the user's system accent; hosts can still override per-view
         // with `userAccent` (e.g. the seam color in the desktop app).
         Color(nsColor: .controlAccentColor)
+        #elseif os(iOS)
+        Color(uiColor: OpenClawIOSBrand.accent)
         #else
         self.adaptiveColor(
             light: IOSPalette.lightAccent,
@@ -161,8 +190,32 @@ public enum OpenClawChatTheme {
     }
 
     static var muted: Color {
+        #if os(iOS)
+        self.adaptiveColor(light: IOSPalette.lightSecondaryText, dark: IOSPalette.darkSecondaryText)
+        #else
         .secondary
+        #endif
     }
+
+    #if os(iOS)
+    /// Quiet link ink for prose on the canvas and on the tinted user bubble; not a control tint.
+    static var messageLink: Color {
+        self.adaptiveColor(
+            light: UIColor(red: 131 / 255.0, green: 72 / 255.0, blue: 68 / 255.0, alpha: 1),
+            dark: UIColor(red: 215 / 255.0, green: 160 / 255.0, blue: 156 / 255.0, alpha: 1))
+    }
+
+    static var placeholder: Color {
+        self.adaptiveColor(light: IOSPalette.lightTertiaryText, dark: IOSPalette.darkTertiaryText)
+    }
+
+    /// The app's switch green, so a switch in a chat sheet matches the ones in Settings.
+    static var switchOn: Color {
+        self.adaptiveColor(
+            light: UIColor(red: 22 / 255.0, green: 101 / 255.0, blue: 52 / 255.0, alpha: 1),
+            dark: UIColor(red: 95 / 255.0, green: 191 / 255.0, blue: 127 / 255.0, alpha: 1))
+    }
+    #endif
 
     static var warning: Color {
         #if os(macOS)
@@ -183,6 +236,8 @@ public enum OpenClawChatTheme {
     static var assistantBubble: Color {
         #if os(macOS)
         Color(nsColor: self.assistantBubbleDynamicNSColor)
+        #elseif os(iOS)
+        self.adaptiveColor(light: IOSPalette.lightMutedSurface, dark: IOSPalette.darkRaisedSurface)
         #else
         // Neutral raised surface for diagrams, notices and swarm rows on the white chat canvas.
         self.adaptiveColor(light: .systemGray5, dark: IOSPalette.darkPanelRaised)
@@ -223,14 +278,25 @@ public enum OpenClawChatTheme {
     static var assistantText: Color {
         #if os(macOS)
         Color(nsColor: .labelColor)
+        #elseif os(iOS)
+        self.adaptiveColor(light: IOSPalette.lightText, dark: IOSPalette.darkText)
         #else
         Color(uiColor: .label)
         #endif
     }
 
+    #if os(iOS)
+    /// The chat canvas for UIKit surfaces that sit on it (the image viewer).
+    static var canvasUIColor: UIColor {
+        UIColor { $0.userInterfaceStyle == .dark ? IOSPalette.darkCanvas : IOSPalette.lightCanvas }
+    }
+    #endif
+
     static var composerBackground: AnyShapeStyle {
         #if os(macOS)
         AnyShapeStyle(.ultraThinMaterial)
+        #elseif os(iOS)
+        AnyShapeStyle(self.adaptiveColor(light: IOSPalette.lightCanvas, dark: IOSPalette.darkCanvas))
         #else
         AnyShapeStyle(self.adaptiveColor(light: .secondarySystemGroupedBackground, dark: IOSPalette.darkPanel))
         #endif
@@ -239,6 +305,8 @@ public enum OpenClawChatTheme {
     static var composerField: AnyShapeStyle {
         #if os(macOS)
         AnyShapeStyle(.thinMaterial)
+        #elseif os(iOS)
+        AnyShapeStyle(self.adaptiveColor(light: IOSPalette.lightRaisedSurface, dark: IOSPalette.darkRaisedSurface))
         #else
         AnyShapeStyle(self.adaptiveColor(light: .secondarySystemBackground, dark: IOSPalette.darkComposer))
         #endif
@@ -247,13 +315,19 @@ public enum OpenClawChatTheme {
     static var composerBorder: Color {
         #if os(macOS)
         Color(nsColor: .separatorColor).opacity(0.6)
+        #elseif os(iOS)
+        self.adaptiveColor(light: IOSPalette.lightBorder, dark: IOSPalette.darkBorder)
         #else
         self.adaptiveColor(light: .separator, dark: UIColor.white.withAlphaComponent(0.14))
         #endif
     }
 
     static var divider: Color {
+        #if os(iOS)
+        self.adaptiveColor(light: IOSPalette.lightBorder, dark: IOSPalette.darkBorder)
+        #else
         Color.secondary.opacity(0.2)
+        #endif
     }
 }
 

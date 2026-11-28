@@ -1,5 +1,13 @@
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+/** Recorded turn affinity; live custody and cancellation authority are separate decisions. */
+export function hasRequesterTurn(
+  entry: Pick<SubagentRunRecord, "requesterTurnRunId">,
+  runId: string,
+): boolean {
+  return entry.requesterTurnRunId === runId;
+}
+
 /** Recorded pause only; cancellation and continuation eligibility are separate decisions. */
 export function isSubagentPausedByYield<T extends Pick<SubagentRunRecord, "pauseReason">>(
   entry: T | null | undefined,

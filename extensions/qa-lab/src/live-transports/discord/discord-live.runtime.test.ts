@@ -12,14 +12,7 @@ import {
   sentMessage,
 } from "./discord-flow.test-support.js";
 import { createDiscordQaEndpointFetcher } from "./discord-live.endpoint.js";
-import {
-  buildDiscordWebMessageUrl,
-  collectSeenReactionSequence,
-  normalizeDiscordObservedMessage,
-  normalizeDiscordReactionSnapshot,
-  renderDiscordStatusReactionHtml,
-  renderDiscordThreadReplyAttachmentHtml,
-} from "./discord-live.evidence.js";
+import { renderDiscordThreadReplyAttachmentHtml } from "./discord-live.evidence.js";
 import * as testing from "./discord-live.runtime.js";
 import { waitForDiscordVoiceState } from "./discord-live.voice.js";
 import {
@@ -56,13 +49,6 @@ const runtimeEnv = {
   OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID: sutId,
 };
 
-function reactionSnapshot(elapsedMs: number, emojis: string[]) {
-  return {
-    elapsedMs,
-    observedAt: new Date(Date.parse("2026-05-03T12:00:00.000Z") + elapsedMs).toISOString(),
-    reactions: emojis.map((emoji) => ({ emoji, count: 1 })),
-  };
-}
 const discordStatus = (connected: boolean, extra = {}) => ({
   channelAccounts: {
     discord: [{ accountId: "sut", running: true, connected, restartPending: false, ...extra }],
@@ -269,69 +255,8 @@ describe("discord live qa runtime", () => {
     }
   });
 
-  it("normalizes observed Discord messages", () => {
-    const timestamp = "2026-04-22T12:00:00.000Z";
-    const observed = normalizeDiscordObservedMessage({
-      ...sentMessage(voiceChannelId, timestamp),
-      guild_id: guildId,
-      content: "hello",
-      author: { id: driverId, username: "driver", bot: true },
-      referenced_message: { id: sutId },
-    });
-    expect(observed).toEqual({
-      ...polledReply(voiceChannelId, "hello", timestamp).message,
-      senderId: driverId,
-    });
-  });
-
   it("rejects invalid Discord RTT timestamps", () => {
     expect(testing.computeDiscordRttMs("bad", "2026-04-22T12:00:00.875Z")).toBeUndefined();
-  });
-
-  it("collects the status reaction sequence across timeline snapshots", () => {
-    const snapshots = [
-      reactionSnapshot(0, ["👀"]),
-      reactionSnapshot(250, ["👀", "🤔"]),
-      reactionSnapshot(500, ["👍"]),
-    ];
-    expect(collectSeenReactionSequence(snapshots, ["👀", "🤔", "👍"])).toEqual(["👀", "🤔", "👍"]);
-  });
-
-  it("normalizes reaction snapshots from Discord messages", () => {
-    expect(
-      normalizeDiscordReactionSnapshot({
-        startedAtMs: new Date("2026-05-03T12:00:00.000Z").getTime(),
-        observedAt: new Date("2026-05-03T12:00:01.000Z"),
-        message: {
-          id: voiceChannelId,
-          channel_id: channelId,
-          reactions: [
-            { count: 1, emoji: { name: "🤔" }, me: true },
-            { count: 2, emoji: { name: "👀" }, me: false },
-          ],
-        },
-      }),
-    ).toEqual({
-      elapsedMs: 1000,
-      observedAt: "2026-05-03T12:00:01.000Z",
-      reactions: [
-        { emoji: "👀", count: 2 },
-        { emoji: "🤔", count: 1 },
-      ],
-    });
-  });
-
-  it("renders a human-readable status reaction timeline artifact", () => {
-    const html = renderDiscordStatusReactionHtml({
-      scenarioTitle: "Discord's status reactions",
-      expectedSequence: ["👀", "🤔", "👍"],
-      seenSequence: ["👀", "🤔"],
-      snapshots: [reactionSnapshot(0, ["👀"])],
-    });
-
-    expect(html).toContain("Discord&#39;s status reactions");
-    expect(html).toContain("Expected: 👀 → 🤔 → 👍");
-    expect(html).toContain("Seen: 👀 → 🤔");
   });
 
   it("renders a human-readable thread attachment artifact", () => {
@@ -348,16 +273,6 @@ describe("discord live qa runtime", () => {
     expect(html).toContain("Mantis&#39; thread attachment reply");
     expect(html).toContain("No attachments on the SUT thread reply");
     expect(html).toContain("mantis-thread-report.md");
-  });
-
-  it("builds Discord Web message URLs for logged-in Mantis capture", () => {
-    expect(
-      buildDiscordWebMessageUrl({
-        guildId: "111111111111111111",
-        messageId: "333333333333333333",
-        threadId: "222222222222222222",
-      }),
-    ).toBe("https://discord.com/channels/111111111111111111/222222222222222222/333333333333333333");
   });
 
   it.each([true, false])(

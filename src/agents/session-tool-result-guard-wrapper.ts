@@ -20,6 +20,7 @@ import {
 import type { AssistantErrorTranscript } from "./assistant-error-transcript.js";
 import { isMidTurnPrecheckAssistantError } from "./embedded-agent-runner/run/midturn-precheck.js";
 import { readPersistedImageBlockFactIndexes } from "./embedded-agent-runner/run/prompt-image-metadata.js";
+import { boundToolResult } from "./embedded-agent-runner/tool-result-bound.js";
 import {
   resolveLiveToolResultMaxChars,
   truncateToolResultMessage,
@@ -417,6 +418,7 @@ export function guardSessionManager(
   });
   setSessionToolResultPreparer(guardedSessionManager, {
     cap: (message) => truncateToolResultMessage(message, maxToolResultChars),
+    bound: (result, spill) => boundToolResult(result, maxToolResultChars, spill),
   });
   guardedSessionManager.hasPendingToolResults = guard.hasPendingToolResults;
   guardedSessionManager.flushPendingToolResults = guard.flushPendingToolResults;

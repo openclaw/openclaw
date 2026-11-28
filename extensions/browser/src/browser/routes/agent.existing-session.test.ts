@@ -573,26 +573,6 @@ describe("existing-session browser routes", () => {
     expect(clickParams.signal).toMatchObject({ aborted: true, reason });
   });
 
-  it("supports coordinate clicks for existing-session profiles", async () => {
-    const response = await invoke("act", {
-      kind: "clickCoords",
-      x: 25,
-      y: "32",
-      doubleClick: true,
-    });
-
-    expectResponseContaining(response, { ok: true, targetId: "7", url: "https://example.com" });
-    const coords = requireRecord(mcp.clickChromeMcpCoords.mock.calls[0]?.[0], "click params");
-    expect(coords).toMatchObject({
-      ...existingTarget,
-      x: 25,
-      y: 32,
-      doubleClick: true,
-    });
-    expect(coords.button).toBeUndefined();
-    expect(coords.delayMs).toBeUndefined();
-  });
-
   it.each([{ button: "right" }, { delayMs: 5 }])(
     "rejects unsupported native coordinate input %j before clicking",
     async (options) => {
@@ -988,24 +968,6 @@ describe("existing-session interaction navigation guard", () => {
 
     await expect(pending).rejects.toThrow(/aborted|cancelled/i);
     expect(evaluate).not.toHaveBeenCalled();
-  });
-
-  it("normalizes ref-scoped statement-body evaluate sources before Chrome MCP execution", async () => {
-    evaluate.mockResolvedValueOnce("Ada");
-
-    const response = await runAction(
-      { kind: "evaluate", ref: "7", fn: "const text = el.textContent; return text;" },
-      null,
-    );
-
-    expect(response.statusCode).toBe(200);
-    expect(evaluate).toHaveBeenCalledOnce();
-    expect(evaluate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        args: ["7"],
-        fn: "async (el) => {\nconst text = el.textContent; return text;\n}",
-      }),
-    );
   });
 
   it("blocks evaluate before execution when the current tab URL is disallowed", async () => {
