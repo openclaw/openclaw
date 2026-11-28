@@ -108,6 +108,7 @@ function installAccount(
       // -u <account> -- <node> -e <loader> <env file> <entry> <command...>
       'shift 8; command=$1; [ "$command" = gateway ] && command=health; [ "$command" = update ] && command=$2',
       'echo "$command" >> "$dir/calls"',
+      'echo "$*" >> "$dir/argv"',
       // Like the real command: a migration that got as far as its backup leaves a receipt.
       '[ "$command" = migrate ] && [ -f "$dir/migrate.receipt" ] && mkdir -p "$(dirname "$4")" && : > "$4.receipt.json"',
       '[ -f "$dir/$command.code" ] || exit 70',
@@ -125,6 +126,7 @@ function installAccount(
     uid: process.getuid?.() || 1001,
     gid: process.getgid?.() ?? 0,
     runuser: shim,
+    programArguments: [process.execPath, path.join(root, "dist", "index.js"), "gateway"],
     home: path.join(accountDir, "home"),
     env: {
       HOME: path.join(accountDir, "home"),
@@ -187,6 +189,17 @@ beforeEach(() => {
   children.push(child);
   native.startPid = child.pid ?? 0;
 });
+
+/** A process that overwrites its argv like a Gateway started with --token. */
+function retitledGateway(): number {
+  const child = spawn(
+    process.execPath,
+    ["-e", "process.title = 'openclaw-gateway'; setInterval(() => {}, 1000);"],
+    { stdio: "ignore" },
+  );
+  children.push(child);
+  return child.pid ?? 0;
+}
 
 afterEach(() => {
   for (const child of children.splice(0)) {
@@ -346,6 +359,49 @@ describe("system service update as the unit's account", () => {
   });
 
   it.runIf(process.platform === "linux")(
+    "reaches the Gateway on the unit's --port as the account",
+    async () => {
+      installAccount({ migrate: ok("migrated"), health: [0, "{}"], finish: ok("finished") });
+      if (native.plan) {
+        native.plan.port = 19111;
+      }
+
+      const result = await activate();
+
+      expect(result).toMatchObject({ status: "updated" });
+      const argv = fs.readFileSync(path.join(accountDir, "argv"), "utf8");
+      expect(argv).toContain("gateway health --json --port 19111");
+      expect(scheduledPayloads()).toMatchObject([
+        { health: ["gateway", "health", "--json", "--port", "19111"] },
+      ]);
+    },
+  );
+
+  it.runIf(process.platform === "linux")(
+    "identifies a Gateway that retitled itself by the unit's ExecStart",
+    async () => {
+      native.startPid = retitledGateway();
+      installAccount({ migrate: ok("migrated"), health: [0, "{}"], restore: ok("restored") });
+
+      expect(await activate()).toMatchObject({ status: "updated" });
+    },
+  );
+
+  it.runIf(process.platform === "linux")(
+    "restores a retitled Gateway whose unit runs another installation",
+    async () => {
+      native.startPid = retitledGateway();
+      installAccount({ migrate: ok("migrated"), health: [0, "{}"], restore: ok("restored") });
+      if (native.plan) {
+        native.plan.programArguments = [process.execPath, "/opt/other/dist/index.js", "gateway"];
+      }
+
+      expect(await activate(1_500)).toMatchObject({ status: "failed", stateRestored: true });
+      expect(calls().at(-1)).toBe("restore");
+    },
+  );
+
+  it.runIf(process.platform === "linux")(
     "restores when the account's own client cannot reach the started Gateway",
     async () => {
       installAccount({
@@ -415,6 +471,7 @@ describe("settle step after the installed updater exits", () => {
       handoffDir: "/tmp/handoff",
       backupRoot: "/var/lib/openclaw/.openclaw-update/x/native",
       controlGroup: "/system.slice/openclaw-gateway.service",
+      health: ["gateway", "health", "--json"],
       loader: "loader",
       path: "/usr/bin:/bin",
     };

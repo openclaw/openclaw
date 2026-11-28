@@ -126,7 +126,7 @@ const settle = () => {
   if (!rolledBack) {
     // Retire the backup only for a verified activation: root's marker from the Doctor child, or
     // the unit serving now with the account's own client reaching it.
-    const verified = fs.existsSync(p.handoffDir + "/verified") || (show("ActiveState") === "active" && asAccount(undefined, "gateway", "health", "--json"));
+    const verified = fs.existsSync(p.handoffDir + "/verified") || (show("ActiveState") === "active" && asAccount(undefined, ...p.health));
     if (verified) {
       log("update kept; recording it as " + p.account);
       if (!asAccount("finished", "update", "finish", "--backup-root", p.backupRoot)) log("update finish did not confirm; the backup is kept; retry update finish as " + p.account);
@@ -160,6 +160,16 @@ const tick = () => {
 tick();
 `;
 
+/** The account's own client, aimed at the port the unit's ExecStart chose. */
+function healthArgs(execution: ServiceAccountExecution): string[] {
+  return [
+    "gateway",
+    "health",
+    "--json",
+    ...(execution.port === undefined ? [] : ["--port", String(execution.port)]),
+  ];
+}
+
 async function scheduleSettle(
   mode: "settle" | "start",
   execution: ServiceAccountExecution,
@@ -183,6 +193,7 @@ async function scheduleSettle(
     handoffDir: handoff.directory,
     backupRoot: params.backupRoot,
     controlGroup: params.controlGroup,
+    health: healthArgs(execution),
     loader: SERVICE_ACCOUNT_ENV_LOADER,
     path: SERVICE_ACCOUNT_LAUNCH_PATH,
   };
@@ -265,18 +276,28 @@ async function waitForUnit(
 /**
  * The serving process is the expected build when systemd's main process runs an entry inside
  * this installation and the root-owned package there is the candidate. Root derives both
- * from /proc and its own package; nothing the account wrote decides it.
+ * from /proc, the unit's ExecStart it read itself and its own package; nothing the account
+ * wrote decides it.
  */
-async function servesCandidate(pid: number, root: string, candidateVersion: string) {
+async function servesCandidate(
+  pid: number,
+  root: string,
+  candidateVersion: string,
+  execution: ServiceAccountExecution,
+) {
   if (!Number.isInteger(pid) || pid <= 0) {
     return false;
   }
   try {
     const argv = (await fs.readFile(`/proc/${pid}/cmdline`, "utf8")).split("\0").filter(Boolean);
     const realRoot = await fs.realpath(root);
-    // Runtime options such as --max-old-space-size come before the entry script.
-    const index = resolveServiceEntrypointIndex(argv);
-    const script = index === undefined ? undefined : argv[index];
+    // Runtime options such as --max-old-space-size come before the entry script. A Gateway
+    // started with --token or --password retitles itself, which overwrites its argv; the
+    // main process of the unit root just started then runs the unit's own ExecStart.
+    const retitled = argv.length === 1 && !argv[0]?.includes(path.sep);
+    const command = retitled ? execution.programArguments : argv;
+    const index = resolveServiceEntrypointIndex(command);
+    const script = index === undefined ? undefined : command[index];
     const entry = script ? await fs.realpath(script).catch(() => "") : "";
     return (
       entry.startsWith(realRoot + path.sep) &&
@@ -464,8 +485,8 @@ async function activateSystemServiceAsAccount(
       unitName,
       async (unit) =>
         unit.active === "active" &&
-        (await servesCandidate(unit.pid, options.root, options.candidateVersion)) &&
-        (await asAccount(["gateway", "health", "--json"], 20_000).then(
+        (await servesCandidate(unit.pid, options.root, options.candidateVersion, execution)) &&
+        (await asAccount(healthArgs(execution), 20_000).then(
           (health) => health?.termination === "exit" && health.code === 0,
         )),
       Math.min(DEFAULT_READY_TIMEOUT_MS, budget(DEFAULT_READY_TIMEOUT_MS)),

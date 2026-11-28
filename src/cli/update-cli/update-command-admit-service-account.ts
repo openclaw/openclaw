@@ -16,6 +16,7 @@ import {
 } from "../../daemon/systemd-service-files.js";
 import { readSystemdAccount, readSystemdAccountHome } from "../../daemon/systemd-state-identity.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import type { UpdateAdmissionContext } from "../../infra/update-admission-contract.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { buildParseArgv } from "../argv.js";
@@ -41,6 +42,10 @@ export type SystemServiceAccountPlan =
       runuser: string;
       /** The unit's effective environment and profile, the only environment its account child gets. */
       env: Record<string, string>;
+      /** The unit's ExecStart as root read it. */
+      programArguments: string[];
+      /** The unit's `--port`, which its account's clients must use to reach it. */
+      port?: number;
     }
   | { kind: "refuse"; message: string; nextAction: string };
 
@@ -227,6 +232,8 @@ async function resolveServiceAccountExecution(
     uid: ids.uid,
     gid: ids.gid,
     runuser,
+    programArguments: command.programArguments,
+    port: parseTcpPortFromArgs(command.programArguments) ?? undefined,
     env: Object.fromEntries(
       Object.entries(unitEnv).flatMap(([key, value]) =>
         typeof value === "string" ? [[key, value]] : [],
