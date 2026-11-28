@@ -755,7 +755,7 @@ suite.define(() => {
         after: 4,
         cooldownMs: 1_001,
         mode: "webhook",
-        to: "https://alerts.example.test/job",
+        to: "https:alerts.example.test/job-token",
         accountId: "fixture-account",
         includeSkipped: true,
       });
@@ -783,12 +783,23 @@ suite.define(() => {
           patch: { failureAlert: { after: null, cooldownMs: null, mode: null } },
         });
         expect(cleared.stored.failureAlert).toEqual({
-          to: "https://alerts.example.test/job",
+          to: "https:alerts.example.test/job-token",
           accountId: "fixture-account",
           includeSkipped: true,
         });
+        await openEdit(page);
+        const advanced = page.locator("[data-test-id=cron-advanced]");
+        const collapsedSummary = page.locator(
+          "details.cron-advanced:not([open]) .cron-alert-summary",
+        );
+        const savedSummary = await collapsedSummary.textContent();
+        expect(savedSummary).toBe("Specified destination · Default run failure threshold");
+        await advanced.click();
+        await page.locator("#cron-failure-alert-to").fill("https://[bad]/job-token");
+        await advanced.click();
+        expect(await collapsedSummary.textContent()).toBe(savedSummary);
+        await advanced.click();
         const policyMode = page.locator("openclaw-select-picker:has(#cron-failure-alert-mode)");
-        await openAdvanced(page, job.stored.name);
         await choosePicker(policyMode, "inherit");
         const inherited = await submitCronForm(evidence, "cron.update");
         expect(inherited.request.params).toMatchObject({ patch: { failureAlert: null } });

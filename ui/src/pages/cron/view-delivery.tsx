@@ -1,3 +1,4 @@
+import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { createMemo, createSignal } from "solid-js";
 import type { ChannelPickerOption } from "../../components/solid/channel-picker.tsx";
@@ -179,6 +180,9 @@ export function Advanced(
 ) {
   const isCronSchedule = () => props.form.scheduleKind === "cron";
   const channelOptions = createMemo(() => buildChannelOptions(props));
+  const alertSummary = createMemo(() =>
+    props.isAgentTurn ? failureAlertSummary(props.form) : undefined,
+  );
   const [open, setOpen] = createSignal(false);
   const hasAdvancedError = createMemo(() =>
     ADVANCED_FIELDS.some((field) => Boolean(props.fieldErrors[field])),
@@ -194,6 +198,9 @@ export function Advanced(
       <summary class="cron-advanced__summary" data-test-id="cron-advanced">
         {t("cron.form.advanced")}
         <Icon name="chevronDown" />
+        {!open() && props.isAgentTurn && props.form.failureAlertMode !== "inherit" ? (
+          <span class="cron-alert-summary">{alertSummary()}</span>
+        ) : undefined}
         {props.form.triggerEnabled ? (
           <span class="cron-trigger-summary">
             <Icon name="gitBranch" /> {t("cron.form.triggerConfigured")}
@@ -380,7 +387,7 @@ export function Advanced(
           <DeliveryRows {...props} channelOptions={channelOptions()} />
         </SettingsSection>
         {props.isAgentTurn ? (
-          <SettingsSection title={t("cron.form.failureAlerts")}>
+          <SettingsSection title={t("cron.form.failureAlerts")} description={alertSummary()}>
             <FailureAlertRows {...props} channelOptions={channelOptions()} />
           </SettingsSection>
         ) : undefined}
@@ -464,11 +471,59 @@ function TriggerRows(props: CronProps) {
     </>
   );
 }
+function failureAlertSummary(form: CronFormState) {
+  if (form.failureAlertMode !== "custom") {
+    return t(
+      form.failureAlertMode === "disabled"
+        ? "cron.form.failureAlertOffSummary"
+        : "cron.form.failureAlertUseDefaults",
+    );
+  }
+  const to = form.failureAlertTo.trim();
+  const telegramHandle =
+    form.failureAlertChannel === "telegram"
+      ? /^(?:https?:\/\/)?t\.me\/([a-z0-9_]+)$/i.exec(to)?.[1]
+      : undefined;
+  let action = t("cron.form.failureAlertDefaultRoute");
+  let namesRecipient = false;
+  if (form.failureAlertDeliveryMode === "webhook") {
+    action = t("cron.form.failureAlertWebhookTarget");
+  } else if (telegramHandle) {
+    namesRecipient = true;
+    action = t("cron.form.failureAlertRecipient", { recipient: `@${telegramHandle}` });
+  } else if (to) {
+    const chat =
+      form.failureAlertDeliveryMode === "announce" || form.failureAlertChannel !== "last";
+    // The route can inherit webhook mode. Only name recognizable chat recipients.
+    const chatLabel = /^[@#][\w.-]+$/.test(to);
+    const webAddress = isHttpUrl(to) || /^https?:|^\/|[?\\]|^[\w.-]+\.[\w-]+(?:[/:]|$)/i.test(to);
+    namesRecipient = (chat || chatLabel) && !webAddress;
+    action = namesRecipient
+      ? t("cron.form.failureAlertRecipient", { recipient: to })
+      : t("cron.form.failureAlertSpecifiedRoute");
+  } else if (form.failureAlertChannel !== "last") {
+    action = t("cron.form.failureAlertChannelRecipient", { channel: form.failureAlertChannel });
+  }
+  const count = Math.floor(Number(form.failureAlertAfter));
+  if (count === 1) {
+    return t(
+      namesRecipient ? "cron.form.failureAlertFirst" : "cron.form.failureAlertFirstThreshold",
+      { action },
+    );
+  }
+  if (Number.isFinite(count) && count > 1) {
+    return t("cron.form.failureAlertRepeated", { action, count: String(count) });
+  }
+  return t("cron.form.failureAlertDefaultTiming", { action });
+}
+
 function FailureAlertRows(
   props: CronProps & {
     channelOptions: readonly ChannelPickerOption[];
   },
 ) {
+  const webhook = () => props.form.failureAlertDeliveryMode === "webhook";
+  const saved = () => props.editingJob?.failureAlert || undefined;
   return (
     <>
       <CronSelect
@@ -510,27 +565,45 @@ function FailureAlertRows(
               { value: "webhook", label: t("cron.form.failureAlertWebhook") },
             ]}
           />
-          <CronSelect
-            {...props}
-            field="failureAlertChannel"
-            label={t("cron.form.failureAlertChannel")}
-            options={props.channelOptions}
-            channel
-          />
+          {!webhook() ||
+          props.form.failureAlertChannel !== "last" ||
+          saved()?.channel !== undefined ? (
+            <CronSelect
+              {...props}
+              field="failureAlertChannel"
+              label={t("cron.form.failureAlertChannel")}
+              options={props.channelOptions}
+              channel
+            />
+          ) : undefined}
           <CronInput
             {...props}
             field="failureAlertTo"
-            label={t("cron.form.failureAlertTo")}
-            help={t("cron.form.failureAlertToHelp")}
+            label={t(webhook() ? "cron.form.webhookUrl" : "cron.form.failureAlertTo")}
+            help={webhook() ? undefined : t("cron.form.failureAlertToHelp")}
             list="cron-failure-alert-to-suggestions"
-            placeholder={t("cron.form.failureAlertToPlaceholder")}
+            placeholder={t(
+              webhook()
+                ? "cron.form.webhookPlaceholder"
+                : props.form.failureAlertDeliveryMode === "announce"
+                  ? "cron.form.toPlaceholder"
+                  : "cron.form.failureAlertToPlaceholder",
+            )}
           />
-          <CronInput
-            {...props}
-            field="failureAlertAccountId"
-            label={t("cron.form.failureAlertAccountId")}
-            placeholder={t("cron.form.failureAlertAccountPlaceholder")}
-          />
+          {!webhook() || props.form.failureAlertAccountId || saved()?.accountId !== undefined ? (
+            <CronInput
+              {...props}
+              field="failureAlertAccountId"
+              label={t("cron.form.failureAlertAccountId")}
+              placeholder={t("cron.form.failureAlertAccountPlaceholder")}
+            />
+          ) : undefined}
+          {!webhook() && props.form.failureAlertThreadId !== undefined ? (
+            <SettingsRow
+              title={t("cron.form.failureAlertThread")}
+              control={<span>{props.form.failureAlertThreadId}</span>}
+            />
+          ) : undefined}
         </>
       ) : undefined}
     </>
