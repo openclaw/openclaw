@@ -585,14 +585,13 @@ export function registerModelCapabilityCommands(capability: Command): void {
             );
             const store =
               await authProfiles.ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
-            const removedProfiles = authProfiles.listProfilesForProvider(store, provider);
-            const warning = await removeModelAuthCredentials({
+            const result = await removeModelAuthCredentials({
               cfg: config,
               agentDir,
-              profileIds: removedProfiles,
+              profileIds: authProfiles.listProfilesForProvider(store, provider),
               provider,
             });
-            return { provider, removedProfiles, ...(warning ? { warning } : {}) };
+            return { provider, ...result };
           },
         });
       }),
