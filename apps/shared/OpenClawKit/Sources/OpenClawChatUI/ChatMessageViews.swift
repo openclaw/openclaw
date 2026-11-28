@@ -19,13 +19,16 @@ struct ChatSystemNoticeRow: View {
                     systemImage: self.notice.systemImage,
                     label: self.notice.label,
                     metric: nil)
+                    #if os(iOS)
+                        .labelContent
+                    #endif
             }
             .foregroundStyle(.secondary)
             .tint(.secondary)
             #if os(iOS)
             // Inside the iOS List a default DisclosureGroup turns into an outline row that the
             // label tap does not toggle; keep the inline label + chevron behaviour.
-            .disclosureGroupStyle(ChatInlineDisclosureStyle())
+            .disclosureGroupStyle(ChatInlineDisclosureStyle(header: .systemNotice))
             #endif
             .padding(.vertical, 4)
         } else {
@@ -52,15 +55,14 @@ struct ChatSystemNoticeRow: View {
 /// chevron, 44 pt target) that never moves, with content easing in below it. A default
 /// DisclosureGroup there turns into an outline row that the label tap does not toggle.
 struct ChatInlineDisclosureStyle: DisclosureGroupStyle {
-    enum Chevron {
-        case tint
-        case secondary
-    }
+    enum Header { case plain, toolGroup, systemNotice }
 
-    var chevron: Chevron = .tint
+    var header: Header = .plain
 
     func makeBody(configuration: Configuration) -> some View {
-        ChatInlineDisclosure(configuration: configuration, chevron: self.chevron)
+        ChatInlineDisclosure(
+            configuration: configuration,
+            header: self.header)
     }
 }
 
@@ -68,7 +70,7 @@ private struct ChatInlineDisclosure: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openClawReadingPosition) private var readingPosition
     let configuration: DisclosureGroupStyleConfiguration
-    let chevron: ChatInlineDisclosureStyle.Chevron
+    let header: ChatInlineDisclosureStyle.Header
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -84,16 +86,20 @@ private struct ChatInlineDisclosure: View {
                     readingPosition?.disclosureDidSettle()
                 }
             } label: {
-                HStack(alignment: .center, spacing: 8) {
+                let label = ChatToolRowLabel(
+                    asset: self.header == .toolGroup ? "wrench" : nil,
+                    disclosure: .degrees(self.configuration.isExpanded ? 90 : 0))
+                {
                     self.configuration.label
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    Image(systemName: "chevron.right")
-                        .font(.caption)
-                        .foregroundStyle(self.chevronStyle)
-                        .rotationEffect(.degrees(self.configuration.isExpanded ? 90 : 0))
-                        .accessibilityHidden(true)
                 }
-                .frame(minHeight: 44)
+                Group {
+                    if self.header == .systemNotice {
+                        ChatSystemRules { label }
+                    } else {
+                        label
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -111,13 +117,6 @@ private struct ChatInlineDisclosure: View {
             .clipped()
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
-    }
-
-    private var chevronStyle: AnyShapeStyle {
-        switch self.chevron {
-        case .tint: AnyShapeStyle(.tint)
-        case .secondary: AnyShapeStyle(.secondary)
-        }
     }
 }
 #endif
@@ -148,43 +147,6 @@ struct ChatHistoryDividerRow: View {
         [self.divider.label, self.divider.metric, self.divider.description]
             .compactMap(\.self)
             .joined(separator: ", ")
-    }
-}
-
-private struct ChatSystemLine: View {
-    let systemImage: String
-    let label: String
-    let metric: String?
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Rectangle()
-                .fill(OpenClawChatTheme.divider)
-                .frame(height: 1)
-            HStack(spacing: 5) {
-                Image(systemName: self.systemImage)
-                    .font(.system(size: 11, weight: .medium))
-                    .accessibilityHidden(true)
-                Text(self.label.uppercased())
-                    .font(OpenClawChatTypography.captionSemiBold)
-                    .tracking(0.5)
-                if let metric {
-                    Text("·")
-                        .font(OpenClawChatTypography.caption)
-                        .accessibilityHidden(true)
-                    Text(metric)
-                        .font(OpenClawChatTypography.caption)
-                        .monospacedDigit()
-                }
-            }
-            .lineLimit(1)
-            .minimumScaleFactor(0.75)
-            // The rules take what the label leaves; equal thirds truncated any label longer than a third of the row.
-            .layoutPriority(1)
-            Rectangle()
-                .fill(OpenClawChatTheme.divider)
-                .frame(height: 1)
-        }
     }
 }
 
@@ -700,7 +662,7 @@ extension ChatMessageBubble {
             }
 
             if !toolActivityItems.isEmpty {
-                ChatToolActivityList(items: toolActivityItems, isNestedToolActivity: self.message.isNestedToolActivity)
+                ChatToolActivityList(items: toolActivityItems)
             }
 
             if !shouldRenderBubble {
