@@ -260,11 +260,14 @@ describe("openrouter provider hooks", () => {
     }
   });
 
-  it("normalizes OpenRouter API ids before capability loading and lookup", async () => {
+  it.each([
+    ["openrouter/anthropic/claude-sonnet-4.6", "anthropic/claude-sonnet-4.6"],
+    ["openrouter/auto", "openrouter/auto"],
+  ])("normalizes %s for capability loading and lookup", async (modelId, capabilityModelId) => {
     loadedCapabilities.mockReset();
     loadCapabilities.mockClear();
     loadedCapabilities.mockReturnValue({
-      name: "Claude Sonnet 4.6",
+      name: "Catalog capability model",
       reasoning: true,
       compat: { supportedReasoningEfforts: ["high", "low"] },
       thinkingLevelMap: { off: null },
@@ -274,17 +277,16 @@ describe("openrouter provider hooks", () => {
       contextWindow: 200_000,
       maxTokens: 64_000,
     });
-    const modelId = "openrouter/anthropic/claude-sonnet-4.6";
     const context = dynamicContext(modelId);
 
     await provider.prepareDynamicModel?.(context);
     const model = provider.resolveDynamicModel?.(context);
 
-    expect(loadCapabilities).toHaveBeenCalledWith("anthropic/claude-sonnet-4.6");
-    expect(loadedCapabilities).toHaveBeenCalledWith("anthropic/claude-sonnet-4.6");
+    expect(loadCapabilities).toHaveBeenCalledWith(capabilityModelId, undefined);
+    expect(loadedCapabilities).toHaveBeenCalledWith(capabilityModelId, undefined);
     expect(model).toMatchObject({
       id: modelId,
-      name: "Claude Sonnet 4.6",
+      name: "Catalog capability model",
       reasoning: true,
       input: ["text", "image"],
       compat: { supportsTools: true, supportedReasoningEfforts: ["high", "low"] },
