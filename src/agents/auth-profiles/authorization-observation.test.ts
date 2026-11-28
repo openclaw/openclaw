@@ -7,6 +7,7 @@ import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js"
 import { captureMcpAuthProfileAuthorization } from "../mcp-auth-profile-authorization.js";
 import { enrollAuthProfileAuthorizationInDatabase as enroll } from "./authorization-enrollment.js";
 import { readAuthProfileAuthorizationLifetimes as lifetimes } from "./authorization-lifetime.js";
+import { setAuthProfileDisplayName } from "./display-name.js";
 import {
   removeAuthProfilesAcrossOwnerStores,
   upsertAuthProfileWithLockOrThrow as upsert,
@@ -36,6 +37,25 @@ function enrollLocal(agentDir: string, expected?: ReturnType<typeof inspectStore
 }
 const replaceLocal = (key: string) =>
   upsert({ agentDir: root.agentDir, profileId: "local", credential: apiKey(key) });
+
+it("preserves an enrolled grant across a display-only update but not credential replacement", async () => {
+  enrollLocal(root.agentDir);
+  const before = lifetimes(readStore(root.agentDir));
+  expect(before.local).toEqual(expect.any(String));
+  const rename = (displayName: string | null) =>
+    setAuthProfileDisplayName({
+      agentDir: root.agentDir,
+      profileId: "local",
+      displayName,
+      preserveStateProfileIds: [],
+    });
+  expect(await rename("Label")).toBe("saved");
+  expect(lifetimes(readStore(root.agentDir))).toEqual(before);
+  expect(await rename(null)).toBe("saved");
+  expect(lifetimes(readStore(root.agentDir))).toEqual(before);
+  await replaceLocal("replacement");
+  expect(lifetimes(readStore(root.agentDir)).local).not.toBe(before.local);
+});
 
 it("refuses stale worker enrollment without changing a newer credential", async () => {
   const expected = inspectStore(root.agentDir);
