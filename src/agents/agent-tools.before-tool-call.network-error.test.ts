@@ -9,7 +9,7 @@ function probe(
     prepare?: AnyAgentTool["prepareBeforeToolCallParams"];
     beforeFailure?: () => void;
     emitDiagnostics?: boolean;
-  } = {},
+  },
 ) {
   const { prepare, beforeFailure, emitDiagnostics = false, ...context } = options;
   const outcomes = vi.fn();
