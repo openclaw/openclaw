@@ -959,3 +959,12 @@ it("reports shared-root work unless its whole ancestry began after the family de
     holders,
   );
 });
+
+it("does not report the inspector's own descendants as holders during doctor inspection", () => {
+  processRow(peer, ["openclaw"], { ppid: self });
+  processRow(peer + 1, ["node", "worker.js"], { ppid: peer });
+  processRow(peer + 2, ["openclaw"]);
+  expect(inspectOtherOpenClawProcesses()).toEqual({
+    pids: [peer + 2],
+  });
+});

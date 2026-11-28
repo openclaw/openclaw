@@ -29,6 +29,7 @@ import {
   readProcessWorkingDirectories,
   referencesRetainedArtifact,
 } from "./gateway-process-argv.js";
+import { collectSelfManagedDescendants } from "./openclaw-process-census-descendants.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { readWindowsProcessCensus } from "./windows-process-census.js";
 import { readWindowsUserSid } from "./windows-user-sid.js";
@@ -518,6 +519,7 @@ export function inspectOtherOpenClawProcesses(
       : readProcessWorkingDirectories(processes.map(({ pid }) => pid));
     const launchers = new Set<number>();
     const updateInspector = !handoff && isUpdateCommandArgv(process.argv);
+    const selfDescendants = collectSelfManagedDescendants(processes, process.pid);
     const ancestors = new Set<number>([process.pid]);
     let child = current;
     let parentPid = current.command?.ppid ?? current.ppid ?? 0;
@@ -632,7 +634,7 @@ export function inspectOtherOpenClawProcesses(
       if (handoff && Date.now() >= deadline) {
         throw new Error("Process census deadline exceeded");
       }
-      if (pid === process.pid || launchers.has(pid)) {
+      if (pid === process.pid || launchers.has(pid) || selfDescendants.has(pid)) {
         continue;
       }
       if ((state?.startsWith("Z") || handoff) && isPidDefinitelyDead(pid)) {
