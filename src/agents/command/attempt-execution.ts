@@ -348,13 +348,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
         onCompactionAccounting: params.onCompactionAccounting,
       },
       async (turn) => {
-        const {
-          sessionEntry,
-          cliSessionBinding,
-          assertSettlementCurrent,
-          settleResult,
-          publishContext,
-        } = turn;
+        const { sessionEntry, cliSessionBinding, assertSettlementCurrent, settleResult } = turn;
         const accessProgram = resolveTurnCyberAccessProgram({
           program: params.cyberAccessProgram ?? sessionEntry?.cyberAccessProgram,
           provider: params.providerOverride,
@@ -491,7 +485,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
               bootstrapPromptWarningSignaturesSeen,
             }),
             diagnosticOwner,
-            publishContext,
+            publishContext: turn.publishContext,
             sessionEntry: params.sessionEntry,
             storePath: params.storePath,
             persistAssistantTranscript:

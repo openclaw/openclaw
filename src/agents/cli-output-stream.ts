@@ -36,7 +36,6 @@ import {
   preferGeminiCliStreamJsonError,
   readClaudeAttributedSubagentProgressId,
   preferStreamedClaudeTextOverResult,
-  readCliUsage,
   readGeminiCliStreamJsonError,
   supportsCliJsonlToolEvents,
 } from "./cli-output-records.js";
@@ -48,7 +47,7 @@ import {
   streamJsonOutputLimitErrorText,
 } from "./cli-output-stream-limits.js";
 import { resolveCliStreamOutput } from "./cli-output-stream-output.js";
-import { deriveSessionTotalTokens } from "./usage.js";
+import { createCliUsageObserver } from "./cli-output-usage.js";
 export { CLI_STREAM_JSON_MISSING_RESULT_ERROR } from "./cli-output-stream-output.js";
 const CLAUDE_SYNTHETIC_NO_RESPONSE_ERROR = "Claude CLI returned a synthetic no-response result.";
 
@@ -75,9 +74,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   let resumeCheckpointId: string | undefined;
   let usage: CliUsage | undefined;
   let diagnosticUsage: CliUsage | undefined;
-  let parentStreamId: string | undefined;
-  let refinedParentId: string | undefined;
-  let measuredParentId: string | undefined;
+  const observeUsage = createCliUsageObserver(params);
   let output: CliOutput | null = null;
   let parseErrorText = "";
   let rawChars = 0;
@@ -348,67 +345,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       sawTerminalResult = true;
     }
     observeSessionId(parsed);
-    const nextUsage = readCliUsage(parsed);
-    const isClaudeTerminalResult = claudeStreamJson && parsed.type === "result";
-    if (isClaudeTerminalResult && nextUsage && usage) {
-      diagnosticUsage = nextUsage;
-    }
-    if (nextUsage) {
-      params.onUsage?.(nextUsage, isClaudeTerminalResult);
-    }
-    if (claudeStreamJson && !isClaudeSubagentRecord(parsed)) {
-      const evt =
-        parsed.type === "stream_event" && isRecord(parsed.event) ? parsed.event : undefined;
-      const message =
-        parsed.type === "assistant"
-          ? parsed.message
-          : evt?.type === "message_start"
-            ? evt.message
-            : undefined;
-      const id = isRecord(message) && typeof message.id === "string" ? message.id : undefined;
-      if (evt?.type === "message_start") {
-        parentStreamId = id;
-        refinedParentId = undefined;
-      }
-      const delta = evt?.type === "message_delta" && parentStreamId !== undefined;
-      // Claude deltas refine the current call; null counters mean unchanged, not zero.
-      const previous = delta && parentStreamId === measuredParentId ? usage : undefined;
-      const patch = delta && isRecord(evt.usage) ? evt.usage : undefined;
-      const measured = patch
-        ? readCliUsage({
-            usage: {
-              input_tokens: patch.input_tokens ?? previous?.input,
-              output_tokens: patch.output_tokens ?? previous?.output,
-              cache_read_input_tokens: patch.cache_read_input_tokens ?? previous?.cacheRead,
-              cache_creation_input_tokens:
-                patch.cache_creation_input_tokens ?? previous?.cacheWrite,
-              cache_creation:
-                patch.cache_creation ??
-                (patch.cache_creation_input_tokens == null ||
-                patch.cache_creation_input_tokens === previous?.cacheWrite
-                  ? { ephemeral_1h_input_tokens: previous?.cacheWrite1h }
-                  : undefined),
-            },
-          })
-        : isRecord(message) && message.model !== "<synthetic>" && (!id || id !== refinedParentId)
-          ? readCliUsage({ usage: message.usage })
-          : undefined;
-      const tokens = deriveSessionTotalTokens({ lastCallUsage: measured });
-      if (measured && tokens !== undefined) {
-        usage = measured;
-        measuredParentId = delta ? parentStreamId : id;
-        if (delta) refinedParentId = parentStreamId;
-        params.onContextTokens?.(tokens);
-      } else if (isClaudeTerminalResult && !usage && parsed.openclaw_interim_result !== true) {
-        usage = nextUsage;
-      }
-      if (evt?.type === "message_stop") parentStreamId = undefined;
-    } else if (
-      !claudeStreamJson &&
-      (!supportsCliJsonlToolEvents(params) || parsed.type !== "result" || !usage)
-    ) {
-      usage = nextUsage ?? usage;
-    }
+    ({ usage, diagnosticUsage } = observeUsage(parsed, usage, diagnosticUsage));
     if (
       parsed.type === "assistant" &&
       isRecord(parsed.message) &&
