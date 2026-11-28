@@ -1,5 +1,6 @@
 package ai.openclaw.app.systemagent
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.CompletableDeferred
@@ -106,16 +107,16 @@ class SystemAgentChatControllerTest {
     runTest {
       val harness = readyHarness(this)
       harness.responses += questionReply()
-      harness.responses += reply("Applied")
-
       harness.controller.refresh()
       advanceUntilIdle()
       val questionMessage =
         harness.controller.state.value.messages
           .single()
+      val response = CompletableDeferred<String>()
+      harness.handler = { response.await() }
 
       harness.controller.answerQuestion(questionMessage.id, "Use Tailscale")
-      advanceUntilIdle()
+      runCurrent()
 
       val params = json.parseToJsonElement(harness.requests[1].paramsJson).jsonObject
       assertEquals("tailscale", params.getValue("message").jsonPrimitive.content)
@@ -124,27 +125,61 @@ class SystemAgentChatControllerTest {
           .any { it.text == "Use Tailscale" },
       )
       assertTrue(questionMessage.id in harness.controller.state.value.retiredQuestionIds)
+      harness.controller.answerQuestion(questionMessage.id, "Use Tailscale")
+      harness.controller.skipQuestion(questionMessage.id)
+      runCurrent()
+      assertEquals(2, harness.requests.size)
+
+      response.complete(reply("Applied"))
+      advanceUntilIdle()
+      assertEquals(
+        "Applied",
+        harness.controller.state.value.messages
+          .last()
+          .text,
+      )
+      harness.controller.answerQuestion(questionMessage.id, "Use Tailscale")
+      harness.controller.skipQuestion(questionMessage.id)
+      advanceUntilIdle()
+      assertEquals(2, harness.requests.size)
     }
 
   @Test
-  fun skipSendsExplicitReplyAndDismissesQuestion() =
+  fun skipSendsExplicitReplyAndRetiresQuestion() =
     runTest {
       val harness = readyHarness(this)
       harness.responses += questionReply()
-      harness.responses += reply("Skipped")
-
       harness.controller.refresh()
       advanceUntilIdle()
       val questionMessage =
         harness.controller.state.value.messages
           .single()
+      val response = CompletableDeferred<String>()
+      harness.handler = { response.await() }
 
       harness.controller.skipQuestion(questionMessage.id)
-      advanceUntilIdle()
+      runCurrent()
 
       val params = json.parseToJsonElement(harness.requests[1].paramsJson).jsonObject
       assertEquals("Skip for now", params.getValue("message").jsonPrimitive.content)
-      assertTrue(questionMessage.id in harness.controller.state.value.dismissedQuestionIds)
+      assertTrue(questionMessage.id in harness.controller.state.value.retiredQuestionIds)
+      harness.controller.skipQuestion(questionMessage.id)
+      harness.controller.answerQuestion(questionMessage.id, "Use Tailscale")
+      runCurrent()
+      assertEquals(2, harness.requests.size)
+
+      response.complete(reply("Skipped"))
+      advanceUntilIdle()
+      assertEquals(
+        "Skipped",
+        harness.controller.state.value.messages
+          .last()
+          .text,
+      )
+      harness.controller.skipQuestion(questionMessage.id)
+      harness.controller.answerQuestion(questionMessage.id, "Use Tailscale")
+      advanceUntilIdle()
+      assertEquals(2, harness.requests.size)
     }
 
   @Test
@@ -249,7 +284,7 @@ class SystemAgentChatControllerTest {
         }
       }
       harness.handler = {
-        throw GatewayRequestRejected(GatewaySession.ErrorShape("FAILED", "old route failure"))
+        throw GatewayRequestRejected(ErrorShape("FAILED", "old route failure"))
       }
 
       harness.controller.refresh()

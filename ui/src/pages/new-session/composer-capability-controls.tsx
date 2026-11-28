@@ -11,6 +11,7 @@ import type {
   ChatComposerPlusMenuProps,
   ChatComposerCapabilityMenuSource,
 } from "../chat/components/chat-composer-plus-menu.types.ts";
+import type { NewSessionComposerOptions } from "./composer-options.ts";
 import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
 
 registerNewSessionSetupEnglish();
@@ -65,7 +66,7 @@ export function StartControl(props: {
     canSubmit: boolean;
     submitDisabledReason?: string;
     onBlockedSubmit?: () => void;
-    attachmentDraft: { reads: { pendingReads: number } };
+    attachmentDraft: NewSessionComposerOptions["attachmentDraft"];
   };
   onSubmit: () => void;
 }) {
@@ -74,7 +75,9 @@ export function StartControl(props: {
       ? t("newSession.starting")
       : t(props.options.nativeTerminal ? "newSession.startInTerminal" : "newSession.start");
   const busy = () =>
-    props.options.submitting || props.options.attachmentDraft.reads.pendingReads > 0;
+    props.options.submitting ||
+    (props.options.attachmentDraft.reads.videoPreparationStatus?.busy ??
+      props.options.attachmentDraft.reads.pendingReads > 0);
   const showShortcuts = () =>
     !isMobileBrowserPlatform() &&
     !props.options.nativeTerminal &&

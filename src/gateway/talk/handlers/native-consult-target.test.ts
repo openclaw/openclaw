@@ -304,6 +304,7 @@ beforeEach(async () => {
   config = {
     agents: {
       ownership: "explicit",
+      defaults: { model: "anthropic/claude-opus-4-6" },
       entries: { primary: {}, voice: { workspace: state.workspaceDir } },
     },
     talk: { agentId: "voice" },
@@ -378,10 +379,8 @@ afterEach(async () => {
 });
 
 async function createRelayCall(params: Record<string, unknown> = {}) {
-  const { sessionId } = await createNativeTalkCall(dispatch, false, params);
-  if (!sessionId) {
-    throw new Error("Expected a relay session ID");
-  }
+  const call = await createNativeTalkCall(dispatch, false, params);
+  const sessionId = expectDefined(call.sessionId, "Expected a relay session ID");
   const record = getUnifiedTalkSession(sessionId);
   if (record.kind !== "realtime-relay") {
     throw new Error("Expected realtime relay");

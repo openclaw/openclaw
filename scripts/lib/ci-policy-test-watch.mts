@@ -31,6 +31,11 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: [input],
   })),
   {
+    // A Node-only suite must execute, not silently skip, when its runtime policy changes.
+    testFile: "src/infra/git-release.test.ts",
+    watchGlobs: ["scripts/lib/ci-test-runtime.mts"],
+  },
+  {
     // Scenario coverage and taxonomy are filesystem inventories, not imports.
     testFile: "extensions/qa-lab/src/coverage-report.test.ts",
     watchGlobs: ["qa/scenarios/**", "taxonomy.yaml"],
@@ -196,6 +201,11 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   {
     testFile: "src/gateway/server.config-patch.test.ts",
     watchGlobs: ["src/gateway/config-reload.ts"],
+  },
+  {
+    // sessions.create reaches fork normalization through four imports, beyond the PR walk.
+    testFile: "src/gateway/server.sessions.create.fork-search.test.ts",
+    watchGlobs: ["src/config/sessions/session-accessor.sqlite-parent-fork.ts"],
   },
   // server.close() reaches these owners through the kernel's lazy shutdown
   // runtime, four or five import hops away; aggressive selection walks two.
@@ -859,6 +869,11 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/state/openclaw-agent-execution.worker.ts",
     ],
   },
+  {
+    // The test loads the packaged worker through its runtime entrypoint.
+    testFile: "src/config/sessions/session-transcript-reconcile.lifecycle-phases.test.ts",
+    watchGlobs: ["src/config/sessions/session-transcript-reconcile.worker.ts"],
+  },
   ...[
     "src/config/sessions/session-accessor.sqlite-transcript-suffix.test.ts",
     "src/config/sessions/session-transcript-context-eligibility.test.ts",
@@ -1462,7 +1477,9 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   },
   // Native maintainer fixtures copy and launch their shell owner instead of importing it.
   ...[
+    "test/scripts/pr-baseline-proof.test.ts",
     "test/scripts/pr-correction-preparation.test.ts",
+    "test/scripts/pr-current-workflow-recovery.test.ts",
     "test/scripts/pr-host-tools.test.ts",
     "test/scripts/pr-main-refresh.test.ts",
     "test/scripts/pr-merge-auto-recovery.test.ts",
@@ -1474,6 +1491,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "test/scripts/pr-merge-prior-ci.test.ts",
     "test/scripts/pr-merge-qualified-refusal.test.ts",
     "test/scripts/pr-publication.test.ts",
+    "test/scripts/pr-workflow-successor.test.ts",
     "test/scripts/pr-wrappers.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
@@ -2281,14 +2299,4 @@ export function resolvePolicyTestTargets(
       );
     })
     .map(({ testFile }) => testFile);
-}
-
-/** True when the policy tests are the complete bounded owner for this path. */
-export function isPolicyTestOwnedPath(changedPath: string): boolean {
-  const literal = isPlainRepoRelativePath(changedPath);
-  return policyTestWatches.some(({ ownerGlobs, includeDotPaths }) =>
-    ownerGlobs?.some((ownerGlob) =>
-      matchesPolicyPattern(changedPath, ownerGlob, literal, includeDotPaths),
-    ),
-  );
 }

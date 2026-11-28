@@ -10,18 +10,22 @@ import { resolveEffectiveCompactionReserveTokens } from "../agent-compaction-con
 import type { Agent, AgentMessage } from "../runtime/index.js";
 import { createFreshLlmBoundaryTokenEstimator } from "../sessions/context-token-pressure.js";
 import { resolveToolResultContextMaxChars } from "../tool-result-limits.js";
-import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import {
   TOOL_IMAGE_CHARS,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
   type MessageCharEstimateCache,
   estimateMessageChars,
+  formatImageOmissionNotice,
   estimateMessageCharsCached,
   getToolResultText,
   isToolResultMessage,
 } from "./tool-result-char-estimator.js";
 import { isToolResultTextBlock } from "./tool-result-text-budget.js";
-import { truncateToolResultMessage, truncateToolResultText } from "./tool-result-truncation.js";
+import {
+  formatOmittedCharsNotice,
+  truncateToolResultMessage,
+  truncateToolResultText,
+} from "./tool-result-truncation.js";
 
 function replaceToolResultContent(
   msg: AgentMessage,
@@ -59,13 +63,6 @@ function truncateToolResultToChars(
     const isText = (block: unknown): block is { type: "text"; text: string } =>
       isToolResultTextBlock(block) && block.type === "text";
     const imageCount = content.filter(isImage).length;
-    const omissionNotice = (retainedImages: number) => {
-      const omittedImages = imageCount - retainedImages;
-      return (
-        `[${omittedImages} image${omittedImages === 1 ? "" : "s"} omitted from context` +
-        `${retainedImages === 0 ? "; no images fit the context limit" : ""}; rerun with fewer images]`
-      );
-    };
     const projectContent = (retainedContent: unknown[], noticeText?: string) => {
       const notice = noticeText ? [{ type: "text", text: noticeText }] : [];
       const reservedChars = estimateMessageChars(msg, [
@@ -96,7 +93,9 @@ function truncateToolResultToChars(
       );
       const { message, compactedText, boundedContent } = projectContent(
         retainedContent,
-        retainedImages < imageCount ? omissionNotice(retainedImages) : undefined,
+        retainedImages < imageCount
+          ? formatImageOmissionNotice(imageCount, retainedImages)
+          : undefined,
       );
       if (
         !compactedText &&
@@ -120,8 +119,8 @@ function truncateToolResultToChars(
     return projectContent(
       content.filter(isText),
       imageCount > 0
-        ? omissionNotice(0)
-        : formatContextLimitTruncationNotice(
+        ? formatImageOmissionNotice(imageCount, 0)
+        : formatOmittedCharsNotice(
             Math.max(1, Math.floor(omittedChars / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE)),
           ),
     ).message;
@@ -184,6 +183,7 @@ export function installContextEngineLoopHook(params: {
   modelId: string;
   repairAssembledMessages?: (messages: AgentMessage[]) => AgentMessage[];
   getPrePromptMessageCount?: () => number;
+  getCurrentUserIdempotencyKey?: () => string | undefined;
   onAfterTurnCheckpoint?: (messageCount: number) => void;
   deferredTurn?: { prompt: string; readonly availableTools: Set<string> };
   getRuntimeContext?: (params: {
@@ -277,9 +277,24 @@ export function installContextEngineLoopHook(params: {
       lastSourceMessages = transcriptMessages;
       // An admitted turn is not in the engine's store yet. Assemble accepted
       // history separately, then retain the host-owned user/tool exchange.
-      const historyLength = params.deferredTurn
-        ? (params.getPrePromptMessageCount?.() ?? 0)
-        : providerMessages.length;
+      let historyLength = providerMessages.length;
+      if (params.deferredTurn) {
+        historyLength = params.getPrePromptMessageCount?.() ?? 0;
+        const currentUserKey = params.getCurrentUserIdempotencyKey?.();
+        const currentUserIndex = currentUserKey
+          ? providerMessages.findLastIndex(
+              (message) =>
+                message.role === "user" &&
+                "idempotencyKey" in message &&
+                message.idempotencyKey === currentUserKey,
+            )
+          : -1;
+        // The engine replaces everything before the fence with its stored history, which
+        // cannot contain the admitted user message; a stale count must not put it there.
+        if (currentUserIndex >= 0) {
+          historyLength = Math.min(historyLength, currentUserIndex);
+        }
+      }
       const pendingMessages = providerMessages.slice(historyLength);
       const assembled = await contextEngine.assemble({
         ...sessionIdentity,

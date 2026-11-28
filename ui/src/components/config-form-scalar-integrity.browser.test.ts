@@ -56,31 +56,6 @@ describe("config form scalar integrity", () => {
     expect(onPatch).toHaveBeenCalledTimes(1);
   });
 
-  it("separates boolean help from its default description", () => {
-    const container = document.createElement("div");
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
-        runtime: {
-          type: "object",
-          properties: {
-            enabled: {
-              type: "boolean",
-              default: true,
-              description: "Controls runtime processing.",
-            },
-          },
-        },
-      },
-    });
-    renderAnalyzedFormFixture(container, analysis, {
-      value: { runtime: { enabled: false } },
-      onPatch: vi.fn(),
-    });
-    expect(container.textContent).toContain("Controls runtime processing.");
-    expect(container.textContent).not.toContain("Default: true");
-  });
-
   it.each(["text", "number"] as const)(
     "revalidates a focused %s draft through snapshot refresh without untracked reads",
     (inputType) => {

@@ -146,6 +146,7 @@ export class WorkboardStoreRuntime {
           () => store.claimIfOwnerAvailable(key, value, expectedUpdatedAt, ownerSlot),
           (result) => result === "updated",
         ),
+      findCardIdsByPrefix: (prefix) => this.runOperation(() => store.findCardIdsByPrefix(prefix)),
       listCardStatuses: (ids) => this.runOperation(() => store.listCardStatuses(ids)),
       listBoardAggregates: () => this.runOperation(() => store.listBoardAggregates()),
       listStatsAggregates: (boardId) => this.runOperation(() => store.listStatsAggregates(boardId)),

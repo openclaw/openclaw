@@ -7,6 +7,7 @@ import {
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { buildRuntimeContextCustomMessage } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
+import { prepareParticipationTestRun } from "../../agents/participation-ceiling.test-support.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import { testWorkerDescriptor } from "../../node-host/node-worker-supervisor.test-support.js";
@@ -20,9 +21,30 @@ import { createWorkerImageHistory } from "../../worker/replay-images.test-suppor
 import { parseWorkerProcessRequest } from "../../worker/worker-process-protocol.js";
 import { measureNodeWorkerLaunchBytes } from "./node-launch-adapter.js";
 import {
+  assertSupportedTurn,
   fitLaunchDescriptorWithRuntimeIdentity,
   windowInitialMessages,
 } from "./worker-turn-payload.js";
+
+it("refuses participating input at direct worker execution preflight", () => {
+  expect(() =>
+    assertSupportedTurn({
+      runId: "participant-worker",
+      timeoutMs: 60_000,
+      sessionId: "session",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      ...prepareParticipationTestRun({
+        kind: "send",
+        profileId: "guest",
+        sessionKey: "agent:main:session",
+      }),
+    }),
+  ).toThrow(
+    "Participating inputs require Gateway-local OpenClaw execution. Worker placements cannot enforce their permission ceiling; use a Gateway-local OpenClaw session.",
+  );
+});
 
 const runtimeIdentityToken = vi.hoisted(() => ({
   value: "fixture-runtime-identity-token",

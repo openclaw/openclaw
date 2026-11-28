@@ -395,7 +395,7 @@ vi.mock("../runtime.js", () => ({
 function startTestMonitor(config: OpenClawConfig = testConfig) {
   const socket = new FakeWebSocket();
   const abortController = new AbortController();
-  const socketFactory = mockState.createWebSocket.mockReturnValue(socket);
+  mockState.createWebSocket.mockReturnValue(socket);
   const monitor = monitorMattermostProvider({
     config,
     runtime: testRuntime(),
@@ -405,7 +405,6 @@ function startTestMonitor(config: OpenClawConfig = testConfig) {
   return {
     socket,
     abortController,
-    socketFactory,
     monitor,
     stop: async () => {
       if (stopped) {

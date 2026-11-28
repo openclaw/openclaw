@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { getAgentCommandAdmissionFacts } from "../../agents/agent-command-admission-facts.js";
 import type { AgentCommandGatewayIngressOpts } from "../../agents/command/types.js";
 import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
@@ -18,6 +19,8 @@ export function registerAgentOwnerPolicyCases(): void {
   const mocks = getAgentTestMocks();
   type OriginOptions = {
     authenticatedProfile?: true;
+    /** Profile of the admitted operator authority the caller already holds. */
+    admittedAs?: string;
     requesterOrigin?: RequesterOrigin;
     ownerAllowFrom?: string[];
     expectedSenderRestriction?: true;
@@ -43,18 +46,28 @@ export function registerAgentOwnerPolicyCases(): void {
     expectedOwner: boolean,
     options: OriginOptions = {},
   ) => ({ name, admin, expectedOwner, ...options });
+  // Owner status is the admitted grant's owner bit, or an asserted channel owner's config match.
+  // Scopes without admission grant nothing.
   it.each([
-    row("direct admin", true, true),
-    row("direct write", false, false),
+    row("admitted admin CLI", true, true, { admittedAs: "gateway-owner" }),
+    row("admitted write CLI", false, false, { admittedAs: "gateway-owner" }),
+    row("unadmitted admin-scoped CLI", true, false),
     row("authenticated operator admin", true, true, { authenticatedProfile: true }),
     row("authenticated operator write", false, false, { authenticatedProfile: true }),
     row("authenticated operator continuation", true, true, {
       authenticatedProfile: true,
       requesterOrigin: origin(),
     }),
-    row("operator admin continuation", true, true, { requesterOrigin: operator }),
-    row("operator write continuation", false, false, { requesterOrigin: operator }),
+    row("operator admin continuation", true, true, {
+      admittedAs: "operator-alice",
+      requesterOrigin: operator,
+    }),
+    row("operator write continuation", false, false, {
+      admittedAs: "operator-alice",
+      requesterOrigin: operator,
+    }),
     row("operator admin carrying external origin", true, true, {
+      admittedAs: "operator-alice",
       requesterOrigin: { ...operator, messageProvider: "telegram", senderId: "alice" },
       expectedSenderRestriction: true,
     }),
@@ -67,20 +80,14 @@ export function registerAgentOwnerPolicyCases(): void {
       ownerAllowFrom: ["whatsapp:+15555550123"],
       expectedSenderRestriction: true,
     }),
-    row("System admin with session-only origin", true, true, { requesterOrigin: origin() }),
-    row("System admin with internal origin", true, true, {
-      requesterOrigin: origin({ messageProvider: "webchat" }),
-    }),
-    row("System admin carrying incomplete external origin", true, false, {
-      requesterOrigin: origin({ messageProvider: "telegram" }),
-    }),
-    row("System write with session-only origin", false, false, { requesterOrigin: origin() }),
+    row("unadmitted System admin", true, false, { requesterOrigin: origin() }),
   ])(
     "resolves admitted ownership for $name",
     async ({
       admin,
       expectedOwner,
       authenticatedProfile,
+      admittedAs,
       requesterOrigin: providedOrigin,
       ownerAllowFrom,
       expectedSenderRestriction,
@@ -115,15 +122,23 @@ export function registerAgentOwnerPolicyCases(): void {
         profile && providedOrigin
           ? { ...providedOrigin, operatorProfileId: profile.id }
           : providedOrigin;
+      const operatorRunAuthority = admittedAs
+        ? createTestOperatorAuthority({ profileId: admittedAs, scopes })
+        : undefined;
+      const actorProfileId = profile?.id ?? (requesterOrigin ? admittedAs : undefined);
       const client = requesterOrigin
         ? createSyntheticPluginRuntimeClient({
             scopes,
-            operatorRoleActor: profile
-              ? { kind: "operator", profileId: profile.id }
+            operatorRoleActor: actorProfileId
+              ? { kind: "operator", profileId: actorProfileId }
               : { kind: "system" },
+            operatorRunAuthority,
             agentToolCaller: { agentId: "main", sessionKey: "agent:main:source", requesterOrigin },
           })
-        : operatorWriteCliClient(scopes);
+        : {
+            ...operatorWriteCliClient(scopes),
+            ...(operatorRunAuthority ? { internal: { operatorRunAuthority } } : {}),
+          };
       if (profile) {
         const { id: profileId, displayName, updatedAt } = profile;
         client.authenticatedUserProfile = { profileId, displayName, hasAvatar: false, updatedAt };
@@ -148,11 +163,14 @@ export function registerAgentOwnerPolicyCases(): void {
         },
       });
       if (requesterOrigin) {
+        const representedProfileId = profile?.id ?? admittedAs;
         expect(admissionFacts).toMatchObject({
           invoker: principal("agent", "main"),
-          ...(profile ? { representedSubject: principal("person", profile.id) } : {}),
+          ...(representedProfileId
+            ? { representedSubject: principal("person", representedProfileId) }
+            : {}),
         });
-        if (!profile) {
+        if (!representedProfileId) {
           expect(admissionFacts?.representedSubject).toBeUndefined();
         }
       }

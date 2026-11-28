@@ -372,6 +372,25 @@ describe("install.sh", () => {
     expect(result.stdout + result.stderr).toContain(message);
   });
 
+  it("stops before pnpm when the selected checkout refuses its source build", () => {
+    const result = runInstallShell(`
+      set -eu
+      source "${SCRIPT_PATH}"
+      repo="$HOME/repo"
+      git init -q "$repo"
+      mkdir -p "$repo/scripts/lib"
+      printf 'process.exitCode = 19;\\n' > "$repo/scripts/lib/tsdown-memory-admission.mts"
+      git -C "$repo" add scripts
+      git -C "$repo" -c user.name=Fixture -c user.email=fixture@example.invalid commit -qm fixture
+      resolve_git_openclaw_ref() { git -C "$repo" rev-parse HEAD; }
+      ensure_node() { :; }
+      ensure_pnpm() { echo "unexpected pnpm setup"; return 93; }
+      install_openclaw_from_git "$repo"
+    `);
+    expect(result.status, result.stderr || result.stdout).toBe(19);
+    expect(result.stdout).not.toContain("unexpected pnpm setup");
+  });
+
   it("writes git install wrappers with the resolved Node runtime", () => {
     const result = runInstallShell(`
       set -euo pipefail

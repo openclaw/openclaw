@@ -113,15 +113,6 @@ describe("ConfigPage navigation", () => {
     resetServerUiPrefsSync();
   });
 
-  it("keeps curated sections off the Advanced page", () => {
-    for (const section of ["messages", "env", "mcp", "tts", "broadcast", "models"]) {
-      expect(configSelectionFromSearch("advanced", `?section=${section}`)).toEqual({
-        activeSection: ["env", "broadcast", "models"].includes(section) ? section : null,
-        activeSubsection: null,
-      });
-    }
-  });
-
   it.each(["__proto__"])("rejects an unsupported runtime page id: %s", (pageId) => {
     expect(() => configSelectionFromSearch(pageId as ConfigPageId, "")).toThrow(
       "Unknown config page",

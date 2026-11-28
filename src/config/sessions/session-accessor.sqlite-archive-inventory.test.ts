@@ -8,7 +8,7 @@ import { ensureSessionTranscriptArchiveSchema } from "../../state/openclaw-agent
 import {
   listTranscriptArchiveIdentitiesFromDatabase,
   listTranscriptArchivesFromDatabase,
-} from "./session-accessor.sqlite-archive-read.js";
+} from "./session-accessor.sqlite-archive-metadata.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

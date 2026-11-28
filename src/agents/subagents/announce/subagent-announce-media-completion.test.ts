@@ -82,9 +82,8 @@ function expectNoExternalDelivery(
   expect(sendMessage).not.toHaveBeenCalled();
 }
 
-function createGatewayMock(response: Record<string, unknown> | Error = {}, onCall?: () => void) {
+function createGatewayMock(response: Record<string, unknown> | Error = {}) {
   return vi.fn(async (opts: Parameters<typeof runtimeCallGateway>[0]) => {
-    onCall?.();
     if (response instanceof Error) {
       throw response;
     }
@@ -245,7 +244,7 @@ describe("live generated-media completion", () => {
         isSourceSessionEffectsAllowed: () => sourceAllowed,
       };
       const pending = await deliverFixture("discord", params);
-      expect(pending).toMatchObject({ delivered: false, disposition: "session_queued" });
+      expect(pending).toMatchObject({ delivered: false, path: "queued" });
       expectNoExternalDelivery(callGateway, sendMessage);
       sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery.mockImplementationOnce(() => {
         sourceAllowed = owner !== "retired";

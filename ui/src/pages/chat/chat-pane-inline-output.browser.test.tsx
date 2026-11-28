@@ -207,10 +207,10 @@ it("updates a mounted inline invocation without rendering the pane or disturbing
   disclosureRow.click();
   await expect.poll(() => disclosureRow.getAttribute("aria-expanded")).toBe("true");
   // Finish the lazy expanded-body/catalog load before measuring independent stdout work.
+  await vi.dynamicImportSettled();
   await expect
     .poll(() => pane.querySelector(".chat-tool-term__out code")?.textContent)
     .toBe("First stdout line.");
-  await vi.dynamicImportSettled();
   await pane.updateComplete;
   disclosureRow.click();
   await expect.poll(() => disclosureRow.getAttribute("aria-expanded")).toBe("false");
@@ -590,8 +590,8 @@ it("updates a mounted inline invocation without rendering the pane or disturbing
   });
   const progressCard = () =>
     pane.querySelector<HTMLDetailsElement>(".session-progress-card--composer");
-  await expect.poll(() => progressCard()?.open).toBe(true);
   await vi.dynamicImportSettled();
+  await expect.poll(() => progressCard()?.open).toBe(true);
   state.chatReadingHistory = false;
   await pane.updateComplete;
   renders.mockClear();

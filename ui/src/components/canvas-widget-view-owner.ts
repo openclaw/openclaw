@@ -19,6 +19,10 @@ import { generateUUID } from "../lib/uuid.ts";
 import { WidgetSandboxHost, WIDGET_LOAD_NOTICE_MS } from "../lib/widget-sandbox-host.ts";
 import { registerWidgetThemeFrame, postWidgetTheme } from "../lib/widget-theme.ts";
 import { forwardChatWheelToTranscript } from "../pages/chat/chat-scroll-input.ts";
+import {
+  createWidgetInspection,
+  type WidgetInspectionListener,
+} from "./canvas-widget-inspection.ts";
 import { isCanvasWidgetLoadRetryEvent } from "./canvas-widget-view-events.ts";
 import {
   forgetPendingCanvasView,
@@ -124,6 +128,7 @@ export function createCanvasWidget(
   let activeBinding: ViewBinding | undefined;
   let sandboxHost: WidgetSandboxHost | undefined;
   let promptPort: MessagePort | undefined;
+  const inspect = createWidgetInspection();
   let releasePromptPort: (() => void) | undefined;
   let frameElement: HTMLIFrameElement | undefined;
   let sandboxOrigin = "";
@@ -145,6 +150,13 @@ export function createCanvasWidget(
     previewFrame: {
       configurable: true,
       get: () => (frameElement?.isConnected ? frameElement : undefined),
+    },
+    startInspection: {
+      configurable: true,
+      value: (receive: WidgetInspectionListener) =>
+        promptPort && props.presentationActive && props.allowScripts && isCurrent(validatedBinding)
+          ? inspect.start(promptPort, receive)
+          : undefined,
     },
   });
   function clearRetry(): void {
@@ -235,13 +247,18 @@ export function createCanvasWidget(
     sandboxHost = undefined;
     releaseMessages?.();
     releaseMessages = undefined;
+    clearPromptPort();
+    releaseTheme?.();
+    releaseTheme = undefined;
+    reportedHeight = state.contentHeight = undefined;
+  }
+
+  function clearPromptPort(): void {
+    inspect.reset();
     releasePromptPort?.();
     releasePromptPort = undefined;
     promptPort?.close();
     promptPort = undefined;
-    releaseTheme?.();
-    releaseTheme = undefined;
-    reportedHeight = state.contentHeight = undefined;
   }
 
   function sameOwner(binding: ViewBinding | undefined): binding is ViewBinding {
@@ -300,6 +317,7 @@ export function createCanvasWidget(
       clearRetry();
       retryDelayMs = 1_000;
       validatedBinding = undefined;
+      inspect.stop();
       sandboxHost?.setActive(false);
       state.awaitingResult = false;
       state.pending = true;
@@ -431,6 +449,7 @@ export function createCanvasWidget(
     const active = props.presentationActive && isCurrent(validatedBinding);
     sandboxHost?.setActive(active);
     if (!active) {
+      inspect.stop();
       cancelFrameAdmission?.();
       cancelFrameAdmission = undefined;
     }
@@ -455,6 +474,7 @@ export function createCanvasWidget(
       sandboxShellHtml: view.sandboxShellHtml,
       documentKey: `${binding.docId}\0${binding.generation}`,
       loadDocument: async () => view.html,
+      onProxyReload: clearPromptPort,
       onLoaded: () => {
         state.pending = false;
         postHostState();
@@ -653,22 +673,27 @@ export function createCanvasWidget(
       return;
     }
     // The isolated proxy forwards only the wrapper's first offer. Inline views
-    // adopt its prompt channel only; pinning never lends them dashboard grants.
+    // adopt its private inline channel only; pinning never lends them dashboard grants.
     promptPort = port;
     releasePromptPort = listen(port, "message", (message) => {
       if (
-        message instanceof MessageEvent &&
-        props.presentationActive &&
-        isCurrent(validatedBinding) &&
-        sandboxHost === host &&
-        promptPort === port &&
-        message.data?.type === "openclaw:widget-prompt"
+        !props.presentationActive ||
+        !props.allowScripts ||
+        !isCurrent(validatedBinding) ||
+        sandboxHost !== host ||
+        promptPort !== port
       ) {
+        return;
+      }
+      const payload = asOptionalRecord(message.data);
+      if (payload?.type === "openclaw:widget-prompt") {
         void dispatchWidgetPrompt(
           host.frame,
-          message.data.prompt,
+          payload.prompt,
           `${props.sessionKey}\0${props.docId}\0${validatedBinding!.generation}`,
         );
+      } else if (payload) {
+        inspect.receive(payload, host.frame);
       }
     });
     port.start();

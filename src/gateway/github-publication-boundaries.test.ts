@@ -223,7 +223,7 @@ describe("Gateway GitHub publication boundaries", () => {
     const coordinator = createTestGitHubPublicationCoordinator({ placements });
 
     await expect(publish(coordinator, "local-turn-during-snapshot")).rejects.toThrow(
-      "session authority changed during snapshot",
+      "session moved during snapshot",
     );
     expectNoCommands("commit-tree", "push");
   });

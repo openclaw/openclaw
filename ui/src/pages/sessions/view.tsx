@@ -1,6 +1,17 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { createDeferred, createMemo, Errored, isPending, Loading, Repeat, Show } from "solid-js";
+import {
+  createDeferred,
+  createMemo,
+  createSignal,
+  Errored,
+  isPending,
+  Loading,
+  Repeat,
+  Show,
+} from "solid-js";
+import type { GatewaySessionRow } from "../../api/types.ts";
+import { personalSessionPinKeys } from "../../app-navigation.ts";
 import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ContextNewSessionAction } from "../../components/solid/new-session-link.tsx";
@@ -16,7 +27,10 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../../lib/reactive/platform.ts";
+import { createSessionSnoozeWake } from "../../lib/reactive/session-snooze-wake.ts";
 import { groupSessionRows } from "../../lib/sessions/grouping.ts";
+import { isPinnableUiSessionRow } from "../../lib/sessions/session-key.ts";
+import { isSessionSnoozed } from "../../lib/sessions/session-snooze.ts";
 import { sessionsTableColumnCount } from "./session-row.tsx";
 import { SessionWindow, type SessionEntry } from "./session-window.tsx";
 import { SessionsAdvancedFilters } from "./sessions-filters.tsx";
@@ -220,6 +234,20 @@ function SortHeader(
   );
 }
 
+function withTablePin(
+  row: GatewaySessionRow,
+  ranks: ReadonlyMap<string, number>,
+  now: number,
+): GatewaySessionRow {
+  // Only project on already visible, eligible rows. A stale saved key cannot create a row.
+  const pinned =
+    ranks.has(row.key) &&
+    !row.archived &&
+    !isSessionSnoozed(row, now) &&
+    isPinnableUiSessionRow(row);
+  return (row.pinned === true) === pinned ? row : { ...row, pinned };
+}
+
 function SessionsTable(props: SessionsProps & { readRoster: () => RosterOutcome }) {
   const rawRows = createMemo(() => props.result?.sessions ?? []);
   const pageSize = createMemo(() => props.pageSize);
@@ -228,11 +256,30 @@ function SessionsTable(props: SessionsProps & { readRoster: () => RosterOutcome 
   const pageSizeValue = createMemo(() => String(props.pageSize));
   const sortColumn = createMemo(() => props.sortColumn);
   const direction = createMemo(() => (props.sortDir === "asc" ? 1 : -1));
+  const pinRanks = createMemo(
+    () =>
+      new Map([...personalSessionPinKeys(props.personalSidebarEntries)].map((key, i) => [key, i])),
+  );
+  const [wakeRevision, setWakeRevision] = createSignal(0);
+  const wake = createSessionSnoozeWake(() => setWakeRevision((revision) => revision + 1));
   const sorted = createMemo(() => {
+    wakeRevision();
     const column = sortColumn();
     const sortDirection = direction();
-    return rawRows().toSorted((a, b) => {
-      const pinnedDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
+    const ranks = pinRanks();
+    const roster = rawRows();
+    // The roster refreshes at the Gateway's snooze deadline. Use its clock, but keep
+    // membership and order live from navigation, even before a pin edit's list reply.
+    const gatewayTime = props.gatewayTimedPins ? props.result?.ts : undefined;
+    const now = gatewayTime ?? Date.now();
+    wake(
+      gatewayTime === undefined ? roster.filter((row) => ranks.has(row.key) && !row.archived) : [],
+      now,
+    );
+    const rows = roster.map((row) => withTablePin(row, ranks, now));
+    return rows.toSorted((a, b) => {
+      const pinnedDiff =
+        (a.pinned ? ranks.get(a.key)! : ranks.size) - (b.pinned ? ranks.get(b.key)! : ranks.size);
       if (pinnedDiff !== 0) {
         return pinnedDiff;
       }

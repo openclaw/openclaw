@@ -584,6 +584,19 @@ openclaw-session-owner-chip .viewer-avatar__initials {
     box-shadow var(--duration-fast) var(--ease-out);
 }
 
+/* All states size the same grid cell; only the active one is visible and named. */
+.state-stack {
+  display: inline-grid;
+
+  & > * {
+    grid-area: 1 / 1;
+  }
+
+  & > [aria-hidden="true"] {
+    visibility: hidden;
+  }
+}
+
 .btn:hover:where(:not(:disabled, [aria-disabled="true"])) {
   background: var(--btn-bg-hover, var(--bg-hover));
   border-color: var(--border-strong);
@@ -2206,10 +2219,6 @@ openclaw-tooltip:last-child > .refresh-button,
   container-type: inline-size;
 }
 
-.list-title {
-  font-weight: 500;
-}
-
 .chip-row {
   display: flex;
   flex-wrap: wrap;
@@ -3036,6 +3045,7 @@ select.data-table-pagination__size {
    These values repeat .agent-chat__input for the first open, before its sheet loads. */
 .cmd-palette {
   --chat-composer-min-height: 0px;
+  --cmd-palette-inset: 18px;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -3092,7 +3102,7 @@ select.data-table-pagination__size {
   position: relative;
   flex: 0 0 auto;
   min-width: 0;
-  padding: 14px 4px 14px 18px;
+  padding: 14px 4px 14px var(--cmd-palette-inset);
 }
 
 /* The field keeps its inset across modes, so the caret never shifts on Tab. */
@@ -3101,6 +3111,9 @@ select.data-table-pagination__size {
 }
 
 .cmd-palette__input-scroll {
+  --cmd-palette-input-size: var(--chat-composer-editor-size, var(--control-ui-text-md));
+  --cmd-palette-input-line: calc(var(--cmd-palette-input-size) * 1.5);
+  --cmd-palette-input-end-inset: 10px;
   position: relative;
   min-width: 0;
   overflow: hidden;
@@ -3113,14 +3126,12 @@ select.data-table-pagination__size {
   display: block;
   width: 100%;
   min-width: 0;
-  --cmd-palette-input-size: var(--chat-composer-editor-size, var(--control-ui-text-md));
-  --cmd-palette-input-line: calc(var(--cmd-palette-input-size) * 1.5);
   --control-ui-touch-input-size: var(--cmd-palette-input-size);
   height: var(--cmd-palette-input-line);
   min-height: var(--cmd-palette-input-line);
   max-height: calc(var(--cmd-palette-input-line) * 3);
   margin: 0;
-  padding: 0 10px 0 0;
+  padding: 0 var(--cmd-palette-input-end-inset) 0 0;
   resize: none;
   overflow-y: hidden;
   scrollbar-gutter: stable;
@@ -3146,7 +3157,38 @@ select.data-table-pagination__size {
 }
 
 .cmd-palette__input::placeholder {
-  color: var(--muted);
+  color: var(--chat-composer-placeholder);
+  opacity: 1;
+}
+
+/* A focused native placeholder clips instead of painting an ellipsis in Chromium.
+   Keep it for semantics, but prevent it from making the empty Compose field grow. */
+.cmd-palette__input--compose::placeholder {
+  opacity: 0;
+  white-space: nowrap;
+}
+
+.cmd-palette__placeholder {
+  display: none;
+  position: absolute;
+  inset: 0 var(--cmd-palette-input-end-inset) auto 0;
+  color: var(--chat-composer-placeholder, var(--muted));
+  font-size: var(--cmd-palette-input-size);
+  line-height: var(--cmd-palette-input-line);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+@media (pointer: coarse) {
+  .cmd-palette__placeholder {
+    font-size: max(16px, var(--cmd-palette-input-size));
+  }
+}
+
+.cmd-palette__input:placeholder-shown + .cmd-palette__placeholder {
+  display: block;
 }
 
 /* Fades cover only text, never the native far-right scrollbar. */
@@ -3543,16 +3585,6 @@ select.data-table-pagination__size {
    Restart when the row returns instead of retaining those compositor layers. */
 .session-run-indicator--offscreen {
   animation: none;
-}
-
-.session-glyph__ring--background,
-.session-glyph__trace--background {
-  opacity: 0.6;
-}
-
-.session-glyph__ring--background,
-.session-glyph__trace--background .session-glyph__trace-run {
-  animation-duration: 3.2s;
 }
 
 /* Forced colors would repaint the background these masks show through. */
@@ -4133,7 +4165,7 @@ select.data-table-pagination__size {
    (openclaw/openclaw#196820), and hidden popovers still pay for those searches during
    page restyles. Closing surfaces may fade on their primary side; hidden surfaces
    need no fallback. !important overrides surface-specific lists until opening.
-   Document styles keep this out of overlay.css's shadow-inlined boot JS copies. */
+   Shadow roots get the same rule from components/solid/overlay-shadow-reset.css. */
 [data-phase="closing"],
 [data-phase="hidden"] {
   position-try-fallbacks: none !important;

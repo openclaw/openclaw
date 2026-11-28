@@ -13,16 +13,13 @@ import { isPostgresSqlConnection, type EngineConnection } from "./sql-connection
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
 import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
+import { inspectUpdateRepairDriverAdmission } from "./update-repair-driver-admission.js";
 import {
   admitUpdateResultInTransaction,
   claimUpdateResultInTransaction,
 } from "./update-result-claim.js";
 import type { UpdateResultPayload } from "./update-result-payload.js";
-import {
-  inspectUpdateRepairDriverAdmission,
-  isStaleIdentitylessUpdateRun,
-  recordedUpdateRunDrivers,
-} from "./update-run-activity.js";
+import { isStaleIdentitylessUpdateRun, recordedUpdateRunDrivers } from "./update-run-activity.js";
 import { runUpdateRunAdmission } from "./update-run-admission.js";
 import { encodeRun, type UpdateRunLedgerOptions as LedgerOptions } from "./update-run-codec.js";
 import {
@@ -57,8 +54,6 @@ import {
   type UpdateRunPhase,
   type UpdateRunStep,
 } from "./update-run-record.js";
-import { isUpdateRecoveryPending } from "./update-run-recovery-schema.js";
-import { inspectRecoveryRows } from "./update-run-recovery-store.js";
 import { upsertStep } from "./update-run-step-upsert.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
 import {
@@ -480,9 +475,7 @@ export function reconcilePackageOwnerRefusal(
           db,
           query.select("run_id").where("status", "=", "running").limit(1),
         ) ||
-        inspectRecoveryRows(db).some(
-          ({ record }) => record.runId === expected.runId || isUpdateRecoveryPending(record),
-        )
+        hasStoredUpdateRecovery(db, expected.runId)
       ) {
         return false;
       }
@@ -518,11 +511,7 @@ function finishInterruptedRunInTransaction(
   status: "skipped" | "failed",
   options: LedgerOptions,
 ): UpdateRunRecord | undefined {
-  if (
-    inspectRecoveryRows(db).some(
-      ({ record }) => record.runId === expected.runId || isUpdateRecoveryPending(record),
-    )
-  ) {
+  if (hasStoredUpdateRecovery(db, expected.runId)) {
     return undefined;
   }
   return mutateRunInTransaction(

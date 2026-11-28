@@ -264,7 +264,9 @@ export function QuestionFreeText(props: QuestionFreeTextProps) {
               >
                 {/* Own answer is one more choice beside the options, so it takes their mark. */}
                 {props.question.multiSelect ? (
-                  <span class="chat-question-panel__option-marker" aria-hidden="true" />
+                  <span class="chat-question-panel__option-marker" aria-hidden="true">
+                    {props.selected ? "✓" : ""}
+                  </span>
                 ) : (
                   <RadioMark checked={props.selected} />
                 )}

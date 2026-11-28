@@ -120,6 +120,7 @@ function mockCapturedContext() {
       coordinationKey: `path:${databasePath}`,
       databasePath,
       identity: { key: `path:${databasePath}`, canonicalPath: databasePath },
+      isCurrent: () => true,
       assertCurrent: () => {},
     },
   };

@@ -1015,13 +1015,14 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     following turn falls back to full local history.
 
     When `anthropicCompactThreshold` is omitted, OpenClaw uses
-    `max(50000, floor(budget * 0.7))`, where the budget is the model's
-    `contextTokens` cap when set and its `contextWindow` otherwise. Explicit session
-    context-window choices still apply when live model discovery is unavailable.
-    With the default trigger, Anthropic compacts before local preflight compaction
-    would. If a trigger falls inside the local compaction reserve, for example
-    the 50000 minimum on a small window, local compaction may run first; that
-    only skips server compaction, never overflows. An explicit
+    `max(50000, floor(budget * 0.85))`, where the budget is the model's
+    `contextTokens` cap when set and its `contextWindow` otherwise, the same
+    fraction as client compaction. Explicit session context-window choices still
+    apply when live model discovery is unavailable. On a 200,000-token window
+    the default trigger is 170,000 tokens. If a trigger falls inside the local
+    compaction reserve, for example the 50000 minimum on a small window, local
+    compaction may run first; that only skips server compaction, never
+    overflows. An explicit
     `anthropicServerCompaction: true` delays the outer pre-run check to the
     trigger; checkpoint safety guards can still compact locally first. To
     choose a different input-token trigger:

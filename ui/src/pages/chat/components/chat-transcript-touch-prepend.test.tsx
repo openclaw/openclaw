@@ -3,9 +3,16 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
-import { contact, mountTestTranscript } from "../test-helpers/chat-transcript-native.tsx";
+import {
+  contact,
+  mountTestTranscript,
+  mountChatThread,
+} from "../test-helpers/chat-transcript-native.tsx";
 import {
   installTranscriptDomMocks,
+  flushDeferredRowPrune,
+  requireElement,
+  threadProps,
   resetTranscriptTestDom,
   type TestContentRow,
 } from "./chat-transcript.test-support.ts";
@@ -81,6 +88,66 @@ it.each([
     } finally {
       transcript.dispose();
       vi.useRealTimers();
+    }
+  },
+);
+
+it.each([false, true])(
+  "holds a real call/result regrouping during touch, shared source key=%s",
+  async (sharedSourceKey) => {
+    const transcript = createTestTranscript("touch-regroup");
+    const result = {
+      role: "toolResult",
+      toolCallId: "read-1",
+      toolName: "read",
+      content: [{ type: "text", text: "Saved file contents" }],
+      __openclaw: { id: "result", seq: 2 },
+    };
+    const answer = {
+      role: "assistant",
+      content: "The retained answer",
+      __openclaw: { id: "answer", seq: 3 },
+    };
+    const call = {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "older.md" } }],
+      __openclaw: { id: sharedSourceKey ? "result" : "call", seq: 1 },
+    };
+    const container = document.body.appendChild(document.createElement("div"));
+    const view = mountChatThread(container, transcript);
+    const props = threadProps("touch-regroup", "agent:main:touch-regroup", [result, answer], {
+      showToolCalls: true,
+    });
+    try {
+      view.render(props);
+      await flushDeferredRowPrune();
+      const bubble = requireElement(container, '.chat-bubble[data-entry-id="answer"]');
+      const owned = contact(1, bubble);
+      bubble.dispatchEvent(
+        new TouchEvent("touchstart", {
+          touches: [owned],
+          changedTouches: [owned],
+          bubbles: true,
+        }),
+      );
+      props.messages = [call, result, answer];
+      view.render(props);
+      expect(container.textContent).not.toContain("older.md");
+      expect(bubble.isConnected).toBe(true);
+      bubble.dispatchEvent(
+        new TouchEvent("touchend", {
+          touches: [],
+          changedTouches: [owned],
+          bubbles: true,
+        }),
+      );
+      view.render(props);
+      await flushDeferredRowPrune();
+      expect(container.textContent).toContain("older.md");
+      expect(container.textContent).toContain("The retained answer");
+    } finally {
+      view.unmount();
+      transcript.dispose();
     }
   },
 );

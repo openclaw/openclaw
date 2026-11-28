@@ -123,6 +123,11 @@ const enSettings = {
     },
     overview: {
       modelSelection: "Model selection",
+      modelSelectionHelp: "Choose overrides for this agent, or inherit the defaults from Models.",
+      inheritBehaviorHelp:
+        "Inherit default: use the shared setting, or the model’s own policy when no shared preference is set.",
+      editFallbackChain: "Edit fallback chain",
+      automaticFallbacks: "Default ({models})",
       primaryModel: "Primary model",
       primaryModelDefault: "Primary model (default)",
       notSet: "Not set",
@@ -134,6 +139,11 @@ const enSettings = {
       utilityModelInheritAutomatic: "Automatic",
       utilityModelDisabled: "Disabled for this agent",
       utilityModelFallbacks: "This agent's utility fallbacks: {models}",
+      subagentModel: "Subagent model",
+      subagentWithoutDefault:
+        "If neither this agent nor Models sets a subagent model, a child of the same agent keeps its starting session’s model. A child started under another agent uses that agent’s own model.",
+      subagentModelHelp:
+        "Runs subagents and agent-started sessions that run as this agent. Inherit the Models page default or choose one for this agent only.",
       inheritDefaultThinking: "Inherit default ({level})",
       fallbacks: "Fallbacks",
       addFallback: "Add fallback…",
@@ -766,6 +776,7 @@ const enSettings = {
     testProvider: "Test {provider}",
     testing: "Searching…",
     query: "Search query",
+    queryTooLong: "Shorten the search query to {limit} characters or fewer.",
     queryPlaceholder: "What would you like to find?",
     queryDefault: "OpenClaw documentation",
     success: "Search succeeded",
@@ -1097,7 +1108,7 @@ const enSettings = {
         "Sign in and enable this provider for this agent without changing the active model.",
       nativeDone: "Provider enabled. The active model has not changed.",
       setupDescription:
-        "Choose how to connect. Verifying an API key or token can also set this agent's active model.",
+        "Choose how to connect. Setup can also verify and select a model for this agent.",
       done: "Provider credentials saved.",
       statusRefreshFailed: "Sign-in saved, but refreshing status failed. Retry",
       startChat: "Start a new chat with {model}",
@@ -1221,6 +1232,11 @@ const enSettings = {
       sourceExternal: "External CLI",
       sourceInherited: "Shared account",
       sourceSaved: "Saved in OpenClaw",
+      nameManagedByConfig: "Name managed in configuration",
+      renameAccount: "Rename",
+      renameAccountFor: "Rename {account}",
+      accountName: "Account name",
+      accountNamePlaceholder: "Leave blank to use the default",
     },
     apiKey: {
       label: "API key",
@@ -1241,6 +1257,14 @@ const enSettings = {
       checkUnavailable:
         "API key saved, but OpenClaw couldn’t check it. Use Test access to try again.",
       authModeBlocked: "API key changes aren’t available with the current sign-in method.",
+    },
+    voice: {
+      title: "Talk, speech, and transcription",
+      detail:
+        "Sign in with ChatGPT doesn’t include {provider} voice. API usage is billed separately from your ChatGPT plan.",
+      providerDetail:
+        "Signing in with {provider} doesn’t include voice. Voice API usage is billed separately.",
+      status: "API key needed",
     },
     probe: {
       test: "Test access",
@@ -1271,6 +1295,18 @@ const enSettings = {
         "The saved sign-in for {provider} is removed from OpenClaw. You can add this account again later.",
       loggingOut: "Signing out…",
       done: "Signed out",
+      deviceAction: "Sign out on this device",
+      deviceActionFor: "Sign out {account} on this device",
+    },
+    disconnect: {
+      action: "Disconnect account",
+      actionFor: "{action}: {account}",
+      title: "{action}?",
+      confirm:
+        "OpenClaw asks the provider to revoke its access for {account}, then removes the saved sign-in from this Gateway. Other devices and agents that use this sign-in stop working. To remove it from this Gateway only, use Sign out on this device.",
+      failed: "Couldn’t disconnect {account}",
+      retry: "Try again",
+      manage: "Manage connected apps",
     },
     remove: {
       action: "Remove provider",
@@ -1322,6 +1358,13 @@ const enSettings = {
       automaticUnavailable: "No recommended small model",
       disabled: "Disabled",
       fallback: "Fallback model",
+      subagent: "Subagent model",
+      subagentHelpLabel: "About the subagent model",
+      subagentHelpPurpose:
+        "Runs subagents and the sessions agents start. An agent’s own subagent model, or a model named in the request, takes priority.",
+      subagentHelpInherit:
+        "Not set: a child of the same agent keeps the model of the session that started it. A child started under another agent uses that agent’s own model.",
+      subagentInherit: "Not set",
       utilityFallback: "Utility fallback model",
       utilityOverridesTitle: "Agents with their own utility settings:",
       utilityOverridesOthers: "Other agents use this default.",
@@ -1906,6 +1949,8 @@ const enSettings = {
       testAllBrowsersHint: "Tests include browsers registered by other people on this Gateway.",
       sendingTest: "Sending test…",
       updateFailed: "Couldn’t complete the notification request. Try again.",
+      retryAgentSelection: "Couldn’t confirm the selection. Reopen to review and retry.",
+      reviewAgentSelection: "Couldn’t confirm your last save. Review your selection and try again.",
       testError: "Not sent",
       testOutcome: "Test notification",
       testQueued: "Test notification queued",
@@ -2084,7 +2129,7 @@ const enSettings = {
         lobster: "Lobster",
         empty: "No lobsters unlocked in this browser yet.",
         localCollection: "Unlocked in this browser. Your collection is not synced.",
-        unavailable: "This lobster is not unlocked in this browser. Using Default until it is.",
+        unavailable: "This lobster isn’t unlocked in this browser. Using Default until it is.",
       },
       textSize: "Text size",
     },
@@ -2279,9 +2324,13 @@ const enSettings = {
       description: "These plugins add features to your memory engine. You can use more than one.",
       activeMemory: {
         title: activeMemoryPresentation.memoryAddon.label,
+        knowledgeDescription:
+          "Recalls relevant Knowledge records before a reply. Knowledge does not support private conversation transcript recall.",
       },
       memoryWiki: {
         title: memoryWikiPresentation.memoryAddon.label,
+        knowledgeDescription:
+          "Browse and search the selected agent’s Knowledge records alongside compiled wiki insights.",
       },
       toggleAriaLabel: "Enable or disable {plugin}",
       changeFailed: "Couldn’t update {plugin}. Try again.",

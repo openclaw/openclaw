@@ -70,10 +70,139 @@ struct ChatMessageReactions: View {
     }
 
     private func reactorsLabel(_ reaction: OpenClawChatReactionSummary) -> String {
-        let own = reaction.identities.filter { $0.id == self.viewModel.viewerReactionUserID }
-        let others = reaction.identities.filter { $0.id != self.viewModel.viewerReactionUserID }
+        ChatReactionNames.label(reaction, viewerID: self.viewModel.viewerReactionUserID)
+    }
+}
+
+#if os(iOS)
+/// A message's reactions as one pill: the three most used faces, then the total once there is more
+/// than one reaction. Same ranking, face limit and total as the web tab
+/// (ui/src/pages/chat/components/chat-message-reaction-chips-view.tsx).
+struct ChatReactionSummary: Equatable {
+    static let faceLimit = 3
+
+    let faces: [String]
+    /// One per person per emoji, as the Gateway counts them.
+    let total: Int
+
+    init?(_ reactions: [OpenClawChatReactionSummary]) {
+        guard !reactions.isEmpty else { return nil }
+        // Ties keep arrival order, so the faces do not reshuffle when counts match.
+        let ranked = reactions.enumerated()
+            .sorted {
+                $0.element.count != $1.element.count ? $0.element.count > $1.element.count : $0.offset < $1.offset
+            }
+        self.faces = ranked.prefix(Self.faceLimit).map(\.element.emoji)
+        self.total = reactions.reduce(0) { $0 + $1.count }
+    }
+}
+
+/// The reactions pill on both sides of the transcript: anchored on the user bubble's corner, and
+/// leading the row under an agent reply. Tapping it opens the picker, which lists who reacted with
+/// what and toggles your own reactions.
+@MainActor
+struct ChatReactionPill: View {
+    let viewModel: OpenClawChatViewModel
+    let message: OpenClawChatMessage
+    let openPicker: () -> Void
+
+    var body: some View {
+        if let messageID = self.message.transcriptMessageID,
+           let summary = ChatReactionSummary(self.viewModel.messageReactions(for: self.message))
+        {
+            if self.viewModel.canReact(to: self.message) {
+                Button(action: self.openPicker) { ChatReactionPillLabel(summary: summary) }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(self.accessibilityLabel)
+                    .accessibilityIdentifier("chat-message-reactions-\(messageID)")
+            } else {
+                ChatReactionPillLabel(summary: summary)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(self.accessibilityLabel)
+                    .accessibilityIdentifier("chat-message-reactions-\(messageID)")
+            }
+        }
+    }
+
+    private var accessibilityLabel: String {
+        self.viewModel.messageReactions(for: self.message)
+            .map { ChatReactionNames.label($0, viewerID: self.viewModel.viewerReactionUserID) }
+            .joined(separator: "; ")
+    }
+}
+
+/// One height for single and grouped reactions. On a user bubble the pill takes
+/// the bubble's own fill, and the canvas ring keeps it from melting into the bubble's edge; on the
+/// agent side the ring disappears into the canvas.
+struct ChatReactionPillLabel: View {
+    static let ring: CGFloat = 2
+
+    let summary: ChatReactionSummary
+    @ScaledMetric(relativeTo: .footnote) private var height: CGFloat = 24
+    @Environment(\.openClawReactionPillOnUserBubble) private var onUserBubble
+    @Environment(\.openClawChatUserAccent) private var userAccent
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(self.summary.faces, id: \.self) { face in
+                Text(verbatim: face)
+                    .font(OpenClawChatTypography.reactionEmoji)
+            }
+            if self.summary.total > 1 {
+                Text(self.summary.total, format: .number.notation(.compactName))
+                    .font(OpenClawChatTypography.reactionCount)
+                    .monospacedDigit()
+                    .foregroundStyle(OpenClawChatTheme.muted)
+                    .padding(.horizontal, 1)
+            }
+        }
+        .lineLimit(1)
+        .padding(.horizontal, self.summary.total > 1 ? 7 : self.onUserBubble ? 6 : 0)
+        .frame(minWidth: self.onUserBubble ? self.height + 6 : self.height, minHeight: self.height)
+        .background(self.fill, in: Capsule())
+        .padding(Self.ring)
+        .background { OpenClawChatTheme.background.clipShape(Capsule()) }
+        .contentShape(Capsule())
+        // A flexible frame takes the width it is offered; the pill never takes less than its faces.
+        .fixedSize()
+    }
+
+    private var fill: AnyShapeStyle {
+        self.onUserBubble
+            ? AnyShapeStyle(OpenClawChatTheme.userBubbleSurface(in: self.colorScheme, accent: self.userAccent))
+            : OpenClawChatTheme.subtleCard
+    }
+}
+
+extension EnvironmentValues {
+    /// Set by the user bubble for the reactions pill it anchors.
+    @Entry var openClawReactionPillOnUserBubble = false
+}
+
+/// Reaction errors stay under the message; the pill itself has no room for text.
+@MainActor
+struct ChatMessageReactionError: View {
+    let viewModel: OpenClawChatViewModel
+    let message: OpenClawChatMessage
+
+    var body: some View {
+        if let error = self.viewModel.reactionError(for: self.message) {
+            Text(error)
+                .font(OpenClawChatTypography.caption)
+                .foregroundStyle(OpenClawChatTheme.danger)
+                .accessibilityIdentifier("chat-reaction-error")
+        }
+    }
+}
+#endif
+
+enum ChatReactionNames {
+    static func label(_ reaction: OpenClawChatReactionSummary, viewerID: String?) -> String {
+        let own = reaction.identities.filter { $0.id == viewerID }
+        let others = reaction.identities.filter { $0.id != viewerID }
         let names = (own + others).map {
-            $0.id == self.viewModel.viewerReactionUserID ? String(localized: "You") : ($0.label ?? $0.id)
+            $0.id == viewerID ? String(localized: "You") : ($0.label ?? $0.id)
         }
         let shown = names.prefix(3).joined(separator: ", ")
         let label = names.count > 3
@@ -113,6 +242,11 @@ struct ChatMessageReactionPicker: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 20) {
+                #if os(iOS)
+                if !self.current.isEmpty {
+                    self.currentReactions
+                }
+                #endif
                 HStack(spacing: 6) {
                     ForEach(OpenClawChatReactionEmoji.quick, id: \.self) { emoji in
                         let selected = self.isSelected(emoji)
@@ -158,7 +292,7 @@ struct ChatMessageReactionPicker: View {
             }
             .disabled(!self.viewModel.canReact(to: self.message))
         }
-        .presentationDetents([.height(self.showsCustom ? 300 : 220)])
+        .presentationDetents([.height((self.showsCustom ? 300 : 220) + self.currentReactionsHeight)])
         .accessibilityIdentifier("chat-reaction-picker")
         .onChange(of: self.viewModel.reactionContextID) { _, _ in self.dismiss() }
         .onChange(of: self.viewModel.sessionKey) { _, _ in self.dismiss() }
@@ -167,6 +301,56 @@ struct ChatMessageReactionPicker: View {
             if !allowed { self.dismiss() }
         }
     }
+
+    private var current: [OpenClawChatReactionSummary] {
+        self.viewModel.messageReactions(for: self.message)
+    }
+
+    private var currentReactionsHeight: CGFloat {
+        #if os(iOS)
+        self.current.isEmpty ? 0 : 56
+        #else
+        0
+        #endif
+    }
+
+    #if os(iOS)
+    /// The message's reactions with their counts, as on the web picker. Tapping one adds or removes
+    /// yours; VoiceOver reads who reacted.
+    private var currentReactions: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 8) {
+                ForEach(self.current, id: \.emoji) { reaction in
+                    let selected = self.isSelected(reaction.emoji)
+                    Button { self.apply(reaction.emoji) } label: {
+                        HStack(spacing: 4) {
+                            Text(verbatim: reaction.emoji)
+                                .font(OpenClawChatTypography.body)
+                            Text(reaction.count, format: .number)
+                                .font(OpenClawChatTypography.footnoteSemiBold)
+                                .monospacedDigit()
+                                .foregroundStyle(selected ? Color.primary : OpenClawChatTheme.muted)
+                        }
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 36)
+                        .background(Color.primary.opacity(selected ? 0.12 : 0.06), in: Capsule())
+                        .overlay(Capsule().strokeBorder(Color.primary.opacity(selected ? 0.3 : 0), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(self.viewModel.isReactionPending(for: self.message, emoji: reaction.emoji))
+                    .accessibilityLabel(ChatReactionNames.label(
+                        reaction,
+                        viewerID: self.viewModel.viewerReactionUserID))
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                    .accessibilityIdentifier("chat-reaction-\(reaction.emoji)")
+                }
+            }
+        }
+        .scrollIndicators(.hidden)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(String(localized: "Current reactions"))
+    }
+    #endif
 
     private var customInput: some View {
         VStack(alignment: .leading, spacing: 8) {

@@ -1,11 +1,14 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createNodeWorkerE2eTestShards } from "../../scripts/lib/ci-changed-node-test-plan.mts";
+import { rebalanceMeasuredSerialJobs } from "../../scripts/lib/ci-measured-compact-packing.mts";
 import { listWholeConfigSplitFiles } from "../../scripts/lib/ci-node-test-inventory.mts";
 import {
+  type CompactNodeTestShard,
   createNodeTestShardBundles,
   createNodeTestShards,
-  isRuntimeTestFileIncluded,
 } from "../../scripts/lib/ci-node-test-plan.mts";
+import { isRuntimeTestFileIncluded } from "../../scripts/lib/ci-runtime-test-eligibility.mts";
 
 const options = {
   compact: true,
@@ -164,4 +167,68 @@ it.each(["push", "main", "full"] as const)("bounds hosted groups (%s)", (mode) =
   if (!mainValidation && !full) {
     expect(updateJobs[0]!.groups).toHaveLength(1);
   }
+});
+
+describe("scripts/lib/ci-node-test-plan.mts", () => {
+  type TestGroup = CompactNodeTestShard["groups"][number];
+
+  const workers = (group: Pick<TestGroup, "env"> | undefined) =>
+    group?.env?.OPENCLAW_VITEST_MAX_WORKERS;
+
+  function sortedGroups(jobs: readonly CompactNodeTestShard[]) {
+    return jobs
+      .flatMap((job) => job.groups)
+      .toSorted((a, b) => a.shard_name.localeCompare(b.shard_name));
+  }
+
+  function expectEvery<T>(items: readonly T[], predicate: (item: T) => unknown, message?: string) {
+    expect(items.every(predicate), message).toBe(true);
+  }
+
+  const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
+
+  const measuredCompactFixture = JSON.parse(
+    readFileSync(new URL("./fixtures/ci-measured-compact-jobs.json", import.meta.url), "utf8"),
+  ) as {
+    toolingJobs: CompactNodeTestShard[];
+    cliTailJob: CompactNodeTestShard;
+    cliChildJobWallSeconds: number[];
+    toolingTailJobs: CompactNodeTestShard[];
+  };
+
+  function measuredToolingFixture(): CompactNodeTestShard[] {
+    return structuredClone(measuredCompactFixture.toolingJobs);
+  }
+
+  const measuredPackingOptions = {
+    runner: DEFAULT_NODE_TEST_RUNNER,
+    estimateGroup: () => ({ seconds: 0, complete: false }),
+    canShare: (groups: CompactNodeTestShard["groups"]) => {
+      const families = groups.map((group) => group.shard_name.replace(/-hosted-\d+$/u, ""));
+      return groups.length <= 10 && new Set(families).size === families.length;
+    },
+  };
+
+  it("packs within 300 test seconds while retaining indivisible native-wall outliers", () => {
+    const before = measuredToolingFixture();
+    const after = rebalanceMeasuredSerialJobs(before, measuredPackingOptions);
+    expect(after).toHaveLength(10);
+    expect(sortedGroups(after)).toEqual(sortedGroups(before));
+    expect(Math.max(...after.map((job) => job.predictedSeconds!))).toBe(351);
+    expectEvery(
+      after.filter((job) => job.groups.length > 1),
+      (job) => job.predictedSeconds! <= 300,
+    );
+    expectEvery(
+      after.filter((job) => job.predictedSeconds! > 300),
+      (job) => job.groups.length === 1,
+    );
+    expectEvery(
+      after,
+      (job) =>
+        job.planConcurrency === 1 &&
+        job.timeoutMinutes === 20 &&
+        (workers(job) === "2" || job.groups.every((group) => workers(group) === "2")),
+    );
+  });
 });

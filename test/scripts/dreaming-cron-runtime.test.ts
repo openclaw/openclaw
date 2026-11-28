@@ -15,19 +15,19 @@ function grantRevision(value: object) {
 
 function fixture() {
   const schedule = { expr: "17 12 20 10 *", kind: "cron", tz: "UTC" };
-  const row = (id: string, ordinal: number, timestamp: number, enabled = false) => {
+  const row = (id: string, ordinal: number, timestamp: number, reconciled = false) => {
     const grant = {
       id,
       description: "Migrated automation",
       wakeMode: "now",
-      schedule: enabled ? schedule : { everyMs: 1_800_000, kind: "every" },
+      schedule: reconciled ? schedule : { everyMs: 1_800_000, kind: "every" },
     };
     return {
       store_key: "active",
       job_id: id,
       description: grant.description,
-      enabled: Number(enabled),
-      job_json: JSON.stringify({ ...grant, enabled, state: {} }),
+      enabled: 0,
+      job_json: JSON.stringify({ ...grant, enabled: false, state: {} }),
       state_json: "{}",
       schedule_identity: "{}",
       sort_order: ordinal,
@@ -49,14 +49,11 @@ function fixture() {
   Object.assign(after[1], {
     ...row("dreaming", after[1].sort_order, Math.max(after[1].runtime_updated_at_ms, 2000), true),
     state_json: JSON.stringify({
-      consecutiveErrors: 0,
-      scheduleErrorCount: 0,
-      nextRunAtMs: 3000,
       scheduleActivatedAtMs: 2000,
     }),
     schedule_identity: JSON.stringify({
       version: 2,
-      enabled: true,
+      enabled: false,
       schedule,
       hasTrigger: false,
     }),
@@ -89,6 +86,7 @@ describe("dreaming runtime persistence assertion", () => {
     ["authored timestamp projection", change(2, { updated_at: 1010 })],
     ["authored JSON reserialization", (rows: Rows) => (rows[2].job_json += " ")],
     ["inactive partition rewrite", change(3, { updated_at: 1001 })],
+    ["paused dreaming job re-enabled", change(1, { enabled: 1 })],
     ["changed row ordinal rewrite", change(1, { sort_order: 1 })],
     ["regressed future timestamp", change(1, { updated_at: 2000 })],
     ["stale changed definition grant", change(1, { grant_definition_generation: 3 })],

@@ -318,12 +318,12 @@ export function registerQueuedReservationFailureTests({
     "tombstone write",
     "claim release",
     "session replacement at intent",
-    "session replacement release",
+    "session replacement at tombstone",
     "session replacement",
     "row replacement",
     "lifecycle rotation",
     "parent persistence",
-  ])("releases or withdraws the exact queued reservation after %s failure", async (failure) => {
+  ])("releases or withdraws the exact queued reservation after %s", async (failure) => {
     const { controllerSessionKey } = controlController;
     let entry = createSubagentRunRecord({
       runId: "failure-queued",
@@ -369,7 +369,7 @@ export function registerQueuedReservationFailureTests({
                   );
                 }
                 if (
-                  ["tombstone write", "claim release", "session replacement release"].includes(
+                  ["tombstone write", "claim release", "session replacement at tombstone"].includes(
                     failure,
                   ) &&
                   writeNumber === 2
@@ -380,7 +380,7 @@ export function registerQueuedReservationFailureTests({
               }
               const receipt = await scope.execute(command);
               if (
-                ["session replacement", "session replacement release"].includes(failure) &&
+                ["session replacement", "session replacement at tombstone"].includes(failure) &&
                 writeNumber === 1
               ) {
                 replaceSessionEntrySync(
@@ -448,18 +448,25 @@ export function registerQueuedReservationFailureTests({
         await expect(pending).rejects.toThrow("partial persistence failed");
       } else {
         const result = await pending;
-        expect(result.killed).toBe(0);
-        expect(result.status).toBe(
-          ["row replacement", "lifecycle rotation"].includes(failure) ? "ok" : "error",
+        const settledRotation = ["session replacement at intent", "session replacement"].includes(
+          failure,
         );
-        if (failure === "session replacement release") {
+        expect(result.killed).toBe(settledRotation ? 1 : 0);
+        expect(result.status).toBe(
+          settledRotation || ["row replacement", "lifecycle rotation"].includes(failure)
+            ? "ok"
+            : "error",
+        );
+        if (failure === "session replacement at tombstone") {
           expect(rejectedWrite).toBe(2);
           expect(result).toMatchObject({
-            error: expect.stringContaining("kill intent could not be released"),
+            error: expect.stringContaining("Failed to persist subagent kill tombstone"),
           });
         }
       }
-      if (["tombstone write", "claim release", "session replacement release"].includes(failure)) {
+      if (
+        ["tombstone write", "claim release", "session replacement at tombstone"].includes(failure)
+      ) {
         expect(subagentRuns.get(entry.runId)?.killIntent).toMatchObject({ reason: "killed" });
         const survivor = vi.fn(async () => {});
         enqueueControlRun("failure-lane", "survivor", [], survivor);
@@ -469,6 +476,10 @@ export function registerQueuedReservationFailureTests({
         expect(subagentRuns.get(entry.runId)?.collectorCompletion).toMatchObject({
           status: "killed",
         });
+        expect(dispatch).not.toHaveBeenCalled();
+      } else if (["session replacement at intent", "session replacement"].includes(failure)) {
+        expect(subagentRuns.get(entry.runId)?.killIntent).toBeUndefined();
+        expect(subagentRuns.get(entry.runId)?.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
         expect(dispatch).not.toHaveBeenCalled();
       } else {
         expect(subagentRuns.get(entry.runId)?.killIntent).toBeUndefined();

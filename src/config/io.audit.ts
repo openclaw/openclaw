@@ -467,6 +467,7 @@ export async function scrubConfigAuditLog(params: {
     await replaceFileAtomic({
       filePath: path.join(directory, path.basename(auditPath)),
       content: outLines.join("\n"),
+      allowDrvfsRenameRecovery: true,
       mode: 0o600 & ~process.umask(),
       dirMode: "preserve",
       beforeRename: async ({ filePath }) => {

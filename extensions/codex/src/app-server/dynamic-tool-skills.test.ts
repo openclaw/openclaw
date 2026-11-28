@@ -24,11 +24,15 @@ beforeEach(async () => {
 
 afterEach(() => cleanupDynamicToolBuildFixture(tempDir, hostCapabilityClosers));
 
-it.each(["allowed", "denied", "oversized"])(
-  "preserves the %s skill-read result through the dynamic tool bridge",
+// "attempt-budget": the attempt budget (16k tokens) is smaller than the model window. A ~12k
+// skill passed the per-result cap but not the context share, so it was later cut while
+// reported as a success.
+it.each(["allowed", "denied", "oversized", "oversized-multiline", "attempt-budget"])(
+  "delivers whole skills or refuses %s reads through the dynamic tool bridge",
   async (mode) => {
     const denied = mode === "denied";
-    const oversized = mode === "oversized";
+    const attemptBudget = mode === "attempt-budget";
+    const oversized = mode.startsWith("oversized") || attemptBudget;
     const workspaceDir = tempDir;
     const params = createParams(path.join(tempDir, "skills-session.jsonl"), workspaceDir, {
       runtimePlan: createCodexRuntimePlanFixture(),
@@ -45,9 +49,11 @@ it.each(["allowed", "denied", "oversized"])(
       source: "test",
       sourceInfo: { source: "test", scope: "temporary", origin: "top-level", path: "/s" } as const,
       disableModelInvocation: false,
-      readContent: oversized
-        ? `# Release\n\n${"Complete instructions. ".repeat(5_000)}\nEND OF SKILL`
-        : "# Release\n\nComplete instructions.\n",
+      readContent: attemptBudget
+        ? `# Release\n\n${"Complete instructions. ".repeat(520)}\nEND OF SKILL`
+        : oversized
+          ? `# Release\n\n${(mode === "oversized-multiline" ? "Complete instructions.\n" : "Complete instructions. ").repeat(5_000)}\nEND OF SKILL`
+          : "# Release\n\nComplete instructions.\nEND OF SKILL\n",
     };
     params.skillsSnapshot = {
       prompt: "",
@@ -61,7 +67,12 @@ it.each(["allowed", "denied", "oversized"])(
       tools,
       signal: new AbortController().signal,
       loading: "direct",
-      hookContext: { sessionKey: params.sessionKey, runId: params.runId, workspaceDir },
+      hookContext: {
+        sessionKey: params.sessionKey,
+        runId: params.runId,
+        workspaceDir,
+        contextWindowTokens: attemptBudget ? 16_000 : params.model.contextWindow,
+      },
     });
     const guidance = renderCodexSkillsInstructions({
       attempt: params,
@@ -81,18 +92,35 @@ it.each(["allowed", "denied", "oversized"])(
       expect(guidance).toContain("skills_search");
       expect(guidance).toContain("skills_read");
       expect(guidance).not.toContain("skills.read(");
+      // Name lookup and description search are callable, so the listed catalog is names only.
+      const catalog = renderCodexSkillsInstructions({
+        attempt: params,
+        dynamicTools: bridge.availableSpecs,
+        skillsPrompt: [
+          "<available_skills>",
+          "  <skill>",
+          `    <name>${skill.name}</name>`,
+          `    <description>${skill.description}</description>`,
+          `    <location>${skill.filePath}</location>`,
+          "  </skill>",
+          "</available_skills>",
+        ].join("\n"),
+      });
+      expect(catalog).toContain(`- "${skill.name}"`);
+      expect(catalog).not.toContain(skill.description);
+      expect(catalog).not.toContain(skill.filePath);
     }
     const result = await call("skills_search", { query: "publish release" });
     expect(result.success).toBe(!denied);
     if (!denied) {
       expect(JSON.stringify(result)).toContain("release-guide");
       const read = await call("skills_read", { name: "release-guide" });
-      expect(read.success).toBe(true);
+      expect(read.success).toBe(!oversized);
       if (oversized) {
-        expect(read.diagnosticTerminalType).toBe("completed");
+        expect(read.diagnosticTerminalType).toBe("error");
         const text = JSON.stringify(read.contentItems);
-        expect(text).toContain("Skill instructions incomplete:");
-        expect(text).toContain("read the rest");
+        expect(text).toContain("cannot deliver the whole skill");
+        expect(text).not.toContain("Complete instructions.");
         expect(text).not.toContain("END OF SKILL");
       } else {
         const text = `Skill location: ${skill.filePath}\nResolve relative resource paths from the directory containing this SKILL.md.\n\n${skill.readContent}`;

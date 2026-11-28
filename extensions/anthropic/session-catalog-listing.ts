@@ -4,7 +4,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import {
   publishSessionCatalogHost,
-  type SessionCatalogProvider,
+  type SessionCatalogListProviderParams,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_LOCAL_SESSION_HOST_ID } from "./session-catalog-adoption.js";
@@ -56,10 +56,31 @@ export async function listLocalClaudeSessionPage(
   value: unknown,
   homeDir?: string,
   scanOptions?: { configDir?: string; includeDesktop?: boolean },
+  exportSource?: SessionCatalogListProviderParams["exportSource"],
 ): Promise<ClaudeSessionCatalogPage> {
   const resolvedHome = homeDir ?? resolveClaudeCatalogHomeDir();
   const resolvedScanOptions =
     scanOptions ?? (homeDir === undefined ? gatewayClaudeScanOptions(true) : {});
+  if (exportSource) {
+    // A saved locator is bound to one physical transcript. A free-text page or
+    // a truncated general scan cannot establish that the selected file is gone.
+    if (!exportSource.sourceHomeId) {
+      return { sessions: [] };
+    }
+    const { records } = await listClaudeSessions(resolvedHome, {
+      ...resolvedScanOptions,
+      sessionId: exportSource.threadId,
+    });
+    return {
+      sessions: records
+        .filter(
+          (record) =>
+            record.threadId === exportSource.threadId &&
+            record.sourceHomeId === exportSource.sourceHomeId,
+        )
+        .map(({ filePath: _filePath, ...session }) => session),
+    };
+  }
   const params = readListParams(value);
   const offset = decodeOffset(params.cursor, "catalog");
   const search = params.searchTerm?.toLocaleLowerCase();
@@ -103,21 +124,25 @@ export async function readLocalClaudeTranscriptPage(
   value: unknown,
   homeDir?: string,
   scanOptions?: { configDir?: string; includeDesktop?: boolean },
+  sourceHomeId?: string,
 ): Promise<Omit<ClaudeSessionTranscriptPage, "hostId" | "label">> {
   const resolvedHome = homeDir ?? resolveClaudeCatalogHomeDir();
   const resolvedScanOptions =
     scanOptions ?? (homeDir === undefined ? gatewayClaudeScanOptions(true) : {});
   const params = readTranscriptParams(value);
   const lookupOptions = { ...resolvedScanOptions, sessionId: params.threadId };
+  const matches = (record: { threadId: string; sourceHomeId?: string }) =>
+    record.threadId === params.threadId &&
+    (sourceHomeId === undefined || sourceHomeId === record.sourceHomeId);
   let filePath = (await listClaudeSessions(resolvedHome, lookupOptions)).records.find(
-    (record) => record.threadId === params.threadId,
+    matches,
   )?.filePath;
   if (!filePath) {
     // A just-created session can race the stamp snapshot. Specific reads must retry against disk so
     // opening a new thread never fails only because the assembled catalog is still warm.
     filePath = (
       await listClaudeSessions(resolvedHome, { ...lookupOptions, forceRefresh: true })
-    ).records.find((record) => record.threadId === params.threadId)?.filePath;
+    ).records.find(matches)?.filePath;
   }
   if (!filePath) {
     throw new ClaudeCatalogParamsError("Claude session is unavailable");
@@ -221,7 +246,8 @@ export async function listClaudeSessionCatalog(params: {
   runtime: PluginRuntime;
   query?: unknown;
   allowProcessHomeFallback?: boolean;
-  listNodes?: Parameters<SessionCatalogProvider["list"]>[0]["listNodes"];
+  listNodes?: SessionCatalogListProviderParams["listNodes"];
+  exportSource?: SessionCatalogListProviderParams["exportSource"];
   onHost?: (host: ClaudeSessionCatalogHost) => void;
   waitUntil?: (completion: Promise<void>) => void;
   signal?: AbortSignal;
@@ -254,6 +280,7 @@ export async function listClaudeSessionCatalog(params: {
                   },
                   resolveClaudeCatalogHomeDir(),
                   scanOptions,
+                  params.exportSource,
                 )),
               };
             } catch {
@@ -374,6 +401,7 @@ export async function listClaudeSessionCatalog(params: {
 }
 
 export async function readClaudeSessionTranscript(params: {
+  sourceHomeId?: string;
   runtime: PluginRuntime;
   hostId: string;
   threadId: string;
@@ -395,6 +423,7 @@ export async function readClaudeSessionTranscript(params: {
         },
         resolveClaudeCatalogHomeDir(),
         gatewayClaudeScanOptions(params.allowProcessHomeFallback),
+        params.sourceHomeId,
       )),
     };
   }

@@ -482,7 +482,10 @@ export function useSessionMenuEntries(
       ...(state.involvingMeContext ? involvement() : []),
       ...(!batch() && !actions.actionExtraDisabled("snooze")
         ? [
-            isSessionSnoozed({ snoozedUntil: state.session.snoozedUntil ?? undefined }, Date.now())
+            isSessionSnoozed(
+              { snoozedUntil: state.session.snoozedUntil ?? undefined },
+              state.session.snoozeTime ?? Date.now(),
+            )
               ? item({
                   kind: "wake",
                   label: `${t("sessionsView.wakeSession")} · ${formatSessionSnoozeWakeTime(state.session.snoozedUntil!)}`,

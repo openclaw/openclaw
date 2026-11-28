@@ -155,6 +155,7 @@ export function SidebarPanelLauncher(props: {
                     aria-disabled={!type().available ? "true" : undefined}
                     onClick={() => {
                       if (type().available) {
+                        type().prepare?.();
                         props.onOpen(type().slot);
                       }
                     }}
@@ -257,12 +258,14 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
       trigger={<Icon name="plus" />}
       items={entries()()}
       onSelect={(item) => {
-        const slot = props.panelDefinitions.find(
+        const definition = props.panelDefinitions.find(
           (type) => type.available && type.slot === item.id,
-        )?.slot;
-        if (!slot) {
+        );
+        if (!definition) {
           return;
         }
+        definition.prepare?.();
+        const slot = definition.slot;
         const alreadyOpen = openSlots().has(slot);
         props.callbacks?.openSlot(slot);
         const request = HOSTED_TAB_REQUESTS.find(([panel]) => panel === slot);

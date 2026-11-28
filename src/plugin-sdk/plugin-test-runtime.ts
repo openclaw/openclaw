@@ -11,6 +11,8 @@ import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
 
+export { createAgentHarnessCompletionScope as createAgentHarnessCompletionScopeForTest } from "../agents/agent-harness-completion-scope.js";
+
 /** Builds a bundled-plugin Gateway runtime backed by the real session projection and handlers. */
 export async function createTestPluginGatewayRuntime(params: {
   pluginId: string;
@@ -85,7 +87,7 @@ type AgentHarnessHostTestAttempt = Omit<
 
 type PluginHarnessTestOperatorSource = Pick<
   AdmittedRunOperatorAuthority,
-  "profileId" | "scopes" | "assertCurrent" | "modelPolicy" | "onModelPolicyChanged"
+  "profileId" | "scopes" | "modelPolicy"
 >;
 
 async function admitPluginHarnessRunForTest(params: {
@@ -98,10 +100,15 @@ async function admitPluginHarnessRunForTest(params: {
     createOperationalRunInstanceRef,
     prepareAgentRunAdmission,
   } = await import("../agents/admitted-run-context.js");
+  const { decideTurnGrant } = await import("../gateway/operator-admission.js");
   const admission = prepareAgentRunAdmission({
     cfg: params.attempt.config ?? {},
     operatorAuthority: params.operatorSource
-      ? createAdmittedRunOperatorAuthority({ ...params.operatorSource, canonicalIdentity: null })
+      ? createAdmittedRunOperatorAuthority({
+          ...params.operatorSource,
+          canonicalIdentity: null,
+          grant: decideTurnGrant(params.operatorSource.scopes),
+        })
       : undefined,
     facts: {
       runId: params.attempt.runId,

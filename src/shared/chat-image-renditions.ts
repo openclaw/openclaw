@@ -2,6 +2,9 @@ const CHAT_IMAGE_RENDITION_WIDTHS = [480, 960, 1920] as const;
 
 export type ChatImageRenditionWidth = (typeof CHAT_IMAGE_RENDITION_WIDTHS)[number];
 
+// Both chat media routes use immutable thumbnail URLs.
+export const CHAT_IMAGE_RENDITION_VERSION = "5";
+
 export const DEFAULT_CHAT_IMAGE_RENDITION_WIDTH: ChatImageRenditionWidth = 960;
 
 export const CHAT_IMAGE_RENDITION_MAX_BYTES = {

@@ -30,6 +30,7 @@ import {
 } from "../cron-creator-authority-grant.js";
 import { retainCronControlSource } from "../cron-operator-source.js";
 import type { OperatorRunRecoverySnapshot } from "../operator-run-recovery-source.codec.js";
+import { cronAcknowledgeFailureHandler } from "./cron-acknowledge-failure.js";
 import { cronAddHandler } from "./cron-add.js";
 import { cronBindHandler } from "./cron-bind.js";
 import {
@@ -103,6 +104,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       preserveCronGetWireMessage: true,
     },
   ),
+  "cron.acknowledgeFailure": cronAcknowledgeFailureHandler,
   ...cronScratchHandlers,
   "cron.add": cronAddHandler,
   "cron.bind": cronBindHandler,
@@ -116,9 +118,6 @@ export const cronHandlers: GatewayRequestHandlers = {
     hasCurrentClientAuthority,
   }) => {
     sessionMutationCommitGuard?.();
-    if (hasCurrentClientAuthority?.() === false) {
-      throw new Error("Automation caller authority is no longer active");
-    }
     let candidate: unknown;
     let normalizedPatch: CronJobPatch | null;
     try {
@@ -180,7 +179,11 @@ export const cronHandlers: GatewayRequestHandlers = {
         : callerScope && { ...callerScope, manageAll: undefined };
     let capture: ReturnType<typeof resolveCronCreatorAuthorityCapture>;
     let inference: Awaited<ReturnType<typeof captureCronUpdatedInferenceBinding>>;
-    let operatorCapture: Awaited<ReturnType<typeof captureCronCreatorSession>> | undefined;
+    let operatorCapture:
+      | (Awaited<ReturnType<typeof captureCronCreatorSession>> & {
+          assertOperatorSourceCurrent?: () => void;
+        })
+      | undefined;
     // The native process is authorized by whoever approves it now; the payload keeps its requester.
     let processSource: OperatorRunRecoverySnapshot | undefined;
     let operatorSourceExecutionRevision: string | undefined;
@@ -286,6 +289,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         client?.internal?.openclawIdPrincipal ||
         sealed?.source.kind === "gateway" ||
         sealed?.source.snapshot.openclawIdPrincipal ||
+        sealed?.source.snapshot.participationCeiling ||
         currentJob.streamOperatorSource,
       );
       if (
@@ -389,7 +393,6 @@ export const cronHandlers: GatewayRequestHandlers = {
           client,
           callerScope,
           sessionMutationCommitGuard,
-          hasCurrentClientAuthority,
           retainExecutionPolicy: true,
         });
         if (!updateOptions) {
@@ -556,7 +559,9 @@ export const cronHandlers: GatewayRequestHandlers = {
             commitGuard,
             () => {
               if (readCronCallerScope(client)?.currentJobId !== jobId) {
-                throw new TypeError("cron self-removal authority is no longer active");
+                throw new TypeError(
+                  "This cron run no longer owns the job; remove it from the Cron page.",
+                );
               }
             },
           );

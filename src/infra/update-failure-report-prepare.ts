@@ -1,7 +1,6 @@
 /** Sanitizes and prepares one explicitly reviewed update-failure report. */
 import { isIP } from "node:net";
 import { constants } from "node:os";
-import path from "node:path";
 import { valid as validSemver } from "semver";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -9,52 +8,36 @@ import {
   redactPublicSupportConfigKey,
   redactPublicSupportDiagnosticLine,
   redactPublicSupportVersion,
-  redactSupportDiagnosticLine,
   redactSupportString,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
-import { classifyUpdateOutcome } from "../shared/update-outcome-classification.js";
+import { isReportableUpdateRun } from "../shared/update-outcome-classification.js";
 import { UPDATE_FOREIGN_DESTINATION_REASON } from "../shared/update-outcome.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { VERSION } from "../version.js";
 import { sha256Hex } from "./crypto-digest.js";
 import { prepareGithubIssue, type PreparedGithubIssue } from "./github-issue.js";
 import { PACKAGE_REFUSAL_CODES } from "./package-update-refusal.js";
-import { normalizeUpdateChannel } from "./update-channels.js";
-import { normalizeUpdateDoctorLintFindings } from "./update-doctor-lint.js";
 import {
   formatUpdateFailureFact,
   selectUpdateFailureReportSteps,
   UPDATE_DESTINATION_RECOVERY,
 } from "./update-failure-facts-format.js";
 import { normalizeUpdateFailureFacts } from "./update-failure-facts.js";
-import { isPublicUpdateFailureCode } from "./update-failure-public-codes.js";
 import { projectPublicUpdateFailureIdentifiers } from "./update-failure-public-identifiers.js";
-import { formatNpmFailureFacts } from "./update-npm-failure.js";
 import {
-  updatePreflightDetailMessage,
-  UPDATE_HANDOFF_BEFORE_TRANSFER_DETAIL,
-} from "./update-preflight-details.js";
+  formatNpmFailureFacts,
+  isPublicReleaseVersion,
+  isPublicUpdateSelector,
+  publicNpmPackageSpec,
+} from "./update-npm-failure.js";
+import { updatePreflightDetailMessage } from "./update-preflight-details.js";
 import { classifyUpdateRunCause } from "./update-run-cause.js";
 import {
   LEGACY_UPDATE_RUN_ADVISORY,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
 } from "./update-run-legacy-expiry.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
-import { readUpdateRunReportHealth } from "./update-run-report-health.js";
-import {
-  formatUpdateRunRecovery,
-  formatUpdateRunCurrentHealth,
-  formatUpdateRunIdentity,
-  updateRunReportInputFromResult,
-} from "./update-run-report.js";
-import { updateRunStepKey } from "./update-run-step-key.js";
-import {
-  isFailedUpdateStep,
-  projectUpdateRunResultSteps,
-  updateRunWarningMessages,
-} from "./update-run-step.js";
-import type { UpdateRunResult } from "./update-runner-types.js";
 import { resolvePublicUpdateStepId } from "./update-step-identity.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
@@ -64,18 +47,6 @@ const UPDATE_REPORT_FIELD_MAX_BYTES = 512;
 export type PreparedUpdateFailureReport = PreparedGithubIssue & {
   attemptId: string;
   previewDigest: string;
-  savedReportPath: string;
-  url?: string;
-};
-
-export type UpdateFailureReportInput = {
-  attemptId: string;
-  error?: string;
-  result: UpdateRunResult;
-  action?: "cli";
-  recordedRun?: Pick<UpdateRunRecord, "runId" | "steps"> &
-    Partial<Pick<UpdateRunRecord, "trigger" | "reason" | "target" | "after" | "verification">>;
-  target?: string;
 };
 
 type UpdateFailureReportContext = SupportRedactionContext;
@@ -135,165 +106,81 @@ type ReportedFailedStep = Pick<
   "name" | "exitCode" | "termination" | "failureFacts" | "stderrTail"
 > & { detail?: string; signal?: string | null };
 
-function resolveFailedSteps(input: UpdateFailureReportInput): ReportedFailedStep[] {
-  const direct = new Map(input.result.steps.map((step) => [updateRunStepKey(step.name), step]));
-  const recorded = input.recordedRun?.runId === input.attemptId ? input.recordedRun.steps : [];
-  const recordedNames = new Set(recorded.map((step) => updateRunStepKey(step.step)));
-  // The ledger orders recovery after the initial failure; measured results enrich it in place.
-  return [
-    ...Array.from(direct.values()).filter(
-      (step) => isFailedUpdateStep(step) && !recordedNames.has(updateRunStepKey(step.name)),
-    ),
-    ...recorded.flatMap((step): ReportedFailedStep[] => {
-      const measured = direct.get(updateRunStepKey(step.step));
-      if (measured ? !isFailedUpdateStep(measured) : step.status !== "failed") {
-        return [];
-      }
-      // Compact sentinel steps must not erase diagnostics already recorded by the run owner.
-      return [
-        {
-          name: measured?.name ?? step.step,
-          exitCode: measured?.exitCode ?? step.exitCode ?? null,
-          failureFacts: measured?.failureFacts?.length ? measured.failureFacts : step.failureFacts,
-          detail: step.detail,
-          termination: measured?.termination ?? step.termination,
-          signal: measured?.signal ?? step.signal,
-          stderrTail: measured?.stderrTail?.trim() ? measured.stderrTail : step.stderrTail,
-        },
-      ];
-    }),
-  ];
+function resolveFailedSteps(input: UpdateRunRecord): ReportedFailedStep[] {
+  return input.steps
+    .filter((step) => step.status === "failed")
+    .map((step) => ({
+      name: step.step,
+      exitCode: step.exitCode ?? null,
+      termination: step.termination,
+      signal: step.signal,
+      failureFacts: step.failureFacts,
+      detail: step.detail,
+      stderrTail: step.stderrTail,
+    }));
 }
 
-function resolveUpdateTarget(
-  input: UpdateFailureReportInput,
-  context: UpdateFailureReportContext,
-): string {
-  const explicit =
-    input.target?.trim() ||
-    input.recordedRun?.target?.sha ||
-    input.recordedRun?.target?.version ||
-    input.recordedRun?.target?.tag ||
-    input.recordedRun?.target?.channel;
-  if (explicit) {
-    // update.run records these two display forms from validated campaign facts.
-    // Revalidate their scalar payloads before adding the fixed display words.
-    const version = explicit.startsWith("version ") ? explicit.slice("version ".length) : null;
-    if (version && !/\s/u.test(version) && validSemver(version)) {
-      return `version ${sanitizeReportField(version, context)}`;
-    }
-    const channel = explicit.endsWith(" channel")
-      ? normalizeUpdateChannel(explicit.slice(0, -" channel".length))
-      : null;
-    if (channel) {
-      return `${channel} channel`;
-    }
-    return sanitizeReportField(explicit, context);
+// Fork versions, custom tags and build IDs can name private projects or hosts; publish the
+// release shapes OpenClaw writes and a placeholder otherwise.
+function publicCommit(value: string): string {
+  return /^[0-9a-f]{7,64}$/u.test(value) ? value : "[redacted-sha]";
+}
+
+function publicBuildId(value: string): string {
+  const version =
+    /^(.+?)-(?:release-)?[0-9a-f]{12}-\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d(?:\.\d+)?Z$/u.exec(value)?.[1];
+  return version && isPublicReleaseVersion(version) ? value : "[redacted-build]";
+}
+
+function resolveUpdateTarget(input: UpdateRunRecord): string {
+  const { sha, version, tag, channel } = input.target;
+  if (sha) {
+    return publicCommit(sha);
   }
-  return truncateUtf8Prefix(
-    `exact target unavailable; mode: ${sanitizeReportField(resolveUpdateMode(input), context)}`,
-    UPDATE_REPORT_FIELD_MAX_BYTES,
-  );
-}
-
-function resolveUpdateMode(input: UpdateFailureReportInput): string {
-  return input.result.mode === "unknown"
-    ? (input.recordedRun?.target?.kind ?? "unknown")
-    : input.result.mode;
-}
-
-function resolveRecoveryOutcome(
-  { verification, steps }: ReturnType<typeof updateRunReportInputFromResult>,
-  context: UpdateFailureReportContext,
-): string {
-  const recovery = verification.recovery;
-  const observation = steps.findLast((step) => step.step === "gateway recovery verification");
-  return (
-    formatUpdateRunRecovery(
-      {
-        ...verification,
-        recovery: recovery?.serviceRestartSafe
-          ? { ...recovery, version: redactPublicSupportVersion(recovery.version) }
-          : recovery,
-        runningVersion: verification.runningVersion
-          ? redactPublicSupportVersion(verification.runningVersion)
-          : undefined,
-      },
-      observation && {
-        exitCode: observation.exitCode,
-        failureFacts: observation.failureFacts?.map((fact) => ({
-          check: fact.check,
-          code: isPublicUpdateFailureCode(fact.code) ? fact.code : "gateway-probe-failed",
-        })),
-      },
-      sanitizeReportField(recovery?.reason ?? "not-recorded", context, 96),
-    ) ??
-    (verification.rollbackOutcome?.status === "not-needed" &&
-    verification.rollbackOutcome.reason === UPDATE_HANDOFF_BEFORE_TRANSFER_DETAIL
-      ? UPDATE_HANDOFF_BEFORE_TRANSFER_DETAIL
-      : undefined) ??
-    (steps.some(
-      (step) => step.step === "finalize:package-rollback-not-needed" && step.status === "skipped",
-    )
-      ? "package rollback not needed: no package mutation"
-      : "not recorded")
-  );
+  const selector = version || tag || channel;
+  if (!selector) {
+    return "not-recorded";
+  }
+  return isPublicUpdateSelector(selector) ? selector : "[redacted-tag]";
 }
 
 async function renderBoundedDiagnostics(
-  input: UpdateFailureReportInput,
+  input: UpdateRunRecord,
   context: UpdateFailureReportContext,
   steps: ReportedFailedStep[],
 ): Promise<string[]> {
   const diagnostics = [
-    `Result: ${input.result.status}`,
-    `Update mode: ${sanitizeReportField(resolveUpdateMode(input), context)}`,
-    `Reason code: ${sanitizeReportField(input.result.reason ?? "unknown", context)}`,
-    // A closed enum: the one diagnostic line that redaction never hides.
+    `Result: ${input.status}`,
+    `Update mode: ${sanitizeReportField(input.target.kind ?? "unknown", context)}`,
+    `Reason code: ${sanitizeReportField(input.reason ?? "unknown", context)}`,
     `Cause: ${classifyUpdateRunCause({
-      status: input.result.status === "error" ? "failed" : "succeeded",
-      reason: input.result.reason,
+      status: input.status,
+      reason: input.reason,
       facts: steps.flatMap((step) => step.failureFacts ?? []),
     })}`,
   ];
-  if (input.error?.trim()) {
-    diagnostics.push(
-      `Error: ${truncateUtf8Prefix(redactPublicSupportDiagnosticLine(input.error, context), 200)}`,
-    );
-  }
-  if (input.result.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON) {
+  if (input.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON) {
     diagnostics.push(`Advisory: ${LEGACY_UPDATE_RUN_ADVISORY}`);
   }
-  if (input.result.reason === UPDATE_FOREIGN_DESTINATION_REASON) {
+  if (input.reason === UPDATE_FOREIGN_DESTINATION_REASON) {
     diagnostics.push(`Next step: ${UPDATE_DESTINATION_RECOVERY}`);
-  }
-  for (const finding of normalizeUpdateDoctorLintFindings(
-    input.result.steps.flatMap((step) => step.doctorLintFindings ?? []),
-    context.env,
-  )) {
-    const { check } = await projectPublicUpdateFailureIdentifiers({
-      check: finding.checkId,
-      code: "doctor-failed",
-    });
-    const severity =
-      finding.severity === "warning" || finding.severity === "info" ? finding.severity : "error";
-    diagnostics.push(
-      `Doctor lint ${severity} [${check}]: ${redactPublicSupportDiagnosticLine([finding.requirement, finding.message].filter(Boolean).join(": "), context)}`,
-    );
   }
   // Reviewed identity facts also bind consent when the run ID stays the same.
   for (const [label, identity] of [
-    ["Before", input.result.before],
-    ["After", input.result.after],
+    ["Before", input.before],
+    ["After", input.after],
   ] as const) {
-    for (const field of ["version", "sha"] as const) {
-      if (identity?.[field]) {
-        diagnostics.push(`${label} ${field}: ${sanitizeReportField(identity[field], context)}`);
-      }
+    if (identity?.version) {
+      diagnostics.push(
+        `${label} version: ${isPublicReleaseVersion(identity.version) ? identity.version : "[redacted-version]"}`,
+      );
+    }
+    if (identity?.sha) {
+      diagnostics.push(`${label} sha: ${publicCommit(identity.sha)}`);
     }
   }
-  if (input.result.after?.buildId) {
-    diagnostics.push(`After build: ${sanitizeReportField(input.result.after.buildId, context)}`);
+  if (input.after?.buildId) {
+    diagnostics.push(`After build: ${publicBuildId(input.after.buildId)}`);
   }
   for (const step of selectUpdateFailureReportSteps(steps)) {
     const phase = sanitizeFactIdentifier(step.name, context);
@@ -345,7 +232,7 @@ async function renderBoundedDiagnostics(
     const diagnostic = refused
       ? "[redacted-diagnostic]"
       : npm
-        ? [npm.npmErrorCode, npm.packageSpec].filter(Boolean).join(" ")
+        ? [npm.npmErrorCode, publicNpmPackageSpec(npm.packageSpec)].filter(Boolean).join(" ")
         : truncateUtf8Prefix(
             [
               ...new Set(
@@ -372,10 +259,11 @@ async function renderBoundedDiagnostics(
         ? publicDetail
         : `${exit} (${publicDetail})`;
     diagnostics.push(`Failed phase ${phase}: ${detail}${termination}`);
-    diagnostics.push(...formatNpmFailureFacts(facts, context));
+    diagnostics.push(...formatNpmFailureFacts(facts));
     diagnostics.push(
       ...publicFacts
-        .filter((fact) => fact.check !== "npm" && fact.check !== "bun")
+        // Projection can rename the check; npm facts are already summarized above.
+        .filter((_fact, index) => facts[index]?.check !== "npm" && facts[index]?.check !== "bun")
         .map(formatUpdateFailureFact),
     );
     if (
@@ -392,26 +280,15 @@ async function renderBoundedDiagnostics(
 
 /** Builds the exact sanitized body the user must review before submission. */
 export async function prepareUpdateFailureReport(
-  request: UpdateFailureReportInput,
+  input: UpdateRunRecord,
   options: { env?: NodeJS.ProcessEnv; stateDir?: string } = {},
 ): Promise<PreparedUpdateFailureReport> {
-  if (!request.attemptId.trim()) {
+  if (!input.runId.trim()) {
     throw new Error("Update report attempt identity is required.");
   }
-  if (classifyUpdateOutcome(request.result) !== "failed") {
+  if (!isReportableUpdateRun(input)) {
     throw new Error("Only a final failed update can be reported.");
   }
-  const recordedRun =
-    request.recordedRun?.runId === request.attemptId ? request.recordedRun : undefined;
-  const input = {
-    ...request,
-    recordedRun,
-    result: {
-      ...request.result,
-      reason: request.result.reason ?? recordedRun?.reason ?? undefined,
-      after: request.result.after ?? recordedRun?.after,
-    },
-  };
   const env = options.env ?? process.env;
   const stateDir = options.stateDir ?? resolveStateDir(env);
   const { buildConfigSchemaCore, classifyConfigSchemaPathSegment } =
@@ -437,45 +314,10 @@ export async function prepareUpdateFailureReport(
   };
   const version = sanitizeReportField(VERSION, context);
   const platform = sanitizeReportField(`${process.platform}/${process.arch}`, context);
-  const target = resolveUpdateTarget(input, context);
+  const target = resolveUpdateTarget(input);
   const steps = resolveFailedSteps(input);
   const phase = sanitizeFactIdentifier(steps.at(-1)?.name ?? "not-recorded", context);
-  const projection = updateRunReportInputFromResult(input.result, recordedRun);
-  const recovery = resolveRecoveryOutcome(projection, context);
-  const rollback = input.result.rollbackOutcome ?? recordedRun?.verification?.rollbackOutcome;
-  const action = recordedRun?.trigger ?? input.action;
-  const installation = recordedRun?.target?.installationMethod;
-  const verification =
-    input.result.verification || recordedRun?.verification ? projection.verification : undefined;
-  const identity = verification
-    ? formatUpdateRunIdentity(verification, projection.after)
-    : undefined;
-  const currentHealth = verification
-    ? await readUpdateRunReportHealth(verification, { env })
-    : undefined;
-  const warnings = [
-    ...new Set([
-      ...(await Promise.all(
-        (input.result.postUpdate?.plugins?.warnings ?? []).slice(-3).map(async (warning) => {
-          const { code, pluginId } = await projectPublicUpdateFailureIdentifiers({
-            check: "plugin-convergence",
-            code: warning.reason,
-            pluginId: warning.pluginId,
-          });
-          const diagnostic = redactPublicSupportDiagnosticLine(
-            [warning.errorCode, warning.message].filter(Boolean).join("\n"),
-            context,
-          );
-          return `Plugin convergence (${code})${pluginId ? `; plugin ${pluginId}` : ""}: ${diagnostic}`;
-        }),
-      )),
-      ...updateRunWarningMessages(
-        projectUpdateRunResultSteps({ steps: recordedRun?.steps ?? [] }, input.result.steps).steps,
-      )
-        .slice(-3)
-        .map((message) => redactPublicSupportDiagnosticLine(message, context)),
-    ]),
-  ];
+  const { rollbackOutcome: rollback, recovery, runningVersion } = input.verification;
   const bodyWithoutMarker = [
     "# OpenClaw update failure report",
     "",
@@ -484,49 +326,50 @@ export async function prepareUpdateFailureReport(
     `- OpenClaw version: ${version}`,
     `- Platform: ${platform}`,
     `- Node version: ${sanitizeReportField(process.versions.node ?? "unknown", context)}`,
-    ...(action
-      ? [
-          `- Update action: ${action === "cli" ? "CLI command: openclaw update" : action === "campaign" ? "automatic update campaign" : `Gateway RPC: update.run (${action})`}`,
-        ]
+    `- Attempt: ${sha256Hex(input.runId)}`,
+    `- Update action: ${sanitizeReportField(input.trigger, context)}`,
+    ...(input.target.installationMethod
+      ? [`- Installation method: ${sanitizeReportField(input.target.installationMethod, context)}`]
       : []),
-    ...(installation ? [`- Installation method: ${installation}`] : []),
     `- Update target: ${target}`,
     `- Failed phase: ${phase}`,
     ...(rollback
       ? [
-          `- Rollback outcome: ${{ "not-needed": "not needed", "not-attempted": "not attempted", succeeded: "attempted; succeeded", failed: "attempted; failed" }[rollback.status]} — ${redactSupportDiagnosticLine(rollback.reason, context)}`,
+          // The reason can carry a restore error's text; it stays in the local record.
+          `- Rollback outcome: ${{ "not-needed": "not needed", "not-attempted": "not attempted", succeeded: "attempted; succeeded", failed: "attempted; failed" }[rollback.status]}`,
         ]
       : []),
-    ...(recovery !== "not recorded" || !rollback ? [`- Recovery outcome: ${recovery}`] : []),
-    ...(identity ? [`- Recorded verification: ${identity}`] : []),
-    ...(currentHealth
+    ...(recovery
       ? [
-          `- ${formatUpdateRunCurrentHealth(
-            currentHealth.kind === "responding"
-              ? {
-                  ...currentHealth,
-                  version: redactPublicSupportVersion(currentHealth.version),
-                }
-              : currentHealth,
-          )}`,
-          "- Recovery and verification above describe the update attempt, not a current instruction to stop or restart the Gateway.",
+          `- Recovery outcome: ${recovery.serviceRestartSafe ? "restart safe" : "restart unverified"}; ${sanitizeReportField(recovery.reason ?? "not-recorded", context)}`,
+          ...(recovery.serviceRestartSafe
+            ? [`- Recovery version: ${redactPublicSupportVersion(recovery.version)}`]
+            : []),
         ]
       : []),
-    ...(warnings.length ? ["", "## Warnings", "", ...warnings.map((line) => `- ${line}`)] : []),
+    ...(runningVersion
+      ? [`- Recorded running version: ${redactPublicSupportVersion(runningVersion)}`]
+      : []),
+    ...(
+      [
+        "booted",
+        "serviceRunning",
+        "versionMatch",
+        "channelsReady",
+        "readyz",
+        "coreReady",
+        "settled",
+      ] as const
+    )
+      .filter((key) => input.verification[key] !== undefined)
+      .map((key) => `- Recorded ${key}: ${input.verification[key]}`),
     "",
     "## Bounded diagnostics",
     "",
     ...(await renderBoundedDiagnostics(input, context, steps)).map((line) => `- ${line}`),
     "",
   ].join("\n");
-  const reconciliationMarker = `openclaw-update-report:${sha256Hex(`${input.attemptId}\0${bodyWithoutMarker}`)}`;
-  const body = truncateUtf8Prefix(
-    bodyWithoutMarker.replace(
-      "This report was explicitly reviewed and confirmed in OpenClaw.\n",
-      `This report was explicitly reviewed and confirmed in OpenClaw.\n\n<!-- ${reconciliationMarker} -->\n`,
-    ),
-    UPDATE_REPORT_BODY_MAX_BYTES,
-  );
+  const body = truncateUtf8Prefix(bodyWithoutMarker, UPDATE_REPORT_BODY_MAX_BYTES);
   const title = truncateUtf8Prefix(`Update failure: ${phase} (${version})`, 200).replace(
     /\s+/gu,
     " ",
@@ -534,9 +377,7 @@ export async function prepareUpdateFailureReport(
   const issue = prepareGithubIssue({ title, body });
   return {
     ...issue,
-    attemptId: input.attemptId,
+    attemptId: input.runId,
     previewDigest: sha256Hex(issue.body),
-    savedReportPath: path.join(stateDir, "update-reports", `${sha256Hex(input.attemptId)}.md`),
-    ...(issue.browserFallback.status === "available" ? { url: issue.browserFallback.url } : {}),
   };
 }

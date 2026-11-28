@@ -2,6 +2,7 @@ import { createMemo, type Accessor } from "solid-js";
 import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import { t as translate } from "../../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
+import { resolveDaybreakAccessProgram } from "../../../lib/chat/daybreak-access-program.ts";
 import { resolvePreferredServerChatModelValue } from "../../../lib/chat/model-ref.ts";
 import {
   hasNoConnectedChatModel,
@@ -88,8 +89,10 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
         props.modelSwitching,
         props.selectedAgentRuntime,
         props.modelSelectionLocked,
+        props.sessionRowCurrent,
         session?.model,
         session?.modelProvider,
+        session?.modelDisplayName,
         session?.modelOverrideSource,
         session?.runtimeSelectionLocked,
         session?.contextTokens,
@@ -123,8 +126,10 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
       modelSwitching,
       selectedRuntimeOverride,
       modelSelectionLocked,
+      sessionRowCurrent,
       sessionModel,
       sessionProvider,
+      sessionModelDisplayName,
       sessionOverrideSource,
       sessionRuntimeLocked,
       sessionContextTokens,
@@ -173,6 +178,21 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
     // A running turn can report its old model (or fallback) after a new choice is saved.
     const defaultProviderHint = defaultsProvider ?? "";
     const defaultCatalogEntry = catalog.entry(defaultModel);
+    const sessionModelValue = resolvePreferredServerChatModelValue(
+      sessionModel,
+      sessionProvider,
+      modelCatalog,
+    );
+    const selectedValue = currentOverride || defaultModel;
+    const selectedEntry = catalog.entry(selectedValue);
+    // Before the first scoped catalog, a live role-projected row can name the saved
+    // preference. It cannot admit options or name a different optimistic selection.
+    const labelValue =
+      uninitialized && !retired && sessionRowCurrent ? rawCurrentOverride : selectedValue;
+    const rowLabel =
+      !selectedEntry && labelValue && labelValue === sessionModelValue
+        ? sessionModelDisplayName?.trim()
+        : undefined;
     const canonicalDefaultLabel = resolveChatModelPickerLabel(defaultCatalogEntry, defaultLabel);
     const pickerDefaultLabel =
       defaultModel && canonicalDefaultLabel !== defaultLabel
@@ -296,16 +316,14 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
         value: currentOverride,
         label: resolveChatModelPickerLabel(
           currentCatalogEntry,
-          currentCatalogEntry?.name.trim() || currentOverride,
+          currentCatalogEntry?.name.trim() || rowLabel || currentOverride,
         ),
         provider: catalog.provider(currentOverride, currentProviderHint),
       });
     }
     // A persisted pin can match a changed default; equality cannot establish inheritance.
     const selectedAgentRuntime =
-      selectedRuntimeOverride ??
-      sessionRuntimeId ??
-      catalog.entry(currentOverride || defaultModel)?.agentRuntime?.id;
+      selectedRuntimeOverride ?? sessionRuntimeId ?? selectedEntry?.agentRuntime?.id;
     const defaultRuntime = defaultCatalogEntry?.agentRuntime?.id ?? defaultsRuntimeId;
     // A default model can still have a runtime pin; only the configured model/runtime pair inherits Default.
     const pickerValue =
@@ -316,11 +334,7 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
     const activeModelOption = modelOptions.find((option) =>
       isModelPickerOptionSelected(option, pickerValue, selectedAgentRuntime),
     );
-    const activeSessionModel = sessionModel
-      ? catalog.entry(
-          resolvePreferredServerChatModelValue(sessionModel, sessionProvider, modelCatalog),
-        )
-      : undefined;
+    const activeSessionModel = catalog.entry(sessionModelValue);
     const activeOptionModel = activeModelOption
       ? catalog.entry(activeModelOption.value)
       : undefined;
@@ -350,13 +364,13 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
     // A lock prevents model changes; the concrete selection still owns its label.
     // Without a selection, neither the runtime nor the agent default identifies it.
     const committedModelLabel =
-      modelSelectionLocked === true && !currentOverride
+      modelSelectionLocked === true && !currentOverride && !(uninitialized && rowLabel)
         ? translate("chat.selectors.lockedSessionModel")
         : resolveChatModelPickerLabel(
-            catalog.entry(currentOverride || defaultModel),
+            selectedEntry,
             formatPickerModelLabel(
               selectOptions.find((entry) => entry.value === currentOverride)?.label ??
-                (catalog.entry(currentOverride)?.name.trim() || currentOverride || defaultLabel),
+                (currentCatalogEntry?.name.trim() || rowLabel || currentOverride || defaultLabel),
             ),
             currentOverride || defaultModel ? triggerRuntime : null,
           );
@@ -537,29 +551,25 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
       !props.modelSwitching
         ? accessProgramModel?.availableAccessPrograms?.cyber
         : undefined;
-    const hasAccessSelection =
-      props.requestedAccessProgram !== undefined || effectiveAccessProgram !== undefined;
-    const showAccessProgram =
-      Boolean(props.onAccessProgramSelect) &&
-      (hasAccessSelection || accessPrograms?.some((program) => program !== "standard"));
+    const daybreak = resolveDaybreakAccessProgram(
+      accessPrograms,
+      props.requestedAccessProgram ?? effectiveAccessProgram,
+    );
+    const showAccessProgram = Boolean(props.onAccessProgramSelect) && daybreak.visible;
     const accessProgramDisabled =
       commonDisabled || !hasResolvableModel || Boolean(props.accessProgramMutationDisabledReason);
     const effortDisabled =
       commonDisabled ||
-      (!(showAccessProgram && hasAccessSelection) &&
-        (!hasResolvableModel ||
-          ((effortMutationDisabled || (thinking.options.length === 0 && fastMode.disabled)) &&
-            (!showAccessProgram || accessProgramDisabled))));
+      !hasResolvableModel ||
+      ((effortMutationDisabled || (thinking.options.length === 0 && fastMode.disabled)) &&
+        (!showAccessProgram || accessProgramDisabled));
     // An empty catalog must not expose fallback speed controls for an unavailable model.
     const confirmedEmptyCatalog =
       catalogState.hasSnapshot &&
       modelOptions.length === 0 &&
       !catalogState.pendingProviders?.length;
-    const reserveEffortPicker = !hasResolvableModel && !(showAccessProgram && hasAccessSelection);
     return {
-      showEffort:
-        !setupRequired &&
-        (!confirmedEmptyCatalog || Boolean(showAccessProgram && hasAccessSelection)),
+      showEffort: !setupRequired && !confirmedEmptyCatalog,
       model: {
         modelAuthStatusResult: props.modelAuthStatusResult,
         authProfileId:
@@ -630,10 +640,7 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
         accessProgram:
           showAccessProgram && props.onAccessProgramSelect
             ? {
-                requested: props.requestedAccessProgram,
-                previous: props.daybreakAccessProgram,
-                effectiveAccessProgram,
-                programs: accessPrograms,
+                daybreak,
                 disabled: accessProgramDisabled,
                 sessionKey: props.sessionKey,
                 onSelect: props.onAccessProgramSelect,
@@ -652,7 +659,7 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
           props.onFastModeSelect?.(next, targetSessionKey),
         onThinkingSelect: async (next, targetSessionKey) =>
           props.onThinkingSelect?.(next, targetSessionKey),
-        reserved: reserveEffortPicker,
+        reserved: !hasResolvableModel,
       },
     };
   });

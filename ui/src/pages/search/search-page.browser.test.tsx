@@ -1,5 +1,6 @@
 import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { userEvent } from "vitest/browser";
 import type {
   WebSearchStatusResult,
   WebSearchTestResult,
@@ -537,6 +538,28 @@ describe("Search settings", () => {
     },
   );
 
+  it("keeps an over-limit query editable and submits the corrected 500 code points", async () => {
+    const page = await mount();
+    const query = page.input("Search query");
+    const atLimit = "🪁".repeat(499) + "駅";
+    await userEvent.fill(query, atLimit + "!");
+    expect(query.value).toBe(atLimit + "!");
+    expect(query.ariaInvalid).toBe("true");
+    page.expectText("Shorten the search query to 500 characters or fewer.");
+    expect(page.button("Test search").disabled).toBe(true);
+    await userEvent.keyboard("{Enter}");
+    expect(page.calls("webSearch.test")).toHaveLength(0);
+
+    await userEvent.keyboard("{End}{Backspace}");
+    expect(query.value).toBe(atLimit);
+    expect(query.ariaInvalid).toBeNull();
+    page.expectNoText("Shorten the search query to 500 characters or fewer.");
+    page.click("Test search");
+    await page.settle();
+    expect(page.calls("webSearch.test")).toHaveLength(1);
+    expect(page.calls("webSearch.test")[0]?.[1]).toMatchObject({ query: atLimit });
+  });
+
   it("submits Enter but ignores IME confirmation", async () => {
     const page = await mount();
     const query = page.input("Search query");
@@ -646,21 +669,12 @@ describe("Search configuration lifecycle", () => {
       apiKey: { type: "string", title: "Example API key" },
     });
     if (options.advanced) {
-      const group = (title: string, properties: JsonSchema["properties"]): JsonSchema => ({
-        type: "object",
-        title,
-        additionalProperties: false,
-        properties,
-      });
       Object.assign(
         (schema.properties ??= {}),
         schemaAt(searchPath, {
           enabled: { type: "boolean" },
           provider: { type: "string" },
           maxResults: { type: "integer", title: "Result limit", default: 5 },
-          openaiCodex: group("OpenAI Codex", {
-            userLocation: group("User location", { city: { type: "string", title: "City" } }),
-          }),
         }).properties,
       );
     }
@@ -773,23 +787,6 @@ describe("Search configuration lifecycle", () => {
         ? atPath(endpointPath, value)
         : atPath([...searchPath, "maxResults"], Number(value));
     expect(JSON.parse(submitted.raw)).toMatchObject(expected);
-    page.save.resolve({ config: JSON.parse(submitted.raw), hash: "saved-2" });
-    await page.runtime.flushFormChanges();
-  });
-
-  it("gives nested advanced settings their own rows", async () => {
-    const page = await mount({ advanced: true });
-    page.element.querySelector<HTMLDetailsElement>("details")!.open = true;
-    const label = "OpenAI Codex: User location: City";
-    const row = page.input(label).closest(".settings-row--stacked-on-narrow")!;
-    expect(row.querySelector(".settings-row__title")?.textContent).toBe(label);
-    expect(row.querySelectorAll("input")).toHaveLength(1);
-    expect(row.textContent!.split(label)).toHaveLength(2);
-    page.edit(label, "Bengaluru");
-    const submitted = await page.writeStarted.promise;
-    expect(JSON.parse(submitted.raw)).toMatchObject(
-      atPath([...searchPath, "openaiCodex", "userLocation", "city"], "Bengaluru"),
-    );
     page.save.resolve({ config: JSON.parse(submitted.raw), hash: "saved-2" });
     await page.runtime.flushFormChanges();
   });

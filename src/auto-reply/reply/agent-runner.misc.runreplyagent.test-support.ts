@@ -231,7 +231,7 @@ vi.mock("../../agents/subagents/registry/subagent-registry.js", async (importOri
     await importOriginal<typeof import("../../agents/subagents/registry/subagent-registry.js")>();
   return {
     ...actual,
-    getSwarmRunByLaunchReplayKey: async () => undefined,
+    resolveSwarmLaunchReplay: async () => ({ status: "missing" }),
     markSubagentRunTerminated: () => 0,
   };
 });

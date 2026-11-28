@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import * as sessionChangeEvent from "./server-methods/session-change-event.js";
 import * as gateway from "./server.auth.test-helpers.js";
+import * as deviceProvider from "./worker-environments/device-provider.js";
 import * as placementDispatch from "./worker-environments/placement-dispatch.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 
@@ -168,6 +169,11 @@ test.for(["before acknowledgment", "after acknowledgment"] as const)(
 
     // Observe real provider setup, never replace it.
     const setupCalls: string[] = [];
+    const resolveDeviceAvailability = deviceProvider.resolveDeviceWorkerAvailability;
+    vi.spyOn(deviceProvider, "resolveDeviceWorkerAvailability").mockImplementation((...args) => {
+      setupCalls.push("resolveDeviceWorkerAvailability");
+      return resolveDeviceAvailability(...args);
+    });
     const dispatchErrors: string[] = [];
     let dispatchSettled: Promise<unknown> | undefined;
     let terminalPlacement: Promise<WorkerSessionPlacementRecord | undefined> | undefined;
@@ -324,7 +330,7 @@ test.for(["before acknowledgment", "after acknowledgment"] as const)(
           await closed;
         },
         /device worker is not a paired node host: paired/,
-        ["prepareProjectIntent", "createWithRequest"],
+        ["resolveDeviceWorkerAvailability"],
       );
       if (afterAcknowledgment) {
         expect((await disconnected.created).ok).toBe(true);
@@ -347,7 +353,7 @@ test.for(["before acknowledgment", "after acknowledgment"] as const)(
           }
         },
         /device worker is not a paired node host: paired/,
-        ["prepareProjectIntent", "createWithRequest"],
+        ["resolveDeviceWorkerAvailability"],
       );
       if (!afterAcknowledgment) {
         await expect(reassigned.created).rejects.toThrow(/closed|policy changed|role changed/);

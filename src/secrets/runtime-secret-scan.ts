@@ -1,6 +1,14 @@
 /** Scans config-like values for SecretRefs and credential-looking fields. */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isLegacySecretRefWithoutProvider, parseSecretRef } from "../config/types.secrets.js";
 import type { SecretDefaults } from "./runtime-shared.js";
+
+/** Only named config fields can match a manifest-declared plugin SecretInput path. */
+export function hasPluginConfigValues(entry: unknown): boolean {
+  return (
+    isRecord(entry) && isRecord(entry.config) && Object.getOwnPropertyNames(entry.config).length > 0
+  );
+}
 
 /** Field names treated as credential-bearing even before a value is converted to SecretRef. */
 const CREDENTIAL_FIELD_NAMES = new Set(["apikey", "key", "token", "secret", "password"]);

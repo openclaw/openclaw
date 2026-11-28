@@ -619,54 +619,6 @@ describe("slackPlugin outbound", () => {
     },
   );
 
-  it("renders shared interactive payloads into Slack Block Kit via plugin outbound", async () => {
-    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-interactive" });
-
-    const result = await sendPayload(
-      {
-        text: "Slack interactive smoke.",
-        interactive: {
-          blocks: [
-            { type: "text", text: "Slack interactive smoke." },
-            {
-              type: "buttons",
-              buttons: [button("Approve"), button("Reject")],
-            },
-            {
-              type: "select",
-              placeholder: "Choose a target",
-              options: [button("Canary"), button("Production")],
-            },
-          ],
-        },
-      },
-      sendSlack,
-      "user:U123",
-    );
-
-    expect(callArg(sendSlack)).toBe("user:U123");
-    expect(callArg(sendSlack, 1)).toBe(
-      "Slack interactive smoke.\n\nApprove\nReject\n\nChoose a target\nCanary\nProduction",
-    );
-    expect(callRecord(sendSlack, 2).blocks).toMatchObject([
-      { type: "section" },
-      {
-        type: "actions",
-        elements: [
-          { type: "button", value: "approve" },
-          { type: "button", value: "reject" },
-        ],
-      },
-      {
-        type: "actions",
-        elements: [
-          { type: "static_select", options: [{ value: "canary" }, { value: "production" }] },
-        ],
-      },
-    ]);
-    expect(result).toEqual({ channel: "slack", messageId: "m-interactive" });
-  });
-
   it.each([
     { surface: "interactive", type: "text" },
     { surface: "presentation", type: "text" },

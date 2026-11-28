@@ -112,12 +112,12 @@ type InstallFailure = Extract<InstallResult, { ok: false }> & {
   warning?: string;
 };
 
-export function mockCallArg(mock: MockWithCalls, callIndex = 0, argIndex = 0): unknown {
-  const call = mock.mock.calls[callIndex];
-  if (!call || call.length <= argIndex) {
-    throw new Error(`Expected mock call ${callIndex} argument ${argIndex}`);
+export function mockCallArg(mock: MockWithCalls): unknown {
+  const call = mock.mock.calls[0];
+  if (!call || call.length === 0) {
+    throw new Error("Expected mock call 0 argument 0");
   }
-  return call[argIndex];
+  return call[0];
 }
 
 export function expectInstallSuccess(result: unknown): InstallSuccess {

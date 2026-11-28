@@ -131,7 +131,7 @@ async function fixture(externalAgents = false) {
       }
     } else {
       db.exec(
-        "CREATE TABLE schema_meta(meta_key TEXT, role TEXT, agent_id TEXT); INSERT INTO schema_meta VALUES ('primary','agent','main');",
+        "CREATE TABLE schema_meta(meta_key TEXT, role TEXT, agent_id TEXT, schema_version INTEGER); INSERT INTO schema_meta VALUES ('primary','agent','main',17);",
       );
       db.prepare("UPDATE payload SET value = ?").run(path.basename(path.dirname(file)));
     }
@@ -385,7 +385,7 @@ it("classifies maintenance-owned sources once for the backup worker", async () =
   const [engines] = worker.mock.calls.flatMap(([{ input }]) =>
     input.mode === "database-backup" ? [input.sourceEngines] : [],
   );
-  const classified = Object.keys(engines ?? {});
+  const classified = [f.shared];
   const sqlite = { engine: "sqlite" } as const;
   const sourceEngines = Object.fromEntries(classified.map((file) => [file, sqlite]));
   expect(engines).toEqual(sourceEngines);

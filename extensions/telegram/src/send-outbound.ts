@@ -98,6 +98,8 @@ export function buildTelegramProviderDeliveryResult(params: {
   messageId: string | number;
   fallbackChatId: string | number;
   successfulSendThread?: TelegramThreadSpec;
+  /** Null when the accepted request had no native reply, omitted when it was not observed. */
+  acceptedReplyToMessageId?: number | null;
   kind?: MessageReceiptPartKind;
   meta?: TelegramSendResult["meta"];
 }): TelegramSendResult {
@@ -107,18 +109,24 @@ export function buildTelegramProviderDeliveryResult(params: {
     message: params.message,
     successfulSendThread: params.successfulSendThread,
   });
+  const receipt =
+    providerThreadId !== undefined || params.acceptedReplyToMessageId !== undefined
+      ? createMessageReceiptFromOutboundResults({
+          results: [{ messageId, chatId }],
+          kind: params.kind,
+          threadId: providerThreadId?.toString(),
+          replyToId: params.acceptedReplyToMessageId?.toString(),
+        })
+      : undefined;
+  if (receipt && params.acceptedReplyToMessageId === null) {
+    for (const part of receipt.parts) {
+      part.nativeReplyAbsent = true;
+    }
+  }
   return {
     messageId,
     chatId,
-    ...(providerThreadId !== undefined
-      ? {
-          receipt: createMessageReceiptFromOutboundResults({
-            results: [{ messageId, chatId }],
-            ...(params.kind !== undefined ? { kind: params.kind } : {}),
-            threadId: String(providerThreadId),
-          }),
-        }
-      : {}),
+    ...(receipt ? { receipt } : {}),
     ...(params.meta ? { meta: params.meta } : {}),
   };
 }

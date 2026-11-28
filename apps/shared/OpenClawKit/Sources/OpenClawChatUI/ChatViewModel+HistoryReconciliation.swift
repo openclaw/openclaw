@@ -741,15 +741,18 @@ extension OpenClawChatViewModel {
 
     static func dedupeKey(for message: OpenClawChatMessage) -> String? {
         if let key = correlatedMessageIdentityKey(for: message, role: message.role) { return key }
+        // Retained history can have only a sequence. Scope the content key to its source
+        // so equal rows survive and results projected from one carrier stay distinct.
+        let sourcePrefix = Self.historySourceIdentity(for: message).map { "\($0)|" } ?? ""
         if message.isToolResult, ChatPayloadDecoding.trimmedNonEmptyString(message.toolCallId) != nil {
             // Parallel calls can return identical output at the carrier's timestamp.
-            return Self.messageIdentityKey(for: message).map { "\($0)|\(message.workRunID ?? "")" }
+            return Self.messageIdentityKey(for: message).map { "\(sourcePrefix)\($0)|\(message.workRunID ?? "")" }
         }
         guard let timestamp = message.timestamp else { return nil }
         let text = message.content.compactMap(\.text).joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
-        return "\(message.role)|\(timestamp)|\(text)"
+        return "\(sourcePrefix)\(message.role)|\(timestamp)|\(text)"
     }
 }
 
@@ -914,6 +917,8 @@ extension OpenClawChatViewModel {
         retainedMessageIDs.formUnion(self.outboxCommandIDsByMessageID.keys)
         retainedMessageIDs.formUnion(self.pendingLocalUserEchoMessageIDsByRunID.values)
         retainedMessageIDs.formUnion(self.historyRouteLocalUserEchoIDs)
+        // The message shown at the Send tap, still on its way to the outbox or a run.
+        retainedMessageIDs.formUnion(optimisticSendMessageID.map { [$0] } ?? [])
         var nextMessages = if isDelta {
             // The canonical prefix and ordered delta precede local/live-only rows retained by anchor.
             Self.insertingRetainedMessages(
@@ -1009,7 +1014,14 @@ extension OpenClawChatViewModel {
         // An empty post-send refresh is incomplete by contract: reconciliation
         // preserves the visible transcript, so preserve its last canonical cache too.
         let isCompletePage = replacingCanonicalHistory || !preservingOptimisticLocalMessages || !incoming.isEmpty
-        self.noteLiveHistoryPage(request.id, isComplete: (isDelta || isCompletePage) && !retainsAnsweredTurn)
+        // A tail delta inherits its snapshot's coverage. A new incomplete anchor cannot prove absence.
+        let coversHistory = isDelta ? self.outboxRestoreEvidence.latestLiveHistoryRequestID > 0 : isCompletePage
+        let hasOlderPage = payload.hasMore ?? (payload.olderCursor != nil)
+        if hasOlderPage || (!coversHistory && !retainsAnsweredTurn && payload.deltaCursor != nil) {
+            self.outboxRestoreEvidence.latestLiveHistoryRequestID = 0
+        } else {
+            self.noteLiveHistoryPage(request.id, isComplete: coversHistory && !retainsAnsweredTurn)
+        }
         if isCompletePage {
             // The cache store writes only gateway-derived rows. It filters
             // locally retained outbox bubbles until history proves their keys.

@@ -62,10 +62,12 @@ and refuses its calls. A tool or plugin configuration change starts a new pin.
 With Tool Search on (`tools.toolSearch` enabled in `mode: "tools"` without
 `include` or `exclude` selections), every turn of a session builds the same list:
 
-- `message` is listed on every turn: user, cron, wake, subagent completion, and
+- `message` is listed on every turn of a session that has a supported source or a
+  configured messaging route: user, cron, wake, subagent completion, and
   child-session turns. A turn whose reply delivery or tool policy does not allow
   the message tool refuses the call with a visible message. The turn's own
-  delivery rules still decide whether a send is allowed.
+  delivery rules still decide whether a send is allowed. A session with neither,
+  such as `openclaw agent --local` on an install without channels, omits it.
 - A run's `toolsAllow` (scheduled runs, queued follow-ups, and cross-session
   events) and group `tools` / `toolsBySender` policy keep the session's tools
   listed and refuse each call they do not allow with a visible message, including
@@ -91,6 +93,9 @@ they do not require replacing the earlier system prompt.
 
 CLI continuations retain the conversation's recorded presentation capabilities,
 including Control UI formatting, without borrowing its delivery route or authority.
+This holds for every turn source: `sessions_send` turns and subagent completions
+run on the internal channel, yet their system prompt still describes the
+session's own conversation, and the turn's routing arrives in its runtime context.
 Scheduled turns inside an existing conversation retain its full automations
 definition; job-scoped execution still rejects actions outside the current job.
 
@@ -119,6 +124,13 @@ channel, scheduled, heartbeat, and senderless wake turns retain the same
 Gateway checks current identity, target access, and full operator write authority
 for privileged PR actions when called. Listing an action does not grant it.
 
+With Tool Search or Code Mode active, `computer` and the yielding
+`github_publish` listing are [on-demand](/tools/tool-search#on-demand-tools):
+they stay out of the provider tool list until the model first looks one up or
+calls it. Loading appends that definition, so the tool list changes once, on
+the next request, and the session pin keeps it fixed for the rest of the
+series.
+
 The `message` description and schema use the session's channel, bound account,
 and configured bindings, not the current turn's source. CLI, restart recovery, and subagent
 announcement turns in the same conversation keep identical definitions,
@@ -131,9 +143,16 @@ conversation. Reaction
 execution still requires the current prompt's live authority; an advertised
 action does not grant permission to execute it.
 
-Isolated settled-turn finalization uses a separate cache key scoped to the run.
-Its tool-free prompt and full transcript differ from the conversation request,
-so it does not replace the conversation's cache or history-diagnostic baseline.
+Settled-turn finalization (the request that asks for a final answer after a
+turn ends with only `NO_REPLY`) is one more request of that turn. On protocols
+where `tool_choice` is outside the cache key (OpenAI Responses and Anthropic
+Messages), it sends the turn's last request (system prompt, tools, parameters,
+cache key and history) unchanged, followed by its own new items and
+`tool_choice: none`, so it reads the turn's cached prefix and cannot call a
+tool. It falls back to a tool-free prompt under a run-scoped cache key on other
+protocols, when the provider rejected the turn's context, when the turn's
+prepared request was a `previous_response_id` delta, or when its last item is
+missing from the recovery's history.
 
 Inter-session messages steered into an active turn carry their source envelope
 on the first model request. Reopening the session replays the same envelope,
@@ -203,6 +222,80 @@ compaction boundary count as their cache key unless the caller supplies an
 explicit key. Operator, WebChat, private subagent completion, requester-settle,
 and recovery turns share this session-boundary identity. The current client and
 reply delivery route do not select a different cache key.
+
+## Warm compaction requests
+
+Automatic compaction at a request boundary sends its summary request as the
+session's next normal request: the same system prompt, tools, `tool_choice`,
+output limit, thinking settings, cache key and every earlier message, plus one
+appended user item that asks for the summary. The provider therefore reads the
+prompt prefix it already cached instead of processing a separate summarizer
+request. The appended item is sent once and is never replayed, so the Anthropic
+and Chat Completions transports place no cache marker on it. The history markers
+are the ones the normal request would carry, so the request writes only what that
+request would have written, such as a new user message. On routes without prompt
+caching the request is still correct and costs ordinary input.
+
+This applies on every built-in route except the native ChatGPT sign-in route,
+which uses its provider checkpoint at the same boundary, and sessions whose
+compaction belongs to a context engine, a registered compaction provider, or a
+separate `agents.defaults.compaction.model`. Manual `/compact` and overflow
+recovery keep their existing paths. See
+[Compaction](/concepts/compaction#warm-request-compaction).
+
+<a id="idle-keep-warm" />
+
+## Idle keep-warm
+
+When an interactive session goes idle with a large cached prompt, the Gateway
+sends one read-only prewarm request shortly before the provider's cache lifetime
+ends. The prewarm is the session's own next request (pinned system prompt and
+tool definitions, history, cache markers, cache key, thinking settings and
+`tool_choice`) with one trailing placeholder item that is never cached or
+answered, sent so that the provider generates no output:
+
+- Anthropic Messages (direct API, setup-token, compatible proxies, GitHub
+  Copilot Claude): `max_tokens: 0` without streaming. The reply is empty and
+  bills no output tokens.
+- OpenAI Responses: `prompt_cache_options.prewarm: true`, with the lifetime the
+  session already sends.
+
+The prewarm reads the cached prefix and so restarts its lifetime. Nothing is
+written to the transcript. Each prewarm records its usage as an internal
+`model.usage` diagnostic of a background session fork, like other forks.
+
+A session gets prewarms only when all of these hold:
+
+- The route has a known cache lifetime of at most one hour. Anthropic-style
+  routes use the cache-write tier the session's own responses reported (5 minutes
+  or 1 hour, so a proxy that forces 1 hour is handled). OpenAI Responses routes
+  use the documented 30-minute lifetime on the native API (GPT-5.6 and later).
+  Routes with an undocumented or no lifetime (ChatGPT sign-in, xAI, Gemini, Chat
+  Completions, local models) get none. A 12-hour lifetime gets none: a read
+  does not restart it.
+- The last reply settled on the session's current route, with no compaction,
+  reset or model change after it, and its prompt was at least 50,000 tokens.
+- A person used the session within one cache lifetime of its last request.
+  Automation runs, subagents and ACP sessions get none.
+- The request does not use Anthropic budget thinking, a forced tool or
+  structured output, which cannot be prewarmed without changing the cached
+  prefix.
+
+Prewarms stop when the user sends a message (the next turn re-anchors the
+schedule), after a miss (the prewarm read less than half the prompt or wrote
+more than it read), after an error (the provider pauses for 15 minutes), after
+12 hours, and after a budget that keeps all prewarms below half the cost of
+one cache rewrite: `(write − read) / (2 × read)` prices relative to input, at
+most 24, or 3 when the route has no prices. A wake that arrives after the cache
+may have expired sends nothing.
+
+The schedule comes from stored facts: the transcript's last reply and the
+session row's `promptCacheKeepWarm` record of the last prewarm (its time, route,
+the reply it warmed and the prewarm count since the last human turn). A Gateway
+restart therefore resumes a series where it stopped. Cache-TTL pruning reads the
+same record as a cache touch, so a prewarmed cache is not pruned as expired.
+
+Set `agents.defaults.promptCacheKeepWarm: false` to turn it off.
 
 ## Primary knobs
 
@@ -344,6 +437,7 @@ cache billing are described in [Model Studio context caching](https://www.alibab
 
 - Prompt caching is automatic on supported recent models; OpenClaw does not inject block-level cache markers.
 - OpenClaw sends a stable `prompt_cache_key` across turns. On models before GPT-5.6 this helps cache routing; on GPT-5.6 and later it separates cache accounting, while OpenAI handles routing automatically. Responses and Chat Completions requests to direct `api.openai.com` hosts get this automatically when a session or explicit cache key is available; `compat.supportsPromptCacheKey: false` disables it. OpenAI-compatible proxies (oMLX, llama.cpp, custom endpoints) need `compat.supportsPromptCacheKey: true` in model config to opt in - this is never auto-detected for a proxy.
+- `/status` shows `cache key: not sent` after the endpoint when the session's last completed request to an OpenAI-style route had no `prompt_cache_key`. It reflects that request, so it is not shown while a turn runs and updates only after the next completed request. A key is not sent when the route has not opted in, when `cacheRetention` is `"none"`, or when `compat.supportsPromptCacheKey` is `false`. Many providers still cache automatically or through other markers. To opt in, set `compat.supportsPromptCacheKey: true` on that model only if the endpoint accepts `prompt_cache_key`; remove it again if requests are rejected (HTTP 400 or 422).
 - `cacheRetention: "long"` requests `prompt_cache_options: { ttl: "30m" }` for GPT-5.6 and later on both APIs. Earlier native models receive `prompt_cache_retention: "24h"` only for OpenAI's documented extended-retention models: GPT-5.5 / GPT-5.5 Pro, GPT-5.4, GPT-5.2, GPT-5.1 / Codex / Codex Max / Codex Mini / Chat Latest, GPT-5 / Codex, and GPT-4.1 (including dated snapshots). Other earlier native models receive no lifetime field. See [OpenAI cache lifetime](https://developers.openai.com/api/docs/guides/prompt-caching#cache-lifetime).
 - Lifetime fields require both cache-key support and `compat.supportsLongCacheRetention` (true by default; Together AI and Cloudflare profiles disable it). Opted-in proxies use the same GPT-5.6+ TTL mapping and otherwise receive `"24h"`; disable long-retention support if the proxy rejects lifetime fields.
 - `cacheRetention: "short"` sends the key without lifetime fields, leaving the provider's default lifetime in effect. `cacheRetention: "none"` suppresses the key and both lifetime fields; it does not disable OpenAI's automatic prompt caching.
@@ -665,7 +759,7 @@ History baselines share a 16 MiB budget for fingerprint strings and container ov
 
 The comparison baseline resets when the session ID changes, even if an isolated cron job reuses its provider cache key. Session reset, deletion, shutdown, and completion of a detached Skill Workshop review release the retired session's diagnostic fingerprints; resident sessions keep their cross-turn baselines. A fresh transcript can legitimately reuse fewer tokens than the previous run's final request. Within a session, `no tracked cache input change` means the tracked fingerprints stayed stable; it does not prove identical final provider payloads or diagnose cache expiry. Compare request timing and final payloads before attributing a drop to provider caching.
 
-For encoded provider requests, `providerPrefix` compares the serialized instructions, tools, and up to 512 input items. It names the first changed item, with bounded protocol fields for the first 32 items, such as `message:3.encrypted_content`, plus changed request parameters such as `parameters:prompt_cache_key`. Values and unknown field names are never logged. `order` means object key order changed without a tracked field-value change; it is wire evidence, not proof that the provider rendered different tokens. Beyond the item limit, a tail digest can detect changes but cannot locate the first differing item.
+For encoded provider requests, `providerPrefix` compares the serialized instructions, tools, and up to 512 input items. It names the first changed item, with bounded protocol fields for the first 32 items, such as `message:3.encrypted_content`, plus changed request parameters such as `parameters:prompt_cache_key`. Output caps (`max_tokens`, `max_completion_tokens`, `max_output_tokens`) are not compared: they do not change the prompt a prefix cache keys on, and Chat Completions routes re-clamp them from the remaining context on most requests, so a drop where only the cap changed reports `prefix-match`. Values and unknown field names are never logged. `order` means object key order changed without a tracked field-value change; it is wire evidence, not proof that the provider rendered different tokens. Beyond the item limit, a tail digest can detect changes but cannot locate the first differing item.
 
 A `continuation:` prefix means either request used `previous_response_id`. Its `wire-input` items are deltas, so differences between them do not establish rewritten conversation history. Compare the separate `historyRewrite` signal and the changed request parameters before attributing a cache miss. A matching full-history wire prefix also does not guarantee a hit: OpenAI must find an available matching cache boundary.
 
@@ -684,12 +778,23 @@ it starts, on every provider route. Each later request in the session extends th
 previous one byte for byte: system prompt, tools, and every earlier message stay
 unchanged, and earlier runtime-context carriers stay in history.
 
+State snapshots in those carriers (active exec sessions, subagents,
+media-generation tasks, approved executables, temporal context) are sent only
+when they change. A turn compares each snapshot with the latest copy the request
+already carries and omits an identical one, so history does not grow with
+repeated state. A snapshot the request does not carry, for example after
+compaction or on a route that clears turn-scoped updates, is sent in full,
+including its empty form.
+
 Mid-session changes (skills, workspace files, permissions, exec wakes,
 inter-session input, subagent completions) go out as appended deltas: an
 in-history system message where the route supports one (direct Anthropic API
 keys on prefix-binding Claude models, native OpenAI Responses), otherwise a
 user-role note. Tools change only at a rebuild point or a tool configuration
-change.
+change. Reordering existing `##` sections also appends an update, even when their
+text is unchanged. That update includes the complete current prompt in its new
+order; ordinary text edits still send only the changed sections. The pinned
+prefix and earlier messages remain unchanged.
 
 The session prompt rebuilds only at these points:
 

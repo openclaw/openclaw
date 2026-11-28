@@ -67,8 +67,8 @@ type AgentRuntimePluginRegistryParams = {
   /** Live Gateway registry whose unchanged instances this load borrows instead of loading. */
   borrowRegistry?: PluginRegistry;
   selections?: readonly AgentHarnessPluginSelection[];
-  /** Config-wide harness runtimes carried by a prepared lifecycle batch. */
-  configuredHarnessRuntimes?: readonly string[];
+  /** Read config-wide harnesses from the prepared batch only for plans that select them. */
+  getConfiguredHarnessRuntimes?: () => readonly string[];
   /** Lifecycle-owned selection; standalone/direct generations stay source-default. */
   preferBuiltPluginArtifacts?: boolean;
   metadataSnapshot?: PluginMetadataSnapshot;
@@ -115,6 +115,7 @@ function resolveAgentRuntimePluginRegistryLoad(
               (activePluginIds.length > 0 ? activePluginIds : undefined))));
   const plan = resolveAgentRuntimePluginLoadPlan({
     config: params.config,
+    activationSourceConfig: loadOptions.activationSourceConfig,
     workspaceDir: workspaceDir ?? process.cwd(),
     basePluginIds: startupPluginIds,
     selections: resolveAgentRuntimePluginSelections(
@@ -122,7 +123,7 @@ function resolveAgentRuntimePluginRegistryLoad(
       params.selections ?? [],
       params.purpose === "model-catalog" || params.purpose === "isolated-completion"
         ? []
-        : params.configuredHarnessRuntimes,
+        : params.getConfiguredHarnessRuntimes?.(),
     ),
     metadataSnapshot,
     ...(params.purpose ? { purpose: params.purpose } : {}),

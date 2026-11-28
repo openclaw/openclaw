@@ -243,10 +243,7 @@ export function createSessionAutomationInventory(
             }
           });
           const unsubscribeEvents = source.subscribeEvents((event) => {
-            if (
-              current() &&
-              (event.event === "cron" || isCronInventoryInvalidation(event, source.snapshot))
-            ) {
+            if (current() && (event.event === "cron" || isCronInventoryInvalidation(event))) {
               dirty = true;
               void load({ event: event.event === "cron" ? event.payload : undefined });
             }

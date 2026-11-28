@@ -22,6 +22,7 @@ import {
   getAgentRunContextOwnerStatus,
   getAgentRunLifecycleGeneration,
   readAgentRunIndexVersion,
+  storeRunContext,
 } from "./agent-run-registry-state.js";
 import type {
   AgentRunContext,
@@ -97,19 +98,6 @@ export function registerAgentRunSequenceResetHandler(handler: (runId: string) =>
   getAgentRunRegistryState().sequenceResetHandler = handler;
 }
 
-function storeRunContext(runId: string, context: AgentRunContext, predecessor?: AgentRunContext) {
-  // Scheduler leases and observed activity never transfer to a fresh registration.
-  context.capacityWaits = undefined;
-  context.executionActivity = undefined;
-  context.localModelWait = undefined;
-  context.eventState = { seq: 0 };
-  context.modelCallSequence = { value: 0 };
-  context.acceptedUserReply = undefined;
-  context.registeredAt ??= Date.now();
-  getAgentRunRegistryState().contexts.set(runId, context);
-  recordAgentEventRouting(runId, context, predecessor);
-}
-
 /** Registers or merges per-run context used by later agent event emissions. */
 export function registerAgentRunContext(
   runId: string,
@@ -153,6 +141,7 @@ export function registerAgentRunContext(
     existing.verboseLevel = context.verboseLevel;
   }
   existing.completionSource ??= context.completionSource;
+  existing.onRestartResumeSaved ??= context.onRestartResumeSaved;
   if (context.sessionEventDelivery === false) {
     existing.sessionEventDelivery = false;
   }
@@ -498,7 +487,7 @@ export function claimAgentRunApprovalAuthority(
   const state = getAgentRunRegistryState();
   const context = state.contexts.get(parent.operationalRunInstance.runId);
   if (!context?.delegatedAuthority || !validateAgentRunDelegatedAuthority(parent)) {
-    throw new Error("agent run approval authority is no longer active");
+    throw new Error("The approval scope ended. Start a new turn to retry.");
   }
   const leases = (context.approvalLeases ??= new AgentRunApprovalLeases((authority, reason) =>
     notifyDelegatedAuthorityClosed(state, authority, reason),

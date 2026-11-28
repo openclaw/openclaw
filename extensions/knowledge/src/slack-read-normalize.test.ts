@@ -155,6 +155,154 @@ it("normalizes saved Slack read results into chat JSONL the transcript and manif
   expect(JSON.parse(await readFile(summary, "utf8"))).toMatchObject({ item_count: 3 });
 });
 
+it("names mentioned users from the read without changing the message or its hash", async () => {
+  const dir = tempDirs.make("slack-read-mentions-");
+  const file = (name: string) => path.join(dir, name);
+  const message = { ts: "1790000100.000200", user: "U2", text: "<@U7> and <@U8|old> please look" };
+  // A thread root and a reply two days later, which quotes its root.
+  const root = {
+    ts: "1790000300.000300",
+    user: "U2",
+    text: "<@U7> costs",
+    thread_ts: "1790000300.000300",
+  };
+  const reply = { ts: "1790172800.000400", user: "U2", text: "done", thread_ts: root.ts };
+  const normalize = async (name: string, read: object) => {
+    await writeFile(file(`${name}.json`), JSON.stringify(read));
+    run("slack-read-normalize.mjs", [
+      "--team",
+      "T1",
+      "--channel",
+      "C1",
+      "--input",
+      file(`${name}.json`),
+      "--output",
+      file(`${name}.jsonl`),
+    ]);
+    const [first] = (await readFile(file(`${name}.jsonl`), "utf8")).split("\n");
+    return JSON.parse(first ?? "");
+  };
+  const named = await normalize("named", {
+    channelId: "C1",
+    messages: [message, root, reply],
+    userProfiles: { U7: { display_name: "Cy", name: "cy" } },
+  });
+  const bare = await normalize("bare", { channelId: "C1", messages: [message] });
+  expect(named.payload.content).toBe(message.text);
+  expect(named.payload.mention_names).toStrictEqual({ U7: "Cy" });
+  expect(bare.payload.mention_names).toBeUndefined();
+  expect(named.sha256).toBe(bare.sha256);
+  run("chat-transcript.mjs", [
+    "--input",
+    file("named.jsonl"),
+    "--output-dir",
+    file("transcript"),
+    "--channel",
+    "#launch",
+    "--source-key",
+    "slack:T1/C1",
+  ]);
+  const day = await readFile(path.join(file("transcript"), "2026-09-21.txt"), "utf8");
+  // A user no read named keeps Slack's mention.
+  expect(day).toContain("14:15 U2: @Cy and <@U8|old> please look");
+  // Thread names and reply quotes name mentioned users too.
+  const later = await readFile(path.join(file("transcript"), "2026-09-23.txt"), "utf8");
+  expect(later).toContain("## Thread: @Cy costs");
+  expect(later).toContain('↩ U2 2026-09-21 14:18 "@Cy costs": done');
+});
+
+it("keeps same-named authors and mentioned users apart in the transcript", async () => {
+  const dir = tempDirs.make("slack-read-mention-names-");
+  const file = (name: string) => path.join(dir, name);
+  await writeFile(
+    file("read.json"),
+    JSON.stringify({
+      channelId: "C1",
+      messages: [{ ts: "1790000100.000200", user: "U1", text: "ask <@U2> and <@U3>" }],
+      userProfiles: { U2: { display_name: "Sam" }, U3: { display_name: "Sam" } },
+    }),
+  );
+  run("slack-read-normalize.mjs", [
+    "--team",
+    "T1",
+    "--channel",
+    "C1",
+    "--input",
+    file("read.json"),
+    "--output",
+    file("m.jsonl"),
+  ]);
+  const rows = (await readFile(file("m.jsonl"), "utf8")).replace(
+    '"author_name":"U1"',
+    '"author_name":"Sam"',
+  );
+  await writeFile(file("m.jsonl"), rows);
+  run("chat-transcript.mjs", [
+    "--input",
+    file("m.jsonl"),
+    "--output-dir",
+    file("tx"),
+    "--channel",
+    "#c",
+    "--source-key",
+    "slack:T1/C1",
+  ]);
+  const day = await readFile(path.join(file("tx"), "2026-09-21.txt"), "utf8");
+  expect(day).toContain("14:15 Sam#U1: ask @Sam#U2 and @Sam#U3");
+});
+
+it("names an author whose own lookup failed from a later read's mention", async () => {
+  const dir = tempDirs.make("slack-read-author-fallback-");
+  const file = (name: string) => path.join(dir, name);
+  await writeFile(
+    file("first.json"),
+    JSON.stringify({
+      channelId: "C1",
+      messages: [{ ts: "1790000100.000200", user: "U1", text: "hello" }],
+    }),
+  );
+  await writeFile(
+    file("second.json"),
+    JSON.stringify({
+      channelId: "C1",
+      messages: [
+        {
+          ts: "1790000200.000300",
+          user: "U2",
+          user_profile: { display_name: "Bo" },
+          text: "thanks <@U1>",
+        },
+      ],
+      userProfiles: { U1: { display_name: "Sam" } },
+    }),
+  );
+  run("slack-read-normalize.mjs", [
+    "--team",
+    "T1",
+    "--channel",
+    "C1",
+    "--input",
+    file("first.json"),
+    "--input",
+    file("second.json"),
+    "--output",
+    file("m.jsonl"),
+  ]);
+  run("chat-transcript.mjs", [
+    "--input",
+    file("m.jsonl"),
+    "--output-dir",
+    file("tx"),
+    "--channel",
+    "#c",
+    "--source-key",
+    "slack:T1/C1",
+  ]);
+  const day = await readFile(path.join(file("tx"), "2026-09-21.txt"), "utf8");
+  expect(day).toContain("14:15 Sam: hello");
+  expect(day).toContain("14:16 Bo: thanks @Sam");
+});
+
 it("keeps an unchanged reply's hash whether or not its root was read, and changes it on an edit", async () => {
   const dir = tempDirs.make("slack-read-normalize-");
   const file = (name: string) => path.join(dir, name);

@@ -51,7 +51,7 @@ it("native read-only edit retains the linked-account refusal for a source-less s
   runEmbeddedAgentMock.mockImplementation((params) =>
     fixture.modelTools(params, async ({ publication }) => {
       await expect(publication.execute("read-only-control", { action: "edit" })).rejects.toThrow(
-        "verified linked GitHub account",
+        "This channel cannot confirm who you are",
       );
       return agentResult();
     }),

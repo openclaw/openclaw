@@ -79,7 +79,7 @@ describe("canCallGatewayMethod", () => {
   });
 
   it.each([
-    ["disconnected", { connected: false }],
+    ["disconnected", { connected: false, methods: ["skills.update"] }],
     ["method unavailable", { methods: [], scopes: ["operator.admin"] }],
     ["scope insufficient", { methods: ["skills.update"], scopes: ["operator.write"] }],
     ["method catalog omitted", { scopes: ["operator.admin"] }],

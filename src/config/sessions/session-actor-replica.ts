@@ -496,19 +496,19 @@ function readCurrentEntryCellForPath(
 }
 
 /** Only the complete actor postimage covers pending-input absence for its current window. */
-export function hasSessionActorEmptyPendingInputHistory(
+export function readSessionActorEmptyPendingInputHistory(
   admitted: DatabasePathIdentity,
   sessionKey: string,
   sessionId: string,
-): boolean {
+) {
   const snapshot = readCurrentEntryCellForPath(
     { path: admitted.canonicalPath, sessionKey },
     admitted,
   )?.cell.snapshot;
-  return (
-    snapshot?.entry?.sessionId === sessionId &&
+  return snapshot?.entry?.sessionId === sessionId &&
     snapshot.pendingInputs.every((row) => row.consumed_event_id !== null)
-  );
+    ? { status: snapshot.entry.status, lastRunId: snapshot.entry.lastRunId }
+    : undefined;
 }
 
 /** Borrow current physical facts; the admitted reader retains disclosure authority. */

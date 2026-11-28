@@ -54,6 +54,8 @@ final class DashboardNativeBrowserHost {
     private var tabs: [Tab] = []
     private var downloads: [String: DashboardBrowserDownload] = [:]
     private var presentations: [String: Presentation] = [:]
+    private var overlayCutouts: [DashboardBrowserCutout] = []
+    private var colorScheme: DashboardBrowserColorScheme?
     private var presentationOrder: UInt64 = 0
     private var revision = 0
     private var pushScheduled = false
@@ -146,10 +148,11 @@ final class DashboardNativeBrowserHost {
         guard self.webView(for: tabId) == nil else { throw DashboardBrowserError.duplicateTab }
         guard let container, let dashboardWebView else { throw DashboardBrowserError.unavailable }
         let browser = DashboardBrowserTab(websiteDataStore: self.websiteDataStore, requestedURL: url)
+        browser.webView.appearance = self.readingAppearance
         browser.webView.navigationDelegate = self.navigationDelegate
         browser.webView.uiDelegate = self.uiDelegate
-        browser.webView.isHidden = true
-        container.addSubview(browser.webView, positioned: .above, relativeTo: dashboardWebView)
+        browser.isHidden = true
+        container.addSubview(browser, positioned: .above, relativeTo: dashboardWebView)
         self.tabs.append(Tab(
             id: tabId, sessionKey: sessionKey, browser: browser, openedBy: openedBy, openerTabId: openerTabId))
         browser.observeNavigationState { [weak self, weak browser] in
@@ -225,6 +228,11 @@ final class DashboardNativeBrowserHost {
         self.updatePresentations()
     }
 
+    func setOverlayCutouts(_ cutouts: [DashboardBrowserCutout]) {
+        self.overlayCutouts = cutouts
+        self.updatePresentations()
+    }
+
     func releaseScope(_ scope: String) {
         self.presentations.removeValue(forKey: scope)
         self.updatePresentations()
@@ -232,6 +240,7 @@ final class DashboardNativeBrowserHost {
 
     func releaseAllScopes() {
         self.presentations.removeAll()
+        self.overlayCutouts.removeAll()
         self.updatePresentations()
     }
 
@@ -275,13 +284,41 @@ final class DashboardNativeBrowserHost {
         guard let browser = self.browserTab(for: webView) else { return }
         browser.finishNavigation(navigation, at: webView.url, title: webView.title)
         self.scheduleStatePush()
+        self.refreshFavicon(for: browser)
+    }
+
+    private var readingAppearance: NSAppearance? {
+        self.colorScheme.flatMap { NSAppearance(named: $0 == .dark ? .darkAqua : .aqua) }
+    }
+
+    func setColorScheme(_ colorScheme: DashboardBrowserColorScheme) {
+        guard self.colorScheme != colorScheme else { return }
+        self.colorScheme = colorScheme
+        // The dashboard must keep observing the system preference for System mode.
+        let appearance = self.readingAppearance
+        for tab in self.tabs {
+            let browser = tab.browser
+            browser.webView.appearance = appearance
+            if browser.webView.isLoading {
+                browser.faviconRefreshPending = true
+            } else {
+                self.refreshFavicon(for: browser)
+            }
+        }
+    }
+
+    private func refreshFavicon(for browser: DashboardBrowserTab) {
+        let webView = browser.webView
+        browser.faviconRefreshPending = false
+        browser.faviconGeneration &+= 1
         let generation = browser.faviconGeneration
+        let colorScheme = self.colorScheme
         Task { @MainActor [weak self, weak browser] in
             guard let self, let browser, self.browserTab(for: webView) === browser,
                   browser.faviconGeneration == generation else { return }
             let value = try? await webView.callAsyncJavaScript(
-                "return (\(BrowserFaviconScript.source))(65536, 10000)",
-                arguments: [:],
+                "return (\(BrowserFaviconScript.source))(65536, 10000, colorScheme)",
+                arguments: ["colorScheme": colorScheme?.rawValue as Any? ?? NSNull()],
                 in: nil,
                 contentWorld: .defaultClient)
             guard self.browserTab(for: webView) === browser,
@@ -299,7 +336,11 @@ final class DashboardNativeBrowserHost {
         let nsError = error as NSError
         // Stop, replacement navigations, and response-policy handoffs (downloads,
         // external browser) cancel deliberately and keep the current page.
-        if !Self.isDeliberateInterruption(nsError) {
+        if Self.isDeliberateInterruption(nsError) {
+            if browser.faviconRefreshPending {
+                self.refreshFavicon(for: browser)
+            }
+        } else {
             let url = nsError.userInfo[NSURLErrorFailingURLErrorKey] as? URL ??
                 browser.representedURL ?? browser.requestedURL
             browser.showFailure(
@@ -387,12 +428,17 @@ final class DashboardNativeBrowserHost {
             // Releasing it restores the older scope if that scope is still visible.
             let presentation = self.presentation(for: tab.id)?.value
             guard let presentation else {
-                tab.browser.webView.isHidden = true
+                tab.browser.isHidden = true
                 continue
             }
             let frame = Self.mappedFrame(rect: presentation.rect, dashboardFrame: dashboardWebView.frame)
-            tab.browser.webView.frame = frame
-            tab.browser.webView.isHidden = frame.isEmpty
+            let browser = tab.browser
+            if browser.frame != frame {
+                browser.frame = frame
+                browser.findBarViewDidChangeHeight()
+            }
+            browser.applyCutouts(self.overlayCutouts, dashboardFrame: dashboardWebView.frame)
+            browser.isHidden = frame.isEmpty
         }
     }
 

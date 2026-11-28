@@ -2,7 +2,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isConfiguredCommandOwner,
   prepareCommandOwnerAuthority,
-} from "../auto-reply/command-auth.js";
+} from "../auto-reply/command-owner-facts.js";
 import { createAccountActionGate } from "../channels/plugins/account-action-gate.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
