@@ -61,7 +61,7 @@ it("exports the optional native contract through the public plugin API", () => {
   }>();
   expectTypeOf<
     Awaited<ReturnType<Native["collect"]>>["completed"][number]["status"]
-  >().toEqualTypeOf<"done" | "failed" | "killed" | "timeout">();
+  >().toEqualTypeOf<"done" | "failed" | "interrupted" | "killed" | "timeout">();
   expectTypeOf<
     Awaited<ReturnType<Native["collect"]>>["completed"][number]["selection"]
   >().toEqualTypeOf<Selection | undefined>();
