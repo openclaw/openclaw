@@ -246,7 +246,7 @@ async function relabelCandidate(from, to) {
   return relabeled;
 }
 
-async function recoverLegacyCrashWithCandidate(candidatePackage, crashedHolder) {
+async function recoverLegacyCrashWithCandidate(candidatePackage, crashedHolder, expectedCommit) {
   const recoveryPrefix = path.join(runtime, "candidate-recovery");
   const recoveryEnv = {
     ...env,
@@ -264,7 +264,7 @@ async function recoverLegacyCrashWithCandidate(candidatePackage, crashedHolder) 
   );
   assert.equal(
     readJson(path.join(recoveryPrefix, "lib/node_modules/openclaw/dist/build-info.json")).commit,
-    build.commit,
+    expectedCommit,
     "candidate recovery CLI does not match the tested candidate",
   );
   await run(
@@ -628,13 +628,26 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     // Public status belongs after updater settlement and before fixture teardown.
     // A failed query is secondary to the original update outcome.
     if (updateFailure && crashedGateway?.holder.processNamespace === undefined) {
-      writeJson("legacy-crash-refusal", { failure: updateFailure, holder: crashedGateway.holder });
+      const retainedHolder = JSON.parse(fs.readFileSync(crashedGateway.lockPath, "utf8"));
+      assert.deepEqual(
+        retainedHolder,
+        crashedGateway.holder,
+        "legacy crash lock changed before recovery",
+      );
+      const failureText = JSON.stringify(updateFailure);
+      writeJson("legacy-crash-refusal", {
+        failure: updateFailure,
+        holder: crashedGateway.holder,
+        retainedHolder,
+      });
       assert(
-        String(updateFailure).includes("Published updater failed") || update?.exitCode !== 0,
-        "legacy crash recovery path did not observe the expected updater refusal",
+        /cannot verify Gateway ownership|Legacy holder|recover-lock|live or unverified owner/iu.test(
+          failureText,
+        ),
+        "legacy crash recovery path did not observe the expected ownership refusal",
       );
       await run("recorded-run-before-recovery", "openclaw", ["update", "status", "--json"]);
-      await recoverLegacyCrashWithCandidate(candidatePackage, crashedGateway.holder);
+      await recoverLegacyCrashWithCandidate(candidatePackage, crashedGateway.holder, build.commit);
       update = await updateTo("update-retry", candidatePackage);
       if (update.exitCode !== 0) {
         updateFailure = Object.assign(new Error("Published updater retry failed"), {
