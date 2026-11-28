@@ -35,6 +35,7 @@ import {
   certificateWindowError,
   ownerLookup,
   memberLookup,
+  ownMember,
   isMemberRecoveryKey,
   proofKeyHex,
   refuse,
@@ -183,7 +184,7 @@ async function applyTarget(
     case "add":
       return addMember(state, target, context.now);
     case "remove": {
-      const member = state.members[target.account_id];
+      const member = ownMember(state.members, target.account_id);
       if (!member) {
         return refuse(state, "target_mismatch", "unknown member");
       }
@@ -198,7 +199,7 @@ async function applyTarget(
       ]);
     }
     case "set_role": {
-      const member = state.members[target.account_id];
+      const member = ownMember(state.members, target.account_id);
       if (!member) {
         return refuse(state, "target_mismatch", "unknown member");
       }
@@ -214,7 +215,7 @@ async function applyTarget(
       if (
         authority.kind === "member_device" &&
         (target.peer_key === authority.peer_key ||
-          !state.members[authority.account_id]?.peer_keys.includes(target.peer_key))
+          !ownMember(state.members, authority.account_id)?.peer_keys.includes(target.peer_key))
       ) {
         return refuse(
           state,
@@ -324,7 +325,7 @@ function addMember(
   if (target.peer_keys.some((key) => state.nodes[key] || isMemberRecoveryKey(state, key))) {
     return refuse(state, "target_mismatch", "a node key cannot be a member key");
   }
-  const existing = state.members[target.account_id];
+  const existing = ownMember(state.members, target.account_id);
   if (!existing && Object.keys(state.members).length >= MAX_MEMBERS) {
     return refuse(state, "limit_reached", `a claw has at most ${MAX_MEMBERS} members`);
   }
@@ -645,7 +646,7 @@ export async function submitRedemption(
   }
   const body = parsed.statement.body;
   if (invite.status !== "open") {
-    const member = state.members[identity.account_id];
+    const member = ownMember(state.members, identity.account_id);
     const keysMatch =
       invite.approved?.device_pub === body.device_pub && invite.approved.peer_key === body.peer_key;
     if (

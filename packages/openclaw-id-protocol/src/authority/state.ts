@@ -281,6 +281,14 @@ export function ownerLookup(state: AuthorityState, now: UnixSeconds): OwnerDevic
   return (devicePub) => caps.get(devicePub);
 }
 
+/** Own member rows only. `constructor` and other inherited names are not members. */
+export function ownMember(
+  members: AuthorityState["members"],
+  accountId: string,
+): MemberRecord | undefined {
+  return Object.hasOwn(members, accountId) ? members[accountId] : undefined;
+}
+
 /** Listed member signing keys. A peer without device metadata has no signing authority. */
 export function memberLookup(state: AuthorityState): MemberDeviceLookup {
   return (devicePub) => {
