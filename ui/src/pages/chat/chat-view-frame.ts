@@ -149,7 +149,7 @@ export type ChatProps = Omit<
     sessionSuggestions?: readonly SessionSuggestion[];
     sessionSuggestionLiveResolutions?: ReadonlyMap<string, boolean>;
     sessionSuggestionRole?: SessionSharingRole;
-    sessionSuggestionBusyIds?: ReadonlySet<string>;
+    sessionSuggestionBusyIds?: Pick<ReadonlySet<string>, "has">;
     sessionSuggestionsArchived?: boolean;
     onCloseSessionSuggestion?: (id: string) => void;
     canResolveSessionSuggestions?: boolean;

@@ -24,7 +24,7 @@ const actions: readonly [SessionSuggestionResolution, string, IconName][] = [
 export function ChatSessionSuggestions(props: {
   suggestions: readonly SessionSuggestion[];
   role?: SessionSharingRole;
-  busyIds: ReadonlySet<string>;
+  busyIds: Pick<ReadonlySet<string>, "has">;
   archived: boolean;
   onClose?: (id: string) => void;
   liveResolutions?: ReadonlyMap<string, boolean>;

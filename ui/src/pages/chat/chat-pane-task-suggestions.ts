@@ -277,7 +277,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       sessionSuggestions:
         multiIdentity ||
         (this.state && selectedChatSessionRow(this.state)?.invitedAccess === "suggest")
-          ? this.collaboration.suggestions
+          ? this.visibleSessionSuggestions
           : [],
       onCloseSessionSuggestion: (id: string) => {
         this.collaboration.liveResolutions = new Map(this.collaboration.liveResolutions).set(
@@ -287,7 +287,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       },
       sessionSuggestionLiveResolutions: this.collaboration.liveResolutions,
       sessionSuggestionRole: this.collaboration.role,
-      sessionSuggestionBusyIds: this.collaboration.busyIds,
+      sessionSuggestionBusyIds: this.collaboration.resolutions,
       sessionSuggestionsArchived: archived,
       canResolveSessionSuggestions:
         canWrite &&

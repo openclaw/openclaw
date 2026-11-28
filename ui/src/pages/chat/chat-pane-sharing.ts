@@ -130,13 +130,20 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     return hasMultiplePresenceIdentities(this.presence.snapshot);
   }
 
+  protected get visibleSessionSuggestions(): SessionSuggestion[] {
+    const { suggestions, resolutions } = this.collaboration;
+    return resolutions.size
+      ? suggestions.filter((row) => !resolutions.get(row.id)?.hideRow)
+      : suggestions;
+  }
+
   protected resetSessionSuggestions(): void {
     this.sessionSuggestionsRequestVersion += 1;
     this.sessionSuggestionsRefreshQueued = false;
     this.collaboration.suggestions = [];
     this.collaboration.liveResolutions = new Map();
     this.collaboration.role = undefined;
-    this.collaboration.busyIds = new Set();
+    this.collaboration.resolutions = new Map();
     this.collaboration.addOperation = undefined;
     this.collaboration.editOperation = undefined;
   }
@@ -270,8 +277,6 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
         (item) => item.id !== event.suggestion.id,
       );
     }
-    this.collaboration.busyIds.delete(event.suggestion.id);
-    this.collaboration.busyIds = new Set(this.collaboration.busyIds);
     if (shouldRefresh) {
       void this.refreshSessionSuggestions();
     }
@@ -344,7 +349,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     const scope = this.captureConnectionScope();
     if (
       !scope ||
-      this.collaboration.busyIds.has(suggestion.id) ||
+      this.collaboration.resolutions.has(suggestion.id) ||
       (resolution === "edit" && this.collaboration.editOperation !== undefined) ||
       !this.suggestionMatchesCurrentSession(suggestion)
     ) {
@@ -355,7 +360,13 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     }
     const sessionKey = scope.state.sessionKey;
     const targetSignature = this.sessionSuggestionTargetSignature;
+    const selfId = this.context.gateway.snapshot.selfUser?.id;
+    // Keep the author's receipt authoritative, even when the author is now a moderator.
+    const operation = {
+      hideRow: resolution === "dismiss" && Boolean(selfId) && selfId !== suggestion.author.id,
+    };
     const isCurrentTarget = () =>
+      this.collaboration.resolutions.get(suggestion.id) === operation &&
       this.isConnectionScopeCurrent(scope) &&
       scope.state.sessionKey === sessionKey &&
       this.sessionSuggestionTargetSignature === targetSignature;
@@ -370,7 +381,25 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     if (editOperation) {
       this.collaboration.editOperation = editOperation;
     }
-    this.collaboration.busyIds = new Set(this.collaboration.busyIds).add(suggestion.id);
+    if (operation.hideRow) {
+      const row = this.element.querySelector<HTMLElement>(".session-suggestion:focus-within");
+      if (row?.dataset.suggestionId === suggestion.id) {
+        const neighbor =
+          row.nextElementSibling?.querySelector("summary") ??
+          row.previousElementSibling?.querySelector("summary");
+        if (neighbor) {
+          neighbor.focus({ preventScroll: true });
+        } else {
+          focusComposerInput(getChatComposerState(this.presentationId).composerTextarea, {
+            preventScroll: true,
+          });
+        }
+      }
+    }
+    this.collaboration.resolutions = new Map(this.collaboration.resolutions).set(
+      suggestion.id,
+      operation,
+    );
     if (resolution === "edit") {
       scope.state.handleChatDraftChange(suggestion.text, []);
       // The native pane hands focus to the composer renderer after publishing the draft.
@@ -392,6 +421,11 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       );
       if (!isCurrentTarget()) {
         return;
+      }
+      if (operation.hideRow && this.sessionSuggestionsRefreshPromise) {
+        // A list captured before dismissal cannot restore the row after the mask lifts.
+        this.sessionSuggestionsRequestVersion += 1;
+        void this.refreshSessionSuggestions();
       }
       const remaining = this.collaboration.suggestions.filter((item) => item.id !== suggestion.id);
       this.collaboration.suggestions =
@@ -421,8 +455,8 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
         if (this.collaboration.editOperation === editOperation) {
           this.collaboration.editOperation = undefined;
         }
-        this.collaboration.busyIds.delete(suggestion.id);
-        this.collaboration.busyIds = new Set(this.collaboration.busyIds);
+        this.collaboration.resolutions.delete(suggestion.id);
+        this.collaboration.resolutions = new Map(this.collaboration.resolutions);
       }
     }
   }
