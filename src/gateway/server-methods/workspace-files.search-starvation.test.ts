@@ -140,6 +140,36 @@ describe("searchWorkspaceEntries budget fairness", () => {
     expect(result?.entries.map((entry) => entry.name)).toContain("inside.txt");
   });
 
+  it("gives two searches that fold to the same query their own budget", async () => {
+    const root = makeRoot();
+
+    // 30 * 100 = 3000 files plus 30 directories: a walk that stays inside
+    // MAX_SEARCH_VISITED_ENTRIES (5000) when each visited entry is charged
+    // once, and exceeds it when every entry is charged twice.
+    for (let dir = 0; dir < 30; dir += 1) {
+      const dirName = `fff-${String(dir).padStart(3, "0")}`;
+      for (let file = 0; file < 100; file += 1) {
+        writeFile(root, `${dirName}/aaa-${String(file).padStart(3, "0")}.txt`);
+      }
+    }
+    writeFile(root, "ZZZ.md");
+
+    // "ZZZ.md" and "zzz.md" fold to the same comparison text. The visited-entry
+    // budget is per SEARCH, so each of them must still reach the same depth a
+    // lone search reaches. Sharing one counter by folded query charged that
+    // counter twice per entry and cut the pair's effective budget in half.
+    const results = await searchWorkspaceEntries(root, ["ZZZ.md", "zzz.md"]);
+
+    expect(results).toHaveLength(2);
+    for (const result of results) {
+      expect(result.entries.map((entry) => entry.name)).toContain("ZZZ.md");
+      // The pair must be exactly as complete as a lone search over the same
+      // tree. Reporting the pair as truncated made the Control UI refuse the
+      // link it had found - the very failure this PR removes.
+      expect(result.truncated).toBe(false);
+    }
+  });
+
   it("skips VCS metadata directories in the walk", async () => {
     const root = makeRoot();
 
