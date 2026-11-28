@@ -442,7 +442,7 @@ src/agents/subagents/registry/subagent-control-kill-intent.ts	2
 src/agents/subagents/registry/subagent-control-kill-runtime.ts	2
 src/agents/subagents/registry/subagent-control-kill-scope.ts	3
 src/agents/subagents/registry/subagent-control-kill-settlement.ts	1
-src/agents/subagents/registry/subagent-control-kill.ts	7
+src/agents/subagents/registry/subagent-control-kill.ts	5
 src/agents/subagents/registry/subagent-control-scope.ts	2
 src/agents/subagents/registry/subagent-control-session.ts	6
 src/agents/subagents/registry/subagent-controller-inputs.ts	2
