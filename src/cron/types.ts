@@ -241,6 +241,8 @@ export type CronRunOutcome = {
   diagnostics?: CronRunDiagnostics;
   /** Transient: the run was skipped because its parent conversation is gone; pause the job. */
   parentUnavailable?: CronParentUnavailable;
+  /** Transient: the provider's stated reset for a rate-limited run; the next run waits for it. */
+  rateLimitResetAt?: number;
 };
 
 /** Why a parent-linked job pauses before any session is created. */
