@@ -2,9 +2,13 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
-import type { LegacyCronInferenceBinding } from "../../../cron/legacy-inference-account.js";
+import {
+  applyCronInferenceModelPin,
+  type CronInferenceBindingConversion,
+} from "../../../cron/legacy-inference-account.js";
 import { resolveCronOperatorExecutionRevision } from "../../../cron/service/jobs-tool-policy.js";
 import { noteCronJobsStoreCommit } from "../../../cron/store.js";
 import { resolveCronJobGrantDefinitionRevision } from "../../../cron/store/job-config-codec.js";
@@ -197,10 +201,10 @@ function definitionEvidence(jobs: readonly PluginDoctorCronJob[]) {
   }));
 }
 
-export type CronInferenceBindingRepair = {
-  job: PluginDoctorCronJob;
-  definition: Record<string, unknown>;
-} & ({ paused: true } | { paused: false; binding: LegacyCronInferenceBinding });
+export type CronInferenceBindingRepair = { job: PluginDoctorCronJob } & (
+  | { paused: true; definition: Record<string, unknown> }
+  | { paused: false; conversion: CronInferenceBindingConversion }
+);
 
 /** Translate stored inference settings without rewriting runtime state. */
 export async function repairCronInferenceBindingsForDoctor(
@@ -241,7 +245,7 @@ export async function repairCronInferenceBindingsForDoctor(
     },
     write(db) {
       for (const change of changes) {
-        const { job, definition, paused } = change;
+        const { job, paused } = change;
         const row = loadCronRows(db, job.storeKey, new Set([job.id]), {
           includeGrantDefinitionProjection: true,
         })[0];
@@ -253,6 +257,19 @@ export async function repairCronInferenceBindingsForDoctor(
           ownerTransferPending: _ownerTransferPending,
           ...original
         } = job.definition;
+        let definition: Record<string, unknown>;
+        if (change.paused) {
+          definition = change.definition;
+        } else {
+          if (!isRecord(original.payload)) {
+            throw new Error(`Cannot migrate the model selection for automation ${job.id}.`);
+          }
+          definition = {
+            ...original,
+            modelAuthProfileAuthorizationId: change.conversion.authorizationId,
+            payload: applyCronInferenceModelPin(original.payload, change.conversion),
+          };
+        }
         const previous = rowToCronJob(row, original);
         const next = paused ? null : rowToCronJob(row, definition);
         const legacy = { inferenceBinding };
@@ -290,7 +307,7 @@ export async function repairCronInferenceBindingsForDoctor(
             previous,
             next,
             row.grant_definition_generation,
-            change.binding,
+            change.conversion,
           );
         }
         executeSqliteQuerySync(

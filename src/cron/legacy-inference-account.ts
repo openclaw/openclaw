@@ -16,6 +16,26 @@ export type LegacyCronInferenceBinding = {
   runtime?: string;
 };
 
+/** The model route and credential lifetime that Doctor verified for one saved job. */
+export type CronInferenceBindingConversion = {
+  binding: LegacyCronInferenceBinding;
+  authorizationId: string;
+  model: string;
+  fallbacks?: string[];
+};
+
+export function applyCronInferenceModelPin(
+  payload: object,
+  conversion: CronInferenceBindingConversion,
+) {
+  return {
+    ...payload,
+    model: conversion.model,
+    ...(conversion.binding.runtime ? { modelRuntime: conversion.binding.runtime } : {}),
+    ...(conversion.fallbacks ? { fallbacks: conversion.fallbacks } : {}),
+  };
+}
+
 export function isLegacyCronInferenceBinding(value: unknown): value is LegacyCronInferenceBinding {
   return (
     isRecord(value) &&

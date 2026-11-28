@@ -1,12 +1,16 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasPendingAutomationContinuation } from "../../cron/automation-result.js";
+import { resolveCronConfigurationRefusal } from "../../cron/configuration-refusal.js";
+import { resolveCronRateLimitResetAt } from "../../cron/rate-limit-reset.js";
 import {
   createCronRunDiagnosticsFromAgentResult,
+  createCronRunDiagnosticsFromError,
   mergeCronRunDiagnostics,
 } from "../../cron/run-diagnostics.js";
 import { projectCronRunUsage } from "../../cron/run-telemetry.js";
 import { consumeCronNextCheckProposal } from "../../infra/agent-run-registry.automation.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import type { ReplyOperationObservation } from "../../sessions/reply-operation-state.js";
@@ -174,13 +178,18 @@ export async function settleSessionEventTurn(params: {
 > {
   const { automation, runId, deliveryEvidence } = params;
   const failed = params.outcome !== "completed";
+  const failureCause = deliveryEvidence?.failureCause;
+  const configurationRefusal = failed ? resolveCronConfigurationRefusal(failureCause) : undefined;
   const presentedError =
     deliveryEvidence?.meta?.error?.message ||
     deliveryEvidence?.payloads?.find((payload) => payload.isError && payload.text?.trim())?.text;
+  // Preserve this owned refusal when optional replies suppress it, without expanding unrelated errors.
+  const ownedCause =
+    configurationRefusal && !presentedError ? formatErrorMessage(failureCause) : undefined;
   if (failed) {
     params.onFailure(
-      presentedError || `Session event execution ${params.outcome}`,
-      !presentedError && params.outcome === "failed",
+      presentedError || ownedCause || `Session event execution ${params.outcome}`,
+      !presentedError && !ownedCause && params.outcome === "failed",
     );
   }
   await params.prepareCurrent();
@@ -220,9 +229,17 @@ export async function settleSessionEventTurn(params: {
       model: deliveryEvidence?.meta?.agentMeta?.model ?? deliveryEvidence?.resolved?.model,
       usage: projectCronRunUsage(deliveryEvidence?.meta?.agentMeta?.usage),
       replyDisposition: deliveryEvidence?.meta?.terminalReply?.disposition,
-      diagnostics: createCronRunDiagnosticsFromAgentResult(deliveryEvidence, {
-        finalStatus: failed ? "error" : "ok",
-      }),
+      diagnostics: ownedCause
+        ? mergeCronRunDiagnostics(
+            createCronRunDiagnosticsFromAgentResult(deliveryEvidence, { finalStatus: "error" }),
+            createCronRunDiagnosticsFromError("agent-run", ownedCause),
+          )
+        : createCronRunDiagnosticsFromAgentResult(deliveryEvidence, {
+            finalStatus: failed ? "error" : "ok",
+          }),
+      ...configurationRefusal,
+      // The settled cause is in-process only; cron keeps the reset as a transient schedule fact.
+      ...(failed ? { rateLimitResetAt: resolveCronRateLimitResetAt(failureCause) } : {}),
     },
   };
 

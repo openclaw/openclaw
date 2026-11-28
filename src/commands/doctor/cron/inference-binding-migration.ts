@@ -88,6 +88,7 @@ export async function maybeRepairCronInferenceBindings(params: {
     for (const stored of pending) {
       const { inferenceBinding: binding, ownerTransferPending, ...definition } = stored.definition!;
       const label = labelFor(stored);
+      let pausedDefinition = definition;
       let authorization: AuthProfileAuthorization | undefined;
       try {
         if (ownerTransferPending !== undefined) {
@@ -116,6 +117,16 @@ export async function maybeRepairCronInferenceBindings(params: {
           throw new CronInferenceMigrationPause(
             "this job does not support an explicit model selection",
           );
+        }
+        if (
+          job.payload.model &&
+          splitTrailingAuthProfile(job.payload.model).profile === binding.profileId
+        ) {
+          // Re-enabling an existing explicit pin must still check its recorded credential.
+          pausedDefinition = {
+            ...definition,
+            modelAuthProfileAuthorizationId: binding.authorizationId,
+          };
         }
         const agentId = tryResolveCronJobEffectiveAgentId(job, tryResolveAmbientOwnerAgentId(cfg));
         if (!agentId) {
@@ -218,23 +229,20 @@ export async function maybeRepairCronInferenceBindings(params: {
           assertCurrent() {},
         });
         authorization.assertCurrent();
+        const verifiedAuthorizationId = authorization.authorizationId;
         retained.push(authorization);
         authorization = undefined;
         changes.push({
           job: stored,
-          definition: {
-            ...definition,
-            payload: {
-              ...definition.payload,
-              model,
-              ...(payload.modelRuntime ? { modelRuntime: payload.modelRuntime } : {}),
-              ...(payload.fallbacks !== job.payload.fallbacks
-                ? { fallbacks: payload.fallbacks }
-                : {}),
-            },
-          },
           paused: false,
-          binding,
+          conversion: {
+            binding,
+            authorizationId: verifiedAuthorizationId,
+            model,
+            ...(payload.fallbacks !== job.payload.fallbacks
+              ? { fallbacks: payload.fallbacks }
+              : {}),
+          },
         });
         descriptions.push(
           `Automation ${label}: pinned ${model}${binding.runtime ? ` on ${binding.runtime}` : ""}.`,
@@ -247,7 +255,7 @@ export async function maybeRepairCronInferenceBindings(params: {
         const reason = `Paused because ${cause}. Review its model and account before enabling it.`;
         changes.push({
           job: stored,
-          definition: { ...definition, enabled: false, inferenceAccountPauseReason: reason },
+          definition: { ...pausedDefinition, enabled: false, inferenceAccountPauseReason: reason },
           paused: true,
         });
         paused.push(`Automation ${label}: ${reason}`);

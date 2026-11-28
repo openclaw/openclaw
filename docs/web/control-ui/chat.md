@@ -495,8 +495,8 @@ Saving keeps your existing draft and does not send a message.
 
 **Ask in side chat** asks about the passage in Side chat. **New session**
 opens the new-session launcher with the passage attached as a
-comment; starting the session sends it as a quote ahead of your prompt. The
-launcher's comment preview can delete the passage but not edit it, and your
+comment; starting the session sends it as a quote ahead of your prompt,
+followed by a link to the session it came from. The launcher's comment preview can delete the passage but not edit it, and your
 current chat draft is left unchanged.
 
 Saving leaves a small, filled comment marker beside the selected passage. Click

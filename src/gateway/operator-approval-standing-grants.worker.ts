@@ -6,7 +6,10 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { Selectable } from "kysely";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
-import type { LegacyCronInferenceBinding } from "../cron/legacy-inference-account.js";
+import {
+  applyCronInferenceModelPin,
+  type CronInferenceBindingConversion,
+} from "../cron/legacy-inference-account.js";
 import { resolveCronOperatorExecutionRevision } from "../cron/service/jobs-tool-policy.js";
 import { resolveCronJobGrantDefinitionRevision } from "../cron/store/job-config-codec.js";
 import { importLegacyCronMemberSources } from "../cron/store/member-source-role-import.js";
@@ -103,7 +106,7 @@ export function migrateCronInferenceStandingGrantReferences(
   previous: CronStoredJob,
   next: CronStoredJob,
   generation: number,
-  inferenceBinding: LegacyCronInferenceBinding,
+  conversion: CronInferenceBindingConversion,
 ): void {
   const maintenance = getOpenClawDatabaseMaintenanceScope();
   if (!maintenance?.ownsSchemaMaintenance) {
@@ -112,7 +115,12 @@ export function migrateCronInferenceStandingGrantReferences(
     );
   }
   maintenance.assertAdmission();
-  const unchanged = { ...next, payload: previous.payload };
+  const { binding: inferenceBinding } = conversion;
+  const expected = {
+    ...previous,
+    payload: applyCronInferenceModelPin(previous.payload, conversion),
+    modelAuthProfileAuthorizationId: conversion.authorizationId,
+  };
   const source = previous.operatorSource;
   if (
     source?.executionRevision ===
@@ -123,14 +131,14 @@ export function migrateCronInferenceStandingGrantReferences(
     })
   ) {
     // Doctor may update only the derivative revision, never the captured authority.
-    unchanged.operatorSource = source;
+    expected.operatorSource = next.operatorSource;
   }
   if (
     next.payload.kind !== "agentTurn" ||
     !next.payload.model?.startsWith(inferenceBinding.provider + "/") ||
     !next.payload.model.endsWith("@" + inferenceBinding.profileId) ||
     next.payload.modelRuntime !== inferenceBinding.runtime ||
-    !isDeepStrictEqual(previous, unchanged)
+    !isDeepStrictEqual(next, expected)
   ) {
     throw new Error("Cron inference migration must preserve the entire approved job definition.");
   }

@@ -318,6 +318,11 @@ export function planCronJobMutation(
       runtimeAuthority: options.runtimeAuthority,
       explicitlyMutatesToolsAllow,
     });
+    if (options.modelAuthProfileAuthorizationId === null || nextJob.runtimeAuthority) {
+      delete nextJob.modelAuthProfileAuthorizationId;
+    } else if (options.modelAuthProfileAuthorizationId !== undefined) {
+      nextJob.modelAuthProfileAuthorizationId = options.modelAuthProfileAuthorizationId;
+    }
     reconcileCronChannelRequesterAuthority({
       job: nextJob,
       // Bind only records the parent link; the authenticated requester stays bound to an

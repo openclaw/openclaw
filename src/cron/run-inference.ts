@@ -1,3 +1,4 @@
+import { AuthProfileAuthorizationError } from "../agents/auth-profiles/authorization-contract.js";
 import { CliExecutionAuthProfileError } from "../agents/cli-execution-auth.js";
 import { resolveBundledCliBackendAuthPolicy } from "../agents/cli-runner/cli-backend-auth-policy.js";
 import type { RunEmbeddedAgentInternalParams } from "../agents/embedded-agent-runner/run/internal-params.js";
@@ -6,6 +7,10 @@ import { resolveProviderModelAuthPolicy } from "../agents/model-auth-policy.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  CRON_INFERENCE_ACCOUNT_RETIRED_CODE,
+  markCronAccountRefusalBypassed,
+} from "./configuration-refusal.js";
 import type { CronStoredJob } from "./types.js";
 
 type CronModelPin = { provider: string; profileId: string; runtime?: string };
@@ -124,7 +129,10 @@ function incompatibleCandidateError(params: {
 
 /** Both Cron execution paths keep the pinned account bound through turn settlement. */
 export async function prepareCronRunInference(params: {
-  job: Pick<CronStoredJob, "id" | "name" | "payload" | "runtimeAuthority">;
+  job: Pick<
+    CronStoredJob,
+    "id" | "name" | "payload" | "runtimeAuthority" | "modelAuthProfileAuthorizationId"
+  >;
   agentId: string;
   cfg: OpenClawConfig;
   agentDir: string;
@@ -162,6 +170,20 @@ export async function prepareCronRunInference(params: {
         agentDir: params.agentDir,
         assertCurrent() {},
       });
+      if (
+        job.modelAuthProfileAuthorizationId !== undefined &&
+        authorization.authorizationId !== job.modelAuthProfileAuthorizationId
+      ) {
+        throw new FailoverError(
+          `Automation ${jobLabel(job)} runs on account ${binding.profileId}, which was signed in again or replaced since the job recorded it. To keep using it: openclaw automations edit ${job.id} --model <provider/model>@<profileId>.`,
+          {
+            reason: "auth",
+            provider: binding.provider,
+            profileId: binding.profileId,
+            code: CRON_INFERENCE_ACCOUNT_RETIRED_CODE,
+          },
+        );
+      }
       const store = await loadAuthProfileStoreForRuntimeAsync(params.agentDir, {
         profileId: binding.profileId,
         readOnly: true,
@@ -182,10 +204,22 @@ export async function prepareCronRunInference(params: {
     } catch (error) {
       authorization?.dispose();
       authorization = undefined;
-      unavailable = new FailoverError(
-        `Automation ${jobLabel(job)} cannot use pinned account ${binding.profileId}: it is unavailable or no longer authorized. Sign in again or edit the job to select another account.`,
-        { cause: error, reason: "auth", provider: binding.provider, profileId: binding.profileId },
-      );
+      const gone = error instanceof AuthProfileAuthorizationError && error.accountGone;
+      unavailable =
+        error instanceof FailoverError
+          ? error
+          : new FailoverError(
+              gone
+                ? `Automation ${jobLabel(job)} runs on account ${binding.profileId}, which was removed or signed out. Sign in again, or choose another account: openclaw automations edit ${job.id} --model <provider/model>@<profileId> (list accounts: openclaw gateway call models.authStatus). To use the agent’s normal account selection: openclaw automations edit ${job.id} --model <provider/model>.`
+                : `Automation ${jobLabel(job)} cannot use pinned account ${binding.profileId}: it is unavailable or no longer authorized. Sign in again or edit the job to select another account.`,
+              {
+                cause: error,
+                reason: "auth",
+                provider: binding.provider,
+                profileId: binding.profileId,
+                code: gone ? CRON_INFERENCE_ACCOUNT_RETIRED_CODE : undefined,
+              },
+            );
     }
   }
   const current = () => {
@@ -219,7 +253,13 @@ export async function prepareCronRunInference(params: {
   // The last admitted candidate's runtime, named when its CLI backend refuses the account.
   let candidateRuntime: string | undefined;
   return {
-    runParams: (provider) => (provider === binding.provider ? pinned : live),
+    runParams: (provider) => {
+      if (provider === binding.provider) {
+        return pinned;
+      }
+      markCronAccountRefusalBypassed(unavailable);
+      return live;
+    },
     runtimeSessionEntry: (entry, provider) =>
       resolveCronRuntimeSessionEntry(binding, entry, provider),
     assertCandidate(provider, cliExecution, runtime) {

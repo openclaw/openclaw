@@ -1,3 +1,4 @@
+import type { RuntimeContextDataRange } from "@openclaw/llm-core/types";
 /**
  * Internal runtime-context delimiter and stripping helpers.
  * Protects runtime-generated prompt blocks from user text and removes old
@@ -12,7 +13,6 @@ import {
   RUNTIME_CONTEXT_END_MARKER,
 } from "../llm/types.js";
 import { escapeRegExp } from "../shared/regexp.js";
-import type { RuntimeContextDataRange } from "./runtime-context-data-ranges.js";
 
 export {
   SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,

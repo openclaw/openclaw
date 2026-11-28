@@ -272,6 +272,15 @@ For Claude CLI's native sign-in, use `anthropic/<model>@anthropic:claude-cli`
 with the Claude CLI runtime. OpenClaw does not forward a stored credential for
 that native sign-in.
 
+Saving an explicit stored profile records its current authorization. If the
+credential is removed, signed out, or replaced under the same profile ID, the
+job refuses that credential. If no fallback can finish the run and the account
+is permanently unavailable, the job pauses with reason `account-unavailable`.
+A temporary fallback error keeps the job on its retry schedule.
+
+To use a replacement credential, sign in again, re-save the job's model with
+the intended `@<profileId>`, and run `openclaw automations enable <jobId>`.
+
 When upgrading from a version that saved accounts privately, Gateway startup
 backs up cron state and converts each compatible saved account to an explicit
 model pin before loading schedules. It keeps the recorded runtime when present

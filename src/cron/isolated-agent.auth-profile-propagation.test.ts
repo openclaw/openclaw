@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureAuthProfileAuthorization } from "../agents/auth-profiles/authorization.js";
+import { removeAuthProfilesAcrossOwnerStores } from "../agents/auth-profiles/profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
@@ -194,4 +196,60 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     );
     expect(h.runCliAgentMock).not.toHaveBeenCalled();
   });
+
+  it.each(["embedded", "cli"] as const)(
+    "fails a %s job whose stored account was removed with one message naming account and runtime",
+    async (route) => {
+      const claudeProfile = "anthropic:default";
+      const model = "claude-opus-4-6";
+      const modelRef = `anthropic/${model}`;
+      const runtime = route === "cli" ? "claude-cli" : "openclaw";
+      await saveProfiles({
+        [claudeProfile]: { type: "token", provider: "anthropic", token: "synthetic-claude-token" },
+      });
+      setupClaudeCliBackend();
+      const cfg = config(modelRef);
+      cfg.agents!.defaults!.models = { [modelRef]: { agentRuntime: { id: runtime } } };
+      cfg.auth = { profiles: { [claudeProfile]: { provider: "anthropic", mode: "token" } } };
+      h.resolveConfiguredModelRefMock.mockReturnValue({ provider: "anthropic", model });
+      h.resolveAllowedModelRefMock.mockReturnValue({ ref: { provider: "anthropic", model } });
+      const captured = await captureAuthProfileAuthorization({
+        cfg,
+        agentDir: state.agentDir(),
+        profileId: claudeProfile,
+        assertCurrent() {},
+      });
+      const job = makeAuthJob({
+        payload: {
+          kind: "agentTurn",
+          message: "Check status",
+          model: `${modelRef}@${claudeProfile}`,
+          modelRuntime: runtime,
+        },
+        modelAuthProfileAuthorizationId: captured.authorizationId,
+      });
+      captured.dispose();
+      await removeAuthProfilesAcrossOwnerStores({
+        profileIds: [claudeProfile],
+        agentDir: state.agentDir(),
+      });
+      clearRuntimeAuthProfileStoreSnapshots();
+
+      const result = await runWithConfig(cfg, job);
+
+      expect(result.status).toBe("error");
+      expect(result.error).toContain(
+        `runs on account ${claudeProfile}, which was removed or signed out`,
+      );
+      expect(result.error).toContain("list accounts: openclaw gateway call models.authStatus");
+      expect(result.error).toContain(
+        "To use the agent’s normal account selection: openclaw automations edit test-job --model <provider/model>.",
+      );
+      // The pause decision reads the producer's code, not this text.
+      expect(result.errorClassification).toEqual({ kind: "permanent" });
+      expect(result.failureNotificationDetail).toEqual({ kind: "inference-account-retired" });
+      expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(h.runCliAgentMock).not.toHaveBeenCalled();
+    },
+  );
 });

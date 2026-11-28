@@ -14,6 +14,7 @@ import { getCronStoreKysely } from "../../../cron/store/schema.js";
 import type { CronStoredJob } from "../../../cron/types.js";
 import { runLegacyCronHealth } from "../../../flows/doctor-health-contribution-runners.state.js";
 import { legacyMemberSnapshot } from "../../../gateway/openclaw-id/member-source-role-import.test-support.js";
+import { migrateCronInferenceStandingGrantReferences } from "../../../gateway/operator-approval-standing-grants.worker.js";
 import { executeSqliteQuerySync } from "../../../infra/kysely-sync.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
@@ -63,8 +64,29 @@ it("backs up captured accounts, converts exact routes, and pauses mismatches wit
       authRequirement: "api-key",
       runtime: "openclaw",
       source: "auto",
-    };
+    } as const;
     authorization.dispose();
+    // This captured account survived publication of an older updater's private state copy.
+    const shadowRoot = state.statePath(".upgrade-example-123-456", "state");
+    const shadow = await captureAuthProfileAuthorization({
+      cfg,
+      profileId: binding.profileId,
+      agentDir: state.agentDir(),
+      publishedStateDir: shadowRoot,
+      assertCurrent() {},
+    });
+    const shadowBinding = { ...binding, authorizationId: shadow.authorizationId };
+    shadow.dispose();
+    await state.writeJson(".upgraded-example.json", {
+      appVersion: "example",
+      ops: [
+        {
+          kind: "replace",
+          live: state.statePath("state", "openclaw.sqlite"),
+          next: state.statePath(".upgrade-example-123-456", "state", "state", "openclaw.sqlite"),
+        },
+      ],
+    });
     const source = {
       version: 1,
       kind: "gateway",
@@ -95,7 +117,7 @@ it("backs up captured accounts, converts exact routes, and pauses mismatches wit
       version: 1,
       jobs: [
         job("inherit"),
-        job("revoked"),
+        job("revoked", "openai/gpt-4.1@openai:reports"),
         { ...job("mismatch"), agentId: "mismatch" },
         job("unbound"),
         {
@@ -107,10 +129,11 @@ it("backs up captured accounts, converts exact routes, and pauses mismatches wit
     const original = await inspectCronJobsForDoctor({ env: process.env });
     runOpenClawStateWriteTransaction(({ db }) => {
       for (const row of original.jobs.filter(({ id }) => id !== "unbound")) {
+        const storedBinding = row.id === "explicit" ? shadowBinding : binding;
         const { state: _state, ...executionDefinition } = row.definition!;
         const executionRevision = hashCronJobDefinition({
           ...executionDefinition,
-          inferenceBinding: binding,
+          inferenceBinding: storedBinding,
         });
         const { enabled: _enabled, ...grantDefinition } = executionDefinition;
         executeSqliteQuerySync(
@@ -121,14 +144,16 @@ it("backs up captured accounts, converts exact routes, and pauses mismatches wit
               job_json: JSON.stringify({
                 ...row.definition,
                 inferenceBinding:
-                  row.id === "revoked" ? { ...binding, authorizationId: "a".repeat(64) } : binding,
+                  row.id === "revoked"
+                    ? { ...binding, authorizationId: "a".repeat(64) }
+                    : storedBinding,
                 ...(row.id === "inherit" ? { operatorSource: { source, executionRevision } } : {}),
               }),
               ...(row.id === "explicit"
                 ? {
                     grant_definition_revision: hashCronJobDefinition({
                       ...grantDefinition,
-                      inferenceBinding: binding,
+                      inferenceBinding: storedBinding,
                     }),
                   }
                 : {}),
@@ -156,6 +181,29 @@ it("backs up captured accounts, converts exact routes, and pauses mismatches wit
         await using ctx = await prepareDoctorContext(state.configPath);
         await runLegacyCronHealth(ctx);
         expect(ctx.updateWarnings ?? []).toEqual(expect.arrayContaining([pauseNotice]));
+        const previous = job("inherit");
+        const model = "openai/gpt-4.1@openai:reports";
+        // A verified billing change cannot carry the previous approval to a different task.
+        expect(() =>
+          runOpenClawStateWriteTransaction(({ db }) =>
+            migrateCronInferenceStandingGrantReferences(
+              db,
+              previous,
+              {
+                ...previous,
+                modelAuthProfileAuthorizationId: binding.authorizationId,
+                payload: {
+                  kind: "agentTurn",
+                  model,
+                  modelRuntime: binding.runtime,
+                  message: "Run a different task",
+                },
+              },
+              1,
+              { binding, model, authorizationId: binding.authorizationId },
+            ),
+          ),
+        ).toThrow("preserve the entire approved job definition");
       });
     } finally {
       notes.mockRestore();
@@ -188,6 +236,7 @@ it("backs up captured accounts, converts exact routes, and pauses mismatches wit
     expect(inherited).toMatchObject({
       enabled: true,
       payload: { model: "openai/gpt-4.1@openai:reports", modelRuntime: "openclaw" },
+      modelAuthProfileAuthorizationId: binding.authorizationId,
     });
     expect(inherited.operatorSource).toEqual({
       source,
@@ -196,13 +245,18 @@ it("backs up captured accounts, converts exact routes, and pauses mismatches wit
     expect(saved.find(({ id }) => id === "explicit")).toMatchObject({
       enabled: true,
       cyberAccessProgram: "daybreak_blue",
+      modelAuthProfileAuthorizationId: binding.authorizationId,
       payload: {
         kind: "agentTurn",
         model: "openai/gpt-4.1-mini@openai:reports",
         modelRuntime: "openclaw",
       },
     });
-    expect(saved.find(({ id }) => id === "revoked")).toMatchObject({ enabled: false });
+    expect(saved.find(({ id }) => id === "revoked")).toMatchObject({
+      enabled: false,
+      payload: { model: "openai/gpt-4.1@openai:reports" },
+      modelAuthProfileAuthorizationId: "a".repeat(64),
+    });
     const mismatch = saved.find(({ id }) => id === "mismatch")!;
     expect(cronJobReadView(mismatch)).toMatchObject({
       enabled: false,

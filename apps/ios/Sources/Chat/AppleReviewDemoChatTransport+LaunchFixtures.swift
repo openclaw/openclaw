@@ -3,6 +3,27 @@ import OpenClawChatUI
 import OpenClawProtocol
 
 enum ScreenshotFixtureMode {
+    static func clockMediaHistory() throws -> [AnyCodable]? {
+        guard ProcessInfo.processInfo.arguments.contains("--openclaw-clock-media-fixture") else { return nil }
+        let yesterday = Int(Date.now.timeIntervalSince1970 * 1000) - 86_400_000
+        // Exercise the sent-photo path with a synthetic mountain scene.
+        let landscape = "iVBORw0KGgoAAAANSUhEUgAAAEgAAAAwCAIAAAA9/qu8AAAA90lEQVR42u3WTQoCMQwF4HdAjyOMV3Gh"
+            + "Z5k7uBW8hyuRgUHoj2mbtkkm8JblkW8RGqzPl8nAYQ5z2NFh78d9ix3YTvqNelhURbc5TIyKaHOYw3zH"
+            + "jgoz+49Zvjzm3IqX23WLKdiuEmtDu0qmDe0kmTwwqkTZwKuSYwMvSQ4PnVTTbeinYrRVtKEfiYVX3YYB"
+            + "qjpbYyHGqIpsLJ0YQyLyGDsxWJWx8XZivCqcI/XmtJzDEGsxRZVJFJNKhgd1GCIS2j0pIWxgwqBlOGmY"
+            + "eljRBk/x1MAoizsXUwyTMy4bTCPpP0yvKglTTYrDDJAiMDOqL8wSxmGa8wGVuQPLJjNLDgAAAABJRU5E"
+            + "rkJggg=="
+        return try JSONDecoder().decode([AnyCodable].self, from: Data(#"""
+        [{"role":"user","timestamp":\#(yesterday),"__openclaw":{"id":"earlier"},
+          "content":[{"type":"text","text":"From yesterday"}]},
+         {"role":"user","timestamp":\#(yesterday + 1000),"__openclaw":{"id":"view"},
+          "content":[{"type":"text","text":"Here’s the view"}]},
+         {"role":"user","timestamp":\#(yesterday + 2000),"__openclaw":{"id":"landscape"},
+          "content":[{"type":"image","mimeType":"image/png","fileName":"landscape.png","alt":"Mountain view",
+                      "width":72,"height":48,"content":"\#(landscape)"}]}]
+        """#.utf8))
+    }
+
     /// A process-local fixture store, never backed by an installed user's chat databases.
     static let queueMenuOutbox: OpenClawChatSQLiteTranscriptCache? = {
         guard ProcessInfo.processInfo.arguments.contains("--openclaw-queue-menu-fixture") else { return nil }
@@ -200,5 +221,103 @@ actor DrawerGroupFixtureStore {
         return try JSONSerialization.data(withJSONObject: [
             "ok": true, "groups": self.names.enumerated().map { ["name": $0.element, "position": $0.offset] },
         ])
+    }
+}
+
+/// `--openclaw-session-states-fixture`: Sessions page rows in each state a row can show (approval with and
+/// without a command, failure with a short, a long and no reason, subagents working, plain working, pinned,
+/// grouped and long titles). The approvals are attention requests as `pendingApprovalAttentionRequests`
+/// builds them; the subagents are hidden rows that `CommandCenterTab.listedSessions` folds into their parent.
+extension ScreenshotFixtureMode {
+    static var sessionStatesEnabled: Bool {
+        ProcessInfo.processInfo.arguments.contains("--openclaw-session-states-fixture")
+    }
+
+    /// One clock for the fixture, so repeated reads return equal rows and requests.
+    static let sessionStatesStart = Date()
+
+    static func sessionStateRows(now: Date = Self.sessionStatesStart) -> [OpenClawChatSessionEntry] {
+        let nowMs = now.timeIntervalSince1970 * 1000
+        var rank = 0.0
+        func fixtureSession(
+            _ key: String,
+            _ label: String,
+            _ change: (inout OpenClawChatSessionEntry) -> Void = { _ in })
+            -> OpenClawChatSessionEntry
+        {
+            rank += 1
+            var entry = OpenClawChatSessionEntry(key: "agent:main:\(key)")
+            entry.label = label
+            entry.agentId = "main"
+            entry.updatedAt = nowMs - rank * 60000
+            change(&entry)
+            return entry
+        }
+        return [
+            fixtureSession(
+                "rows-spinner",
+                "Find out why the sidebar spinner keeps turning after the session ends on iPad"),
+            fixtureSession("rows-fork-lander", "🛬 Fork lander"),
+            fixtureSession("rows-approval-plain", "Rotate the staging keys"),
+            fixtureSession("rows-screens", "Map the OpenClaw screens") {
+                $0.status = "timeout"
+                $0.unread = true
+                $0.lastRunError = "Request timed out before a response was generated. Please try again, " +
+                    "or increase `agents.defaults.timeoutSeconds` in your config."
+            },
+            fixtureSession("rows-rate-limit", "Nightly digest") {
+                $0.status = "failed"
+                $0.unread = true
+                $0.lastRunError = "⚠️ clawrouter/anthropic/claude-opus-5-5 is rate-limited.\n\nPick another model " +
+                    "in the model picker, or configure Model fallbacks in Settings."
+            },
+            fixtureSession("rows-failed-plain", "Import the old notes") {
+                $0.status = "failed"
+                $0.unread = true
+            },
+            fixtureSession("rows-mapping", "iOS mapping, tempbook") { $0.hasActiveRun = true },
+            fixtureSession("rows-icons", "⏳ Redo the OpenClaw icons") { $0.hasActiveRun = true },
+            fixtureSession("rows-boards", "📐 PRINCIPAL - Boards / Designer") {
+                $0.hasActiveRun = true
+                $0.childSessions = ["agent:main:subagent:rows-boards-a", "agent:main:subagent:rows-boards-b"]
+            },
+            fixtureSession("subagent:rows-boards-a", "Board audit") {
+                $0.parentSessionKey = "agent:main:rows-boards"
+                $0.hasActiveRun = true
+            },
+            fixtureSession("subagent:rows-boards-b", "Board export") {
+                $0.parentSessionKey = "agent:main:rows-boards"
+                $0.hasActiveRun = true
+            },
+            fixtureSession("rows-avatar", "🎨 OpenClaw avatar") {
+                $0.pinned = true
+                $0.unread = true
+            },
+            fixtureSession("rows-onboarding", "🧭 Map the OpenClaw onboarding") { $0.pinned = true },
+            fixtureSession("rows-film", "🎬 OpenClaw One Year — Film") { $0.pinned = true },
+            fixtureSession("rows-videos", "Cut the launch video") { $0.category = "Videos" },
+            fixtureSession(
+                "rows-icon-sizes",
+                "Standardize the size and alignment of the icons in the sidebar and the search"),
+            fixtureSession("rows-recent", "Fix the session fixture"),
+        ]
+    }
+
+    static func sessionStateApprovals(now: Date = Self.sessionStatesStart) -> [OpenClawChatAttentionRequest] {
+        let nowMs = now.timeIntervalSince1970 * 1000
+        return [
+            ("rows-spinner", "xcrun simctl erase 3F2A-batch31"),
+            ("rows-fork-lander", "gh pr merge 91342 --squash"),
+            ("rows-approval-plain", ""),
+        ].enumerated().map { index, item in
+            OpenClawChatAttentionRequest(
+                id: "rows-approval-\(index)",
+                kind: .approval,
+                sessionKey: "agent:main:\(item.0)",
+                agentID: "main",
+                createdAtMs: nowMs - Double(index) * 1000,
+                expiresAtMs: nowMs + 3_600_000,
+                preview: item.1)
+        }
     }
 }

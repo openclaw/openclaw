@@ -201,6 +201,65 @@ afterEach(async () => {
   configureAiTransportHost(originalTransportHost);
 });
 
+it("keeps the originally selected credential until the operator reselects or clears the profile", async () => {
+  await withAuthState("cron-model-pin-lifetime", async (state) => {
+    const { CronService } = await import("./service.js");
+    const { createNoopLogger } = await import("./service.test-harness.js");
+    const { createTestGatewayScheduler } = await import("../test-utils/gateway-scheduler-clock.js");
+    const reportsAgentDir = state.agentDir("reports");
+    await writeConfig(state, {
+      agents: {
+        defaults: { model: "openai/gpt-4.1" },
+        entries: { main: { agentDir: state.agentDir() }, reports: { agentDir: reportsAgentDir } },
+      },
+    });
+    const storePath = state.statePath("cron", "jobs.json");
+    const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      storePath,
+      cronEnabled: false,
+      defaultAgentId: "main",
+      log: createNoopLogger(),
+      enqueueSystemEvent() {},
+      runIsolatedAgentJob: async () => ({ status: "ok" }),
+    });
+    const input = {
+      ...storedJob("pin-lifetime"),
+      declarationKey: "weekly-report",
+      payload: {
+        kind: "agentTurn" as const,
+        message: "Report.",
+        model: `openai/gpt-4.1@${platformId}`,
+      },
+    };
+    const savedLifetime = async () =>
+      (await loadCronJobsStore(storePath)).jobs[0]?.modelAuthProfileAuthorizationId;
+    try {
+      await persistAuthProfileBatch({ profiles: [keyProfile(platformId, platformKey)] });
+      await cron.add(input);
+      const original = await savedLifetime();
+      expect(original).toEqual(expect.any(String));
+      await removeAuthProfilesAcrossOwnerStores({ profileIds: [platformId] });
+      await persistAuthProfileBatch({
+        agentDir: reportsAgentDir,
+        profiles: [keyProfile(platformId, "synthetic-replacement")],
+      });
+      await cron.add(input);
+      await cron.update(input.id, { agentId: "reports" });
+      expect(await savedLifetime()).toBe(original);
+      await cron.update(input.id, { payload: { kind: "agentTurn", model: input.payload.model } });
+      const replacement = await savedLifetime();
+      expect(replacement).toEqual(expect.any(String));
+      expect(replacement).not.toBe(original);
+      await cron.update(input.id, { payload: { kind: "agentTurn", model: null } });
+      expect(await savedLifetime()).toBeUndefined();
+    } finally {
+      cron.stop();
+      await cron.waitForIdle();
+    }
+  });
+});
+
 it.each(["API key", "OAuth", "scheduled-model OAuth"] as const)(
   "keeps the selected %s account across fresh runs and default changes",
   async (mode) => {

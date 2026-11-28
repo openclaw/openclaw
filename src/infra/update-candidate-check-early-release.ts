@@ -24,28 +24,28 @@ import { collectRegisteredPaths } from "./update-candidate-state.shared.js";
 const EARLY_RELEASE_LINK = ["git-install", "lib", "node_modules", "openclaw"];
 const STATE_DIR_WORD = "${OPENCLAW_STATE_DIR}";
 
-/** The link as a double-quoted shell word, plus a guard for the start of the line. The early
- * updater replaces the state and home directories in this check's output with placeholders, so
- * the path is spelled from `$HOME`, or for a state directory outside it from `$OPENCLAW_STATE_DIR`,
- * which the line then requires before it changes anything. That output also redacts `$` followed
- * by 16 or more name characters as a Matrix event ID, so longer names are written `${NAME}` and
- * the line's own variable is short. */
-function shellEarlyReleaseLink(
+/** A path in the state directory as a double-quoted shell word, plus a guard for the start of a
+ * line. The early updater replaces the state and home directories in this check's output with
+ * placeholders, so the path is spelled from `$HOME`, or for a state directory outside it from
+ * `$OPENCLAW_STATE_DIR`, which the line then requires before it changes anything. That output
+ * also redacts `$` followed by 16 or more name characters as a Matrix event ID, so longer names
+ * are written `${NAME}` and the line's own variable is short. */
+export function shellStatePath(
   stateDir: string,
   env: NodeJS.ProcessEnv,
-): { link: string; guard?: string } {
+  tail: string,
+): { path: string; guard?: string } {
   const home = env.HOME?.trim();
   const relative = home ? path.relative(home, stateDir) : "";
-  const tail = EARLY_RELEASE_LINK.join("/");
   if (home && relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
     const spelled = relative
       .split(path.sep)
       .join("/")
       .replace(/["$`\\]/gu, "\\$&");
-    return { link: `"$HOME/${spelled}/${tail}"` };
+    return { path: `"$HOME/${spelled}/${tail}"` };
   }
   return {
-    link: `"${STATE_DIR_WORD}/${tail}"`,
+    path: `"${STATE_DIR_WORD}/${tail}"`,
     guard: ': "${OPENCLAW_STATE_DIR:?set it to the OpenClaw state directory}"',
   };
 }
@@ -68,7 +68,7 @@ function formatRebuild(platform: NodeJS.Platform, stateDir: string, env: NodeJS.
       ...build,
     ];
   }
-  const { link, guard } = shellEarlyReleaseLink(stateDir, env);
+  const { path: link, guard } = shellStatePath(stateDir, env, EARLY_RELEASE_LINK.join("/"));
   // The previous service may start through this link, so a failure after its removal restores it.
   const saved = "oc_link";
   const steps = [
@@ -97,11 +97,12 @@ function isClosedWalStore(file: string): boolean {
   }
 }
 
-/** The state store's and the oldest agent store's schema versions; null when unreadable or
- * PostgreSQL-backed. */
-function readSchemaVersions(
-  env: NodeJS.ProcessEnv,
-): { state: number; agent: number | null } | null {
+/** Every SQLite store's schema version, by path. */
+export type SchemaVersions = { state: number; agents: Record<string, number> };
+
+/** Every store's schema version; null when unreadable or PostgreSQL-backed. The recovery runner
+ * compares these before it puts the previous build back. */
+export function readSchemaVersions(env: NodeJS.ProcessEnv = process.env): SchemaVersions | null {
   const stateDir = resolveStateDir(env);
   try {
     const shared = resolveOpenClawStateSqlitePath(env);
@@ -134,7 +135,8 @@ function readSchemaVersions(
     const db = open(shared);
     try {
       // A PostgreSQL store keeps a version-0 SQLite anchor; its schema lives on the server and
-      // migrates through Doctor with writers stopped, which this rebuild does not cover.
+      // migrates through Doctor with writers stopped, which neither the recovery nor the rebuild
+      // covers.
       if (readSqliteUserVersion(db) === 0) {
         return null;
       }
@@ -145,7 +147,7 @@ function readSchemaVersions(
     } finally {
       db.close();
     }
-    let agent: number | null = null;
+    const agents: Record<string, number> = {};
     for (const file of [...agentPaths].filter((candidate) => fs.existsSync(candidate))) {
       const store = open(file);
       try {
@@ -153,12 +155,12 @@ function readSchemaVersions(
         if (version === 0) {
           return null;
         }
-        agent = agent === null ? version : Math.min(agent, version);
+        agents[file] = version;
       } finally {
         store.close();
       }
     }
-    return { state, agent };
+    return { state, agents };
   } catch {
     return null;
   }
@@ -182,6 +184,16 @@ function isEarlyGitReleaseLayout(root: string, env: NodeJS.ProcessEnv): boolean 
   }
 }
 
+export type EarlyGitReleaseSchemaChange = {
+  root: string;
+  stateDir: string;
+  /** `<stateDir>/git-install`, resolved. */
+  prefix: string;
+  /** What this release would migrate (`agent`: the oldest agent store, if any); null once an
+   * automatic recovery started by an earlier update migrated it. */
+  pending: { state: number; agent: number | null } | null;
+};
+
 /**
  * Updaters built from `main` between #199706 (6747b1ec5ae, 2026-11-17) and #201917
  * (2ef6f7bade7, 2026-11-19) build each Git release in `<stateDir>/git-install/releases/<id>/build`
@@ -194,38 +206,92 @@ function isEarlyGitReleaseLayout(root: string, env: NodeJS.ProcessEnv): boolean 
  * the data; builds before #201463 (2183caf789c) even require the migrated schema before the
  * restart that would migrate it, fail after switching the link, and leave the install
  * half-switched, so their next run reports the never-started release as current. Those updaters
- * run first and cannot be patched, so this release refuses here, before anything changes, and
- * names the one-time rebuild. Same-schema updates through them pass. Returns null for every
- * other caller, and when state is current, newer, unreadable or PostgreSQL-backed.
+ * run first and cannot be patched, so this release stops them here, before anything changes:
+ * `update-early-release-recovery-start.ts` then finishes the update where it can, and otherwise
+ * the refusal names the one-time rebuild. It also stops them while that recovery's release
+ * exists, because state it already migrated would let a concurrent early updater through.
+ * Same-schema updates through them pass. Returns null for every other caller, and when state is
+ * current, newer, unreadable or PostgreSQL-backed.
  *
- * Remove only on evidence that the updaters identified here can cross this hop (a run in which
- * one completes a schema-changing update without this check), not on a date or a release: a
- * published release does not replace the updater these checkouts run. The layout test costs a
- * few path lookups for every other caller, so keeping it is cheap.
+ * Remove only on evidence that no installed updater identified here still needs it (a run in
+ * which one completes a schema-changing update without this check, or none left on the
+ * updater's 2026-11-17 to 2026-11-19 commits), not on a date or a release: a published release
+ * does not replace the updater these checkouts run. The layout test costs a few path lookups for
+ * every other caller, so keeping it is cheap. Remove the recovery modules with it.
  */
-export function refuseEarlyGitReleaseSchemaChange(
+export function inspectEarlyGitReleaseSchemaChange(
   root: string,
   env: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = process.platform,
-): string | null {
+): EarlyGitReleaseSchemaChange | null {
   if (!isEarlyGitReleaseLayout(root, env)) {
     return null;
   }
+  const stateDir = resolveStateDir(env);
+  const prefix = fs.realpathSync(path.join(stateDir, "git-install"));
   const versions = readSchemaVersions(env);
-  const changes: string[] = [];
-  if (versions && versions.state < OPENCLAW_STATE_SCHEMA_VERSION) {
-    changes.push(`state schema ${versions.state} to ${OPENCLAW_STATE_SCHEMA_VERSION}`);
-  }
-  if (versions && versions.agent !== null && versions.agent < OPENCLAW_AGENT_SCHEMA_VERSION) {
-    changes.push(`agent schema ${versions.agent} to ${OPENCLAW_AGENT_SCHEMA_VERSION}`);
-  }
-  if (changes.length === 0) {
-    return null;
+  const agents = versions ? Object.values(versions.agents) : [];
+  const agent = agents.length > 0 ? Math.min(...agents) : null;
+  const pending =
+    versions &&
+    (versions.state < OPENCLAW_STATE_SCHEMA_VERSION ||
+      (agent !== null && agent < OPENCLAW_AGENT_SCHEMA_VERSION))
+      ? { state: versions.state, agent }
+      : null;
+  return pending || fs.existsSync(path.join(prefix, "recovery"))
+    ? { root, stateDir, prefix, pending }
+    : null;
+}
+
+/** How the recovery a check started, or found running, is followed. */
+type EarlyGitReleaseRecoveryJob = { status: string; log: string };
+
+export type EarlyGitReleaseRecoveryStart =
+  | { started: true; job: EarlyGitReleaseRecoveryJob; target: string }
+  | { started: false; running?: EarlyGitReleaseRecoveryJob; reason?: string };
+
+/** The check's stderr, which the early updater prints with state and home paths redacted. */
+export function formatEarlyGitReleaseRefusal(
+  change: EarlyGitReleaseSchemaChange,
+  recovery: EarlyGitReleaseRecoveryStart,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const { pending } = change;
+  const changes = pending
+    ? [
+        ...(pending.state < OPENCLAW_STATE_SCHEMA_VERSION
+          ? [`state schema ${pending.state} to ${OPENCLAW_STATE_SCHEMA_VERSION}`]
+          : []),
+        ...(pending.agent !== null && pending.agent < OPENCLAW_AGENT_SCHEMA_VERSION
+          ? [`agent schema ${pending.agent} to ${OPENCLAW_AGENT_SCHEMA_VERSION}`]
+          : []),
+      ]
+    : [];
+  const lines = pending
+    ? [
+        `OpenClaw ${VERSION} migrates your databases (${changes.join(", ")}).`,
+        "The updater in this checkout (a main build from 2026-11-17 to 2026-11-19) cannot finish that: after the migration, neither it nor the checkout's `openclaw` command can open the migrated data.",
+      ]
+    : [
+        "An automatic recovery that an earlier update started has migrated your databases; the updater in this checkout cannot run another update.",
+      ];
+  const job = recovery.started ? recovery.job : recovery.running;
+  if (job) {
+    return [
+      ...lines,
+      recovery.started
+        ? `So it stops here and reports this update as failed, and the new release finishes the update in the background. In about 5 to 10 minutes it moves the checkout to ${recovery.target.slice(0, 11)}, restarts the Gateway on the new release (which migrates your databases at startup), rebuilds the checkout while that release serves, and restarts the Gateway on the rebuilt checkout. The first restart lasts as long as the migration; the second takes a few seconds. If the new release does not start before migrating, the previous build is put back. If the recovery cannot finish, the Gateway keeps serving and its log says why and names the one command that finishes the update; \`openclaw update status\` shows the outcome.`
+        : "So it stops here. That recovery is still running and finishes the update; nothing else was changed.",
+      "Until the rebuild finishes, the checkout's `openclaw` command may fail or refuse the migrated data; that is expected.",
+      `Follow progress: ${job.status} (log: ${job.log})`,
+    ].join("\n");
   }
   return [
-    `OpenClaw ${VERSION} migrates your databases (${changes.join(", ")}).`,
-    "The updater in this checkout (a main build from 2026-11-17 to 2026-11-19) cannot finish that: after the migration, neither it nor the checkout's `openclaw` command can open the migrated data.",
+    ...lines,
     "The update stopped before switching releases; the Gateway was not touched. Running `openclaw update` again stops here the same way.",
-    ...formatRebuild(platform, resolveStateDir(env), env),
+    ...(!recovery.started && recovery.reason
+      ? [`Automatic recovery did not start: ${recovery.reason}.`]
+      : []),
+    ...formatRebuild(platform, change.stateDir, env),
   ].join("\n");
 }

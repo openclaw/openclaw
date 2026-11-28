@@ -29,6 +29,7 @@ export function retireTransferredCronAuthority(job: CronStoredJob): void {
   job.enabled = false;
   delete job.state.nextRunAtMs;
   delete job.operatorSource;
+  delete job.modelAuthProfileAuthorizationId;
   if (job.payload.kind === "agentTurn" && job.payload.model) {
     const { model, profile } = splitTrailingAuthProfile(job.payload.model);
     if (profile) {
