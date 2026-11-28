@@ -1,28 +1,10 @@
 import http from "node:http";
-import { ensureAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
+import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles/store-runtime.js";
+import { markAuthProfileFailure } from "../agents/auth-profiles/usage.js";
 import { connectUserModelAccount } from "../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 /** Loopback OpenAI-Responses providers for scheduled cross-provider fallback tests. */
-
-export async function connectPersonalAccountWithSharedCooldown(state: OpenClawTestState) {
-  const owner = ensureProfileForEmail("automation-owner@example.test");
-  const { authProfileId } = connectUserModelAccount({
-    ownerProfileId: owner.id,
-    credential: { type: "api_key", provider: "openai", key: "key-personal" },
-    assertCurrent() {},
-  });
-  const store = ensureAuthProfileStore(state.agentDir());
-  await state.writeAuthProfiles({
-    ...store,
-    usageStats: {
-      ...store.usageStats,
-      "openai:primary": { disabledUntil: Date.now() + 600_000, disabledReason: "auth_permanent" },
-    },
-  });
-  return { ownerProfileId: owner.id, authProfileId };
-}
 
 export const QUOTA_EXHAUSTED_BODY = JSON.stringify({
   error: {
@@ -110,4 +92,20 @@ export function apiKeyProfile(profileId: string, key: string) {
       key,
     },
   };
+}
+
+export async function connectPersonalAccountWithDisabledSharedAccount(agentDir: string) {
+  await markAuthProfileFailure({
+    agentDir,
+    store: await ensureAuthProfileStoreAsync(agentDir),
+    profileId: "openai:primary",
+    reason: "auth_permanent",
+  });
+  const ownerProfileId = ensureProfileForEmail("alice@example.test").id;
+  const { authProfileId } = connectUserModelAccount({
+    ownerProfileId,
+    credential: { type: "api_key", provider: "openai", key: "key-personal" },
+    assertCurrent() {},
+  });
+  return { authProfileId, ownerProfileId };
 }

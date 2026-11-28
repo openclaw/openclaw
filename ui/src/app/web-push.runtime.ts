@@ -28,15 +28,20 @@ export type WebPushPreferencesResult = {
   effective: WebPushNotificationPreferences & { enabled: boolean; label: string };
 };
 
+export type WebPushAgentSelection = { state: "pending" | "failed"; agentIds?: string[] };
+type PreferenceScope = "user" | "device";
+
 export type WebPushCapabilityAction =
   | { kind: "enable" | "disable" | "test" }
   | {
       kind: "set";
-      scope: "user" | "device";
+      scope: PreferenceScope;
+      field?: "agentIds";
       preferences: WebPushNotificationPreferences | WebPushDevicePreferences;
     };
 
 export type WebPushCapabilityPatch = Partial<WebPushAccess> & {
+  agentSelections?: Partial<Record<PreferenceScope, WebPushAgentSelection>>;
   error?: string | null;
   read?: Promise<unknown>;
   command?: Promise<void>;
@@ -198,6 +203,7 @@ export function createWebPushCapabilityRuntime(params: {
   let disposed = false;
   let pendingRead: PromiseWithResolvers<void> | undefined;
   let scope = Promise.withResolvers<void>();
+  let agentSelections: WebPushCapabilityPatch["agentSelections"];
   const retire = () => {
     pendingRead?.resolve();
     pendingRead = undefined;
@@ -249,7 +255,9 @@ export function createWebPushCapabilityRuntime(params: {
     scope.resolve();
     scope = Promise.withResolvers<void>();
     retire();
+    agentSelections = undefined;
     params.publish({
+      agentSelections,
       subscription: "unknown",
       preferences: null,
       error: null,
@@ -292,6 +300,25 @@ export function createWebPushCapabilityRuntime(params: {
       }
       const admitted = scope;
       const isCurrent = () => !disposed && admitted === scope;
+      const selection =
+        action.kind === "set" && action.field === "agentIds"
+          ? {
+              scope: action.scope,
+              attempt: { state: "pending" as const, agentIds: action.preferences.agentIds },
+            }
+          : undefined;
+      // Keep the submitted choice with its connection while the operator visits another page.
+      if (selection) {
+        agentSelections = { ...agentSelections, [selection.scope]: selection.attempt };
+      }
+      const settleSelection = (state: "accepted" | "failed") => {
+        if (selection && agentSelections?.[selection.scope] === selection.attempt) {
+          agentSelections = {
+            ...agentSelections,
+            [selection.scope]: state === "failed" ? { ...selection.attempt, state } : undefined,
+          };
+        }
+      };
       // This command's readback supersedes any earlier passive reconciliation.
       retire();
       const next = (operation?.catch(() => {}) ?? Promise.resolve())
@@ -305,7 +332,11 @@ export function createWebPushCapabilityRuntime(params: {
             action,
           );
           if (isCurrent()) {
-            params.publish(patch);
+            settleSelection("accepted");
+            if (action.kind === "disable") {
+              agentSelections = undefined;
+            }
+            params.publish({ ...patch, agentSelections });
           }
         })
         .finally(() => {
@@ -317,11 +348,12 @@ export function createWebPushCapabilityRuntime(params: {
           }
         });
       operation = next;
-      params.publish({ command: undefined, read: undefined, error: null });
+      params.publish({ command: undefined, read: undefined, error: null, agentSelections });
       const completion = Promise.race([next, admitted.promise]);
       void completion.catch(() => {
         if (isCurrent()) {
-          params.publish({ command: completion });
+          settleSelection("failed");
+          params.publish({ command: completion, agentSelections });
         }
       });
       return completion;

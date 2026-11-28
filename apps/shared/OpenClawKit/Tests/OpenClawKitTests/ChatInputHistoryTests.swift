@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClawChatUI
 #if os(macOS)
@@ -119,15 +120,33 @@ struct ChatInputHistoryTests {
         var history = ChatInputHistory()
         history.seed(transcriptInputs: ["older"])
         history.record("continue", transcriptEcho: "> **Assistant:** quote\n\ncontinue")
-        history.record("", transcriptEcho: "See attached.")
+        // An attachment-only send carries empty text, so it leaves nothing to recall.
+        history.record("", transcriptEcho: "")
 
         history.seed(transcriptInputs: [
             "older",
             "> **Assistant:** quote\n\ncontinue",
-            "See attached.",
         ])
 
         #expect(history.entries == ["continue", "older"])
+    }
+
+    @Test @MainActor func `legacy attachment-only placeholder stays out of seeded history`() throws {
+        let decode = { (json: String) in
+            try JSONDecoder().decode(OpenClawChatMessage.self, from: Data(json.utf8))
+        }
+        let messages = try [
+            decode(#"{"role":"user","content":[{"type":"text","text":"See attached."}]}"#),
+            decode(#"{"role":"user","content":[{"type":"text","text":"hello"}]}"#),
+            decode(#"{"role":"user","content":[{"type":"text","text":"See attached."},"#
+                + #"{"type":"image","mimeType":"image/png","content":"aW1n"}]}"#),
+        ]
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: InputHistoryTransport())
+
+        viewModel.seedInputHistory(from: messages)
+
+        // Older builds sent the placeholder with attachments; typed text without attachments stays.
+        #expect(viewModel.inputHistoriesBySession[viewModel.visibleComposerKey]?.entries == ["hello", "See attached."])
     }
 
     @Test func `generated transcript echo arriving before acceptance is reconciled`() {
@@ -237,3 +256,27 @@ struct ChatInputHistoryKeyContextTests {
     }
 }
 #endif
+
+private struct InputHistoryTransport: OpenClawChatTransport {
+    func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
+        OpenClawChatHistoryPayload(sessionKey: sessionKey, sessionId: "session-1", messages: [], thinkingLevel: "off")
+    }
+
+    func sendMessage(
+        sessionKey _: String,
+        message _: String,
+        thinking _: String,
+        idempotencyKey _: String,
+        attachments _: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
+    {
+        OpenClawChatSendResponse(runId: "run-1", status: "started")
+    }
+
+    func requestHealth(timeoutMs _: Int) async throws -> Bool {
+        true
+    }
+
+    func events() -> AsyncStream<OpenClawChatTransportEvent> {
+        AsyncStream { $0.finish() }
+    }
+}

@@ -18,8 +18,8 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import {
   apiKeyProfile,
-  connectPersonalAccountWithSharedCooldown,
   completedSse,
+  connectPersonalAccountWithDisabledSharedAccount,
   listenLoopbackProvider,
   loopbackModelRuntime,
   loopbackProviderConfig,
@@ -176,12 +176,17 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-it("fails over to another provider's live account when the primary is out of quota", async () => {
+it("tries the pinned personal account before failing over to the backup provider's live account", async () => {
   await withFallbackFixture(async ({ cfg, hits, reload, run, state }) => {
-    const job = await reload(await boundJob(cfg, "xprov"));
-    expect(job.payload).toMatchObject({ model: "openai/gpt-4.1@openai:primary" });
+    const { authProfileId } = await connectPersonalAccountWithDisabledSharedAccount(
+      state.agentDir(),
+    );
+    const job = await reload(
+      await boundJob(cfg, "xprov", { model: `openai/gpt-4.1@${authProfileId}` }),
+    );
     const first = await run(job);
     expect(first.status, first.error).toBe("ok");
+    expect(hits.primary).toEqual(["Bearer key-personal"]);
     expect(first.summary).toContain("served by backup provider");
     // The fallback follows that provider's live account order, like an interactive run.
     await setAuthProfileOrder({
@@ -193,7 +198,7 @@ it("fails over to another provider's live account when the primary is out of quo
     expect(second.status, second.error).toBe("ok");
     // The quota failure puts the primary account in cooldown, so the second run may skip it;
     // it never sends another account's credential to the primary provider.
-    expect(hits.primary.every((auth) => auth === "Bearer key-primary")).toBe(true);
+    expect(hits.primary.every((auth) => auth === "Bearer key-personal")).toBe(true);
     expect(hits.backup).toEqual(["Bearer key-backup", "Bearer key-backup-other"]);
     // Nothing new is recorded; the binding is exactly what the job stored.
     expect((await reload(job)).payload).toEqual(job.payload);
@@ -256,7 +261,9 @@ it("keeps the recorded provider on its recorded account", async () => {
 
 it("uses its healthy personal account when the shared primary account is disabled", async () => {
   await withFallbackFixture(async ({ cfg, state, hits, reload, run, setPrimary }) => {
-    const { authProfileId, ownerProfileId } = await connectPersonalAccountWithSharedCooldown(state);
+    const { authProfileId, ownerProfileId } = await connectPersonalAccountWithDisabledSharedAccount(
+      state.agentDir(),
+    );
     const job = await reload({
       ...(await boundJob(cfg, "personal-primary", { model: `openai/gpt-4.1@${authProfileId}` })),
       ownerProfileId,

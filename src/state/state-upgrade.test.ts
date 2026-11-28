@@ -5,10 +5,15 @@ import { DatabaseSync } from "node:sqlite";
 import { runInNewContext } from "node:vm";
 import { load as loadSqliteVec } from "sqlite-vec";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import { noteSessionTranscriptHealth } from "../commands/doctor-session-transcripts.js";
+import * as cronAccountMigration from "../commands/doctor/cron/inference-binding-migration.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadCronJobsStore, saveCronJobsStore } from "../cron/store.js";
 import { bindFreshClientCredentialStore } from "../infra/client-credential-migration.js";
 import { openClientCredentialCustody } from "../infra/client-credential-store.js";
-import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import { acquireGatewayLock, type GatewayLockHandle } from "../infra/gateway-lock.js";
 import {
   OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
   OUTBOUND_DELIVERY_QUEUE_NAME,
@@ -18,6 +23,7 @@ import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.doctor.js";
 import { throwIfDoctorStateMigrationRefused } from "../infra/state-migrations.messages.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { LEGACY_ROLLBACK_SOURCE } from "../update/legacy-rollback-source.js";
 import { createTrialPending, resolvePrefix, writeTrial } from "../update/store.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
@@ -33,10 +39,15 @@ import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.j
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { getOpenClawStatePredecessorSchema } from "./openclaw-state-schema-runtime.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { upgradeStateOnGatewayStart } from "./state-upgrade-startup.js";
 import { upgradeStateDirectory } from "./state-upgrade.js";
 
 const dirs: string[] = [];
+const locks: Array<GatewayLockHandle | null> = [];
 afterEach(async () => {
+  for (const lock of locks.splice(0)) {
+    await lock?.release();
+  }
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
@@ -44,6 +55,58 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+it("leaves an unpinned automation on normal account selection during boot", async () => {
+  await withOpenClawTestState(
+    { label: "boot-cron-account-selection", env: { OPENAI_API_KEY: undefined } },
+    async (state) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
+          defaults: { model: "openai/gpt-5.5" },
+        },
+        plugins: { allow: ["openai"], slots: { memory: "none" } },
+      };
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
+      await persistAuthProfileBatch({
+        profiles: [
+          {
+            profileId: "openai:default",
+            credential: { type: "api_key", provider: "openai", key: "synthetic-boot-key" },
+          },
+        ],
+      });
+      const storePath = state.statePath("cron", "jobs.json");
+      await saveCronJobsStore(storePath, {
+        version: 1,
+        jobs: [
+          {
+            id: "legacy-job",
+            agentId: "main",
+            name: "Legacy automation",
+            enabled: true,
+            createdAtMs: 1,
+            updatedAtMs: 1,
+            schedule: { kind: "every", everyMs: 60_000 },
+            sessionTarget: "isolated",
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: "Synthetic work" },
+            delivery: { mode: "none" },
+            state: { lastRunAtMs: 123, lastRunStatus: "ok" },
+          },
+        ],
+      });
+      const [before] = (await loadCronJobsStore(storePath)).jobs;
+      const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Offline proof"));
+      const repair = vi.spyOn(cronAccountMigration, "maybeRepairCronInferenceBindings");
+      await upgradeStateOnGatewayStart(state.env, () => true);
+      expect((await loadCronJobsStore(storePath)).jobs).toEqual([before]);
+      expect(repair).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("startup retained deletion", () => {
@@ -186,10 +249,13 @@ describe("startup retained deletion", () => {
       };
       const activeSnapshot = snapshotActive();
       const log = { info: vi.fn(), warn: vi.fn() };
-      const upgrade = upgradeStateDirectory({
+      const lock = await acquireGatewayLock({
         env,
-        log,
+        role: "sqlite-maintenance",
+        allowInTests: true,
       });
+      locks.push(lock);
+      const upgrade = lock!.run(() => upgradeStateDirectory({ env, log }));
       if (cleanupCompleted) {
         await expect(upgrade).resolves.toEqual({
           status: upgradeShared ? "upgraded" : "current",
@@ -506,10 +572,11 @@ describe("upgradeStateDirectory version zero", () => {
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_CONFIG_PATH: path.join(stateDir, "x.json"),
     };
-    const result = await upgradeStateDirectory({
-      env,
-      log: { info: () => {}, warn: () => {} },
-    });
+    const lock = await acquireGatewayLock({ env, role: "sqlite-maintenance", allowInTests: true });
+    locks.push(lock);
+    const result = await lock!.run(() =>
+      upgradeStateDirectory({ env, log: { info() {}, warn() {} } }),
+    );
     expect(result).toEqual({ status: "current" });
   });
 });

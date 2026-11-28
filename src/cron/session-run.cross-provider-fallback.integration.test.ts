@@ -23,7 +23,7 @@ import { resetSessionControllerStateForTest } from "../sessions/session-lifecycl
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   apiKeyProfile,
-  connectPersonalAccountWithSharedCooldown,
+  connectPersonalAccountWithDisabledSharedAccount,
   completedSse,
   listenLoopbackProvider,
   loopbackModelRuntime,
@@ -160,7 +160,7 @@ async function runSessionFallback(
         );
         const personal =
           params.primary === "personal"
-            ? await connectPersonalAccountWithSharedCooldown(state)
+            ? await connectPersonalAccountWithDisabledSharedAccount(state.agentDir())
             : undefined;
         const selectedProfileId = personal?.authProfileId ?? "openai:primary";
         const model = `openai/gpt-4.1@${selectedProfileId}`;
