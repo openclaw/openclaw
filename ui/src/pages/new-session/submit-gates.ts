@@ -320,11 +320,14 @@ export function resolveNewSessionSubmitBlock(
       : { gate: "placement-recovery", reason: t("newSession.placementNotReady") };
   }
   if (place.folderSubmissionBlocked()) {
+    const checkoutReason = place.currentCheckoutUnavailableReason;
     return {
       gate: "folder",
       reason:
         (place.deviceFolder && place.deviceFolderRuntimeUnsupportedReason) ||
-        place.currentCheckoutUnavailableReason ||
+        (checkoutReason === t("newSession.checkoutProjectUnavailable")
+          ? t("newSession.checkoutProjectUnavailableAction")
+          : checkoutReason) ||
         t(
           place.deviceFolder
             ? place.deviceFolderAvailable
