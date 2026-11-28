@@ -2106,11 +2106,12 @@ const reviewedOperations = new Map([
           "replaceCronRows",
           "upsertCronJobRow",
           "deleteCronJobRowInDatabase",
+          "deleteCronJobConfigRowInDatabase",
           "revokeCronJobStandingGrants",
           "readMaximumRetainedGrantDefinitionGeneration",
         ],
         evidence:
-          "Cron worker kernels or Doctor legacy-repair.ts:395 transactionHooks / store-repair.ts:178 / doctor-heartbeat-task-migration.ts:261,308. Retained grant generations are read by worker upsert or resolveCronJobGrantDefinitionGenerationFloor for commands/doctor/cron/store-repair.ts only.",
+          "Cron worker kernels or Doctor legacy-repair.ts:395 transactionHooks / store-repair.ts:178 / doctor-heartbeat-task-migration.ts:261,308. Quarantine removes only the config row through the same save transaction. Retained grant generations are read by worker upsert or resolveCronJobGrantDefinitionGenerationFloor for commands/doctor/cron/store-repair.ts only.",
       },
       {
         tier: "W",
