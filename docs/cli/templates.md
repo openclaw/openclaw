@@ -704,8 +704,10 @@ Gateway is running.
 | `templates add <source>`             | Create a new agent and install its requirements.  |
 | `templates release <agent-id>`       | Make an earlier Template-managed agent ordinary.  |
 
-Use `--json` for experimental machine-readable output. Validation errors,
-blocked requirements, and failed additions exit `1`.
+Use `--json` for experimental machine-readable output. Every subcommand reports
+its outcome under one boolean `ok` field, alongside `schemaVersion` and
+`stability`; errors and blocked requirements are listed under `diagnostics`.
+Validation errors, blocked requirements, and failed additions exit `1`.
 Gateway-owned Add reports the native `agentId`, `status`, and `readiness` result.
 A partial result exits `1`. A lost Gateway reply reports an unknown outcome;
 inspect the agent and its automations before retrying, since no local fallback
