@@ -215,22 +215,13 @@ it.each(["mixed-parallel", "deferred-exclusive"] as const)(
   },
 );
 
-it("forwards unchanged updates without copying events or inspecting prior content", async () => {
+it("forwards unchanged updates while isolating provider message snapshots", async () => {
   const message = fixtures.makeAssistantMessage([
     { type: "thinking", thinking: "synthetic thought" },
     { type: "text", text: "answer" },
     fixtures.makeCall("lookup"),
   ]);
   message.stopReason = "stop";
-  let blockReads = 0;
-  message.content = new Proxy(message.content, {
-    get(target, key, receiver) {
-      if (key === "0") {
-        blockReads++;
-      }
-      return Reflect.get(target, key, receiver);
-    },
-  });
   const updates: AssistantMessageEvent[] = [
     { type: "thinking_start", contentIndex: 0, partial: message },
     { type: "thinking_delta", contentIndex: 0, delta: "synthetic thought", partial: message },
@@ -241,25 +232,21 @@ it("forwards unchanged updates without copying events or inspecting prior conten
     { type: "toolcall_start", contentIndex: 2, partial: message },
     { type: "toolcall_delta", contentIndex: 2, delta: "{}", partial: message },
   ];
-  const readsAtUpdate: number[] = [];
+  let updateIndex = 0;
   await runAgentLoop(
     [fixtures.user("hello")],
     { systemPrompt: "", messages: [] },
     fixtures.config,
     (event) => {
-      if (event.type === "message_start" && event.message.role === "assistant") {
-        blockReads = 0;
-      }
       if (event.type === "message_update") {
-        expect(event.assistantMessageEvent).toBe(updates[readsAtUpdate.length]);
-        readsAtUpdate.push(blockReads);
+        expect(event.assistantMessageEvent).toBe(updates[updateIndex++]);
         expect(event.message).not.toBe(message);
       }
     },
     undefined,
     () => fixtures.reply(message, [{ type: "start", partial: message }, ...updates]),
   );
-  expect(readsAtUpdate).toEqual(updates.map(() => 0));
+  expect(updateIndex).toBe(updates.length);
 });
 
 it("does not commit an async fragment when a listener changes an ordinary update type", async () => {
@@ -645,7 +632,7 @@ describe("repetition stop at the stream owner", () => {
     });
   }
 
-  async function runResponse(content: AssistantMessage["content"], enabled = true, mode = "text") {
+  async function runResponse(content: AssistantMessage["content"], mode = "text") {
     const terminalOnly = mode === "terminal" || mode === "replaced terminal";
     const initialText = mode.startsWith("replaced")
       ? variedRows.slice(0, loop.length + 1)
@@ -692,7 +679,6 @@ describe("repetition stop at the stream owner", () => {
     const { run, events } = fixtures.captureToolLoop({
       prompt: fixtures.user(),
       tools: [],
-      config: { repetitionGuard: () => enabled },
       streamFn,
     });
     return { result: await run, events, requests };
@@ -718,7 +704,7 @@ describe("repetition stop at the stream owner", () => {
       ...prefix,
       kind === "thinking" ? { type: "thinking", thinking: loop } : { type: "text", text: loop },
     ];
-    const response = await runResponse(content, true, kind);
+    const response = await runResponse(content, kind);
     const expected: AssistantMessage["content"] = [...prefix, { type: "text", text: marker }];
     expectResponse(response, expected, true);
     if (kind.startsWith("replaced")) {
@@ -735,11 +721,6 @@ describe("repetition stop at the stream owner", () => {
     );
     expect(JSON.stringify(replay)).not.toContain("Please provide more input.");
     expect(JSON.stringify(replay)).toContain(marker);
-  });
-
-  it("leaves the same response untouched when the policy is off", async () => {
-    const content: AssistantMessage["content"] = [{ type: "text", text: loop }];
-    expectResponse(await runResponse(content, false), content);
   });
 
   it.each(["unadmitted snapshot", "delta", "error snapshot"])(
@@ -779,7 +760,6 @@ describe("repetition stop at the stream owner", () => {
           },
           fixtures.makeTool("discarded", executed),
         ],
-        config: { repetitionGuard: () => true },
         onEvent: (event) => {
           if (
             event.type === "message_end" &&

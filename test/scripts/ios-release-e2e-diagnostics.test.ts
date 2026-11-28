@@ -12,6 +12,7 @@ vi.mock("node:os", async (importOriginal) => ({
 
 import {
   collectGatewayProcessDiagnostics,
+  parseIOSSimulatorTiming,
   summarizeGatewayLanes,
   summarizeGatewayLogs,
   summarizeIOSBuildTiming,
@@ -19,6 +20,21 @@ import {
 
 beforeEach(() => {
   execFile.mockReset();
+});
+
+test("accepts only bounded preparation timing fields, never surrounding tool output", () => {
+  expect(
+    parseIOSSimulatorTiming("OPENCLAW_SIMULATOR_TIMING phase=ready seconds=12.345 exit=23"),
+  ).toEqual({ phase: "ready", seconds: 12.345, exitCode: 23 });
+  for (const line of [
+    "private output",
+    "OPENCLAW_SIMULATOR_TIMING phase=private-path seconds=1.000 exit=0",
+    "OPENCLAW_SIMULATOR_TIMING phase=ready seconds=-1.000 exit=0",
+    "OPENCLAW_SIMULATOR_TIMING phase=ready seconds=1.000 exit=256",
+    "OPENCLAW_SIMULATOR_TIMING phase=ready seconds=1.000 exit=0 secret-token",
+  ]) {
+    expect(parseIOSSimulatorTiming(line)).toBeUndefined();
+  }
 });
 
 test("retains build task timings without exporting script names or raw build output", () => {

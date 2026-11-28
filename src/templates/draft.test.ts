@@ -1,11 +1,22 @@
-import { readFile, symlink, unlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { link, mkdir, readFile, symlink, unlink, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { crc32 } from "node:zlib";
+import { encodePngRgba } from "rastermill";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  convertImageToJpeg,
+  createImageProcessor,
+  readImageProbeFromHeader,
+} from "../media/image-ops.js";
+import { AVATAR_MAX_BYTES } from "../shared/avatar-limits.js";
 import { createTemplateDraft, prepareTemplateDraft } from "./draft.js";
 import { createResearchBriefProposal } from "./draft.test-support.js";
+import { buildTemplateAddPlan } from "./lifecycle.js";
 import { extractBuiltTemplateArtifact } from "./project-build.js";
-import { parseTemplateMarkdown } from "./reader.js";
+import { parseTemplateMarkdown, readTemplateManifestFile } from "./reader.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const proposal = createResearchBriefProposal();
@@ -17,6 +28,8 @@ async function draftFixture(value: unknown = proposal) {
   const target = { workspaceDir, draftId: draft.draftId, publisher: "maker" };
   return { ...draft, workspaceDir, target, prepare: () => prepareTemplateDraft(target) };
 }
+const manifestText = (draft: { files: Array<{ path: string; content?: string }> }) =>
+  draft.files.find((file) => file.path === "CLAW.md")?.content ?? "";
 const expectNoSharedDraft = (workspaceDir: string) =>
   expect(
     readFile(join(workspaceDir, ".openclaw/template-drafts/current.json"), "utf8"),
@@ -52,8 +65,7 @@ describe("agent-created Template drafts", () => {
       expect(
         prepared.items.filter((item) => item.kind === "skill").map((item) => item.included),
       ).toEqual(source === "bundled" ? [false, true] : [true, false]);
-      const manifest = prepared.files.find((file) => file.path === "CLAW.md")!;
-      expect(parseTemplateMarkdown(Buffer.from(manifest.content), "CLAW.md")).toMatchObject({
+      expect(parseTemplateMarkdown(Buffer.from(manifestText(prepared)), "CLAW.md")).toMatchObject({
         ok: true,
         value: {
           skills:
@@ -106,9 +118,7 @@ describe("agent-created Template drafts", () => {
       name: "@maker/research-brief",
       displayName: "Engineering Partner",
     });
-    expect(prepared.files.find((file) => file.path === "CLAW.md")?.content).toContain(
-      "id: research-brief\n  name: Engineering Partner",
-    );
+    expect(manifestText(prepared)).toContain("id: research-brief\n  name: Engineering Partner");
   });
 
   it("keeps the CLAW.md agent name and description when the seeded description is untouched", async () => {
@@ -129,19 +139,17 @@ describe("agent-created Template drafts", () => {
       }),
     );
     const target = { workspaceDir, draftId: draft.draftId, publisher: "maker" };
-    const manifestOf = (prepared: { files: Array<{ path: string; content: string }> }) =>
-      prepared.files.find((file) => file.path === "CLAW.md")?.content ?? "";
 
     await using initial = await prepareTemplateDraft(target);
     expect(initial).toMatchObject({ displayName: manifestName, description: manifestDescription });
-    expect(manifestOf(initial)).toContain(
+    expect(manifestText(initial)).toContain(
       `name: ${manifestName}\n  description: ${manifestDescription}`,
     );
 
     const choices = { name: "research-brief", description: "", excluded: [] };
     await using cleared = await prepareTemplateDraft({ ...target, choices });
     expect(cleared.description).toBe("");
-    expect(manifestOf(cleared)).not.toContain(manifestDescription);
+    expect(manifestText(cleared)).not.toContain(manifestDescription);
   });
 
   it("builds only the reviewed proposal, excluding the source workspace and private draft metadata", async () => {
@@ -224,5 +232,193 @@ describe("agent-created Template drafts", () => {
     await unlink(path);
     await symlink(privatePath, path);
     await expect(prepare()).rejects.toThrow();
+  });
+});
+
+const PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64",
+);
+const SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20"><rect width="40" height="20" fill="#f60"/></svg>';
+
+describe("agent-created Template draft avatars", () => {
+  const iconPath = "assets/icon.png";
+  const avatarPath = "avatars/avatar.png";
+  const itemId = "file:" + iconPath;
+  const iconFile = { id: itemId, kind: "file", label: iconPath };
+  const iconItem = (detail: string, included: boolean) => ({ ...iconFile, detail, included });
+  async function avatarFixture(path: string, bytes?: Buffer | string) {
+    const fixture = await draftFixture({ ...proposal, avatar: path });
+    if (bytes !== undefined) {
+      await mkdir(dirname(join(fixture.workspaceDir, path)), { recursive: true });
+      await writeFile(join(fixture.workspaceDir, path), bytes);
+    }
+    return fixture;
+  }
+  const manifestOf = (prepared: { files: Array<{ path: string; content?: string }> }) =>
+    parseTemplateMarkdown(Buffer.from(manifestText(prepared)), "CLAW.md");
+
+  const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
+  const webp = async (): Promise<Buffer> =>
+    (await createImageProcessor().encode(PNG, { format: "webp" })).data;
+  it.each<[string, () => Buffer | string | Promise<Buffer>, number]>([
+    ["avatars/harbor.png", () => PNG, 1],
+    ["avatars/harbor.JPG", () => convertImageToJpeg(PNG), 1],
+    ["avatars/harbor.gif", () => gif, 1],
+    ["avatars/harbor.webp", webp, 1],
+    ["harbor.svg", () => SVG, 512],
+    [".openclaw/template-drafts/inline-avatar.png", () => PNG, 1],
+  ])("packages %s as the icon and the new agent's avatar", async (path, bytes, width) => {
+    const { prepare } = await avatarFixture(path, await bytes());
+    await using prepared = await prepare();
+
+    expect(manifestOf(prepared)).toMatchObject({
+      ok: true,
+      value: {
+        agent: { identity: { avatar: avatarPath } },
+        workspace: { files: [{ source: iconPath, path: avatarPath }] },
+      },
+    });
+    expect(prepared.items).toEqual([iconItem(path, true)]);
+    // The binary icon is listed without text content; every other file stays readable text.
+    expect(prepared.files).toEqual([
+      { path: "CLAW.md", content: expect.any(String) },
+      { path: iconPath, workspacePaths: [avatarPath] },
+      { path: "package.json", content: expect.any(String) },
+    ]);
+    await using extracted = await extractBuiltTemplateArtifact(prepared.artifact);
+    const icon = await readFile(join(extracted.packageRoot, iconPath));
+    expect(readImageProbeFromHeader(icon)).toMatchObject({ format: "png", width });
+    expect(icon.byteLength).toBeLessThanOrEqual(512 * 1024);
+    expect(prepared.iconUrl).toBe(`data:image/png;base64,${icon.toString("base64")}`);
+
+    // Add reads the same archive: the new agent gets this image as its avatar.
+    const template = await readTemplateManifestFile(extracted.packageRoot);
+    assert(template.ok, JSON.stringify(template));
+    const workspace = join(extracted.packageRoot, "added-workspace");
+    const plan = await buildTemplateAddPlan({ ...template, context: { workspace } });
+    expect(plan.blockers).toEqual([]);
+    expect(plan.agent.config.identity).toEqual({ avatar: avatarPath });
+    const digest = "sha256:" + createHash("sha256").update(icon).digest("hex");
+    const action = { kind: "workspaceFile", target: join(workspace, avatarPath), digest };
+    expect(plan.actions).toContainEqual(expect.objectContaining(action));
+  });
+
+  it("shrinks an image that cannot fit ClawHub's 512 KiB icon limit at full size", async () => {
+    const side = 640;
+    // Deterministic, incompressible pixels exercise the smaller PNG fallback.
+    const shake = createHash("shake256", { outputLength: side * side * 4 });
+    const pixels = shake.update("noise").digest();
+    for (let alpha = 3; alpha < pixels.length; alpha += 4) {
+      pixels[alpha] = 255;
+    }
+    const { prepare } = await avatarFixture("avatars/noise.png", encodePngRgba(pixels, side, side));
+    await using prepared = await prepare();
+    await using extracted = await extractBuiltTemplateArtifact(prepared.artifact);
+    const icon = await readFile(join(extracted.packageRoot, iconPath));
+
+    expect(icon.byteLength).toBeLessThanOrEqual(512 * 1024);
+    expect(readImageProbeFromHeader(icon)).toMatchObject({ format: "png", width: 384 });
+  });
+
+  it("publishes re-encoded pixels without the source file's metadata", async () => {
+    const text = Buffer.from("tEXtComment\0PRIVATE_METADATA_SENTINEL");
+    const chunk = Buffer.alloc(text.length + 8);
+    chunk.writeUInt32BE(text.length - 4, 0);
+    text.copy(chunk, 4);
+    chunk.writeUInt32BE(crc32(text), chunk.length - 4);
+    // Insert the text chunk before the 12-byte IEND chunk.
+    const source = Buffer.concat([PNG.subarray(0, -12), chunk, PNG.subarray(-12)]);
+    const { prepare } = await avatarFixture("avatars/harbor.png", source);
+    await using prepared = await prepare();
+    await using extracted = await extractBuiltTemplateArtifact(prepared.artifact);
+    const icon = await readFile(join(extracted.packageRoot, iconPath));
+
+    expect(source.includes("PRIVATE_METADATA_SENTINEL")).toBe(true);
+    expect(readImageProbeFromHeader(icon)).toMatchObject({ format: "png", width: 1, height: 1 });
+    expect(icon.includes("PRIVATE_METADATA_SENTINEL")).toBe(false);
+  });
+
+  it("removes the icon and both manifest references when the avatar is excluded", async () => {
+    // An excluded avatar is never read, so even an unusable file cannot block the review.
+    const { target } = await avatarFixture("avatars/harbor.png", "not an image");
+    await using prepared = await prepareTemplateDraft({
+      ...target,
+      choices: { name: proposal.name, description: "", excluded: [itemId] },
+    });
+
+    expect(prepared.items).toEqual([iconItem("avatars/harbor.png", false)]);
+    expect(prepared.files.map((file) => file.path)).toEqual(["CLAW.md", "package.json"]);
+    expect(prepared).not.toHaveProperty("iconUrl");
+    const manifest = manifestOf(prepared);
+    expect(manifest).toMatchObject({ ok: true, value: { workspace: { files: [] } } });
+    expect(JSON.stringify(manifest)).not.toMatch(/avatar|icon/u);
+  });
+
+  it("never packages a workspace image the draft does not name", async () => {
+    const { prepare, workspaceDir } = await draftFixture();
+    await using plain = await prepare();
+    await mkdir(join(workspaceDir, "avatars"));
+    await writeFile(join(workspaceDir, "avatars/harbor.png"), PNG);
+    await using prepared = await prepare();
+
+    expect(prepared).not.toHaveProperty("iconUrl");
+    expect(prepared.items).toEqual([]);
+    expect(prepared.files).toEqual(plain.files);
+    expect(prepared.integrity).toBe(plain.integrity);
+  });
+
+  const oversized = Buffer.concat([PNG, Buffer.alloc(AVATAR_MAX_BYTES)]);
+  const externalSvg = SVG.replace("<rect", '<image href="https://example.test/a.png"/><rect');
+  it.each([
+    ["avatars/missing.png", undefined, "not a readable regular file"],
+    ["avatars/notes.png", "private notes", "does not contain a PNG image"],
+    ["avatars/harbor.jpg", PNG, "does not contain a JPG image"],
+    ["avatars/harbor.png", PNG.subarray(0, 40), "could not be decoded"],
+    ["avatars/huge.png", oversized, "is larger than 2 MB"],
+    ["avatars/harbor.svg", externalSvg, "not a self-contained SVG"],
+    ["avatars/harbor.bmp", PNG, "image path"],
+    ["../harbor.png", undefined, "image path"],
+    ["/tmp/harbor.png", undefined, "image path"],
+  ] as const)("rejects %s with an actionable error", async (path, bytes, problem) => {
+    const { prepare } = await avatarFixture(path, bytes);
+    await expect(prepare()).rejects.toMatchObject({
+      name: "TemplateProjectError",
+      code: "invalid_draft_avatar",
+      message: expect.stringMatching(new RegExp(`${problem}.*or remove the field`, "u")),
+    });
+  });
+
+  it.each(["symlink", "hardlink"] as const)("refuses an avatar that is a %s", async (kind) => {
+    const { workspaceDir, prepare } = await avatarFixture("avatars/harbor.png");
+    const outside = join(tempDirs.make("template-draft-avatar-source-"), "portrait.png");
+    await writeFile(outside, PNG);
+    await mkdir(join(workspaceDir, "avatars"));
+    await (kind === "symlink" ? symlink : link)(outside, join(workspaceDir, "avatars/harbor.png"));
+    await expect(prepare()).rejects.toMatchObject({
+      code: "invalid_draft_avatar",
+      message: expect.stringContaining("not a readable regular file"),
+    });
+  });
+
+  it("refuses a draft that also declares an avatar in its manifest", async () => {
+    const fixture = await draftFixture({
+      ...proposal,
+      avatar: "avatars/harbor.png",
+      manifest: proposal.manifest.replace(
+        "id: research-brief\n",
+        "id: research-brief\n  identity: { avatar: 'data:image/png;base64,AAAA' }\n",
+      ),
+    });
+    await expect(fixture.prepare()).rejects.toMatchObject({
+      code: "invalid_draft_avatar",
+      message: expect.stringContaining("agent.identity.avatar both declare"),
+    });
+  });
+
+  it("rejects a draft whose avatar is not a path string", async () => {
+    const { prepare } = await draftFixture({ ...proposal, avatar: { path: "avatars/harbor.png" } });
+    await expect(prepare()).rejects.toMatchObject({ code: "invalid_draft" });
   });
 });

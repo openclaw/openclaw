@@ -1,3 +1,4 @@
+import { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
 import type { Model, ModelRequestHeaders, StreamFn } from "@openclaw/llm-core";
 import type { AgentCoreCompletionRuntimeDeps } from "../../runtime-deps.js";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
@@ -6,7 +7,6 @@ import { compactFromSource } from "./compaction-assembly.js";
 import type { CompactionRetentionConstraints } from "./compaction-cut-point.js";
 import type { CompactionDetails } from "./compaction-details.js";
 import { prepareCompactionEntries } from "./compaction-preparation.js";
-import { resolveCompactionThreshold } from "./compaction-threshold.js";
 import { runSummarizationCompletion } from "./summarization-completion.js";
 import { prepareCompactionSummaryRequest } from "./summary-checkpoint-prompt.js";
 import type { FileOperations } from "./utils.js";

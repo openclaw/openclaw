@@ -15,15 +15,19 @@ async function expectContained(surface: Locator) {
     const bounds = root.getBoundingClientRect();
     return [...root.querySelectorAll<HTMLElement>("*")]
       .filter((element) => {
+        const style = getComputedStyle(element);
         const box = element.getBoundingClientRect();
+        // On phones the shell shows the title; the clipped heading remains for assistive tech.
+        const clippedTitle =
+          element.classList.contains("plugin-page-title") && style.clipPath === "inset(50%)";
         return (
           element.checkVisibility() &&
           box.width > 0 &&
+          !clippedTitle &&
           !element.closest(".ocid-access__sr-only") &&
           (box.left < bounds.left - 1 ||
             box.right > bounds.right + 1 ||
-            (getComputedStyle(element).textOverflow !== "ellipsis" &&
-              element.scrollWidth > element.clientWidth + 1))
+            (style.textOverflow !== "ellipsis" && element.scrollWidth > element.clientWidth + 1))
         );
       })
       .map((element) => element.className || element.tagName);
@@ -124,10 +128,16 @@ suite.define(() => {
               defined: true,
               sessions: "none",
               requiresSandbox: true,
+              sandbox: {
+                ready: false,
+                reason: "image_missing",
+                backend: "docker",
+                image: "openclaw-sandbox:trixie-slim",
+                doctorBuilds: true,
+              },
               admin: false,
             },
           ],
-          sandboxBackend: { backend: "docker", available: false },
           members: names.map((displayName, index) => ({
             accountId: "member-" + index,
             displayName,
@@ -203,17 +213,18 @@ suite.define(() => {
           expect.stringContaining("guest"),
           expect.stringContaining("Viewer"),
         ]);
-        expect(await options.nth(2).textContent()).toContain("Sandbox required");
+        expect(await options.nth(2).textContent()).toContain("Sandbox required · not set up yet");
+        expect(await options.nth(2).getAttribute("aria-disabled")).toBe("true");
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
           const frame = await takeControlUiScreenshotFrame(page, invite, [options.last()], {
             animations: "disabled",
           });
           writeFileSync(path.join(suite.artifactDir, "invite-role-list.png"), frame.png);
         }
-        await page.getByRole("option", { name: /^guest/ }).click();
+        await page.keyboard.press("Escape");
         await expect
           .poll(() => invite.textContent())
-          .toContain("A sandbox backend is unavailable.");
+          .toContain("Its sandbox isn't installed on this claw yet.");
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
           const frame = await takeControlUiScreenshotFrame(page, invite, [invite], {
             animations: "disabled",
@@ -238,24 +249,11 @@ suite.define(() => {
         expect(await blocked.textContent()).toContain(
           "The role deleted-role is not defined on this claw",
         );
-        await blocked.getByRole("button", { name: "Change role", exact: true }).click();
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            blocked,
-            [blocked.getByRole("button", { name: "Save role" })],
-            { animations: "disabled", scrollTo: blocked },
-          );
-          writeFileSync(path.join(suite.artifactDir, "blocked-member-change-role.png"), frame.png);
-        }
-        await blocked.getByRole("button", { name: "Cancel", exact: true }).click();
+        expect(await blocked.getByRole("button", { name: "Change role" }).count()).toBe(0);
         const node = page.locator('[aria-labelledby="ocid-nodes"] .ocid-access__row').first();
         for (const width of [390, 820, 1400]) {
           await page.setViewportSize({ width, height: width === 390 ? 480 : 844 });
-          await blocked.getByRole("button", { name: "Change role", exact: true }).click();
           await expectContained(surface);
-          await blocked.getByRole("button", { name: "Save role" }).click({ trial: true });
-          await blocked.getByRole("button", { name: "Cancel", exact: true }).click();
           await node.getByRole("button", { name: "Remove node", exact: true }).click();
           const nodeConfirm = node.getByRole("button", {
             name: "Remove Integration review workstation",

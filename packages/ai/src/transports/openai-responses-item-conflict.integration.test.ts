@@ -3,8 +3,10 @@ import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { transformTransportMessages } from "../../../../src/agents/transport-message-transform.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { writerState } from "../provider-state.test-support.js";
+import { PROVIDER_STATE_SCOPE } from "../provider-types.js";
 import { streamOpenAIResponses } from "../providers/openai-responses.js";
-import { cleanupSessionResources } from "../session-resources.js";
+import { claimConversationProviderState, cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import {
   createResponsesLoopbackServer,
@@ -47,7 +49,7 @@ it.each([
   "websocket-compaction",
   "websocket-failed-snapshot",
   "provider",
-  "degenerate-abort",
+  "interrupted",
 ] as const)(
   "reanchors conflicting saved tool items once and retains the repair after reload over %s",
   async (mode) => {
@@ -65,7 +67,7 @@ it.each([
           completedResponse("resp_saved", [reasoning, call]),
         ];
       }
-      if (mode === "degenerate-abort" && turn === 2) {
+      if (mode === "interrupted" && turn === 2) {
         expect(server.requests.at(-1)?.previous_response_id).toBe("resp_saved");
         const partial = wireCall("partial", "record_value");
         return [
@@ -143,6 +145,7 @@ it.each([
     const options = {
       apiKey: "synthetic-item-conflict-key",
       sessionId: `item-conflict-${transport}`,
+      [PROVIDER_STATE_SCOPE]: claimConversationProviderState(`item-conflict-${transport}`),
       transport,
       replayResponsesItemIds: true,
       onPayload: (payload: unknown) => ({ ...(payload as object), store: true }),
@@ -164,14 +167,14 @@ it.each([
     delete tool.argumentsSignature;
     expect(tool.arguments).toEqual({ n: 1 });
     messages.push(first, makeTextToolResult(tool.id, tool.name, "tool failed", true, 2));
-    if (mode === "degenerate-abort") {
+    if (mode === "interrupted") {
       const aborted = await respond();
-      expect(aborted).toMatchObject({ stopReason: "error", errorCode: "degenerate_output" });
+      expect(aborted.stopReason).toBe("error");
       messages.push(aborted, userMessage("Continue after the interruption.", 3));
     }
     cleanupSessionResources();
     const recovered = await respond();
-    const repairIndex = mode === "degenerate-abort" ? 3 : 2;
+    const repairIndex = mode === "interrupted" ? 3 : 2;
     expect(recovered.stopReason).toBe("stop");
     expect(server.requests).toHaveLength(repairIndex + 1);
     expect(logInfo).toHaveBeenCalledWith(
@@ -238,6 +241,7 @@ it.each([
     const options = {
       apiKey: "synthetic-replay-key",
       sessionId: "exact-replay",
+      [PROVIDER_STATE_SCOPE]: claimConversationProviderState("exact-replay"),
       transport: "sse",
       replayResponsesItemIds: true,
     } satisfies Parameters<typeof streamOpenAIResponses>[2];
@@ -302,7 +306,12 @@ it.each(["sse", "websocket-cached"] as const)(
     const stream = await createOpenAIResponsesTransportStreamFn()(
       responsesLoopbackModel,
       { messages: [userMessage("Continue.")] },
-      { apiKey: "synthetic-conflict-key", sessionId: "recovery-exhausted", transport },
+      {
+        apiKey: "synthetic-conflict-key",
+        sessionId: "recovery-exhausted",
+        ...writerState("recovery-exhausted"),
+        transport,
+      },
     );
     const result = await stream.result();
     expect(result).toMatchObject({ stopReason: "error", errorCode: "item_conflict" });
@@ -316,7 +325,7 @@ it.each(["sse", "websocket-cached"] as const)(
 );
 
 it.each(["library", "gateway"])(
-  "does not replay a degenerate aborted function item through %s",
+  "does not replay an interrupted function item through %s",
   async (owner) => {
     const host = getAiTransportHost();
     configureAiTransportHost(owner === "gateway" ? { transformTransportMessages } : {});
@@ -346,7 +355,7 @@ it.each(["library", "gateway"])(
       return stream.result();
     };
     const failed = await respond();
-    expect(failed).toMatchObject({ stopReason: "error", errorCode: "degenerate_output" });
+    expect(failed.stopReason).toBe("error");
     messages.push(failed, userMessage("Continue.", 2));
     expect((await respond()).stopReason).toBe("stop");
     expect(server.requests).toHaveLength(2);
@@ -422,6 +431,7 @@ it.each(
     const options = {
       apiKey: "synthetic-late-conflict-key",
       sessionId: "late-conflict",
+      [PROVIDER_STATE_SCOPE]: claimConversationProviderState("late-conflict"),
       transport,
       replayResponsesItemIds: true,
     };
@@ -510,6 +520,7 @@ it.each(["sse", "websocket-cached"] as const)(
       const options = {
         apiKey: "synthetic-unstored-key",
         sessionId: `unstored-reasoning-${transport}`,
+        [PROVIDER_STATE_SCOPE]: claimConversationProviderState(`unstored-reasoning-${transport}`),
         transport,
         replayResponsesItemIds: true,
         onPayload: (payload: unknown) => ({ ...(payload as object), store }),

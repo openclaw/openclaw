@@ -246,6 +246,19 @@ function insertLexicallyBounded(values: string[], value: string, limit: number):
   }
 }
 
+function shallowSchemaType(schema: unknown): string {
+  const type = isRecord(schema) ? schema.type : undefined;
+  return type === "array"
+    ? "Array<...>"
+    : type === "object"
+      ? "{ ... }"
+      : type === "integer"
+        ? "number"
+        : typeof type === "string" && ["string", "number", "boolean", "null"].includes(type)
+          ? type
+          : "unknown";
+}
+
 function compactObjectHint(
   schema: Record<string, unknown>,
   depth: number,
@@ -363,9 +376,8 @@ function compactObjectHint(
   if (!overflowed) {
     complete &&= hints.every((hint) => hint.complete);
   } else {
-    // An overflowing hint keeps only required keys, at every level. Each keeps
-    // its full type when it fits, else a type shortened to the remaining
-    // budget, else a shallow type.
+    // Preserve every required key and as much type detail as the budget allows.
+    // Nested optional fields stay elided; root optional fields may use spare room.
     omitted ||= optionalCount > 0;
     complete = false;
     const requiredLimits = { ...limits, requiredOnly: true };
@@ -377,19 +389,7 @@ function compactObjectHint(
     body = parts.join("; ");
     if (body.length > budget) {
       const shallow = (index: number) => {
-        const property = properties[requiredKeys[index]!];
-        const type = isRecord(property) ? property.type : undefined;
-        const shallowType =
-          type === "array"
-            ? "Array<...>"
-            : type === "object"
-              ? "{ ... }"
-              : type === "integer"
-                ? "number"
-                : typeof type === "string" && ["string", "number", "boolean", "null"].includes(type)
-                  ? type
-                  : "unknown";
-        const elided = prefixes[index] + shallowType;
+        const elided = prefixes[index] + shallowSchemaType(properties[requiredKeys[index]!]);
         return parts[index]!.length <= elided.length ? parts[index]! : elided;
       };
       let reserve = 0;
@@ -417,6 +417,24 @@ function compactObjectHint(
           part = shortened && shortened.length <= room ? shortened : shallow(index);
         }
         body = body ? `${body}; ${part}` : part;
+      }
+    }
+    if (
+      depth === 0 &&
+      limits.numericInputConstraints &&
+      !requiredOnly &&
+      !structurallyIncomplete &&
+      optionalKeys.length > 0
+    ) {
+      const optionalParts = optionalKeys.map((key, index) => {
+        const offset = requiredKeys.length + index;
+        const full = hints[offset]!.text;
+        const shallow = shallowSchemaType(properties[key]);
+        return prefixes[offset] + (full.length <= shallow.length ? full : shallow);
+      });
+      const expanded = [body, ...optionalParts].filter(Boolean).join("; ");
+      if (expanded.length + 4 + 5 <= limits.maxChars) {
+        body = expanded;
       }
     }
   }
@@ -561,6 +579,25 @@ export function compactToolInputHint(schema: unknown): string {
     hint = compactSchemaType(schema, 0, { ...INPUT_LIMITS, requiredOnly: true });
   }
   return hint.text.length <= INPUT_LIMITS.maxChars ? hint.text : "unknown";
+}
+
+/**
+ * Compact one object input schema only when the text shows its whole required structure, so a
+ * caller can build valid arguments from it alone. Root compositions (`allOf`, unions, `not`,
+ * references) and open or truncated objects are not representable here.
+ */
+export function compactCompleteToolInputHint(schema: unknown): string | undefined {
+  if (
+    !isRecord(schema) ||
+    schema.type !== "object" ||
+    ["anyOf", "oneOf", "not", ...UNSUPPORTED_SHAPE_KEYWORDS].some((key) =>
+      Object.hasOwn(schema, key),
+    )
+  ) {
+    return undefined;
+  }
+  const hint = compactObjectHint(schema, 0, INPUT_LIMITS);
+  return hint.complete && hint.text.length <= INPUT_LIMITS.maxChars ? hint.text : undefined;
 }
 
 /** Compact one trusted output schema. Omit incomplete hints instead of inviting field guesses. */

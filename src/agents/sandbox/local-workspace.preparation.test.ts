@@ -147,7 +147,7 @@ it.for([false, true])(
     });
     fixture.reuse.mockResolvedValue(undefined);
     fixture.prepare.mockImplementation(async (dependencies) => {
-      if (!dependencies) {
+      if (!dependencies?.allocation) {
         throw new Error("Cold projection requires disk admission");
       }
       await dependencies.allocation.requireDiskSpace(

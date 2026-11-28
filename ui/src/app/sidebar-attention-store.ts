@@ -27,6 +27,7 @@ export type SidebarAttentionStoreSources = {
 
 export type SidebarAttentionStoreOwner = {
   readonly entries: readonly SidebarInboxEntry[];
+  readonly hasFailedAutomation: boolean;
   readonly mentions: MentionsCapability;
   dismiss(dismissal: SidebarAttentionDismissal): void;
   syncDismissals(): void;
@@ -63,6 +64,9 @@ export function createSidebarAttentionStore(sources: SidebarAttentionStoreSource
   return {
     get entries() {
       return owner?.entries ?? [];
+    },
+    get hasFailedAutomation() {
+      return owner?.hasFailedAutomation ?? false;
     },
     activate(Owner: SidebarAttentionStoreOwnerConstructor) {
       owner ??= new Owner(sources, listeners.publish);

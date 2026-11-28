@@ -2,9 +2,9 @@ import { intersectOperatorScopes, roleScopesAllow } from "../../shared/operator-
 import { prepareUserProfileSelectionAuthority } from "../../state/user-channel-identity-operations.js";
 import { currentOwnerDevicePrincipal } from "../openclaw-id/tunnel-principal.js";
 import { hasCurrentGatewayOperatorAccess } from "../operator-access-policy.js";
+import { operatorRoleSubject } from "../operator-role-enforcement.js";
 import {
   resolveOperatorRolePolicy,
-  resolveAdministratorMemberRolePolicy,
   resolveOperatorRolePolicyForProfile,
   resolveOperatorRolePolicyForAssignment,
 } from "../operator-role-policy.js";
@@ -25,7 +25,14 @@ type PersonalProfileScope =
 export function currentPersonalProfileClient(
   options: Request,
   scope: PersonalProfileScope,
-  owner?: string | { profileId: string; role: string | null; githubLogin?: string | null },
+  owner?:
+    | string
+    | {
+        profileId: string;
+        role: string | null;
+        githubLogin?: string | null;
+        openclawIdAccountIds?: readonly string[];
+      },
 ) {
   const { client, context } = options;
   if (
@@ -39,9 +46,7 @@ export function currentPersonalProfileClient(
       !isSyntheticGatewayCaller(client) &&
       !context.getClientConnIds?.((current) => current === client).has(client.connId))
   ) {
-    throw new Error(
-      "Personal profile request connection is no longer current; reconnect and try again.",
-    );
+    throw new Error("This personal profile connection lost access. Reconnect and try again.");
   }
   if (!client) {
     return null;
@@ -56,17 +61,17 @@ export function currentPersonalProfileClient(
   const policy =
     currentOwnerDevicePrincipal(client) !== undefined
       ? undefined
-      : (resolveAdministratorMemberRolePolicy(client, cfg) ??
-        (typeof owner === "object"
-          ? resolveOperatorRolePolicyForAssignment(
-              owner.profileId,
-              owner.role,
-              cfg,
-              owner.githubLogin ?? null,
-            )
-          : profileId
-            ? resolveOperatorRolePolicyForProfile(profileId, cfg)
-            : resolveOperatorRolePolicy(client, cfg)));
+      : typeof owner === "object"
+        ? resolveOperatorRolePolicyForAssignment(
+            owner.profileId,
+            owner.role,
+            cfg,
+            owner.githubLogin ?? null,
+            operatorRoleSubject(owner),
+          )
+        : profileId
+          ? resolveOperatorRolePolicyForProfile(profileId, cfg)
+          : resolveOperatorRolePolicy(client, cfg);
   const granted = client.connect.scopes ?? [];
   const scopes = policy ? intersectOperatorScopes(granted, policy.scopes) : granted;
   if (

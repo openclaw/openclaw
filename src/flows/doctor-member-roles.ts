@@ -3,11 +3,11 @@ import {
   listMissingMemberRolePresets,
   withMissingMemberRolePresets,
 } from "../gateway/openclaw-id/member-role-presets.js";
-import { readSandboxBackendAvailability } from "../gateway/openclaw-id/sandbox-availability.js";
-import { isNamedOperatorRoleEnforcementEnabled } from "../gateway/operator-role-enforcement.js";
+import { createRoleSandboxReadinessCheck } from "../gateway/openclaw-id/sandbox-availability.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isOpenClawIdEnabled } from "../shared/openclaw-id-policy.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
+import { readOpenClawIdUserProfiles } from "../state/user-profile-openclaw-id.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import {
   recordDoctorHealthWarnings,
@@ -42,19 +42,41 @@ export const memberRolesCheck: HealthCheck = {
         ...(target ? { target } : {}),
       });
     };
-    const enforced = isNamedOperatorRoleEnforcementEnabled(cfg);
-    if (!enforced && Object.keys(roles.definitions).length > 0) {
+    const enabled = isOpenClawIdEnabled(cfg.gateway?.openclawId);
+    let members: Map<string, string> | undefined;
+    if (enabled) {
+      try {
+        members = await readDoctorMemberRoles(cfg, env);
+      } catch {
+        warn(
+          "membership-unreadable",
+          "Doctor could not read OpenClaw ID membership from the local claw record.",
+          "Check the local claw storage and linking status on Access, then rerun Doctor; membership was not verified.",
+        );
+      }
+    }
+    // Without a default, stored assignments are active only for linked current members.
+    if (
+      roles.default === undefined &&
+      Object.keys(roles.definitions).length &&
+      (!enabled || members)
+    ) {
       try {
         const stored = await executeExistingOpenClawStateRead(
           { env },
           { type: "userProfiles.catalog" },
         );
-        const assigned = stored?.profiles.filter(([, row]) => !row.merged_into && row.role) ?? [];
-        if (assigned.length) {
+        const linked = await readOpenClawIdUserProfiles([...(members?.keys() ?? [])], { env });
+        const memberProfiles = new Set(Object.values(linked).map(({ id }) => id));
+        const inactive =
+          stored?.profiles.filter(
+            ([id, row]) => !row.merged_into && row.role && !memberProfiles.has(id),
+          ) ?? [];
+        if (inactive.length) {
           warn(
             "assignments-inactive",
-            `Named-role enforcement is off: ${assigned.length} profile(s) have stored role assignments. These assignments have no effect because gateway.roles.default is absent.`,
-            "Set gateway.roles.default to a defined role to enforce profile assignments, or clear unused assignments with users.setRole (role: null). OpenClaw ID member roles still apply.",
+            `${inactive.length} profile(s) have inactive stored role assignments because gateway.roles.default is absent and they are not current linked OpenClaw ID members.`,
+            "Set gateway.roles.default to a defined role to enforce non-member profile assignments, or clear unused assignments with users.setRole (role: null).",
           );
         }
       } catch (error) {
@@ -66,10 +88,10 @@ export const memberRolesCheck: HealthCheck = {
       }
     }
     // Existing default-enforced Gateways with OpenClaw ID off retain their current diagnostics.
-    if (!isOpenClawIdEnabled(cfg.gateway?.openclawId)) {
+    if (!enabled) {
       return findings;
     }
-    for (const name of listMissingMemberRolePresets(cfg)) {
+    for (const name of listMissingMemberRolePresetRepairs(cfg)) {
       warn(
         "missing-preset",
         `OpenClaw ID preset role "${name}" has no definition.`,
@@ -77,47 +99,69 @@ export const memberRolesCheck: HealthCheck = {
         name,
       );
     }
-    const sandboxUsers: string[] = [];
-    try {
-      for (const [accountId, role] of await readDoctorMemberRoles(env)) {
-        const definition = Object.hasOwn(roles.definitions, role)
-          ? roles.definitions[role]
-          : undefined;
-        if (!definition) {
-          warn(
-            "member-role-undefined",
-            `OpenClaw ID member "${accountId}" has undefined role "${role}" and cannot connect.`,
-            `Define "${role}" in gateway.roles.definitions, or change this member's role on the Access page.`,
-            accountId,
-          );
-        } else if (definition.sandbox === "required") {
-          sandboxUsers.push(`member "${accountId}" (role "${role}")`);
-        }
+    const sandboxUsers = new Map<string, string[]>();
+    const addSandboxUser = (role: string, user: string) =>
+      sandboxUsers.set(role, [...(sandboxUsers.get(role) ?? []), user]);
+    for (const [accountId, role] of members ?? []) {
+      const definition = Object.hasOwn(roles.definitions, role)
+        ? roles.definitions[role]
+        : undefined;
+      if (!definition) {
+        warn(
+          "member-role-undefined",
+          `OpenClaw ID member "${accountId}" has undefined role "${role}" and cannot connect.`,
+          `Define "${role}" in gateway.roles.definitions, or change this member's role on the Access page.`,
+          accountId,
+        );
+      } else if (definition.sandbox === "required") {
+        addSandboxUser(role, `member "${accountId}" (role "${role}")`);
       }
-    } catch {
-      warn(
-        "membership-unreadable",
-        "Doctor could not read OpenClaw ID membership from the local claw record.",
-        "Check the local claw storage and linking status on Access, then rerun Doctor; membership was not verified.",
-      );
     }
     if (roles.default && roles.definitions[roles.default]?.sandbox === "required") {
-      sandboxUsers.push(`people using the named default "${roles.default}"`);
+      addSandboxUser(roles.default, `people using the named default "${roles.default}"`);
     }
-    if (sandboxUsers.length) {
-      const availability = await readSandboxBackendAvailability(cfg);
-      if (availability.available === false) {
-        const engine = availability.backend === "podman" ? "Podman" : "Docker";
+    const readiness = createRoleSandboxReadinessCheck(cfg);
+    for (const [role, users] of sandboxUsers) {
+      const result = await readiness(roles.definitions[role]!.agents);
+      if (result.ready !== false) {
+        continue;
+      }
+      const engine = result.backend === "podman" ? "Podman" : "Docker";
+      if (result.reason === "engine_unavailable") {
         warn(
           "sandbox-unavailable",
-          `Sandbox required for ${sandboxUsers.join(", ")}, but the configured ${engine} backend is unavailable; their runs will fail.`,
+          `Sandbox required for ${users.join(", ")}, but the configured ${engine} backend is unavailable; their runs will fail.`,
           `Make the configured ${engine} sandbox backend available. Required exec and file tools do not fall back to the host; see https://docs.openclaw.ai/gateway/sandboxing.`,
+          role,
+        );
+      } else {
+        warn(
+          "sandbox-image-missing",
+          `Sandbox required for ${users.join(", ")}, but the sandbox image ${result.image} is missing; their runs will fail.`,
+          result.doctorBuilds
+            ? `Accept Doctor's sandbox image build (openclaw doctor --fix); see https://docs.openclaw.ai/gateway/sandboxing.`
+            : `Build or pull ${result.image} with ${engine}; see https://docs.openclaw.ai/gateway/sandboxing.`,
+          role,
         );
       }
     }
     return findings;
   },
 };
+
+/** Preset roles the check reports and the repair adds: only with roles and OpenClaw ID on. */
+function listMissingMemberRolePresetRepairs(cfg: DoctorHealthFlowContext["cfg"]) {
+  return cfg.gateway?.roles && isOpenClawIdEnabled(cfg.gateway.openclawId)
+    ? listMissingMemberRolePresets(cfg)
+    : [];
+}
+
+/** Read-only: whether {@link runMemberRolesHealth} would offer to add missing presets. */
+export function hasMemberRolePresetRepair(
+  ctx: Pick<DoctorHealthFlowContext, "cfg" | "sourceConfigValid">,
+): boolean {
+  return ctx.sourceConfigValid && listMissingMemberRolePresetRepairs(ctx.cfg).length > 0;
+}
 
 /** Stage an accepted preset repair for Doctor's normal revision-fenced config writer. */
 export async function runMemberRolesHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -129,8 +173,7 @@ export async function runMemberRolesHealth(ctx: DoctorHealthFlowContext): Promis
   });
   const missing = findings.filter(({ requirement }) => requirement === "missing-preset");
   if (
-    missing.length &&
-    ctx.sourceConfigValid &&
+    hasMemberRolePresetRepair(ctx) &&
     (await ctx.prompter.confirmAutoFix({
       message: `Add missing OpenClaw ID role presets (${missing.map(({ target }) => target).join(", ")})? The config file is rewritten as JSON and comments are removed. Existing definitions, default, and assignments are preserved.`,
       initialValue: false,

@@ -18,6 +18,7 @@ import { createInterface } from "node:readline";
 import * as tar from "tar/raw";
 import { afterEach, describe, expect, it } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
+import { UPDATE_COMPATIBILITY_CHUNK_HEADER } from "../../scripts/lib/update-compat-contract.mjs";
 import { listCoreRuntimePostBuildOutputs } from "../../scripts/runtime-postbuild.mts";
 import { resolveNodeRuntimeExecutable } from "../../src/infra/node-runtime-executable.ts";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
@@ -321,20 +322,6 @@ touch "$ROOT_DIR/assembled"
 );
 
 describe("packaged worker freshness", () => {
-  it.skipIf(process.platform === "win32").each([
-    { label: "unset", input: undefined, expected: "1" },
-    { label: "empty", input: "", expected: "1" },
-    { label: "typed opt-in", input: "0", expected: "0" },
-    { label: "runtime-only", input: "1", expected: "1" },
-  ])("passes $label DTS selection to the real packager's build command", ({ input, expected }) => {
-    const { result, events } = runPackageEntrypointHarness({ dts: input });
-
-    expect(result.status, result.stderr).toBe(77);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain(`BUILD_SELECTION=${expected}\n`);
-    expect(events).toEqual(["xcode-version", "swift-version", "pnpm:build"]);
-  });
-
   it.skipIf(process.platform === "win32")(
     "runs the real build entrypoint when the legacy SKIP_TSC shortcut is requested",
     () => {
@@ -499,7 +486,7 @@ ${scriptBlock("cleanup_package_build() {", "merge_framework_machos() {")}
     // Supply the canonical owner's required generated files as fixture inputs;
     // this test proves packaging admission, not the postbuild inventory itself.
     for (const output of listCoreRuntimePostBuildOutputs({ rootDir: root })) {
-      writeFiles(root, { [output]: "fixture output\n" });
+      writeFiles(root, { [output]: `${UPDATE_COMPATIBILITY_CHUNK_HEADER}\n` });
     }
     const info = JSON.stringify({
       version: "1.2.3",
@@ -603,7 +590,6 @@ function writeFixtureExecutable(file: string, body: string) {
 
 function runPackageEntrypointHarness(
   options: {
-    dts?: string;
     skipTsc?: boolean;
     install?: boolean;
     buildConfig?: "debug" | "release";
@@ -675,7 +661,6 @@ esac`,
       BUILD_ARCHS: "arm64",
       SKIP_PNPM_INSTALL: options.install ? "0" : "1",
       ...(options.skipTsc ? { SKIP_TSC: "1" } : {}),
-      ...(options.dts === undefined ? {} : { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: options.dts }),
       ...(options.buildConfig === undefined ? {} : { BUILD_CONFIG: options.buildConfig }),
       ...(options.signingVariant === undefined
         ? {}

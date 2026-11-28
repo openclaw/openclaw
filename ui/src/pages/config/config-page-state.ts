@@ -1,6 +1,5 @@
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { createEffect, createMemo, createSignal, createStore, onSettled } from "solid-js";
-import type * as Push from "../../../../packages/gateway-protocol/src/schema/push.js";
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
@@ -12,6 +11,7 @@ import {
   normalizeTextScale,
   UI_APPEARANCE_DEFAULTS,
 } from "../../app/settings.ts";
+import type { WebPushPreferencesResult as PushPreferences } from "../../app/web-push.runtime.ts";
 import {
   loadStoredHiddenSessionCatalogIds,
   SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
@@ -656,10 +656,10 @@ export function createConfigPage(
       onWebPushSubscribe: () => context.webPush.run({ kind: "enable" }),
       onWebPushUnsubscribe: () => context.webPush.run({ kind: "disable" }),
       onWebPushTest: () => context.webPush.run({ kind: "test" }),
-      onWebPushSetUserPreferences: (nextPreferences: Push.WebPushNotificationPreferences) =>
-        context.webPush.run({ kind: "set", scope: "user", preferences: nextPreferences }),
-      onWebPushSetDevicePreferences: (nextPreferences: Push.WebPushDevicePreferences) =>
-        context.webPush.run({ kind: "set", scope: "device", preferences: nextPreferences }),
+      onWebPushSetUserPreferences: (value: PushPreferences["user"], field?: "agentIds") =>
+        context.webPush.run({ kind: "set", scope: "user", preferences: value, field }),
+      onWebPushSetDevicePreferences: (value: PushPreferences["device"], field?: "agentIds") =>
+        context.webPush.run({ kind: "set", scope: "device", preferences: value, field }),
     };
   }
   const refresh = () => {

@@ -7,7 +7,12 @@ import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import "../../styles/usage.css";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { isUsageCacheIncomplete } from "./cache-status.ts";
-import { buildPeakErrorHours, formatHeadlineCost, formatUsageTokens } from "./metrics.ts";
+import {
+  buildPeakErrorHours,
+  formatHeadlineCost,
+  formatUsageTokens,
+  usageThroughputStats,
+} from "./metrics.ts";
 import { UsageEmptyState } from "./page-shell.tsx";
 import { createUsagePhoneLayout } from "./phone-layout.ts";
 import { buildProviderSeries } from "./provider-series.ts";
@@ -133,15 +138,12 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
   const insightStats = createMemo(() => {
     const durationMs = analyticsData().overview?.durationMs ?? 0;
     const durationCount = analyticsData().overview?.durationCount ?? 0;
-    const totals = analyticsTotals();
-    const messages = activeAggregates().messages;
+    const aggregates = activeAggregates();
+    const messages = aggregates.messages;
     return {
       durationCount,
       avgDurationMs: durationCount ? durationMs / durationCount : 0,
-      throughputTokensPerMin:
-        totals && durationMs > 0 ? totals.totalTokens / (durationMs / 60000) : undefined,
-      throughputCostPerMin:
-        totals && durationMs > 0 ? totals.totalCost / (durationMs / 60000) : undefined,
+      ...usageThroughputStats(analyticsData().aggregates ?? {}, props.filters.selectedDays),
       errorRate: messages.total ? messages.errors / messages.total : 0,
     };
   });

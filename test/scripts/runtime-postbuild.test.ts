@@ -33,7 +33,6 @@ import {
   writeLegacyRootRuntimeCompatAliases,
   writeStableRootRuntimeAliases,
 } from "../../scripts/runtime-postbuild.mts";
-import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { readBuildIdFromBuildInfoForModuleUrl } from "../../src/version.js";
 import { fixtureFiles } from "./script-fixture-files.test-support.js";
@@ -218,17 +217,6 @@ describe("runtime postbuild static assets", () => {
     expect(f.read("dist/bundled/session-memory/handler.js")).toBe("export default () => {};\n");
   });
 
-  it("discovers repo static asset metadata without scanning extension directories", () => {
-    const payload = expectNoNodeFsScans<string[]>(
-      `
-      const assets = await import("./scripts/lib/static-extension-assets.mts");
-      return assets.discoverStaticExtensionAssets().map(({ dest }) => dest);
-    `,
-      { allowedExistsSyncPaths: [path.join(MODULE_ROOT, ".git")] },
-    );
-    expect(payload.length).toBeGreaterThan(0);
-  });
-
   it("ships the PostgreSQL schema read by the packaged Logbook port descriptor", async () => {
     const rootDir = createTempDir("openclaw-logbook-port-assets-");
     const pluginPath = "extensions/logbook";
@@ -246,55 +234,6 @@ describe("runtime postbuild static assets", () => {
     const schema = await readText(MODULE_ROOT, schemaPath);
     for (const outputRoot of ["dist", "dist-runtime"]) {
       await expect(readText(rootDir, path.join(outputRoot, schemaPath))).resolves.toBe(schema);
-    }
-  });
-
-  it("copies each package asset once with multiple Git index stages", async () => {
-    const rootDir = createTempDir("openclaw-static-assets-index-");
-    const git = (args: string[], input?: string) =>
-      childProcess.execFileSync("git", args, { cwd: rootDir, encoding: "utf8", input });
-    const pluginIds = ["conflicted", "package-only", "with-manifest"];
-    for (const id of pluginIds) {
-      const pluginDir = path.join(rootDir, "extensions", id);
-      await fs.mkdir(pluginDir, { recursive: true });
-      await writeFiles(pluginDir, {
-        "asset.txt": `${id} bytes\n`,
-        "package.json": JSON.stringify({
-          openclaw: { build: { staticAssets: [{ source: "asset.txt", output: "asset.txt" }] } },
-        }),
-      });
-    }
-    for (const id of ["with-manifest", "manifest-only"]) {
-      const pluginDir = path.join(rootDir, "extensions", id);
-      await fs.mkdir(pluginDir, { recursive: true });
-      await writeText(pluginDir, "openclaw.plugin.json", "not valid JSON");
-    }
-    git(["init", "-q"]);
-    git(["add", "extensions"]);
-    const packagePath = "extensions/conflicted/package.json";
-    const blob = git(["hash-object", "-w", "--stdin"], "{}").trim();
-    // Keep resolved working-tree metadata while the index still holds all merge stages.
-    git(
-      ["update-index", "--index-info"],
-      sourceLines(
-        `0 ${"0".repeat(blob.length)}\t${packagePath}`,
-        ...[1, 2, 3].map((stage) => `100644 ${blob} ${stage}\t${packagePath}`),
-      ),
-    );
-    const copy = vi.spyOn(fsSync, "copyFileSync");
-    try {
-      copyStaticExtensionAssets({ rootDir });
-      expect(copy).toHaveBeenCalledTimes(3);
-      expect(discoverStaticExtensionAssets({ rootDir }).map(({ pluginDir }) => pluginDir)).toEqual(
-        pluginIds,
-      );
-      for (const id of pluginIds) {
-        await expect(
-          readText(rootDir, path.join("dist", "extensions", id, "asset.txt")),
-        ).resolves.toBe(`${id} bytes\n`);
-      }
-    } finally {
-      copy.mockRestore();
     }
   });
 
@@ -743,9 +682,10 @@ describe("runtime postbuild static assets", () => {
         const loaded = await load(rootDir, `dist/${chunk.path}`);
         for (const { exported, origin } of chunk.exports) {
           expect(await loaded[exported](), `${release.version}: ${chunk.path}:${exported}`).toBe(
-            // 2026.9.37 deliberately denied leased-handoff authority; its implementation
-            // is inline rather than one of the fixture's named runtime exports.
-            release.version === "2026.9.37" &&
+            // Both immutable 9.36/9.37 updaters denied leased-handoff authority; the
+            // recorded immutable export is inline, not a named runtime export.
+            origin.module === "src/infra/update-managed-service-handoff-current.ts" &&
+              origin.symbol === "isImmutableManagedServiceUpdateHandoffProcess" &&
               chunk.path === "update-managed-service-handoff-current-E5XsvJxw.mjs" &&
               exported === "isCurrentManagedServiceUpdateHandoffProcess"
               ? false
@@ -849,11 +789,11 @@ describe("previous release update compatibility", () => {
         ].join("\n"),
         ...(includePrivateWorker
           ? {
-              "state/openclaw-state-read.worker.js":
-                '//#region src/cli/update-cli/update-command-service-command.ts\nexport async function restart() { return await import("./openclaw-state-read-service-abcdefgh.mjs"); }\n',
-              "state/openclaw-state-read-command.mjs":
-                '//#region src/daemon/inspect.ts\nexport async function inspect() { return await import("./openclaw-state-read-service-abcdefgh.mjs"); }\n',
-              "state/openclaw-state-read-service-abcdefgh.mjs":
+              "infra/shared-worker-host.worker.js":
+                '//#region src/cli/update-cli/update-command-service-command.ts\nexport async function restart() { return await import("./shared-worker-host-service-abcdefgh.mjs"); }\n',
+              "infra/shared-worker-host-command.mjs":
+                '//#region src/daemon/inspect.ts\nexport async function inspect() { return await import("./shared-worker-host-service-abcdefgh.mjs"); }\n',
+              "infra/shared-worker-host-service-abcdefgh.mjs":
                 '//#region src/cli/update-cli/runner.ts\nexport function resolveRunner() { return "private worker"; }\n',
             }
           : {}),

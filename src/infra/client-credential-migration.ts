@@ -2,7 +2,6 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
-import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { chunkItems } from "../utils/chunk-items.js";
 import {
@@ -20,10 +19,16 @@ import {
 } from "./client-credential-readiness.js";
 import {
   CLIENT_CREDENTIAL_LEGACY_KEYS,
+  isSameClientCredentialFile,
+  isSameIndependentClientCredentialIdentity,
   readClientCredentialFileIdentity,
   serializeClientCredentialReceipt,
   type ClientCredentialReceipt,
 } from "./client-credential-receipt.js";
+import {
+  hasAuthoritativeSharedClientCredentials,
+  planClientCredentialReceiptRecovery,
+} from "./client-credential-recovery-plan.js";
 import {
   CLIENT_CREDENTIAL_SCHEMA_VERSION,
   CLIENT_CREDENTIAL_SOURCE_TABLES,
@@ -236,10 +241,7 @@ export function bindFreshClientCredentialStore(
     }
     const previousSource = previous?.receipt.source;
     const previousFile = previous?.receipt.sharedFile;
-    const sameSharedFile =
-      previousFile?.path === sharedFile.path &&
-      previousFile.dev === sharedFile.dev &&
-      previousFile.ino === sharedFile.ino;
+    const sameSharedFile = isSameClientCredentialFile(previousFile, sharedFile);
     const samePostgresBootstrap =
       postgres &&
       previousSource?.kind === postgres.kind &&
@@ -331,13 +333,7 @@ export function recoverClientCredentialStore(
     recovery?: PreparedClientCredentialRecovery;
   },
 ): "rebound" | void {
-  const metadata = source
-    .prepare("SELECT created_at FROM schema_meta WHERE meta_key = 'primary'")
-    .get();
-  if (
-    readStateSchemaContentVersion(source) < CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION ||
-    CLIENT_CREDENTIAL_SOURCE_TABLES.slice(0, 3).some((table) => tableExists(source, table))
-  ) {
+  if (hasAuthoritativeSharedClientCredentials(source)) {
     throw new Error(
       "Shared credentials are still authoritative; complete their migration before using the local store.",
     );
@@ -410,47 +406,11 @@ export function recoverClientCredentialStore(
     );
   }
   try {
-    const stored = readClientCredentialReceipt(target.database);
-    if (!stored) {
-      throw new Error("Local credential receipt is missing; restore its matching backup.");
-    }
-    const file = readClientCredentialFileIdentity(options.path);
-    if (!file) {
-      throw new Error("Shared credential source is missing; restore its matching backup.");
-    }
-    const provenance = stored.receipt.source;
-    const original = stored.receipt.sharedFile;
-    const sameFile =
-      original?.path === file.path && original.dev === file.dev && original.ino === file.ino;
-    if (!provenance && !sameFile) {
-      throw new Error(
-        "Local credentials do not match the shared database; restore their matched backup.",
-      );
-    }
-    if (provenance?.kind === "independent") {
-      throw new Error(
-        "Independent native credentials require copy admission, not canonical recovery.",
-      );
-    }
-    const sameNativeBootstrap =
-      provenance?.kind === "canonical" && provenance.engine === "native-v0" && sameFile;
-    if (provenance) {
-      const identity = isPostgresSqlConnection(source)
-        ? String(readEngineAnchor(source.anchor, "identity", true)?.[0]?.store_id)
-        : `${file.path}:${String(metadata?.created_at ?? 0)}`;
-      if (provenance.identity !== identity && !sameNativeBootstrap) {
-        throw new Error(
-          "Local credentials do not match the shared database; restore their matched backup.",
-        );
-      }
-      if (sameNativeBootstrap) {
-        provenance.engine = isPostgresSqlConnection(source) ? "postgres" : "sqlite";
-        provenance.identity = identity;
-      }
-    }
-    if (stored.phase === "complete" && sameFile && !sameNativeBootstrap && provenance) {
+    const recovery = planClientCredentialReceiptRecovery(source, target.database, options.path);
+    if (recovery.kind === "complete") {
       return;
     }
+    const { stored, file } = recovery;
     // A bootstrap interrupted after source commit still has the original file fence.
     stored.receipt.source ??= readClientCredentialBootstrapSource(source, file.path);
     stored.receipt.sharedFile = file;
@@ -595,11 +555,9 @@ export function prepareClientCredentialMigration(
         previous?.phase === "complete" &&
         previous.receipt.source?.kind === "independent" &&
         nativeBootstrap &&
-        previous.receipt.source.identity === `${file.dev}:${file.ino}` &&
+        isSameIndependentClientCredentialIdentity(previous.receipt.source.identity, file) &&
         previous.receipt.source.sha256 === receipt.source!.sha256 &&
-        previous.receipt.sharedFile?.path === file.path &&
-        previous.receipt.sharedFile.dev === file.dev &&
-        previous.receipt.sharedFile.ino === file.ino;
+        isSameClientCredentialFile(previous.receipt.sharedFile, file);
       if (independent) {
         writeClientCredentialReceipt(database, receipt, "copied");
         return;

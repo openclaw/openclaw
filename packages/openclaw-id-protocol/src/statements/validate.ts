@@ -364,6 +364,11 @@ const V1_BODIES: Record<StatementType, Check> = {
     binding_seq: positive,
     issued_at: seconds,
   }),
+  // Added to v1-draft in place (pre-release); see docs/versioning.md, "Claw unlink".
+  ClawUnlink: object({
+    claw_id: clawId,
+    binding_seq: positive,
+  }),
 };
 
 // Body schemas per envelope version. Every supported version has its own complete table.

@@ -98,6 +98,7 @@ export type ResolvedAgentConfig = {
   contextInjection?: AgentEntry["contextInjection"];
   bootstrapMaxChars?: AgentEntry["bootstrapMaxChars"];
   bootstrapTotalMaxChars?: AgentEntry["bootstrapTotalMaxChars"];
+  sharedUserDir?: AgentEntry["sharedUserDir"];
   experimental?: AgentDefaultsConfig["experimental"];
   skills?: AgentEntry["skills"];
   memory?: AgentEntry["memory"];
@@ -440,15 +441,27 @@ export function resolveMutableAgentEntry(
   return undefined;
 }
 
+/** Borrow the roster owner's prepared entry; mutable public callers keep clone-on-read. */
+export function readAgentConfigEntry(
+  cfg: OpenClawConfig,
+  agentId: string,
+): Readonly<AgentEntry> | undefined {
+  const id = normalizeAgentId(agentId);
+  const facts = readAgentRosterFacts(cfg);
+  const entry = facts
+    ? (facts.entryByNormalizedId ??= buildAgentEntryIndex(cfg)).get(id)?.entry
+    : resolveAgentEntry(cfg, id);
+  return (
+    entry ?? (!hasAgentRosterProperty(cfg) && id === LEGACY_IMPLICIT_AGENT_ID ? { id } : undefined)
+  );
+}
+
 /** Resolves merged config for one agent id. */
 export function resolveAgentConfig(
   cfg: OpenClawConfig,
   agentId: string,
 ): ResolvedAgentConfig | undefined {
-  const id = normalizeAgentId(agentId);
-  const entry: AgentEntry | undefined =
-    resolveAgentEntry(cfg, id) ??
-    (!hasAgentRosterProperty(cfg) && id === LEGACY_IMPLICIT_AGENT_ID ? { id } : undefined);
+  const entry = readAgentConfigEntry(cfg, agentId);
   if (!entry) {
     return undefined;
   }
@@ -476,6 +489,7 @@ export function resolveAgentConfig(
     contextInjection: entry.contextInjection,
     bootstrapMaxChars: entry.bootstrapMaxChars,
     bootstrapTotalMaxChars: entry.bootstrapTotalMaxChars,
+    sharedUserDir: entry.sharedUserDir,
     experimental: entry.experimental
       ? { ...agentDefaults?.experimental, ...entry.experimental }
       : agentDefaults?.experimental,
@@ -520,7 +534,7 @@ export function resolveAgentWorkspaceDir(
   env: NodeJS.ProcessEnv = process.env,
 ) {
   const id = normalizeAgentId(agentId);
-  const configured = resolveAgentConfig(cfg, id)?.workspace?.trim();
+  const configured = readAgentConfigEntry(cfg, id)?.workspace?.trim();
   if (configured) {
     return stripNullBytes(resolveUserPath(configured, env));
   }
@@ -579,7 +593,7 @@ export function resolveAgentWorkspaceProvisioning(
   },
 ): AgentWorkspaceProvisioning {
   const id = normalizeAgentId(agentId);
-  const entry = resolveAgentConfig(cfg, id);
+  const entry = readAgentConfigEntry(cfg, id);
   if (entry?.runtime?.type !== "acp") {
     return "standard";
   }
@@ -611,7 +625,7 @@ export function resolveAgentWorkspaceProvisioning(
  * (configured binding resolution) stay off embedded/default agent turns.
  */
 export function isImplicitAcpWorkspaceCandidate(cfg: OpenClawConfig, agentId: string): boolean {
-  const entry = resolveAgentConfig(cfg, normalizeAgentId(agentId));
+  const entry = readAgentConfigEntry(cfg, normalizeAgentId(agentId));
   return entry?.runtime?.type === "acp" && !entry.workspace?.trim();
 }
 
@@ -636,7 +650,7 @@ export function resolveEffectiveAgentDir(
   deps?: AgentDirResolutionEnv,
 ): string {
   const id = normalizeAgentId(agentId);
-  const configured = resolveAgentConfig(cfg, id)?.agentDir?.trim();
+  const configured = readAgentConfigEntry(cfg, id)?.agentDir?.trim();
   const env = deps?.env ?? process.env;
   return configured
     ? resolveUserPath(configured, env, deps?.homedir)

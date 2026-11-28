@@ -1,5 +1,7 @@
 import type { PreparedStateDatabaseReadAccess } from "../infra/gateway-state-owner.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import { getProcessCleanupBudget } from "../process/supervisor/cleanup-budget.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   isOpenClawDatabaseMaintenanceResourceOwned,
@@ -20,6 +22,7 @@ export type StateDatabaseBorrowers = {
   retiring: boolean;
   cleanupComplete: boolean;
   retirement?: RetirementIntent;
+  releaseJoin?: Deferred;
   asyncRetirement?: {
     start(): void;
     close(): Promise<void>;
@@ -103,7 +106,9 @@ export function createStateDatabaseRetainer(
       let unregister: (() => void) | undefined;
       const finish = (retirement?: RetirementIntent) => {
         owner.references.delete(retained);
-        if (retirement?.isCurrent()) {
+        if (owner.releaseJoin) {
+          owner.releaseJoin.resolve();
+        } else if (retirement?.isCurrent()) {
           retirement.retire();
         } else {
           owner.retiring = false;
@@ -112,7 +117,9 @@ export function createStateDatabaseRetainer(
         owner.asyncRetirement = undefined;
         unregister?.();
         unregister = undefined;
-        operations.touch(database);
+        if (!owner.releaseJoin) {
+          operations.touch(database);
+        }
       };
       const run = (): Promise<void> => {
         if (pending) {
@@ -140,6 +147,8 @@ export function createStateDatabaseRetainer(
           .catch((error: unknown) => {
             owner.references.add(retained);
             operations.retainFailed(database);
+            owner.releaseJoin?.reject(error);
+            owner.releaseJoin = undefined;
             throw error;
           });
         // A synchronous final release hands failures to the registered lifecycle resource.
@@ -168,6 +177,12 @@ export function createStateDatabaseRetainer(
       }
       released = true;
       owner.references.delete(reference);
+      if (owner.releaseJoin) {
+        if (owner.references.size === 0) {
+          owner.releaseJoin.resolve();
+        }
+        return;
+      }
       if (owner.retirement && !owner.retirement.isCurrent()) {
         owner.retirement = undefined;
         owner.asyncRetirement = undefined;
@@ -203,6 +218,10 @@ export function createStateDatabaseRetainer(
       release,
       async releaseAsync() {
         if (owner.cleanupComplete) {
+          return;
+        }
+        if (owner.releaseJoin) {
+          release();
           return;
         }
         const retirement =
@@ -280,11 +299,34 @@ export function createStateDatabaseRetainer(
   };
 }
 
+/** Admission stops immediately; only the admitted references may release native custody. */
+export async function joinStateDatabaseBorrowersReleased(
+  owner: StateDatabaseBorrowers | undefined,
+  pathname: string,
+): Promise<void> {
+  if (!owner || owner.cleanupComplete) {
+    return;
+  }
+  owner.retiring = true;
+  if (owner.references.size === 0) {
+    return;
+  }
+  if (!owner.releaseJoin) {
+    owner.releaseJoin = createDeferredCore();
+    getProcessCleanupBudget()?.warn(
+      `Waiting for ${owner.references.size} active native borrower(s) before retiring OpenClaw state database: ${pathname}`,
+    );
+  }
+  await owner.releaseJoin.promise;
+}
+
 export function assertStateDatabaseBorrowersReleased(
   owner: StateDatabaseBorrowers | undefined,
   pathname: string,
 ): void {
   if (owner?.references.size) {
-    throw new Error(`OpenClaw state database still has active native borrowers: ${pathname}`);
+    throw new Error(
+      `OpenClaw state database still has active native borrowers (${owner.references.size}): ${pathname}`,
+    );
   }
 }

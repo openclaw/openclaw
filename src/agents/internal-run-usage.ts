@@ -4,7 +4,8 @@ import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
-import { estimateAggregateUsageCostAsync, resolveModelCostConfig } from "../utils/usage-format.js";
+import { resolveModelCostConfig } from "../model-catalog/usage-pricing.js";
+import { estimateAggregateUsageCostAsync } from "../utils/usage-format.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { hasBillableUsage, toDiagnosticUsage } from "./usage.js";
 

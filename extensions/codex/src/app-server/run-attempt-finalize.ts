@@ -33,7 +33,7 @@ import {
   canClearCodexBindingForRecovery,
   clearCodexBindingAfterInvalidImagePayload,
   retireCodexTransportAfterFailure,
-  shouldUseFreshCodexThreadAfterContextEngineOverflow,
+  shouldUseFreshCodexThreadAfterContextOverflow,
 } from "./run-attempt-state.js";
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
@@ -197,8 +197,9 @@ export async function finalizeCodexAttempt(
       );
     }
     if (
+      !params.providerReviewAcknowledgment &&
       resourceState.thread.connectionScope !== "supervision" &&
-      shouldUseFreshCodexThreadAfterContextEngineOverflow({
+      shouldUseFreshCodexThreadAfterContextOverflow({
         error: enrichedPromptError,
         contextEngineActive: Boolean(activeContextEngine),
         thread: resourceState.thread,
@@ -206,7 +207,7 @@ export async function finalizeCodexAttempt(
       canClearBindingForRecovery("clearing a native context after overflow")
     ) {
       embeddedAgentLog.warn(
-        "codex app-server context-engine turn overflowed after resume; clearing thread binding for recovery",
+        "codex app-server context overflow; clearing thread binding for next-turn recovery",
         {
           threadId: resourceState.thread.threadId,
           turnId: activeTurnId,

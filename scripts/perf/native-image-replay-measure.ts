@@ -27,6 +27,7 @@ import {
 import type { AgentMessage } from "../../src/agents/runtime/index.js";
 import { convertToLlm } from "../../src/agents/sessions/messages.js";
 import { createHostSandboxFsBridge } from "../../src/agents/test-helpers/host-sandbox-fs-bridge.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -127,12 +128,7 @@ try {
   initialValidations = 0;
   global.gc?.();
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   for (let session = 0; session < sessions; session++) {
     const options = {

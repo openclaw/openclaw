@@ -46,6 +46,38 @@ vi.mock("../../harness/runtime-plugin.js", () => ({
 }));
 
 describe("model chat and native model ownership", () => {
+  it("preserves native catalog capabilities for a turn", async () => {
+    const fixture = await createFixture();
+    const row = {
+      provider: fixture.generation.provider,
+      id: fixture.generation.modelId,
+      name: "Native fixture",
+      nativeRuntime: "codex",
+      reasoning: false,
+      input: ["text" as const],
+      contextWindow: 65_536,
+    };
+    const catalog = { entries: [row], routeVariants: [row] };
+    const source: PreparedModelRuntimeSnapshot = {
+      ...fixture.generation.preparedModelRuntime,
+      modelCatalog: catalog,
+      readFullModelCatalog: () => catalog,
+    };
+    const setup = await fixture.resolve(
+      undefined,
+      capturePreparedModelRuntimeCatalog(source, source),
+    );
+    expect(setup.nativeModelOwned).toBe(true);
+    expect(setup.model).toMatchObject({
+      name: "Native fixture",
+      reasoning: false,
+      input: ["text"],
+      contextWindow: 65_536,
+      maxTokens: 32_768,
+    });
+    expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
+  });
+
   it.each([true, false])(
     "prepares native ownership through the async hook (sync hook present: %s)",
     async (hasSyncHook) => {

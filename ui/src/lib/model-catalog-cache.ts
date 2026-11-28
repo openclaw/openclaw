@@ -16,6 +16,7 @@ export type ModelCatalogReadScope = Pick<
 type ModelCatalogInvalidationScope = ModelCatalogReadScope & {
   sessionsOnly?: boolean;
   pendingOnly?: boolean;
+  catalogChanged?: boolean;
   sessionModelRevision?: string;
 };
 export type ModelCatalogCacheUpdate = {
@@ -52,7 +53,10 @@ export function modelCatalogEventInvalidation(
 }
 
 export type ModelCatalogRequest = {
-  refresh: boolean;
+  scope: ModelsListParams;
+  timeoutMs?: number | null;
+  retired: boolean;
+  statusChanged: boolean;
   controller: AbortController;
   promise: Promise<ModelCatalogResult>;
   resolve: (result: ModelCatalogResult) => void;
@@ -64,7 +68,7 @@ type ModelCatalogCache = {
   entries: Map<string, ModelCatalogEntry>;
   snapshot?: ModelCatalogRead & { promise: Promise<void>; release: () => void };
   requiresSnapshot?: boolean;
-  requests: Map<string, Map<string, ModelCatalogRequest>>;
+  requests: Map<string, Set<ModelCatalogRequest>>;
 };
 
 export type ModelCatalogRead = {
@@ -168,6 +172,7 @@ export function publishModelCatalogResult(
   read: ModelCatalogRead,
   params: ModelsListParams,
   result: ModelCatalogResult,
+  statusChanged = false,
 ): boolean {
   const { cache, client } = read;
   if (modelCatalogCache.get(client) !== cache || read.signal?.aborted) {
@@ -199,7 +204,8 @@ export function publishModelCatalogResult(
     }
   }
   entry.result = result;
-  entry.invalidated = !discoverySucceeded;
+  entry.invalidated =
+    !discoverySucceeded || (statusChanged && Boolean(result.pendingProviders?.length));
   // Cooldown expiry changes readiness without publishing a new Gateway generation.
   entry.expiresAt = discoverySucceeded
     ? result.models.reduce(
@@ -216,7 +222,12 @@ export function publishModelCatalogResult(
     snapshot.release();
   }
   for (const pending of cache.requests.get(key)?.values() ?? []) {
-    if (discoverySucceeded && (params.refresh || !pending.refresh)) {
+    if (discoverySucceeded && (!pending.scope.refresh || (params.refresh && !pending.retired))) {
+      // The partial is already usable. A reader rechecking after a status notice
+      // needs a new wire instead of rejoining this already settled request.
+      if (entry.invalidated) {
+        pending.retired = true;
+      }
       pending.resolve(result);
     }
   }
@@ -330,10 +341,7 @@ export function invalidateModelCatalogCache(
           .map(([key]) => key)
       : [],
   );
-  const matches = (readScope: ModelsListParams | undefined) => {
-    if (readScope && unchanged.has(modelCatalogKey(modelCatalogParams(readScope)))) {
-      return false;
-    }
+  const matchesScope = (readScope: ModelsListParams | undefined) => {
     if (!scope || !readScope) {
       return true;
     }
@@ -368,6 +376,24 @@ export function invalidateModelCatalogCache(
       readScope.agentId,
     );
   };
+  // A catalog publication retires matching wires. A status notice only asks whether a
+  // still-pending receipt needs one further read; other agents can emit the same notice.
+  if (scope?.catalogChanged || scope?.pendingOnly) {
+    for (const requests of cache.requests.values()) {
+      for (const request of requests) {
+        if (matchesScope(request.scope)) {
+          if (scope.catalogChanged) {
+            request.retired = true;
+          } else {
+            request.statusChanged = true;
+          }
+        }
+      }
+    }
+  }
+  const matches = (readScope: ModelsListParams | undefined) =>
+    matchesScope(readScope) &&
+    (!readScope || !unchanged.has(modelCatalogKey(modelCatalogParams(readScope))));
   for (const entry of cache.entries.values()) {
     if (matches(entry.scope)) {
       markModelCatalogInvalid(entry);

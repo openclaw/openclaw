@@ -102,73 +102,63 @@ async function cleanupWorktree(context: unknown, storePath: string, key?: string
   await removeOwnedSessionWorktree(key);
 }
 
-test.for(["keep", "delete"] as const)(
-  "names a remote session without blocking placement or deletion (%s)",
-  async (outcome, { signal }) => {
-    const naming = createDeferredCore<string>();
-    const namingStarted = createDeferredCore();
-    titleMocks.generate.mockImplementation(() => {
-      namingStarted.resolve();
-      return naming.promise;
-    });
-    const { storePath } = await createSessionStoreDir();
-    const context = {
-      broadcastToConnIds: vi.fn(),
-      getSessionEventSubscriberConnIds: () => new Set(["title-listener"]),
-    };
-    let key: string | undefined;
-    try {
-      const created = await request<{ key: string; runStarted: boolean }>(
-        "sessions.create",
-        {
-          agentId: "main",
-          repository: { url: "https://github.com/openclaw/openclaw.git" },
-          titleSource: "Explain how the updater safely rolls back a failed release",
-        },
-        { ...controlUiClient, context },
-      );
-      expect(created.runStarted).toBe(false);
-      key = created.key;
-      await racePromiseWithAbortSignal(namingStarted.promise, signal);
-      expect(titleMocks.generate).toHaveBeenCalledOnce();
-      expect(readEntry(storePath, key)?.displayName).toBeUndefined();
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      // Cloud dispatch uses this drain before provisioning; optional naming cannot hold it.
-      expect(
-        await interruptSessionControllerEffects({
-          scope: storePath,
-          identities: [key],
-          timeoutMs: 100,
-        }),
-      ).toBe(true);
-      if (outcome === "delete") {
-        expect(await request("sessions.delete", { key })).toMatchObject({ deleted: true });
-      }
-      naming.resolve("Explain safe updater rollback");
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-      if (outcome === "delete") {
-        expect(readEntry(storePath, key)).toBeUndefined();
-        return;
-      }
-      await vi.waitFor(() =>
-        expect(readEntry(storePath, key!)?.displayName).toBe("Explain safe updater rollback"),
-      );
-      await vi.waitFor(() =>
-        expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-          "sessions.changed",
-          expect.objectContaining({ sessionKey: key, reason: "chat.title" }),
-          expect.anything(),
-          expect.anything(),
-        ),
-      );
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-    } finally {
-      naming.resolve("Explain safe updater rollback");
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-      await settleWorkspaceRuns(context, storePath, key);
-    }
-  },
-);
+test("names a remote session without blocking placement drain", async ({ signal }) => {
+  const naming = createDeferredCore<string>();
+  const namingStarted = createDeferredCore();
+  titleMocks.generate.mockImplementation(() => {
+    namingStarted.resolve();
+    return naming.promise;
+  });
+  const { storePath } = await createSessionStoreDir();
+  const context = {
+    broadcastToConnIds: vi.fn(),
+    getSessionEventSubscriberConnIds: () => new Set(["title-listener"]),
+  };
+  let key: string | undefined;
+  try {
+    const created = await request<{ key: string; runStarted: boolean }>(
+      "sessions.create",
+      {
+        agentId: "main",
+        repository: { url: "https://github.com/openclaw/openclaw.git" },
+        titleSource: "Explain how the updater safely rolls back a failed release",
+      },
+      { ...controlUiClient, context },
+    );
+    expect(created.runStarted).toBe(false);
+    key = created.key;
+    await racePromiseWithAbortSignal(namingStarted.promise, signal);
+    expect(titleMocks.generate).toHaveBeenCalledOnce();
+    expect(readEntry(storePath, key)?.displayName).toBeUndefined();
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    // Cloud dispatch uses this drain before provisioning; optional naming cannot hold it.
+    expect(
+      await interruptSessionControllerEffects({
+        scope: storePath,
+        identities: [key],
+        timeoutMs: 100,
+      }),
+    ).toBe(true);
+    naming.resolve("Explain safe updater rollback");
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await vi.waitFor(() =>
+      expect(readEntry(storePath, key!)?.displayName).toBe("Explain safe updater rollback"),
+    );
+    await vi.waitFor(() =>
+      expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+        "sessions.changed",
+        expect.objectContaining({ sessionKey: key, reason: "chat.title" }),
+        expect.anything(),
+        expect.anything(),
+      ),
+    );
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  } finally {
+    naming.resolve("Explain safe updater rollback");
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await settleWorkspaceRuns(context, storePath, key);
+  }
+});
 
 test.each(["adopted", "incognito"] as const)(
   "creation title input leaves an %s session unnamed",
@@ -341,7 +331,7 @@ test.each(["generator error", "delayed title"])(
       await waitForPreparation(dispatchStarted.promise);
       await waitForPreparation(titleStarted.promise);
       const branch = loadSessionEntry(target)?.worktree?.branch;
-      expect(branch).toMatch(/^openclaw\/[a-z]+-[a-z]+$/);
+      expect(branch).toMatch(/^openclaw\/[a-z]+-[a-z]+-[0-9a-f]{6}$/);
       expect(titleMocks.generate).toHaveBeenCalledOnce();
       dispatchFinished.resolve();
       await settleWorkspaceRuns(context, storePath, key);
@@ -388,7 +378,7 @@ test("creates a two-word worktree name before an initial turn can generate its t
     key = created.key;
     await settleWorkspaceRuns(context, storePath, key);
     const branch = (await managedWorktrees.findLiveByOwner("session", key))?.branch;
-    expect(branch).toMatch(/^openclaw\/[a-z]+-[a-z]+$/);
+    expect(branch).toMatch(/^openclaw\/[a-z]+-[a-z]+-[0-9a-f]{6}$/);
     const entry = readEntry(storePath, key);
     expect(entry?.worktree?.branch).toBe(branch);
   } finally {

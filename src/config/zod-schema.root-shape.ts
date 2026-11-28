@@ -47,6 +47,108 @@ import { CommandsSchema, MessagesSchema, SessionSchema } from "./zod-schema.sess
 import { StorageConfigSchema } from "./zod-schema.storage.js";
 import { TelemetryConfigSchema } from "./zod-schema.telemetry.js";
 
+const browserProfilesSchema = z.util.cached(() =>
+  z
+    .record(
+      z.string().regex(/^[a-z0-9-]+$/, "Profile names must be alphanumeric with hyphens only"),
+      z
+        .strictObject({
+          /** Browser engine capability preset. Lightpanda and Kitesurf are external CDP services. */
+          engine: z.enum(["chromium", "lightpanda", "kitesurf"]).optional(),
+          /** CDP port for this profile. Allocated once at creation, persisted permanently. */
+          cdpPort: z.number().int().min(1).max(65535).optional(),
+          /** CDP/DevTools endpoint URL for this profile (remote CDP or existing-session endpoint attach). */
+          cdpUrl: z.string().optional(),
+          /** Explicit user data directory for existing-session Chrome MCP attachment. */
+          userDataDir: z.string().optional(),
+          /** Override the Chrome MCP command for existing-session profiles. */
+          mcpCommand: z.string().optional(),
+          /** Extra Chrome MCP arguments for existing-session profiles. */
+          mcpArgs: z.array(z.string()).optional(),
+          /**
+           * Profile driver (default: openclaw). "extension" attaches to the user's
+           * signed-in browser through the OpenClaw Chrome extension relay.
+           */
+          driver: z
+            .union([
+              z.literal("openclaw"),
+              z.literal("clawd"),
+              z.literal("existing-session"),
+              z.literal("extension"),
+            ])
+            .optional(),
+          /** If true, launch this profile in headless mode. Falls back to browser.headless. */
+          headless: z.boolean().optional(),
+          /** Browser executable path for this profile. Falls back to browser.executablePath. */
+          executablePath: z.string().optional(),
+          /** If true, never launch a browser for this profile; only attach. Falls back to browser.attachOnly. */
+          attachOnly: z.boolean().optional(),
+        })
+        .refine(
+          (value) =>
+            value.driver === "existing-session" ||
+            value.driver === "extension" ||
+            value.cdpPort ||
+            value.cdpUrl,
+          {
+            message: "Profile must set cdpPort or cdpUrl",
+          },
+        )
+        .refine((value) => value.driver === "existing-session" || !value.userDataDir, {
+          message: 'Profile userDataDir is only supported with driver="existing-session"',
+        })
+        .refine((value) => value.driver !== "extension" || !value.cdpUrl, {
+          message:
+            'Profile cdpUrl is not supported with driver="extension" (the relay owns the endpoint)',
+        })
+        .superRefine((value, ctx) => {
+          if (value.engine !== "lightpanda" && value.engine !== "kitesurf") {
+            return;
+          }
+          const label = value.engine === "kitesurf" ? "Kitesurf" : "Lightpanda";
+          const endpoint = value.cdpUrl ? URL.parse(value.cdpUrl) : null;
+          if (!endpoint || !["ws:", "wss:"].includes(endpoint.protocol)) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["cdpUrl"],
+              message: `${label} requires an explicit ws:// or wss:// CDP endpoint`,
+            });
+          }
+          if (value.attachOnly !== true) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["attachOnly"],
+              message: `${label} requires attachOnly: true; OpenClaw does not launch it`,
+            });
+          }
+          if (value.driver !== undefined && value.driver !== "openclaw") {
+            ctx.addIssue({
+              code: "custom",
+              path: ["driver"],
+              message: `${label} requires the default "openclaw" CDP driver`,
+            });
+          }
+          for (const key of [
+            "cdpPort",
+            "userDataDir",
+            "mcpCommand",
+            "mcpArgs",
+            "headless",
+            "executablePath",
+          ] as const) {
+            if (value[key] !== undefined) {
+              ctx.addIssue({
+                code: "custom",
+                path: [key],
+                message: `${label} does not support the profile ${key} setting`,
+              });
+            }
+          }
+        }),
+    )
+    .optional(),
+);
+
 const CronDefaultDeliveryDestinationSchema = z.strictObject({
   channel: z.string().optional(),
   to: z.string().trim().min(1),
@@ -157,105 +259,10 @@ export const OpenClawSchemaShape = {
       snapshotDefaults: BrowserSnapshotDefaultsSchema,
       /** SSRF policy for browser navigation/open-tab operations. */
       ssrfPolicy: SsrFPolicyConfigSchema.optional(),
-      profiles: z
-        .record(
-          z.string().regex(/^[a-z0-9-]+$/, "Profile names must be alphanumeric with hyphens only"),
-          z
-            .strictObject({
-              /** Browser engine capability preset. Lightpanda and Kitesurf are external CDP services. */
-              engine: z.enum(["chromium", "lightpanda", "kitesurf"]).optional(),
-              /** CDP port for this profile. Allocated once at creation, persisted permanently. */
-              cdpPort: z.number().int().min(1).max(65535).optional(),
-              /** CDP/DevTools endpoint URL for this profile (remote CDP or existing-session endpoint attach). */
-              cdpUrl: z.string().optional(),
-              /** Explicit user data directory for existing-session Chrome MCP attachment. */
-              userDataDir: z.string().optional(),
-              /** Override the Chrome MCP command for existing-session profiles. */
-              mcpCommand: z.string().optional(),
-              /** Extra Chrome MCP arguments for existing-session profiles. */
-              mcpArgs: z.array(z.string()).optional(),
-              /**
-               * Profile driver (default: openclaw). "extension" attaches to the user's
-               * signed-in browser through the OpenClaw Chrome extension relay.
-               */
-              driver: z
-                .union([
-                  z.literal("openclaw"),
-                  z.literal("clawd"),
-                  z.literal("existing-session"),
-                  z.literal("extension"),
-                ])
-                .optional(),
-              /** If true, launch this profile in headless mode. Falls back to browser.headless. */
-              headless: z.boolean().optional(),
-              /** Browser executable path for this profile. Falls back to browser.executablePath. */
-              executablePath: z.string().optional(),
-              /** If true, never launch a browser for this profile; only attach. Falls back to browser.attachOnly. */
-              attachOnly: z.boolean().optional(),
-            })
-            .refine(
-              (value) =>
-                value.driver === "existing-session" ||
-                value.driver === "extension" ||
-                value.cdpPort ||
-                value.cdpUrl,
-              {
-                message: "Profile must set cdpPort or cdpUrl",
-              },
-            )
-            .refine((value) => value.driver === "existing-session" || !value.userDataDir, {
-              message: 'Profile userDataDir is only supported with driver="existing-session"',
-            })
-            .refine((value) => value.driver !== "extension" || !value.cdpUrl, {
-              message:
-                'Profile cdpUrl is not supported with driver="extension" (the relay owns the endpoint)',
-            })
-            .superRefine((value, ctx) => {
-              if (value.engine !== "lightpanda" && value.engine !== "kitesurf") {
-                return;
-              }
-              const label = value.engine === "kitesurf" ? "Kitesurf" : "Lightpanda";
-              const endpoint = value.cdpUrl ? URL.parse(value.cdpUrl) : null;
-              if (!endpoint || !["ws:", "wss:"].includes(endpoint.protocol)) {
-                ctx.addIssue({
-                  code: "custom",
-                  path: ["cdpUrl"],
-                  message: `${label} requires an explicit ws:// or wss:// CDP endpoint`,
-                });
-              }
-              if (value.attachOnly !== true) {
-                ctx.addIssue({
-                  code: "custom",
-                  path: ["attachOnly"],
-                  message: `${label} requires attachOnly: true; OpenClaw does not launch it`,
-                });
-              }
-              if (value.driver !== undefined && value.driver !== "openclaw") {
-                ctx.addIssue({
-                  code: "custom",
-                  path: ["driver"],
-                  message: `${label} requires the default "openclaw" CDP driver`,
-                });
-              }
-              for (const key of [
-                "cdpPort",
-                "userDataDir",
-                "mcpCommand",
-                "mcpArgs",
-                "headless",
-                "executablePath",
-              ] as const) {
-                if (value[key] !== undefined) {
-                  ctx.addIssue({
-                    code: "custom",
-                    path: [key],
-                    message: `${label} does not support the profile ${key} setting`,
-                  });
-                }
-              }
-            }),
-        )
-        .optional(),
+      // An absent browser skips profile validation setup. Shape inspection shares the same schema.
+      get profiles() {
+        return browserProfilesSchema.value;
+      },
       /**
        * Additional Chrome launch arguments.
        * Useful for stealth flags, window size overrides, or custom user-agent strings.

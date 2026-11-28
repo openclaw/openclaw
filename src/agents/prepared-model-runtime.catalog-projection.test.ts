@@ -14,10 +14,8 @@ import { gatewayConnect } from "../gateway/server/client-fixtures.test-support.j
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import * as providerPolicy from "../plugins/provider-policy-surface.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import {
-  getPluginRuntimeGenerationRegistry,
-  withPluginRuntimeGenerationScope,
-} from "../plugins/runtime/generation-scope.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
 import {
   harnessRegistry,
   model as configuredModel,

@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 
 export type SkillLibraryWorkerAuthority = {
+  roleSubject?: import("../../gateway/operator-role-enforcement.js").OperatorRoleSubject;
   profileId?: string;
   namespace?: "personal";
   scopes: readonly string[];

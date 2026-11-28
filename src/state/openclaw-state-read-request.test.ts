@@ -71,6 +71,79 @@ it("preserves admission charges for every UTF-16 code unit and surrogate boundar
   }
 });
 
+it("matches the original structural charge for randomized captured payloads", () => {
+  // The original JSON-stringifying accountant is an independent admission oracle.
+  function original(value: unknown): number {
+    if (typeof value === "string") {
+      return Buffer.byteLength(JSON.stringify(value));
+    }
+    if (typeof value === "number" || typeof value === "bigint") {
+      return 8;
+    }
+    if (typeof value === "boolean") {
+      return 1;
+    }
+    if (value === null || value === undefined) {
+      return 0;
+    }
+    if (Array.isArray(value)) {
+      return value.reduce((sum, entry) => sum + 8 + original(entry), 0);
+    }
+    return Object.entries(value).reduce(
+      (sum, [key, entry]) => sum + Buffer.byteLength(key) + 8 + original(entry),
+      0,
+    );
+  }
+  let seed = 2682;
+  const random = (limit: number) => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return (seed >>> 8) % limit;
+  };
+  const string = () =>
+    Array.from({ length: random(40) }, () =>
+      String.fromCharCode(random(2) ? random(128) : random(65536)),
+    ).join("");
+  function payload(depth: number): unknown {
+    const kind = random(depth ? 8 : 6);
+    if (kind === 0) {
+      return null;
+    }
+    if (kind === 1) {
+      return undefined;
+    }
+    if (kind === 2) {
+      return random(2) === 0;
+    }
+    if (kind === 3) {
+      return random(10000);
+    }
+    if (kind === 4) {
+      return BigInt(random(10000));
+    }
+    if (kind === 5) {
+      return string();
+    }
+    if (kind === 6) {
+      return Array.from({ length: random(12) }, () => payload(depth - 1));
+    }
+    return Object.fromEntries(
+      Array.from({ length: random(12) }, () => [string(), payload(depth - 1)]),
+    );
+  }
+  for (let index = 0; index < 2000; index++) {
+    const command = { type: "subagents.sessionList" as const, payload: payload(3) };
+    expect(
+      requestBytes({
+        command,
+        context: { environment: { OPENCLAW_STATE_DIR: "" } },
+        databasePath: "",
+        location: "",
+        checkFreshAdmission: false,
+      }),
+    ).toBe(original(command) + 18); // The required environment key is charged even when empty.
+  }
+});
+
 it("reuses readonly engine charges across interleaved contexts while measuring changed environments", () => {
   const engines = {
     state: "sqlite",

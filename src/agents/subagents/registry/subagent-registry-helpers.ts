@@ -23,11 +23,10 @@ import { recordGatewaySessionRunFailure } from "../../../sessions/session-run-er
 import { truncateUtf8Prefix } from "../../../utils/utf8-truncate.js";
 import { cleanupMaterializedSubagentAttachments } from "../subagent-attachment-cleanup.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
-import { getDeliveryLastError } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
-import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
@@ -41,7 +40,6 @@ export const GATEWAY_ADMISSION_RETRY_DELAY_MS = 1_000;
 export const MIN_ANNOUNCE_RETRY_DELAY_MS = 15_000;
 const MAX_ANNOUNCE_RETRY_DELAY_MS = 5 * 60_000;
 const ANNOUNCE_RETRY_JITTER = 0.2;
-export const ANNOUNCE_EXPIRY_MS = 5 * 60_000;
 export const ANNOUNCE_COMPLETION_HARD_EXPIRY_MS = 30 * 60_000;
 /** The durable media outbox owns its own delivery window, independent of the mailbox. */
 export const SESSION_DELIVERY_DEADLINE_MS = ANNOUNCE_COMPLETION_HARD_EXPIRY_MS;
@@ -72,22 +70,6 @@ export function capFrozenResultText(resultText: string): string {
 
 export function resolveAnnounceRetryDelayMs(retryCount: number) {
   return computeBackoff(ANNOUNCE_RETRY_BACKOFF, Math.max(1, retryCount));
-}
-
-export function logAnnounceGiveUp(
-  entry: SubagentRunRecord,
-  reason: "expiry" | "permanent_failure",
-) {
-  const endedAt = entry.execution.endedAt;
-  subagentRegistryLog.warn("Subagent announce give up", {
-    reason,
-    runId: entry.runId,
-    childSessionKey: entry.childSessionKey,
-    requesterSessionKey: entry.requesterSessionKey,
-    retries: entry.delivery?.attemptCount ?? 0,
-    endedAgoMs: typeof endedAt === "number" ? Math.max(0, Date.now() - endedAt) : undefined,
-    deliveryError: getDeliveryLastError(entry),
-  });
 }
 
 export async function persistSubagentSessionTiming(
@@ -254,7 +236,6 @@ export async function persistSubagentSessionTiming(
       update: ([row]) => {
         if (
           !row ||
-          options?.isCurrentGeneration?.() === false ||
           (expected &&
             (row.entry.sessionId !== expected.sessionId ||
               row.entry.lifecycleRevision !== expected.lifecycleRevision))
@@ -291,15 +272,12 @@ export async function persistSubagentSessionTiming(
     }
   };
   try {
-    if (options?.session) {
-      options.session.assertCurrent();
-      if (options.session.entry) {
-        await persist(options.session.entry, options.session.assertCurrent);
+    const session = options?.session;
+    if (session || options?.sessionEntryCurrent) {
+      session?.assertCurrent();
+      if (!session || session.entry) {
+        await persist(session?.entry, session?.assertCurrent);
       }
-      return;
-    }
-    if (options?.sessionEntryCurrent) {
-      await persist(undefined);
       return;
     }
     await withSessionEntryReadOnlyInWorker(
@@ -374,7 +352,7 @@ export function updateSubagentArchiveAtMs(entry: SubagentRunRecord, cfg?: OpenCl
         ? entry.completion.capturedAt
         : endedAt
     : entry.cleanup === "delete" &&
-        (entry.pauseReason !== "sessions_yield" ||
+        (!isSubagentPausedByYield(entry) ||
           (!entry.waitForMessage && subagentRuns.isCompletionAuthorityRetired(entry)))
       ? entry.delivery?.discardReason === "task-missing"
         ? (entry.delivery.discardedAt ?? endedAt)

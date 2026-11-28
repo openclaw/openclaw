@@ -18,6 +18,28 @@ function modelConfig(
   return { agents: { defaults: { ...defaults, models: { [key]: { params } } } } };
 }
 
+it("reads fast-mode inputs without deriving unrelated agent defaults", () => {
+  let unrelatedReads = 0;
+  const cfg: OpenClawConfig = {
+    agents: {
+      defaults: {
+        fastModeDefault: true,
+        get verboseDefault(): "off" {
+          unrelatedReads++;
+          return "off";
+        },
+      },
+      entries: { main: {}, other: { fastModeDefault: false } },
+    },
+  };
+  for (let index = 0; index < 10; index++) {
+    expect(resolve({ cfg, agentId: "main" }).mode).toBe(true);
+    expect(resolve({ cfg, agentId: "other" }).mode).toBe(false);
+  }
+  expect(resolve({ cfg, agentId: "removed" }).source).toBe("default");
+  expect(unrelatedReads).toBe(0);
+});
+
 it.each(["serviceTier", "service_tier"])("keeps %s inherited until a speed is selected", (key) => {
   const cfg = modelConfig({ [key]: "ultrafast" }, "openai/speed-fixture");
   const state = resolve({ cfg, provider: "openai", model: "speed-fixture" });

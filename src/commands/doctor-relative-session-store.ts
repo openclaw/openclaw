@@ -41,6 +41,7 @@ import {
 import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.paths.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import { backupDoctorSqliteDatabases } from "./doctor-migration-backup.js";
 import { resolveRelativeSessionStoreMigrationTargets } from "./doctor-relative-session-store-paths.js";
 import { readRelativeStorePreservationState } from "./doctor-relative-session-store-preservation.js";
@@ -226,6 +227,17 @@ function sourceFingerprint(
 }
 
 /** Offline repair retires the old selector only after backed-up, verified same-owner copies. */
+/** Read-only: whether {@link repairRelativeSessionStores} has a relative store to move. */
+export function checkRelativeSessionStoresPending(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  registeredDatabases?: readonly { agentId: string; path: string }[];
+}): DoctorMaintenancePending {
+  return discoverStoreMoves(params.cfg, params.env, params.registeredDatabases ?? []).length > 0
+    ? "work"
+    : "none";
+}
+
 export async function repairRelativeSessionStores(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -291,14 +303,6 @@ export async function repairRelativeSessionStores(params: {
           }
         }
         if (!fs.existsSync(source.path)) {
-          authority.assertCurrent();
-          for (const pathname of new Set([source.path, ...aliases])) {
-            unregisterOpenClawAgentDatabase({
-              agentId: source.databaseAgentId,
-              path: pathname,
-              env: params.env,
-            });
-          }
           continue;
         }
         const sourceSnapshot = readStoreSnapshot(source, params.env, true);

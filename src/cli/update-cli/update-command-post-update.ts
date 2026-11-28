@@ -60,6 +60,7 @@ import {
   deferUpdateCommandTerminalPreparation,
   recordUpdatePackageCompletion,
 } from "./update-command-terminal.js";
+import { releaseLaunchedState } from "./update-command-verification.js";
 
 export async function finishUpdate(
   params: FinishUpdateParams,
@@ -549,12 +550,14 @@ async function finishSettledUpdate(
         const restarted = await forward(() =>
           restartService({
             onGatewayStartAttempted,
+            rollbackBlockedReason: params.rollbackBlockedReason,
             originalManagedServiceRuntime: params.originalManagedServiceRuntime,
             shouldRestart: shouldRestart && restartContext.serviceMutationAllowed,
             observePackageReplacement:
               params.opts.restart === false && currentServiceStop()?.running === true,
             result: resultWithPostUpdate,
             opts: params.opts,
+            gitReleaseRestartMode: restartContext.gitReleaseRestartMode,
             refreshServiceEnv: restartContext.refreshGatewayServiceEnv,
             definitionRecovery,
             serviceUpdateVerdict: restartContext.serviceUpdateVerdict,
@@ -587,6 +590,8 @@ async function finishSettledUpdate(
         if (activationVerified && restarted === "restart-health-failed") {
           throw new GatewayRestartHealthError(`Restart finalization: ${verificationFailure}.`);
         }
+        // A launched candidate owns the state it migrated; rollback stays unattempted.
+        rollbackAttempted ||= await releaseLaunchedState(params, restarted, resultWithPostUpdate);
         const failure: UpdateRunResult = {
           ...resultWithPostUpdate,
           status: "error",
@@ -632,7 +637,11 @@ async function finishSettledUpdate(
           });
           pendingRestartAtMs ??= stopped.stoppedAtMs;
         }));
+        // Only an already-current core reaches here with its root unbound: a replaced core's
+        // first restart rebound it, or owed the rebind. A second pass would restart again, or
+        // restart the previous definition.
         const requiresInstallRootRefresh =
+          params.coreAlreadyCurrent === true &&
           restartContext.serviceUpdateVerdict?.kind === "owned" &&
           restartContext.serviceUpdateVerdict.requiresInstallRootRefresh;
         if (

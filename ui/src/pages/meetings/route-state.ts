@@ -11,11 +11,23 @@ export const TRANSCRIPT_ADVANCED_FILTER_KEYS = [
 ] as const;
 export const TRANSCRIPT_FILTER_KEYS = ["query", ...TRANSCRIPT_ADVANCED_FILTER_KEYS] as const;
 
-export function transcriptListParams(search: string): TranscriptsListParams {
+export function isTranscriptQueryTooLong(text: string): boolean {
+  // The Gateway counts code points. Bound the scan even for a large paste.
+  return (
+    text.length > TRANSCRIPT_QUERY_LIMIT &&
+    (text.length > 2 * TRANSCRIPT_QUERY_LIMIT || Array.from(text).length > TRANSCRIPT_QUERY_LIMIT)
+  );
+}
+
+export function transcriptListParams(search: string): TranscriptsListParams | null {
   const query = new URLSearchParams(search);
+  const text = query.get("query") ?? "";
+  if (isTranscriptQueryTooLong(text)) {
+    return null;
+  }
   return {
     limit: TRANSCRIPT_PAGE_SIZE,
-    query: query.get("query")?.slice(0, TRANSCRIPT_QUERY_LIMIT) || undefined,
+    query: text || undefined,
     providerId: query.get("providerId") || undefined,
     accountId: query.get("accountId") || undefined,
     agentId: query.get("agentId") || undefined,

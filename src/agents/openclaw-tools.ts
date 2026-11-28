@@ -21,6 +21,7 @@ import {
 } from "./agent-scope.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store-runtime.js";
 import { readGitHubPublicationConfiguration } from "./github-tool-identity-config.js";
+import { KNOWLEDGE_CONVERSATION_SCRIBE } from "./knowledge-conversation-scribe.js";
 import {
   resolveOpenClawPluginToolsForOptions,
   resolveOpenClawPluginToolsForOptionsAsync,
@@ -81,6 +82,7 @@ import { createAvailablePortalTools } from "./tools/portal-tool.js";
 import { createProgressCardTool } from "./tools/progress-card-tool.js";
 import { createScreenTool } from "./tools/screen-tool.js";
 import { createSecretsTool } from "./tools/secrets-tool.js";
+import { createSessionProjectTool } from "./tools/session-project-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsCreateTool } from "./tools/sessions-create-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
@@ -256,6 +258,7 @@ function* createOpenClawToolsSteps(
   const inlineWidgetClientAvailable =
     (widgetClientCaps ?? options?.clientCaps)?.includes("inline-widgets") === true;
   const sessionKey = normalizeOptionalString(options?.runSessionKey ?? options?.agentSessionKey);
+  const projectRouting = { config: availabilityConfig ?? {}, agentId: sessionAgentId };
   const gatewayCallerAccountId = options?.gatewayCallerAccountId ?? options?.agentAccountId;
   const deliveryContext = {
     channel: options?.agentChannel,
@@ -364,9 +367,6 @@ function* createOpenClawToolsSteps(
         agentDir: searchContext.agentDir,
         authStore: options?.authProfileStore,
         runtimeWebSearch: runtimeWebTools?.search,
-        ...(options?.authProfileStoreSource !== undefined
-          ? { resolveAuthProfileStoreSource: () => options.authProfileStoreSource === true }
-          : {}),
       });
     options?.onWebSearchConfiguration?.(configured);
     if (!configured) {
@@ -439,6 +439,13 @@ function* createOpenClawToolsSteps(
     pinnedWidgetAuthoringAdmitted &&
     inlineWidgetClientAvailable &&
     options?.clientCaps?.includes("inline-widgets") !== true;
+  // The UI uses this start request ID for both setup and run-once turns. A
+  // caller-chosen ID can only narrow tools here; the owner is the admitted agent.
+  const sessionReadAgentOnly =
+    scheduledTargets?.sessionReadAgentOnly === true ||
+    (Boolean(requesterSessionKey) &&
+      options?.runId?.startsWith(`${KNOWLEDGE_CONVERSATION_SCRIBE}:${requesterSessionKey}:`) ===
+        true);
   const sessionLookupToolOptions = {
     agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
     sandboxed: options?.sandboxed,
@@ -464,6 +471,7 @@ function* createOpenClawToolsSteps(
   // sessions_create runs through the visible-spawn owner, so both tools share one trusted context.
   const sessionsSpawnToolOptions = {
     ...options,
+    assertActive: options?.assertInvocationCurrent,
     // Only a keyed parent has a stored incarnation for spawn to check.
     expectedParentSessionId:
       (options?.runSessionKey ?? options?.agentSessionKey) ? options?.sessionId : undefined,
@@ -472,9 +480,6 @@ function* createOpenClawToolsSteps(
     // A scheduled owner run carries no sender bit; its children record the owner
     // bit the occurrence was admitted with, as the run's own memory audience does.
     senderIsOwner: scheduledTargets?.spawnSenderIsOwner ?? options?.senderIsOwner,
-    ...(scheduledTargets?.spawnSenderIsOwner
-      ? { assertSenderOwnerCurrent: scheduledTargets.assertOwnerCurrent }
-      : {}),
     completionOwnerKey: options?.runSessionKey,
     currentMessagingTarget: options?.currentMessagingTarget ?? options?.currentChannelId,
     currentChannelId: options?.nativeChannelId ?? options?.currentChannelId,
@@ -509,6 +514,7 @@ function* createOpenClawToolsSteps(
               }),
           createCronTool({
             ...options,
+            requireCreationPlan: options?.requireCronCreationPlan,
             // Use the durable runSessionKey; cleanup-retired policy keys leave cron jobs dangling.
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentId: sessionAgentId,
@@ -589,6 +595,9 @@ function* createOpenClawToolsSteps(
           preview: options.githubPublicationPreview,
         })
       : null,
+    !embedded && sessionKey && options?.sessionProjectMoveEligible
+      ? createSessionProjectTool(options, { ...projectRouting, sessionKey })
+      : null,
     transcriptsTool,
     imageGenerateTool,
     musicGenerateTool,
@@ -637,18 +646,21 @@ function* createOpenClawToolsSteps(
       ...sessionLookupToolOptions,
       requesterAgentIdOverride: sessionAgentId,
       requesterProfileId: options?.gatewayUiCommandTarget?.profileId,
-      supportsActiveOnly: !embedded,
+      sessionReadAgentOnly,
+      gatewayBacked: !embedded,
       requireSessionReadOwner: embedded,
     }),
     createSessionsHistoryTool({
       ...sessionLookupToolOptions,
       requesterAgentIdOverride: sessionAgentId,
       sessionReadScopeKey: options?.sessionReadScopeKey,
+      sessionReadAgentOnly,
     }),
     createSessionsSearchTool({
       ...sessionLookupToolOptions,
       agentId: sessionAgentId,
       sessionReadScopeKey: options?.sessionReadScopeKey,
+      sessionReadAgentOnly,
     }),
     ...(embedded ? [] : createHostedConversationTools(options, sessionAgentId, sessionConfig)),
     !embedded || options?.allowGatewaySubagentBinding === true

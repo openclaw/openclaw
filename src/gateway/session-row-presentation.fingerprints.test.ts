@@ -4,6 +4,7 @@ import {
   persistSessionTranscriptTurn,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { registerAgentRunContext, clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -22,12 +23,17 @@ import {
 } from "./session-row-delta-fields.js";
 import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
 import { freezeSessionRow } from "./session-row-identity.js";
-import { prepareSessionRowPublication } from "./session-row-presentation.js";
+import {
+  prepareSessionRowPublication,
+  shareSidebarSessionRows,
+} from "./session-row-presentation.js";
 import {
   createTestProjection,
   seedRow,
 } from "./session-row-projection.read-fixture.test-support.js";
+import { prepareSessionRowPublicationView } from "./session-row-publication.js";
 import { rolePolicyConfig } from "./session-sharing.test-utils.js";
+import * as childDisplay from "./session-utils-display.js";
 import { replaceSessionRowFacts } from "./session-utils-row.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
@@ -162,6 +168,7 @@ it("retains nested publication facts across real transcript writes without hidin
         ],
       });
     await append();
+    using deleted = vi.spyOn(Reflect, "deleteProperty");
     using projection = await createTestProjection({ cfg, modelCatalog: [] });
     const read = async (unchanged = false) => {
       await projection.ensureMaterialized();
@@ -203,6 +210,9 @@ it("retains nested publication facts across real transcript writes without hidin
     };
     // The first delivery owns the weak fingerprint sample throughout this reuse proof.
     const initial = await read();
+    expect(
+      deleted.mock.calls.filter(([row]) => Reflect.get(row, "key") === query.key),
+    ).toHaveLength(0);
     let previous = initial;
     for (let update = 0; update < 3; update++) {
       await collectForRetentionCheck("session-row-fingerprint-sample", 1);
@@ -267,6 +277,23 @@ it("retains nested publication facts across real transcript writes without hidin
         JSON.stringify({ mcpToolsDeny }),
       );
     }
+    const retained = record.materialized;
+    expect(
+      replaceSessionRowFacts(retained, { toolOverrides: { mcpToolsDeny: { b: ["b"], a: ["a"] } } }),
+    ).toBe(retained);
+    const cleared = replaceSessionRowFacts(retained, {
+      toolOverrides: undefined,
+      lastAssistantMessage: undefined,
+    });
+    expect(Object.hasOwn(cleared.row, "toolOverrides")).toBe(false);
+    expect(Object.hasOwn(cleared.row, "lastAssistantMessage")).toBe(false);
+    expect(Object.isFrozen(cleared.row)).toBe(true);
+    expect(Object.keys(cleared.row)).toEqual(
+      Object.keys(retained.row).filter(
+        (field) => !["toolOverrides", "lastAssistantMessage"].includes(field),
+      ),
+    );
+    expect(retained.row.toolOverrides).toBeDefined();
   });
 });
 
@@ -290,3 +317,140 @@ it.each([
   expect(Object.isFrozen(after)).toBe(true);
   expect(Reflect.set(after, "length", 3)).toBe(false);
 });
+
+it("bounds retained sidebar rows across distinct authorized child views", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const cfg = rolePolicyConfig();
+    cfg.agents = { entries: { main: {} }, defaults: { utilityModel: "" } };
+    const now = Date.now();
+    const key = "agent:main:shared-parent";
+    const query = { key, agentId: "main" };
+    const options = { rowMode: "sidebar" } as const;
+    seedRow(key, { sessionId: key, updatedAt: now, visibility: "shared" });
+    const viewers = Array.from({ length: 68 }, (_, index) => {
+      const profile = ensureProfileForEmail(`viewer-${index}@presentation.test`);
+      const child = `agent:main:subagent:private-child-${index}`;
+      seedRow(child, {
+        sessionId: child,
+        updatedAt: now,
+        parentSessionKey: key,
+        spawnedBy: key,
+        visibility: "draft",
+        createdActor: { type: "human", source: "profile", id: profile.id },
+      });
+      return { client: createSessionRowEventPeer(profile, profile.id, now).client, child };
+    });
+    using projection = await createTestProjection({ cfg, modelCatalog: [] });
+    const publish = prepareSessionRowPublication(projection, now);
+    const read = ({ client, child }: (typeof viewers)[number]) => {
+      const row = publish(client).getPresentation().snapshot(query, options).row!;
+      expect(row.childSessions).toEqual([child]);
+      return row;
+    };
+    const first = read(viewers[0]!);
+    const sidebar = (row: GatewaySessionRow, ifRowsRevision?: string) => {
+      const presentation = publish(viewers[0]!.client).getPresentation();
+      const list = presentation.list([row], options);
+      return shareSidebarSessionRows(list.sessions, ifRowsRevision, list.rowHistory);
+    };
+    const revision = sidebar(first).rowsRevision;
+    const materialized = projection.describe(query)!.materialized;
+    const publication = prepareSessionRowPublicationView(projection)();
+    const retained = () => [...publication.rows.get(materialized)!.views.values()].flat();
+    expect(read(viewers[0]!)).toBe(first);
+    for (const viewer of viewers.slice(1)) {
+      read(viewer);
+    }
+    expect(retained()).toHaveLength(64);
+    expect(retained().some((view) => view.row === first)).toBe(false);
+
+    const revisited = read(viewers[0]!);
+    expect(revisited).not.toBe(first);
+    expect(revisited).toEqual(first);
+    expect(read(viewers[0]!)).toBe(revisited);
+    expect(retained()).toHaveLength(64);
+    const replacement = sidebar(revisited, revision);
+    expect(replacement.sessions).toHaveLength(1);
+    expect(replacement.rowsRevision).not.toBe(revision);
+    expect(sidebar(revisited, replacement.rowsRevision).rowsUnchanged).toBe(true);
+  });
+});
+
+it.each(["keyed", "alias"])(
+  "keeps unrelated child activity prepared across interleaved %s runs and audiences",
+  async (mode) => {
+    using clock = vi.spyOn(Date, "now");
+    clock.mockReturnValue(1_800_000_000_000);
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const cfg = rolePolicyConfig();
+      cfg.agents = { entries: { main: {} }, defaults: { utilityModel: "" } };
+      const profiles = ["owner", "viewer"].map((name) =>
+        ensureProfileForEmail(`${name}@keyed-activity.test`),
+      );
+      const clients = profiles.map((profile) => {
+        const client = createSessionRowEventPeer(profile, profile.id, Date.now()).client;
+        prepareGatewayRecipientProfile(client);
+        return client;
+      });
+      const parents = [0, 1, 2].map((index) => `agent:main:parent-${index}`);
+      const children = parents.map((parent, index) => {
+        seedRow(parent, { sessionId: parent, updatedAt: Date.now(), visibility: "shared" });
+        return [0, 1].map((child) => {
+          const key = `agent:main:subagent:child-${index}-${child}`;
+          seedRow(key, {
+            sessionId: key,
+            updatedAt: Date.now(),
+            parentSessionKey: parent,
+            spawnedBy: parent,
+            visibility: child ? "draft" : "shared",
+            createdActor: { type: "human", source: "profile", id: profiles[0]!.id },
+          });
+          return key;
+        });
+      });
+      using projection = await createTestProjection({ cfg, modelCatalog: [] });
+      const read = (activeParent = -1) => {
+        const publication = prepareSessionRowPublication(projection, Date.now());
+        return clients.map((client, audience) =>
+          parents.map((key, index) => {
+            const row = publication(client)
+              .getPresentation()
+              .snapshot({ key, agentId: "main" }).row;
+            expect(row?.childSessions).toEqual(
+              audience === 0 ? children[index] : children[index]!.slice(0, 1),
+            );
+            expect(Boolean(row?.hasActiveSubagentRun)).toBe(index === activeParent);
+            return row;
+          }),
+        );
+      };
+      read();
+      using projected = vi.spyOn(childDisplay, "projectPreparedSessionChild");
+      try {
+        for (const index of [0, 1, 0, 2]) {
+          const key = children[index]![0]!;
+          registerAgentRunContext("interleaved-activity", {
+            sessionKey: mode === "keyed" ? key : "agent:main:run-alias:child",
+            sessionId: key,
+            agentId: "main",
+            projectSessionActive: true,
+          });
+          await projection.ensureMaterialized();
+          projected.mockClear();
+          read(index);
+          const keys = projected.mock.calls.map(([link]) => link.key);
+          // Moving a run can also invalidate its previous parent, but never an untouched sibling.
+          expect(keys.every((child) => child.endsWith("-0"))).toBe(true);
+          expect(keys.length).toBeLessThanOrEqual(2);
+          projected.mockClear();
+          read(index);
+          expect(projected).not.toHaveBeenCalled();
+        }
+      } finally {
+        clearAgentRunContext("interleaved-activity");
+      }
+      await projection.ensureMaterialized();
+      read();
+    });
+  },
+);

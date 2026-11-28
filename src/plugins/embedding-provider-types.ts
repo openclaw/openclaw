@@ -38,6 +38,9 @@ export type EmbeddingProviderCreateResult = {
   runtime?: EmbeddingProviderRuntime;
 };
 
+/** Non-text input a model embeds into the same vector space as its text. */
+export type EmbeddingMediaModality = "image" | "audio";
+
 /** Adapter contract registered by core or plugin embedding providers. */
 export type EmbeddingProviderAdapter = {
   id: string;
@@ -51,6 +54,11 @@ export type EmbeddingProviderAdapter = {
   resolveIndexIdentity?: (
     options: EmbeddingProviderCreateOptions,
   ) => EmbeddingProviderIndexIdentity;
+  /**
+   * Media this model embeds alongside text, which the adapter's requests must carry as
+   * inline-data parts. Absent or empty means text only.
+   */
+  mediaModalities?: (params: { model: string }) => readonly EmbeddingMediaModality[];
   create: (options: EmbeddingProviderCreateOptions) => Promise<EmbeddingProviderCreateResult>;
   formatSetupError?: (err: unknown) => string;
 };

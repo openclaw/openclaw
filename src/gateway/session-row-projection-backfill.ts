@@ -19,7 +19,7 @@ function transcriptParams(row: Row, entry: EntryRow["entry"]) {
     sessionKey: row.key,
     sessionId: entry.sessionId,
     sessionEntry: entry,
-    model: row.materialized && {
+    model: row.materialized?.source.selectedModel && {
       selectedProvider: row.materialized.source.selectedModel.provider,
       selectedModel: row.materialized.source.selectedModel.model,
       config: row.materialized.source.cfg,
@@ -88,10 +88,7 @@ export function createSessionRowProjectionBackfill(params: {
         continue;
       }
       try {
-        const fields = await backfillSessionRowTranscriptFields(
-          transcriptParams(row, entry),
-          signal,
-        );
+        const fields = await backfillSessionRowTranscriptFields(transcriptParams(row, entry));
         const live = params.read(id);
         // A replacement/private-session revocation must not publish another session's text.
         if (!closed() && live?.entry && params.current(row)) {

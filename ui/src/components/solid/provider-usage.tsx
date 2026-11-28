@@ -94,7 +94,7 @@ function createProviderAmountFormatter(unit: string): (amount: number) => string
 }
 
 /** A reset as a calendar date plus "in 3 hours", or nothing when it is unknown or past. */
-function resetText(window: UsageWindow): { date?: string; relative?: string } {
+export function resetText(window: UsageWindow): { date?: string; relative?: string } {
   if (!window.resetAt || !Number.isFinite(window.resetAt) || window.resetAt <= Date.now()) {
     return {};
   }
@@ -109,12 +109,12 @@ function resetText(window: UsageWindow): { date?: string; relative?: string } {
   };
 }
 
-function remainingPercent(window: UsageWindow): number {
+export function remainingPercent(window: UsageWindow): number {
   return Math.round(100 - Math.max(0, Math.min(100, window.usedPercent)));
 }
 
 /** Little headroom reads as a warning, none as an error. */
-function remainingTone(window: UsageWindow): "warning" | "error" | undefined {
+export function remainingTone(window: UsageWindow): "warning" | "error" | undefined {
   const remaining = remainingPercent(window);
   return remaining <= 10 ? "error" : remaining <= 25 ? "warning" : undefined;
 }

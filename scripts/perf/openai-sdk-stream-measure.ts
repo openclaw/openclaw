@@ -26,6 +26,7 @@ import { parseArgs } from "node:util";
 import { configureAiTransportHost } from "../../packages/ai/src/host.js";
 import { createOpenAIResponsesTransportStreamFn } from "../../packages/ai/src/transports/openai-responses-client.js";
 import type { Model } from "../../packages/ai/src/types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -326,12 +327,7 @@ try {
   eventCount = 0;
   requests = 0;
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   const hostLoad = loadavg();
   const cpuStart = process.cpuUsage();

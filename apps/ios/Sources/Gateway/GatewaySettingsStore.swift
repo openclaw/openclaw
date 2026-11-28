@@ -375,13 +375,6 @@ enum GatewaySettingsStore {
             instanceId: trimmedInstanceID)
     }
 
-    static func saveLegacyGatewayTokenForMigrationTest(_ token: String, instanceId: String) {
-        _ = GenericPasswordKeychainStore.saveString(
-            token,
-            service: self.gatewayService,
-            account: self.gatewayTokenAccount(instanceId: instanceId))
-    }
-
     private struct LegacyLastGatewayConnectionData: Codable {
         var kind: GatewayRegistryEntry.Kind
         var stableID: String
@@ -408,6 +401,11 @@ enum GatewaySettingsStore {
             GatewayStableIdentifier.matches($0.stableID, normalized.stableID)
         }) {
             var replacement = normalized
+            let saved = registry.entries[index]
+            // Connection and discovery callbacks supply defaults, not user edits.
+            if !saved.hasAutomaticAddressName, saved.name != saved.stableID {
+                replacement.name = saved.name
+            }
             // Connection/Bonjour updates do not own ingress identity. Retain the
             // last admitted origin until its owner retires or replaces the grant.
             replacement.accessOrigin = replacement.accessOrigin ?? registry.entries[index].accessOrigin

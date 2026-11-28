@@ -83,7 +83,11 @@ export function captureOpenClawStateSchemaReadAdmission(pathname: string) {
     return undefined;
   }
   isExistingOpenClawStateSchema(pathname);
-  return { path: scope.path, assertCurrent: () => assertSchemaScopeActive(scope) };
+  return {
+    path: scope.path,
+    isCurrent: () => scope.active,
+    assertCurrent: () => assertSchemaScopeActive(scope),
+  };
 }
 
 /** Check supplied and cached handles before exposing them to another admission policy. */
@@ -163,7 +167,7 @@ export function assertExistingOpenClawStateSchemaCacheAdmission(
 export function assertOpenClawStateSchemaRepairAllowed(pathname: string): void {
   if (isExistingOpenClawStateSchema(pathname)) {
     throw new Error(
-      `Shared-state schema repair is owned by the existing installation at ${pathname}; update that installation before retrying the managed node.`,
+      `Shared-state schema repair is owned by the existing installation at ${pathname}; run openclaw doctor --fix with that installation. The managed node retries automatically.`,
     );
   }
 }

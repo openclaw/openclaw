@@ -6,6 +6,7 @@ import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js
 import { enqueueFollowupRun, reserveSteerCandidate } from "../../auto-reply/reply/queue/enqueue.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { derivePersistedSessionLifecyclePatch } from "../../config/sessions/session-run-lifecycle-projection.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
@@ -30,20 +31,27 @@ import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleto
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureUserProfilesSchema } from "../../state/user-profiles-schema.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { agentHandlers } from "../server-methods/agent.js";
+import { agentWaitHandler } from "../server-methods/agent.js";
+import { prepareChatAdmission } from "../server-methods/chat-send-admission.test-support.js";
+import { createPendingChatSendReservationAccess } from "../server-methods/chat-send-reservation.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
 import { makeContextParams } from "../server-request-context.test-support.js";
 import type { DedupeEntry } from "../server-shared.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import {
+  appendProjectionMessages,
+  seedProjectionRow,
+  withSessionRowProjectionState,
+} from "../session-row-projection.test-support.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { createRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { replayAgentTurnIfCached } from "./agent-dedupe.js";
 import * as agentJobs from "./agent-job.js";
 import { setGatewayDedupeEntry, waitForAgentJob } from "./agent-job.js";
-import { createAgentTurnService } from "./agent-turn-service.js";
-import { prepareAgentWaitForTurn } from "./agent-wait.js";
+import { prepareAgentWaitForTurn, prepareExactAgentTurnWait } from "./agent-wait.js";
 import { createTestRpcSource, testRpcSourceController } from "./rpc-source.test-support.js";
 
-type WaitArgs = Parameters<NonNullable<(typeof agentHandlers)["agent.wait"]>>[0];
+type WaitArgs = Parameters<typeof agentWaitHandler>[0];
 function invokeWait(
   context: WaitArgs["context"],
   runId: string,
@@ -52,10 +60,9 @@ function invokeWait(
   isWebchat = false,
   respond = vi.fn(),
 ) {
-  const handler = expectDefined(agentHandlers["agent.wait"], "registered wait handler");
   return {
     respond,
-    promise: handler({
+    promise: agentWaitHandler({
       req: { type: "req", id: runId, method: "agent.wait" },
       params: { runId, timeoutMs },
       respond,
@@ -378,16 +385,16 @@ it("keeps whitespace-distinct protocol run IDs separate", async () => {
     },
   );
   rpcSourceTesting.reset([[spaced, source]]);
-  const service = createAgentTurnService({
-    context: { dedupe } as unknown as Parameters<typeof createAgentTurnService>[0]["context"],
-    isWebchatConnect: () => false,
-  });
-  expect((await service.waitForTurn({ runId: spaced, timeoutMs: 0 })).result).toMatchObject({
+  expect(
+    (await prepareExactAgentTurnWait({ dedupe }, { runId: spaced, timeoutMs: 0 }).wait()).result,
+  ).toMatchObject({
     runId: spaced,
     status: "pending",
     timeoutPhase: "queue",
   });
-  expect((await service.waitForTurn({ runId: plain, timeoutMs: 0 })).result).toMatchObject({
+  expect(
+    (await prepareExactAgentTurnWait({ dedupe }, { runId: plain, timeoutMs: 0 }).wait()).result,
+  ).toMatchObject({
     runId: plain,
     status: "ok",
   });
@@ -630,13 +637,7 @@ it("binds queued observation to the queue entry selected after waiting", async (
   };
   writeObservation(new Map(), runId, { status: "ok" }, { session: original });
   rpcSourceTesting.clear();
-  const service = createAgentTurnService({
-    context: {
-      dedupe: new Map(),
-    } as unknown as Parameters<typeof createAgentTurnService>[0]["context"],
-    isWebchatConnect: () => false,
-  });
-  const selected = service.waitForTurn({ runId, timeoutMs: 0 });
+  const selected = prepareExactAgentTurnWait({ dedupe: new Map() }, { runId, timeoutMs: 0 }).wait();
   const queued = { sessionKey: "agent:main:queued", sessionId: "queued-session", agentId: "main" };
   const source = createRpcSourceForTest({}, { ...queued, runId, phase: "waiting" });
   const controller = testRpcSourceController(source);
@@ -659,19 +660,18 @@ it("observes later queue admission without completing terminal or another Gatewa
   const otherContext = createGatewayRequestContext(makeContextParams());
   context.resolveGatewayContext = () => context;
   otherContext.resolveGatewayContext = () => otherContext;
-  const service = createAgentTurnService({ context, isWebchatConnect: () => false });
-  const otherService = createAgentTurnService({
-    context: otherContext,
-    isWebchatConnect: () => false,
-  });
   const queuedObserved = vi.fn();
   const terminalObserved = vi.fn();
   const otherObserved = vi.fn();
-  const queuedWait = service.waitForTurn({ runId, timeoutMs: 30_000 }).then(queuedObserved);
+  const queuedWait = prepareExactAgentTurnWait(context, { runId, timeoutMs: 30_000 })
+    .wait()
+    .then(queuedObserved);
   const terminalWait = waitForAgentJob({ runId, timeoutMs: 30_000, source: "chat" }).then(
     terminalObserved,
   );
-  const otherWait = otherService.waitForTurn({ runId, timeoutMs: 30_000 }).then(otherObserved);
+  const otherWait = prepareExactAgentTurnWait(otherContext, { runId, timeoutMs: 30_000 })
+    .wait()
+    .then(otherObserved);
   let queuedSource: RpcSourceRef | undefined;
   const session = {
     sessionKey: "agent:main:queued-after-wait",
@@ -822,3 +822,170 @@ it.each(["lifecycle-first", "dedupe-first"] as const)(
     expect(JSON.stringify(waiter.respond.mock.calls[0]?.[1])).not.toContain("private-target");
   },
 );
+
+it.each([
+  [" completed-before-restart ", "completed-before-restart"],
+  ["completed-before-restart", " completed-before-restart "],
+])(
+  "recovers the initiating wire ID from a single reopened session (%s)",
+  async (runId, otherId) => {
+    await withSessionRowProjectionState(async (create) => {
+      const endedAt = Date.now();
+      const startedAt = endedAt - 1;
+      const completed = derivePersistedSessionLifecyclePatch({
+        event: {
+          runId: "execution",
+          clientRunId: runId,
+          ts: endedAt,
+          data: { phase: "end", startedAt, endedAt },
+        },
+        currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
+      });
+      const original = seedProjectionRow("finished", completed);
+      await appendProjectionMessages(
+        original.scope,
+        {
+          role: "user",
+          content: "original",
+          timestamp: startedAt,
+          idempotencyKey: runId + ":user",
+        },
+        {
+          role: "user",
+          content: "steer",
+          timestamp: endedAt,
+          idempotencyKey: otherId + ":user",
+          __openclaw: { steerTargetRunId: runId },
+        },
+      );
+      const context = createGatewayRequestContext(makeContextParams());
+      setRuntimeConfigSnapshot({});
+      const projection = await create({ cfg: {}, modelCatalog: [] });
+      bindSessionRowProjection(context, () => projection);
+      await expectReply(
+        invokeWait(context, runId, 0),
+        expect.objectContaining({ runId, status: "ok", startedAt, endedAt }),
+      );
+      await expectReply(invokeWait(context, otherId, 0), {
+        runId: otherId,
+        status: "timeout",
+      });
+    });
+  },
+);
+
+it("returns a live completion published during a failed recovery poll", async () => {
+  const { runId, complete } = runFixture();
+  const poll = waitForAgentJob({
+    runId,
+    timeoutMs: 0,
+    canRestoreCompletion: () => true,
+    readRestoredCompletion: async () => {
+      complete();
+      throw new Error("Session store discovery failed");
+    },
+  });
+  await expect(poll).resolves.toMatchObject({ status: "ok", startedAt: 100, endedAt: 200 });
+});
+
+it("drops a restored result when another chat reserves the ID during the history read", async () => {
+  await withSessionRowProjectionState(async (create) => {
+    const runId = "reserved-again";
+    const original = seedProjectionRow("finished", {
+      lastRunId: runId,
+      status: "done",
+      startedAt: 1,
+      endedAt: 2,
+    });
+    await appendProjectionMessages(original.scope, {
+      role: "user",
+      content: "original",
+      timestamp: 1,
+      idempotencyKey: runId + ":user",
+    });
+    const context = createGatewayRequestContext(makeContextParams());
+    setRuntimeConfigSnapshot({});
+    const projection = await create({ cfg: {}, modelCatalog: [] });
+    bindSessionRowProjection(context, () => projection);
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const read = projection.readRestoredCompletion;
+    vi.spyOn(projection, "readRestoredCompletion").mockImplementationOnce(async (id) => {
+      const result = await read(id);
+      entered.resolve();
+      await release.promise;
+      return result;
+    });
+    const waiter = invokeWait(context, runId, 0);
+    try {
+      await entered.promise;
+      const admission = await prepareChatAdmission({
+        context,
+        client: null,
+        params: { sessionKey: "agent:main:second", idempotencyKey: runId, message: "new attempt" },
+      });
+      createPendingChatSendReservationAccess({
+        ...admission,
+        attemptId: "second-attempt",
+      }).reserve();
+      admission.session.releaseSessionStorage?.();
+    } finally {
+      release.resolve();
+    }
+    await expectReply(waiter, { runId, status: "timeout" });
+  });
+});
+
+it("keeps a reused run ambiguous after a second restart and a later turn", async () => {
+  await withSessionRowProjectionState(async (create) => {
+    const runId = "reused";
+    const row = seedProjectionRow("first", {
+      lastRunId: runId,
+      status: "done",
+      startedAt: 1,
+      endedAt: 2,
+    });
+    await appendProjectionMessages(row.scope, {
+      role: "user",
+      content: "original",
+      timestamp: 1,
+      idempotencyKey: runId + ":user",
+    });
+    const context = createGatewayRequestContext(makeContextParams());
+    setRuntimeConfigSnapshot({});
+    let projection = await create({ cfg: {}, modelCatalog: [] });
+    bindSessionRowProjection(context, () => projection);
+    const wait = () => invokeWait(context, runId, 0);
+    await expectReply(wait(), expect.objectContaining({ status: "ok" }));
+    const target = { agentId: "main", sessionKey: "agent:main:second" };
+    await upsertSessionEntryCore(target, {
+      sessionId: "second",
+      updatedAt: 3,
+      ...derivePersistedSessionLifecyclePatch({
+        event: { runId, ts: 3, data: { phase: "start", startedAt: 3 } },
+        currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
+      }),
+    });
+    await projection.ensureMaterialized();
+    await expectReply(wait(), { runId, status: "timeout" });
+    projection.dispose();
+    projection = await create({ cfg: {}, modelCatalog: [] });
+    await expectReply(wait(), { runId, status: "timeout" });
+    for (const [id, endedAt] of [
+      [runId, 4],
+      ["later", 5],
+    ] as const) {
+      await upsertSessionEntryCore(target, {
+        sessionId: "second",
+        updatedAt: endedAt,
+        status: "done",
+        lastRunId: id,
+        lifecycleRunId: undefined,
+        endedAt,
+      });
+    }
+    projection.dispose();
+    projection = await create({ cfg: {}, modelCatalog: [] });
+    await expectReply(wait(), { runId, status: "timeout" });
+  });
+});

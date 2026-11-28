@@ -1,5 +1,6 @@
 import { shouldIncludeAgentHarnessRuntimeContext } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
+  compactCatalogForSkillRead,
   embeddedAgentLog,
   prepareWatchedSessionsHarnessContext,
   type AgentMessage,
@@ -76,16 +77,10 @@ export async function readMirroredSessionHistoryMessages(
   params: CodexMirroredSessionHistoryTarget & {
     admission?: TranscriptTurnAdmission;
     signal?: AbortSignal;
-    contextTokenBudget?: number;
   },
 ): Promise<AgentMessage[] | undefined> {
-  const { admission, signal, contextTokenBudget, ...target } = params;
-  const messages = await readCodexMirroredSessionHistoryMessages(
-    target,
-    admission,
-    signal,
-    contextTokenBudget,
-  );
+  const { admission, signal, ...target } = params;
+  const messages = await readCodexMirroredSessionHistoryMessages(target, admission, signal);
   if (!messages) {
     embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
       sessionFile: params.sessionFile,
@@ -453,7 +448,6 @@ function withoutGatewayOnlySkillLocations(
   prompt: string,
   skills: readonly { name: string; source: string; filePath: string }[],
   remoteRoot: string,
-  readable: boolean,
 ): string {
   const escape = (value: string) =>
     value
@@ -467,9 +461,7 @@ function withoutGatewayOnlySkillLocations(
       (name) => `    <name>${escape(name)}</name>`,
     ),
   );
-  const note = readable
-    ? "Stored on the Gateway: read it with skills_read by name."
-    : "Stored on the Gateway: its instructions cannot be read on this machine.";
+  const note = "Stored on the Gateway: its instructions cannot be read on this machine.";
   return names.size === 0
     ? prompt
     : prompt.replace(/^ {2}<skill>\n[\s\S]*?\n {2}<\/skill>$/gmu, (block) =>
@@ -499,15 +491,19 @@ export function renderCodexSkillsInstructions(params: {
   const search = names.has("skills_search");
   const read = names.has("skills_read");
   const trimmed = params.skillsPrompt?.trim();
-  const prompt =
-    trimmed && params.remoteWorkspaceRoot
-      ? withoutGatewayOnlySkillLocations(
-          trimmed,
-          params.attempt.skillsSnapshot?.resolvedSkills ?? [],
-          params.remoteWorkspaceRoot,
-          read,
-        )
-      : trimmed;
+  // skills_read resolves by name, so locations go and Gateway-only paths need no note;
+  // skills_search matches descriptions on demand, so they go too.
+  const prompt = !trimmed
+    ? trimmed
+    : read
+      ? compactCatalogForSkillRead(trimmed, !search)
+      : params.remoteWorkspaceRoot
+        ? withoutGatewayOnlySkillLocations(
+            trimmed,
+            params.attempt.skillsSnapshot?.resolvedSkills ?? [],
+            params.remoteWorkspaceRoot,
+          )
+        : trimmed;
   if (!prompt && !search) {
     return undefined;
   }

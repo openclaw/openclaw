@@ -437,6 +437,10 @@ export function resolveExecutableFromUserShellPath(
   return direct ? { executable: direct } : undefined;
 }
 
+export function isShellEnvAppliedKey(key: string): boolean {
+  return lastAppliedKeys.includes(key);
+}
+
 export function getShellEnvAppliedKeys(): string[] {
   return [...lastAppliedKeys];
 }

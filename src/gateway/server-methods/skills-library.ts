@@ -81,12 +81,6 @@ export function libraryAuthority(
       ],
       (assertSources) => {
         assertSources();
-        if (ownerDevice && currentOwnerDevicePrincipal(client) === undefined) {
-          throw new SkillLibraryError(
-            "AUTHORITY_EXPIRED",
-            "Skill library authority changed. Refresh and retry.",
-          );
-        }
         // Synthetic agents must carry host-bound operator authority; identityless agents cannot publish.
         if (client?.internal?.syntheticClient) {
           throw new SkillLibraryError(
@@ -437,7 +431,7 @@ export const skillsLibraryHandlers: GatewayRequestHandlers = {
         const listed = await access.read("list", {});
         const result = projectSkillLibraryList(listed.value, params);
         if (session) {
-          const pins = session.target.entry.skillLibrarySelections ?? [];
+          const pins = structuredClone(session.target.entry.skillLibrarySelections ?? []);
           const selected = await access.read("pins", pins);
           listed.assertCurrent();
           selected.assertCurrent();

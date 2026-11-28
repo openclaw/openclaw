@@ -176,13 +176,17 @@ it("keeps foreign-destination remediation visible until a later successful updat
     reason: "global-install-foreign-destination",
     target: { kind: "package", version: "2026.9.4" },
     before: { version: "2026.7.1-2" },
+    origin: {
+      nextAction:
+        "https://docs.openclaw.ai/install/update-troubleshooting#node-and-global-install-permissions",
+    },
     steps: [{ step: "global-install-foreign-destination", status: "failed" }],
   });
   listRuns.mockImplementation(async (input) => (input?.active ? [] : [latest]));
   readCandidate.mockResolvedValue(latest);
   await noteStaleUpdateRuns({});
   expect(note).toHaveBeenCalledOnce();
-  expectHistoryNote("OpenClaw update failed: global-install-foreign-destination.");
+  expectHistoryNote("(global-install-foreign-destination).");
   expectHistoryNote(
     "https://docs.openclaw.ai/install/update-troubleshooting#node-and-global-install-permissions",
   );

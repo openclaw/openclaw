@@ -29,8 +29,9 @@ struct ChatMarkdownBlockSegmenterTests {
         #expect(self.segments("  \n\n ") == [])
     }
 
-    @Test func `crlf input is normalized`() {
-        let blocks = self.segments("alpha\r\n```\r\ncode\r\n```")
+    @Test(arguments: ["\n", "\r\n", "\r"])
+    func `fenced code after prose recognizes CommonMark line endings`(_ newline: String) {
+        let blocks = self.segments(["alpha", "```", "code", "```"].joined(separator: newline))
         #expect(blocks == [
             .prose("alpha"),
             .code(ChatCodeBlock(language: nil, code: "code", isComplete: true)),
@@ -424,9 +425,30 @@ struct ChatMarkdownBlockSegmenterTests {
         ])
     }
 
-    @Test func `heading nested in block quote stays prose`() {
-        let markdown = "> # Quoted"
-        #expect(self.segments(markdown) == [.prose(markdown)])
+    @Test func `heading nested in block quote stays inside the quote`() {
+        #expect(self.segments("> # Quoted") == [
+            .quote([.heading(ChatMarkdownHeading(level: 1, markdown: "# Quoted"))]),
+        ])
+    }
+
+    // MARK: - Quotes
+
+    @Test func `a quoted reply keeps the quote apart from the reply`() {
+        let quote = "Parei. Daqui em diante eu recebo, delego e fecho o turno."
+        let reply = "delega. maestro."
+        #expect(self.segments("> \(quote)\n\n\(reply)") == [.quote([.prose(quote)]), .prose(reply)])
+        #expect(self.segments("> \(quote)") == [.quote([.prose(quote)])])
+        #expect(self.segments("> one\n>\n> two\nlazy\n\n\(reply)") == [
+            .quote([.prose("one\n\ntwo\nlazy")]),
+            .prose(reply),
+        ])
+        #expect(self.segments(">> nested") == [.quote([.quote([.prose("nested")])])])
+    }
+
+    @Test func `a collapsed prompt still starts with its quote`() throws {
+        let text = "> quoted line\n\n" + String(repeating: "reply ", count: 200)
+        let preview = try #require(ChatUserMessageDisclosurePolicy.collapsedPreview(text))
+        #expect(self.segments(preview).first == .quote([.prose("quoted line")]))
     }
 
     @Test func `heading nested in list stays attached to its item`() {
@@ -1180,7 +1202,7 @@ struct ChatMarkdownBlockSegmenterTests {
                 header: ["a", "b"],
                 alignments: [.leading, .leading],
                 rows: [["1", "2"]])),
-            .prose("> quote"),
+            .quote([.prose("quote")]),
         ])
     }
 

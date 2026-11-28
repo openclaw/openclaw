@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import type { TranscriptSessionDescriptor } from "./provider-types.js";
 import {
   writeTranscriptArtifactFile,
   type TranscriptArtifactAuthority,
 } from "./store-artifacts.js";
 import type { TranscriptStoreOperation } from "./store-worker-client.js";
+import type { TranscriptSessionDescriptor } from "./types.js";
 
 export async function writeTranscriptJsonlArtifact(params: {
   sessionDir: string;

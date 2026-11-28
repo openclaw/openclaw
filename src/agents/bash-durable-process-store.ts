@@ -10,7 +10,10 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import type { WorkerWriteOperationContext } from "../state/worker-operation-registry.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 
-/** Only registry-owned restart facts; never environment, output, or requester authority. */
+/**
+ * Only registry-owned restart facts and the requester's saved source, never environment, output,
+ * or a grant: the exit admits that source again against current access.
+ */
 export type DurableProcessRecord = Pick<
   ProcessSession,
   | "id"
@@ -22,6 +25,7 @@ export type DurableProcessRecord = Pick<
   | "notifyOnExit"
   | "notifyOnExitEmptySuccess"
   | "cancellationRequested"
+  | "operatorSource"
 > & {
   /** An ordinary wake-armed process: no unit, so a restart always settles it as lost. */
   kind?: "ordinary";

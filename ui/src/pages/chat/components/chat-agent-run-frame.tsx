@@ -32,8 +32,8 @@ import {
   type ProjectedContinuationSource,
 } from "../chat-turn-boundary.ts";
 import { ChatContinuationActivity } from "./chat-handoff-sessions.tsx";
-import { ChatInlineSwarm, type InlineSwarm } from "./chat-inline-swarm.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { McpConnectCards } from "./chat-mcp-connect-card.tsx";
 import {
   ActivityGroup,
   MessageGroup,
@@ -58,7 +58,6 @@ const ChatSourcePreviews = lazy(() => import("./chat-source-previews.tsx"), {
 type AgentRunFrameOptions = {
   basePath?: string;
   sessionPublicOrigin?: string;
-  swarms?: readonly InlineSwarm[];
   streamOptions: StreamGroupOptions;
   renderGroupOptions: (group: MessageGroupData) => NativeMessageGroupOptions;
   partDependencies: (part: BodyPart) => readonly unknown[];
@@ -267,10 +266,11 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
               : [],
         )
         .at(0) ?? null);
+  const replyGroups = source.detachedGroups ? [...source.detachedGroups, ...groups] : groups;
   const sourcePreviews = actionOwner
     ? extractChatSourcePreviews({
         // Cited results can sit in an earlier rollup that no visible reply owns.
-        groups: frame.detachedGroups ? [...frame.detachedGroups, ...groups] : groups,
+        groups: replyGroups,
         answer: actionOwner.message,
         runId: frame.runId,
         basePath: opts.basePath,
@@ -327,28 +327,16 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
     bodyParts,
     firstBubbleKey,
     sourcePreviews,
+    replyGroups,
     resumes,
   };
-}
-
-function FrameSwarms(props: { swarms: readonly InlineSwarm[] | undefined }) {
-  return (
-    <For each={props.swarms} keyed={(swarm) => swarm.group.groupId}>
-      {(swarm) => <ChatInlineSwarm swarm={swarm()} />}
-    </For>
-  );
 }
 
 export function AgentRunFrame(props: FrameProps) {
   const statusParts = createMemo(() => agentRunFrameActiveStatusParts(props.frame));
   return (
     <Show when={statusParts()} fallback={<RunFrame frame={props.frame} options={props.options} />}>
-      {(parts) => (
-        <>
-          <FrameSwarms swarms={props.options.swarms} />
-          <StreamGroup parts={parts()} options={props.options.streamOptions} />
-        </>
-      )}
+      {(parts) => <StreamGroup parts={parts()} options={props.options.streamOptions} />}
     </Show>
   );
 }
@@ -360,14 +348,14 @@ function RunFrame(props: FrameProps) {
   const footerReactionMessageKey = () =>
     shellOptions().bubbleMode ? undefined : state().actionOwner?.key;
   const firstBubbleKey = createMemo(() => state().firstBubbleKey);
+  const completedFragment = () => Boolean(props.frame.fragment && !props.frame.fragment.last);
   const frameContent = [
-    <FrameSwarms swarms={props.options.swarms} />,
     <FrameBody
       parts={state().bodyParts}
       options={props.options}
       // Completed nonfinal fragments cannot contain widgets. Keep the final
       // reply's owner unchanged as it transitions from active to completed.
-      completedFragment={Boolean(props.frame.fragment && !props.frame.fragment.last)}
+      completedFragment={completedFragment()}
     >
       {(input) => {
         const part = () => input().part;
@@ -479,6 +467,9 @@ function RunFrame(props: FrameProps) {
         );
       }}
     </FrameBody>,
+    <Show when={props.frame.outcome.kind !== "active" && !completedFragment()}>
+      <McpConnectCards groups={state().replyGroups} />
+    </Show>,
     <Show when={state().sourcePreviews.length > 0}>
       <ChatLazyBoundary>
         <ChatSourcePreviews

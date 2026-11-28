@@ -1,5 +1,5 @@
 // Plugin Prerelease Test Plan tests cover plugin prerelease test plan script behavior.
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, matchesGlob } from "node:path";
 import { runInNewContext } from "node:vm";
@@ -19,7 +19,11 @@ import {
   resolvePluginPrereleaseExtensionRuntime,
 } from "../../scripts/lib/plugin-prerelease-test-plan.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { evaluateWorkflowExpression, evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
+import {
+  evaluateWorkflowExpression,
+  evaluateWorkflowRunner,
+  runWorkflowShellScript,
+} from "./ci-workflow.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -81,8 +85,7 @@ function runPluginPhaseValidation(params: {
   if (!step?.run) {
     throw new Error("Missing plugin prerelease phase validation step");
   }
-  return spawnSync("bash", ["-c", step.run], {
-    encoding: "utf8",
+  return runWorkflowShellScript(step.run, {
     env: {
       CANDIDATE_ARTIFACT_JSON: params.candidateArtifactJson ?? "",
       EXPECTED_SHA: params.expectedSha ?? "",
@@ -114,9 +117,9 @@ function runPluginManifest(
     "./.frv-tooling/scripts/lib/ci-blacksmith-capacity.mjs",
     new URL("../../scripts/lib/ci-blacksmith-capacity.mjs", import.meta.url).href,
   );
-  const result = spawnSync("bash", ["-c", run], {
+  const result = runWorkflowShellScript(run, {
     cwd: targetRoot,
-    encoding: "utf8",
+    linuxWorkflow: true,
     env: {
       FULL_RELEASE_VALIDATION: eventName === "schedule" ? "false" : "true",
       GITHUB_EVENT_NAME: eventName,
@@ -155,8 +158,7 @@ function runPluginSummary(params: {
   if (!step?.run) {
     throw new Error("Missing plugin prerelease summary step");
   }
-  return spawnSync("bash", ["-c", step.run], {
-    encoding: "utf8",
+  return runWorkflowShellScript(step.run, {
     env: {
       DOCKER_RESULT: params.docker,
       EXTENSIONS_RESULT: params.extensions,
@@ -570,7 +572,7 @@ export const createExtensionTestShards = () => [{
     ).toBe("matrix.requires_bun == true");
 
     const hourly = runPluginManifest("independent", "schedule", "", undefined, "boat", "");
-    const boatHourly = runPluginManifest("independent", "schedule", "", undefined, "boat");
+    const boatHourly = runPluginManifest("independent", "schedule", "", undefined, "boat", "21");
     const release = runPluginManifest("independent");
     const forcedNode = runPluginManifest("independent", "workflow_dispatch", "node");
     expect(hourly.result.status, hourly.result.stderr).toBe(0);
@@ -603,14 +605,49 @@ export const createExtensionTestShards = () => [{
     expect(
       boatRows.map(({ runner_label: _label, ...row }: Record<string, unknown>) => row),
     ).toEqual(physicalRows.map(({ runner_label: _label, ...row }: Record<string, unknown>) => row));
+    expect(
+      physicalRows.every((row: { runner_label: string }) => row.runner_label === "ubuntu-24.04"),
+    ).toBe(true);
+    for (const allowance of ["invalid", "1"]) {
+      const limited = runPluginManifest(
+        "independent",
+        "schedule",
+        "",
+        undefined,
+        "boat",
+        allowance,
+      );
+      expect(limited.result.status, limited.result.stderr).toBe(0);
+      const rows = JSON.parse(
+        expectDefined(
+          outputs(limited.output).plugin_prerelease_extension_matrix,
+          "limited Boat matrix",
+        ),
+      ).include;
+      expect(
+        rows.filter((row: { runner_label: string }) => row.runner_label.startsWith("boat")),
+      ).toHaveLength(allowance === "1" ? 1 : 0);
+      expect(
+        rows.every(
+          (row: { runner_label: string }) =>
+            row.runner_label.startsWith("boat") || row.runner_label === "ubuntu-24.04",
+        ),
+      ).toBe(true);
+      expect(rows.map(({ runner_label: _label, ...row }: Record<string, unknown>) => row)).toEqual(
+        physicalRows.map(({ runner_label: _label, ...row }: Record<string, unknown>) => row),
+      );
+    }
+    expect(
+      boatRows
+        .filter((row: { runner_label: string }) => row.runner_label.startsWith("boat"))
+        .every((row: { task: string }) => row.task === "extension-file-shard"),
+    ).toBe(true);
     const mixedBatches = boatRows.filter(
       (row: { task: string }) => row.task === "extensions-batch",
     );
     expect(mixedBatches.length).toBeGreaterThan(0);
     expect(
-      mixedBatches.every((row: { runner_label: string }) =>
-        row.runner_label.startsWith("blacksmith-"),
-      ),
+      mixedBatches.every((row: { runner_label: string }) => row.runner_label === "ubuntu-24.04"),
     ).toBe(true);
     for (const [index, row] of boatRows.entries()) {
       if (!row.runner_label.startsWith("boat")) {
@@ -638,6 +675,7 @@ export const createExtensionTestShards = () => [{
         JSON.parse(expectDefined(matrix, "extension matrix"))
           .include.map(
             ({
+              runner_label: _label,
               requires_bun: _bun,
               test_runtime_policy: _policy,
               test_runtime: _runtime,
@@ -862,6 +900,7 @@ export const createExtensionTestShards = () => [{
       "resolve_target",
       "plugin_compatibility_readiness",
       "evidence_reuse",
+      "npm_preflight_first",
     ]);
     expect(fullReleaseWorkflow.jobs.normal_ci.if).toContain(
       "needs.resolve_target.result == 'success'",

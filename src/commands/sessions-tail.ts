@@ -18,6 +18,7 @@ import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { sessionActivityTimestamp } from "../shared/session-activity-timestamp.js";
+import { TRAJECTORY_SNAPSHOT_FRAGMENT } from "../trajectory/runtime-snapshot.js";
 import { loadSqliteTrajectoryRuntimeEventRowsSync } from "../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
 import { resolveCommandSessionStoreTargets } from "./session-store-targets.js";
@@ -138,6 +139,9 @@ function formatProgressLine(event: TrajectoryEvent): string {
 
 function renderEvents(events: TrajectoryEvent[], runtime: RuntimeEnv): void {
   for (const event of events) {
+    if (event.type === TRAJECTORY_SNAPSHOT_FRAGMENT) {
+      continue;
+    }
     runtime.log(formatProgressLine(event));
   }
 }
@@ -340,14 +344,27 @@ export async function sessionsTailCommand(
 
   const followStates: SqliteFollowState[] = [];
   for (const selection of selected) {
-    const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
-      agentId: selection.agentId,
-      sessionId: selection.sessionId,
-      storePath: selection.storePath,
-      tailEvents: Math.max(tailCount, opts.follow ? 1 : 0),
-    });
+    let window = Math.max(tailCount, opts.follow ? 1 : 0);
+    const readWindow = () =>
+      loadSqliteTrajectoryRuntimeEventRowsSync({
+        agentId: selection.agentId,
+        sessionId: selection.sessionId,
+        storePath: selection.storePath,
+        tailEvents: window,
+      });
+    let rows = readWindow();
+    while (
+      rows.length === window &&
+      window > 0 &&
+      window < Number.MAX_SAFE_INTEGER &&
+      rows.filter((row) => row.event.type !== TRAJECTORY_SNAPSHOT_FRAGMENT).length < tailCount
+    ) {
+      window = Math.min(Number.MAX_SAFE_INTEGER, window * 2);
+      rows = readWindow();
+    }
     followStates.push({ selection, lastStorageSeq: rows.at(-1)?.seq ?? -1 });
-    renderEvents(tailCount > 0 ? rows.slice(-tailCount).map((row) => row.event) : [], runtime);
+    const visible = rows.filter((row) => row.event.type !== TRAJECTORY_SNAPSHOT_FRAGMENT);
+    renderEvents(tailCount > 0 ? visible.slice(-tailCount).map((row) => row.event) : [], runtime);
   }
 
   if (opts.follow) {

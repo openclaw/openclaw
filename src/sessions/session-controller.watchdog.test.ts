@@ -160,6 +160,25 @@ describe("nested compaction attempts", () => {
     expect(watchdog.snapshot().executionDeadlineAtMs).toBe(100);
     watchdog.close();
   });
+
+  it("lets quiet compaction outlast the stall window while Stop still cancels it", async () => {
+    const { operation, cancel } = running();
+    operation.watchdog.attachAttempt({ assertCurrent() {} });
+    const compaction = operation.watchdog.attachAttempt({ nested: true, assertCurrent() {} });
+    compaction.setExecutionDeadline(10 * 60_000); // compaction.timeoutSeconds: 600
+    const summaryAt = 7 * 60_000;
+    await tickAt(operation.watchdog, summaryAt);
+    expect(cancel).not.toHaveBeenCalled();
+    compaction.close(); // The summary arrived; the turn resumes from here.
+    await tickAt(operation.watchdog, summaryAt + abortMs - 1);
+    expect(cancel).not.toHaveBeenCalled();
+
+    const next = operation.watchdog.attachAttempt({ nested: true, assertCurrent() {} });
+    next.setExecutionDeadline(summaryAt + abortMs + 10 * 60_000);
+    operation.abort();
+    expect(operation.abortSignal.aborted).toBe(true);
+    expect(next.isCurrent()).toBe(false);
+  });
 });
 
 describe("execution deadline recovery", () => {

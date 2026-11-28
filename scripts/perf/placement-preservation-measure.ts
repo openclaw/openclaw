@@ -16,6 +16,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { WorkerSessionPlacementRecord } from "../../src/gateway/worker-environments/placement-record.js";
 import type { PlacementAuthorityOwner } from "../../src/gateway/worker-environments/placement-turn-authority.types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -245,12 +246,7 @@ const observer = new PerformanceObserver((list) => {
   }
 });
 if (values.mode === "allocation") {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32768);
 } else if (values.mode === "timing") {
   observer.observe({ entryTypes: ["gc"] });
   loop.enable();
