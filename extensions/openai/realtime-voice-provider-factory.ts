@@ -132,6 +132,19 @@ export function buildOpenAIRealtimeVoiceProvider(
     logger?: Pick<PluginLogger, "debug" | "warn">;
   },
 ): RealtimeVoiceProviderPlugin {
+  const resolveGaVoice = (requestedVoice: string | undefined, configuredVoice?: string) => {
+    const voice =
+      normalizeOpenAIRealtimeVoice(requestedVoice) ??
+      normalizeOpenAIRealtimeVoice(configuredVoice) ??
+      "alloy";
+    const requested = normalizeOptionalString(requestedVoice) ?? configuredVoice;
+    if (requested && !normalizeOpenAIRealtimeVoice(requested)) {
+      options?.logger?.warn(
+        `OpenAI Realtime voice: unsupported voice "${requested}"; using "${voice}" instead.`,
+      );
+    }
+    return voice;
+  };
   const prepareBrowserSessionAuth = (params: RealtimeVoiceProviderConfiguredContext) => {
     const { cfg, providerConfig, agentId } = params;
     const config = normalizeProviderConfig(providerConfig);
@@ -253,7 +266,7 @@ export function buildOpenAIRealtimeVoiceProvider(
         {
           ...req,
           ...config,
-          voice: normalizeOpenAIRealtimeVoice(config.voice),
+          voice: resolveGaVoice(config.voice),
           interruptResponseOnInputAudio:
             req.interruptResponseOnInputAudio ?? config.interruptResponseOnInputAudio,
           logger: options?.logger ?? { warn: () => undefined },
@@ -296,10 +309,7 @@ export function buildOpenAIRealtimeVoiceProvider(
         const auth = await resolveOpenAIQuicksilverBridgeAuth({ ...authParams, model }, context);
         return await quicksilverBroker.createBrowserSession(quicksilverRequest, auth);
       }
-      const voice =
-        normalizeOpenAIRealtimeVoice(req.voice) ??
-        normalizeOpenAIRealtimeVoice(config.voice) ??
-        "alloy";
+      const voice = resolveGaVoice(req.voice, config.voice);
       if (req.clientControl) {
         if (!quicksilverBroker) {
           throw new Error("OpenAI realtime browser session broker is unavailable");

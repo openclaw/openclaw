@@ -153,6 +153,11 @@ sidebarTitle: "Voice and speech"
     OpenAI recommends `marin` and `cedar` for the best Realtime quality. This
     is a separate set from the Text-to-speech voices above; a TTS-only voice
     such as `fable`, `nova`, or `onyx` is not valid for Realtime sessions.
+    For GA Realtime models, an unsupported voice logs a warning naming the
+    requested and effective voices. Calls still start with the existing fallback:
+    the supported configured voice after an unsupported browser override, or
+    `alloy` otherwise. An unset voice uses `alloy` without a warning. GPT-Live
+    uses its separate model-specific voice policy.
     Set the model explicitly to `gpt-realtime-2.1-mini` when you prefer the
     smaller, lower-cost Realtime 2.1 variant.
 
