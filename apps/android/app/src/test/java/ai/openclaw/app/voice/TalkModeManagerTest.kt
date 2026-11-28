@@ -1353,6 +1353,31 @@ class TalkModeManagerTest {
     }
 
   @Test
+  fun nativeTalkEndsWithFailureWhenSpeechLanguageIsUnsupported() =
+    runBlocking {
+      withNativeTalk { proof, _ ->
+        val recognizer = currentRecognizer()
+        val session = recognizer.lastRecognizerIntent
+        recognizer.triggerOnError(SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED)
+        // Drive past the 600 ms restart a retryable error would schedule.
+        repeat(10) {
+          proof.scheduler.advanceTimeBy(100)
+          proof.scheduler.runCurrent()
+          shadowOf(Looper.getMainLooper()).idle()
+        }
+
+        assertSame("An unsupported language must not restart recognition", session, recognizer.lastRecognizerIntent)
+        assertFalse(proof.manager.isEnabled.value)
+        val notice = checkNotNull(proof.manager.failureNotice.value)
+        assertEquals(
+          "Speech recognition on this phone doesn’t support ${Locale.getDefault().toLanguageTag()}. " +
+            "In the Control UI, set Settings → Talk → Speech locale to a supported language, then start Talk again.",
+          notice.text,
+        )
+      }
+    }
+
+  @Test
   fun nativeTalkKeepsListeningWithSpeakerOff() =
     runBlocking {
       withNativeTalk { proof, sends ->
