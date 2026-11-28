@@ -195,13 +195,13 @@ describe("resolvePrivateCommandRouteTargets", () => {
       name: "prefers same-surface owners over the first configured owner",
       plugins: () => [
         createApprovalChannelPlugin("telegram", [{ to: "849985193" }]),
-        createApprovalChannelPlugin("discord", [{ to: "493655423946194964" }]),
+        createApprovalChannelPlugin("discord", [{ to: "user:493655423946194964" }]),
       ],
       owners: ["telegram:849985193", "discord:493655423946194964"],
       expected: [
         {
           channel: "discord",
-          to: "493655423946194964",
+          to: "user:493655423946194964",
           accountId: "discord-bot-account",
           threadId: undefined,
         },

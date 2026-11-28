@@ -7,6 +7,8 @@ export type {
   ChannelCapabilities,
   ChannelDisplayMention,
   ChannelMentionAdapter,
+  ChannelDirectTarget,
+  ChannelDirectTargetResolution,
   ChannelDirectoryEntry,
   ChannelDirectoryEntryKind,
   ChannelGroupContext,

@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/status-helpers";
 import { buildChannelConfigSchema, GoogleChatConfigSchema } from "../config-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { resolveGoogleChatDirectTarget } from "./approval-auth.js";
 import {
   googleChatApprovalCapability,
   isGoogleChatNativeApprovalClientEnabled,
@@ -67,6 +68,7 @@ export const googlechatPlugin = createChatChannelPlugin({
       targetPrefixes: ["googlechat", "google-chat", "gchat"],
       targetIdComparison: "case-sensitive",
       normalizeTarget: normalizeGoogleChatTarget,
+      resolveDirectTarget: resolveGoogleChatDirectTarget,
       inferTargetChatType: ({ to }) => {
         const target = normalizeGoogleChatTarget(to);
         if (!target) {

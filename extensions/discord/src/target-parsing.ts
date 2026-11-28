@@ -1,3 +1,4 @@
+import type { ChannelDirectTargetResolution } from "openclaw/plugin-sdk/channel-contract";
 import {
   buildMessagingTarget,
   parseMentionPrefixOrAtUserTarget,
@@ -95,6 +96,21 @@ export function parseDiscordTarget(
     );
   }
   return buildMessagingTarget("channel", trimmed, trimmed);
+}
+
+/** Outbound sends to `user:<id>` open the Discord DM channel for that user. */
+export function resolveDiscordDirectTarget(params: {
+  senderId: string;
+}): ChannelDirectTargetResolution | undefined {
+  let target: DiscordTarget | undefined;
+  try {
+    target = parseDiscordTarget(params.senderId, { defaultKind: "user" });
+  } catch {
+    return undefined;
+  }
+  return target?.kind === "user" && /^\d+$/.test(target.id)
+    ? { kind: "direct", to: `user:${target.id}` }
+    : undefined;
 }
 
 export function resolveDiscordChannelId(raw: string): string {

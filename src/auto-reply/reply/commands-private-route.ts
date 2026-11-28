@@ -214,16 +214,21 @@ function buildPrivateCommandRouteOwnerKeys(target: PrivateCommandRouteTarget): S
   const channel = normalizeLowercaseStringOrEmpty(target.channel);
   const to = normalizeLowercaseStringOrEmpty(target.to);
   const keys = new Set<string>();
-  if (to) {
-    keys.add(to);
-    keys.add(`user:${to}`);
-  }
-  if (channel && to) {
-    keys.add(`${channel}:${to}`);
+  // Direct-message targets carry a `user:` kind; owner entries usually name the bare id.
+  for (const id of to.startsWith("user:") ? [to, to.slice("user:".length)] : [to]) {
+    if (!id) {
+      continue;
+    }
+    keys.add(id);
+    keys.add(`user:${id}`);
+    if (!channel) {
+      continue;
+    }
+    keys.add(`${channel}:${id}`);
     for (const prefix of getLoadedChannelPlugin(channel)?.messaging?.targetPrefixes ?? []) {
       const normalizedPrefix = normalizeLowercaseStringOrEmpty(prefix);
       if (normalizedPrefix) {
-        keys.add(`${normalizedPrefix}:${to}`);
+        keys.add(`${normalizedPrefix}:${id}`);
       }
     }
   }

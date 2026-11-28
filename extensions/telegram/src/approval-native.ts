@@ -26,7 +26,11 @@ import {
   shouldHandleTelegramExecApprovalRequest,
 } from "./exec-approvals.js";
 import { parseTelegramThreadId } from "./outbound-params.js";
-import { normalizeTelegramChatId, parseTelegramTarget } from "./targets.js";
+import {
+  normalizeTelegramChatId,
+  parseTelegramTarget,
+  resolveTelegramDirectTarget,
+} from "./targets.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
 type TelegramOriginTarget = { to: string; threadId?: number };
@@ -76,7 +80,10 @@ const resolveTelegramOriginTarget = createChannelNativeOriginTargetResolverAsync
 const resolveConfiguredTelegramApproverDmTargets = createChannelApproverDmTargetResolverAsync({
   shouldHandleRequest: shouldHandleTelegramExecApprovalRequest,
   resolveApprovers: getTelegramExecApprovalApprovers,
-  mapApprover: (approver): TelegramOriginTarget => ({ to: approver }),
+  mapApprover: (approver): TelegramOriginTarget | null => {
+    const target = resolveTelegramDirectTarget({ senderId: approver });
+    return target?.kind === "direct" ? { to: target.to } : null;
+  },
 });
 
 const resolveTelegramApproverDmTargets = async (

@@ -39,6 +39,7 @@ import {
   createDiscordMessageNonce,
   stripUndefinedFields,
 } from "./send.shared.js";
+import { parseDiscordTarget } from "./target-parsing.js";
 
 export { buildExecApprovalCustomId };
 
@@ -264,7 +265,11 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
         token: resolved.context.token,
         accountId: resolved.accountId,
       });
-      const userId = plannedTarget.target.to;
+      const userId = parseDiscordTarget(plannedTarget.target.to, { defaultKind: "user" })?.id;
+      if (!userId) {
+        logError(`discord approvals: invalid DM target ${plannedTarget.target.to}`);
+        return null;
+      }
       const dmChannel = await discordRequest(() => createUserDmChannel(rest, userId), "dm-channel");
       if (!dmChannel?.id) {
         logError(`discord approvals: failed to create DM for user ${userId}`);
@@ -374,16 +379,14 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
         );
         return;
       }
-      logDebug(`discord approvals: sent approval ${request.id} to user ${plannedTarget.target.to}`);
+      logDebug(`discord approvals: sent approval ${request.id} to ${plannedTarget.target.to}`);
     },
     onDeliveryError: ({ error, plannedTarget }) => {
       if (plannedTarget.surface === "origin") {
         logError(`discord approvals: failed to send to channel: ${String(error)}`);
         return;
       }
-      logError(
-        `discord approvals: failed to notify user ${plannedTarget.target.to}: ${String(error)}`,
-      );
+      logError(`discord approvals: failed to notify ${plannedTarget.target.to}: ${String(error)}`);
     },
   },
 });

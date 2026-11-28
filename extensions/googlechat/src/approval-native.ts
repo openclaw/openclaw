@@ -31,7 +31,7 @@ import {
 import {
   getGoogleChatApprovalApprovers,
   googleChatApprovalAuth,
-  normalizeGoogleChatApproverId,
+  resolveGoogleChatDirectTarget,
 } from "./approval-auth.js";
 import { isGoogleChatSpaceTarget, normalizeGoogleChatTarget } from "./targets.js";
 
@@ -150,12 +150,9 @@ const resolveGoogleChatApproverDmTargets = createChannelApproverDmTargetResolver
   shouldHandleRequest: shouldHandleGoogleChatNativeApprovalRequest,
   resolveApprovers: getGoogleChatApprovalApprovers,
   mapApprover: (approver, params) => {
-    const to = normalizeGoogleChatApproverId(approver);
-    return to
-      ? {
-          to,
-          accountId: normalizeOptionalString(params.accountId),
-        }
+    const target = resolveGoogleChatDirectTarget({ senderId: approver });
+    return target?.kind === "direct"
+      ? { to: target.to, accountId: normalizeOptionalString(params.accountId) }
       : null;
   },
 });

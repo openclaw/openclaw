@@ -80,7 +80,11 @@ import { normalizeExplicitDiscordSessionKey } from "./session-key-normalization.
 import { discordSetupContract } from "./setup-adapter.js";
 import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
 import { collectDiscordStatusIssues } from "./status-issues.js";
-import { normalizeDiscordSnowflake, parseDiscordTarget } from "./target-parsing.js";
+import {
+  normalizeDiscordSnowflake,
+  parseDiscordTarget,
+  resolveDiscordDirectTarget,
+} from "./target-parsing.js";
 import { discordConversationBindings } from "./thread-bindings-channel.js";
 
 const DISCORD_ACCOUNT_STARTUP_STAGGER_MS = 10_000;
@@ -193,6 +197,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
         targetPrefixes: ["discord"],
         targetIdComparison: "lowercase",
         normalizeTarget: normalizeDiscordMessagingTarget,
+        resolveDirectTarget: resolveDiscordDirectTarget,
         resolveInboundConversation: resolveDiscordInboundConversation,
         normalizeExplicitSessionKey: ({ sessionKey, ctx }) =>
           normalizeExplicitDiscordSessionKey(sessionKey, ctx),

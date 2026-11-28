@@ -1,6 +1,10 @@
 // Matrix tests cover allowlist plugin behavior.
 import { describe, expect, it } from "vitest";
-import { normalizeMatrixAllowList, resolveMatrixAllowListMatch } from "./allowlist.js";
+import {
+  normalizeMatrixAllowList,
+  resolveMatrixAllowListMatch,
+  resolveMatrixDirectTarget,
+} from "./allowlist.js";
 
 describe("resolveMatrixAllowListMatch", () => {
   it("matches full user IDs and prefixes", () => {
@@ -56,5 +60,15 @@ describe("resolveMatrixAllowListMatch", () => {
     });
     expect(match.allowed).toBe(true);
     expect(match.matchSource).toBe("wildcard");
+  });
+});
+
+describe("resolveMatrixDirectTarget", () => {
+  it("maps Matrix user ids to user targets", () => {
+    expect(resolveMatrixDirectTarget({ senderId: "matrix:@Alice:example.org" })).toEqual({
+      kind: "direct",
+      to: "user:@Alice:example.org",
+    });
+    expect(resolveMatrixDirectTarget({ senderId: " " })).toBeUndefined();
   });
 });

@@ -2,6 +2,7 @@ import {
   resolveAllowlistMatchByCandidates,
   type AllowlistMatch,
 } from "openclaw/plugin-sdk/allow-from";
+import type { ChannelDirectTargetResolution } from "openclaw/plugin-sdk/channel-contract";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-normalization-runtime";
 
@@ -29,6 +30,14 @@ export function normalizeMatrixUserId(raw?: string | null): string {
     return normalizeMatrixUser(trimmed.slice("user:".length));
   }
   return normalizeMatrixUser(trimmed);
+}
+
+/** Matrix sends to `user:<mxid>` deliver to the existing DM room with that user. */
+export function resolveMatrixDirectTarget(params: {
+  senderId: string;
+}): ChannelDirectTargetResolution | undefined {
+  const userId = normalizeMatrixUserId(params.senderId);
+  return userId ? { kind: "direct", to: `user:${userId}` } : undefined;
 }
 
 function normalizeMatrixAllowListEntry(raw: string): string {

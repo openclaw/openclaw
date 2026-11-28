@@ -37,6 +37,7 @@ import {
   resolveSlackApprovalTeamId,
 } from "./approval-auth.js";
 import { resolvePluginApprovalSlackApprovers } from "./approval-plugin-policy.js";
+import { resolveSlackDirectTarget } from "./direct-target.js";
 import {
   getSlackExecApprovalApprovers,
   isSlackExecApprovalClientEnabled,
@@ -86,18 +87,11 @@ export async function resolveSlackApproverDmTargets(
         : []
       : getSlackExecApprovalApprovers(params);
   return approvers.map((approver) => {
-    const target = parseSlackTarget(approver, { defaultKind: "user" });
-    if (!target || target.kind !== "user") {
+    const target = resolveSlackDirectTarget({ senderId: approver, teamId });
+    if (target?.kind !== "direct") {
       throw new Error("Slack approval approver target must be a user");
     }
-    return {
-      to: formatSlackTarget({
-        kind: "user",
-        id: target.id,
-        teamId: target.teamId ?? teamId,
-        explicitKind: true,
-      }),
-    };
+    return { to: target.to };
   });
 }
 

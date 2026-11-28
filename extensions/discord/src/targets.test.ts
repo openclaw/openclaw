@@ -3,7 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveDiscordDirectoryUserId } from "./directory-cache.js";
 import { clearDiscordDirectoryCacheForTest } from "./directory-cache.test-support.js";
 import * as directoryLive from "./directory-live.js";
-import { parseDiscordTarget, resolveDiscordChannelId } from "./target-parsing.js";
+import {
+  parseDiscordTarget,
+  resolveDiscordChannelId,
+  resolveDiscordDirectTarget,
+} from "./target-parsing.js";
 import { resolveDiscordTarget } from "./target-resolver.js";
 
 const config = (discord: NonNullable<OpenClawConfig["channels"]>["discord"]): OpenClawConfig => ({
@@ -89,5 +93,18 @@ describe("resolveDiscordTarget", () => {
     });
     expect(resolveDiscordDirectoryUserId({ accountId: "work", handle: "jane" })).toBe("999");
     expect(resolveDiscordDirectoryUserId({ accountId: "default", handle: "jane" })).toBeUndefined();
+  });
+});
+
+describe("resolveDiscordDirectTarget", () => {
+  it("maps user ids to user targets and rejects channels", () => {
+    for (const senderId of ["123456789", "user:123456789", "<@!123456789>"]) {
+      expect(resolveDiscordDirectTarget({ senderId })).toEqual({
+        kind: "direct",
+        to: "user:123456789",
+      });
+    }
+    expect(resolveDiscordDirectTarget({ senderId: "channel:123456789" })).toBeUndefined();
+    expect(resolveDiscordDirectTarget({ senderId: "@someone" })).toBeUndefined();
   });
 });

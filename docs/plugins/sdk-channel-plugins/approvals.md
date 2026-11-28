@@ -124,6 +124,11 @@ ideally via `createChannelApprovalNativeRuntimeAdapterAsync(...)` from
 handler and own request filtering, routing, dedupe, expiry, gateway
 subscription, and routed-elsewhere notices.
 
+Map approvers to DM targets with the channel's
+[`messaging.resolveDirectTarget`](/plugins/sdk-channel-outbound#direct-message-targets)
+inside `mapApprover`, so approval DMs and other direct messages share one
+user-to-DM mapping.
+
 Gateway-owned handlers use the applied configuration when admitting a new
 request. The request keeps that configuration through routing, presentation,
 delivery, and cleanup, so a hot reload does not redirect an in-flight approval.

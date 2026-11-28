@@ -30,7 +30,7 @@ import {
   shouldHandleMatrixApprovalRequest,
 } from "./exec-approvals.js";
 import { listMatrixAccountIds } from "./matrix/accounts.js";
-import { normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
+import { normalizeMatrixUserId, resolveMatrixDirectTarget } from "./matrix/monitor/allowlist.js";
 import { resolveMatrixTargetIdentity } from "./matrix/target-ids.js";
 import type { CoreConfig } from "./types.js";
 
@@ -163,12 +163,10 @@ const matrixNativeApprovalCapability = createApproverRestrictedNativeApprovalCap
     if (!(await shouldHandleMatrixApprovalRequest(params))) {
       return [];
     }
-    return getMatrixApprovalApprovers(params)
-      .map((approver) => {
-        const normalized = normalizeMatrixUserId(approver);
-        return normalized ? { to: `user:${normalized}` } : null;
-      })
-      .filter((target): target is { to: string } => target !== null);
+    return getMatrixApprovalApprovers(params).flatMap((approver) => {
+      const target = resolveMatrixDirectTarget({ senderId: approver });
+      return target?.kind === "direct" ? [{ to: target.to }] : [];
+    });
   },
   notifyOriginWhenDmOnly: true,
   nativeRuntimeAsync: createLazyChannelApprovalNativeRuntimeAdapterAsync({

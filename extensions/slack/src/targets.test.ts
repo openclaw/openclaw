@@ -1,5 +1,6 @@
 // Slack tests cover targets plugin behavior.
 import { describe, expect, it } from "vitest";
+import { resolveSlackDirectTarget } from "./direct-target.js";
 import {
   canonicalizeSlackApiTargetId,
   formatSlackTarget,
@@ -79,5 +80,19 @@ describe("slackContextTargetsMatch", () => {
     ).toBe(true);
     expect(slackContextTargetsMatch("U999", context)).toBe(false);
     expect(slackContextTargetsMatch("C123", context)).toBe(false);
+  });
+});
+
+describe("resolveSlackDirectTarget", () => {
+  it("maps user ids to user targets in the account workspace", () => {
+    expect(resolveSlackDirectTarget({ senderId: "U123ABC" })).toEqual({
+      kind: "direct",
+      to: "user:U123ABC",
+    });
+    expect(resolveSlackDirectTarget({ senderId: "U123ABC", teamId: "T999" })).toEqual({
+      kind: "direct",
+      to: "team:T999:user:U123ABC",
+    });
+    expect(resolveSlackDirectTarget({ senderId: "channel:C123" })).toBeUndefined();
   });
 });

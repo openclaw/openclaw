@@ -21,7 +21,11 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultMSTeamsAccountId, resolveMSTeamsAccount } from "./accounts.js";
-import { getMSTeamsApprovalApprovers, msTeamsApprovalAuth } from "./approval-auth.js";
+import {
+  getMSTeamsApprovalApprovers,
+  msTeamsApprovalAuth,
+  resolveMSTeamsDirectTarget,
+} from "./approval-auth.js";
 import { msteamsConfigAdapter } from "./channel-config.js";
 import { normalizeMSTeamsMessagingTarget } from "./resolve-allowlist.js";
 
@@ -127,10 +131,12 @@ const msTeamsLazyApprovalNativeRuntime = createLazyChannelApprovalNativeRuntimeA
 const resolveMSTeamsApproverDmTargets = createChannelApproverDmTargetResolverAsync({
   shouldHandleRequest: shouldHandleMSTeamsNativeApprovalRequest,
   resolveApprovers: getMSTeamsApprovalApprovers,
-  mapApprover: (approver, params) => ({
-    to: `user:${approver}`,
-    accountId: normalizeOptionalString(params.accountId),
-  }),
+  mapApprover: (approver, params) => {
+    const target = resolveMSTeamsDirectTarget({ senderId: approver });
+    return target?.kind === "direct"
+      ? { to: target.to, accountId: normalizeOptionalString(params.accountId) }
+      : null;
+  },
 });
 
 const msTeamsNativeApprovalCapability = createApproverRestrictedNativeApprovalCapabilityAsync({
