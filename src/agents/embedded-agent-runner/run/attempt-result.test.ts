@@ -677,9 +677,10 @@ describe("trailing source progress at runtime settlement", () => {
   ])("settles source progress with %s", async (_name, calls, delivered) => {
     const { result, finalizerInstruction } = await settleRealLoop(calls);
     expect(result.sourceReplyDeliveryState).toBe(delivered ? "delivered" : "missing");
-    expect(result.messagingToolSentTargets?.map((send) => send.sourceReplyFinal)).toEqual([
-      delivered,
-    ]);
+    // A settled progress send is the reply: it no longer counts as progress either.
+    expect(
+      result.messagingToolSentTargets?.map((send) => [send.sourceReplyFinal, send.progress]),
+    ).toEqual([delivered ? [true, undefined] : [false, true]]);
     if (delivered) {
       expect(finalizerInstruction).toBeNull();
     } else {

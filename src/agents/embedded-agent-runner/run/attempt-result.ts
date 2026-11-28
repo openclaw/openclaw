@@ -263,10 +263,15 @@ export function completeEmbeddedAttemptResult(
     state.terminal.kind === "ok" &&
     terminalAssistant?.stopReason === "stop" &&
     closingReply.terminalReply.disposition !== "visible";
-  const completeLastProgress = <T extends { sourceReplyFinal?: boolean }>(sends: T[]): T[] => {
+  const completeLastProgress = <T extends { sourceReplyFinal?: boolean; progress?: true }>(
+    sends: T[],
+  ): T[] => {
     const index = sends.findLastIndex((send) => send.sourceReplyFinal === false);
     return progressIsReply && index >= 0
-      ? sends.with(index, Object.assign({}, sends[index], { sourceReplyFinal: true }))
+      ? sends.with(
+          index,
+          Object.assign({}, sends[index], { sourceReplyFinal: true, progress: undefined }),
+        )
       : sends;
   };
   const messagingToolSourceReplyPayloads = completeLastProgress(

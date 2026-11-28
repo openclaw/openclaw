@@ -85,6 +85,21 @@ describe("source delivery plan", () => {
     });
   });
 
+  it.each([
+    ["a progress send alone", [{ ...slackSend, progress: true as const }], false],
+    [
+      "a progress send, then a final send",
+      [{ ...slackSend, progress: true as const }, slackSend],
+      true,
+    ],
+  ])("satisfies source delivery only with a final send: %s", (_name, sent, satisfied) => {
+    const outcome = resolveSourceDeliveryOutcome(messageToolPlan(slackDestination), {
+      didSendViaMessageTool: true,
+      messageToolSentTargets: sent,
+    });
+    expect(outcome).toMatchObject({ ...outcomeFlags(true), satisfiesSourceDelivery: satisfied });
+  });
+
   it("matches source targets through the same provider normalization used by delivery", () => {
     expect(
       ["message", "discord"].map(
