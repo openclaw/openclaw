@@ -180,6 +180,7 @@ export function projectChatTranscript(
     activeRunIds: activeSession?.hasActiveRun ? activeSession.activeRunIds : undefined,
     runWorking: Boolean(props.runWorking),
     searchActive: searchFiltering,
+    showToolCalls: props.showToolCalls,
     bubbleMode: props.chatBubbleMode === true,
     session: props.transcriptMetadata ?? activeSession,
   };
