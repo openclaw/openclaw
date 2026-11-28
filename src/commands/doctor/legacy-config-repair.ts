@@ -107,7 +107,13 @@ export async function repairLegacyConfigForUpdateChannel(params: {
     return { snapshot: params.configSnapshot, repaired: false, ...diagnostics };
   }
   if (params.plan && containsAuthoredInclude(plan.snapshot.parsed)) {
-    const paths = plan.snapshot.includedPaths ?? [];
+    // Watch paths include canonical aliases; provenance names the captured include reads.
+    const paths =
+      plan.snapshot.includeProvenance?.flatMap(
+        (entry) => entry.targetPaths ?? (entry.targetPath ? [entry.targetPath] : []),
+      ) ??
+      plan.snapshot.includedPaths ??
+      [];
     if (
       paths.length === 0 ||
       paths.some(

@@ -15,6 +15,13 @@ const moduleUrl = (relative: string) => JSON.stringify(new URL(relative, registr
 
 it("repairs an included legacy config without flattening and restores both authored files", () => {
   const root = fs.realpathSync(dirs.make("state-upgrade-includes-"));
+  fs.mkdirSync(path.join(root, "config-inputs"));
+  fs.mkdirSync(path.join(root, "node_modules"));
+  fs.symlinkSync(
+    path.join(root, "config-inputs"),
+    path.join(root, "node_modules", "config"),
+    "junction",
+  );
   // Reuse the prepared native graph and executable cleanup owner, not cold source loaders.
   const result = spawnNodeEvalSync(
     String.raw`
@@ -35,7 +42,7 @@ it("repairs an included legacy config without flattening and restores both autho
       const env = process.env;
       const stateDir = env.OPENCLAW_STATE_DIR;
       const configPath = env.OPENCLAW_CONFIG_PATH;
-      const includePath = path.join(stateDir, "diagnostics.json");
+      const includePath = path.join(fs.realpathSync(path.dirname(configPath)), "diagnostics.json");
       const rootBytes = '{\n  "diagnostics": { "$include": "diagnostics.json" }\n}\n';
       const includeBytes = '{\n  "otel": { "protocol": "grpc" }\n}\n';
       fs.writeFileSync(configPath, rootBytes);
@@ -61,6 +68,7 @@ it("repairs an included legacy config without flattening and restores both autho
       }
       assert.equal(fs.readFileSync(configPath, "utf8"), rootBytes);
       assert.deepEqual(JSON.parse(fs.readFileSync(includePath, "utf8")), { otel: {} });
+      assert.equal(fs.lstatSync(path.dirname(configPath)).isSymbolicLink(), true);
       const manifest = JSON.parse(fs.readFileSync(path.join(path.dirname(target), ".restore"), "utf8"));
       assert.deepEqual(manifest.files.filter(file => file.preimage !== null).map(file => file.live).sort(),
         [configPath, includePath].sort());
@@ -118,7 +126,7 @@ it("repairs an included legacy config without flattening and restores both autho
         HOME: root,
         USERPROFILE: root,
         OPENCLAW_STATE_DIR: root,
-        OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+        OPENCLAW_CONFIG_PATH: path.join(root, "node_modules", "config", "openclaw.json"),
         XDG_CACHE_HOME: path.join(root, "cache"),
         JITI_FS_CACHE: "0",
       },
