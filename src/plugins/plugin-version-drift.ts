@@ -181,8 +181,13 @@ async function resolveClawHubTarget(
   // Only suppress a mismatch for a verified latest intent: the update owner may
   // select a tag, an exact version, or the extended-stable core cohort instead.
   try {
-    const { installSpec } = resolveClawHubUpdateSpecs({
-      record: { source: "clawhub", spec: entry.spec, clawhubPackage: packageName },
+    const { installSpec } = await resolveClawHubUpdateSpecs({
+      record: {
+        source: "clawhub",
+        spec: entry.spec,
+        clawhubPackage: packageName,
+        clawhubUrl: entry.clawhubUrl,
+      },
       officialSpec: entry.clawhubOfficialSpec,
       updateChannel: entry.clawhubUpdateChannel,
       officialPackageName: packageName,

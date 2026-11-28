@@ -33,6 +33,14 @@ import {
 } from "./update-authority.test-support.js";
 import { updateNpmInstalledPlugins } from "./update-installed.js";
 
+// mock-isolation: beta-channel tag selection reads ClawHub; offline keeps the @beta attempt.
+vi.mock("../infra/clawhub-packages.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/clawhub-packages.js")>()),
+  fetchClawHubPackageDetail: async () => {
+    throw new Error("offline");
+  },
+}));
+
 afterEach(() => {
   vi.restoreAllMocks();
   syncBuiltinESMExports();

@@ -60,6 +60,16 @@ vi.mock("../plugins/install.js", () => ({
   installPluginFromNpmPackArchive: installers.archive,
 }));
 
+// mock-isolation: beta-channel tag selection reads ClawHub; offline keeps the @beta attempt.
+const fetchClawHubPackageDetail = vi.hoisted(() =>
+  vi.fn(async () => {
+    throw new Error("offline");
+  }),
+);
+vi.mock("../infra/clawhub-packages.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/clawhub-packages.js")>()),
+  fetchClawHubPackageDetail,
+}));
 // mock-isolation: package lookup and installation use fixtures instead of the live registry.
 vi.mock("../plugins/clawhub.js", () => ({
   CLAWHUB_INSTALL_ERROR_CODE: {
@@ -135,28 +145,24 @@ import { ensureChannelSetupPluginInstalled } from "./channel-setup/plugin-instal
 import { ensureOnboardingPluginInstalled } from "./onboarding-plugin-install.js";
 import {
   bundledDirectory,
+  type ClawHubInstallCall,
   clawHubRecord,
+  firstCall,
+  type InstallChoice,
   installEntry,
   installedPlugin,
+  type InstallPrompt,
   installPolicyConfig,
+  localOption,
   localWorkspace,
   notInstalled,
+  type NpmPackInstallCall,
+  type NpmSpecInstallCall,
+  requireCapturedPrompt,
+  runInstall,
+  skipOption,
 } from "./onboarding-plugin-install.test-fixtures.js";
 import type { OnboardingPluginInstallOptions } from "./onboarding-plugin-install.types.js";
-
-function runInstall(
-  entry: OnboardingPluginInstallOptions["entry"],
-  prompter: OnboardingPluginInstallOptions["prompter"],
-  options: Partial<Omit<OnboardingPluginInstallOptions, "entry" | "prompter">> = {},
-) {
-  return ensureOnboardingPluginInstalled({
-    cfg: {},
-    runtime: {} as never,
-    ...options,
-    entry,
-    prompter,
-  });
-}
 
 function progress(update = vi.fn(), stop = vi.fn()) {
   return vi.fn(() => ({ update, stop }));
@@ -186,30 +192,6 @@ function expectDiscoveryInvalidated() {
   );
 }
 
-function requireCapturedPrompt<T>(captured: T | undefined): T {
-  if (!captured) {
-    throw new Error("expected captured install prompt");
-  }
-  return captured;
-}
-
-type InstallChoice = "clawhub" | "npm" | "local" | "skip";
-type InstallPrompt = Parameters<OnboardingPluginInstallOptions["prompter"]["select"]>[0];
-
-function firstCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T {
-  return requireCapturedPrompt(mock.mock.calls[0]);
-}
-
-type NpmPackInstallCall = Parameters<
-  typeof import("../plugins/install.js").installPluginFromNpmPackArchive
->[0];
-type NpmSpecInstallCall = Parameters<
-  typeof import("../plugins/install.js").installPluginFromNpmSpec
->[0];
-type ClawHubInstallCall = Parameters<
-  typeof import("../plugins/clawhub.js").installPluginFromClawHub
->[0];
-
 function npmCall() {
   return firstCall(installers.npm)[0];
 }
@@ -232,11 +214,6 @@ async function useArtifactConsent() {
   prepareManagedPluginArtifactConsentHandler.mockImplementationOnce(
     actual.prepareManagedPluginArtifactConsentHandler,
   );
-}
-
-const skipOption = { value: "skip", label: "Skip for now" };
-function localOption(hint: string) {
-  return { value: "local", label: "Use local plugin path", hint };
 }
 
 function blockEnablement(pluginId: string) {
@@ -657,6 +634,16 @@ describe("ensureOnboardingPluginInstalled", () => {
       expectDiscoveryInvalidated();
     },
   );
+
+  it("opens the source menu without waiting on ClawHub", async () => {
+    const select = vi.fn(async (_input: InstallPrompt) => "skip");
+    const cfg = { update: { channel: "beta" as const } };
+    const entry = installEntry({ clawhubSpec: "clawhub:demo-plugin" });
+    const result = await runInstall(entry, { select } as never, { cfg });
+    expect(result.status).toBe("skipped");
+    expect(select).toHaveBeenCalledOnce();
+    expect(fetchClawHubPackageDetail).not.toHaveBeenCalled();
+  });
 
   it("retries the operator ClawHub selector when no beta release is published", async () => {
     const spec = "clawhub:demo-plugin@latest";

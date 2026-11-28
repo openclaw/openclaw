@@ -24,11 +24,12 @@ export function expectedNpmInstallSpec(spec: string): string {
     : spec;
 }
 
-export function expectedClawHubInstallSpec(spec: string): string {
-  return resolveClawHubInstallSpecsForUpdateChannel({
+export async function expectedClawHubInstallSpec(spec: string): Promise<string> {
+  const specs = await resolveClawHubInstallSpecsForUpdateChannel({
     spec,
     updateChannel: resolveRegistryUpdateChannel({ currentVersion: VERSION }),
-  }).installSpec;
+  });
+  return specs.installSpec;
 }
 
 export function expectedCodexInstallSpec(): string {
@@ -276,6 +277,13 @@ vi.mock("../../../infra/install-source-utils.js", async (importOriginal) => ({
   resolveNpmSpecMetadata: mocks.resolveNpmSpecMetadata,
 }));
 
+// mock-isolation: beta-channel tag selection reads ClawHub; offline keeps the @beta attempt.
+vi.mock("../../../infra/clawhub-packages.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/clawhub-packages.js")>()),
+  fetchClawHubPackageDetail: async () => {
+    throw new Error("offline");
+  },
+}));
 vi.mock("../../../plugins/clawhub.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../plugins/clawhub.js")>()),
   installPluginFromClawHub: mocks.installPluginFromClawHub,

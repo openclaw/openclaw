@@ -75,6 +75,13 @@ vi.mock("./plugin-metadata-snapshot.js", () => ({
   resolvePluginMetadataSnapshot: mocks.metadata,
 }));
 
+// mock-isolation: beta-channel tag selection reads ClawHub; offline keeps the @beta attempt.
+vi.mock("../infra/clawhub-packages.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/clawhub-packages.js")>()),
+  fetchClawHubPackageDetail: async () => {
+    throw new Error("offline");
+  },
+}));
 vi.mock("./clawhub.js", () => ({
   installPluginFromClawHub: (params: Parameters<typeof invokePluginArtifactInstallMock>[1]) =>
     invokePluginArtifactInstallMock(mocks.clawhubInstall, params, {

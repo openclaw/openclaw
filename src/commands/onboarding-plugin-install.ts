@@ -652,19 +652,7 @@ export async function ensureOnboardingPluginInstalled(
     configChannel: normalizeUpdateChannel(next.update?.channel),
     currentVersion: VERSION,
   });
-  const clawhubSpecs = clawhubSpec
-    ? resolveClawHubInstallSpecsForUpdateChannel({
-        spec: clawhubSpec,
-        updateChannel,
-        officialPackageName: entry.trustedSourceLinkedOfficialInstall
-          ? parseClawHubPluginSpec(clawhubSpec)?.name
-          : undefined,
-        coreVersion: VERSION,
-        versionBoundToCore: entry.versionBoundToOpenClaw,
-      })
-    : null;
   let npmSpecs: Awaited<ReturnType<typeof resolveNpmInstallSpecsForUpdateChannel>> | undefined;
-  const clawhubInstallSpec = clawhubSpecs?.installSpec ?? clawhubSpec;
   const defaultChoice = ((): InstallChoice => {
     const hasRemoteSpec = Boolean(clawhubSpec) || Boolean(npmSpec);
     const remoteDefault = (): InstallChoice =>
@@ -698,7 +686,7 @@ export async function ensureOnboardingPluginInstalled(
           const label = entry.label;
           const autoConfirmSingleSource = params.autoConfirmSingleSource;
           // Bundled plugins are version-locked; remote specs are fallback metadata only.
-          const promptClawHubSpec = bundledLocalPath ? null : clawhubInstallSpec;
+          const promptClawHubSpec = bundledLocalPath ? null : clawhubSpec;
           const promptNpmSpec = bundledLocalPath ? null : npmSpec;
           const safeLabel = sanitizeTerminalText(label);
           const safeClawHubSpec = promptClawHubSpec
@@ -841,6 +829,19 @@ export async function ensureOnboardingPluginInstalled(
         );
       }
     }
+    // Resolved only once ClawHub is a chosen source: its tag lookup must not delay the menu.
+    const clawhubSpecs =
+      clawhubSpec && sources.some((source) => source.source === "clawhub")
+        ? await resolveClawHubInstallSpecsForUpdateChannel({
+            spec: clawhubSpec,
+            updateChannel,
+            officialPackageName: entry.trustedSourceLinkedOfficialInstall
+              ? parseClawHubPluginSpec(clawhubSpec)?.name
+              : undefined,
+            coreVersion: VERSION,
+            versionBoundToCore: entry.versionBoundToOpenClaw,
+          })
+        : undefined;
     const onFallback = async (message: string) => {
       await prompter.note(message, t("wizard.plugins.installTitle"));
     };

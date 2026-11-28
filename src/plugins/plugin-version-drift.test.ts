@@ -282,15 +282,14 @@ describe("resolvePluginVersionDriftTargets for ClawHub installs", () => {
         rejectedPluginIds: new Map([["whatsapp-alias", "fixture ownership rejection"]]),
       }),
     ).toEqual({ pluginIds: [], error: "fixture ownership rejection" });
-    expect(
-      resolveClawHubUpdateSpecs({
-        record,
-        officialSpec: entry.clawhubOfficialSpec,
-        updateChannel: entry.clawhubUpdateChannel,
-        officialPackageName: entry.clawhubPackage,
-        coreVersion: entry.gatewayVersion,
-      }).installSpec,
-    ).toBe("clawhub:@openclaw/whatsapp");
+    const specs = await resolveClawHubUpdateSpecs({
+      record,
+      officialSpec: entry.clawhubOfficialSpec,
+      updateChannel: entry.clawhubUpdateChannel,
+      officialPackageName: entry.clawhubPackage,
+      coreVersion: entry.gatewayVersion,
+    });
+    expect(specs.installSpec).toBe("clawhub:@openclaw/whatsapp");
     // Diagnostic guidance cannot bypass current owner/alias admission.
     for (const rejectedId of ["whatsapp", "whatsapp-alias"]) {
       expect(
@@ -305,11 +304,34 @@ describe("resolvePluginVersionDriftTargets for ClawHub installs", () => {
   it.each<Parameters<typeof hubReport>>([
     ["2026.9.5", { spec: hubSpec("2026.9.5"), config: { update: { channel: "stable" } } }],
     ["2026.9.3", { spec: hubSpec("beta"), config: { update: { channel: "stable" } } }],
-    ["2026.9.3", { spec: hubSpec(), config: { update: { channel: "beta" } } }],
     ["2026.9.3", { spec: hubSpec("latest"), config: { update: { channel: "extended-stable" } } }],
-    ["2026.9.3", { gatewayVersion: "2026.9.4-beta.1" }],
   ])("withholds repair for selected targets: %s %j", async (...args) => {
     expectNoRepair(await hubEntry(...args));
+  });
+
+  it.each<Parameters<typeof hubReport>>([
+    ["2026.9.3", { spec: hubSpec(), config: { update: { channel: "beta" } } }],
+    ["2026.9.3", { gatewayVersion: "2026.9.4-beta.1" }],
+  ])("withholds repair while a newer ClawHub beta is selected: %s %j", async (...args) => {
+    // The beta channel's own choice between beta and latest needs the package tags.
+    vi.mocked(fetchClawHubPackageDetail).mockResolvedValue({
+      package: {
+        name: "@openclaw/whatsapp",
+        displayName: "WhatsApp",
+        family: "code-plugin",
+        channel: "official",
+        isOfficial: true,
+        createdAt: 0,
+        updatedAt: 0,
+        tags: { beta: "2026.9.4-beta.1" },
+      },
+    });
+    const entry = await hubEntry(...args);
+    expect(entry.targetResolution?.status).toBe("unresolved");
+    expect(entry.targetResolution).toMatchObject({
+      error: expect.stringContaining("@beta"),
+    });
+    expect(repairCommand(entry)).toBeUndefined();
   });
 
   it.each([{ pluginApiRange: ">=2026.10.1" }, { minGatewayVersion: "2026.10.1" }])(

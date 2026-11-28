@@ -123,7 +123,8 @@ plugin API or OpenClaw version and asks you to upgrade or choose an explicit
 compatible plugin version.
 Fresh beta-channel installs with bare/default or `@latest` intent target the
 installed core's exact beta version for eligible official npm and trusted
-official ClawHub plugins. If the core is not a beta release, they target `@beta`.
+official ClawHub plugins. If the core is not a beta release, they target the newer
+of the package's `beta` and `latest` releases.
 The selected release must exist in a declared source; pass an explicit version
 to choose another release. Doctor, onboarding, and plugin-update recovery paths
 can fall back to the recorded or default selector with a visible warning.

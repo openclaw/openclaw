@@ -233,8 +233,9 @@ async function runInstalledPluginUpdate(
     }
     const clawhubSpecs =
       record.source === "clawhub"
-        ? resolveClawHubUpdateSpecs({
+        ? await resolveClawHubUpdateSpecs({
             record,
+            timeoutMs: params.timeoutMs,
             officialSpec: trustedOfficialClawHubInstall?.clawhubSpec,
             officialSpecOverride: officialClawHubSpec,
             updateChannel,
