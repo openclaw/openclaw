@@ -313,19 +313,24 @@ it("moves a quick retry to a reset just past its backoff instead of the next dai
   expect(job.state.nextRunAtMs).toBe(resetAt);
 });
 
-// Each execution adapter rebuilds the outcome; the reset must survive it into the store.
-it.each(["isolated", "session-target"] as const)(
-  "persists a %s job's next run at its first slot after the provider's reset",
-  async (path) => {
+// Each execution adapter rebuilds the outcome, and schedule maintenance runs after it; the
+// reset must survive both into the store.
+it.each([
+  { path: "isolated", expr: "0 6,10,14,18 * * 1-5", resetMs: 6 * 24 * 60 * 60_000 + 30 * 60_000 },
+  { path: "session-target", expr: "0 6,10,14,18 * * 1-5", resetMs: 6 * 24 * 60 * 60_000 },
+  { path: "isolated", expr: "*/5 * * * *", resetMs: 20 * 60_000 + 30_000 },
+] as const)(
+  "persists a $path job ($expr) at its first slot after the provider's reset",
+  async ({ path, expr, resetMs }) => {
     const store = timerRegressionFixtures.makeStorePath();
     const now = Date.parse("2026-08-03T06:00:00.000Z");
-    const resetAt = now + 6 * 24 * 60 * 60 * 1000 + 30 * 60_000;
+    const resetAt = now + resetMs;
     const job = {
       ...createIsolatedRegressionJob({
         id: `rate-limited-${path}`,
         name: "rate limited",
         scheduledAt: now,
-        schedule: { kind: "cron", expr: "0 6,10,14,18 * * 1-5", tz: "UTC" },
+        schedule: { kind: "cron", expr, tz: "UTC", staggerMs: 0 },
         payload: { kind: "agentTurn", message: "report" },
         state: { nextRunAtMs: now },
       }),

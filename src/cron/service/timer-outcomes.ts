@@ -178,10 +178,13 @@ export function applyJobResult(
     !result.interruptedByRestart &&
     result.errorClassification?.kind !== "aborted";
   const previousConsecutiveErrors = normalizeConsecutiveErrors(job.state.consecutiveErrors);
-  const computeNaturalNext = (restartInterval: boolean) => {
+  const computeNaturalNext = (
+    restartInterval: boolean,
+    // The first scheduled slot at or after a provider's reset keeps cron expressions on-slot.
+    fromMs = Math.max(result.endedAt, retryFloorMs - 1),
+  ) => {
     try {
-      // The first scheduled slot at or after a provider's reset keeps cron expressions on-slot.
-      return computeJobNextRunAtMs(job, Math.max(result.endedAt, retryFloorMs - 1), {
+      return computeJobNextRunAtMs(job, fromMs, {
         preserveEveryAnchor: restartInterval,
       });
     } catch (err) {
@@ -425,7 +428,8 @@ export function applyJobResult(
       // Within the quick-retry budget the next run is at most minutes away, whether it is the
       // retry itself or an earlier natural slot, so a provider outage holds notifications.
       // A provider reset moves the quick retry to it, holding no alert once past this backoff.
-      // A reset beyond the longest error backoff skips quick retries for the next real slot.
+      // A reset past the schedule's own next slot skips quick retries for the first slot after
+      // it: an off-slot time there is one schedule maintenance would move earlier again.
       const holdsForRetry =
         retryDecision.retryable &&
         retryDecision.backoffMs !== undefined &&
@@ -448,7 +452,8 @@ export function applyJobResult(
       if (
         retryDecision.retryable &&
         retryDecision.backoffMs !== undefined &&
-        retryFloorMs <= result.endedAt + Math.max(...DEFAULT_ERROR_BACKOFF_SCHEDULE_MS)
+        (retryFloorMs <= result.endedAt + retryDecision.backoffMs ||
+          retryFloorMs < (computeNaturalNext(true, result.endedAt) ?? 0))
       ) {
         normalNext = computeNormalNext();
         if (normalNext === undefined) {
