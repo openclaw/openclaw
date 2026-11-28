@@ -112,3 +112,32 @@ it("rejects replacements that change the admitted model or access programs", asy
   ).rejects.toThrow("access programs");
   await expect(replace({ input: "withheld", model: "fixture" })).rejects.toThrow();
 });
+
+it("preflights compaction tool bytes even without a policy plugin", async () => {
+  let sent = false;
+  const stream = wrapStreamFnWithModelRequestGate(
+    async (activeModel, _context, options) => {
+      await options?.onPayload?.(
+        {
+          tools: [
+            {
+              type: "function",
+              name: "large",
+              description: "界".repeat(360_000),
+              parameters: { type: "object", properties: {} },
+            },
+          ],
+        },
+        activeModel,
+      );
+      sent = true;
+      return undefined as never;
+    },
+    {},
+    "compaction",
+  );
+  await expect(stream({ ...model, api: "openai-responses" }, { messages: [] }, {})).rejects.toThrow(
+    "Tool description exceeds the 1 MiB wire budget",
+  );
+  expect(sent).toBe(false);
+});

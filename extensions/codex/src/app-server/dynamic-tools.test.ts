@@ -1572,3 +1572,59 @@ describe("Codex tool operator hints", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+describe("oversized direct Codex catalogs", () => {
+  it.each([
+    { functionToolsOnly: false, allExecutable: true },
+    { functionToolsOnly: false, allExecutable: false },
+    { functionToolsOnly: true, allExecutable: false },
+  ])(
+    "preserves namespace/executor contracts ($functionToolsOnly, $allExecutable)",
+    async ({ functionToolsOnly, allExecutable }) => {
+      const first = createTool("search_tools", {
+        execute: vi.fn(async () => textToolResult("found")),
+      });
+      const tools = [
+        first,
+        ...Array.from({ length: 100 }, (_, index) =>
+          createTool(`large_${index}`, {
+            description: "界".repeat(5_500),
+          }),
+        ),
+      ];
+      const available = allExecutable ? tools : [first];
+      const bridge = createBridge(available, {
+        registeredTools: tools,
+        loading: "direct",
+        functionToolsOnly,
+      });
+      expect(bridge.availableTools).toHaveLength(available.length);
+      expect(bridge.telemetry.quarantinedTools).toEqual([]);
+      if (functionToolsOnly) {
+        expect(bridge.specs).toHaveLength(tools.length);
+        expect(bridge.specs.every((spec) => spec.type === "function")).toBe(true);
+        return;
+      }
+      const namespace = bridge.specs.find(
+        (spec) => spec.type === "namespace" && spec.name === "openclaw",
+      );
+      expect(namespace?.type).toBe("namespace");
+      if (namespace?.type !== "namespace") {
+        throw new Error("Expected deferred native namespace");
+      }
+      expect(namespace.tools).toHaveLength(tools.length);
+      expect(namespace.tools.every((tool) => tool.deferLoading)).toBe(true);
+      const availableNamespace = bridge.availableSpecs.find(
+        (spec) => spec.type === "namespace" && spec.name === "openclaw",
+      );
+      expect(availableNamespace?.type).toBe("namespace");
+      if (availableNamespace?.type !== "namespace") {
+        throw new Error("Expected matching available namespace");
+      }
+      expect(availableNamespace.tools).toHaveLength(available.length);
+      expect(availableNamespace.tools.every((tool) => tool.deferLoading)).toBe(true);
+      expect((await callTool(bridge, "search_tools")).success).toBe(true);
+      expect(first.execute).toHaveBeenCalledOnce();
+    },
+  );
+});

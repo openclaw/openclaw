@@ -5,8 +5,13 @@ import {
 } from "@openclaw/ai/internal/model-request-body";
 import { sha256Hex, sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assertRuntimeToolDescriptionBudget } from "../tool-description-budget.js";
 
-export type ProviderPromptTask = { payload: unknown; encode: boolean };
+export type ProviderPromptTask = {
+  payload: unknown;
+  encode: boolean;
+  checkToolDescriptions?: boolean;
+};
 type ModelRequestJson = NonNullable<ReturnType<typeof serializeModelRequestBody>["json"]>;
 
 type ProviderPromptItemFingerprint = { digest: string; fields: Record<string, string> };
@@ -169,7 +174,11 @@ function fingerprintSerializedPrompt(
   };
 }
 
-export function prepareProviderPrompt({ payload, encode }: ProviderPromptTask): {
+export function prepareProviderPrompt({
+  payload,
+  encode,
+  checkToolDescriptions,
+}: ProviderPromptTask): {
   digest: string;
   byteWeight: number;
   encoded: EncodedModelRequestBody | undefined;
@@ -189,6 +198,10 @@ export function prepareProviderPrompt({ payload, encode }: ProviderPromptTask): 
     return { ...sha256StableValue(payload), encoded: undefined };
   }
   const { json, ...encoded } = serializeModelRequestBody(payload);
+  const tools = json?.json[0] === "{" ? new Map(json.members()).get("tools") : undefined;
+  if (checkToolDescriptions && tools?.json[0] === "[") {
+    assertRuntimeToolDescriptionBudget(tools.json);
+  }
   const cachePrefix = fingerprintSerializedPrompt(json);
   return {
     digest: sha256Hex(encoded.body),
