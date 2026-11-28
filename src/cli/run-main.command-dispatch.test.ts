@@ -38,7 +38,7 @@ import {
 } from "./run-main.test-support.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import process from "node:process";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
