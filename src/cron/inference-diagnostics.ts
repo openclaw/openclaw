@@ -34,7 +34,8 @@ export async function prepareCronInferenceDiagnosticSession(params: {
 }) {
   const { cfg, agentId, job, signal } = params;
   signal?.throwIfAborted();
-  const targetKey = resolveCronSessionTargetSessionKey(job.sessionTarget);
+  const targetKey =
+    job.sessionTarget === "main" ? "main" : resolveCronSessionTargetSessionKey(job.sessionTarget);
   const sessionKey = resolveCronAgentSessionKey({
     cfg,
     agentId,

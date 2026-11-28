@@ -1,6 +1,15 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ProviderModelRouteAuthRequirement } from "../plugin-sdk/provider-model-types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { CronJob } from "./types.js";
+
+export function cronInferencePayload(job: Pick<CronJob, "payload" | "sessionTarget">) {
+  const payload = job.payload;
+  return payload.kind === "systemEvent" ||
+    (payload.kind === "agentTurn" && job.sessionTarget !== "main")
+    ? payload
+    : undefined;
+}
 
 /** Code on the refusal for an automation whose recorded account was removed, signed out or replaced. */
 export const CRON_INFERENCE_ACCOUNT_RETIRED_CODE = "CRON_INFERENCE_ACCOUNT_RETIRED";

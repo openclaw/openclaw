@@ -144,6 +144,31 @@ function legacyJob(id: string, model?: string): CronStoredJob {
   };
 }
 
+it("adopts the main session's account for a saved system event, not the subagent model", async () => {
+  await withAccounts(async (state) => {
+    const cfg = await configure(
+      state,
+      config(state, { model: "openai/gpt-5.5", subagents: { model: "anthropic/claude-opus-4-6" } }),
+    );
+    await saveProfiles(apiProfile("openai:main", "fixture-main"));
+    const job: CronStoredJob = {
+      ...legacyJob("reminder"),
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "Reminder" },
+    };
+    const path = state.statePath("cron", "jobs.json");
+    await saveJobs(path, job);
+    await doctor.withDoctorConfigMaintenance(async () => {
+      await migrate(cfg);
+      expect((await readJobs(path))[0]).toMatchObject({
+        id: job.id,
+        payload: job.payload,
+        inferenceBinding: { provider: "openai", profileId: "openai:main" },
+      });
+    });
+  });
+});
+
 it.each(["model", "provider", "session"] as const)(
   "repairs migrated heartbeat-main on explicit Codex %s runtime twice before scheduled auth",
   async (runtimeSource) => {

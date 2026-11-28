@@ -257,6 +257,8 @@ while the response is pending.
 
 ### Inference account continuity
 
+Main-session system events use the main session’s model, not the scheduled subagent model. When that model uses an eligible stored account, new jobs record the account and repairing Doctor adopts it for saved jobs. A configured API key needs no stored account. Without a configured model, the event cannot complete.
+
 New isolated agent-turn jobs privately retain their selected stored inference account
 and compatible authentication route. OAuth and API keys can remain enabled together:
 changing interactive defaults, profile order, or the job’s plain model selection does

@@ -37,8 +37,9 @@ export async function captureCronInferenceBinding(params: {
   agentId: string;
   model?: string;
   isGmailHook?: boolean;
+  payloadKind?: "agentTurn" | "systemEvent";
   sessionEntry?: SessionEntry;
-  executionSessionEntry?: Pick<SessionEntry, "modelOverride" | "providerOverride">;
+  executionSessionEntry?: SessionEntry;
   /**
    * The entry the cron session takes its runtime override from: the target row of a
    * `session:` job, or what a `current` job carries from its creating conversation.
@@ -62,13 +63,20 @@ export async function captureCronInferenceBinding(params: {
     agentId,
     agentDir,
     workspaceDir,
+    payloadKind: params.payloadKind,
     payloadModel: params.model,
     // Only a persistent execution target supplies model overrides; creator auth stays separate.
     sessionEntry: params.executionSessionEntry ?? {},
     isGmailHook: params.isGmailHook === true,
   });
   if (!model.ok) {
+    if (params.payloadKind === "systemEvent") {
+      return undefined;
+    }
     throw new Error(model.error);
+  }
+  if (params.payloadKind === "systemEvent" && params.executionSessionEntry?.modelSelectionLocked) {
+    return undefined;
   }
   // The account follows the config's runtime policy, so a job binds the account it always has.
   const cliExecutionProvider = resolveCliRuntimeExecutionProvider({
@@ -111,10 +119,12 @@ export async function captureCronInferenceBinding(params: {
     params.sessionEntry?.providerOverride ?? params.sessionEntry?.modelProvider;
   const creatorSession =
     creatorProvider && creatorProvider !== model.provider ? undefined : params.sessionEntry;
+  const authSession =
+    params.payloadKind === "systemEvent" ? params.executionSessionEntry : creatorSession;
   let selection: Awaited<ReturnType<typeof resolveSessionAuthSelection>>;
   if (cliExecutionProvider) {
     // Record the account the CLI backend forwards, not a separate inferred owner.
-    const selectedProfileId = model.configuredProfileId ?? creatorSession?.authProfileOverride;
+    const selectedProfileId = model.configuredProfileId ?? authSession?.authProfileOverride;
     const selected = await resolveCliExecutionAuthSelection({
       cliExecutionProvider,
       authProfileProvider: model.provider,
@@ -125,8 +135,8 @@ export async function captureCronInferenceBinding(params: {
             authProfileId: selectedProfileId,
             authProfileIdSource:
               model.configuredProfileId ||
-              creatorSession?.authProfileOverrideSource === "user" ||
-              creatorSession?.authProfileOverrideSource === "user-link"
+              authSession?.authProfileOverrideSource === "user" ||
+              authSession?.authProfileOverrideSource === "user-link"
                 ? "user"
                 : "auto",
           }
@@ -170,7 +180,7 @@ export async function captureCronInferenceBinding(params: {
       provider: model.provider,
       modelId: model.model,
       configuredProfileId: model.configuredProfileId ?? creatorSession?.authProfileOverride,
-      sessionEntry: model.configuredProfileId ? undefined : creatorSession,
+      sessionEntry: model.configuredProfileId ? undefined : authSession,
       isNewSession: false,
     });
   }
@@ -282,9 +292,9 @@ export async function captureCronInferenceBinding(params: {
       runtime,
       source:
         model.configuredProfileId ||
-        creatorSession?.authProfileOverrideSource === "user" ||
-        creatorSession?.authProfileOverrideSource === "user-link" ||
-        (!creatorSession?.authProfileOverride && selection.source === "user")
+        authSession?.authProfileOverrideSource === "user" ||
+        authSession?.authProfileOverrideSource === "user-link" ||
+        (!authSession?.authProfileOverride && selection.source === "user")
           ? "user"
           : "auto",
     };

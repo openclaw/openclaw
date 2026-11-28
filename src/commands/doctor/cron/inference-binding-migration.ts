@@ -36,6 +36,7 @@ import { prepareSqliteTargetFromSessionStorePath } from "../../../config/session
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
 import {
+  cronInferencePayload,
   normalizeCronInferenceBinding,
   type CronInferenceBinding,
 } from "../../../cron/inference-binding.js";
@@ -110,14 +111,15 @@ export async function maybeRepairCronInferenceBindings(params: {
         // Malformed legacy rows must not abandon adoption for unrelated jobs or partitions.
         // Normalize only resolver input; the committed definition retains every authored field.
         const job = normalizeCronJobCreate(definition);
-        if (!job || job.payload.kind !== "agentTurn" || job.sessionTarget === "main") {
+        const payload = job && cronInferencePayload(job);
+        if (!job || !payload) {
           continue;
         }
         const previous = normalizeCronInferenceBinding(definition.inferenceBinding);
         if (previous && isUserModelAuthProfileId(previous.profileId)) {
           continue;
         }
-        modelRef = job.payload.model;
+        modelRef = payload.kind === "agentTurn" ? payload.model : undefined;
         const agentId = tryResolveCronJobEffectiveAgentId(
           job,
           tryResolveAmbientOwnerAgentId(params.cfg),
@@ -163,8 +165,9 @@ export async function maybeRepairCronInferenceBindings(params: {
           workspaceDir: resolveAgentWorkspaceDir(config, agentId),
           agentConfigOverride: resolveAgentConfig(config, agentId),
           sessionEntry: session.sessionEntry,
-          payloadModel: job.payload.model,
-          isGmailHook: job.payload.externalContentSource === "gmail",
+          payloadKind: payload.kind,
+          payloadModel: modelRef,
+          isGmailHook: payload.kind === "agentTurn" && payload.externalContentSource === "gmail",
         });
         if (!selected.ok) {
           throw new Error(selected.error);
@@ -255,7 +258,9 @@ export async function maybeRepairCronInferenceBindings(params: {
             credential: sessionCredential,
           });
         let explicitProfileId =
-          selected.configuredProfileId ??
+          (payload.kind === "systemEvent" && account.preference?.source === "user"
+            ? account.preference.profileId
+            : selected.configuredProfileId) ??
           ((sessionPin === "user" || sessionPin === "user-link") && compatibleSessionPin
             ? sessionProfileId
             : undefined);

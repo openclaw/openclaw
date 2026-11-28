@@ -1,0 +1,230 @@
+import assert from "node:assert/strict";
+import { execFile, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { once } from "node:events";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+
+// Disposable published-driver prefix, fresh state root, packed candidate, full expected commit.
+const [prefix, root, tarball, commit, version, mode, rawPort] = process.argv.slice(2);
+assert(["stored", "configured-key", "no-model"].includes(mode));
+assert.match(commit, /^[a-f0-9]{40}$/);
+const port = Number(rawPort);
+const run = promisify(execFile);
+const cli = path.join(prefix, "bin/openclaw");
+const pkg = path.join(prefix, "lib/node_modules/openclaw");
+const readJson = async (file) => JSON.parse(await fs.readFile(file, "utf8"));
+assert.equal((await readJson(path.join(pkg, "package.json"))).version, version);
+process.umask(0o077);
+await fs.mkdir(root, { mode: 0o700 });
+const home = path.join(root, "home");
+const state = path.join(root, "state");
+const tmp = path.join(root, "tmp");
+await Promise.all([home, state, tmp].map((dir) => fs.mkdir(dir)));
+const token = randomBytes(24).toString("hex");
+const env = {
+  ...process.env,
+  HOME: home,
+  TMPDIR: tmp,
+  TMP: tmp,
+  TEMP: tmp,
+  npm_config_prefix: prefix,
+  PATH: prefix + "/bin:" + process.env.PATH,
+  OPENCLAW_STATE_DIR: state,
+  OPENCLAW_CONFIG_PATH: path.join(state, "openclaw.json"),
+  OPENCLAW_GATEWAY_PORT: String(port),
+  OPENCLAW_GATEWAY_TOKEN: token,
+};
+const config = {
+  gateway: { mode: "local", bind: "loopback", port, auth: { mode: "token", token } },
+  agents: {
+    entries: { main: { workspace: path.join(root, "workspace"), heartbeat: { every: "0m" } } },
+    defaults: { systemAgent: { agentId: "main" } },
+  },
+  cron: { enabled: true },
+  plugins: { enabled: mode !== "no-model" },
+};
+const text = "Report the saved system event: upgrade-event-fixture";
+const requestLog = path.join(root, "requests.jsonl");
+const fixtureKey = "synthetic-automation-proof-only";
+const children = new Set();
+async function start(exe, args, name, extra = {}) {
+  const log = await fs.open(path.join(root, name + ".log"), "w", 0o600);
+  try {
+    const proc = spawn(exe, args, {
+      cwd: root,
+      env: { ...env, ...extra },
+      stdio: ["ignore", log.fd, log.fd],
+    });
+    children.add(proc);
+    return proc;
+  } finally {
+    await log.close();
+  }
+}
+async function stop(proc) {
+  if (proc.exitCode === null && proc.signalCode === null) {
+    const closed = once(proc, "close");
+    proc.kill();
+    await closed;
+  }
+  children.delete(proc);
+}
+async function gateway(name) {
+  const proc = await start(
+    cli,
+    ["gateway", "--bind", "loopback", "--port", String(port), "--allow-unconfigured"],
+    name,
+  );
+  for (let i = 0; i < 180; i++) {
+    if (proc.exitCode !== null || proc.signalCode !== null)
+      throw new Error(name + " exited before readiness");
+    if (
+      await fetch("http://127.0.0.1:" + port + "/readyz").then(
+        (r) => r.ok,
+        () => false,
+      )
+    )
+      return proc;
+    await delay(500);
+  }
+  throw new Error(name + " not ready");
+}
+async function call(args, extra = {}) {
+  return (await run(cli, args, { cwd: root, env, maxBuffer: 16 * 1024 * 1024, ...extra })).stdout;
+}
+async function occurrence(id) {
+  try {
+    await call(["cron", "run", id, "--wait", "--wait-timeout", "120s", "--json"]);
+  } catch (error) {
+    if (!error.stdout) throw error;
+  }
+  const history = JSON.parse(await call(["cron", "runs", "--id", id, "--limit", "1", "--json"]));
+  assert.equal(history.entries[0]?.jobId, id);
+  return history.entries[0];
+}
+try {
+  if (mode !== "no-model") {
+    config.agents.defaults.model = { primary: "proof/proof-model" };
+    config.models = {
+      providers: {
+        proof: {
+          api: "openai-completions",
+          baseUrl: "http://127.0.0.1:" + (port + 100) + "/v1",
+          apiKey: fixtureKey,
+          models: [{ id: "proof-model", name: "Proof", contextWindow: 128000, maxTokens: 4096 }],
+        },
+      },
+    };
+    const control = path.join(root, "model.json");
+    await fs.writeFile(control, JSON.stringify({ text: "UPGRADE_EVENT_OK" }));
+    await start(
+      process.execPath,
+      [fileURLToPath(new URL("../../mock-openai-server.mjs", import.meta.url))],
+      "model",
+      {
+        MOCK_PORT: String(port + 100),
+        MOCK_REQUEST_LOG: requestLog,
+        MOCK_RESPONSE_CONTROL: control,
+      },
+    );
+  }
+  await fs.writeFile(env.OPENCLAW_CONFIG_PATH, JSON.stringify(config), { mode: 0o600 });
+  if (mode === "stored") {
+    const child = spawn(
+      cli,
+      [
+        "models",
+        "auth",
+        "paste-api-key",
+        "--provider",
+        "proof",
+        "--profile-id",
+        "proof:fixture",
+        "--agent",
+        "main",
+      ],
+      { cwd: root, env, stdio: ["pipe", "ignore", "inherit"] },
+    );
+    const done = once(child, "close");
+    child.stdin.end(fixtureKey + "\n");
+    assert.equal((await done)[0], 0);
+  }
+  const old = await gateway("old-gateway");
+  const job = JSON.parse(
+    await call([
+      "cron",
+      "add",
+      "--agent",
+      "main",
+      "--every",
+      "7d",
+      "--wake",
+      "next-heartbeat",
+      "--session",
+      "main",
+      "--name",
+      "upgrade-event",
+      "--system-event",
+      text,
+      "--json",
+    ]),
+  );
+  const before = await occurrence(job.id);
+  assert.equal(before.status, "ok");
+  await stop(old);
+  const updateEnv = { ...env };
+  delete updateEnv.OPENCLAW_GATEWAY_TOKEN;
+  const update = JSON.parse(
+    await call(
+      [
+        "update",
+        "--channel",
+        "stable",
+        "--tag",
+        "file:" + tarball,
+        "--no-restart",
+        "--yes",
+        "--json",
+      ],
+      { env: updateEnv },
+    ),
+  );
+  assert.equal(update.status, "ok");
+  const installed = (await readJson(path.join(pkg, "dist/build-info.json"))).commit;
+  assert.equal(installed, commit);
+  await fs.writeFile(requestLog, "");
+  await gateway("new-gateway");
+  const after = await occurrence(job.id);
+  assert(after.runAtMs > before.runAtMs);
+  const requests = (await fs.readFile(requestLog, "utf8"))
+    .split("\n")
+    .filter((line) => line.includes("upgrade-event-fixture")).length;
+  console.log(
+    JSON.stringify({
+      version,
+      mode,
+      installed,
+      jobId: job.id,
+      before: before.status,
+      after: after.status,
+      error: after.error,
+      model: after.model,
+      requests,
+      steps: update.steps?.map(({ name, exitCode }) => ({ name, exitCode })),
+    }),
+  );
+  if (mode === "no-model") {
+    assert.equal(after.status, "error");
+    assert.match(after.error, /No model is configured/i);
+    assert.equal(requests, 0);
+  } else {
+    assert.equal(after.status, "ok", after.error);
+    assert(requests > 0, "saved event did not reach the model");
+  }
+} finally {
+  for (const child of [...children].reverse()) await stop(child);
+}
