@@ -3,6 +3,7 @@ package ai.openclaw.app
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
+import ai.openclaw.app.gateway.GatewayTlsParams
 import ai.openclaw.app.ui.controlUiOriginRule
 import ai.openclaw.app.ui.desktopUrl
 import ai.openclaw.app.ui.sessionDashboardUrl
@@ -84,7 +85,10 @@ class GatewayFleetSelectionTest {
       )
 
     assertTrue(endpoint?.tlsEnabled == true)
-    assertEquals("https://gateway.example:443", gatewayControlPageBaseUrl(requireNotNull(endpoint)))
+    assertEquals(
+      "https://gateway.example:443",
+      gatewayControlPageBaseUrl(requireNotNull(endpoint), GatewayTlsParams(expectedFingerprint = null)),
+    )
   }
 
   @Test
@@ -135,7 +139,8 @@ class GatewayControlPageContextPathTest {
       )
 
     cases.forEach { (endpoint, expected) ->
-      assertEquals(endpoint.contextPath, expected, gatewayControlPageBaseUrl(endpoint))
+      val tls = if (endpoint.tlsEnabled) GatewayTlsParams(expectedFingerprint = null) else null
+      assertEquals(endpoint.contextPath, expected, gatewayControlPageBaseUrl(endpoint, tls))
     }
   }
 
@@ -144,6 +149,7 @@ class GatewayControlPageContextPathTest {
     val baseUrl =
       gatewayControlPageBaseUrl(
         GatewayEndpoint.manual("gateway.example", 443, true, "/tenant%2Fgateway%20west"),
+        GatewayTlsParams(expectedFingerprint = null),
       )
 
     assertEquals(

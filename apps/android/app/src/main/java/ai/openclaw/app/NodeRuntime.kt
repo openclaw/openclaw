@@ -4907,7 +4907,7 @@ class NodeRuntime internal constructor(
     }
     page =
       GatewayControlPage(
-        baseUrl = gatewayControlPageBaseUrl(endpoint),
+        baseUrl = gatewayControlPageBaseUrl(endpoint, connection?.tls),
         // Reflect the admitted connection's TLS, not merely a saved preference:
         // an active pin must gate embedded auth; a saved-but-inactive pin must not.
         tlsFingerprintSha256 = connection?.tls?.expectedFingerprint,
@@ -6318,7 +6318,11 @@ class NodeRuntime internal constructor(
         _gatewayAccentArgb.value = resolveGatewayAccentArgb(config)
         _gatewaySourcePreviewConfig.value =
           connectedEndpoint?.let { endpoint ->
-            resolveGatewaySourcePreviewConfig(config, gatewayControlPageBaseUrl(endpoint), gatewayScope.generation)
+            resolveGatewaySourcePreviewConfig(
+              config,
+              gatewayControlPageBaseUrl(endpoint, connectionManager.resolveTlsParams(endpoint)),
+              gatewayScope.generation,
+            )
           }
       }
       val profileRead = pinProfileRead ?: fetchProfileAppearancePreferences(gatewayScope, lease, refreshGeneration)
@@ -8851,9 +8855,12 @@ internal fun gatewayRegistryEntry(
   )
 }
 
-/** HTTP(S) base URL serving the connected gateway's Control UI pages. */
-internal fun gatewayControlPageBaseUrl(endpoint: GatewayEndpoint): String {
-  val scheme = if (endpoint.tlsEnabled) "https" else "http"
+/** Control UI origin. A null TLS decision is cleartext; any socket TLS decision is HTTPS. */
+internal fun gatewayControlPageBaseUrl(
+  endpoint: GatewayEndpoint,
+  tls: GatewayTlsParams?,
+): String {
+  val scheme = if (tls != null) "https" else "http"
   return "$scheme://${formatGatewayAuthority(endpoint.host, endpoint.port)}${endpoint.contextPath}"
 }
 
