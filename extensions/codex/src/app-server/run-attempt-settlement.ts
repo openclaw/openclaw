@@ -1,4 +1,5 @@
 import { addAbortListener } from "node:events";
+import { setTimeout as delay } from "node:timers/promises";
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS } from "./attempt-timeouts.js";
@@ -8,6 +9,8 @@ import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
 import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+
+const LATE_NATIVE_COMMAND_RESULT_GRACE_MS = 150;
 
 export async function beginCodexAttemptSettlement(
   resources: StartedCodexAttemptResources,
@@ -104,6 +107,18 @@ export async function beginCodexAttemptSettlement(
         });
       }
       // Native exit may arrive while the inventory RPC is pending.
+      await drainNotificationQueue();
+    }
+    const retained = readRetainedNativeCommands?.();
+    if (
+      !state.pluginRuntimeRefreshStop &&
+      [...activeProjector.getPendingNativeCommands()].some(([id]) => !retained?.has(id))
+    ) {
+      // Codex can emit command exits just after turn/completed, after the queue
+      // and inventory have already drained. Give only those exits a bounded grace.
+      await delay(LATE_NATIVE_COMMAND_RESULT_GRACE_MS, undefined, {
+        signal: runAbortController.signal,
+      }).catch(() => undefined);
       await drainNotificationQueue();
     }
     activeProjector.prepareTerminalToolResultCheckpoint(toolBridge.telemetry, {
