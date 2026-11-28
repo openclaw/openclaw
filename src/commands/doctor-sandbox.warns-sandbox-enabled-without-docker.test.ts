@@ -295,18 +295,52 @@ describe("sandbox health", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
+  const guestRole = {
+    roles: {
+      definitions: {
+        guest: { sessions: { others: "view" }, agents: "*", scopes: [], sandbox: "required" },
+      },
+    },
+  } as NonNullable<OpenClawConfig["gateway"]>;
+  const agentOn = (network: string) => ({ sandbox: { mode: "all" as const, docker: { network } } });
   it.each([
-    ["an agent with egress over defaults without it", "none", "bridge", false],
-    ["an agent without egress over defaults with it", "bridge", "none", true],
+    [
+      "an agent with egress over defaults without it",
+      {
+        defaults: { sandbox: { docker: { network: "none" } } },
+        entries: { work: agentOn("bridge") },
+      },
+      undefined,
+      false,
+    ],
+    [
+      "an agent without egress over defaults with it",
+      {
+        defaults: { sandbox: { docker: { network: "bridge" } } },
+        entries: { work: agentOn("none") },
+      },
+      undefined,
+      true,
+    ],
+    [
+      "any sandbox without egress among sandboxes with it",
+      {
+        defaults: { sandbox: { mode: "all", docker: { network: "bridge" } } },
+        entries: { main: {}, work: agentOn("none") },
+      },
+      undefined,
+      true,
+    ],
+    [
+      "a role-required sandbox without egress",
+      { entries: { work: agentOn("bridge"), other: {} } },
+      guestRole,
+      true,
+    ],
   ] as const)(
     "probes the network namespace from each sandbox's resolved network: %s",
-    async (_name, defaultsNetwork, agentNetwork, probed) => {
-      await probeOnLinux({
-        agents: {
-          defaults: { sandbox: { docker: { network: defaultsNetwork } } },
-          entries: { work: { sandbox: { mode: "all", docker: { network: agentNetwork } } } },
-        },
-      });
+    async (_name, agents, gateway, probed) => {
+      await probeOnLinux({ agents, gateway } as OpenClawConfig);
       expect(probeCodexWorkspaceWriteSandbox.mock.calls.length > 0).toBe(probed);
     },
   );
