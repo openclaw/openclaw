@@ -132,6 +132,8 @@ type OpenClawPluginToolContextBase = {
   requesterSenderId?: string;
   /** Trusted owner bit from inbound context (runtime-provided, not tool args). */
   senderIsOwner?: boolean;
+  /** True when projecting a durable session-stable tool catalog rather than the live executable surface. */
+  stableCatalog?: boolean;
   /** Host-resolved memory partition for this turn. Providers must not reconstruct it. */
   memoryAudience?: MemoryAudience;
   /** Stable identity for one provider-owned pre-compaction flush cycle. */

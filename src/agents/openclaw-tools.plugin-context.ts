@@ -37,6 +37,7 @@ export type OpenClawPluginToolOptions = Pick<
   | "modelContextWindowTokens"
   | "requesterSenderId"
   | "senderIsOwner"
+  | "stableCatalog"
   | "memoryAudience"
   | "memoryFlush"
   | "conversationReadOrigin"
@@ -154,6 +155,7 @@ export function resolveOpenClawPluginToolInputs(params: {
       nativeChannelId: options?.nativeChannelId,
       requesterSenderId: options?.requesterSenderId ?? undefined,
       senderIsOwner: options?.senderIsOwner,
+      ...(options?.stableCatalog ? { stableCatalog: true as const } : {}),
       memoryAudience: options?.memoryAudience,
       memoryFlush: options?.memoryFlush,
       assertMemoryAudienceCurrent: options?.memoryAudience

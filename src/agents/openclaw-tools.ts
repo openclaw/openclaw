@@ -26,7 +26,10 @@ import {
   resolveOpenClawPluginToolsForOptions,
   resolveOpenClawPluginToolsForOptionsAsync,
 } from "./openclaw-plugin-tools.js";
-import { resolveSessionToolListingClientCaps } from "./openclaw-tools.client-caps.js";
+import {
+  createSessionTaskSuggestionTools,
+  resolveSessionToolListingClientCaps,
+} from "./openclaw-tools.client-caps.js";
 import { finalizeOpenClawTools } from "./openclaw-tools.finalize.js";
 import { resolveCapturedOpenClawToolsFsPolicy } from "./openclaw-tools.fs-policy.js";
 import { createHostedGatewayTools } from "./openclaw-tools.gateway.js";
@@ -93,7 +96,6 @@ import { createSessionsTool } from "./tools/sessions-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createSkillLibraryTool } from "./tools/skill-library-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
-import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
 import { createTerminalTool } from "./tools/terminal-tool.js";
 import { createThemeTool } from "./tools/theme-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
@@ -553,13 +555,15 @@ function* createOpenClawToolsSteps(
                 ...createAvailablePortalTools(options),
               ]),
         ]),
-    ...(!embedded && sessionKey && options?.taskSuggestionDeliveryMode === "gateway"
-      ? createTaskSuggestionTools({
-          sessionKey,
-          agentId: sessionAgentId,
-          cwd: resolveWorkspaceRoot(options?.cwd ?? options?.workspaceDir ?? inferredWorkspaceDir),
-        })
-      : []),
+    ...createSessionTaskSuggestionTools({
+      embedded,
+      sessionKey,
+      agentId: sessionAgentId,
+      cwd: resolveWorkspaceRoot(options?.cwd ?? options?.workspaceDir ?? inferredWorkspaceDir),
+      scheduledCaller,
+      taskSuggestionDeliveryMode: options?.taskSuggestionDeliveryMode,
+      listingClientCaps: options?.listingClientCaps,
+    }),
     includeMessageTool && (messageToolAvailable || options?.retainUnavailableMessageTool)
       ? messageTool
       : null,

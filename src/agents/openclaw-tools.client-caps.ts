@@ -1,3 +1,4 @@
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { gateAgentToolExecution } from "./agent-tool-availability.js";
 import { resolveSessionCapabilityEntry } from "./subagents/spawn/subagent-capabilities.js";
@@ -6,6 +7,7 @@ import type {
   SessionCapabilityStore,
 } from "./subagents/spawn/subagent-session-store.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
 
 /** Read the same session-owned fact for coding and standalone tool assembly. */
 export function resolveSessionToolListingClientCaps(params: {
@@ -52,4 +54,42 @@ export function filterToolsByClientCaps(
           )
         : tool,
     );
+}
+
+/**
+ * List task-suggestion tools whenever the current turn has a live gateway sink
+ * OR the session's recorded listing caps include `task-suggestions` (for
+ * non-scheduled turns), gating execution whenever no live gateway sink is active.
+ */
+export function createSessionTaskSuggestionTools(params: {
+  embedded: boolean;
+  sessionKey?: string;
+  agentId?: string;
+  cwd?: string;
+  scheduledCaller: boolean;
+  taskSuggestionDeliveryMode?: "gateway";
+  listingClientCaps?: string[];
+}): AnyAgentTool[] {
+  const executable = params.taskSuggestionDeliveryMode === "gateway";
+  const listed =
+    !params.embedded &&
+    Boolean(params.sessionKey) &&
+    (executable ||
+      (!params.scheduledCaller &&
+        params.listingClientCaps?.includes(GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS) === true));
+  if (!listed || !params.sessionKey) {
+    return [];
+  }
+  return createTaskSuggestionTools({
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    cwd: params.cwd ?? process.cwd(),
+  }).map((tool) =>
+    executable
+      ? tool
+      : gateAgentToolExecution(
+          tool,
+          `${tool.name} requires a connected requesting client with ${GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS}. Ask again from the open Control UI.`,
+        ),
+  );
 }

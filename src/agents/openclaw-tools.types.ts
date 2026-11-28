@@ -104,6 +104,8 @@ export type OpenClawSharedToolsOptions = {
   runtimeToolAllowlist?: string[];
   /** The session lists one fixed set: the run allowlist gates calls, never construction. */
   fixedToolListing?: boolean;
+  /** Project durable session-stable catalog definitions. Execution still enforces current turn authority. */
+  stableCatalog?: boolean;
   /** Session-owned Gateway publication surface; the broker checks current identity and authority. */
   githubPublicationAvailable?: boolean;
   /** Admitted session is in its default workspace. The move checks live authority separately. */

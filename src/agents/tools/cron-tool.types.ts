@@ -86,6 +86,8 @@ export type CronToolOptions = {
   /** Visible fail-closed reason when a queued local turn cannot retain fresh MCP authority. */
   creatorAuthorityUnavailableReason?: "queued-local-operator-configured-mcp";
   selfRemoveOnlyJobId?: string;
+  /** Project the session's durable catalog schema and description. Execution still enforces current grants. */
+  stableCatalog?: boolean;
   runId?: string;
 };
 

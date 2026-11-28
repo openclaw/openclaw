@@ -41,6 +41,7 @@ import {
   isSystemAgentOnlyCodexDynamicToolAllowlist,
   normalizeCodexDynamicToolName,
 } from "./dynamic-tool-profile.js";
+import { resolveCodexStableCatalogOptions } from "./dynamic-tool-stable-catalog.js";
 import {
   resolveCodexNodeExecToolOverrides,
   prepareCodexNativeExecutionPolicyForRun,
@@ -186,6 +187,13 @@ export async function buildDynamicTools(
       nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
     });
     const messageToolProvider = resolveCodexMessageToolProvider(params);
+    const stableCatalogOptions = await resolveCodexStableCatalogOptions({
+      attempt: params,
+      ignoreRuntimePlan: input.ignoreRuntimePlan,
+      sessionAgentId: input.sessionAgentId,
+      sandboxSessionKey: input.sandboxSessionKey,
+      messageToolProvider,
+    });
     const webFetchHostnameAllowlistRef: { value?: string[] } = {};
     const toolConstructionPlan = resolveCodexToolConstructionPlan(
       input.sandbox,
@@ -196,6 +204,7 @@ export async function buildDynamicTools(
       agentId: input.sessionAgentId,
       policyAgentId: input.policyAgentId,
       ...toolRunContext,
+      ...stableCatalogOptions,
       exec: {
         ...params.execOverrides,
         ...(input.sessionPermissionPolicy ? { mode: input.sessionPermissionPolicy.execMode } : {}),
@@ -209,8 +218,6 @@ export async function buildDynamicTools(
       sandbox: input.sandbox,
       requireWorkspaceOnly: params.requireWorkspaceOnly,
       ...(toolConstructionPlan ? { toolConstructionPlan } : {}),
-      messageProvider: messageToolProvider,
-      toolPolicyMessageProvider: params.messageProvider ?? params.messageChannel,
       // Codex dispatches dynamic tools itself, so no tool-start handler reserves a
       // blocking question's prompt. Hand the tools this run's own way to show one.
       ...(params.onToolResult

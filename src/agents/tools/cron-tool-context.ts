@@ -1,10 +1,48 @@
 import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { getRuntimeConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isCronModelManagementAllowed } from "../../gateway/cron-creator-authority-grant.js";
+import { isCronSessionKey } from "../../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { REMINDER_CONTEXT_MESSAGES_MAX } from "./cron-tool-schema.js";
-import type { ChatMessage, GatewayToolCaller } from "./cron-tool.types.js";
+import type { ChatMessage, CronToolOptions, GatewayToolCaller } from "./cron-tool.types.js";
 import type { GatewayCallOptions } from "./gateway.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
+
+export function resolveCronToolCatalogShape(params: {
+  opts?: CronToolOptions;
+  config?: OpenClawConfig;
+  managementAuthority?: { managementOnly: boolean };
+  activeRun: boolean;
+  nextCheckEnabled: boolean;
+}): {
+  selfRemoveOnly: boolean;
+  management: "only" | "also" | undefined;
+  managementOnly: boolean | undefined;
+  activeRun: boolean;
+  nextCheckEnabled: boolean;
+} {
+  const selfRemoveOnly =
+    Boolean(params.opts?.selfRemoveOnlyJobId?.trim()) &&
+    (!params.opts?.agentSessionKey?.trim() || isCronSessionKey(params.opts.agentSessionKey));
+  if (params.opts?.stableCatalog === true && !selfRemoveOnly) {
+    return {
+      selfRemoveOnly,
+      management: isCronModelManagementAllowed(params.config) ? "also" : undefined,
+      managementOnly: false,
+      activeRun: false,
+      nextCheckEnabled: false,
+    };
+  }
+  return {
+    selfRemoveOnly,
+    management:
+      params.managementAuthority && (params.managementAuthority.managementOnly ? "only" : "also"),
+    managementOnly: params.managementAuthority?.managementOnly,
+    activeRun: params.activeRun,
+    nextCheckEnabled: params.nextCheckEnabled,
+  };
+}
 
 const REMINDER_CONTEXT_PER_MESSAGE_MAX = 220;
 const REMINDER_CONTEXT_TOTAL_MAX = 700;

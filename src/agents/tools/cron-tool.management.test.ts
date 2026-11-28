@@ -211,6 +211,65 @@ it("visibly refuses unsupported next_check", async () => {
   });
 });
 
+it("keeps identical description and parameters under stableCatalog across management modes while enforcing execute()", async () => {
+  const agentSessionKey = "agent:main:control-ui";
+  const withoutGrant = createCronTool({ agentSessionKey, stableCatalog: true });
+  let channelOwnerStable: ReturnType<typeof createCronTool> | undefined;
+  let managementOnlyStable: ReturnType<typeof createCronTool> | undefined;
+
+  await withCronManagementCaller(
+    "stable-channel-owner",
+    async (identity) => {
+      channelOwnerStable = createCronTool({
+        runId: "stable-channel-owner",
+        agentSessionKey: identity.sessionKey,
+        stableCatalog: true,
+      });
+    },
+    "channel-owner",
+  );
+
+  await withCronManagementCaller(
+    "stable-management-only",
+    async (identity) => {
+      const calls: Array<[string, unknown]> = [];
+      using _ = vi
+        .spyOn(gatewayModule, "callGatewayTool")
+        .mockImplementation(async (method, _opts, params) => {
+          calls.push([method, params]);
+          return { id: jobId } as never;
+        });
+      managementOnlyStable = createCronTool({
+        runId: "stable-management-only",
+        agentSessionKey: identity.sessionKey,
+        stableCatalog: true,
+      });
+      await expect(
+        managementOnlyStable.execute("stable-add", {
+          action: "add",
+          job: {
+            name: "blocked",
+            schedule: { kind: "every", everyMs: 60_000 },
+            payload: { kind: "agentTurn", message: "blocked" },
+          },
+        }),
+      ).rejects.toThrow("can only list, get, update, run, remove, or bind automations");
+      for (const action of ["status", "runs", "wake"]) {
+        await expect(
+          managementOnlyStable.execute(`stable-${action}`, { action, jobId, text: "hi" }),
+        ).rejects.toThrow("can only list, get, update, run, remove, or bind automations");
+      }
+      expect(calls).toEqual([]);
+    },
+    "unknown",
+  );
+
+  expect(channelOwnerStable!.description).toBe(withoutGrant.description);
+  expect(channelOwnerStable!.parameters).toEqual(withoutGrant.parameters);
+  expect(managementOnlyStable!.description).toBe(withoutGrant.description);
+  expect(managementOnlyStable!.parameters).toEqual(withoutGrant.parameters);
+});
+
 describe("cron next_check action", () => {
   const RUN_ID = "paced-run";
   const JOB_ID = "paced-job";

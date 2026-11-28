@@ -254,6 +254,62 @@ describe("cron model schema regressions", () => {
       "Do not ask again or disable the saved stream solely because no user approval reply is visible in chat",
     );
   });
+
+  it("projects a session-stable catalog under stableCatalog while preserving enforcement", async () => {
+    const agentSessionKey = "agent:main:stable-catalog-proof";
+    const stableNoGrant = createCronTool({ agentSessionKey, stableCatalog: true });
+    const stableWithPolicyOff = createCronTool({
+      agentSessionKey,
+      stableCatalog: true,
+      config: {
+        tools: { gatewayPolicy: { allow: ["automations"], automations: { scope: "caller" } } },
+      },
+    });
+    const callerScoped = createCronTool({
+      agentSessionKey,
+      config: {
+        tools: { gatewayPolicy: { allow: ["automations"], automations: { scope: "caller" } } },
+      },
+    });
+    // Under default Gateway policy (model management allowed), stableCatalog advertises management="also".
+    expect(propertyAt(stableNoGrant.parameters, "job.schedule.kind")?.enum).toContain("on-exit");
+    expect(propertyAt(stableNoGrant.parameters, "job.payload.kind")?.enum).toContain("command");
+    expect(propertyAt(stableNoGrant.parameters, "job.agentId")).toBeDefined();
+    // When Gateway policy restricts model management to caller scope, stableCatalog matches caller-scoped shape.
+    expect(stableWithPolicyOff.description).toBe(callerScoped.description);
+    expect(stableWithPolicyOff.parameters).toEqual(callerScoped.parameters);
+    expect(propertyAt(stableWithPolicyOff.parameters, "job.schedule.kind")?.enum).not.toContain(
+      "on-exit",
+    );
+    // Cron-session selfRemoveOnly keeps its self-scoped schema even when stableCatalog is set.
+    const cronSelf = createCronTool({
+      agentSessionKey: "agent:main:cron:self-job",
+      selfRemoveOnlyJobId: "self-job",
+      stableCatalog: true,
+    });
+    expect(cronSelf.parameters).toHaveProperty("properties.action.enum", [
+      "status",
+      "list",
+      "get",
+      "remove",
+      "runs",
+    ]);
+    // Without management authority, execute() still fails closed on on-exit/command mutations.
+    await expect(
+      stableNoGrant.execute("stable-on-exit-add", {
+        action: "add",
+        job: { schedule: { kind: "on-exit", command: "make" } },
+      }),
+    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
+    await expect(
+      stableNoGrant.execute("stable-on-exit-update", {
+        action: "update",
+        jobId: "job-1",
+        job: { schedule: { kind: "on-exit", command: "make" } },
+      }),
+    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
 });
 
 installCronToolTestFixture();
