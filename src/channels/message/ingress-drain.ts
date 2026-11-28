@@ -252,10 +252,20 @@ export function createChannelIngressDrainOwner<
   ) => {
     const { claim } = state;
     if (err instanceof GatewayDrainingError) {
-      // Root dispatch closes before durable transport admission during restart.
-      // Preserve the row for the successor without spending its failure budget.
-      await releaseClaim(claim, { recordAttempt: false });
-      return;
+      // Let the normal retry policy handle GatewayDrainingError so that
+      // - the attempt is recorded and backoff is applied,
+      // - after the retry limit is exceeded the event is dead-lettered,
+      // - and a storm of re-claims is avoided even when global admission is open
+      //   but a per-session admission (e.g. a root work lane) is closed.
+      //
+      // The original intent of releasing without recording an attempt was to
+      // preserve the row for a successor dispatch after a gateway restart
+      // without spending the failure budget. That concern is addressed by the
+      // retry policy itself: when the limit is exceeded the claim is failed
+      // and the row is properly settled, and on restart the row will be
+      // unclaimed and can be re-admitted when the lane opens.
+      //
+      // Fall through to retry.failure() below.
     }
     const disposition = retry.failure({
       err,
