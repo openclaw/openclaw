@@ -559,8 +559,7 @@ private fun projectContent(content: JsonElement?): JsonElement? =
               }
 
               is JsonObject -> {
-                val type = part.stringOrNull("type")
-                if (type != null && type != "text") continue
+                if (!isWearTextContentType(part["type"])) continue
                 part.stringOrNull("text")
               }
 
