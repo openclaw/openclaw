@@ -142,14 +142,11 @@ its original rollback paths, so a later failed update can refuse automatic
 rollback after relocation. It preserves the moved state and retained snapshots;
 follow its candidate-Doctor recovery guidance before restarting or downgrading.
 
-`openclaw doctor --fix` owns general persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies current-format rows, records a migration receipt, then removes the retired source. Gateway, node-host, and local CLI startup leave general legacy repair to Doctor. Normal versioned database opening, native initialization, and recovery of valid current config remain available.
+`openclaw doctor --fix` owns general persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies current-format rows, records a migration receipt, then removes the retired source. Gateway boot invokes the existing migration owners in place; node-host and local CLI startup leave general legacy repair to Doctor.
 
-The container image entrypoint automatically runs `openclaw doctor --fix --non-interactive`
-against the mounted state and config before starting the Gateway. If you override
-that entrypoint, run Doctor explicitly against the same mounts. Doctor performs
-the required legacy repairs under exclusive maintenance ownership and preserves
-verified SQLite copies before schema upgrades, along with its normal config
-backups and legacy-file archives. Gateway startup then checks runtime readiness.
+The container image entrypoint starts the Gateway directly against the mounted
+state and config. Boot converges supported schemas and legacy state before
+readiness; installed plugin packages converge in the background after readiness.
 An unsafe required store exits with code 78 and its specific reason. Refused default
 or system agents never produce a healthy readiness response. Unused legacy stores,
 including loose `agent/settings.json` files without an agent owner, remain untouched

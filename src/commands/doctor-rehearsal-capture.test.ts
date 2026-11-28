@@ -166,7 +166,6 @@ it("keeps config and declared plugin resources while excluding disposable core i
             const result = await preserveDoctorOriginalState({
               root: process.cwd(),
               env: process.env,
-              runtime,
               signal: maintenance!.signal,
               assertCurrent: scope.assertAdmission,
             });
@@ -263,7 +262,6 @@ it("keeps config and declared plugin resources while excluding disposable core i
             await preserveDoctorOriginalState({
               root: process.cwd(),
               env: process.env,
-              runtime,
               signal: maintenance!.signal,
               assertCurrent: scope.assertAdmission,
               writeAuthority: {

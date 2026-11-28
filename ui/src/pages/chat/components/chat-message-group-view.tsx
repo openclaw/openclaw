@@ -108,6 +108,7 @@ function PreparedMessage(props: {
   index: number;
   options: NativeMessageGroupOptions & Pick<GroupedMessageOptions, "replyLine">;
   prepared?: ReturnType<typeof prepareGroupMessage>;
+  completionDelay?: number;
   /** Off when the row under a flat reply carries its reactions. */
   bubbleReactions?: boolean;
 }) {
@@ -181,6 +182,7 @@ function PreparedMessage(props: {
       >
         <ChatSubagentCompletion
           completions={messageSubagentCompletions(props.item.message)}
+          elapsed={props.completionDelay}
           onOpenSession={
             props.options.subagents?.onOpenSession ?? props.options.subagents?.onOpenSubagent
           }
@@ -241,6 +243,7 @@ export function MessageGroupContent(props: {
   group: MessageGroupData;
   options: NativeMessageGroupOptions;
   footerReactionMessageKey?: string;
+  completionDelay?: { key: string; elapsed: number };
 }) {
   const options = createMemo(() => resolveFileLinkOwnerOptions(props.group, props.options));
   return (
@@ -257,6 +260,9 @@ export function MessageGroupContent(props: {
             item={item()}
             index={index()}
             options={{ ...options(), isForwarded: hasForwardedSource(props.group) }}
+            completionDelay={
+              props.completionDelay?.key === item().key ? props.completionDelay.elapsed : undefined
+            }
             bubbleReactions={props.footerReactionMessageKey !== item().key}
           />
         )}

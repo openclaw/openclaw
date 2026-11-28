@@ -6,6 +6,7 @@ import type {
   AnyAgentTool,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { Type } from "typebox";
 import { afterEach, assert, describe, expect, it, vi, type Mock } from "vitest";
@@ -102,6 +103,113 @@ it("serializes mixed tool output and supplies the empty-output fallback", async 
   });
 });
 
+// The prefix-only cut dropped the end of the output without a notice. File tools run in the
+// hosted VM, so the bound names no Gateway path.
+it("bounds oversized output with head, tail and a size-only notice", async () => {
+  const full = [...Array.from({ length: 6_000 }, (_, i) => `row ${i}`), "LAST-ROW"].join("\n");
+  const tool: AnyAgentTool = {
+    name: "fixture_large",
+    label: "Fixture large",
+    description: "Returns synthetic oversized content",
+    parameters: Type.Object({}, { additionalProperties: false }),
+    execute: async () => ({ content: [{ type: "text", text: full }], details: {} }),
+  };
+  await withFixtureTool(tool, async (surface) => {
+    const result = await execute(surface, tool.name, "large", {});
+    assert(result.success);
+    expect(result.output.length).toBeLessThan(full.length);
+    expect(result.output).toContain("row 0\n");
+    expect(result.output).toMatch(/LAST-ROW$/u);
+    expect(result.output).toMatch(/\[\.\.\. \d+ chars omitted\]/u);
+    expect(result.output).not.toContain("Full output:");
+  });
+});
+
+// The adapter's own cap on the joined output cut the end of a bounded result: an image block
+// before one untrusted envelope pushed the end marker past the cap.
+it("keeps both untrusted-content markers when an image precedes the envelope", async () => {
+  const wrapped = wrapExternalContent(
+    Array.from({ length: 40_000 }, (_, i) => `line ${i}`).join("\n"),
+    { source: "web_fetch" },
+  );
+  const id = /<<<EXTERNAL_UNTRUSTED_CONTENT id="([a-f0-9]{16})">>>/u.exec(wrapped)?.[1];
+  assert(id);
+  const tool: AnyAgentTool = {
+    name: "fixture_envelope",
+    label: "Fixture envelope",
+    description: "Returns a synthetic wrapped page after an image",
+    parameters: Type.Object({}, { additionalProperties: false }),
+    execute: async () => ({
+      content: [
+        { type: "image", data: "AA==", mimeType: "image/png" },
+        { type: "text", text: wrapped },
+      ],
+      details: {},
+    }),
+  };
+  await withFixtureTool(tool, async (surface) => {
+    const result = await execute(surface, tool.name, "envelope", {});
+    assert(result.success);
+    const placeholder = "[Image result omitted from Agents API function output]\n";
+    expect(result.output.startsWith(placeholder)).toBe(true);
+    expect(result.output).toContain(`<<<EXTERNAL_UNTRUSTED_CONTENT id="${id}">>>`);
+    // The closed frame, then the trusted notice outside it, last.
+    const end = `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="${id}">>>\n\n`;
+    const notice = /\[\.\.\. (\d+) chars omitted\]$/u.exec(result.output);
+    assert(notice);
+    expect(result.output.slice(0, notice.index).endsWith(end)).toBe(true);
+    // The notice reports what this one cut removed (a second pass once reported a few chars):
+    // every other char sent is the page's, except the placeholder, the blank line and the
+    // `\n…\n` between the body's kept head and tail.
+    const kept = notice.index - placeholder.length - 2 - "\n…\n".length;
+    expect(Number(notice[1])).toBe(wrapped.length - kept);
+  });
+});
+
+// The blocks fit the 32,000-char budget (128k window) by one char; the two joining newlines
+// push the string over, and the adapter's final cut landed on page A's end marker.
+it("keeps every wrapped page's frame when several blocks are joined", async () => {
+  const header = "Fetched 2 pages.";
+  const frame = wrapExternalContent("", { source: "api" }).length;
+  const pageA = wrapExternalContent("a".repeat(22_400 - header.length - 1 - frame), {
+    source: "api",
+  });
+  const pageB = wrapExternalContent("b".repeat(31_999 - header.length - pageA.length - frame), {
+    source: "api",
+  });
+  const tool: AnyAgentTool = {
+    name: "fixture_pages",
+    label: "Fixture pages",
+    description: "Returns a header and two wrapped pages",
+    parameters: Type.Object({}, { additionalProperties: false }),
+    execute: async () => ({
+      content: [
+        { type: "text", text: header },
+        { type: "text", text: pageA },
+        { type: "text", text: pageB },
+      ],
+      details: {},
+    }),
+  };
+  await withFixtureTool(
+    tool,
+    async (surface) => {
+      const result = await execute(surface, tool.name, "pages", {});
+      assert(result.success);
+      const markers = [
+        ...result.output.matchAll(/<<<(END_)?EXTERNAL_UNTRUSTED_CONTENT id="([a-f0-9]{16})">>>/gu),
+      ].map((match) => `${match[1] ? "end" : "start"}:${match[2]}`);
+      // The 128k window's per-result budget; the adapter's own cap never had to cut.
+      expect(result.output.length).toBeLessThanOrEqual(32_000);
+      expect(markers).toHaveLength(4);
+      expect(markers[1]).toBe(markers[0]!.replace("start:", "end:"));
+      expect(markers[3]).toBe(markers[2]!.replace("start:", "end:"));
+    },
+    undefined,
+    128_000,
+  );
+});
+
 describe("a delivered send to a configured delivery target", () => {
   // Shape of a cron send: the delivery target is the current source and the
   // message tool confirms the source reply.
@@ -154,6 +262,7 @@ async function withFixtureTool(
   tool: AnyAgentTool,
   run: (surface: Awaited<ReturnType<typeof buildAgentsApiToolSurface>>) => Promise<void>,
   messageToolFinalByDefault?: boolean,
+  contextTokenBudget?: number,
 ) {
   await withOpenClawTestState({ label: "agentsapi-tool-results" }, async (state) => {
     const attempt = createAttemptParams({
@@ -162,6 +271,7 @@ async function withFixtureTool(
       sessionFile: state.statePath("fixture-session.jsonl"),
       config: { plugins: { allow: [] } },
       ...(messageToolFinalByDefault === undefined ? {} : { messageToolFinalByDefault }),
+      ...(contextTokenBudget === undefined ? {} : { contextTokenBudget }),
     });
     await withSurface(attempt, new AbortController(), run, tool);
   });

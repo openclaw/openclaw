@@ -57,7 +57,6 @@ import {
   isSameCodexAppServerThreadOwner,
   retainCodexAppServerBindingSubscription,
 } from "./thread-ownership.js";
-import { isCodexNativeDelegationDisabledForRun } from "./thread-requests.js";
 import { createCodexTrajectoryRecorder } from "./trajectory.js";
 import type { CodexAppServerTurnRouter, CodexThreadRouteReservation } from "./turn-router.js";
 
@@ -679,9 +678,6 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     });
     await state.nativeHookRelay?.prepareInvocation();
     connection.assertCurrent();
-    if (!isCodexNativeDelegationDisabledForRun(params)) {
-      params.hostCapabilities.assertNativeSubagentSpawnAllowed?.();
-    }
     return {
       configPatch: state.nativeHookRelay
         ? buildCodexNativeHookRelayConfig({

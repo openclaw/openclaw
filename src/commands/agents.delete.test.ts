@@ -17,6 +17,7 @@ import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js
 import { readExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import { defaultRuntime } from "../runtime.js";
+import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
@@ -24,6 +25,10 @@ import {
   registerOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db-registry.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { readAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { readAgentProvenance } from "../test-utils/agent-provenance.js";
@@ -638,4 +643,42 @@ describe("agents delete command", () => {
       }
     },
   );
+
+  it("shows Doctor's restore-first warning for a held store before confirming", async ({
+    state,
+  }) => {
+    // Lost deletion history: Doctor reconstructs it and holds the retired agent's store back.
+    await state.setup();
+    const storePath = path.join(
+      state.stateDir,
+      "agents",
+      "retired",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    openOpenClawAgentDatabase({ agentId: "retired", path: storePath });
+    openOpenClawStateDatabase().db.exec("DROP TABLE agent_deletion_journal");
+    runOpenClawStateWriteTransaction((database) =>
+      reconstructAgentDeletionJournal(database, [{ agentId: "retired", path: storePath }]),
+    );
+    const restoreFirst = expect.stringMatching(
+      /Doctor holds back a store of agent "retired"[\s\S]*openclaw agents add '?retired'?[\s\S]*to abort deletion and restore/,
+    );
+    const confirm = vi.fn(async () => false);
+    wizardMocks.createClackPrompter.mockReturnValue({ confirm });
+    await agentsDeleteCommand({ id: "retired" });
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ message: restoreFirst }));
+    expect(registeredAgentIds()).toContain("retired");
+    expectNoLocalMutation();
+    // A store outside Doctor's holds keeps the ordinary confirmation.
+    await agentsDeleteCommand({ id: "ops" });
+    expect(confirm).toHaveBeenLastCalledWith(
+      expect.objectContaining({ message: 'Delete agent "ops" and prune workspace/state?' }),
+    );
+    // --force prints the same warning and proceeds.
+    await removeAgent({ id: "retired", json: true });
+    expect(runtime.error).toHaveBeenCalledWith(restoreFirst);
+    expect(registeredAgentIds()).not.toContain("retired");
+  });
 });

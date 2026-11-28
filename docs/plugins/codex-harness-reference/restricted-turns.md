@@ -52,22 +52,14 @@ memory. Plugin ownership alone does not make a denial safe: unknown names and
 unaudited plugin tools still use the restricted surface.
 
 OpenClaw admin and status denies alone do not remove native Codex tools.
-Session, conversation and delegation-tool denies keep the native shell and file
-tools but disable native delegation for the turn: OpenClaw sets
-`agents.enabled=false` and turns off `features.multi_agent` and
-`features.multi_agent_v2`, so `spawn_agent`, `send_input`, `resume_agent`
-and the v2 cross-thread tools are not available. Managed Codex requirements or
-legacy managed config that pin `multi_agent` or `multi_agent_v2` on make such a
-turn fail before inference instead of re-enabling delegation. Default hidden
-OpenClaw children therefore keep native shell and file tools without native
-delegation. Visible spawned sessions do not get the built-in sub-agent denies,
-so they keep the full native surface, including delegation, unless another
-policy, such as an inherited parent restriction, restricts it.
-
-A child at its configured delegation depth cap also loses native collaboration,
-as do turns with an explicit native-tool deny, finite allowlist, or other unsafe
-restriction. Restricted turns do not advertise native helpers such as
-`spawn_agent` in their developer instructions.
+OpenClaw sets `agents.enabled=false` and turns off `features.multi_agent` and
+`features.multi_agent_v2` on every thread it starts or resumes, so
+`spawn_agent`, `send_input`, `resume_agent` and the v2 cross-thread tools are
+not available; delegation uses `sessions_spawn`. When a session, conversation or
+delegation-tool deny applies, managed Codex requirements or legacy managed config
+that pin `multi_agent` or `multi_agent_v2` on make the turn fail before inference
+instead of re-enabling delegation. Without such a deny, a managed pin wins and
+Codex keeps its native tools.
 
 Policy-restricted turns have no Codex environment selection or native Code Mode.
 OpenClaw disables inherited and configured MCP servers, attests that they remain
