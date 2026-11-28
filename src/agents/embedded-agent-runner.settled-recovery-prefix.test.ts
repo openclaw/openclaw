@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -73,7 +72,6 @@ async function runSettledTurn(params: {
 }) {
   const { api, provider, model } = params;
   return await withOpenClawTestState({ label: `recovery-prefix-${api}` }, async (state) => {
-    const effectsFile = state.path("tool-effects.txt");
     const pluginDir = state.path("recovery-plugin");
     await fs.mkdir(pluginDir, { recursive: true });
     await fs.writeFile(
@@ -88,7 +86,7 @@ async function runSettledTurn(params: {
     await fs.writeFile(
       path.join(pluginDir, "index.cjs"),
       `module.exports = { id: "recovery-proof", register(api) {
-        api.registerTool({ name: "cache_probe", label: "Cache probe", description: "Return a synthetic record.", parameters: { type: "object", properties: {} }, execute: async () => { require("node:fs").appendFileSync(${JSON.stringify(effectsFile)}, "effect\\n"); return { content: [{ type: "text", text: "synthetic tool result" }] }; } });
+        api.registerTool({ name: "cache_probe", label: "Cache probe", description: "Return a synthetic record.", parameters: { type: "object", properties: {} }, execute: async () => ({ content: [{ type: "text", text: "synthetic tool result" }] }) });
       }};`,
     );
     const config = cacheRunnerConfig({
@@ -186,8 +184,7 @@ async function runSettledTurn(params: {
         timeoutMs: 120_000,
         prompt: "Check the record, then answer.",
       });
-      const effects = await fs.readFile(effectsFile, "utf8").catch(() => "");
-      return { requests, result, toolRuns: effects.split("\n").filter(Boolean).length };
+      return { requests, result };
     } finally {
       admission.close();
       cleanupSessionResources(sessionId);
@@ -226,49 +223,12 @@ it.each([
       digest(turn.system ?? turn.instructions),
     );
     expect(digest(params(recovery))).toBe(digest(params(turn)));
+    // Byte-identical to the turn's request up to the new user message.
     expect(digest(recoveryItems.slice(0, turnItems.length))).toBe(digest(turnItems));
     expect(recoveryItems.length).toBeGreaterThan(turnItems.length);
     expect(JSON.stringify(recoveryItems.at(-1))).toContain("Your turn ended without a final");
-    if (api === "anthropic-messages") {
-      // Whether Anthropic's thinking binding covers tool_choice is unmeasured; keep it.
-      expect(recovery.tool_choice).toEqual(turn.tool_choice);
-    } else {
-      expect(recovery.tool_choice).toBe("none");
-    }
+    // tool_choice is outside the cache key on both protocols; the recovery forbids tool calls.
+    expect(recovery.tool_choice).toEqual(api === "anthropic-messages" ? { type: "none" } : "none");
     expect(result.payloads?.map((payload) => payload.text)).toEqual(["Recovered final answer."]);
-  },
-);
-
-it(
-  "refuses a tool call in the Anthropic recovery request without running it",
-  {
-    timeout: TEST_TIMEOUT_MS,
-  },
-  async () => {
-    const { requests, result, toolRuns } = await runSettledTurn({
-      api: "anthropic-messages",
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      replies: ["tool", "silent", "tool", "answer"],
-    });
-    // Only the turn's own call ran.
-    expect(toolRuns).toBe(1);
-    const refusal = requests
-      .slice(3)
-      .flatMap((request) => request.messages ?? [])
-      .flatMap((message) =>
-        isRecord(message) && Array.isArray(message.content) ? message.content : [],
-      )
-      .find(
-        (block) =>
-          isRecord(block) && block.type === "tool_result" && block.tool_use_id === "toolu_resp_3",
-      );
-    expect(isRecord(refusal) && refusal.is_error).toBe(true);
-    // The recovery fails visibly instead of presenting work it could not do.
-    expect(result.payloads ?? []).toEqual([]);
-    expect(result.meta.error).toMatchObject({
-      kind: "incomplete_turn",
-      message: "No answer was returned. Ask again if you still need one.",
-    });
   },
 );

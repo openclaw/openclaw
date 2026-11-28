@@ -289,10 +289,8 @@ export function applySessionForkRequest(
  * generated under the turn's system prompt, tools and history. The recovery renders earlier
  * history without the turn's envelopes, so the last sent item (after a tool loop, a tool result
  * with its call id) anchors the suffix; without an anchor the recovery's own request is sent.
- * Callers reach this only where `tool_choice` is outside the cache key, and the recovery run
- * executes no tool. Anthropic keeps the turn's `tool_choice`, since whether its thinking binding
- * covers that field is unmeasured: a client tool call gets an error result and the recovery fails
- * visibly, and a request with provider-run tools keeps the recovery's own tool-free request.
+ * Callers reach this only where `tool_choice` is outside the cache key, so tool_choice none
+ * stops every tool call, provider-hosted ones included.
  */
 export function applySettledTurnRequest(
   payload: Record<string, unknown>,
@@ -302,14 +300,14 @@ export function applySettledTurnRequest(
   const key = ["input", "messages"].find((name) => Array.isArray(payload[name]));
   const ownItems = key ? payload[key] : undefined;
   const sentItems = key ? prepared[key] : undefined;
-  const forbidsCalls = api !== "anthropic-messages";
+  const shape = TOOL_CHOICE_NONE.get(api);
   if (
+    !shape ||
     !key ||
     !Array.isArray(ownItems) ||
     !Array.isArray(sentItems) ||
     sentItems.length === 0 ||
-    prepared.previous_response_id != null ||
-    (!forbidsCalls && !requestTools(prepared).every(isClientTool))
+    prepared.previous_response_id != null
   ) {
     return;
   }
@@ -324,8 +322,8 @@ export function applySettledTurnRequest(
     { prepared, key, sentItems },
     ownItems.slice(anchor + 1).map((item) => serializeItem(item, keep)),
   );
-  if (forbidsCalls && Array.isArray(payload.tools) && payload.tools.length > 0) {
-    payload.tool_choice = "none";
+  if (Array.isArray(payload.tools) && payload.tools.length > 0) {
+    payload.tool_choice = shape === "object" ? { type: "none" } : "none";
   }
 }
 

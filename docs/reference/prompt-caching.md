@@ -141,17 +141,15 @@ execution still requires the current prompt's live authority; an advertised
 action does not grant permission to execute it.
 
 Settled-turn finalization (the request that asks for a final answer after a
-turn ends with only `NO_REPLY`) is one more request of that turn. On OpenAI
-Responses and Anthropic Messages, where `tool_choice` is outside the cache key,
-it sends the turn's last request (system prompt, tools, parameters, cache key and
-history) unchanged, followed by its own new items, so it reads the turn's cached
-prefix. Responses sends `tool_choice: "none"`. Anthropic keeps the turn's
-`tool_choice`; the run executes no tool, so a tool call fails the recovery
-visibly. It falls back to a tool-free prompt under a run-scoped cache key on
-other protocols, when the provider rejected the turn's context, when the turn's
-prepared request was a `previous_response_id` delta or its last item is missing
-from the recovery's history, and on Anthropic when the turn listed
-provider-run tools.
+turn ends with only `NO_REPLY`) is one more request of that turn. On protocols
+where `tool_choice` is outside the cache key (OpenAI Responses and Anthropic
+Messages), it sends the turn's last request (system prompt, tools, parameters,
+cache key and history) unchanged, followed by its own new items and
+`tool_choice: none`, so it reads the turn's cached prefix and cannot call a
+tool. It falls back to a tool-free prompt under a run-scoped cache key on other
+protocols, when the provider rejected the turn's context, when the turn's
+prepared request was a `previous_response_id` delta, or when its last item is
+missing from the recovery's history.
 
 Inter-session messages steered into an active turn carry their source envelope
 on the first model request. Reopening the session replays the same envelope,
