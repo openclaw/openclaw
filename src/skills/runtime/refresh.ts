@@ -181,9 +181,12 @@ function observeSource(source: Source) {
             state.refreshTimer ??= runInDiscoveryContext(() =>
               setTimeout(() => {
                 state.refreshTimer = undefined;
-                void scanDirtySources().catch((error: unknown) =>
-                  log.warn(`passive skills refresh failed: ${String(error)}`),
-                );
+                void scanDirtySources().catch((error: unknown) => {
+                  // Shutdown retires the worker under a running scan; that is not a failure.
+                  if (!state.closing) {
+                    log.warn(`passive skills refresh failed: ${String(error)}`);
+                  }
+                });
               }, 50).unref(),
             );
           },
