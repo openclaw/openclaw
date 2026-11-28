@@ -53,8 +53,9 @@ The Control UI is an **admin surface** (chat, config, exec approvals). Do not ex
   Gateway URL, not localStorage.
 - **Host-authorized browser handoff**: `openclaw dashboard` issues a short-lived, single-use bootstrap
   instead of putting the shared Gateway token in the browser launch URL. The bootstrap is bound to
-  that browser's signed device identity and exchanged for a durable administrator credential. A
-  different browser profile cannot redeem the same handoff or inherit the resulting access.
+  that browser's signed device identity and exchanged for a durable administrator credential. The
+  dashboard reconnects with that credential before it is ready to use; no page reload is needed.
+  A different browser profile cannot redeem the same handoff or inherit the resulting access.
 - **Missing-config runtime token**: if startup says it generated a runtime token, that token is ephemeral and cannot be recovered. Loopback still requires auth. Run `openclaw doctor --generate-gateway-token`, restart the Gateway, then run `openclaw gateway auth-token --show` in an interactive terminal and paste the output into Control UI settings.
 - If `gateway.auth.token` is SecretRef-managed, the interactive dashboard handoff still works because
   it carries only the short-lived browser bootstrap; the external shared token is not placed in

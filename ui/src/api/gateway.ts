@@ -469,6 +469,14 @@ export class GatewayBrowserClient {
         token: hello.auth.deviceToken,
         scopes,
       });
+      if (hello.auth.method === "bootstrap-token") {
+        // The handoff pairs the device; publish readiness only on its durable connection.
+        this.opts.token = undefined;
+        this.opts.password = undefined;
+        this.stop();
+        this.start();
+        return;
+      }
     }
     void this.resolveRecoveryScope(hello, plan);
   }
