@@ -456,6 +456,11 @@ export async function runCliFallbackCandidate(
             ...buildReplyRunStateParams(turn.followupRun.run),
             diagnosticOwner,
             sessionId: turn.followupRun.run.sessionId,
+            // The stranded-reply retry keeps the human turn's provenance and authority; only
+            // its native input is host-generated, so the CLI must not save it as user text.
+            ...(turn.followupRun.strandedReplyRetry === true
+              ? { promptOrigin: "host" as const }
+              : {}),
             sessionKey,
             sessionTarget,
             sessionEntry,

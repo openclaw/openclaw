@@ -9,7 +9,6 @@ registerEnglishCatalog(registerPreferencesEnglish);
 export function LocalToggleRow(props: {
   config: ConfigProps;
   setting:
-    | "compactSessionOpening"
     | "chatShowTaskProgress"
     | "chatCollapseTaskProgress"
     | "composerHoldToRecord"

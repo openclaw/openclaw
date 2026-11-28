@@ -101,6 +101,22 @@ export async function runUtilityCompletion(
     return await attempt(request);
   }
   const { runWithModelFallback } = await import("./model-fallback-runner.js");
+  // The caller's currency guard cancels its own work: carry that as the caller-cancel
+  // fact the fallback chain already honors, so a stale task never tries the next model.
+  const cancel = new AbortController();
+  const { assertCurrent } = params;
+  const guarded = assertCurrent
+    ? {
+        assertCurrent: () => {
+          try {
+            assertCurrent();
+          } catch (error) {
+            cancel.abort(error);
+            throw error;
+          }
+        },
+      }
+    : {};
   const result = await runWithModelFallback({
     cfg: params.config,
     agentId: params.agentId,
@@ -109,7 +125,9 @@ export async function runUtilityCompletion(
     model: params.model,
     requestedRouteResolution: "resolved",
     fallbacksOverride: fallbacks,
-    abortSignal: params.abortSignal,
+    abortSignal: params.abortSignal
+      ? AbortSignal.any([params.abortSignal, cancel.signal])
+      : cancel.signal,
     operatorAuthority: params.operatorAuthority,
     resolveAgentHarnessRuntimeOverride: (provider, model) =>
       provider === params.provider && model === params.model
@@ -121,6 +139,7 @@ export async function runUtilityCompletion(
     run: (provider, model, options) =>
       attempt({
         ...request,
+        ...guarded,
         provider,
         model,
         ...(options?.modelRoutingProvenance.stage === "fallback"

@@ -294,6 +294,9 @@ function restoreTranscriptPrependAnchor(
   // The scroll owner retires deferred row corrections represented by the DOM.
   // An ignored native write must not keep the measurement loop alive.
   virtualizer.scrollToOffset(offset, { behavior: "instant" });
+  // This anchor remeasures the bubble itself. A later exact-landing frame would replay
+  // the old offset if the reader scrolled before its native event was delivered.
+  virtualizer.cancelScroll();
   onLayoutCorrection(before, scrollElement.scrollTop);
   return scrollElement.scrollTop !== before;
 }

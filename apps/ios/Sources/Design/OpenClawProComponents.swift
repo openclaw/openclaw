@@ -228,6 +228,19 @@ struct OpenClawSidebarRevealToolbarVisibility: ViewModifier {
     }
 }
 
+struct OpenClawRoundNavigationButton<Glyph: View>: View {
+    let action: () -> Void
+    @ViewBuilder let glyph: () -> Glyph
+
+    var body: some View {
+        Button(action: self.action) {
+            self.glyph().openClawToolbarHitTarget().contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: Circle())
+    }
+}
+
 struct OpenClawSidebarControlButton: View {
     let action: OpenClawSidebarHeaderAction
 

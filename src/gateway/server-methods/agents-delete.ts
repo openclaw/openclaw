@@ -8,6 +8,7 @@ import {
   prepareAgentDeleteDatabases,
   prepareJournaledAgentDirOwnership,
   readAgentDeleteDatabaseRegistry,
+  readRegisteredAgentDatabasePaths,
   resolveSurvivingDatabaseFilePaths,
   retireAgentDeleteRuntime,
 } from "../../agents/agent-delete-databases.js";
@@ -175,10 +176,12 @@ async function deleteGatewayAgentAttempt(
           throw new Error(`Agent ${agentId} deletion recovery no longer owns its journal.`);
         }
         const configured = isConfiguredAgent(lockedConfig, agentId);
+        // A retired agent (removed from config, still registered) is deleted like a configured one.
+        const retired = !configured && (await readRegisteredAgentDatabasePaths(agentId)).length > 0;
         if (await agentOwnsSharedAuthStore(lockedConfig, agentId)) {
           throw new AgentSharedAuthStoreOwnerError(formatSharedAuthStoreOwnerDeleteError(agentId));
         }
-        if (!configured && (!lockedJournal || lockedJournal.cleanupCompleted)) {
+        if (!configured && !retired && (!lockedJournal || lockedJournal.cleanupCompleted)) {
           throw new AgentConfigPreconditionError(`agent "${agentId}" not found`);
         }
         if (agentId === tryResolveSoleAgentId(lockedConfig)) {
@@ -191,7 +194,7 @@ async function deleteGatewayAgentAttempt(
             `Agent "${agentId}" owns inherited credentials through agents.defaults.authInheritance.agentId and cannot be deleted. Relocate those credentials, then re-point or remove that binding before retrying.`,
           );
         }
-        if (configured && lockedJournal?.cleanupCompleted) {
+        if ((configured || retired) && lockedJournal?.cleanupCompleted) {
           const claimed = await claimCompletedAgentDeletion(agentId, lockedJournal.operationId);
           const remainingJournal = await readAgentDeletionJournalAsync(agentId);
           if (!claimed && remainingJournal) {

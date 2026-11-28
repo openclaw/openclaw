@@ -627,7 +627,10 @@ Choose **Snoozed** in the Status filter to find snoozed sessions, or **All** to 
 them alongside awake and archived sessions. Snoozed root rows show **Wakes** and
 the local wake time. The row menu's **Wake session**
 item also shows the scheduled time; choose it to bring the session back early.
-The snooze confirmation offers **Undo**. Snoozing a session keeps its personal
+The sidebar updates as soon as you choose **Snooze** or **Wake session**. If the
+Gateway rejects the change, the row returns to its previous state and an error
+appears. After the Gateway confirms a snooze, the confirmation offers **Undo**.
+Snoozing a session keeps its personal
 rail shortcut. Adding or removing that shortcut does not wake the session or
 change its snooze time. Archiving clears its snooze.
 
