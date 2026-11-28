@@ -1,20 +1,10 @@
+import { applyEdits, format } from "jsonc-parser";
+import { parseMarkdownJson } from "../../components/markdown-json.ts";
 import { t } from "../../i18n/index.ts";
 import type { ToolCard } from "./chat-types.ts";
+import { readToolOutputText } from "./tool-output-text.ts";
 
 export const TOOL_OUTPUT_PREVIEW_CHARS = 8_000;
-
-export function isLegacyToolOutputUnavailable(card: ToolCard): boolean {
-  // New records carry the producer's loss fact. Only older records need the
-  // historical suffix; literal process text must never impersonate capture loss.
-  return (
-    !card.outputTruncated &&
-    (card.toolOutput?.captureTruncated === true ||
-      (!card.toolOutput &&
-        /\n\.\.\.\(OpenClaw truncated Codex native tool output: original \d+ chars, showing \d+; rerun with narrower args\.\)\s*$/u.test(
-          card.outputText ?? "",
-        )))
-  );
-}
 
 export function toolOutputSourceLabel(card: ToolCard): string {
   return t(
@@ -26,12 +16,12 @@ export function toolOutputSourceLabel(card: ToolCard): string {
   );
 }
 
-export function toolOutputSourceNote(card: ToolCard): string | undefined {
-  return card.toolOutput
-    ? t(
-        card.toolOutput.source === "provider-response"
-          ? "chat.toolCards.providerResponseNote"
-          : "chat.toolCards.executionOutputNote",
-      )
-    : undefined;
+/** Format for display while preserving the captured bytes for Raw/Copy/Download. */
+export function formatToolOutput(card: ToolCard): string | undefined {
+  return readToolOutputText(card, (output) =>
+    // Whitespace-only edits preserve duplicate members and exact number/string lexemes.
+    parseMarkdownJson(output)?.root
+      ? applyEdits(output, format(output, undefined, { insertSpaces: true, tabSize: 2 }))
+      : output,
+  );
 }

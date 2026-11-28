@@ -1,5 +1,5 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizePluginId, normalizePluginsConfig } from "./config-state.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { validatePluginSchemaValue } from "./schema-validator.js";
 
@@ -17,13 +17,16 @@ export function resolvePluginConfigEnablement(params: {
   if (!manifest?.configSchema) {
     return { mode: "ready" };
   }
-  const entry = params.config.plugins?.entries?.[params.pluginId];
-  const hasConfig = isRecord(entry) && Object.hasOwn(entry, "config");
+  // Settings live under the canonical lowercase policy key, not the manifest spelling.
+  const settings = normalizePluginsConfig(params.config.plugins).entries[
+    normalizePluginId(params.pluginId)
+  ]?.config;
+  const hasConfig = settings !== undefined;
   const result = validatePluginSchemaValue({
     origin: manifest.origin,
     schema: manifest.configSchema,
     cacheKey: manifest.schemaCacheKey ?? manifest.manifestPath,
-    value: hasConfig ? entry.config : {},
+    value: hasConfig ? settings : {},
     applyDefaults: true,
   });
   if (result.ok) {

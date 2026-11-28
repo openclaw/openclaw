@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildCodeSpanIndex } from "./code-spans.js";
-import { findMarkdownCodeSpans } from "./reasoning-tags.js";
+import { buildCodeSpanIndex, createInlineCodeState } from "./code-spans.js";
+import { findMarkdownCodeRegions } from "./reasoning-tags.js";
 
 describe("buildCodeSpanIndex", () => {
   it("supports backward queries over inline code that encloses a fence", () => {
@@ -24,36 +24,63 @@ describe("buildCodeSpanIndex", () => {
       ),
     ).toEqual([false, true, true, false, true]);
   });
+
+  it("keeps an inline backtick run intact when a chunk boundary splits it", () => {
+    const text = "`` ``";
+    const expected = buildCodeSpanIndex(text);
+    const first = buildCodeSpanIndex("`", createInlineCodeState());
+    const second = buildCodeSpanIndex("` ``", first.inlineState);
+
+    expect(expected.isInside(2)).toBe(true);
+    expect(second.isInside(1)).toBe(expected.isInside(2));
+    expect(second.inlineState.open).toBe(false);
+  });
+
+  it("carries a split backtick run across an empty chunk", () => {
+    const first = buildCodeSpanIndex("`", createInlineCodeState());
+    const empty = buildCodeSpanIndex("", first.inlineState);
+    const last = buildCodeSpanIndex("` ``", empty.inlineState);
+
+    expect(last.isInside(1)).toBe(true);
+    expect(last.inlineState.open).toBe(false);
+  });
+
+  it.each(["x````b", "``a`b``", "\\` literal", "`one` ``two``"])(
+    "matches the one-shot index for one-character chunks: %j",
+    (text) => {
+      const expected = buildCodeSpanIndex(text);
+      let state = createInlineCodeState();
+      for (let offset = 0; offset < text.length; offset += 1) {
+        const chunk = text.charAt(offset);
+        const index = buildCodeSpanIndex(chunk, state);
+        expect(index.isInside(0), `offset ${offset} in ${JSON.stringify(text)}`).toBe(
+          expected.isInside(offset),
+        );
+        state = index.inlineState;
+      }
+      expect(state.open).toBe(expected.inlineState.open);
+      expect(state.ticks).toBe(expected.inlineState.ticks);
+    },
+  );
+
+  it.each(["opener", "closer"])("tracks a mid-line %s split with both scanner states", (kind) => {
+    const text = "note: ``word`` after";
+    const cut = (kind === "opener" ? text.indexOf("``") : text.lastIndexOf("``")) + 1;
+    const first = buildCodeSpanIndex(text.slice(0, cut));
+    const second = buildCodeSpanIndex(text.slice(cut), first.inlineState, first.fenceState);
+    const word = text.indexOf("word");
+
+    expect(word < cut ? first.isInside(word) : second.isInside(word - cut)).toBe(true);
+    expect(second.isInside(text.indexOf("after") - cut)).toBe(false);
+  });
 });
 
 describe("markdown-core code spans", () => {
   function expectCodeRegionSlices(text: string, expectedSlices: readonly string[]) {
-    const regions = findMarkdownCodeSpans(text);
+    const regions = findMarkdownCodeRegions(text).map(({ start, end }) => [start, end] as const);
     expect(regions).toHaveLength(expectedSlices.length);
     expect(regions.map(([start, end]) => text.slice(start, end))).toEqual(expectedSlices);
   }
-
-  it.each([
-    {
-      name: "finds fenced and inline code regions without double-counting inline code inside fences",
-      text: ["before `inline` after", "```ts", "const a = `inside fence`;", "```", "tail"].join(
-        "\n",
-      ),
-      expectedSlices: ["`inline`", "```ts\nconst a = `inside fence`;\n```"],
-    },
-    {
-      name: "accepts alternate fence markers and unterminated trailing fences",
-      text: "~~~js\nconsole.log(1)\n~~~\nplain\n```\nunterminated",
-      expectedSlices: ["~~~js\nconsole.log(1)\n~~~", "```\nunterminated"],
-    },
-    {
-      name: "keeps adjacent inline code outside fenced regions",
-      text: ["```ts", "const a = 1;", "```", "after `inline` tail"].join("\n"),
-      expectedSlices: ["```ts\nconst a = 1;\n```", "`inline`"],
-    },
-  ] as const)("$name", ({ text, expectedSlices }) => {
-    expectCodeRegionSlices(text, expectedSlices);
-  });
 
   it.each([
     {
@@ -133,6 +160,45 @@ describe("markdown-core code spans", () => {
     },
   ] as const)("follows CommonMark block ownership: $name", ({ text, expectedSlices }) => {
     expectCodeRegionSlices(text, expectedSlices);
+  });
+
+  it.each([
+    { text: "    A\n\n    B", value: "A\n\nB", nested: false },
+    { text: "\t  A\n\n\tB", value: "  A\n\nB", nested: false },
+    { text: ">     A\n>\n>     B", value: "A\n\nB", nested: true },
+    { text: "- item\n\n      A\n\n      B", value: "A\n\nB", nested: true },
+  ])(
+    "maps authored indented content without container syntax: $text",
+    ({ text, value, nested }) => {
+      const ordinary = findMarkdownCodeRegions(text);
+      const regions = findMarkdownCodeRegions(text, { includeIndentedSource: true });
+      expect(regions.map(({ start, end, block }) => ({ start, end, block }))).toEqual(ordinary);
+      expect(regions).toHaveLength(1);
+      const region = regions[0];
+      if (!region?.indentedSource) {
+        throw new Error("Expected parser-owned indented source metadata");
+      }
+      const source = region.indentedSource;
+      expect(source.value).toBe(value);
+      expect(source.nested).toBe(nested);
+      for (const character of ["A", "B"]) {
+        const at = text.indexOf(character) - region.start;
+        expect(source.value.slice(source.offsets[at], source.offsets[at + 1])).toBe(character);
+      }
+    },
+  );
+
+  it("retains inline source ownership when indented source mapping is also requested", () => {
+    const text = "Use `A\nB` here.\n\n    C";
+    const inline = findMarkdownCodeRegions(text, { includeSource: true }).filter(
+      (region) => !region.block,
+    );
+    expect(
+      findMarkdownCodeRegions(text, {
+        includeSource: true,
+        includeIndentedSource: true,
+      }).filter((region) => !region.block),
+    ).toEqual(inline);
   });
 
   it("walks deeply nested Markdown without exhausting the JavaScript stack", () => {

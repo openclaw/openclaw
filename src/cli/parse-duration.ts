@@ -1,14 +1,21 @@
-// Duration parser shared by CLI flags, command directives, and config-backed timing values.
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
-import milliseconds from "ms";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { durationUnitMs } from "../infra/format-time/duration-units.js";
 
-/** Options for choosing the unit used by bare numeric duration values. */
 type DurationMsParseOptions = {
   defaultUnit?: "ms" | "s" | "m" | "h" | "d";
 };
+
+const MAX_TOKEN_LENGTH = 100;
+// The token limit bounds decimal precision. Use one exact scale across units and segments.
+const DURATION_SCALE = 10n ** BigInt(MAX_TOKEN_LENGTH);
+
+const DURATION_UNIT_MS = new Map<string, number>([
+  ["ms", durationUnitMs.millisecond],
+  ["s", durationUnitMs.second],
+  ["m", durationUnitMs.minute],
+  ["h", durationUnitMs.hour],
+  ["d", durationUnitMs.day],
+]);
 
 function invalidDuration(raw: string, reason?: string): Error {
   const value = raw.trim() ? `"${raw}"` : "empty value";
@@ -16,57 +23,55 @@ function invalidDuration(raw: string, reason?: string): Error {
   return new Error(`${prefix} Use values like 500ms, 30s, 5m, 2h, or 1h30m.`);
 }
 
-function parseDurationToken(raw: string, value: string, unit: string): number {
-  const parsed = milliseconds(`${value}${unit}` as Parameters<typeof milliseconds>[0]);
-  if (!Number.isFinite(parsed) || parsed < 0) {
+function parseScaledDurationToken(raw: string, value: string, unit: string): bigint {
+  const multiplier = DURATION_UNIT_MS.get(unit);
+  if (multiplier === undefined || value.length + unit.length > MAX_TOKEN_LENGTH) {
     throw invalidDuration(raw);
   }
-  return parsed;
+  const [whole, fraction = ""] = value.split(".");
+  return BigInt(`${whole}${fraction.padEnd(MAX_TOKEN_LENGTH, "0")}`) * BigInt(multiplier);
 }
 
-function roundSafeDurationMs(raw: string, value: number): number {
-  const ms = Math.round(value);
+function roundSafeDurationMs(raw: string, scaledMs: bigint): number {
+  const ms = Number((scaledMs + DURATION_SCALE / 2n) / DURATION_SCALE);
   if (!Number.isSafeInteger(ms)) {
     throw invalidDuration(raw);
   }
   return ms;
 }
 
-/** Parse a non-negative duration into milliseconds, supporting single and composite units. */
 export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): number {
-  const trimmed = normalizeLowercaseStringOrEmpty(normalizeOptionalString(raw) ?? "");
+  const trimmed = normalizeLowercaseStringOrEmpty(raw);
   if (!trimmed) {
     throw invalidDuration(raw, "empty");
   }
 
-  // Fast path for a single token (supports default unit for bare numbers).
   const single = /^(\d+(?:\.\d+)?)(ms|s|m|h|d)?$/.exec(trimmed);
   if (single) {
     const value = single[1] ?? "";
-    const unit = (single[2] ?? opts?.defaultUnit ?? "ms") as "ms" | "s" | "m" | "h" | "d";
-    return roundSafeDurationMs(raw, parseDurationToken(raw, value, unit));
+    const unit = single[2] ?? opts?.defaultUnit ?? "ms";
+    return roundSafeDurationMs(raw, parseScaledDurationToken(raw, value, unit));
   }
 
   // Composite form (e.g. "1h30m", "2m500ms"); each token must include a unit.
-  let totalMs = 0;
+  let scaledMs = 0n;
   let consumed = 0;
   const tokenRe = /(\d+(?:\.\d+)?)(ms|s|m|h|d)/g;
   for (const match of trimmed.matchAll(tokenRe)) {
     const [full, valueRaw, unitRaw] = match;
-    const index = match.index ?? -1;
-    if (!full || !valueRaw || !unitRaw || index < 0) {
+    if (!full || !valueRaw || !unitRaw) {
       throw invalidDuration(raw);
     }
-    if (index !== consumed) {
+    if (match.index !== consumed) {
       throw invalidDuration(raw, "each composite segment needs a unit");
     }
-    totalMs += parseDurationToken(raw, valueRaw, unitRaw);
+    scaledMs += parseScaledDurationToken(raw, valueRaw, unitRaw);
     consumed += full.length;
   }
 
-  if (consumed !== trimmed.length || consumed === 0) {
+  if (consumed !== trimmed.length) {
     throw invalidDuration(raw);
   }
 
-  return roundSafeDurationMs(raw, totalMs);
+  return roundSafeDurationMs(raw, scaledMs);
 }

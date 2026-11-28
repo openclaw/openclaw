@@ -2,6 +2,12 @@ import type { WebClient } from "@slack/web-api";
 import { z } from "zod";
 import { formatSlackTarget } from "./target-parsing.js";
 
+export const slackTeamIdSchema = z
+  .string()
+  .trim()
+  .regex(/^T[A-Z0-9]+$/i)
+  .optional();
+
 export function parseSlackConversationOpenInput(userIds: unknown, teamId?: string) {
   // Slack opens one conversation for 1-8 other users and includes the caller.
   // Reject malformed/duplicate recipients instead of silently changing the audience.
@@ -20,14 +26,7 @@ export function parseSlackConversationOpenInput(userIds: unknown, teamId?: strin
   }
   return {
     users,
-    teamId:
-      teamId === undefined
-        ? undefined
-        : z
-            .string()
-            .trim()
-            .regex(/^T[A-Z0-9]+$/i)
-            .parse(teamId),
+    teamId: slackTeamIdSchema.parse(teamId),
   };
 }
 

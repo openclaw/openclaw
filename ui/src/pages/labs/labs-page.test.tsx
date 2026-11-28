@@ -1,0 +1,383 @@
+/* @vitest-environment jsdom */
+
+import { createRouter, definePage } from "@openclaw/uirouter";
+import { onSettled } from "solid-js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ConfigSnapshot } from "../../api/types.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { i18n } from "../../i18n/index.ts";
+import {
+  invalidateConfigConnection,
+  type ConfigAutoSaveStatus,
+} from "../../lib/config/config-state-model.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { LabsPage } from "./labs-page.tsx";
+
+type RuntimeConfigState = {
+  connected: boolean;
+  configLoading: boolean;
+  configAutoSaveStatus: ConfigAutoSaveStatus;
+  configSnapshot: {
+    hash: string;
+    sourceConfig: Record<string, unknown>;
+    valid?: boolean;
+    warnings?: ConfigSnapshot["warnings"];
+  } | null;
+  lastError: string | null;
+};
+
+function createGateway() {
+  const client = {} as GatewayBrowserClient;
+  let snapshot = { client, phase: "connected" } as ApplicationGatewaySnapshot;
+  const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
+  return {
+    gateway: {
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe(listener: (snapshot: ApplicationGatewaySnapshot) => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    } as unknown as ApplicationContext["gateway"],
+    setPhase(phase: ApplicationGatewaySnapshot["phase"]) {
+      snapshot = { ...snapshot, phase };
+      listeners.forEach((listener) => listener(snapshot));
+    },
+  };
+}
+
+function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
+  const state: RuntimeConfigState = {
+    connected: true,
+    configLoading: false,
+    configAutoSaveStatus: "idle",
+    configSnapshot: { hash: "config-hash", sourceConfig },
+    lastError: null,
+  };
+  const listeners = new Set<(state: RuntimeConfigState) => void>();
+  return {
+    state,
+    notify: () => listeners.forEach((listener) => listener(state)),
+    ensureLoaded: vi.fn(async () => undefined),
+    refresh: vi.fn(async () => undefined),
+    patch: vi.fn(async (_input: { raw: Record<string, unknown>; note: string }) => true),
+    subscribe(listener: (state: RuntimeConfigState) => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+}
+
+async function mountPage(sourceConfig: Record<string, unknown>, basePath = "") {
+  const runtimeConfig = createRuntimeConfig(sourceConfig);
+  const gateway = createGateway();
+  const navigate = vi.fn();
+  const router = createRouter({
+    routes: [
+      definePage({ id: "labs", path: "/labs", component: () => ({}) }),
+      definePage({ id: "usage", path: "/usage", component: () => ({}) }),
+    ],
+  });
+  const context = {
+    basePath,
+    gateway: gateway.gateway,
+    runtimeConfig,
+    navigate,
+    router,
+  } as unknown as ApplicationContext;
+  const provider = createSolidApplicationContextProvider(context);
+  const { container: page, unmount } = mountSolid(
+    () => {
+      onSettled(() => () => router.stop());
+      return <LabsPage />;
+    },
+    { wrapper: provider.wrapper },
+  );
+  await waitForSolid(() => expect(page.querySelector(".settings-page")).not.toBeNull());
+  return { page, unmount, runtimeConfig, gateway, router, context: { navigate } };
+}
+
+function labRow(page: HTMLElement, title: string) {
+  const row = [...page.querySelectorAll<HTMLElement>(".settings-row")].find(
+    (candidate) => candidate.querySelector(".settings-row__title")?.textContent?.trim() === title,
+  );
+  if (!row) {
+    throw new Error(`${title} row not rendered`);
+  }
+  return row;
+}
+
+function labToggle(page: HTMLElement, title = "Speech bubbles") {
+  const toggle = labRow(page, title).querySelector<HTMLInputElement>('input[role="switch"]');
+  if (!toggle) {
+    throw new Error(`${title} toggle not rendered`);
+  }
+  return toggle;
+}
+
+function changeToggle(toggle: HTMLInputElement, checked: boolean) {
+  toggle.checked = checked;
+  toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+}
+
+async function expectPatch(
+  runtimeConfig: ReturnType<typeof createRuntimeConfig>,
+  raw: Record<string, unknown>,
+  feature: string,
+) {
+  await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+  expect(runtimeConfig.patch).toHaveBeenCalledWith({ raw, note: `labs: update ${feature}` });
+}
+
+const experimental = (values: Record<string, unknown>) => ({
+  gateway: { controlUi: { experimental: values } },
+});
+const hostDesktop = (value: Record<string, unknown>) => ({ desktop: { host: value } });
+const workerDesktop = (desktop: boolean) => ({ cloudWorkers: { desktop } });
+const hostEnabled = (enabled: boolean) => hostDesktop({ enabled });
+const openclawId = (value: Record<string, unknown>) => ({ gateway: { openclawId: value } });
+
+async function startSave(title = "Speech bubbles", config?: Record<string, unknown>) {
+  const mounted = await mountPage(config ?? {});
+  const pendingPatch = deferred<boolean>();
+  mounted.runtimeConfig.patch.mockImplementationOnce(() => pendingPatch.promise);
+  const toggle = labToggle(mounted.page, title);
+  changeToggle(toggle, true);
+  return { ...mounted, pendingPatch, toggle };
+}
+
+beforeEach(() => i18n.setLocale("en"));
+
+afterEach(() => {
+  document.body.replaceChildren();
+  vi.restoreAllMocks();
+});
+
+describe("LabsPage", () => {
+  it("defaults predictions off with Utility and saves each model without enabling the lab", async () => {
+    const { page, runtimeConfig } = await mountPage({});
+    const toggle = labToggle(page, "Composer predictions");
+    expect(toggle.checked).toBe(false);
+    const select = page.querySelector<HTMLSelectElement>('select[aria-label="Prediction model"]')!;
+    expect(select.closest(".settings-row--nested")).not.toBeNull();
+    expect(select.value).toBe("utility");
+    for (const model of ["conversation", "default", "utility"]) {
+      runtimeConfig.patch.mockClear();
+      select.value = model;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      await expectPatch(
+        runtimeConfig,
+        experimental({ composerPredictions: { model } }),
+        "predictionModel",
+      );
+      await waitForSolid(() => expect(select.disabled).toBe(false));
+      expect(toggle.checked).toBe(false);
+    }
+    runtimeConfig.patch.mockClear();
+    toggle.click();
+    await waitForSolid(() =>
+      expect(runtimeConfig.patch).toHaveBeenCalledWith({
+        raw: {
+          gateway: { controlUi: { experimental: { composerPredictions: { enabled: true } } } },
+        },
+        note: "labs: update composerPredictions",
+      }),
+    );
+  });
+
+  it.each([
+    [
+      "Desktop on the computer running OpenClaw",
+      "hostDesktop",
+      false,
+      hostDesktop({ enabled: true, managed: false, port: 5908, passwordFile: "/tmp/vnc-password" }),
+      hostEnabled(false),
+    ],
+    ["Speech bubbles", "chatBubbles", true, {}, experimental({ chatBubbles: true })],
+    [
+      "Desktop on the computer running OpenClaw",
+      "hostDesktop",
+      true,
+      hostEnabled(false),
+      hostEnabled(true),
+    ],
+    ["Cloud device desktop", "workerDesktop", true, workerDesktop(false), workerDesktop(true)],
+    ["OpenClaw ID remote access", "openclawId", true, {}, openclawId({ enabled: true })],
+    [
+      "OpenClaw ID remote access",
+      "openclawId",
+      false,
+      openclawId({ enabled: true, relayUrl: "https://relay.example.test/" }),
+      openclawId({ enabled: false }),
+    ],
+  ])(
+    "patches %s (%s) to %s through the canonical config flow: %j",
+    async (label, feature, enabled, sourceConfig, expectedPatch) => {
+      const { page, runtimeConfig } = await mountPage(sourceConfig);
+      const toggle = labToggle(page, label);
+      expect(toggle.checked).toBe(!enabled);
+      changeToggle(toggle, enabled);
+      await expectPatch(runtimeConfig, expectedPatch, feature);
+      expect(runtimeConfig.refresh).not.toHaveBeenCalled();
+    },
+  );
+
+  it("shows OpenClaw ID as a flag only, pointing to the account menu", async () => {
+    const { page } = await mountPage(openclawId({ enabled: true }));
+    const toggle = labToggle(page, "OpenClaw ID remote access");
+    expect(toggle.checked).toBe(true);
+    expect(page.textContent).toContain("from the account menu");
+    expect(page.textContent).not.toContain("Make reachable");
+    expect(page.textContent).not.toContain("Invite someone");
+  });
+
+  it("shows the Gateway activation warning and clears it with the config snapshot", async () => {
+    const message =
+      "OpenClaw ID is on, but the Access page stays off: plugins.deny includes openclaw-id-access. Remove that deny entry yourself if you want the page.";
+    const plugins = { deny: ["openclaw-id-access"] };
+    const { page, runtimeConfig } = await mountPage({ plugins });
+    const toggle = labToggle(page, "OpenClaw ID remote access");
+    expect(page.textContent).not.toContain(message);
+    runtimeConfig.patch.mockImplementationOnce(async () => {
+      runtimeConfig.state.configSnapshot = {
+        hash: "activated-config-hash",
+        sourceConfig: { ...openclawId({ enabled: true }), plugins },
+        warnings: [
+          { path: "gateway.openclawId.enabled", message },
+          { path: "plugins.other", message: "An unrelated config warning" },
+        ],
+      };
+      runtimeConfig.notify();
+      return true;
+    });
+
+    changeToggle(toggle, true);
+    await waitForSolid(() => {
+      expect(page.querySelector('[role="status"]')?.textContent ?? "").toContain(message);
+      expect(toggle.checked).toBe(true);
+      expect(toggle.hasAttribute("aria-disabled")).toBe(false);
+    });
+    expect(page.textContent).not.toContain("An unrelated config warning");
+    runtimeConfig.state.configSnapshot = {
+      hash: "unblocked-config-hash",
+      sourceConfig: openclawId({ enabled: true }),
+      warnings: [],
+    };
+    runtimeConfig.notify();
+    await waitForSolid(() => expect(page.querySelector('[role="status"]')).toBeNull());
+    expect(toggle.checked).toBe(true);
+    expect(runtimeConfig.patch).toHaveBeenCalledOnce();
+  });
+
+  it("does not publish a retired save failure after a same-client reconnect", async () => {
+    const { gateway, page, runtimeConfig, pendingPatch, toggle } = await startSave();
+    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+
+    await waitForSolid(() => {
+      expect(toggle).toMatchObject({ checked: true, disabled: false });
+      expect(toggle.hasAttribute("aria-disabled")).toBe(true);
+      expect(labToggle(page, "Composer predictions").disabled).toBe(true);
+    });
+    runtimeConfig.state.configLoading = true;
+    runtimeConfig.notify();
+    await waitForSolid(() => expect(toggle.disabled).toBe(true));
+    runtimeConfig.state.configLoading = false;
+    runtimeConfig.notify();
+    await waitForSolid(() => expect(toggle.disabled).toBe(false));
+    toggle.click();
+    expect(runtimeConfig.patch).toHaveBeenCalledOnce();
+    gateway.setPhase("reconnecting");
+    gateway.setPhase("connected");
+    await waitForSolid(() => {
+      expect(toggle.checked).toBe(false);
+      expect(toggle.hasAttribute("aria-disabled")).toBe(false);
+      expect(labToggle(page, "Composer predictions").disabled).toBe(false);
+    });
+    pendingPatch.resolve(false);
+    await pendingPatch.promise;
+    flush();
+
+    expect(page.querySelector('[role="alert"]')).toBeNull();
+    expect(toggle.checked).toBe(false);
+  });
+
+  it("releases optimistic save presentation when navigation leaves Labs", async () => {
+    const { page, runtimeConfig, router, pendingPatch, toggle } = await startSave();
+    await waitForSolid(() => expect(toggle.checked).toBe(true));
+    expect(runtimeConfig.patch).toHaveBeenCalledOnce();
+    await router.navigate("usage", {});
+    await waitForSolid(() => expect(toggle.checked).toBe(false));
+    pendingPatch.reject(new Error("Retired save failed"));
+    await waitForSolid(() => expect(page.querySelector('[role="alert"]')).toBeNull());
+  });
+});
+
+describe("LabsPage Decision assistance", () => {
+  it("keeps pending intent scoped through failure", async () => {
+    const { page, runtimeConfig, pendingPatch, toggle } = await startSave(
+      "Decision assistance",
+      {},
+    );
+    await waitForSolid(() => {
+      expect(toggle.checked).toBe(true);
+      expect(toggle.hasAttribute("aria-disabled")).toBe(true);
+    });
+    expect(labRow(page, "Decision assistance").textContent).not.toContain("Preference saved.");
+    runtimeConfig.state.configAutoSaveStatus = "rejected";
+    runtimeConfig.state.lastError = "The setting was rejected";
+    runtimeConfig.notify();
+    pendingPatch.resolve(false);
+    await pendingPatch.promise;
+    await waitForSolid(() => {
+      expect(labToggle(page, "Decision assistance").checked).toBe(false);
+      expect(labRow(page, "Decision assistance").textContent).not.toContain(
+        "Couldn’t load this setting",
+      );
+      expect(page.querySelector('[role="alert"]')).not.toBeNull();
+    });
+    expect(runtimeConfig.patch).toHaveBeenCalledOnce();
+  });
+
+  it.each(["missing", "loading", "read failure", "stale"])(
+    "does not present %s configuration as an observed opt-out",
+    async (state) => {
+      const { page, runtimeConfig } = await mountPage({
+        agents: { defaults: { experimental: { decisionAssistance: true } } },
+      });
+      if (state === "missing") {
+        runtimeConfig.state.configSnapshot = null;
+      }
+      if (state === "loading") {
+        runtimeConfig.state.configLoading = true;
+      }
+      if (state === "read failure") {
+        runtimeConfig.state.lastError = "Configuration read failed";
+      }
+      if (state === "stale") {
+        invalidateConfigConnection(runtimeConfig.state);
+      }
+      runtimeConfig.notify();
+      flush();
+      const row = labRow(page, "Decision assistance");
+      expect(row.querySelector('input[role="switch"]')).toBeNull();
+      expect(row.textContent).toContain(
+        state === "loading" ? "Loading setting" : "Couldn’t load this setting",
+      );
+      expect(row.textContent).not.toContain("Default: Disabled");
+      expect(runtimeConfig.patch).not.toHaveBeenCalled();
+      if (state === "read failure") {
+        row.querySelector<HTMLButtonElement>("button")!.click();
+        expect(runtimeConfig.refresh).toHaveBeenCalledOnce();
+        runtimeConfig.state.lastError = null;
+        runtimeConfig.notify();
+        flush();
+        expect(labToggle(page, "Decision assistance").checked).toBe(true);
+      }
+    },
+  );
+});

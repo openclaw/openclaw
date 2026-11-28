@@ -1,3 +1,8 @@
+import noForcedProcessExit from "./lib/no-forced-process-exit.mjs";
+import noOperatorPermissionRead from "./lib/no-operator-permission-read.mjs";
+import noOperatorRefusalConstruction from "./lib/no-operator-refusal-construction.mjs";
+import noRecursiveReaddir from "./lib/no-recursive-readdir.mjs";
+import noTurnAuthorityDerivation from "./lib/no-turn-authority-derivation.mjs";
 import {
   BOUNDARY_GUARD_FIXTURE_ROOT,
   CHAINED_ASSERTION_EXCLUDED_ROOTS,
@@ -18,16 +23,20 @@ function unwrapExpression(node) {
   return current;
 }
 
+function repositoryPath(context) {
+  const filename = context.physicalFilename.replaceAll("\\", "/");
+  const cwd = context.cwd.replaceAll("\\", "/");
+  return filename.startsWith(`${cwd}/`) ? filename.slice(cwd.length + 1) : filename;
+}
+
 function restrictedCallRule({ allowedFiles = [], message, objects, property, roots }) {
   return {
     create(context) {
-      const filename = context.physicalFilename.replaceAll("\\", "/");
-      const cwd = context.cwd.replaceAll("\\", "/");
-      const repoPath = filename.startsWith(`${cwd}/`) ? filename.slice(cwd.length + 1) : filename;
+      const repoPath = repositoryPath(context);
       if (
-        !filename.endsWith(".ts") ||
+        !/\.tsx?$/u.test(repoPath) ||
         !roots.some((root) => pathMatchesTypeAssertionRoot(repoPath, root)) ||
-        TYPE_ASSERTION_TEST_FILE_SUFFIXES.some((suffix) => filename.endsWith(suffix)) ||
+        TYPE_ASSERTION_TEST_FILE_SUFFIXES.some((suffix) => repoPath.endsWith(suffix)) ||
         allowedFiles.includes(repoPath)
       ) {
         return {};
@@ -108,9 +117,7 @@ function noChainedTypeAssertionsRule({ excludedRoots = [], roots }) {
       },
     },
     create(context) {
-      const filename = context.physicalFilename.replaceAll("\\", "/");
-      const cwd = context.cwd.replaceAll("\\", "/");
-      const repoPath = filename.startsWith(`${cwd}/`) ? filename.slice(cwd.length + 1) : filename;
+      const repoPath = repositoryPath(context);
       if (
         !roots.some((root) => pathMatchesTypeAssertionRoot(repoPath, root)) ||
         excludedRoots.some((root) => pathMatchesTypeAssertionRoot(repoPath, root)) ||
@@ -237,7 +244,7 @@ function assertedExpression(node) {
 
 function assertedIdentifier(node) {
   let expression = assertedExpression(node);
-  while (expression.type === "TSAsExpression" || expression.type === "TSTypeAssertion") {
+  while (isTypeAssertionExpression(expression)) {
     expression = assertedExpression(expression);
   }
   return expression.type === "Identifier" ? expression : null;
@@ -248,17 +255,12 @@ function isNestedAssertion(node) {
   while (parent?.type === "ParenthesizedExpression") {
     parent = parent.parent;
   }
-  return (
-    (parent?.type === "TSAsExpression" || parent?.type === "TSTypeAssertion") &&
-    assertedExpression(parent) === node
-  );
+  return parent && isTypeAssertionExpression(parent) && assertedExpression(parent) === node;
 }
 
 function assertionFromExpression(expression) {
   const unwrapped = unwrapExpressionParentheses(expression);
-  return unwrapped.type === "TSAsExpression" || unwrapped.type === "TSTypeAssertion"
-    ? unwrapped
-    : null;
+  return isTypeAssertionExpression(unwrapped) ? unwrapped : null;
 }
 
 function normalizedTypeText(sourceText, type) {
@@ -354,7 +356,7 @@ function variableDeclarator(variable) {
 function knownValueEvidence(expression, scopes, boundary, visitedVariables) {
   const unwrapped = unwrapExpressionParentheses(expression);
 
-  if (unwrapped.type === "TSAsExpression" || unwrapped.type === "TSTypeAssertion") {
+  if (isTypeAssertionExpression(unwrapped)) {
     if (broadTypeKind(unwrapped.typeAnnotation) !== null) {
       return null;
     }
@@ -415,19 +417,7 @@ function knownValueEvidence(expression, scopes, boundary, visitedVariables) {
   );
 }
 
-function widenedBinding(variable, scopes) {
-  const declarator = variableDeclarator(variable);
-  if (
-    declarator === null ||
-    declarator.parent.type !== "VariableDeclaration" ||
-    declarator.parent.kind !== "const" ||
-    declarator.id.type !== "Identifier" ||
-    declarator.init === null ||
-    variable.references.some((reference) => reference.isWrite() && !reference.init)
-  ) {
-    return null;
-  }
-
+function widenedBinding(variable, scopes, declarator) {
   const boundary = functionBoundary(declarator);
   const declaredType = declarator.id.typeAnnotation?.typeAnnotation;
   const initializerAssertion = assertionFromExpression(declarator.init);
@@ -456,21 +446,26 @@ function resolveWidenedBinding(variable, scopes, boundary, assertedAt) {
     }
     visitedVariables.add(current);
 
-    const widened = widenedBinding(current, scopes);
-    if (widened !== null) {
-      return widened;
-    }
-
     const declarator = variableDeclarator(current);
     if (
       declarator === null ||
       declarator.parent.type !== "VariableDeclaration" ||
       declarator.parent.kind !== "const" ||
       declarator.id.type !== "Identifier" ||
-      (declarator.id.typeAnnotation !== null && declarator.id.typeAnnotation !== undefined) ||
       declarator.init === null ||
+      current.references.some((reference) => reference.isWrite() && !reference.init)
+    ) {
+      return null;
+    }
+
+    const widened = widenedBinding(current, scopes, declarator);
+    if (widened !== null) {
+      return widened;
+    }
+
+    if (
+      (declarator.id.typeAnnotation !== null && declarator.id.typeAnnotation !== undefined) ||
       declarator.end >= assertedAt ||
-      current.references.some((reference) => reference.isWrite() && !reference.init) ||
       functionBoundary(declarator) !== boundary
     ) {
       return null;
@@ -518,14 +513,12 @@ function noWidenThenAssertRule({ roots }) {
       },
     },
     create(context) {
-      const filename = context.physicalFilename.replaceAll("\\", "/");
-      const cwd = context.cwd.replaceAll("\\", "/");
-      const repoPath = filename.startsWith(`${cwd}/`) ? filename.slice(cwd.length + 1) : filename;
+      const repoPath = repositoryPath(context);
       if (!roots.some((root) => repoPath === root || repoPath.startsWith(`${root}/`))) {
         return {};
       }
 
-      let scopes = [];
+      let scopes;
       const checkAssertion = (node) => {
         if (isNestedAssertion(node)) {
           return;
@@ -535,6 +528,7 @@ function noWidenThenAssertRule({ roots }) {
           return;
         }
 
+        scopes ??= context.sourceCode.scopeManager.scopes;
         const variable = resolvedVariableForIdentifier(scopes, expression);
         if (variable === null) {
           return;
@@ -563,9 +557,6 @@ function noWidenThenAssertRule({ roots }) {
       };
 
       return {
-        Program() {
-          scopes = context.sourceCode.scopeManager.scopes;
-        },
         TSAsExpression: checkAssertion,
         TSTypeAssertion: checkAssertion,
       };
@@ -576,6 +567,11 @@ function noWidenThenAssertRule({ roots }) {
 export default {
   meta: { name: "openclaw-boundaries" },
   rules: {
+    "no-forced-process-exit": noForcedProcessExit,
+    "no-operator-permission-read": noOperatorPermissionRead,
+    "no-operator-refusal-construction": noOperatorRefusalConstruction,
+    "no-recursive-readdir": noRecursiveReaddir,
+    "no-turn-authority-derivation": noTurnAuthorityDerivation,
     "no-raw-window-open-call": restrictedCallRule({
       allowedFiles: ["ui/src/lib/editor-links.ts", "ui/src/lib/open-external-url.ts"],
       roots: ["ui/src", "test/fixtures/oxlint-boundary-guards"],

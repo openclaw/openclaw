@@ -46,6 +46,60 @@ describe("readChatSessionActionAccess", () => {
     expect(Object.values(admin).every((access) => access.allowed)).toBe(true);
   });
 
+  it("permits message forks only for owned sessions with a session write grant", () => {
+    for (const sharingRole of ["owner", "admin", "member", "viewer", undefined] as const) {
+      const access = readChatSessionActionAccess(
+        snapshot({ methods, scopes: ["operator.sessions.write"] }),
+        false,
+        { session: { sharingRole } },
+      );
+      expect(access.fork.allowed).toBe(sharingRole === "owner" || sharingRole === "admin");
+      expect(access.rewind.allowed).toBe(false);
+      expect(access.reset.allowed).toBe(false);
+      expect(access.branchSwitch.allowed).toBe(false);
+    }
+    expect(
+      readChatSessionActionAccess(
+        snapshot({ methods, scopes: ["operator.sessions.read"] }),
+        false,
+        { session: { sharingRole: "owner" } },
+      ).fork,
+    ).toMatchObject({ allowed: false, cause: "missing-scope" });
+  });
+
+  it("offers invited participants only the exact chat run action", () => {
+    const gateway = snapshot({ methods, scopes: ["operator.sessions.read"] });
+    const options = {
+      session: { sharingRole: "member" as const, invitedAccess: "send" as const },
+      runId: "own-run",
+    };
+    const access = readChatSessionActionAccess(gateway, true, options);
+    expect(access.abort.allowed).toBe(true);
+    expect(
+      Object.entries(access)
+        .filter(([, value]) => value.allowed)
+        .map(([action]) => action),
+    ).toEqual(["abort"]);
+    expect(
+      readChatSessionActionAccess(gateway, true, { session: options.session }).abort.allowed,
+    ).toBe(false);
+    expect(readChatSessionActionAccess(gateway, false, options).abort.allowed).toBe(false);
+    expect(
+      readChatSessionActionAccess(gateway, true, { ...options, sessionAbortable: true }).abort
+        .allowed,
+    ).toBe(false);
+    expect(
+      readChatSessionActionAccess({ ...gateway, phase: "reconnecting" }, true, options).abort,
+    ).toMatchObject({ allowed: false, cause: "disconnected" });
+    expect(
+      readChatSessionActionAccess(
+        snapshot({ methods: ["sessions.abort"], scopes: ["operator.sessions.read"] }),
+        true,
+        options,
+      ).abort,
+    ).toMatchObject({ allowed: false, cause: "method-unavailable" });
+  });
+
   it("selects the active-run abort method and rejects explicit method absence", () => {
     expect(
       readChatSessionActionAccess(

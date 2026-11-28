@@ -1,7 +1,7 @@
 import type { APIGatewayBotInfo } from "discord-api-types/v10";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { captureHttpExchange } from "openclaw/plugin-sdk/proxy-capture";
+import { captureHttpExchangeAsync } from "openclaw/plugin-sdk/proxy-capture";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -47,60 +47,16 @@ const discordGatewayBotInfoSchema = Type.Object({
 
 const gatewayMetadataFallbackLogLastAt = new WeakMap<RuntimeEnv, number>();
 
-function resolveFetchInputUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.toString();
-  }
-  return input.url;
-}
-
-async function materializeGuardedResponse(response: Response): Promise<Response> {
-  const body = new Uint8Array(
-    await readResponseWithLimit(response, DISCORD_GATEWAY_METADATA_MAX_BYTES, {
-      onOverflow: ({ size, maxBytes }) =>
-        new Error(
-          `Discord gateway metadata response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
-        ),
-    }),
-  );
-  return new Response(body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
-}
-
-function normalizeGatewayInfoTimeoutMs(value: unknown): number | undefined {
-  const numeric = parseStrictPositiveInteger(value);
-  if (numeric === undefined) {
-    return undefined;
-  }
-  return Math.min(numeric, MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS);
-}
-
 export function resolveDiscordGatewayInfoTimeoutMs(params?: { env?: NodeJS.ProcessEnv }): number {
-  return (
-    normalizeGatewayInfoTimeoutMs(params?.env?.[DISCORD_GATEWAY_INFO_TIMEOUT_ENV]) ??
-    DEFAULT_DISCORD_GATEWAY_INFO_TIMEOUT_MS
+  return Math.min(
+    parseStrictPositiveInteger(params?.env?.[DISCORD_GATEWAY_INFO_TIMEOUT_ENV]) ??
+      DEFAULT_DISCORD_GATEWAY_INFO_TIMEOUT_MS,
+    MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS,
   );
-}
-
-function summarizeGatewayResponseBody(body: string): string {
-  return summarizeDiscordResponseBody(body, { emptyText: "<empty>" }) ?? "<empty>";
-}
-
-function isDiscordGatewayRateLimitResponse(status: number, body: string): boolean {
-  return status === 429 && isDiscordRateLimitResponseBody(body);
 }
 
 function isTransientDiscordGatewayResponse(status: number, body: string): boolean {
-  if (status >= 500) {
-    return true;
-  }
-  if (isDiscordGatewayRateLimitResponse(status, body)) {
+  if (status >= 500 || (status === 429 && isDiscordRateLimitResponseBody(body))) {
     return true;
   }
   const normalized = body.toLowerCase();
@@ -131,23 +87,6 @@ function createGatewayMetadataError(params: {
   return error;
 }
 
-function isTransientGatewayMetadataError(error: unknown): boolean {
-  return Boolean((error as DiscordGatewayMetadataError | undefined)?.transient);
-}
-
-function createDefaultGatewayInfo(): APIGatewayBotInfo {
-  return {
-    url: DEFAULT_DISCORD_GATEWAY_URL,
-    shards: 1,
-    session_start_limit: {
-      total: 1,
-      remaining: 1,
-      reset_after: 0,
-      max_concurrency: 1,
-    },
-  };
-}
-
 function summarizeGatewaySchemaErrors(value: unknown): string {
   const errors = Errors(discordGatewayBotInfoSchema, value);
   if (errors.length === 0) {
@@ -159,73 +98,10 @@ function summarizeGatewaySchemaErrors(value: unknown): string {
     .join("; ");
 }
 
-function parseDiscordGatewayInfoBody(body: string): APIGatewayBotInfo {
-  const parsed = JSON.parse(body) as unknown;
-  if (!Check(discordGatewayBotInfoSchema, parsed)) {
-    throw new Error(summarizeGatewaySchemaErrors(parsed));
-  }
-  return parsed;
-}
-
-async function fetchDiscordGatewayInfo(params: {
-  token: string;
-  gatewayBotUrl?: string;
-  fetchImpl: DiscordGatewayFetch;
-  fetchInit?: DiscordGatewayFetchInit;
-}): Promise<APIGatewayBotInfo> {
-  let response: DiscordGatewayMetadataResponse;
-  try {
-    response = await params.fetchImpl(params.gatewayBotUrl ?? DISCORD_GATEWAY_BOT_URL, {
-      ...params.fetchInit,
-      headers: {
-        ...params.fetchInit?.headers,
-        Authorization: `Bot ${params.token}`,
-      },
-    });
-  } catch (error) {
-    throw createGatewayMetadataError({
-      detail: formatErrorMessage(error),
-      transient: true,
-      cause: error,
-    });
-  }
-
-  let body: string;
-  try {
-    body = await response.text();
-  } catch (error) {
-    throw createGatewayMetadataError({
-      detail: formatErrorMessage(error),
-      transient: true,
-      cause: error,
-    });
-  }
-  const summary = summarizeGatewayResponseBody(body);
-  const transient = isTransientDiscordGatewayResponse(response.status, body);
-
-  if (!response.ok) {
-    throw createGatewayMetadataError({
-      detail: `Discord API /gateway/bot failed (${response.status}): ${summary}`,
-      transient,
-    });
-  }
-
-  try {
-    return parseDiscordGatewayInfoBody(body);
-  } catch (error) {
-    throw createGatewayMetadataError({
-      detail: `Discord API /gateway/bot returned invalid metadata: ${formatErrorMessage(error)} (${summary})`,
-      transient,
-      cause: error,
-    });
-  }
-}
-
 export async function fetchDiscordGatewayInfoWithTimeout(params: {
   token: string;
   gatewayBotUrl?: string;
   fetchImpl: DiscordGatewayFetch;
-  fetchInit?: DiscordGatewayFetchInit;
   timeoutMs?: number;
 }): Promise<APIGatewayBotInfo> {
   const timeoutMs = Math.max(1, params.timeoutMs ?? DEFAULT_DISCORD_GATEWAY_INFO_TIMEOUT_MS);
@@ -237,16 +113,46 @@ export async function fetchDiscordGatewayInfoWithTimeout(params: {
         transient: true,
         cause: new Error("gateway metadata timeout"),
       }),
-    run: async (signal) =>
-      await fetchDiscordGatewayInfo({
-        token: params.token,
-        gatewayBotUrl: params.gatewayBotUrl,
-        fetchImpl: params.fetchImpl,
-        fetchInit: {
-          ...params.fetchInit,
+    run: async (signal) => {
+      let response: DiscordGatewayMetadataResponse;
+      let body: string;
+      try {
+        response = await params.fetchImpl(params.gatewayBotUrl ?? DISCORD_GATEWAY_BOT_URL, {
           signal,
-        },
-      }),
+          headers: {
+            Authorization: `Bot ${params.token}`,
+          },
+        });
+        body = await response.text();
+      } catch (error) {
+        throw createGatewayMetadataError({
+          detail: formatErrorMessage(error),
+          transient: true,
+          cause: error,
+        });
+      }
+      const summary = summarizeDiscordResponseBody(body, { emptyText: "<empty>" }) ?? "<empty>";
+      const transient = isTransientDiscordGatewayResponse(response.status, body);
+      if (!response.ok) {
+        throw createGatewayMetadataError({
+          detail: `Discord API /gateway/bot failed (${response.status}): ${summary}`,
+          transient,
+        });
+      }
+      try {
+        const parsed = JSON.parse(body) as unknown;
+        if (!Check(discordGatewayBotInfoSchema, parsed)) {
+          throw new Error(summarizeGatewaySchemaErrors(parsed));
+        }
+        return parsed;
+      } catch (error) {
+        throw createGatewayMetadataError({
+          detail: `Discord API /gateway/bot returned invalid metadata: ${formatErrorMessage(error)} (${summary})`,
+          transient,
+          cause: error,
+        });
+      }
+    },
   });
 }
 
@@ -254,7 +160,7 @@ export function resolveGatewayInfoWithFallback(params: { runtime?: RuntimeEnv; e
   info: APIGatewayBotInfo;
   usedFallback: boolean;
 } {
-  if (!isTransientGatewayMetadataError(params.error)) {
+  if (!(params.error as DiscordGatewayMetadataError | undefined)?.transient) {
     throw params.error;
   }
   const message = formatErrorMessage(params.error);
@@ -272,7 +178,16 @@ export function resolveGatewayInfoWithFallback(params: { runtime?: RuntimeEnv; e
     }
   }
   return {
-    info: createDefaultGatewayInfo(),
+    info: {
+      url: DEFAULT_DISCORD_GATEWAY_URL,
+      shards: 1,
+      session_start_limit: {
+        total: 1,
+        remaining: 1,
+        reset_after: 0,
+        max_concurrency: 1,
+      },
+    },
     usedFallback: true,
   };
 }
@@ -285,7 +200,7 @@ export async function fetchDiscordGatewayMetadataGuarded(
   const requestInit = init as RequestInit | undefined;
   const signal = requestInit?.signal ?? undefined;
   const guarded = await fetchWithSsrFGuard({
-    url: resolveFetchInputUrl(input),
+    url: input,
     init: requestInit,
     // DNS and proxy preflight run before RequestInit reaches fetch. Surface the
     // existing metadata watchdog here so the whole lookup shares one deadline.
@@ -306,12 +221,26 @@ export async function fetchDiscordGatewayMetadataGuarded(
   });
   let response: Response;
   try {
-    response = await materializeGuardedResponse(guarded.response);
+    const source = guarded.response;
+    const body = new Uint8Array(
+      await readResponseWithLimit(source, DISCORD_GATEWAY_METADATA_MAX_BYTES, {
+        onOverflow: ({ size, maxBytes }) =>
+          new Error(
+            `Discord gateway metadata response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+          ),
+      }),
+    );
+    response = new Response(body, {
+      status: source.status,
+      statusText: source.statusText,
+      headers: source.headers,
+    });
   } finally {
     await guarded.release();
   }
   if (options?.capture) {
-    captureHttpExchange({
+    // Finalization retains capture failures; observe the Promise returned by the SDK view.
+    void captureHttpExchangeAsync({
       url: input,
       method: (init?.method as string | undefined) ?? "GET",
       requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
@@ -319,7 +248,7 @@ export async function fetchDiscordGatewayMetadataGuarded(
       response,
       flowId: options.capture.flowId,
       meta: options.capture.meta,
-    });
+    }).catch(() => {});
   }
   return response;
 }

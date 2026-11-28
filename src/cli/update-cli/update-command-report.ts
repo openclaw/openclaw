@@ -7,43 +7,42 @@ import {
   prepareUpdateFailureReport,
   submitUpdateFailureReport,
   type UpdateFailureReportSubmitResult,
+  type PreparedUpdateFailureReport,
 } from "../../infra/update-failure-report.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
-type UpdateFailureAction = "triage" | "report" | "dismiss";
+type UpdateFailureAction = "triage" | "report" | "status" | "browser" | "dismiss";
 
-function renderSubmissionResult(result: UpdateFailureReportSubmitResult): string[] {
+function renderSubmissionResult(
+  result: UpdateFailureReportSubmitResult,
+  browserRequested: boolean,
+): string[] {
   if (result.status === "created") {
     return [`Created GitHub issue: ${result.url}`, ...(result.message ? [result.message] : [])];
   }
   if (result.status === "fallback") {
     return [
-      `GitHub issue creation was unavailable: ${result.message}`,
-      `Prefilled issue: ${result.fallbackUrl}`,
-      `Saved sanitized report: ${result.savedReportPath}`,
+      browserRequested
+        ? result.message
+        : `GitHub issue creation was unavailable: ${result.message}`,
+      ...(browserRequested ? [`Prefilled issue: ${result.fallbackUrl}`] : []),
     ];
   }
-  if (result.status === "retryable") {
-    return [result.message];
-  }
-  return [
-    result.message,
-    ...(result.url ? [`Existing issue: ${result.url}`] : []),
-    ...(result.fallbackUrl ? [`Existing prefilled issue: ${result.fallbackUrl}`] : []),
-  ];
+  return [result.message];
 }
 
 /** Offers report as a distinct interactive action; callers retain triage ownership. */
 export async function runInteractiveUpdateFailureAction(params: {
   attemptId: string;
   env: NodeJS.ProcessEnv;
-  error?: string;
-  result?: UpdateRunResult;
   rollbackCompleted?: boolean;
   runtime: Pick<RuntimeEnv, "error" | "log">;
 }): Promise<"triage" | "handled"> {
+  let prepared: PreparedUpdateFailureReport | undefined;
+  let browserAvailable = false;
+  let reportPending = false;
+  const stateDir = resolveStateDir(params.env);
   while (true) {
     const action = await select<UpdateFailureAction>({
       message: params.rollbackCompleted
@@ -52,7 +51,10 @@ export async function runInteractiveUpdateFailureAction(params: {
       ...(params.rollbackCompleted ? { initialValue: "dismiss" as const } : {}),
       options: [
         { value: "triage", label: "Diagnose update failure" },
-        { value: "report", label: "Report update failure" },
+        reportPending
+          ? { value: "status", label: "Check report status" }
+          : { value: "report", label: "Report update failure" },
+        ...(browserAvailable ? [{ value: "browser" as const, label: "Report in browser" }] : []),
         { value: "dismiss", label: "Exit" },
       ],
     });
@@ -63,48 +65,47 @@ export async function runInteractiveUpdateFailureAction(params: {
       return "triage";
     }
     try {
-      const result: UpdateRunResult = params.result ?? {
-        status: "error",
-        mode: "unknown",
-        steps: [],
-        durationMs: 0,
-      };
-      const stateDir = resolveStateDir(params.env);
-      let recordedRun: ReturnType<typeof getUpdateRun>;
-      try {
-        recordedRun = getUpdateRun(params.attemptId, { env: params.env });
-      } catch {
-        // A missing or locked ledger must not prevent reporting the direct failure.
+      if (!prepared) {
+        const run = getUpdateRun(params.attemptId, { env: params.env });
+        if (!run) {
+          throw new Error("This failed update attempt is unavailable.");
+        }
+        prepared = await prepareUpdateFailureReport(run, { env: params.env, stateDir });
       }
-      const prepared = await prepareUpdateFailureReport(
-        {
-          attemptId: params.attemptId,
-          action: "cli",
-          ...(params.error ? { error: params.error } : {}),
-          result,
-          recordedRun,
-          ...(result.after?.upstreamRef ? { target: result.after.upstreamRef } : {}),
-        },
-        { env: params.env, stateDir },
-      );
       params.runtime.log("Sanitized update failure report preview:");
       params.runtime.log(prepared.body);
       const confirmed = await confirm({
-        message: "Submit this sanitized report to openclaw/openclaw now?",
+        message:
+          action === "browser"
+            ? "Prepare a browser link to review and submit this report yourself?"
+            : action === "status"
+              ? "Check whether this report was submitted to openclaw/openclaw?"
+              : "Submit this sanitized report to openclaw/openclaw now?",
         initialValue: false,
       });
       if (isCancel(confirmed) || !confirmed) {
         params.runtime.log("Update failure report cancelled.");
         return "handled";
       }
-      const submitted = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
-        env: params.env,
-        stateDir,
-      });
-      for (const line of renderSubmissionResult(submitted)) {
+      // A lost upload response must not retain an earlier browser-retry choice.
+      browserAvailable = false;
+      const submitted = await submitUpdateFailureReport(
+        prepared,
+        prepared.previewDigest,
+        action === "browser"
+          ? { publicationMode: "browser" }
+          : action === "status"
+            ? { publicationMode: "reconcile" }
+            : { allowBrowserFallback: false },
+      );
+      reportPending = submitted.status === "pending";
+      browserAvailable =
+        prepared.browserFallback.status === "available" &&
+        (submitted.status === "retryable" || submitted.status === "fallback");
+      for (const line of renderSubmissionResult(submitted, action === "browser")) {
         params.runtime.log(line);
       }
-      if (submitted.status !== "retryable") {
+      if (submitted.status === "created" || (action === "browser" && submitted.fallbackUrl)) {
         return "handled";
       }
     } catch (error) {

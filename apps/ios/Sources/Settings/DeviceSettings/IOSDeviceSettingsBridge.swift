@@ -17,7 +17,7 @@ final class IOSDeviceSettingsBridge: NSObject, WKScriptMessageHandlerWithReply {
     private let onStatusRequest: (() -> Void)?
     private let producer: IOSDeviceSettingsSnapshotProducer
     private let permissions = IOSDeviceSettingsPermissions()
-    private let requests = IOSDeviceSettingsRequestQueue()
+    private let requests = DeviceSettingsRequestQueue()
     private let consent = IOSDeviceSettingsConsentPresenter()
     private weak var webView: WKWebView?
     private var gatewayURL: URL?
@@ -194,7 +194,7 @@ final class IOSDeviceSettingsBridge: NSObject, WKScriptMessageHandlerWithReply {
             return
         }
         if request == .status { self.onStatusRequest?() }
-        self.requests.enqueue(operation: { [weak self] in
+        self.requests.enqueue { [weak self] in
             guard let self, self.isCurrent(sourceID) else {
                 reply.retire()
                 return
@@ -234,7 +234,9 @@ final class IOSDeviceSettingsBridge: NSObject, WKScriptMessageHandlerWithReply {
                 self.refresh()
                 reply.finish(error: "Device settings could not be updated. Try again.")
             }
-        }, onCancel: { reply.retire() })
+        } onCancel: {
+            reply.retire()
+        }
     }
 
     private func isCurrent(_ sourceID: RequestIdentity) -> Bool {
@@ -263,26 +265,24 @@ final class IOSDeviceSettingsBridge: NSObject, WKScriptMessageHandlerWithReply {
         switch request {
         case .status:
             self.refreshLocationAvailability()
-        case .checkForUpdates, .chromeExtensionStatus, .installChromeExtension:
+        case .checkForUpdates, .chromeExtensionSetup, .chromeExtensionStatus, .installChromeExtension,
+             .resolvePermission:
             break
         case let .set(key, value):
-            return try await self.set(key, value: value, sourceID: sourceID)
+            return try await IOSDeviceSettingsActions.set(
+                key,
+                value: value,
+                appModel: self.appModel,
+                appearanceModel: self.appearanceModel,
+                confirm: self.confirm,
+                isCurrent: isCurrent)
         case let .requestPermission(permission):
-            switch permission {
-            case .notifications:
-                _ = await IOSDeviceSettingsActions.requestNotificationPermission(
-                    confirmDisclosure: { await self.confirm(.notificationEnrollment) },
-                    isCurrent: isCurrent)
-                return false
-            case .location:
-                let mode = self.locationMode == .off ? .whileUsing : self.locationMode
-                _ = await self.appModel.requestLocationPermissions(mode: mode, isCurrent: isCurrent)
-                return true
-            default:
-                try await self.permissions.request(permission, isCurrent: isCurrent)
-                return [.camera, .microphone, .speechRecognition, .contacts, .calendars, .reminders, .photos]
-                    .contains(permission)
-            }
+            return try await IOSDeviceSettingsActions.requestPermission(
+                permission,
+                appModel: self.appModel,
+                permissions: self.permissions,
+                confirm: self.confirm,
+                isCurrent: isCurrent)
         case .openSystemSettings:
             if let url = URL(string: UIApplication.openSettingsURLString) { await UIApplication.shared.open(url) }
         case let .open(panel):
@@ -290,62 +290,6 @@ final class IOSDeviceSettingsBridge: NSObject, WKScriptMessageHandlerWithReply {
             case .connection, .gateways, .watch, .diagnostics, .licenses, .about: self.openPanel(panel)
             default: break
             }
-        }
-        return false
-    }
-
-    private var locationMode: OpenClawLocationMode {
-        UserDefaults.standard.string(forKey: "location.enabledMode")
-            .flatMap(OpenClawLocationMode.init(rawValue:)) ?? .off
-    }
-
-    private func set(
-        _ key: DeviceSettingKey,
-        value: DeviceSettingValue,
-        sourceID: RequestIdentity) async throws -> Bool
-    {
-        let required = IOSDeviceSettingsConsent.required(for: key, value: value, locationMode: self.locationMode)
-        if let required {
-            guard await self.confirm(required) else { return false }
-        }
-        guard self.isCurrent(sourceID),
-              IOSDeviceSettingsConsent.required(for: key, value: value, locationMode: self.locationMode) == required
-        else { return false }
-        let isCurrent: @MainActor () -> Bool = { [weak self] in self?.isCurrent(sourceID) == true }
-        switch (key, value) {
-        case let (.appearance, .string(raw)):
-            if let preference = AppAppearancePreference(rawValue: raw) { self.appearanceModel.select(preference) }
-        case let (.notificationsEnabled, .boolean(enabled)):
-            _ = await IOSDeviceSettingsActions.setNotificationsEnabled(
-                enabled, confirmDisclosure: { await self.confirm(.notificationEnrollment) }, isCurrent: isCurrent)
-        case let (.cameraEnabled, .boolean(enabled)):
-            UserDefaults.standard.set(enabled, forKey: "camera.enabled")
-            return true
-        case let (.keepAwakeEnabled, .boolean(enabled)):
-            UserDefaults.standard.set(enabled, forKey: "screen.preventSleep")
-        case let (.healthSummaryEnabled, .boolean(enabled)):
-            if enabled {
-                try await HealthAuthorization.enable(isCurrent: isCurrent)
-            } else {
-                HealthAuthorization.disable()
-            }
-            return true
-        case let (.wakeEnabled, .boolean(enabled)): self.appModel.setVoiceWakeEnabled(enabled)
-        case let (.talkEnabled, .boolean(enabled)): self.appModel.setTalkEnabled(enabled)
-        case let (.talkButtonEnabled, .boolean(enabled)):
-            UserDefaults.standard.set(enabled, forKey: "talk.button.enabled")
-        case let (.talkBackgroundEnabled, .boolean(enabled)):
-            UserDefaults.standard.set(enabled, forKey: "talk.background.enabled")
-        case let (.speakerphoneEnabled, .boolean(enabled)): self.appModel.setTalkSpeakerphoneEnabled(enabled)
-        case let (.locationMode, .string(raw)):
-            guard let mode = DeviceSettingsLocationMode(rawValue: raw) else { return false }
-            return await IOSDeviceSettingsActions.applyLocationMode(
-                mode.nativeMode,
-                appModel: self.appModel,
-                isCurrent: isCurrent)
-        default:
-            // Precision is system-owned on iOS; unsupported platform settings only republish current state.
-            break
         }
         return false
     }

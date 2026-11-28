@@ -189,6 +189,45 @@ describe("consumer dispatch contract", () => {
 
 describe("archive boundary", () => {
   const parser = path.resolve("scripts/mantis/read-request-archive.py");
+  it.each([8192, 8193])("bounds UI bundle entries at %s files", (entries) => {
+    const temp = mkdtempSync(path.join(os.tmpdir(), "mantis-bundle-"));
+    try {
+      const archive = path.join(temp, "bundle.tar");
+      const output = path.join(temp, "bundle");
+      execFileSync(
+        "python3",
+        [
+          "-I",
+          "-S",
+          "-c",
+          `import io,sys,tarfile
+with tarfile.open(sys.argv[1], "w") as archive:
+    for index in range(int(sys.argv[2])):
+        name = "control-ui/index.html" if index == 0 else f"control-ui/assets/chunk-{index}.js"
+        entry = tarfile.TarInfo(name)
+        entry.size = 1
+        archive.addfile(entry, io.BytesIO(b"x"))
+`,
+          archive,
+          String(entries),
+        ],
+        { stdio: "pipe" },
+      );
+      const parse = () =>
+        execFileSync("python3", ["-I", "-S", parser, "bundle", archive, output], {
+          stdio: "pipe",
+        });
+      if (entries === 8192) {
+        parse();
+        expect(readFileSync(path.join(output, "index.html"), "utf8")).toBe("x");
+      } else {
+        expect(parse).toThrow();
+      }
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
   it.each(["complete", "traversal", "symlink", "missing", "oversized", "duplicate", "nul-path"])(
     "handles %s ZIP without unsafe extraction",
     async (fault) => {

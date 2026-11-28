@@ -23,7 +23,7 @@ Optional variables accepted by `scripts/docker/setup.sh` (and, for the gateway c
 | `OPENCLAW_DOCKER_BUILD_NODE_OPTIONS`            | Override the local source-build Node options (default `--max-old-space-size=8192`)                                                  |
 | `OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB` | Override the local source-build tsdown heap in MB                                                                                   |
 | `OPENCLAW_DOCKER_BUILD_SKIP_DTS`                | Skip declaration output during runtime-only local image builds (default `1`)                                                        |
-| `OPENCLAW_INSTALL_BROWSER`                      | Bake Chromium + Xvfb into the image at build time                                                                                   |
+| `OPENCLAW_INSTALL_BROWSER`                      | Bake both Chromium distributions (`1`), only `chromium`, or only `headless-shell` into the image; empty or `0` omits the browser    |
 | `OPENCLAW_EXTRA_MOUNTS`                         | Extra host bind mounts (comma-separated `source:target[:opts]`)                                                                     |
 | `OPENCLAW_HOME_VOLUME`                          | Persist `/home/node` in a named Docker volume                                                                                       |
 | `OPENCLAW_TZ`                                   | Set the gateway and CLI container timezone to an IANA name (default `UTC`)                                                          |
@@ -51,3 +51,18 @@ OPENCLAW_DOCKER_BUILD_NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_DOCKER_BUI
 ```
 
 The explicit tsdown heap override is also the supported opt-in for attempting a build below the automatically detected safe minimum. That attempt may stall or fail.
+
+## Telemetry
+
+To opt out of Gateway update telemetry and ClawHub reporting, add these lines to
+the official Compose project's `.env`. Both the Gateway and CLI services read it.
+
+```dotenv
+OPENCLAW_NO_AUTO_UPDATE=1
+CLAWHUB_DISABLE_TELEMETRY=1
+```
+
+Apply the new environment to the Gateway with `docker compose up -d openclaw-gateway`.
+A plain `docker compose restart` does not pick up changes to `.env`. For custom
+containers, pass the variables in the environment of the processes that need them.
+See [Telemetry controls](/gateway/telemetry#telemetry-controls) for what each switch disables.

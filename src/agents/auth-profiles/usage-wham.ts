@@ -8,8 +8,8 @@ import {
   resolveExpiresAtMsFromEpochSeconds,
 } from "@openclaw/normalization-core/number-coercion";
 import { z } from "zod";
-import type { AuthProfileCooldownClassification } from "./types.js";
 import { resolveUsageWindowUntil } from "./usage-failure-state.js";
+import type { WhamCooldownProbeResult } from "./usage-reduction.js";
 
 const WHAM_BURST_COOLDOWN_MS = 15_000;
 export const WHAM_PROBE_FAILURE_COOLDOWN_MS = 30_000;
@@ -31,6 +31,8 @@ const whamCreditsSchema = z.object({
   overage_limit_reached: z.boolean().optional(),
 });
 export const whamUsageSchema = z.object({
+  account_id: z.string().nullish(),
+  user_id: z.string().nullish(),
   rate_limit: whamRateLimitSchema,
   additional_rate_limits: z
     .array(z.object({ rate_limit: whamRateLimitSchema.nullish() }))
@@ -51,13 +53,6 @@ export const whamUsageSchema = z.object({
     .nullish(),
 });
 export type WhamUsage = z.infer<typeof whamUsageSchema>;
-
-export type WhamCooldownProbeResult = {
-  available?: true;
-  cooldownMs: number;
-  cooldownClassification?: AuthProfileCooldownClassification;
-  blockedUntil?: number;
-};
 
 function resolveWhamResetMs(window: WhamUsageWindow, now: number): number | null {
   if (window.reset_after_seconds !== undefined && window.reset_after_seconds > 0) {
@@ -108,7 +103,7 @@ export function classifyWhamUsage(usage: WhamUsage, now: number): WhamCooldownPr
       entry.rate_limit ? [entry.rate_limit] : [],
     ),
   ];
-  let resetMs = 0;
+  let resetMs: number | undefined;
   for (const limit of limits) {
     const windows = [limit.primary_window, limit.secondary_window].filter(isWhamWindowExhausted);
     if (limit.limit_reached === false && windows.length === 0) {
@@ -121,22 +116,20 @@ export function classifyWhamUsage(usage: WhamUsage, now: number): WhamCooldownPr
     if (windows.length === 0) {
       return failedProbe;
     }
+    const covered = limit === usage.rate_limit && whamCreditsCoverExhaustedWindows(usage);
     for (const window of windows) {
       const remainingMs = resolveWhamResetMs(window, now);
       if (remainingMs === null || remainingMs <= 0) {
         return failedProbe;
       }
-      resetMs = Math.max(resetMs, remainingMs);
+      resetMs = Math.max(resetMs ?? 0, covered ? 0 : remainingMs);
     }
   }
   const reachedType = usage.rate_limit_reached_type?.type;
-  if (resetMs === 0 && reachedType && reachedType !== "unknown") {
+  if (resetMs === undefined && reachedType && reachedType !== "unknown") {
     return failedProbe;
   }
-  if (resetMs > 0 && whamCreditsCoverExhaustedWindows(usage)) {
-    return { available: true, cooldownMs: WHAM_BURST_COOLDOWN_MS };
-  }
-  return resetMs > 0
+  return resetMs
     ? {
         cooldownMs: WHAM_BURST_COOLDOWN_MS,
         blockedUntil: resolveUsageWindowUntil(now, resetMs),

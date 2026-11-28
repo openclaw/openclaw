@@ -26,22 +26,34 @@ struct OnboardingActivationCanvas<Content: View>: View {
     }
 }
 
-private struct OnboardingHeroGlyph: View {
-    var mood: OpenClawMascotMood = .idle
-
-    var body: some View {
-        OpenClawActivationGlyph(size: 78, mood: self.mood, interactive: true)
-    }
-}
-
+/// The brand mark and title of every full-screen onboarding step. Keep it the only owner of the
+/// mark's size and spacing, so stepping between screens never moves or resizes the mark.
 struct OnboardingHeroHeader: View {
     let title: LocalizedStringKey
     let subtitle: LocalizedStringKey?
     var mood: OpenClawMascotMood = .idle
+    var showsConnectedBadge = false
 
     var body: some View {
         VStack(spacing: 18) {
-            OnboardingHeroGlyph(mood: self.mood)
+            ZStack(alignment: .bottomTrailing) {
+                OpenClawActivationGlyph(size: 78, mood: self.mood, interactive: true)
+
+                if self.showsConnectedBadge {
+                    Image(systemName: "checkmark")
+                        .font(OpenClawType.headlineBold)
+                        .foregroundStyle(.white)
+                        .frame(width: 30, height: 30)
+                        .background {
+                            Circle()
+                                .fill(OpenClawBrand.ok)
+                        }
+                        .overlay {
+                            Circle()
+                                .stroke(OpenClawBrand.activationCanvas, lineWidth: 3)
+                        }
+                }
+            }
 
             VStack(spacing: 8) {
                 Text(self.title)
@@ -58,6 +70,7 @@ struct OnboardingHeroHeader: View {
             }
         }
         .frame(maxWidth: .infinity)
+        .padding(.top, 18)
     }
 }
 
@@ -73,8 +86,6 @@ private struct OnboardingWelcomePrompt: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 }
-
-private typealias OnboardingPrimaryButtonStyle = OpenClawPrimaryActionButtonStyle
 
 private enum OnboardingIntroPanelStyle {
     static let iconSize: CGFloat = 34
@@ -92,7 +103,7 @@ struct OnboardingIntroPanel<Content: View>: View {
 
     var body: some View {
         self.content
-            .padding(Self.panelPadding)
+            .padding(OnboardingIntroPanelStyle.panelPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background {
                 RoundedRectangle(cornerRadius: OnboardingIntroPanelStyle.panelCornerRadius, style: .continuous)
@@ -107,10 +118,6 @@ struct OnboardingIntroPanel<Content: View>: View {
                 RoundedRectangle(cornerRadius: OnboardingIntroPanelStyle.panelCornerRadius, style: .continuous)
                     .stroke(OnboardingIntroPanelStyle.stroke, lineWidth: 0.5)
             }
-    }
-
-    private static var panelPadding: CGFloat {
-        OnboardingIntroPanelStyle.panelPadding
     }
 }
 
@@ -167,14 +174,13 @@ private struct OnboardingSecurityNotice: View {
                     Text("Security notice")
                         .font(OpenClawType.subheadSemiBold)
                         .foregroundStyle(.primary)
-                    (
-                        Text("The connected OpenClaw agent can use device capabilities you enable.")
-                            + Text(verbatim: " ")
-                            + Text(
-                                "Camera, microphone, photos, contacts, calendar, and location may be available.")
-                            + Text(verbatim: " ")
-                            + Text(
-                                "Continue only if you trust the gateway and agent you connect to."))
+                    Text(verbatim: [
+                        String(localized: "The connected OpenClaw agent can use device capabilities you enable."),
+                        String(localized: """
+                        Camera, microphone, photos, contacts, calendar, and location may be available.
+                        """),
+                        String(localized: "Continue only if you trust the gateway and agent you connect to."),
+                    ].joined(separator: " "))
                         .font(OpenClawType.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -200,8 +206,7 @@ private struct OnboardingCommandChip: View {
             } label: {
                 Image(systemName: self.didCopy ? "checkmark" : "doc.on.doc")
                     .font(OpenClawType.subheadSemiBold)
-                    .foregroundStyle(
-                        self.didCopy ? OpenClawBrand.activationPrimaryAction : Color.secondary.opacity(0.56))
+                    .foregroundStyle(self.didCopy ? Color.primary : Color.secondary.opacity(0.56))
                     .frame(width: 38, height: 38)
                     .contentTransition(.symbolEffect(.replace))
             }
@@ -210,7 +215,8 @@ private struct OnboardingCommandChip: View {
             .accessibilityLabel("Copy setup code command")
             .accessibilityValue(self.didCopy ? "Copied" : self.command)
         }
-        .foregroundStyle(OpenClawBrand.activationPrimaryAction)
+        // Neutral ink: the accent belongs to the one primary action on the screen.
+        .foregroundStyle(.primary)
         .padding(.horizontal, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: 54)
@@ -242,12 +248,15 @@ struct OnboardingIntroStep: View {
     let onContinue: () -> Void
 
     var body: some View {
+        let isPad = UIDevice.current.userInterfaceIdiom == .pad
+
         OnboardingActivationCanvas {
             VStack(alignment: .leading, spacing: 0) {
                 OnboardingHeroHeader(
                     title: "OpenClaw",
-                    subtitle: "Your agent, in your pocket. Pair this iPhone with your gateway to get started.")
-                    .padding(.top, 18)
+                    subtitle: isPad
+                        ? "Your agent, in your pocket. Pair this iPad with your gateway to get started."
+                        : "Your agent, in your pocket. Pair this iPhone with your gateway to get started.")
 
                 OnboardingIntroPanel {
                     VStack(alignment: .leading, spacing: 14) {
@@ -256,7 +265,9 @@ struct OnboardingIntroStep: View {
                             title: "Your agent runs on your own computer")
                         OnboardingSafetyRow(
                             symbol: "qrcode.viewfinder",
-                            title: "Pair this iPhone by scanning a setup code")
+                            title: isPad
+                                ? "Pair this iPad by scanning a setup code"
+                                : "Pair this iPhone by scanning a setup code")
                         OnboardingSafetyRow(
                             symbol: "message.fill",
                             title: "Chat, talk, and approve actions from anywhere")
@@ -276,7 +287,7 @@ struct OnboardingIntroStep: View {
                         Text("Continue")
                             .font(OpenClawType.subheadSemiBold)
                     }
-                    .buttonStyle(OnboardingPrimaryButtonStyle())
+                    .buttonStyle(OpenClawPrimaryActionButtonStyle())
                 }
             }
         }
@@ -288,6 +299,8 @@ struct OnboardingWelcomeStep: View {
     let isConnecting: Bool
     let onScanQRCode: () -> Void
     let onManualSetup: () -> Void
+    /// Set only while no Gateway has ever been saved on this device.
+    let onShowNewUserGuide: (() -> Void)?
 
     var body: some View {
         let statusText = self.statusLine.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -298,7 +311,6 @@ struct OnboardingWelcomeStep: View {
                     title: "Connect Gateway",
                     subtitle: nil,
                     mood: self.isConnecting ? .working : .idle)
-                    .padding(.top, 18)
 
                 VStack(spacing: 36) {
                     VStack(spacing: 14) {
@@ -320,7 +332,7 @@ struct OnboardingWelcomeStep: View {
                                     .font(OpenClawType.subheadSemiBold)
                             }
                         }
-                        .buttonStyle(OnboardingPrimaryButtonStyle())
+                        .buttonStyle(OpenClawPrimaryActionButtonStyle())
                         .disabled(self.isConnecting)
                     }
 
@@ -331,8 +343,18 @@ struct OnboardingWelcomeStep: View {
                             Text("Connect Manually")
                                 .font(OpenClawType.subheadSemiBold)
                         }
-                        .buttonStyle(OpenClawSecondaryActionButtonStyle(height: 54, shadowOpacity: 0.018))
+                        .buttonStyle(OpenClawSecondaryActionButtonStyle(height: 54))
                         .disabled(self.isConnecting)
+                    }
+
+                    if let onShowNewUserGuide {
+                        Button(action: onShowNewUserGuide) {
+                            Text("New to OpenClaw? Start here")
+                                .font(OpenClawType.subheadSemiBold)
+                                .foregroundStyle(.primary)
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.top, 46)
@@ -363,30 +385,11 @@ struct OnboardingSuccessStep: View {
     var body: some View {
         OnboardingActivationCanvas {
             VStack(spacing: 0) {
-                Spacer(minLength: 54)
-
-                ZStack(alignment: .bottomTrailing) {
-                    OpenClawActivationGlyph(size: 86, mood: .celebrating, interactive: true)
-                        .shadow(color: OpenClawBrand.activationGlow.opacity(0.18), radius: 12, x: 0, y: 6)
-
-                    Image(systemName: "checkmark")
-                        .font(OpenClawType.headlineBold)
-                        .foregroundStyle(.white)
-                        .frame(width: 30, height: 30)
-                        .background {
-                            Circle()
-                                .fill(OpenClawBrand.ok)
-                        }
-                        .overlay {
-                            Circle()
-                                .stroke(OpenClawBrand.activationCanvas, lineWidth: 3)
-                        }
-                }
-                .padding(.bottom, 22)
-
-                Text("You're connected")
-                    .font(OpenClawType.title1)
-                    .multilineTextAlignment(.center)
+                OnboardingHeroHeader(
+                    title: "You're connected",
+                    subtitle: nil,
+                    mood: .celebrating,
+                    showsConnectedBadge: true)
                     .padding(.bottom, 8)
 
                 Text(verbatim: self.gatewayName)
@@ -410,7 +413,7 @@ struct OnboardingSuccessStep: View {
                     Label("Go to Chat", systemImage: "bubble.left.and.bubble.right.fill")
                         .font(OpenClawType.subheadSemiBold)
                 }
-                .buttonStyle(OnboardingPrimaryButtonStyle())
+                .buttonStyle(OpenClawPrimaryActionButtonStyle())
             }
         }
     }
@@ -422,7 +425,7 @@ struct OnboardingModeIcon: View {
 
     var body: some View {
         Image(systemName: self.symbol)
-            .font(OpenClawType.subheadSemiBold)
+            .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(self.selected ? OpenClawBrand.activationPrimaryActionText : .secondary)
             .frame(width: 34, height: 34)
             .background {

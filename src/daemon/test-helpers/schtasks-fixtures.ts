@@ -1,4 +1,5 @@
-/** Shared Windows schtasks fixtures and temp-env helpers for daemon tests. */
+import type { ChildProcess, SpawnSyncReturns } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,10 +8,15 @@ import { vi } from "vitest";
 import type { PortUsage } from "../../infra/ports-types.js";
 import type { killProcessTree as killProcessTreeImpl } from "../../process/kill-tree.js";
 import type { MockFn } from "../../test-utils/vitest-mock-fn.js";
-import { resolveTaskScriptPath } from "../schtasks.js";
+import { resolveTaskScriptPath } from "../schtasks-layout.js";
 
 export const schtasksResponses: Array<{ code: number; stdout: string; stderr: string }> = [];
 export const schtasksCalls: string[][] = [];
+// Opt-in native registration state: repeated XML reads do not consume mutation results.
+export const schtasksRegistration: {
+  response?: (typeof schtasksResponses)[number];
+  onCommand?: (argv: string[], response: (typeof schtasksResponses)[number]) => void;
+} = {};
 
 export const inspectPortUsageMock: MockFn<
   (port: number, options?: { probeHosts?: readonly string[] }) => Promise<PortUsage>
@@ -18,7 +24,6 @@ export const inspectPortUsageMock: MockFn<
 export const gatewayServiceProbeHostsMock: MockFn<() => Promise<readonly string[]>> = vi.fn();
 export const killProcessTreeMock: MockFn<typeof killProcessTreeImpl> = vi.fn();
 
-/** Runs a test with Windows-like daemon environment paths and cleans the temp dir. */
 export async function withWindowsEnv(
   prefix: string,
   run: (params: { tmpDir: string; env: Record<string, string> }) => Promise<void>,
@@ -40,62 +45,54 @@ export async function withWindowsEnv(
 export function resetSchtasksBaseMocks() {
   schtasksResponses.length = 0;
   schtasksCalls.length = 0;
+  delete schtasksRegistration.response;
+  delete schtasksRegistration.onCommand;
   inspectPortUsageMock.mockReset();
-  gatewayServiceProbeHostsMock.mockReset();
-  gatewayServiceProbeHostsMock.mockResolvedValue(["127.0.0.1"]);
+  gatewayServiceProbeHostsMock.mockReset().mockResolvedValue(["127.0.0.1"]);
   killProcessTreeMock.mockReset();
+}
+
+async function writeScript(scriptPath: string, lines: string[]) {
+  await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+  await fs.writeFile(scriptPath, ["@echo off", ...lines, ""].join("\r\n"), "utf8");
 }
 
 export async function writeGatewayScript(
   env: Record<string, string>,
   port = Number(env.OPENCLAW_GATEWAY_PORT || "18789"),
 ) {
-  const scriptPath = resolveTaskScriptPath(env);
-  await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-  await fs.writeFile(
-    scriptPath,
-    [
-      "@echo off",
-      `set "OPENCLAW_GATEWAY_PORT=${port}"`,
-      `"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port ${port}`,
-      "",
-    ].join("\r\n"),
-    "utf8",
-  );
+  return writeScript(resolveTaskScriptPath(env), [
+    `set "OPENCLAW_GATEWAY_PORT=${port}"`,
+    `"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port ${port}`,
+  ]);
 }
 
 export function resolveStartupFixturePath(env: Record<string, string>, extension = "cmd") {
   const taskName = env.OPENCLAW_WINDOWS_TASK_NAME ?? "OpenClaw Gateway";
   return path.join(
     expectDefined(env.APPDATA, "env.APPDATA test invariant"),
-    "Microsoft",
-    "Windows",
-    "Start Menu",
-    "Programs",
-    "Startup",
+    "Microsoft/Windows/Start Menu/Programs/Startup",
     `${taskName}.${extension}`,
   );
 }
 
-export async function writeStartupFallbackEntry(env: Record<string, string>, extension = "cmd") {
-  const startupEntryPath = resolveStartupFixturePath(env, extension);
-  await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
-  await fs.writeFile(startupEntryPath, "@echo off\r\n", "utf8");
-  return startupEntryPath;
+const spawnSyncDefaults = {
+  pid: 0,
+  output: [null, "", ""],
+  stdout: "",
+  stderr: "",
+  status: 0,
+  signal: null,
+} satisfies SpawnSyncReturns<string>;
+export type SpawnSyncResult = typeof spawnSyncDefaults;
+
+export function makeSpawnSyncResult(overrides: Partial<SpawnSyncResult> = {}): SpawnSyncResult {
+  return { ...spawnSyncDefaults, output: [...spawnSyncDefaults.output], ...overrides };
 }
 
-export async function writeNodeScript(env: Record<string, string>, port = "18789") {
-  const scriptPath = resolveTaskScriptPath(env);
-  await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-  await fs.writeFile(
-    scriptPath,
-    [
-      "@echo off",
-      `set "OPENCLAW_SERVICE_KIND=node"`,
-      `set "OPENCLAW_GATEWAY_PORT=${port}"`,
-      `"C:\\bin\\openclaw.cmd" node run --host 127.0.0.1 --port ${port}`,
-      "",
-    ].join("\r\n"),
-    "utf8",
-  );
+export function createSpawnChild(unref: () => void, error?: Error): ChildProcess {
+  const child = new EventEmitter() as ChildProcess;
+  child.unref = unref;
+  queueMicrotask(() => child.emit(error ? "error" : "spawn", error));
+  return child;
 }

@@ -4,12 +4,48 @@ import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction
 import {
   nodeHostCloudflareAccessConfigFromEnv,
   nodeHostGatewayMatchesUrl,
+  normalizeNodeHostCloudflareAccessConfig,
   resolveNodeHostCloudflareAccess,
 } from "./gateway-cloudflare-access.js";
 
 describe("node-host Cloudflare Access credentials", () => {
   afterEach(() => {
     resetSecretRedactionRegistryForTest();
+  });
+
+  it("normalizes literals and shorthand while retaining current SecretRefs", () => {
+    const ref = { source: "env", provider: "default", id: "CF_ACCESS_CLIENT_ID" } as const;
+    const value = normalizeNodeHostCloudflareAccessConfig({
+      clientId: ref,
+      clientSecret: " test-secret ",
+    });
+    expect(value?.clientId).toBe(ref);
+    expect(value?.clientSecret).toBe("test-secret");
+    expect(
+      normalizeNodeHostCloudflareAccessConfig({
+        clientId: "$CF_ACCESS_CLIENT_ID",
+        clientSecret: "${CF_ACCESS_CLIENT_SECRET}",
+      }),
+    ).toEqual({
+      clientId: ref,
+      clientSecret: { source: "env", provider: "default", id: "CF_ACCESS_CLIENT_SECRET" },
+    });
+  });
+
+  it.each<[string, unknown]>([
+    ["clientId", " "],
+    ["clientSecret", { source: "env", id: "CF_ACCESS_CLIENT_SECRET" }],
+    ["clientSecret", { source: "env", provider: "default", id: "" }],
+  ])("names invalid %s inputs", (field, input) => {
+    expect(() =>
+      normalizeNodeHostCloudflareAccessConfig({
+        clientId: "test-id",
+        clientSecret: "test-secret",
+        [field]: input,
+      }),
+    ).toThrow(
+      `invalid node-host gateway.cloudflareAccess.${field}: expected a non-empty SecretInput`,
+    );
   });
 
   it("persists conventional environment fallback as SecretRefs and resolves it", async () => {

@@ -1,33 +1,14 @@
-/** Inspect captured native service commands for repairable start drift. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isPathInside } from "../infra/path-guards.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { resolveServiceEntrypoint } from "./service-layout.js";
 import type { GatewayServiceStartRepairIssue, GatewayServiceState } from "./service-types.js";
 
-const TEMP_PROGRAM_ROOTS = [os.tmpdir(), "/tmp", "/private/tmp", "/var/tmp"].map((entry) =>
-  path.resolve(entry),
-);
-function pathIsSameOrChild(candidate: string, parent: string): boolean {
-  return candidate === parent || candidate.startsWith(`${parent}${path.sep}`);
-}
-
-function isTemporaryProgramPath(value: string | undefined): boolean {
-  if (!value || !path.isAbsolute(value)) {
-    return false;
-  }
-  const resolved = path.resolve(value);
-  return TEMP_PROGRAM_ROOTS.some((root) => pathIsSameOrChild(resolved, root));
-}
-
-function isMissingProgramPath(value: string | undefined): boolean {
-  if (!value || !path.isAbsolute(value)) {
-    return false;
-  }
-  return !fs.existsSync(value);
-}
-
+const TEMP_PROGRAM_ROOTS = [os.tmpdir(), "/tmp", "/private/tmp", "/var/tmp"]
+  .map((entry) => path.resolve(entry))
+  .filter((root) => root !== path.parse(root).root);
 export function collectGatewayServiceStartRepairIssues(
   state: GatewayServiceState,
   expectedPort?: number,
@@ -42,7 +23,6 @@ export function collectGatewayServiceStartRepairIssues(
     parseTcpPort(command.environment?.OPENCLAW_GATEWAY_PORT ?? "");
   if (expectedPort !== undefined && servicePort !== null && servicePort !== expectedPort) {
     issues.push({
-      code: "port-mismatch",
       message: `service port ${servicePort} does not match current gateway config port ${expectedPort}`,
     });
   }
@@ -50,16 +30,18 @@ export function collectGatewayServiceStartRepairIssues(
     command.programArguments[0],
     resolveServiceEntrypoint(command),
   ])) {
-    if (isTemporaryProgramPath(candidate)) {
+    if (!candidate || !path.isAbsolute(candidate)) {
+      continue;
+    }
+    const resolved = path.resolve(candidate);
+    if (TEMP_PROGRAM_ROOTS.some((root) => isPathInside(root, resolved))) {
       issues.push({
-        code: "temporary-program",
         message: `service command points at a temporary path: ${candidate}`,
       });
       continue;
     }
-    if (isMissingProgramPath(candidate)) {
+    if (!fs.existsSync(candidate)) {
       issues.push({
-        code: "missing-program",
         message: `service command points at a missing path: ${candidate}`,
       });
     }

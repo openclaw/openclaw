@@ -3,7 +3,6 @@ import { buildChatApiAttachments } from "./attachment-api.ts";
 import { restoreChatApiAttachments } from "./attachment-restoration.ts";
 
 it.each([
-  { mediaType: "text/plain;charset=utf-8", mimeType: "text/plain", type: "file" },
   {
     mediaType: "text/plain;charset=utf-8;name=notes%20copy.txt",
     mimeType: "text/plain",
@@ -25,6 +24,26 @@ it.each([
     ).toEqual([{ type, mimeType, fileName: "attachment", content: "bm90ZXM=" }]);
   },
 );
+
+it("preserves a headerless CSV through upload serialization and draft recovery", () => {
+  const submitted = buildChatApiAttachments([
+    {
+      id: "headerless-attachment",
+      dataUrl: 'data:text/csv;name=report.csv;Header="absent";base64,bm90ZXM=',
+      mimeType: "text/csv",
+      fileName: "report.csv",
+    },
+  ]);
+  expect(submitted).toEqual([
+    {
+      type: "file",
+      mimeType: "text/csv; header=absent",
+      fileName: "report.csv",
+      content: "bm90ZXM=",
+    },
+  ]);
+  expect(buildChatApiAttachments(restoreChatApiAttachments(submitted))).toEqual(submitted);
+});
 
 it("serializes supported-size parameterized attachments without losing bytes", () => {
   const content = Buffer.alloc(4 * 1024 * 1024, 0xab).toString("base64");

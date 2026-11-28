@@ -3,11 +3,13 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
 import {
   readCurrentProjectionSnapshot,
+  withBorrowedProjectionSnapshot,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
 import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
+  type ResolvedTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import {
   SessionTranscriptProjectionUnavailableError,
@@ -18,17 +20,24 @@ import { startSessionTranscriptIndexReconcile } from "./session-transcript-recon
 export function withCurrentProjectionSnapshot<T>(
   scope: SessionTranscriptReadScope,
   read: (projection: CurrentTranscriptProjection) => T,
-  options: { readOnly?: boolean } = {},
+  options: {
+    readOnly?: boolean;
+    resolvedScope?: ResolvedTranscriptReadScope;
+    transaction?: CurrentTranscriptProjection["database"];
+  } = {},
 ): T {
-  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const resolved = options.resolvedScope ?? resolveSqliteTranscriptReadScope(scope);
   const databaseOptions = toDatabaseOptions(resolved);
+  if (options.transaction) {
+    return withBorrowedProjectionSnapshot(options.transaction, resolved, read);
+  }
   const readSnapshot = (database: CurrentTranscriptProjection["database"]) =>
     readCurrentProjectionSnapshot(database, resolved, read);
   const result = options.readOnly
-    ? withOpenClawAgentDatabaseReadOnly(readSnapshot, databaseOptions)
+    ? withOpenClawAgentDatabaseReadOnly(readSnapshot, databaseOptions, { snapshot: true })
     : { found: true as const, value: readSnapshot(openOpenClawAgentDatabase(databaseOptions)) };
   if (!result.found) {
-    throw new SessionTranscriptStorageUnavailableError();
+    throw new SessionTranscriptStorageUnavailableError(result.reason);
   }
   if (result.value.kind === "value") {
     return result.value.value;

@@ -10,6 +10,7 @@ import type {
   CodexSessionCatalogControl,
   CodexSessionCatalogControlFactory,
 } from "../session-catalog-types.js";
+import { threadStartResult } from "./codex-app-server.test-fixtures.js";
 import type { CodexThreadForkParams, CodexTurn } from "./protocol.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 
@@ -39,27 +40,19 @@ export function codexForkTurn(id: string, text: string): CodexTurn {
 }
 
 export function forkResponse(threadId = "thread-forked") {
+  const response = threadStartResult(threadId, "/tmp");
   return {
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    cwd: "/tmp",
+    ...response,
     model: "gpt-5.6-luna",
-    modelProvider: "openai",
-    sandbox: { type: "dangerFullAccess" },
     thread: {
-      id: threadId,
+      ...response.thread,
       sessionId: "session-forked",
-      projectId: null,
       cliVersion: "0.150.1",
       createdAt: 1715299200,
       updatedAt: 1715299200,
-      cwd: "/tmp",
-      ephemeral: false,
-      modelProvider: "openai",
       preview: "forked thread",
       source: "appServer" as const,
       status: { type: "notLoaded" as const },
-      turns: [],
     },
   };
 }
@@ -67,6 +60,7 @@ export function forkResponse(threadId = "thread-forked") {
 export function forkParams() {
   return {
     targetKey: "agent:main:dashboard:forked",
+    assertCurrent: () => {},
     source: {
       agentId: "main",
       sessionId: "session-source",
@@ -86,20 +80,6 @@ export function forkParams() {
 
 type ForkThreadStub = (params: CodexThreadForkParams) => Promise<unknown>;
 
-function factoryForControl(control: CodexSessionCatalogControl): CodexSessionCatalogControlFactory {
-  return {
-    hasActiveWork: () => false,
-    disconnect: async () => {},
-    forRequest: () => control,
-    forNode: async () => {
-      throw new Error("Node source is outside this local fork fixture");
-    },
-    homesForAgent: async () => [],
-    forUpstream: async (_agentId, fingerprint) =>
-      fingerprint === control.connectionFingerprint ? control : undefined,
-  };
-}
-
 export function forkControl(
   forkThread: ForkThreadStub = vi.fn(async () => forkResponse()),
   connectionFingerprint = "fingerprint",
@@ -114,13 +94,18 @@ export function forkControl(
     forkThread,
   } as unknown as CodexSessionCatalogControl;
   control.withPinnedConnection = async (run) => await run(control);
-  return {
-    archiveThread,
-    control,
-    controlFactory: factoryForControl(control),
-    forkThread,
-    retireConnection,
+  const controlFactory: CodexSessionCatalogControlFactory = {
+    hasActiveWork: () => false,
+    disconnect: async () => {},
+    forRequest: () => control,
+    forNode: async () => {
+      throw new Error("Node source is outside this local fork fixture");
+    },
+    homesForAgent: async () => [],
+    forUpstream: async (_agentId, fingerprint) =>
+      fingerprint === control.connectionFingerprint ? control : undefined,
   };
+  return { archiveThread, control, controlFactory, forkThread, retireConnection };
 }
 
 export function createForkTestRuntime(

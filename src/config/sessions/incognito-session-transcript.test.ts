@@ -1,9 +1,12 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   inspectOpenClawAgentDatabaseOwner,
   listOpenClawRegisteredAgentDatabases,
@@ -13,366 +16,299 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import {
   createSessionEntryWithTranscript,
   listSessionEntriesCore,
   loadSessionEntry,
   loadTranscriptEvents,
-  loadTranscriptEventsSync,
   patchSessionEntryCore,
   resolveSessionEntryCandidateTarget,
   resolveSessionTranscriptRuntimeTarget,
 } from "./session-accessor.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import type { SessionAccessScope } from "./session-accessor.types.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import type { SelectedSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
+import type { SessionEntry } from "./types.js";
 
 const sessionKey = "agent:main:dashboard:incognito-round-trip";
+const authority = { assertCurrent() {}, authorize() {} };
+const memoryOwners: Array<{ agentId: string; path: string }> = [];
+const makeEntry = (sessionId: string, updatedAt = 1, incognito = true): SessionEntry => ({
+  sessionId,
+  updatedAt,
+  ...(incognito ? { incognito: true } : {}),
+});
+const create = (
+  scope: SessionAccessScope,
+  value: SessionEntry,
+  options?: Parameters<typeof createSessionEntryWithTranscript>[2],
+) => createSessionEntryWithTranscript(scope, () => ({ ok: true, entry: value }), options);
+function expectEmpty(...states: OpenClawTestState[]) {
+  for (const state of states) {
+    expect.soft(listDirectoryTreeStrictSync(state.stateDir)).toEqual([]);
+  }
+}
+const expectHeader = (scope: SessionAccessScope, sessionId: string, extra = {}) =>
+  expect(loadTranscriptEvents({ ...scope, sessionId })).resolves.toEqual([
+    expect.objectContaining({ type: "session", id: sessionId, ...extra }),
+  ]);
+const memoryRead = (binding: SelectedSessionActorStorageBinding) =>
+  binding.actor.storage.readCurrent({ type: "session.entry.read", input: {} }, authority);
+async function withMemory(
+  scope: SessionAccessScope,
+  run: (binding: SelectedSessionActorStorageBinding) => Promise<void>,
+) {
+  let acquired = false;
+  await withSessionActorStorage(
+    { ...scope, sessionKey: scope.sessionKey.trim() },
+    {
+      authority,
+      lifetime: { assertCurrent() {}, assertReadable() {} },
+      create: true,
+    },
+    (binding) => {
+      acquired = true;
+      memoryOwners.push(binding);
+      return run(binding);
+    },
+  );
+  expect(acquired).toBe(true);
+}
 
-afterEach(() => {
+afterEach(async () => {
+  for (const options of memoryOwners.splice(0)) {
+    memorySessionActorOwners.closeDatabase(options);
+  }
   closeOpenClawAgentDatabasesForTest();
+  await explicit.cleanup();
+  await ambient.cleanup();
 });
 
-describe("session creation scope", () => {
-  let ambient: OpenClawTestState;
-  let explicit: OpenClawTestState;
-  const agentId = "secondary";
-  const key = "agent:secondary:dashboard:incognito-fresh-session";
+let ambient: OpenClawTestState;
+let explicit: OpenClawTestState;
+const agentId = "secondary";
+const key = "agent:secondary:dashboard:incognito-fresh-session";
+const scopeFor = (env: NodeJS.ProcessEnv | undefined, keyValue = key, storePath?: string) => ({
+  agentId,
+  env,
+  sessionKey: keyValue,
+  storePath,
+});
 
-  beforeEach(async () => {
-    ambient = await createOpenClawTestState({ prefix: "session-creation-env-ambient-" });
-    explicit = await createOpenClawTestState({
-      prefix: "session-creation-env-explicit-",
-      applyEnv: false,
-    });
+beforeEach(async () => {
+  ambient = await createOpenClawTestState({ prefix: "session-creation-env-ambient-" });
+  explicit = await createOpenClawTestState({
+    prefix: "session-creation-env-explicit-",
+    applyEnv: false,
   });
+  setRuntimeConfigSnapshot({});
+});
 
-  afterEach(async () => {
-    closeOpenClawAgentDatabasesForTest();
-    await explicit.cleanup();
-    await ambient.cleanup();
-  });
-
-  it.each(["ambient", "omitted", "sentinel", "durable"] as const)(
-    "creates and reloads a secondary transcript without disk state (%s store scope)",
-    async (variant) => {
-      const state = variant === "ambient" ? ambient : explicit;
-      const env = variant === "ambient" ? undefined : explicit.env;
-      const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId, env });
-      const scope = {
-        agentId,
-        env,
-        sessionKey: ` ${key} `,
-        ...(variant === "sentinel"
-          ? { storePath: sentinel }
-          : variant === "durable"
-            ? { storePath: state.statePath("ignored.sqlite") }
-            : {}),
+it.each(["ambient", "omitted", "sentinel", "durable"] as const)(
+  "creates and reloads an incognito transcript (%s scope)",
+  async (variant) => {
+    const state = variant === "ambient" ? ambient : explicit;
+    const env = variant === "ambient" ? undefined : explicit.env;
+    const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId, env });
+    const storePath =
+      variant === "sentinel"
+        ? sentinel
+        : variant === "durable"
+          ? state.statePath("ignored.sqlite")
+          : undefined;
+    const scope = scopeFor(env, ` ${key} `, storePath);
+    const original = makeEntry("created-incognito");
+    await withMemory(scope, async () => {
+      const createChecked = async (value: SessionEntry, label: string) => {
+        let followed = false;
+        const result = await create(scope, value, {
+          cwd: state.workspaceDir,
+          label,
+          afterCommitted: async (_entry, source) => {
+            source.assertCurrent();
+            expect(loadSessionEntry(scope)).toMatchObject(value);
+            await Promise.resolve();
+            source.assertCurrent();
+            expect(loadSessionEntry(scope)).toMatchObject(value);
+            followed = true;
+          },
+        });
+        expect(followed).toBe(true);
+        expect(result).toMatchObject({ ok: true, entry: { ...value, label }, sessionFile: key });
       };
-      const entry = { incognito: true as const, sessionId: "created-incognito", updatedAt: 1 };
-      expect(process.env.OPENCLAW_STATE_DIR).toBe(ambient.stateDir);
-      expect(explicit.stateDir).not.toBe(ambient.stateDir);
+      await createChecked(original, "unused");
+      expectEmpty(explicit, ambient);
 
-      const created = await createSessionEntryWithTranscript(
-        scope,
-        ({ existingEntry, targetEntry, isLabelInUse }) => {
-          expect(existingEntry).toBeUndefined();
-          expect(targetEntry).toBeUndefined();
-          expect(isLabelInUse("unused")).toBe(false);
-          return { ok: true, entry };
-        },
-        { cwd: state.workspaceDir },
-      );
-      expect(created).toEqual({ ok: true, entry, sessionFile: key });
-      // Inspect before reading: a bad creation can open the sentinel under the wrong agent.
-      expect
-        .soft(inspectOpenClawAgentDatabaseOwner(sentinel))
-        .toEqual({ status: "owned", agentId });
-      expect.soft(fs.readdirSync(explicit.stateDir, { recursive: true })).toEqual([]);
-      expect.soft(fs.readdirSync(ambient.stateDir, { recursive: true })).toEqual([]);
-
-      const transcriptScope = { ...scope, sessionKey: key, sessionId: entry.sessionId };
-      await expect(resolveSessionTranscriptRuntimeTarget(transcriptScope)).resolves.toEqual({
+      const transcriptScope = { ...scope, sessionKey: key, sessionId: original.sessionId };
+      expect(await resolveSessionTranscriptRuntimeTarget(transcriptScope)).toMatchObject({
         agentId,
-        sessionId: entry.sessionId,
+        sessionId: original.sessionId,
         sessionKey: key,
         storePath: sentinel,
       });
-      await expect(loadTranscriptEvents(transcriptScope)).resolves.toEqual([
-        expect.objectContaining({ type: "session", id: entry.sessionId, cwd: state.workspaceDir }),
-      ]);
+      await expectHeader(transcriptScope, original.sessionId, { cwd: state.workspaceDir });
       expect(
-        resolveSessionEntryCandidateTarget({
-          agentId,
-          env,
-          cfg: {},
-          candidateKeys: [key],
-        }),
-      ).toMatchObject({ agentId, sessionKey: key, persisted: true, entry });
-
-      const updated = { ...entry, label: "recreated", updatedAt: 2 };
-      await expect(
-        createSessionEntryWithTranscript(scope, ({ existingEntry, targetEntry, isLabelInUse }) => {
-          expect(existingEntry).toMatchObject(entry);
-          expect(targetEntry).toMatchObject(entry);
-          expect(isLabelInUse("recreated")).toBe(false);
-          return { ok: true, entry: updated };
-        }),
-      ).resolves.toMatchObject({ ok: true, sessionFile: key });
-      expect(loadSessionEntry(scope)).toMatchObject(updated);
-
-      closeOpenClawAgentDatabasesForTest();
-      expect(loadSessionEntry(scope)).toBeUndefined();
-      await expect(loadTranscriptEvents(transcriptScope)).resolves.toEqual([]);
-      expect(fs.readdirSync(explicit.stateDir, { recursive: true })).toEqual([]);
-      expect(fs.readdirSync(ambient.stateDir, { recursive: true })).toEqual([]);
-    },
-  );
-
-  it.each(["default", "exact", "custom"] as const)(
-    "preserves durable storage and physical ownership (%s store)",
-    async (variant) => {
-      const storePath =
-        variant === "default"
-          ? undefined
-          : explicit.statePath(variant === "exact" ? "shared.sqlite" : "custom/sessions.json");
-      const databasePath =
-        variant === "default"
-          ? explicit.statePath("agents/secondary/agent/openclaw-agent.sqlite")
-          : variant === "exact"
-            ? explicit.statePath("shared.sqlite")
-            : explicit.statePath("custom/openclaw-agent.secondary.sqlite");
-      const physicalOwner = variant === "exact" ? "main" : agentId;
-      const scope = {
+        resolveSessionEntryCandidateTarget({ agentId, env, cfg: {}, candidateKeys: [key] }),
+      ).toMatchObject({
         agentId,
-        env: explicit.env,
-        sessionKey: "agent:secondary:dashboard:durable-created",
-        storePath,
-      };
-      const entry = { sessionId: "durable-created", updatedAt: 1 };
-      await expect(
-        createSessionEntryWithTranscript(scope, () => ({ ok: true, entry })),
-      ).resolves.toMatchObject({ ok: true, sessionFile: scope.sessionKey });
-
-      expect(inspectOpenClawAgentDatabaseOwner(databasePath)).toEqual({
-        status: "owned",
-        agentId: physicalOwner,
+        sessionKey: key,
+        persisted: true,
+        entry: original,
       });
-      expect(listOpenClawRegisteredAgentDatabases({ env: explicit.env })).toEqual([
-        expect.objectContaining({ agentId: physicalOwner, path: databasePath }),
-      ]);
-      expect(fs.existsSync(databasePath)).toBe(true);
-      closeOpenClawAgentDatabasesForTest();
-      expect(loadSessionEntry(scope)).toMatchObject(entry);
-      await expect(loadTranscriptEvents({ ...scope, sessionId: entry.sessionId })).resolves.toEqual(
-        [expect.objectContaining({ type: "session", id: entry.sessionId })],
-      );
-      expect(fs.readdirSync(ambient.stateDir, { recursive: true })).toEqual([]);
-    },
-  );
 
-  it.each(["header", "entry"] as const)(
-    "does not commit the protected %s mutation after authority is revoked",
-    async (rejectedPhase) => {
-      const scope = { agentId, env: explicit.env, sessionKey: key };
-      const original = { incognito: true as const, sessionId: "original", updatedAt: 1 };
-      await expect(
-        createSessionEntryWithTranscript(scope, () => ({ ok: true, entry: original })),
-      ).resolves.toMatchObject({ ok: true });
-      const next = { ...original, sessionId: "rejected", updatedAt: 2 };
-      const nextScope = { ...scope, sessionId: next.sessionId };
-      const revoked = new Error("creation authority revoked");
+      const updated = { ...original, label: "recreated", updatedAt: 2 };
+      await createChecked(updated, "recreated");
+      expect(loadSessionEntry(scope)).toMatchObject(updated);
+    });
+    memorySessionActorOwners.closeDatabase({ agentId, path: sentinel });
+    expect(memorySessionActorOwners.read({ agentId, path: sentinel })).toBeUndefined();
+    expectEmpty(explicit, ambient);
+  },
+);
 
-      await expect(
-        createSessionEntryWithTranscript(scope, () => ({ ok: true, entry: next }), {
-          commitGuard: () => {
-            const headerCommitted = loadTranscriptEventsSync(nextScope).length > 0;
-            if (rejectedPhase === "header" || headerCommitted) {
-              throw revoked;
-            }
-          },
-        }),
-      ).rejects.toBe(revoked);
-      expect(loadSessionEntry(scope)).toMatchObject(original);
-      // Header and lifecycle commits are separate; a later refusal protects the entry mutation.
-      expect(loadTranscriptEventsSync(nextScope)).toEqual(
-        rejectedPhase === "header"
-          ? []
-          : [expect.objectContaining({ type: "session", id: next.sessionId })],
-      );
-      expect(fs.readdirSync(explicit.stateDir, { recursive: true })).toEqual([]);
-      expect(fs.readdirSync(ambient.stateDir, { recursive: true })).toEqual([]);
-    },
-  );
+it.each([
+  ["default", undefined, "agents/secondary/agent/openclaw-agent.sqlite", "secondary"],
+  ["exact", "shared.sqlite", "shared.sqlite", "main"],
+  ["custom", "custom/sessions.json", "custom/openclaw-agent.secondary.sqlite", "secondary"],
+] as const)(
+  "preserves durable physical ownership (%s store)",
+  async (_variant, store, database, physicalOwner) => {
+    const databasePath = explicit.statePath(database);
+    const scope = scopeFor(
+      explicit.env,
+      "agent:secondary:dashboard:durable-created",
+      store ? explicit.statePath(store) : undefined,
+    );
+    const original = makeEntry("durable-created", 1, false);
+    await expect(create(scope, original)).resolves.toMatchObject({
+      ok: true,
+      sessionFile: scope.sessionKey,
+    });
+
+    expect(inspectOpenClawAgentDatabaseOwner(databasePath)).toEqual({
+      status: "owned",
+      agentId: physicalOwner,
+    });
+    expect(listOpenClawRegisteredAgentDatabases({ env: explicit.env })).toEqual([
+      expect.objectContaining({ agentId: physicalOwner, path: databasePath }),
+    ]);
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    expect(loadSessionEntry(scope)).toMatchObject(original);
+    await expectHeader(scope, original.sessionId);
+    expectEmpty(ambient);
+  },
+);
+
+it("rolls back creation after commit authority is revoked", async () => {
+  const scope = scopeFor(explicit.env);
+  await withMemory(scope, async (binding) => {
+    const original = makeEntry("original");
+    await create(scope, original);
+    await expect(
+      create(scope, makeEntry("rejected", 2), {
+        commitGuard() {
+          throw new Error("creation authority revoked");
+        },
+      }),
+    ).rejects.toThrow("creation authority revoked");
+    expect(loadSessionEntry(scope)).toMatchObject(original);
+    expect(
+      binding.actor.storage.readCurrent(
+        { type: "session.entry.readById", input: { sessionId: "rejected" } },
+        authority,
+      ),
+    ).toBeUndefined();
+    await expectHeader(scope, "original");
+    expectEmpty(explicit);
+  });
+});
+it("reopens incognito turns without writing a durable locator", async () => {
+  const scope = { agentId: "main", env: explicit.env, sessionKey };
+  await withMemory(scope, async () => {
+    await create(scope, makeEntry("incognito-session"));
+    const durableStorePath = path.join(explicit.workspaceDir, "sessions.json");
+    expect(loadSessionEntry({ ...scope, storePath: durableStorePath })?.incognito).toBe(true);
+    const target = {
+      ...scope,
+      sessionId: "incognito-session",
+      storePath: resolveSessionStorePathCore(undefined, scope),
+    };
+    const firstTurn = await SessionManager.openAsync(target, explicit.workspaceDir);
+    await firstTurn.appendMessageAsync(makeUserMessage("first question", 1));
+    await firstTurn.appendMessageAsync(
+      makeAgentAssistantMessage({ content: [{ type: "text", text: "first answer" }] }),
+    );
+    const secondTurn = await SessionManager.openAsync(target, explicit.workspaceDir);
+    await secondTurn.appendMessageAsync(makeUserMessage("second question", 3));
+    expect(secondTurn.buildSessionContext().messages).toMatchObject([
+      { role: "user", content: "first question" },
+      { role: "assistant" },
+      { role: "user", content: "second question" },
+    ]);
+    expect(fs.existsSync(durableStorePath)).toBe(false);
+    expectEmpty(explicit);
+  });
 });
 
-describe("incognito transcript access", () => {
-  it("round-trips two turns through the normal marker-backed SessionManager", async () => {
-    const cwd = fs.realpathSync(
-      fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "incognito-turns-")),
-    );
-    try {
-      const created = await createSessionEntryWithTranscript(
-        { agentId: "main", sessionKey },
-        () => ({
-          ok: true as const,
-          entry: {
-            incognito: true as const,
-            sessionId: "incognito-session",
-            updatedAt: 1,
-          },
-        }),
-      );
-      expect(created.ok).toBe(true);
-      if (!created.ok) {
-        return;
-      }
-      const durableStorePath = path.join(cwd, "sessions.json");
-      expect(
-        loadSessionEntry({
-          agentId: "main",
-          sessionKey,
-          storePath: durableStorePath,
-        })?.incognito,
-      ).toBe(true);
-      expect(fs.existsSync(durableStorePath)).toBe(false);
-
-      const target = {
-        agentId: "main",
-        sessionId: created.entry.sessionId,
-        sessionKey,
-        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-      };
-      const firstTurn = SessionManager.open(target, cwd);
-      firstTurn.appendMessage({ role: "user", content: "first question", timestamp: 1 });
-      firstTurn.appendMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "first answer" }],
-        api: "openai-responses",
-        provider: "openai",
-        model: "gpt-test",
-        usage: {
-          input: 1,
-          output: 1,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 2,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: 2,
-      });
-
-      const secondTurn = SessionManager.open(target, cwd);
-      secondTurn.appendMessage({ role: "user", content: "second question", timestamp: 3 });
-      const messages = secondTurn.buildSessionContext().messages;
-
-      expect(messages.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
-      expect(messages[0]).toMatchObject({ content: "first question" });
-      expect(messages[2]).toMatchObject({ content: "second question" });
-    } finally {
-      fs.rmSync(cwd, { force: true, recursive: true });
-    }
-  });
-
-  it("archives incognito transcripts only in memory until the database closes", async () => {
-    const stateDir = fs.realpathSync(
-      fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "incognito-maintenance-")),
-    );
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
-    const archiveDirectory = path.join(path.dirname(path.dirname(storePath)), "sessions");
-    const staleScope = {
-      agentId: "main",
-      env,
-      sessionKey: "agent:main:dashboard:incognito-stale",
-      storePath,
-    };
-    const activeScope = {
-      agentId: "main",
-      env,
-      sessionKey: "agent:main:dashboard:incognito-active",
-      storePath,
-    };
+it("retains archived incognito transcripts until owner close", async () => {
+  const scope = {
+    agentId: "main",
+    env: explicit.env,
+    sessionKey: "agent:main:dashboard:incognito-archived",
+  };
+  await withMemory(scope, async (binding) => {
     const now = Date.now();
-    const staleUpdatedAt = now - 366 * 24 * 60 * 60 * 1000;
-
-    try {
-      await patchSessionEntryCore(
-        staleScope,
-        () => ({ sessionId: "incognito-stale-session", updatedAt: staleUpdatedAt }),
-        {
-          fallbackEntry: { sessionId: "incognito-stale-session", updatedAt: staleUpdatedAt },
-          replaceEntry: true,
-          skipMaintenance: true,
-        },
-      );
-      await replaceTranscriptEvents({ ...staleScope, sessionId: "incognito-stale-session" }, [
-        {
-          id: "incognito-stale-event",
-          timestamp: new Date(now).toISOString(),
-          type: "metadata",
-        },
-      ]);
-      await patchSessionEntryCore(
-        activeScope,
-        () => ({ sessionId: "incognito-active-session", updatedAt: now + 1 }),
-        {
-          fallbackEntry: { sessionId: "incognito-active-session", updatedAt: now + 1 },
-          replaceEntry: true,
-          skipMaintenance: true,
-        },
-      );
-
-      await patchSessionEntryCore(activeScope, () => ({ model: "gpt-test" }), {
-        maintenanceConfig: {
-          archiveDashboardAfterMs: null,
-          highWaterBytes: null,
-          maxDiskBytes: null,
-          maxEntries: 1,
-          mode: "enforce",
-          modelRunPruneAfterMs: 24 * 60 * 60 * 1000,
-          pruneAfterMs: 365 * 24 * 60 * 60 * 1000,
-          resetArchiveRetentionMs: null,
-        },
+    const event = {
+      id: "archived-event",
+      type: "metadata",
+      timestamp: new Date(now).toISOString(),
+    };
+    await createSessionEntryWithTranscript(scope, () => ({
+      ok: true,
+      entry: makeEntry("archived", now - 366 * 24 * 60 * 60 * 1000),
+      transcriptEvents: [event],
+    }));
+    const activeScope = { ...scope, sessionKey: "agent:main:dashboard:incognito-active" };
+    await withMemory(activeScope, async () => {
+      await create(activeScope, makeEntry("active", now, false));
+      const maintenanceConfig = resolveMaintenanceConfigFromInput({
+        archiveDashboardAfter: false,
+        maxDiskBytes: false,
+        maxEntries: 1,
+        pruneAfter: "365d",
       });
-
-      await vi.waitFor(() => {
-        expect(loadSessionEntry(staleScope)).toMatchObject({
-          sessionId: "incognito-stale-session",
-          archivedAt: expect.any(Number),
+      for (const mode of ["skip", "warn", "enforce"] as const) {
+        await patchSessionEntryCore(activeScope, () => ({ model: mode }), {
+          maintenanceConfig: { ...maintenanceConfig, mode: mode === "warn" ? "warn" : "enforce" },
+          skipMaintenance: mode === "skip",
         });
-        expect(
-          listSessionEntriesCore({ agentId: "main", env, storePath })
-            .filter(({ entry }) => entry.archivedAt === undefined)
-            .map((summary) => summary.sessionKey),
-        ).toEqual([activeScope.sessionKey]);
-      });
-      expect(listSessionEntriesCore({ agentId: "main", env, storePath })).toHaveLength(2);
-      await expect(
-        loadTranscriptEvents({ ...staleScope, sessionId: "incognito-stale-session" }),
-      ).resolves.toEqual([
-        {
-          id: "incognito-stale-event",
-          timestamp: new Date(now).toISOString(),
-          type: "metadata",
-        },
-      ]);
-      expect(fs.readdirSync(stateDir, { recursive: true })).toEqual([]);
-
-      closeOpenClawAgentDatabasesForTest();
-      expect(listSessionEntriesCore({ agentId: "main", env, storePath })).toEqual([]);
-      await expect(
-        loadTranscriptEvents({
-          ...staleScope,
-          sessionId: "incognito-stale-session",
-        }),
-      ).resolves.toEqual([]);
-      expect(fs.existsSync(storePath)).toBe(false);
-      expect(fs.existsSync(archiveDirectory)).toBe(false);
-      expect(fs.readdirSync(stateDir, { recursive: true })).toEqual([]);
-    } finally {
-      closeOpenClawAgentDatabasesForTest();
-      fs.rmSync(stateDir, { force: true, recursive: true });
-    }
+        if (mode !== "enforce") {
+          expect(memoryRead(binding)?.archivedAt).toBeUndefined();
+        }
+      }
+    });
+    expect(loadSessionEntry(scope)).toMatchObject({
+      sessionId: "archived",
+      archivedAt: expect.any(Number),
+    });
+    const entries = listSessionEntriesCore({ ...scope, storePath: binding.path });
+    expect(entries).toHaveLength(2);
+    expect(
+      entries
+        .filter(({ entry }) => entry.archivedAt === undefined)
+        .map(({ sessionKey: entryKey }) => entryKey),
+    ).toEqual([activeScope.sessionKey]);
+    await expect(loadTranscriptEvents({ ...scope, sessionId: "archived" })).resolves.toEqual([
+      event,
+    ]);
+    memorySessionActorOwners.closeDatabase(binding);
+    expect(memorySessionActorOwners.read(binding)).toBeUndefined();
+    expect(fs.existsSync(binding.path)).toBe(false);
+    expectEmpty(explicit);
   });
 });

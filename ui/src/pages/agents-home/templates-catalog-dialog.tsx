@@ -1,0 +1,579 @@
+import { action, createMemo, createOptimistic, createSignal, onSettled, Show } from "solid-js";
+import { pathForTemplateCatalogEntry } from "../../app-route-paths.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import { FilePreviewModal } from "../../components/file-preview-modal.tsx";
+import { ModalDialog } from "../../components/modal-dialog.tsx";
+import { registerTemplatesEnglish } from "../../i18n/locales/en-templates.ts";
+import { formatUiError, UserFacingError } from "../../lib/format-error.ts";
+import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { loadPluginCatalog, loadPluginDiscoveryDetail } from "../../lib/plugins/index.ts";
+import { useApplication } from "../../lib/reactive/context.ts";
+import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { showToast } from "../../lib/toast.ts";
+import type { TemplatePluginPresentation } from "./template-plugin-icon.tsx";
+import {
+  addTemplateAgent,
+  receiveTemplateAddFailures,
+  type TemplateAddFailure,
+} from "./templates-add-agent.ts";
+import {
+  readTemplateDetail,
+  readTemplatePreview,
+  type TemplateCatalogDetail,
+  type TemplateCatalogEntry,
+  type TemplateCatalogSource,
+} from "./templates-catalog-client.ts";
+import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
+import { TemplatesCatalogView } from "./templates-catalog-view.tsx";
+import { TemplatesExplore } from "./templates-explore.tsx";
+
+registerEnglishCatalog(registerTemplatesEnglish);
+
+type TemplatesDialogProps = {
+  onClose?: () => void;
+  initialPackageName?: string;
+  initialVersion?: string;
+  modal?: boolean;
+};
+
+function pluginReleaseKey(ref: string, version: string) {
+  return `${ref}@${version}`;
+}
+
+class TemplatesCatalogModel {
+  selected: TemplateCatalogEntry | null = null;
+  detail: TemplateCatalogDetail | null = null;
+  preview: {
+    kind: "instruction" | "skill";
+    name: string;
+    content: string | null;
+    request: Promise<void>;
+  } | null = null;
+  pluginPresentations: ReadonlyMap<string, TemplatePluginPresentation | null> = new Map();
+  /** Why the last Add of a Template left nothing behind; shown with that Template. */
+  addFailure: Pick<TemplateAddFailure, "entry" | "message"> | null = null;
+  applying = false;
+  /** ClawHub's audit of the selected release, awaiting the user's decision. */
+  consentWarning: string | null = null;
+  private riskAcknowledged = false;
+  gateway!: ReturnType<typeof useGatewayPage>;
+  disposed = false;
+
+  constructor(
+    readonly context: ApplicationContext,
+    readonly props: TemplatesDialogProps,
+    readonly presentDetailRequest: (
+      request: Promise<TemplateCatalogDetail | null> | undefined,
+    ) => void,
+  ) {}
+
+  private previewRevision = 0;
+  private detailRevision = 0;
+  private cancelDetailRead = () => {};
+  private cancelPreviewRead = () => {};
+  onIdentityChange() {
+    this.resetSelection();
+    this.applying = false;
+  }
+
+  invalidateRequests() {
+    this.cancelDetailRead();
+    this.closePreview();
+    this.detailRevision += 1;
+    // A retained detail keeps settled names; retired reads cannot finish pending labels.
+    this.pluginPresentations = new Map(
+      [...this.pluginPresentations].filter(([, presentation]) => presentation !== null),
+    );
+    this.applying = false;
+    this.consentWarning = null;
+    this.riskAcknowledged = false;
+  }
+
+  dispose() {
+    this.cancelDetailRead();
+    this.cancelPreviewRead();
+    this.disposed = true;
+  }
+
+  private source(): TemplateCatalogSource | null {
+    const packageName = this.selected?.packageName;
+    const version = this.detail?.version ?? this.selected?.latestVersion;
+    return packageName && version ? { packageName, version } : null;
+  }
+
+  private loadDetail() {
+    this.cancelDetailRead();
+    const scope = this.gateway.capture();
+    const packageName = this.props.initialPackageName ?? this.selected?.packageName;
+    const version = this.props.initialPackageName
+      ? this.props.initialVersion
+      : this.selected?.latestVersion;
+    if (!packageName || !scope) {
+      return;
+    }
+    const revision = ++this.detailRevision;
+    this.detail = null;
+    this.pluginPresentations = new Map();
+    const source = { packageName, ...(version ? { version } : {}) };
+    this.presentDetailRequest(
+      new Promise((resolve, reject) => {
+        // Disconnect stops a pending skeleton without clearing a settled receipt or error.
+        this.cancelDetailRead = () => resolve(this.detail);
+        void readTemplateDetail(scope.client, source).then(
+          (detail) => {
+            if (this.gateway.isCurrent(scope) && revision === this.detailRevision) {
+              this.selected = detail;
+              this.detail = detail;
+              void this.loadPluginPresentations(detail, scope, revision);
+              resolve(detail);
+            }
+          },
+          (error: unknown) => {
+            if (this.gateway.isCurrent(scope) && revision === this.detailRevision) {
+              reject(new UserFacingError(formatUiError(error), { cause: error }));
+            }
+          },
+        );
+      }),
+    );
+  }
+
+  private async loadPluginPresentations(
+    detail: TemplateCatalogDetail,
+    scope: GatewayConnectionScope,
+    revision: number,
+  ) {
+    const releases = new Map(
+      detail.contents.integrations.flatMap((item) =>
+        item.kind === "plugin" && item.source === "clawhub"
+          ? [[pluginReleaseKey(item.ref, item.version), item] as const]
+          : [],
+      ),
+    );
+    if (releases.size === 0) {
+      return;
+    }
+    this.pluginPresentations = new Map([...releases.keys()].map((key) => [key, null]));
+    const isCurrent = () =>
+      !this.disposed && this.gateway.isCurrent(scope) && revision === this.detailRevision;
+    const result = await loadPluginCatalog(scope.client).catch(() => null);
+    if (!isCurrent()) {
+      return;
+    }
+    const installed = new Map(
+      (result?.plugins ?? []).flatMap((plugin) =>
+        plugin.installed && plugin.clawhubPackage && plugin.version
+          ? [[pluginReleaseKey(plugin.clawhubPackage, plugin.version), plugin] as const]
+          : [],
+      ),
+    );
+    await Promise.all(
+      [...releases].map(async ([key, item]) => {
+        const local = installed.get(key);
+        let presentation: TemplatePluginPresentation | undefined;
+        if (local) {
+          presentation = {
+            name: local.name,
+            installed: true,
+            pluginId: local.hasIcon ? local.id : undefined,
+          };
+        } else {
+          const id =
+            "ch_" + btoa(item.ref).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+          const remote = await loadPluginDiscoveryDetail(
+            scope.client,
+            id,
+            undefined,
+            item.version,
+          ).catch(() => null);
+          const catalog = remote?.plugin?.catalog;
+          if (
+            remote?.detail?.packageName === item.ref &&
+            !remote.detail.remoteError &&
+            remote.detail.selectedRelease?.version === item.version &&
+            catalog?.name
+          ) {
+            presentation = {
+              name: catalog.name,
+              imageUrl: catalog.imageUrl,
+            };
+          }
+        }
+        if (isCurrent()) {
+          const next = new Map(this.pluginPresentations);
+          if (presentation) {
+            next.set(key, presentation);
+          } else {
+            next.delete(key);
+          }
+          this.pluginPresentations = next;
+        }
+      }),
+    );
+  }
+
+  private resetSelection(selected: TemplateCatalogEntry | null = null) {
+    this.detailRevision += 1;
+    this.applying = false;
+    this.cancelDetailRead();
+    this.closePreview();
+    this.selected = selected;
+    this.detail = null;
+    this.presentDetailRequest(undefined);
+    this.pluginPresentations = new Map();
+    this.addFailure = null;
+    this.consentWarning = null;
+    this.riskAcknowledged = false;
+  }
+
+  refresh() {
+    this.loadDetail();
+  }
+
+  async addEntry(entry: TemplateCatalogEntry) {
+    if (this.applying || !entry.latestVersion || !this.canAdd()) {
+      return;
+    }
+    this.resetSelection(entry);
+    await this.add();
+  }
+
+  /** The Gateway undid an Add and returned the user here; false when another Template is shown. */
+  showAddFailure(failure: TemplateAddFailure): boolean {
+    const viewing = this.props.initialPackageName === failure.entry.packageName;
+    if (this.disposed || (this.props.initialPackageName && !viewing)) {
+      return false;
+    }
+    if (!viewing) {
+      this.resetSelection(failure.entry);
+    }
+    if (failure.trustWarning) {
+      // Ask before acknowledging: the audit and its decision appear with the Template.
+      this.consentWarning = failure.trustWarning;
+      if (!viewing) {
+        this.loadDetail();
+      }
+    } else {
+      this.addFailure = failure;
+    }
+    return true;
+  }
+
+  openDetails(entry: TemplateCatalogEntry) {
+    this.resetSelection();
+    this.context.navigate("templates", {
+      pathname: pathForTemplateCatalogEntry(entry.packageName, this.context.basePath),
+      search: entry.latestVersion
+        ? `?${new URLSearchParams({ version: entry.latestVersion })}`
+        : "",
+    });
+  }
+
+  private close() {
+    this.props.onClose?.();
+  }
+
+  private back() {
+    if (this.applying) {
+      return;
+    }
+    if (this.props.initialPackageName) {
+      this.close();
+    } else {
+      this.resetSelection();
+    }
+  }
+
+  private async add() {
+    const entry = this.selected;
+    const scope = this.gateway.capture();
+    if (!entry || !scope || !this.canAdd() || this.applying) {
+      return;
+    }
+    const revision = this.detailRevision;
+    const isCurrent = () =>
+      !this.disposed && this.gateway.isCurrent(scope) && revision === this.detailRevision;
+    this.applying = true;
+    this.addFailure = null;
+    try {
+      const source = this.source();
+      if (!source) {
+        return;
+      }
+      const detail = this.detail;
+      // Navigation is synchronous. A cold card uses a presentation-only id until
+      // the application-owned lookup resolves the release's actual agent id.
+      // This keeps catalog/detail network latency out of click-to-chat time.
+      void addTemplateAgent(
+        this.context,
+        {
+          entry,
+          source,
+          agentId: detail?.agentId ?? entry.packageName.split("/").at(-1) ?? "template",
+          ...(detail?.agentName ? { agentName: detail.agentName } : {}),
+          ...(!detail ? { resolveAgent: () => readTemplateDetail(scope.client, source) } : {}),
+        },
+        this.riskAcknowledged,
+      ).catch((error: unknown) => {
+        showToast({ severity: "error", message: formatUiError(error), durationMs: 12_000 });
+      });
+    } catch (error) {
+      if (isCurrent()) {
+        this.addFailure = { entry, message: formatUiError(error) };
+      }
+    } finally {
+      if (isCurrent()) {
+        this.applying = false;
+      }
+    }
+  }
+
+  private canAdd() {
+    return (
+      !this.disposed &&
+      !this.context.agents.state.pendingAgent &&
+      canCallGatewayMethod(this.gateway.snapshot, "templates.add.apply", "operator.admin")
+    );
+  }
+
+  closePreview() {
+    this.cancelPreviewRead();
+    this.previewRevision += 1;
+    this.preview = null;
+  }
+
+  async openPreview(kind: "instruction" | "skill", name: string) {
+    this.cancelPreviewRead();
+    const source = this.source();
+    const scope = this.gateway.capture();
+    const revision = ++this.previewRevision;
+    const receipt = Promise.withResolvers<void>();
+    this.cancelPreviewRead = receipt.resolve;
+    void receipt.promise.catch(() => {});
+    this.preview = { kind, name, content: null, request: receipt.promise };
+    if (!source || !scope) {
+      receipt.reject(new UserFacingError(t("templatesCatalog.unavailable")));
+      return;
+    }
+    try {
+      const result = await readTemplatePreview(scope.client, source, { kind, name });
+      if (this.gateway.isCurrent(scope) && revision === this.previewRevision && this.preview) {
+        this.preview = { ...this.preview, content: result.content };
+      }
+    } catch (error) {
+      if (this.gateway.isCurrent(scope) && revision === this.previewRevision && this.preview) {
+        receipt.reject(new UserFacingError(formatUiError(error), { cause: error }));
+      }
+    } finally {
+      receipt.resolve();
+    }
+  }
+
+  /** Reads one workspace file of the shown release for the page; a newer selection wins. */
+  async readInstruction(name: string): Promise<string> {
+    const source = this.source();
+    const scope = this.gateway.capture();
+    const revision = this.detailRevision;
+    if (!source || !scope) {
+      throw new UserFacingError(t("templatesCatalog.unavailable"));
+    }
+    const result = await readTemplatePreview(scope.client, source, { kind: "instruction", name });
+    if (!this.gateway.isCurrent(scope) || revision !== this.detailRevision) {
+      throw new UserFacingError(t("templatesCatalog.unavailable"));
+    }
+    return result.content ?? "";
+  }
+
+  view(): Omit<TemplatesCatalogViewProps, "readDetail" | "detailRequest"> {
+    const presentations = this.pluginPresentations;
+    return {
+      basePath: this.context.basePath,
+      selected: this.selected,
+      detail: this.detail,
+      preview: this.preview,
+      onClosePreview: () => this.closePreview(),
+      readPluginPresentation: (item) =>
+        item.kind === "plugin" && item.source === "clawhub"
+          ? presentations.get(pluginReleaseKey(item.ref, item.version))
+          : undefined,
+      addFailure: this.addFailure,
+      applying: this.applying,
+      canAdd: this.canAdd(),
+      consentWarning: this.consentWarning,
+      onOpenPreview: (kind, name) => void this.openPreview(kind, name),
+      readInstruction: (name) => this.readInstruction(name),
+      onBack: () => this.back(),
+      onRetryDetail: () => this.loadDetail(),
+      onConfirm: () => {
+        this.riskAcknowledged = false;
+        return this.add();
+      },
+      onConfirmConsent: () => {
+        this.riskAcknowledged = true;
+        this.consentWarning = null;
+        return this.add();
+      },
+      onCancelConsent: () => {
+        this.consentWarning = null;
+        this.riskAcknowledged = false;
+      },
+    };
+  }
+}
+
+export function TemplatesCatalogDialog(props: TemplatesDialogProps) {
+  const context = useApplication();
+  const [detailRequest, setDetailRequest] = createSignal<Promise<TemplateCatalogDetail | null>>();
+  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+  const [applying, showApplying] = createOptimistic(false);
+  const presentMutation = action(function* (completed: Promise<void>) {
+    showApplying(true);
+    yield completed;
+  });
+  const model = new Proxy(
+    new TemplatesCatalogModel(context, props, (request) => {
+      void setDetailRequest(request);
+    }),
+    {
+      set(target, key, value) {
+        if (Object.is(Reflect.get(target, key), value)) {
+          return true;
+        }
+        Reflect.set(target, key, value);
+        setRevision((current) => current + 1);
+        return true;
+      },
+    },
+  );
+  model.gateway = useGatewayPage({
+    getGateway: () => context.gateway,
+    onIdentityChange: () => model.onIdentityChange(),
+    invalidateRequests: () => {
+      model.invalidateRequests();
+    },
+    ensureInitialData: () => model.refresh(),
+  });
+  onSettled(() => {
+    const stopFailures = receiveTemplateAddFailures(context, (failure) =>
+      model.showAddFailure(failure),
+    );
+    return () => {
+      stopFailures();
+      model.dispose();
+    };
+  });
+  const detail = createMemo(() => detailRequest() ?? null);
+  const view = createMemo(() => {
+    revision();
+    return model.view();
+  });
+  function mutate(run: () => void | Promise<void>) {
+    const alreadyApplying = model.applying;
+    const scope = model.gateway.capture();
+    const completed = run();
+    if (alreadyApplying || !model.applying || !scope || !completed) {
+      return;
+    }
+    // Commit owner receipts, including cleared consent, before the action holds.
+    onSettled(() => {
+      if (model.gateway.isCurrent(scope) && model.applying) {
+        void presentMutation(completed);
+      }
+    });
+  }
+  const preview = createMemo(() => {
+    revision();
+    return model.preview;
+  });
+  const readInventory = createMemo(() => (preview()?.kind === "skill" ? preview()?.request : null));
+  const readFile = createMemo(() => preview()?.request ?? null);
+  const previewPath = () => (preview()?.kind === "skill" ? "SKILL.md" : (preview()?.name ?? ""));
+  const files = () => {
+    const current = preview();
+    if (!current) {
+      return [];
+    }
+    if (current.kind === "instruction") {
+      return (model.detail?.contents.instructions ?? []).map((file) => ({
+        path: file.name,
+        size: "",
+        contents: file.name === current.name ? (current.content ?? "") : "",
+      }));
+    }
+    return current.content === null
+      ? []
+      : [{ path: previewPath(), size: "", contents: current.content }];
+  };
+  const content = (
+    <TemplatesCatalogView
+      {...view()}
+      modal={props.modal}
+      readPreview={readFile}
+      readDetail={detail}
+      detailRequest={detailRequest()}
+      applying={applying() && view().applying}
+      onConfirm={() => mutate(view().onConfirm)}
+      onConfirmConsent={() => mutate(view().onConfirmConsent)}
+    />
+  );
+  return (
+    <openclaw-templates-catalog-dialog>
+      <Show
+        when={props.initialPackageName || view().consentWarning}
+        fallback={
+          <TemplatesExplore
+            onSelect={(entry) => model.openDetails(entry)}
+            onAdd={(entry) => void model.addEntry(entry)}
+            addingPackageName={view().applying ? (view().selected?.packageName ?? null) : null}
+            addDisabled={!view().canAdd || view().applying}
+            addFailure={view().addFailure}
+          />
+        }
+      >
+        <Show when={props.modal} fallback={content}>
+          <ModalDialog
+            label={t("templatesCatalog.review")}
+            open
+            style={{ "--openclaw-modal-width": "960px" }}
+            onModal-cancel={(event: Event) => {
+              if (model.applying) {
+                event.preventDefault();
+              } else {
+                props.onClose?.();
+              }
+            }}
+          >
+            {content}
+          </ModalDialog>
+        </Show>
+      </Show>
+      <Show when={!props.modal && preview()}>
+        {(current) => (
+          <FilePreviewModal
+            label={
+              current().kind === "instruction"
+                ? t("templatesCatalog.workspaceFiles")
+                : current().name
+            }
+            files={files()}
+            activePath={previewPath()}
+            layout="document"
+            readInventory={readInventory}
+            inventoryRequest={() => (current().kind === "skill" ? current().request : undefined)}
+            readFile={readFile}
+            fileRequest={() => current().request}
+            onFile-preview-select={(event: CustomEvent<string>) => {
+              if (current().kind === "instruction" && event.detail !== current().name) {
+                void model.openPreview("instruction", event.detail);
+              }
+            }}
+            onFile-preview-retry={() => void model.openPreview(current().kind, current().name)}
+            onFile-preview-close={() => model.closePreview()}
+          />
+        )}
+      </Show>
+    </openclaw-templates-catalog-dialog>
+  );
+}

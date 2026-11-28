@@ -118,8 +118,8 @@ export async function assertCurrentTelegramRequest(
   ) {
     throw new Error("Current workflow run does not match the bounded request");
   }
-  const readCurrentPull = async () =>
-    z
+  for (let read = 0; read < 2; read += 1) {
+    const pr = z
       .object({
         state: z.literal("open"),
         head: z.object({
@@ -128,18 +128,11 @@ export async function assertCurrentTelegramRequest(
         }),
       })
       .parse(await githubJson(`${repo}/pulls/${identity.pull_request}`, options.token, fetchImpl));
-  const pr = await readCurrentPull();
-  if (
-    pr.head.sha !== identity.candidate_sha ||
-    String(pr.head.repo.id) !== identity.repository.id
-  ) {
-    throw new Error("Exact open same-repository PR head is no longer current");
-  }
-  const finalPr = await readCurrentPull();
-  if (
-    finalPr.head.sha !== identity.candidate_sha ||
-    String(finalPr.head.repo.id) !== identity.repository.id
-  ) {
-    throw new Error("Exact open same-repository PR head is no longer current");
+    if (
+      pr.head.sha !== identity.candidate_sha ||
+      String(pr.head.repo.id) !== identity.repository.id
+    ) {
+      throw new Error("Exact open same-repository PR head is no longer current");
+    }
   }
 }

@@ -41,10 +41,15 @@ struct LicenseDocumentLoaderTests {
     @Test func `bundles third party attributions`() throws {
         let documents = LicenseDocumentLoader.bundledDocuments()
         let expected = [
+            ("GitHub Octicons.txt", "GitHub Inc.", "MIT License"),
+            ("llama.cpp.txt", "The ggml authors", "MIT License"),
+            ("Lobe Icons.txt", "LobeHub", "MIT License"),
+            ("Lucide.txt", "Lucide Icons and Contributors", "ISC License"),
             ("SwiftUI Siri Waveform.txt", "Copyright (c) 2019 Noah Chalifour", "MIT License"),
-            ("Mermaid.txt", "Copyright (c) 2014 - 2022 Knut Sveidqvist", "MIT License"),
+            ("Pele.txt", "Copyright (c) 2026 kepano", "MIT License"),
             ("DOMPurify.txt", "Mozilla Public License Version 2.0", "Apache License"),
-            ("JamaJS.txt", "https://github.com/dragonfly-ai/JamaJS", "Apache License"),
+            ("Pele.txt", "Copyright (c) 2026 Lucide Icons and Contributors",
+             "Permission to use, copy, modify, and/or distribute"),
         ]
         for (filename, attribution, license) in expected {
             let document = try #require(documents.first { $0.filename == filename })

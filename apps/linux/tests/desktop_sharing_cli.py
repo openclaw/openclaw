@@ -125,6 +125,22 @@ def main():
     arguments = sys.argv[1:]
     if arguments == ["--version"]:
         print("OpenClaw synthetic desktop fixture")
+    elif arguments == ["browser", "extension", "setup", "--action", "install", "--json", "--wait-ms", "1000"]:
+        if os.environ.get("OPENCLAW_NO_RESPAWN") != "1":
+            raise RuntimeError("Chrome setup lost its native process ownership")
+        record("chrome-setup", action="install")
+        print(json.dumps({
+            "action": "install",
+            "target": {"kind": "local-host", "platform": "linux", "hostname": "fixture",
+                       "profile": "chrome", "relayPort": 18799},
+            "phase": "needs_browser_action",
+            "reason": "extension_missing",
+            "installation": {"nativeHostRegistered": True, "installRequested": False,
+                             "installedProfiles": 0, "discoveredProfiles": 0,
+                             "awaitingApproval": False, "automaticBootstrapSupported": True},
+            "connection": {"state": "not_checked"},
+            "nextAction": "install_from_store",
+        }))
     elif arguments == ["config", "file", "--json"]:
         if (Path.home() / "desktop-cli-config-failure").exists():
             print(json.dumps({"ok": False, "error": {"message": "Synthetic config failure"}}))

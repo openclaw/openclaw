@@ -1,4 +1,3 @@
-// Root --profile/--dev parsing and environment projection for profile-specific state.
 import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -9,17 +8,27 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../daemon/constants.js";
+import { getCommandPositionalsWithRootOptions } from "../infra/cli-root-options.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
+import { splitBrowserPairCodeProfile } from "../shared/browser-pair.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import { isValidProfileName, resolveProfileStateDir } from "./profile-utils.js";
+import { parseCliContainerArgs } from "./container-target.js";
+import {
+  isValidProfileName,
+  resolveProfileGatewayPort,
+  resolveProfileStateDir,
+} from "./profile-utils.js";
 import { scanCliRootOptions } from "./root-option-scan.js";
 import { takeCliRootOptionValue } from "./root-option-value.js";
 
-type CliProfileParseResult =
-  | { ok: true; profile: string | null; argv: string[] }
-  | { ok: false; error: string };
-
-export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
+/**
+ * `containerTarget` is for callers that already stripped `--container` from argv;
+ * otherwise the target comes from argv and OPENCLAW_CONTAINER.
+ */
+export function parseCliProfileArgs(
+  argv: string[],
+  containerTarget?: string | null,
+): { ok: true; profile: string | null; argv: string[] } | { ok: false; error: string } {
   // Root profile flags are stripped before Commander sees argv, except command-local cases.
   let profile: string | null = null;
   let sawDev = false;
@@ -70,16 +79,56 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
   if (!scanned.ok) {
     return scanned;
   }
+  const parsedContainer = containerTarget === undefined ? parseCliContainerArgs(argv) : null;
+  const container =
+    containerTarget ??
+    (parsedContainer?.ok ? parsedContainer.container : null) ??
+    normalizeOptionalString(process.env.OPENCLAW_CONTAINER);
+  // A container target forwards argv to the CLI inside it, which routes the code there.
+  return container
+    ? { ok: true, profile, argv: scanned.argv }
+    : selectPairCodeProfile(scanned.argv, profile);
+}
 
-  return { ok: true, profile, argv: scanned.argv };
+/** `openclaw pair work:ABCD-EFGH` selects the issuing Gateway's profile before paths are pinned. */
+function selectPairCodeProfile(
+  argv: string[],
+  profile: string | null,
+): { ok: true; profile: string | null; argv: string[] } | { ok: false; error: string } {
+  const [pairCode] =
+    getCommandPositionalsWithRootOptions(argv, {
+      commandPath: ["pair"],
+      booleanFlags: ["--yes", "--json", "--expect-final"],
+      valueFlags: ["--url", "--port", "--token", "--password", "--timeout"],
+      maxPositionals: 1,
+      // Commander's reading: required values consume the next token, and `--` keeps operands.
+      mode: "command-path",
+    }) ?? [];
+  const codeProfile = pairCode ? splitBrowserPairCodeProfile(pairCode).profile : null;
+  if (codeProfile === null) {
+    return { ok: true, profile, argv };
+  }
+  if (!isValidProfileName(codeProfile)) {
+    return {
+      ok: false,
+      error: `The pairing code names an invalid profile "${codeProfile}". Copy the code shown in the browser again.`,
+    };
+  }
+  if (profile && profile !== codeProfile) {
+    return {
+      ok: false,
+      error: `This pairing code is for profile "${codeProfile}", but profile "${profile}" was selected. Drop --profile or use the matching one.`,
+    };
+  }
+  return { ok: true, profile: codeProfile, argv };
 }
 
 export function applyCliProfileEnv(params: {
   profile: string;
-  env?: Record<string, string | undefined>;
+  env?: NodeJS.ProcessEnv;
   homedir?: () => string;
 }) {
-  const env = params.env ?? (process.env as Record<string, string | undefined>);
+  const env = params.env ?? process.env;
   const homedir = params.homedir ?? os.homedir;
   const profile = params.profile.trim();
   if (!profile) {
@@ -89,9 +138,8 @@ export function applyCliProfileEnv(params: {
   const inheritedProfile = normalizeOptionalString(env.OPENCLAW_PROFILE) ?? "default";
   const existingStateDir = normalizeOptionalString(env.OPENCLAW_STATE_DIR);
   const existingConfigPath = normalizeOptionalString(env.OPENCLAW_CONFIG_PATH);
-  const profileEnv = env as NodeJS.ProcessEnv;
-  const inheritedProfileStateDir = resolveProfileStateDir(inheritedProfile, profileEnv, homedir);
-  const selectedProfileStateDir = resolveProfileStateDir(profile, profileEnv, homedir);
+  const inheritedProfileStateDir = resolveProfileStateDir(inheritedProfile, env, homedir);
+  const selectedProfileStateDir = resolveProfileStateDir(profile, env, homedir);
   const switchesInheritedProfile = inheritedProfileStateDir !== selectedProfileStateDir;
   const inheritedSystemdServiceName = resolveGatewaySystemdServiceName(inheritedProfile);
   const inheritedServiceSelectors = {
@@ -103,7 +151,7 @@ export function applyCliProfileEnv(params: {
     existingStateDir &&
     switchesInheritedProfile &&
     resolveHomeRelativePath(existingStateDir, {
-      env: env as NodeJS.ProcessEnv,
+      env,
       homedir,
     }) === inheritedProfileStateDir,
   );
@@ -112,15 +160,12 @@ export function applyCliProfileEnv(params: {
     (!existingStateDir || switchesInheritedProfileState) &&
     existingConfigPath &&
     resolveHomeRelativePath(existingConfigPath, {
-      env: env as NodeJS.ProcessEnv,
+      env,
       homedir,
     }) === path.join(inheritedProfileStateDir, "openclaw.json"),
   );
   const inheritedManagedServiceSelectors =
-    switchesInheritedProfile &&
-    isGatewayServiceEnv(env) &&
-    switchesInheritedProfileState &&
-    replacesInheritedProfileConfig;
+    isGatewayServiceEnv(env) && switchesInheritedProfileState && replacesInheritedProfileConfig;
 
   if (inheritedManagedServiceSelectors) {
     for (const key of GATEWAY_SERVICE_SELECTOR_ENV_KEYS) {
@@ -132,10 +177,9 @@ export function applyCliProfileEnv(params: {
   // Switch them together so an explicit profile cannot mutate the service's profile.
   env.OPENCLAW_PROFILE = profile;
 
-  const retainedStateDir = inheritedManagedServiceSelectors ? undefined : existingStateDir;
   const stateDir =
-    retainedStateDir && !switchesInheritedProfileState ? retainedStateDir : selectedProfileStateDir;
-  if (!retainedStateDir || switchesInheritedProfileState) {
+    existingStateDir && !switchesInheritedProfileState ? existingStateDir : selectedProfileStateDir;
+  if (!existingStateDir || switchesInheritedProfileState) {
     env.OPENCLAW_STATE_DIR = stateDir;
   }
 
@@ -156,6 +200,6 @@ export function applyCliProfileEnv(params: {
   }
 
   if (profile === "dev" && !env.OPENCLAW_GATEWAY_PORT?.trim()) {
-    env.OPENCLAW_GATEWAY_PORT = "19001";
+    env.OPENCLAW_GATEWAY_PORT = String(resolveProfileGatewayPort(profile));
   }
 }

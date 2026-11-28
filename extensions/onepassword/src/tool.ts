@@ -1,13 +1,11 @@
-import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
-import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord,
+  asRecord,
+  readStringField,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
-import type {
-  PluginHookToolResultPersistEvent,
-  PluginHookToolResultPersistResult,
-} from "openclaw/plugin-sdk/types";
 import { parseToolInput, type OnePasswordBroker } from "./broker.js";
-import { OnePasswordError } from "./errors.js";
 import { AUTHORIZATION_NONCE_PARAM } from "./pending-authorization.js";
 
 const OnePasswordToolSchema = {
@@ -39,53 +37,9 @@ const OnePasswordToolSchema = {
 } satisfies AnyAgentTool["parameters"];
 
 function errorResult(error: unknown) {
-  const code =
-    error instanceof OnePasswordError
-      ? error.code
-      : error && typeof error === "object" && "code" in error && typeof error.code === "string"
-        ? error.code
-        : "OP_ERROR";
+  const code = readStringField(asRecord(error), "code") ?? "OP_ERROR";
   const message = error instanceof Error ? error.message : "1Password request failed";
   return jsonResult({ ok: false, error: { code, message } });
-}
-
-export function redactPersistedOnePasswordResult(
-  event: PluginHookToolResultPersistEvent,
-): PluginHookToolResultPersistResult | undefined {
-  if (
-    event.message.role !== "toolResult" ||
-    (event.toolName ?? event.message.toolName) !== "onepassword"
-  ) {
-    return undefined;
-  }
-  const details = event.message.details;
-  const contentText = event.message.content
-    .filter(
-      (part): part is Extract<(typeof event.message.content)[number], { type: "text" }> =>
-        part.type === "text",
-    )
-    .map((part) => part.text)
-    .join("\n");
-  const hasSecretValue =
-    (isRecord(details) && typeof details.value === "string") || /"value"\s*:/.test(contentText);
-  if (!hasSecretValue) {
-    return undefined;
-  }
-  const safeDetails = asNonArrayRecord(details);
-  const persisted = {
-    ok: true,
-    redacted: true,
-    ...(typeof safeDetails.slug === "string" ? { slug: safeDetails.slug } : {}),
-    ...(typeof safeDetails.itemTitle === "string" ? { itemTitle: safeDetails.itemTitle } : {}),
-    ...(typeof safeDetails.fieldLabel === "string" ? { fieldLabel: safeDetails.fieldLabel } : {}),
-  };
-  return {
-    message: {
-      ...event.message,
-      content: [{ type: "text", text: JSON.stringify(persisted, null, 2) }],
-      details: persisted,
-    },
-  };
 }
 
 export function createOnePasswordTool(
@@ -99,10 +53,7 @@ export function createOnePasswordTool(
       "List curated 1Password secret slugs or retrieve one secret under its configured access policy.",
     parameters: OnePasswordToolSchema,
     execute: async (toolCallId, rawParams) => {
-      const params =
-        rawParams && typeof rawParams === "object" && !Array.isArray(rawParams)
-          ? (rawParams as Record<string, unknown>)
-          : {};
+      const params = asNonArrayRecord(rawParams);
       try {
         const input = parseToolInput(params);
         if (input.action === "list") {

@@ -6,147 +6,51 @@ import AppKit
 import UIKit
 #endif
 
-enum ChatReaderUserTransition: Equatable {
-    case unchanged
-    case added(UUID)
-    case removed(latestRemainingID: UUID?)
-}
-
-enum ChatReaderInitialRestorePolicy: Equatable {
-    case liveEdge
-    case latestTurn
-}
-
-func chatReaderInitialRestorePolicy() -> ChatReaderInitialRestorePolicy {
-    #if os(iOS)
-    .liveEdge
-    #else
-    .latestTurn
-    #endif
-}
-
-func chatReaderUserTransition(
-    previousID: UUID?,
-    visibleIDs: [UUID]) -> ChatReaderUserTransition
-{
-    let latestID = visibleIDs.last
-    if let previousID, !visibleIDs.contains(previousID) {
-        return .removed(latestRemainingID: latestID)
-    }
-    if let latestID, latestID != previousID {
-        return .added(latestID)
-    }
-    return .unchanged
-}
-
-func chatReaderHasNewerContent(
-    after messageID: UUID,
-    visibleIDs: [UUID],
-    hasTransientContent: Bool) -> Bool
-{
-    guard let messageIndex = visibleIDs.firstIndex(of: messageID) else { return false }
-    return messageIndex < visibleIDs.index(before: visibleIDs.endIndex) || hasTransientContent
-}
-
-/// `hasNewerContentBelow` is derived structurally (a later message or streaming text exists),
-/// which is true from the first Writing tick of a turn even when the whole transcript is on
-/// screen. Gating on the live-edge geometry keeps the jump affordance hidden until content is
-/// actually below the viewport; without it the button flashes during every reply (#108693).
-func chatReaderShowsJumpToLatest(
-    hasNewerContentBelow: Bool,
-    isAtLiveEdge: Bool,
-    hasVisibleContent: Bool,
-    isLoading: Bool) -> Bool
-{
-    hasNewerContentBelow && !isAtLiveEdge && hasVisibleContent && !isLoading
-}
-
-/// The view's own one-shot positioning always runs in a nil-animation transaction, so
-/// `.animating` only comes from system scrolls (status-bar scroll-to-top, keyboard
-/// avoidance). Not releasing there lets the next timeline tick yank the reader back down.
-func chatReaderScrollReleasesFollow(_ phase: ScrollPhase) -> Bool {
-    switch phase {
-    case .interacting, .animating:
-        true
-    case .idle, .tracking, .decelerating:
-        false
-    @unknown default:
-        false
-    }
-}
-
-private enum ScrollFollowTarget: Equatable {
-    case latest
-    case turn(UUID)
-}
-
 private struct ChatTurnRecapObservation: Equatable {
     let sessionKey: String
     let indicatorVisible: Bool
     let row: ChatTurnRecapSessionRow?
 }
 
-public struct OpenClawChatDisplayOptions: OptionSet, Sendable {
-    public let rawValue: UInt8
-
-    public init(rawValue: UInt8) {
-        self.rawValue = rawValue
-    }
-
-    public static let reasoning = Self(rawValue: 1 << 0)
-    public static let toolActivity = Self(rawValue: 1 << 1)
-    public static let assistantTrace: Self = [.reasoning, .toolActivity]
-
-    public static func assistantTrace(_ isVisible: Bool) -> Self {
-        isVisible ? .assistantTrace : []
-    }
-}
-
 @MainActor
 public struct OpenClawChatView: View {
-    public enum Style {
-        case standard
-        case onboarding
-    }
-
-    public enum ComposerChrome {
-        case full
-        case clean
-    }
-
-    public struct StarterPrompt: Hashable, Identifiable, Sendable {
-        public let id: String
-        public let title: String
-        public let prompt: String
-
-        public init(id: String, title: String, prompt: String) {
-            self.id = id
-            self.title = title
-            self.prompt = prompt
-        }
-    }
-
-    @State private var viewModel: OpenClawChatViewModel
+    // The caller owns model lifetime; transport replacement can preserve presentation identity.
+    private let viewModel: OpenClawChatViewModel
+    private let resolveComposerModel: (@MainActor () -> OpenClawChatViewModel?)?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
+    @State private var contentWidth: CGFloat = 0
+    @Environment(\.openClawChatUsesFloatingComposer) private var usesFloatingComposer
+    @Environment(\.openClawChatFloatingHeader) private var floatingHeader
+    @Environment(\.openClawChatComposerAccessory) private var composerAccessory
+    @Environment(\.openClawChatShowsDisconnectNotice) private var showsDisconnectNotice
+    @Environment(\.openClawChatStatusBarInset) private var statusBarInset
+    @Environment(\.openClawChatInteractionsDisabled) private var interactionsDisabled
     @State private var scrollerBottomID = UUID()
-    @State private var scrollPosition: UUID?
+    @State private var scrollCommand = ChatScrollCommand()
+    @State private var dismissedProgressCards: Set<String> = []
+    @State private var scroll = ChatScrollFollowState()
     @State private var hasPerformedInitialScroll = false
     @State private var lastTurnStartID: UUID?
-    @State private var hasNewerContentBelow = false
-    @State private var followTarget: ScrollFollowTarget? = .latest
-    @State private var isAtLiveEdge = true
-    @State private var isUserScrolling = false
+    #if os(iOS)
+    @State private var readerHistorySnapshot: ChatReaderHistorySnapshot?
+    @State private var olderHistory = ChatOlderHistoryReader()
+    #endif
     @State private var isKeyboardVisible = false
     @State private var hoveredMessageID: UUID?
-    @State private var restoresLiveEdgeAfterKeyboardShows = false
     @State private var expandedUserMessageIDs: Set<UUID> = []
     @State private var searchMessageID: UUID?
     @State private var isSearchPresented = false
     @State private var composerFocusRequest = 0
+    @State private var isOnScreen = false
+    #if os(macOS)
+    @Environment(\.openClawChatWindowCommands) private var windowCommands
+    #endif
     @State private var fullMessageRequest: ChatFullMessageReaderRequest?
+    @State private var reactionPickerMessage: OpenClawChatMessage?
     #if os(iOS)
     @State private var selectTextMessage: OpenClawChatMessage?
+    @State private var selectedWork: ChatToolSheetSelection?
     #endif
     @State private var turnRecapResolver = ChatTurnRecapResolver()
     @State private var turnRecap: ChatTurnRecap?
@@ -166,6 +70,9 @@ public struct OpenClawChatView: View {
     private let isComposerEnabled: Bool
     private let isAttachmentInputEnabled: Bool
     private let messagePlaceholder: String?
+    private let compactMessagePlaceholder: String?
+    private let showsEmptyStateNotice: Bool
+    private let showsTurnRecap: Bool
     private let emptyAssistantIntro: String?
     private let emptyAssistantPrompts: [StarterPrompt]
     private let talkControl: OpenClawChatTalkControl?
@@ -173,44 +80,7 @@ public struct OpenClawChatView: View {
     private let voiceNoteControl: OpenClawChatVoiceNoteControl?
     private let speech: OpenClawChatSpeechController?
     private let mediaPlaybackAllowed: @MainActor @Sendable () -> Bool
-
-    private enum Layout {
-        #if os(macOS)
-        static let outerPaddingHorizontal: CGFloat = 6
-        static let outerPaddingVertical: CGFloat = 0
-        static let composerPaddingHorizontal: CGFloat = 0
-        static let swarmPaddingHorizontal: CGFloat = 12
-        static let swarmPaddingVertical: CGFloat = 8
-        static let stackSpacing: CGFloat = 0
-        static let messageSpacing: CGFloat = 6
-        static let messageListPaddingTop: CGFloat = 12
-        static let messageListPaddingBottom: CGFloat = 16
-        static let messageListPaddingHorizontal: CGFloat = 6
-        static let newTurnAnchor = UnitPoint(x: 0.5, y: 0.18)
-        static let liveEdgeThreshold: CGFloat = 48
-        #else
-        static let outerPaddingHorizontal: CGFloat = 6
-        static let outerPaddingVertical: CGFloat = 6
-        static let composerPaddingHorizontal: CGFloat = 6
-        static let swarmPaddingHorizontal: CGFloat = 6
-        static let swarmPaddingVertical: CGFloat = 0
-        static let stackSpacing: CGFloat = 6
-        static let messageSpacing: CGFloat = 12
-        static let messageListPaddingTop: CGFloat = 10
-        static let messageListPaddingBottom: CGFloat = 6
-        static let messageListPaddingHorizontal: CGFloat = 8
-        static let newTurnAnchor = UnitPoint(x: 0.5, y: 0.18)
-        static let liveEdgeThreshold: CGFloat = 48
-        #endif
-    }
-
-    private var readingColumnWidth: CGFloat {
-        #if os(macOS)
-        self.isDesktopLayout ? 760 : .infinity
-        #else
-        .infinity
-        #endif
-    }
+    private let firstConnectionNotice: OpenClawChatFirstConnectionNotice?
 
     private var collapsesCompletedWork: Bool {
         #if os(iOS)
@@ -223,6 +93,7 @@ public struct OpenClawChatView: View {
     /// `showsAssistantTrace` remains as a source-compatible convenience that sets both display options.
     public init(
         viewModel: OpenClawChatViewModel,
+        resolveComposerModel: (@MainActor () -> OpenClawChatViewModel?)? = nil,
         drawsBackground: Bool = true,
         showsSessionSwitcher: Bool = false,
         style: Style = .standard,
@@ -239,15 +110,20 @@ public struct OpenClawChatView: View {
         isComposerEnabled: Bool = true,
         isAttachmentInputEnabled: Bool? = nil,
         messagePlaceholder: String? = nil,
+        compactMessagePlaceholder: String? = nil,
+        showsEmptyStateNotice: Bool = true,
+        showsTurnRecap: Bool = true,
         emptyAssistantIntro: String? = nil,
         emptyAssistantPrompts: [StarterPrompt] = [],
         talkControl: OpenClawChatTalkControl? = nil,
         dictationControl: OpenClawChatDictationControl? = nil,
         voiceNoteControl: OpenClawChatVoiceNoteControl? = nil,
         speech: OpenClawChatSpeechController? = nil,
-        mediaPlaybackAllowed: @escaping @MainActor @Sendable () -> Bool = { true })
+        mediaPlaybackAllowed: @escaping @MainActor @Sendable () -> Bool = { true },
+        firstConnectionNotice: OpenClawChatFirstConnectionNotice? = nil)
     {
-        _viewModel = State(initialValue: viewModel)
+        self.viewModel = viewModel
+        self.resolveComposerModel = resolveComposerModel
         self.drawsBackground = drawsBackground
         self.showsSessionSwitcher = showsSessionSwitcher
         self.style = style
@@ -263,6 +139,9 @@ public struct OpenClawChatView: View {
         self.isComposerEnabled = isComposerEnabled
         self.isAttachmentInputEnabled = isAttachmentInputEnabled ?? isComposerEnabled
         self.messagePlaceholder = messagePlaceholder
+        self.compactMessagePlaceholder = compactMessagePlaceholder
+        self.showsEmptyStateNotice = showsEmptyStateNotice
+        self.showsTurnRecap = showsTurnRecap
         self.emptyAssistantIntro = emptyAssistantIntro
         self.emptyAssistantPrompts = emptyAssistantPrompts
         self.talkControl = talkControl
@@ -270,6 +149,7 @@ public struct OpenClawChatView: View {
         self.voiceNoteControl = voiceNoteControl
         self.speech = speech
         self.mediaPlaybackAllowed = mediaPlaybackAllowed
+        self.firstConnectionNotice = firstConnectionNotice
     }
 
     public var body: some View {
@@ -283,11 +163,20 @@ public struct OpenClawChatView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear {
+            self.isOnScreen = true
             self.viewModel.refreshSourceContext()
             self.viewModel.load()
         }
-        .onChange(of: self.turnRecapObservation, initial: true) { _, observation in
-            self.updateTurnRecap(observation)
+        .onChange(of: ObjectIdentifier(self.viewModel)) { _, _ in
+            self.viewModel.refreshSourceContext()
+        }
+        .modifier(ChatPresentationActivity(viewModel: self.viewModel, isOnScreen: self.isOnScreen))
+        .modifier(ChatTranscriptRoom.Provider())
+        .onChange(of: self.showsTurnRecap ? self.turnRecapObservation : nil, initial: true) { _, observation in
+            if let observation { self.updateTurnRecap(observation) }
+        }
+        .sheet(item: self.$reactionPickerMessage) {
+            ChatMessageReactionPicker(viewModel: self.viewModel, message: $0)
         }
         .sheet(item: self.$fullMessageRequest) { request in
             ChatFullMessageReader(
@@ -295,63 +184,137 @@ public struct OpenClawChatView: View {
                 markdownVariant: self.markdownVariant)
         }
         #if os(iOS)
+        .sheet(item: self.$selectedWork) { selection in
+            ChatToolGroupPresentation(
+                selection: selection,
+                transcript: self.transcriptPresentation,
+                viewModel: self.viewModel,
+                displayOptions: self.displayOptions)
+            { key in
+                self.selectedWork = nil
+                self.viewModel.switchSession(to: key)
+            }
+        }
         .sheet(item: self.$selectTextMessage) {
             ChatSelectableTextSheet(text: ChatMessageVisibleText.copyText(in: $0))
         }
         #endif
     }
+}
 
+extension OpenClawChatView {
     private var content: some View {
-        VStack(spacing: 0) {
-            self.messageList
+        let transcript = self.transcriptPresentation
+        let column = self.columnLayout
+        #if os(macOS)
+        let composerBottom: CGFloat = self.isDesktopLayout ? 12 : Layout.outerPaddingVertical
+        #else
+        let composerBottom = column.margin / 2
+        #endif
+        return VStack(spacing: 0) {
+            self.messageList(transcript: transcript)
                 #if os(macOS)
                     .modifier(ChatTranscriptSearch(
-                        rows: self.transcriptRows,
+                        rows: transcript.rows,
                         sessionKey: self.viewModel.sessionKey,
                         isEnabled: self.isDesktopLayout && self.showsComposer,
+                        focusRequest: self.windowCommands?.findRequest ?? 0,
                         selectedMessageID: self.$searchMessageID,
                         isPresented: self.$isSearchPresented,
                         onSelect: self.revealSearchMessage))
+                    .onChange(of: self.windowCommands?.composerFocusRequest) { _, _ in
+                        self.composerFocusRequest += 1
+                    }
+                    .onChange(of: self.searchMessageID) { previousID, _ in
+                        self.scrollCommand.cancel(targetID: previousID)
+                    }
                     .onChange(of: self.isSearchPresented) { wasPresented, isPresented in
                         if wasPresented, !isPresented { self.composerFocusRequest += 1 }
                     }
                 #endif
-                    .padding(.horizontal, Layout.outerPaddingHorizontal)
+            if !self.usesFloatingComposer {
+                self.composerDock(column: column, bottom: composerBottom)
+            }
+        }
+        .disabled(self.interactionsDisabled)
+        #if os(iOS)
+        .modifier(ChatSafeAreaBar(edge: .bottom) {
+            if self.usesFloatingComposer {
+                self.composerDock(column: column, bottom: ChatColumnLayout.keyboardPadding(
+                    style: self.style, chrome: self.composerChrome, visible: self.isKeyboardVisible))
+                    .disabled(self.interactionsDisabled)
+            }
+        })
+        .modifier(ChatSafeAreaBar(edge: .top) {
+            self.floatingHeader?.padding(.top, self.statusBarInset)
+        })
+        .padding(.top, self.floatingHeader == nil ? 0 : -self.statusBarInset)
+        #endif
+        .padding(.top, Layout.outerPaddingVertical)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { self.contentWidth = $0 }
+        .environment(\.openClawChatColumn, column)
+        // Leaves read these; rows never take them as inputs, so a change redraws only the leaves.
+        .environment(\.openClawChatGateway, self.gatewayResources)
+        #if os(iOS)
+        .environment(\.chatInlineVideos, self.viewModel.inlineVideos)
+        #endif
+        .environment(\.openClawChatUserAccent, self.userAccent)
+        .environment(\.openClawAssistantIdentity, ChatAssistantIdentity(
+            name: self.assistantName,
+            avatarText: self.assistantAvatarText,
+            avatarTint: self.assistantAvatarTint))
+        .environment(
+            \.openClawOpenChatSession,
+            ChatOpenSessionAction(owner: ObjectIdentifier(self.viewModel)) { [viewModel = self.viewModel] in
+                viewModel.switchSession(to: $0)
+            })
+    }
+
+    private func composerDock(column: ChatColumnLayout, bottom: CGFloat) -> some View {
+        VStack(spacing: 0) {
             if !self.usesInlineProgressCard {
+                // The composer draws its surface on the column, so the card shares its edges.
                 self.progressCard
-                    .frame(maxWidth: self.readingColumnWidth)
-                    .padding(.horizontal, Layout.composerPaddingHorizontal)
+                    .chatColumn(column)
                     .padding(.top, Layout.stackSpacing)
             }
             if self.showsComposer {
                 self.turnRecapRow
-                    .frame(maxWidth: self.readingColumnWidth)
+                    .chatColumn(column)
             }
             self.swarmProgress
-                .frame(maxWidth: self.readingColumnWidth)
-                .padding(.horizontal, Layout.swarmPaddingHorizontal)
+                .chatColumn(column)
                 .padding(.vertical, Layout.swarmPaddingVertical)
                 .padding(.top, Layout.stackSpacing)
             if self.showsComposer {
+                let inset = OpenClawChatComposer.surfaceInset(style: self.style, chrome: self.composerChrome)
                 self.composer
-                    .frame(maxWidth: self.readingColumnWidth)
-                    .padding(.horizontal, self.isDesktopLayout ? 16 : Layout.composerPaddingHorizontal)
+                    .chatBehaviorProbe(.composer)
+                    .chatColumn(column, inset: inset)
                     .padding(.top, Layout.stackSpacing)
-                    .padding(.bottom, self.isDesktopLayout ? 12 : Layout.outerPaddingVertical)
+                    .padding(.bottom, bottom)
             }
         }
-        .padding(.top, Layout.outerPaddingVertical)
-        .frame(maxWidth: .infinity)
-        .frame(maxHeight: .infinity, alignment: .top)
     }
 
     @ViewBuilder
     private var progressCard: some View {
         if let progressCard = self.viewModel.progressCard {
-            ChatProgressCard(
-                steps: progressCard.steps ?? [],
-                markdown: progressCard.markdown,
-                isInline: self.usesInlineProgressCard)
+            // Dismissal lasts until the card changes: an update is worth showing again.
+            let signature = String(describing: progressCard)
+            if !self.dismissedProgressCards.contains(signature) {
+                ChatProgressCard(
+                    steps: progressCard.steps ?? [],
+                    markdown: progressCard.markdown,
+                    isInline: self.usesInlineProgressCard,
+                    isRefreshing: self.viewModel.progressCardRefreshPending,
+                    onRefresh: self.viewModel.progressCardRefreshAvailable
+                        ? { self.viewModel.requestProgressCardRefresh() } : nil,
+                    onClearSaved: self.viewModel.progressCardStoreAvailable == true
+                        ? { self.viewModel.clearSavedProgressCard() } : nil,
+                    onDismiss: { self.dismissedProgressCards.insert(signature) })
+            }
         }
     }
 
@@ -377,19 +340,45 @@ public struct OpenClawChatView: View {
             style: self.style,
             showsSessionSwitcher: self.showsSessionSwitcher,
             userAccent: self.userAccent,
-            assistantName: self.assistantName,
-            assistantAvatarText: self.assistantAvatarText,
-            assistantAvatarTint: self.assistantAvatarTint,
             composerChrome: self.composerChrome,
             isComposerEnabled: self.isComposerEnabled
                 && !self.viewModel.isSendingAttachmentDraft,
             isAttachmentInputEnabled: self.isAttachmentInputEnabled
                 && !self.viewModel.isSendingAttachmentDraft,
             messagePlaceholder: self.messagePlaceholder,
+            compactMessagePlaceholder: self.compactMessagePlaceholder,
             talkControl: self.talkControl,
             dictationControl: self.dictationControl,
             voiceNoteControl: self.voiceNoteControl,
-            focusRequest: self.composerFocusRequest)
+            focusRequest: self.composerFocusRequest,
+            resolveInputModel: self.resolveComposerModel)
+    }
+
+    /// The turn has ended, but a helper it started is still running.
+    @ViewBuilder
+    private var subagentWaitRow: some View {
+        if let wait = self.viewModel.subagentWait {
+            HStack(spacing: 7) {
+                ChatWorkingClawView(seed: "subagent-wait", parked: true)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Waiting on subagents")
+                        .font(OpenClawChatTypography.caption)
+                        .foregroundStyle(.secondary)
+                    if let child = wait.child {
+                        Button {
+                            self.viewModel.switchSession(to: child.key)
+                        } label: {
+                            Text(child.name)
+                                .font(OpenClawChatTypography.caption)
+                                .underline()
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("chat-subagent-wait-child")
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+        }
     }
 
     @ViewBuilder
@@ -399,23 +388,78 @@ public struct OpenClawChatView: View {
            let turnRecap
         {
             ChatTurnRecapRow(recap: turnRecap)
-                .padding(.horizontal, Layout.outerPaddingHorizontal + Layout.messageListPaddingHorizontal)
                 .padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
-    private var messageList: some View {
-        ZStack {
-            ScrollView {
-                LazyVStack(spacing: self.isDesktopLayout ? 16 : Layout.messageSpacing) {
-                    self.messageListRows
+    private func handleTranscriptDistanceChange(_ distanceFromBottom: CGFloat) {
+        let isAtLiveEdge = distanceFromBottom <= Layout.liveEdgeThreshold
+        guard self.scroll.isAtLiveEdge != isAtLiveEdge else { return }
+        self.scroll.isAtLiveEdge = isAtLiveEdge
+        #if os(iOS)
+        self.scroll.hasNewerContentBelow = !isAtLiveEdge
+        #endif
+        #if !os(iOS)
+        guard self.hasPerformedInitialScroll else { return }
+        if isAtLiveEdge, !self.scroll.isUserScrolling, !self.isFollowingTurn, self.searchMessageID == nil {
+            self.scroll.followTarget = .latest
+            self.scroll.hasNewerContentBelow = false
+        }
+        #endif
+    }
 
-                    if self.usesInlineProgressCard {
-                        self.progressCard
-                    }
-                    if !self.showsComposer, !self.viewModel.hasBlockingRunActivity {
-                        self.turnRecapRow
+    private func messageListScrollContent(
+        transcript: TranscriptPresentation,
+        hasVisibleContent: Bool) -> some View
+    {
+        #if !os(iOS)
+        let groups = self.runGroups(transcript)
+        let latestTurn = ChatAssistantRunGroup.latestTurnStart(in: groups)
+        let spacing = self.isDesktopLayout ? 16 : Layout.messageSpacing
+        #endif
+        return Group {
+            #if os(iOS)
+            List {
+                ChatOlderHistoryBoundaryRow(viewModel: self.viewModel, load: self.loadOlderHistory)
+                Group {
+                    self.transcriptGroups(transcript: transcript, hasVisibleContent: hasVisibleContent)
+                    if self.usesInlineProgressCard { self.progressCard }
+                    if !self.showsComposer, !self.viewModel.hasBlockingRunActivity { self.turnRecapRow }
+                    self.subagentWaitRow
+                }
+                .chatColumn(self.columnLayout)
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets())
+                Color.clear
+                    .frame(height: Layout.messageListPaddingBottom + 1)
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+            }
+            .listStyle(.plain)
+            .contentMargins(.top, 6, for: .scrollContent)
+            .scrollContentBackground(.hidden)
+            .modifier(ChatDraftIdentityPlacement())
+            .environment(\.defaultMinListRowHeight, 0)
+            .environment(\.openClawReadingPosition, self.scroll.readingPosition)
+            .chatOlderHistoryTrigger(
+                self.olderHistory,
+                viewModel: self.viewModel,
+                scroll: self.scroll,
+                load: self.loadOlderHistory)
+            #else
+            ScrollView {
+                LazyVStack(spacing: spacing) {
+                    self.groupRows(groups[..<latestTurn], transcript: transcript)
+                    VStack(spacing: spacing) {
+                        self.messageListRows(
+                            transcript: transcript,
+                            groups: groups[latestTurn...],
+                            hasVisibleContent: hasVisibleContent)
+                        if self.usesInlineProgressCard { self.progressCard }
+                        if !self.showsComposer, !self.viewModel.hasBlockingRunActivity { self.turnRecapRow }
+                        self.subagentWaitRow
                     }
 
                     Color.clear
@@ -426,49 +470,43 @@ public struct OpenClawChatView: View {
                         #endif
                         .id(self.scrollerBottomID)
                 }
-                // Use scroll targets for stable auto-scroll without ScrollViewReader relayout glitches.
-                .scrollTargetLayout()
                 .padding(.top, self.isDesktopLayout ? 24 : Layout.messageListPaddingTop)
-                .frame(maxWidth: self.readingColumnWidth)
-                .padding(.horizontal, self.isDesktopLayout ? 16 : Layout.messageListPaddingHorizontal)
-                .frame(maxWidth: .infinity)
+                .chatColumn(self.columnLayout)
             }
-            #if !os(macOS)
-            .scrollDismissesKeyboard(.interactively)
             #endif
-            .safeAreaInset(edge: .top, spacing: 0) {
-                self.messageListNoticeBanner
-            }
-            .scrollPosition(id: self.$scrollPosition, anchor: .bottom)
-            .onScrollGeometryChange(for: Bool.self) { geometry in
-                let distanceFromBottom = geometry.contentSize.height - geometry.visibleRect.maxY
-                return distanceFromBottom <= Layout.liveEdgeThreshold
-            } action: { _, isAtLiveEdge in
-                self.isAtLiveEdge = isAtLiveEdge
-                guard self.hasPerformedInitialScroll else { return }
-                if isAtLiveEdge, !self.isUserScrolling, !self.isFollowingTurn, self.searchMessageID == nil {
-                    self.followTarget = .latest
-                    self.hasNewerContentBelow = false
+        }
+    }
+
+    private func messageList(transcript: TranscriptPresentation) -> some View {
+        let hasVisibleContent = !transcript.rows.isEmpty || self.hasVisibleTransientContent
+        let notice = hasVisibleContent && !self.viewModel.isLoading && self.visibleEmptyAssistantIntro == nil
+            ? self.activeErrorText : nil
+        let isWaitingForTranscript = self.showsCleanLoadingPlaceholder(hasVisibleContent: hasVisibleContent)
+        return ZStack {
+            self.messageListScrollContent(transcript: transcript, hasVisibleContent: hasVisibleContent)
+                .chatTranscriptReveal(isWaiting: isWaitingForTranscript)
+                .accessibilityIdentifier("chat-transcript")
+                #if !os(macOS)
+                .scrollDismissesKeyboard(.interactively)
+                #endif
+                .modifier(ChatTranscriptNoticeInset(error: notice, banner: self.messageListNoticeBanner))
+                // Let native layout follow a growing live bubble without issuing a command per word.
+                #if !os(iOS)
+                .defaultScrollAnchor(.bottom, for: .initialOffset)
+                #endif
+                .modifier(ChatScrollFollowAnchorModifier(scroll: self.scroll))
+                // Lazy row sizing can cross the threshold repeatedly within one layout. Observe the
+                // distance so a coalesced update still reconciles the stored live-edge state.
+                .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                    geometry.contentSize.height - geometry.visibleRect.maxY
+                } action: { _, distanceFromBottom in
+                    self.handleTranscriptDistanceChange(distanceFromBottom)
                 }
-            }
-            .onScrollPhaseChange { _, phase in
-                guard self.hasPerformedInitialScroll else { return }
-                if phase == .interacting {
-                    self.restoresLiveEdgeAfterKeyboardShows = false
-                }
-                if chatReaderScrollReleasesFollow(phase) {
-                    self.isUserScrolling = true
-                    self.followTarget = nil
-                } else if phase == .idle, self.isUserScrolling {
-                    self.isUserScrolling = false
-                    if self.isAtLiveEdge {
-                        self.followTarget = .latest
-                        self.hasNewerContentBelow = false
-                    } else {
-                        self.hasNewerContentBelow = true
-                    }
-                }
-            }
+                .onScrollPhaseChange { _, phase in self.handleTranscriptScrollPhase(phase) }
+                .chatBehaviorProbeScroll()
+                #if os(iOS)
+                .modifier(ChatTranscriptTimeReveal(margin: self.columnLayout.margin))
+                #endif
 
             if self.viewModel.isLoading, self.composerChrome == .full {
                 ProgressView()
@@ -476,18 +514,35 @@ public struct OpenClawChatView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
-            self.messageListOverlay
+            if isWaitingForTranscript {
+                ChatTranscriptLoadingPlaceholder(columnLayout: self.columnLayout)
+                    .transition(ChatTranscriptLoadingPlaceholder.transition)
+            }
 
-            if self.showsJumpToLatest {
+            self.messageListOverlay(hasVisibleContent: hasVisibleContent)
+
+            ChatJumpToLatestSlot(
+                scroll: self.scroll,
+                hasVisibleContent: hasVisibleContent,
+                isLoading: self.viewModel.isLoading)
+            {
                 self.jumpToLatestButton
-                    .padding(.bottom, 12)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        #if os(iOS)
+        .modifier(ChatScrollCommandModifier(
+                command: self.$scrollCommand,
+                currentSessionTarget: { self.viewModel.currentSessionTarget },
+                shouldNavigate: { !self.scroll.readingPosition.isTurnRealized($0) }))
+        #else
+            .modifier(ChatScrollCommandModifier(
+                command: self.$scrollCommand,
+                currentSessionTarget: { self.viewModel.currentSessionTarget }))
+        #endif
         // Ensure the message list claims vertical space on the first layout pass.
         .frame(maxHeight: .infinity, alignment: .top)
         .layoutPriority(1)
+        .modifier(ChatTranscriptRoom.Reader())
         .simultaneousGesture(
             TapGesture().onEnded {
                 self.dismissKeyboardIfNeeded()
@@ -499,13 +554,7 @@ public struct OpenClawChatView: View {
             self.lastTurnStartID = self.latestVisibleTurnStartID
         }
         .onChange(of: self.viewModel.currentSessionTarget) { _, _ in
-            self.speech?.stop()
-            self.hasPerformedInitialScroll = false
-            self.followTarget = .latest
-            self.isAtLiveEdge = true
-            self.isUserScrolling = false
-            self.hasNewerContentBelow = false
-            self.lastTurnStartID = nil
+            self.resetTranscriptSession()
         }
         .onChange(of: self.scenePhase) { _, newValue in
             if newValue == .background {
@@ -515,143 +564,384 @@ public struct OpenClawChatView: View {
             self.viewModel.resumeFromForeground()
         }
         .onDisappear {
+            self.isOnScreen = false
+            self.viewModel.setComposerPresentationActive(false)
             self.speech?.stop()
+            self.scrollCommand.cancel()
         }
+        #if os(iOS)
+        .onChange(of: self.viewModel.localSendRevision) { _, _ in
+            guard self.hasPerformedInitialScroll, self.searchMessageID == nil else { return }
+            self.readerHistorySnapshot = nil
+            self.scroll.hasNewerContentBelow = false
+            // The sent message rests just above the composer until the reply outgrows the room under it.
+            self.scroll.readingPosition.turnSent(
+                in: self.viewModel.transcriptMessages,
+                keyboardUp: self.isKeyboardVisible)
+        }
+        .onChange(of: self.showsWorkingIndicator && !self.hasVisibleStreamingAssistantText, initial: true) {
+            self.scroll.readingPosition.workingRowOnly = $1
+        }
+        #endif
         .onChange(of: self.viewModel.timelineRevision) { _, _ in
             self.handleTimelineChange()
         }
         #if canImport(UIKit) && !os(macOS)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { _ in
+            self.scroll.isKeyboardTransitioning = true
+            self.scroll.readingPosition.keyboardFrameChanged()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidChangeFrameNotification)) { _ in
+            self.scroll.isKeyboardTransitioning = false
+            self.scroll.readingPosition.keyboardFrameChanged()
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-            self.restoresLiveEdgeAfterKeyboardShows =
-                self.followTarget == .latest && !self.isUserScrolling && self.searchMessageID == nil
             self.isKeyboardVisible = true
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
-            guard self.restoresLiveEdgeAfterKeyboardShows else { return }
-            self.restoresLiveEdgeAfterKeyboardShows = false
-            guard self.searchMessageID == nil else { return }
-            self.isUserScrolling = false
-            self.followTarget = .latest
-            self.hasNewerContentBelow = false
-            self.moveScrollPosition(to: self.scrollerBottomID)
-        }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            self.restoresLiveEdgeAfterKeyboardShows = false
             self.isKeyboardVisible = false
         }
         #endif
     }
 
-    @ViewBuilder
-    private var messageListRows: some View {
-        let contextWindowTokens = self.viewModel.contextUsage?.contextWindowTokens
+    private func resetTranscriptSession() {
+        #if os(iOS)
+        self.readerHistorySnapshot = nil
+        self.olderHistory.reset()
+        self.scroll.isKeyboardTransitioning = false
+        self.scroll.readingPosition.reset()
+        #endif
+        self.speech?.stop()
+        self.scrollCommand.cancel()
+        self.hasPerformedInitialScroll = false
+        self.scroll.followTarget = .latest
+        self.scroll.isAtLiveEdge = true
+        self.scroll.isUserScrolling = false
+        self.scroll.hasNewerContentBelow = false
+        self.lastTurnStartID = nil
+    }
 
+    #if os(iOS)
+    /// Older page from the reader's top sentinel or the retry row; the reading position stays put.
+    private func loadOlderHistory() {
+        self.olderHistory.load(self.viewModel, readingPosition: self.scroll.readingPosition)
+    }
+    #endif
+
+    private func handleTranscriptScrollPhase(_ phase: ScrollPhase) {
+        guard self.hasPerformedInitialScroll else { return }
+        #if os(iOS)
+        let keyboardTransition = self.scroll.isKeyboardTransitioning
+        #else
+        let keyboardTransition = false
+        #endif
+        if chatReaderScrollReleasesFollow(phase, keyboardTransition: keyboardTransition) {
+            #if os(iOS)
+            if self.readerHistorySnapshot == nil {
+                self.readerHistorySnapshot = ChatReaderHistorySnapshot(
+                    messages: self.viewModel.transcriptMessages,
+                    deletionRevision: self.viewModel.readerHistoryDeletionRevision)
+            }
+            #endif
+            self.scrollCommand.cancel()
+            self.scroll.isUserScrolling = true
+            self.scroll.followTarget = nil
+        } else if phase == .idle, self.scroll.isUserScrolling {
+            self.scroll.isUserScrolling = false
+            if self.scroll.isAtLiveEdge {
+                self.scroll.followTarget = .latest
+                self.scroll.hasNewerContentBelow = false
+                #if os(iOS)
+                self.readerHistorySnapshot = nil
+                #endif
+            } else {
+                self.scroll.hasNewerContentBelow = true
+                #if os(iOS)
+                self.scroll.readingPosition.readerSettled()
+                #endif
+            }
+        }
+    }
+
+    /// Keep one grouping owner per platform so new turns do not recreate disclosure state.
+    private func transcriptGroups(transcript: TranscriptPresentation, hasVisibleContent: Bool) -> some View {
+        self.messageListRows(
+            transcript: transcript,
+            groups: self.runGroups(transcript)[...],
+            hasVisibleContent: hasVisibleContent)
+            .environment(\.openClawToolRowContext, transcript.tools)
+    }
+
+    private func runGroups(_ transcript: TranscriptPresentation) -> [ChatAssistantRunGroup] {
+        let liveRunIDs = Set(self.viewModel.liveAdvertisedRunIDs).union(self.viewModel.liveLocalRunIDs)
+        #if os(iOS)
+        let tools: [OpenClawChatPendingToolCall] = [] // Already merged before activity-run grouping.
+        #else
+        let tools = self.displayOptions.contains(.toolActivity) ? self.viewModel.toolActivities : []
+        #endif
+        return ChatAssistantRunGroup.build(
+            transcript.rows,
+            tools: tools,
+            liveRunID: liveRunIDs.count == 1 ? liveRunIDs.first : nil,
+            hasLiveContent: self.showsWorkingIndicator || self.hasVisibleStreamingAssistantText,
+            searchActive: self.isSearchPresented)
+    }
+
+    @ViewBuilder
+    private func messageListRows(
+        transcript: TranscriptPresentation,
+        groups shownGroups: ArraySlice<ChatAssistantRunGroup>,
+        hasVisibleContent: Bool) -> some View
+    {
+        let inputs = self.rowPassInputs
         if let introText = visibleEmptyAssistantIntro {
             ChatAssistantIntroCard(
                 text: introText,
                 prompts: self.emptyAssistantPrompts,
                 onPrompt: { prompt in
-                    self.viewModel.input = prompt.prompt
-                    self.viewModel.send()
+                    let model: OpenClawChatViewModel? = if let resolveComposerModel {
+                        resolveComposerModel()
+                    } else {
+                        self.viewModel
+                    }
+                    model?.input = prompt.prompt
+                    model?.send()
                 })
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
-        if self.showsCleanLoadingPlaceholder {
-            ChatLoadingBubble()
-                .frame(maxWidth: .infinity, alignment: .leading)
+        #if os(iOS)
+        ForEach(ChatAssistantListCell.cells(shownGroups)) { cell in
+            Group {
+                if cell.group.runID != nil {
+                    ChatAssistantRunFrame(
+                        showsAssistantAvatar: self.showsAssistantAvatars,
+                        joinsAbove: cell.joinsAbove,
+                        joinsBelow: cell.joinsBelow)
+                    {
+                        self.listCellContent(cell, transcript: transcript, inputs: inputs)
+                    }
+                } else {
+                    self.listCellContent(cell, transcript: transcript, inputs: inputs)
+                }
+            }
+            .padding(.top, cell.joinsAbove ? 0 : Layout.messageSpacing / 2)
+            .padding(.bottom, cell.joinsBelow ? 0 : Layout.messageSpacing / 2)
+            .background(ChatReadingRowMarker(key: ChatReadingRowKey(cell), owner: self.scroll.readingPosition))
+            .environment(\.openClawReadingAnswerRun, ChatReadingRowKey(cell).answerRun)
         }
+        #else
+        self.groupRows(shownGroups, transcript: transcript)
+        #endif
+        OpenClawQuestionCards(viewModel: self.viewModel)
+    }
 
-        ForEach(self.transcriptRows) { row in
-            switch row {
-            case let .message(message):
-                self.messageRow(for: message, contextWindowTokens: contextWindowTokens)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(OpenClawChatTheme.accent.opacity(self.searchMessageID == message.id ? 0.08 : 0)))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .strokeBorder(
-                                OpenClawChatTheme.accent.opacity(self.searchMessageID == message.id ? 0.55 : 0),
-                                lineWidth: 1))
-            case let .systemNotice(notice):
-                ChatSystemNoticeRow(notice: notice)
-                    .frame(maxWidth: .infinity)
-            case let .historyDivider(divider):
-                ChatHistoryDividerRow(divider: divider)
-                    .frame(maxWidth: .infinity)
-            case let .completedWork(work):
-                ChatCompletedWorkDisclosure(work: work) { message in
-                    self.messageRow(for: message, contextWindowTokens: contextWindowTokens)
+    private func groupRows(
+        _ groups: ArraySlice<ChatAssistantRunGroup>,
+        transcript: TranscriptPresentation) -> some View
+    {
+        let inputs = self.rowPassInputs
+        return ForEach(groups) { group in
+            let parts = ForEach(group.parts) { part in
+                self.runPart(
+                    part,
+                    metadata: transcript.metadata,
+                    inputs: inputs,
+                    isGrouped: group.runID != nil,
+                    answerID: group.runID == nil ? nil : group.answerID)
+            }
+            if group.runID != nil {
+                ChatAssistantRunFrame(showsAssistantAvatar: self.showsAssistantAvatars) {
+                    parts
+                    if group.includesLive { self.liveAssistantContent }
+                }
+            } else {
+                parts
+                if group.includesLive { self.liveAssistantContent }
+            }
+        }
+    }
+
+    #if os(iOS)
+    @ViewBuilder
+    private func listCellContent(
+        _ cell: ChatAssistantListCell,
+        transcript: TranscriptPresentation,
+        inputs: ChatRowPassInputs) -> some View
+    {
+        if let part = cell.part {
+            self.runPart(
+                part,
+                metadata: transcript.metadata,
+                inputs: inputs,
+                isGrouped: cell.group.runID != nil,
+                answerID: cell.group.answerID)
+        } else {
+            self.liveAssistantContent.chatBehaviorProbe(.runTail)
+        }
+    }
+    #endif
+
+    @ViewBuilder
+    private func runPart(
+        _ part: ChatAssistantRunGroup.Part,
+        metadata: [UUID: ChatMessageMetadata],
+        inputs: ChatRowPassInputs,
+        isGrouped: Bool,
+        answerID: UUID?) -> some View
+    {
+        switch part {
+        case let .row(row):
+            self.transcriptRow(
+                row,
+                metadata: metadata,
+                inputs: inputs,
+                isGrouped: isGrouped,
+                answerID: answerID)
+                .id(row.id)
+                .chatBehaviorProbe(.row(row))
+        case let .tool(tool):
+            ChatToolActivityList(items: [ChatToolActivityItem(live: tool)])
+                .padding(.vertical, 4)
+        }
+    }
+
+    @ViewBuilder
+    private func transcriptRow(
+        _ row: ChatTranscriptRow,
+        metadata: [UUID: ChatMessageMetadata],
+        inputs: ChatRowPassInputs,
+        isGrouped: Bool,
+        answerID: UUID?) -> some View
+    {
+        switch row {
+        case let .message(message):
+            self.messageRow(
+                for: message,
+                metadata: message.presentationOwnsFooter ? metadata[message.id] : nil,
+                inputs: inputs,
+                showsActions: !isGrouped || message.presentationID == answerID)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(OpenClawChatTheme.accent.opacity(self.searchMessageID == message.id ? 0.08 : 0)))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(
+                            OpenClawChatTheme.accent.opacity(self.searchMessageID == message.id ? 0.55 : 0),
+                            lineWidth: 1))
+        case let .systemNotice(notice):
+            ChatSystemNoticeRow(notice: notice)
+                .frame(maxWidth: .infinity)
+        case let .historyDivider(divider):
+            ChatHistoryDividerRow(divider: divider)
+                .frame(maxWidth: .infinity)
+        #if os(iOS)
+        case let .completedWork(work) where work.isActivityRun:
+            let live = Set(work.messages.compactMap(\.workRunID)).flatMap { inputs.liveToolCalls[$0] ?? [] }
+            ChatToolGroupRow(work: work, liveTools: live) { self.selectedWork = .work(work) }
+        #endif
+        case let .completedWork(work):
+            ChatCompletedWorkDisclosure(work: work) { message in
+                self.messageRow(
+                    for: message,
+                    metadata: message.presentationOwnsFooter ? metadata[message.id] : nil,
+                    inputs: inputs,
+                    showsActions: !isGrouped)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var liveAssistantContent: some View {
+        // The transcript decides whether the bubble shows (from live-content shape), in the same
+        // pass that adds the durable row replacing it. Deciding inside the bubble's own observation
+        // scope removed it a layout pass early and collapsed the transcript for a frame.
+        if self.hasVisibleStreamingAssistantText {
+            ChatLiveAssistantText(viewModel: self.viewModel) { text in
+                let preparedText = ChatStreamingAssistantText(
+                    sourceText: text,
+                    includesThinking: self.displayOptions.contains(.reasoning))
+                if !preparedText.segments.isEmpty {
+                    ChatStreamingAssistantBubble(
+                        text: preparedText,
+                        markdownVariant: self.markdownVariant,
+                        showsAssistantAvatar: self.showsAssistantAvatars)
+                        .equatable()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .chatBehaviorProbe(.live)
                 }
             }
         }
-
-        OpenClawQuestionCards(viewModel: self.viewModel)
-
-        if self.showsWorkingIndicator {
-            ChatTypingIndicatorBubble(
-                style: self.style,
-                assistantName: self.assistantName,
-                assistantAvatarText: self.assistantAvatarText,
-                assistantAvatarTint: self.assistantAvatarTint,
-                showsAssistantAvatar: self.showsAssistantAvatars,
-                isClean: self.composerChrome == .clean,
-                runIdentity: self.viewModel.workingIndicatorIdentity,
-                outputTokens: self.viewModel.liveRunOutputTokens)
-                .equatable()
+        // Below the words, where the finished turn's recap appears: above them, its removal
+        // shifted the whole reply up as the final row replaced the live bubble.
+        ChatRunStatusContent {
+            if self.showsWorkingIndicator {
+                ChatTypingIndicatorBubble(
+                    showsAssistantAvatar: self.showsAssistantAvatars,
+                    runIdentity: self.viewModel.workingIndicatorIdentity,
+                    outputTokens: self.viewModel.liveRunOutputTokens,
+                    status: self.viewModel.runStartupStatus)
+                    .equatable()
+            }
         }
+    }
 
-        if self.displayOptions.contains(.toolActivity), !self.viewModel.subagentActivities.isEmpty {
-            ChatSubagentActivityList(
-                activities: self.viewModel.subagentActivities,
-                hiddenWorkingCount: self.viewModel.hiddenWorkingSubagentCount)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
+    /// One value per view model. Its getters run in the leaf that calls them, so only media,
+    /// widget and favicon views observe health and the source context.
+    private var gatewayResources: ChatGatewayResources {
+        ChatGatewayResources(
+            owner: ObjectIdentifier(self.viewModel),
+            isResolverReady: { [weak viewModel] in viewModel?.healthOK == true },
+            faviconContext: { [weak viewModel] in
+                viewModel?.sourcePreviewState.context.flatMap { $0.automaticallyFetchFavicons ? $0 : nil }
+            },
+            loadFavicon: { [weak viewModel] host in
+                await viewModel?.transport.loadSourceFavicon(host: host)
+            },
+            resolveWidgetResource: { [weak viewModel] path, failedResource in
+                await viewModel?.transport.resolveInlineWidgetResource(path: path, replacing: failedResource)
+            },
+            loadMedia: { [weak viewModel] artifactId, kind, playback in
+                guard let viewModel else { return nil }
+                return try await viewModel.transport.loadMediaArtifact(
+                    sessionKey: viewModel.sessionKey,
+                    artifactId: artifactId,
+                    kind: kind,
+                    playback: playback)
+            })
+    }
 
-        if self.displayOptions.contains(.toolActivity), !self.viewModel.toolActivities.isEmpty {
-            ChatPendingToolsBubble(toolCalls: self.viewModel.toolActivities)
-                .equatable()
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-
-        if let text = viewModel.streamingAssistantText, self.hasVisibleStreamingAssistantText {
-            ChatStreamingAssistantBubble(
-                text: text,
-                markdownVariant: self.markdownVariant,
-                showsReasoning: self.displayOptions.contains(.reasoning),
-                assistantName: self.assistantName,
-                assistantAvatarText: self.assistantAvatarText,
-                assistantAvatarTint: self.assistantAvatarTint,
-                showsAssistantAvatar: self.showsAssistantAvatars,
-                isClean: self.composerChrome == .clean)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
+    private var rowPassInputs: ChatRowPassInputs {
+        // Hidden tool activity never draws, so live tool updates must not reach the rows.
+        let calls = self.displayOptions.contains(.toolActivity) ? self.viewModel.toolActivities : []
+        return ChatRowPassInputs(
+            contextWindowTokens: self.viewModel.contextUsage?.contextWindowTokens,
+            liveToolCalls: ChatRowPassInputs.liveToolCallsByRun(calls))
     }
 
     @ViewBuilder
     private func messageRow(
         for msg: OpenClawChatMessage,
-        contextWindowTokens: Int?) -> some View
+        metadata: ChatMessageMetadata?,
+        inputs: ChatRowPassInputs,
+        showsActions: Bool = true) -> some View
     {
-        let bubble = ChatMessageBubble(
+        let actionMessage = msg.presentationBlockIndex == nil ? msg :
+            self.viewModel.transcriptMessages.first(where: { $0.id == msg.id }) ?? msg
+        let isUser = msg.role.lowercased() == "user"
+        #if os(iOS)
+        let isAssistant = msg.role.lowercased() == "assistant"
+        #endif
+        let bubble = self.attachingUserAccessories(to: ChatMessageBubble(
             message: msg,
+            liveToolCalls: msg.workRunID.flatMap { inputs.liveToolCalls[$0] } ?? [],
+            metadata: metadata,
             sourcePreviews: self.viewModel.sourcePreviews(for: msg),
-            sourceContextRevision: self.viewModel.sourcePreviewState.revision,
-            sourceFaviconsEnabled: self.viewModel.sourcePreviewState.context?.automaticallyFetchFavicons == true,
-            loadSourceFavicon: { [weak viewModel] host in
-                await viewModel?.transport.loadSourceFavicon(host: host)
-            },
             style: self.style,
             markdownVariant: self.markdownVariant,
-            userAccent: self.userAccent,
             displayOptions: self.displayOptions,
-            assistantName: self.assistantName,
-            assistantAvatarText: self.assistantAvatarText,
-            assistantAvatarTint: self.assistantAvatarTint,
             showsAssistantAvatar: self.showsAssistantAvatars,
-            isClean: self.composerChrome == .clean,
-            contextWindowTokens: contextWindowTokens,
+            contextWindowTokens: inputs.contextWindowTokens,
             userMessageExpanded: self.expandedUserMessageIDs.contains(msg.id),
             onToggleUserMessageExpanded: {
                 if self.expandedUserMessageIDs.contains(msg.id) {
@@ -660,64 +950,71 @@ public struct OpenClawChatView: View {
                     self.expandedUserMessageIDs.insert(msg.id)
                 }
             },
-            inlineWidgetResolverReady: self.viewModel.healthOK,
-            inlineWidgetResourceResolver: { [weak viewModel] path, failedResource in
-                await viewModel?.resolveInlineWidgetResource(path: path, replacing: failedResource)
-            },
-            mediaArtifactResolverReady: self.viewModel.healthOK,
-            mediaPlaybackAllowed: self.mediaPlaybackAllowed,
-            loadMediaArtifact: { [weak viewModel] artifactId, kind, playback in
-                guard let viewModel else { return nil }
-                return try await viewModel.transport.loadMediaArtifact(
-                    sessionKey: viewModel.sessionKey,
-                    artifactId: artifactId,
-                    kind: kind,
-                    playback: playback)
-            })
-            .frame(
-                maxWidth: .infinity,
-                alignment: msg.role.lowercased() == "user" ? .trailing : .leading)
-        let isUser = msg.role.lowercased() == "user"
+            inlineWidgetScope: ChatInlineWidgetScope(
+                modelID: ObjectIdentifier(self.viewModel),
+                sessionTarget: self.viewModel.currentSessionTarget,
+                sessionGeneration: self.viewModel.sessionGeneration),
+            mediaPlaybackAllowed: self.mediaPlaybackAllowed), actionMessage: actionMessage)
         let row = VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
-            bubble
+            Group {
+                #if os(iOS)
+                // Streaming revisions invalidate the transcript container. Keep completed
+                // iPhone bubbles out of that hot path unless their render inputs changed.
+                if bubble.canUseIOSRenderGate {
+                    bubble.equatable()
+                } else {
+                    bubble
+                }
+                #else
+                bubble
+                #endif
+            }
+            .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+            #if os(iOS)
+            .environment(\.openClawOpenToolSheet) {
+                self.selectedWork = .calls($0, source: msg.id, runID: msg.workRunID)
+            }
+            #endif
+            #if os(iOS)
+            if msg.presentationOwnsFooter {
+                if isAssistant, !self.viewModel.messageReactions(for: msg).isEmpty {
+                    ChatReactionPill(viewModel: self.viewModel, message: msg) {
+                        self.reactionPickerMessage = actionMessage
+                    }
+                    .padding(.leading, -ChatReactionPillLabel.ring)
+                } else if !isAssistant, !isUser {
+                    ChatReactionPill(viewModel: self.viewModel, message: msg) {
+                        self.reactionPickerMessage = actionMessage
+                    }
+                }
+                ChatMessageReactionError(viewModel: self.viewModel, message: msg)
+            }
+            #else
+            if msg.presentationOwnsFooter {
+                ChatMessageReactions(viewModel: self.viewModel, message: msg)
+            }
+            #endif
             if let outboxState = self.viewModel.outboxState(for: msg.id) {
-                ChatOutboxStatusLabel(state: outboxState)
+                ChatOutboxStatusLabel(state: outboxState, queueMode: self.viewModel.outboxQueueMode(for: msg.id))
                     .padding(.trailing, 8)
             }
-            if let speech = self.speech,
+            if msg.presentationOwnsFooter, let speech = self.speech,
                let isPreparing = self.speechChipIsPreparing(speech, messageID: msg.id)
             {
                 ChatSpeechStatusChip(isPreparing: isPreparing) { speech.stop() }
                     .padding(.leading, 8)
             }
-            #if os(iOS)
-            if !isUser {
-                self.messageActionsMenu(for: msg)
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.borderless)
-                    .font(OpenClawChatTypography.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(
-                        width: CleanChatComposerMetrics.controlTouchSize,
-                        height: CleanChatComposerMetrics.controlTouchSize)
-                    .contentShape(Rectangle())
-                    .padding(.leading, 8)
-                    .padding(.bottom, 8)
-            }
-            #endif
             #if os(macOS)
-            if self.isDesktopLayout, isUser || self.isListenable(msg) {
+            if self.isDesktopLayout, showsActions, isUser || self.isListenable(msg) {
                 HStack(spacing: 12) {
-                    self.copyMessageButton(for: msg)
+                    self.copyMessageButton(for: actionMessage)
                         .help("Copy message")
                         .modifier(ChatHoverAction(revealed: self.hoveredMessageID == msg.id))
-                    self.replyMessageButton(for: msg)
-                        .help("Reply")
+                    self.replyMessageButton(for: actionMessage)
                         .modifier(ChatHoverAction(revealed: self.hoveredMessageID == msg.id))
-                    self.listenMessageButton(for: msg)
+                    self.listenMessageButton(for: actionMessage)
                         .modifier(ChatHoverAction(revealed: self.hoveredMessageID == msg.id))
-                    self.messageActionsMenu(for: msg)
-                        .help("Message actions")
+                    self.messageActionsMenu(for: actionMessage)
                         .modifier(ChatHoverAction(revealed: self.hoveredMessageID == msg.id))
                 }
                 .labelStyle(.iconOnly)
@@ -739,19 +1036,52 @@ public struct OpenClawChatView: View {
             }
         }
         #if os(iOS)
+        // A user bubble carries its own menu. A held agent reply opens the same menu over its
+        // opening lines; a reply with no text lifts as it is.
         if isUser {
-            row.contextMenu { self.messageMenuActions(for: msg) }
-        } else {
             row
+        } else if isAssistant {
+            row.chatAgentReplyMenu(previewText: ChatMessageVisibleText.visibleText(in: actionMessage)) {
+                ChatDeferredContent { self.messageMenuActions(for: actionMessage) }
+            }
+        } else {
+            row.chatActionContextMenu { ChatDeferredContent { self.messageMenuActions(for: actionMessage) } }
         }
         #else
-        row.contextMenu { self.messageMenuActions(for: msg) }
+        row.chatActionContextMenu { ChatDeferredContent { self.messageMenuActions(for: actionMessage) } }
+        #endif
+    }
+
+    /// User bubbles carry their long-press menu and reactions pill (iOS), so both attach to the
+    /// bubble's own shape instead of the row.
+    private func attachingUserAccessories(
+        to bubble: ChatMessageBubble,
+        actionMessage: OpenClawChatMessage) -> ChatMessageBubble
+    {
+        #if os(iOS)
+        let msg = bubble.message
+        guard msg.role.lowercased() == "user" else { return bubble }
+        var bubble = bubble
+        bubble.userBubbleAccessories = ChatUserBubbleAccessories(
+            menu: { AnyView(ChatDeferredContent { self.messageMenuActions(for: actionMessage) }) },
+            reactions: {
+                AnyView(Group {
+                    if msg.presentationOwnsFooter {
+                        ChatReactionPill(viewModel: self.viewModel, message: msg) {
+                            self.reactionPickerMessage = actionMessage
+                        }
+                    }
+                })
+            })
+        return bubble
+        #else
+        return bubble
         #endif
     }
 
     private func messageActionsMenu(for message: OpenClawChatMessage) -> some View {
         Menu {
-            self.messageMenuActions(for: message)
+            ChatDeferredContent { self.messageMenuActions(for: message) }
         } label: {
             Label("Message Actions", systemImage: "ellipsis")
         }
@@ -761,31 +1091,20 @@ public struct OpenClawChatView: View {
 
     @ViewBuilder
     private func messageMenuActions(for message: OpenClawChatMessage) -> some View {
+        ChatMessageReactionAction(viewModel: self.viewModel, message: message) {
+            self.reactionPickerMessage = message
+        }
         self.copyMessageButton(for: message)
         #if os(iOS)
         self.selectTextButton(for: message)
         #endif
         self.replyMessageButton(for: message)
         self.openFullMessageButton(for: message)
-        self.rewindMessageButton(for: message)
-        self.forkMessageButton(for: message)
+        self.messageSessionActions(for: message)
         self.listenMessageButton(for: message)
         if let outboxState = self.viewModel.outboxState(for: message.id) {
-            if outboxState.isFailed {
-                Button {
-                    self.viewModel.retryOutboxMessage(message.id)
-                } label: {
-                    Label("Retry Send", systemImage: "arrow.clockwise")
-                }
-            }
-            // In-flight sends may still reach canonical history; hiding them
-            // would make a real send look as though it had been cancelled.
-            if !outboxState.preventsDeletion {
-                Button(role: .destructive) {
-                    self.viewModel.deleteOutboxMessage(message.id)
-                } label: {
-                    Label("Delete", systemImage: "trash")
-                }
+            ChatOutboxMessageActions(viewModel: self.viewModel, messageID: message.id, state: outboxState) {
+                self.composerFocusRequest += 1
             }
         }
     }
@@ -823,115 +1142,100 @@ public struct OpenClawChatView: View {
         }
     }
 
-    private var transcriptRows: [ChatTranscriptRow] {
+    private typealias TranscriptPresentation = ChatTranscriptPresentation
+
+    private var readerPresentationMessages: [OpenClawChatMessage] {
+        let current = self.viewModel.transcriptMessages
+        #if os(iOS)
+        if let snapshot = self.readerHistorySnapshot {
+            return snapshot.presentation(
+                current: current, deletionRevision: self.viewModel.readerHistoryDeletionRevision)
+        }
+        #endif
+        return current
+    }
+
+    private var transcriptPresentation: TranscriptPresentation {
+        let messages = self.readerPresentationMessages
         let base: [OpenClawChatMessage]
         if self.style == .onboarding {
-            guard let first = viewModel.messages.first else { return [] }
-            base = first.role.lowercased() == "user" ? Array(self.viewModel.messages.dropFirst()) : self.viewModel
-                .messages
+            guard let first = messages.first else { return TranscriptPresentation(rows: [], metadata: [:]) }
+            base = first.role.lowercased() == "user" ? Array(messages.dropFirst()) : messages
         } else {
-            base = self.viewModel.messages
+            base = messages
         }
-        var rows = ChatTranscriptRow.build(from: self.mergeToolResults(in: base))
-        if self.collapsesCompletedWork {
-            rows = ChatTranscriptRow.collapseCompletedWork(
-                rows,
-                runWorking: self.viewModel.hasBlockingRunActivity || self.viewModel.streamingAssistantText != nil,
-                activeRunIDs: Set(self.viewModel.liveAdvertisedRunIDs).union(self.viewModel.liveLocalRunIDs),
-                searchActive: self.isSearchPresented)
-        }
-        return rows.compactMap { row in
-            switch row {
-            case let .message(message):
-                return self.shouldDisplayMessage(message) ? row : nil
-            case let .completedWork(work):
-                let visible = work.messages.filter(self.shouldDisplayMessage)
-                return visible.isEmpty ? nil : .completedWork(.init(
-                    anchorID: work.anchorID, messages: visible, durationMilliseconds: work.durationMilliseconds))
-            default:
-                return row
-            }
-        }
+        return TranscriptPresentation.project(
+            base,
+            model: self.viewModel,
+            includesTools: self.displayOptions.contains(.toolActivity),
+            searchActive: self.isSearchPresented,
+            collapsesWork: self.collapsesCompletedWork,
+            streamingTextRunID: self.hasVisibleStreamingAssistantText ? self.viewModel.streamingAssistantRunID : nil,
+            isMessageVisible: { message, _ in self.shouldDisplayMessage(message) })
     }
 
     private var latestVisibleTurnStartID: UUID? {
-        self.visibleTurnStartIDs.last
-    }
-
-    private var visibleTurnStartIDs: [UUID] {
-        self.transcriptRows.compactMap { $0.startsTurn ? $0.id : nil }
+        self.transcriptPresentation.rows.last(where: \.startsTurn)?.id
     }
 
     private var isFollowingTurn: Bool {
-        if case .turn = self.followTarget {
+        if case .turn = self.scroll.followTarget {
             return true
         }
         return false
-    }
-
-    private var showsJumpToLatest: Bool {
-        chatReaderShowsJumpToLatest(
-            hasNewerContentBelow: self.hasNewerContentBelow,
-            isAtLiveEdge: self.isAtLiveEdge,
-            hasVisibleContent: self.hasVisibleMessageListContent,
-            isLoading: self.viewModel.isLoading)
     }
 
     private var jumpToLatestButton: some View {
         Button {
             self.isSearchPresented = false
             self.searchMessageID = nil
-            self.followTarget = .latest
-            self.hasNewerContentBelow = false
+            self.scroll.followTarget = .latest
+            self.scroll.hasNewerContentBelow = false
+            #if os(iOS)
+            self.readerHistorySnapshot = nil
+            self.scroll.isUserScrolling = false
+            self.scroll.readingPosition.jumpToLatest()
+            #else
             self.moveScrollPosition(to: self.scrollerBottomID)
+            #endif
         } label: {
-            Image(systemName: "arrow.down")
-                .font(.system(size: 15, weight: .semibold))
-                .frame(width: 36, height: 36)
-                .background(
-                    Circle()
-                        .fill(OpenClawChatTheme.subtleCard)
-                        .shadow(color: .black.opacity(0.16), radius: 8, y: 3))
-                // Padding keeps a ~44pt tap target around the compact visual circle.
-                .padding(4)
-                .contentShape(Circle())
+            ChatJumpToLatestLabel()
         }
         .buttonStyle(.plain)
         .foregroundStyle(OpenClawChatTheme.assistantText)
+        .modifier(ChatJumpToLatestGlass())
         .accessibilityLabel("Jump to latest reply")
     }
 
     @ViewBuilder
-    private var messageListOverlay: some View {
-        if self.viewModel.isLoading {
-            EmptyView()
-        } else if self.composerChrome == .clean, self.visibleEmptyAssistantIntro != nil {
-            EmptyView()
-        } else if self.showsCleanLoadingPlaceholder {
-            EmptyView()
-        } else if let error = activeErrorText {
-            if self.hasVisibleMessageListContent {
-                EmptyView()
-            } else {
-                let presentation = self.errorPresentation(for: error)
+    private func messageListOverlay(hasVisibleContent: Bool) -> some View {
+        if !self.viewModel.isLoading, self.visibleEmptyAssistantIntro == nil {
+            if let error = activeErrorText {
+                if !hasVisibleContent, let notice = self.firstConnectionNotice, chatErrorIsDisconnected(error) {
+                    notice.card
+                        .padding(.horizontal, 24)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if !hasVisibleContent {
+                    let presentation = chatErrorPresentation(for: error)
+                    ChatNoticeCard(
+                        systemImage: presentation.systemImage,
+                        title: presentation.title,
+                        message: presentation.message,
+                        actionTitle: "Refresh",
+                        action: { self.viewModel.refresh() })
+                        .padding(.horizontal, 24)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            } else if self.showsEmptyStateNotice, self.showsEmptyState {
                 ChatNoticeCard(
-                    systemImage: presentation.systemImage,
-                    title: presentation.title,
-                    message: presentation.message,
-                    actionTitle: "Refresh",
-                    action: { self.viewModel.refresh() })
+                    systemImage: "bubble.left.and.bubble.right.fill",
+                    title: self.emptyStateTitle,
+                    message: self.emptyStateMessage,
+                    actionTitle: nil,
+                    action: nil)
                     .padding(.horizontal, 24)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        } else if self.showsEmptyState {
-            ChatNoticeCard(
-                systemImage: "bubble.left.and.bubble.right.fill",
-                title: self.emptyStateTitle,
-                message: self.emptyStateMessage,
-                actionTitle: nil,
-                action: nil)
-                .padding(.horizontal, 24)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -940,24 +1244,14 @@ public struct OpenClawChatView: View {
         let activeError = showsContextualSignIn
             ? self.viewModel.errorText
             : self.viewModel.composerModelAvailabilityMessage ?? self.viewModel.errorText
-        guard let text = activeError?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !text.isEmpty
-        else {
-            return nil
-        }
-        return text
-    }
-
-    private var hasVisibleMessageListContent: Bool {
-        if !self.transcriptRows.isEmpty {
-            return true
-        }
-        return self.hasVisibleTransientContent
+        guard let error = ChatPayloadDecoding.trimmedNonEmptyString(activeError),
+              self.showsDisconnectNotice || !chatErrorIsDisconnected(error)
+        else { return nil }
+        return error
     }
 
     private var hasVisibleStreamingAssistantText: Bool {
-        guard let text = self.viewModel.streamingAssistantText else { return false }
+        guard let text = self.viewModel.liveAssistantTextShape else { return false }
         return AssistantTextParser.hasVisibleContent(
             in: text,
             includeThinking: self.displayOptions.contains(.reasoning))
@@ -989,40 +1283,32 @@ public struct OpenClawChatView: View {
 
     private var hasVisibleTransientContent: Bool {
         self.viewModel.hasBlockingRunActivity ||
-            (self.displayOptions.contains(.toolActivity) && !self.viewModel.subagentActivities.isEmpty) ||
             (self.displayOptions.contains(.toolActivity) && !self.viewModel.pendingToolCalls.isEmpty) ||
             self.hasVisibleStreamingAssistantText ||
             !self.viewModel.visibleQuestionCards.isEmpty
     }
 
-    @ViewBuilder
-    private var messageListNoticeBanner: some View {
-        if let error = activeErrorText,
-           hasVisibleMessageListContent,
-           !self.viewModel.isLoading,
-           visibleEmptyAssistantIntro == nil,
-           !self.showsCleanLoadingPlaceholder
-        {
-            let presentation = self.errorPresentation(for: error)
-            ChatNoticeBanner(
-                systemImage: presentation.systemImage,
-                title: presentation.title,
-                message: error,
-                tint: presentation.tint,
-                dismiss: { self.viewModel.errorText = nil },
-                refresh: { self.viewModel.refresh() })
-                .padding(.horizontal, 10)
-                .padding(.top, 8)
-                .padding(.bottom, 8)
-        }
+    private func messageListNoticeBanner(error: String) -> some View {
+        let presentation = chatErrorPresentation(for: error)
+        return ChatNoticeBanner(
+            systemImage: presentation.systemImage,
+            title: presentation.title,
+            message: error,
+            tint: presentation.tint,
+            dismiss: { self.viewModel.errorText = nil },
+            refresh: { self.viewModel.refresh() })
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
     }
 
-    private var showsCleanLoadingPlaceholder: Bool {
+    /// A new chat has no transcript to wait for, so it never shows a loading state.
+    private func showsCleanLoadingPlaceholder(hasVisibleContent: Bool) -> Bool {
         self.composerChrome == .clean &&
             self.viewModel.isLoading &&
+            !self.viewModel.isNewChatDraft &&
             self.visibleEmptyAssistantIntro == nil &&
             self.activeErrorText == nil &&
-            !self.hasVisibleMessageListContent
+            !hasVisibleContent
     }
 
     private var visibleEmptyAssistantIntro: String? {
@@ -1034,19 +1320,13 @@ public struct OpenClawChatView: View {
         else {
             return nil
         }
-        guard let text = emptyAssistantIntro?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !text.isEmpty
-        else {
-            return nil
-        }
-        return text
+        return ChatPayloadDecoding.trimmedNonEmptyString(self.emptyAssistantIntro)
     }
 
     private var showsEmptyState: Bool {
         self.viewModel.messages.isEmpty &&
             !self.hasVisibleStreamingAssistantText &&
             !self.viewModel.hasBlockingRunActivity &&
-            self.viewModel.subagentActivities.isEmpty &&
             self.viewModel.pendingToolCalls.isEmpty
     }
 
@@ -1068,105 +1348,107 @@ public struct OpenClawChatView: View {
 }
 
 extension OpenClawChatView {
-    private func errorPresentation(
-        for error: String) -> (title: String, message: String, systemImage: String, tint: Color)
-    {
-        let lower = error.lowercased()
-        if lower.contains("not connected") || lower.contains("socket") {
-            return ("Disconnected", "Reconnect to your gateway to continue.", "wifi.slash", .orange)
-        }
-        if lower.contains("timed out") {
-            return ("Timed out", "The gateway took too long to respond.", "clock.badge.exclamationmark", .orange)
-        }
-        // Unknown errors: keep the raw text as the description so it stays actionable.
-        return ("Something went wrong", error, "exclamationmark.triangle.fill", .orange)
-    }
-
     private func restoreInitialScrollPosition() {
-        switch chatReaderInitialRestorePolicy() {
-        case .liveEdge:
-            self.followTarget = .latest
-            self.hasNewerContentBelow = false
+        if chatReaderInitialRestorePolicy() == .latestTurn,
+           let latestTurnStartID = self.latestVisibleTurnStartID
+        {
+            self.scroll.followTarget = nil
+            self.scroll.hasNewerContentBelow = chatReaderHasNewerContent(
+                after: latestTurnStartID,
+                visibleIDs: self.transcriptPresentation.rows.map(\.id),
+                hasTransientContent: self.hasVisibleTransientContent)
+            #if !os(iOS)
+            self.moveScrollPosition(to: latestTurnStartID, anchor: Layout.newTurnAnchor)
+            #endif
+        } else {
+            // iOS: the reading position pins the bottom once the first page lays out.
+            self.scroll.followTarget = .latest
+            self.scroll.hasNewerContentBelow = false
+            #if !os(iOS)
             self.moveScrollPosition(to: self.scrollerBottomID)
-        case .latestTurn:
-            if let latestTurnStartID = latestVisibleTurnStartID {
-                self.followTarget = nil
-                self.hasNewerContentBelow = chatReaderHasNewerContent(
-                    after: latestTurnStartID,
-                    visibleIDs: self.transcriptRows.map(\.id),
-                    hasTransientContent: self.hasVisibleTransientContent)
-                self.moveScrollPosition(to: latestTurnStartID, anchor: Layout.newTurnAnchor)
-            } else {
-                self.followTarget = .latest
-                self.hasNewerContentBelow = false
-                self.moveScrollPosition(to: self.scrollerBottomID)
-            }
+            #endif
         }
     }
 
     private func handleTimelineChange() {
-        guard self.hasPerformedInitialScroll else { return }
+        guard self.hasPerformedInitialScroll else {
+            // A chat's cached or live rows paint while the rest of its load (sessions, models,
+            // health) is still running. Hold them at the initial position instead of the top;
+            // the load's completion still settles it.
+            #if !os(iOS)
+            if !self.viewModel.messages.isEmpty { self.restoreInitialScrollPosition() }
+            #endif
+            return
+        }
         // A search result is an explicit reading position. Incoming replies
         // must not pull the reader away until they leave Find.
         guard self.searchMessageID == nil else { return }
         if self.viewModel.messages.isEmpty,
            !self.viewModel.hasBlockingRunActivity,
-           self.viewModel.subagentActivities.isEmpty,
            self.viewModel.pendingToolCalls.isEmpty,
-           self.viewModel.streamingAssistantText == nil
+           !self.viewModel.hasStreamingAssistantText
         {
             self.lastTurnStartID = nil
-            self.followTarget = .latest
-            self.hasNewerContentBelow = false
+            self.scroll.followTarget = .latest
+            self.scroll.hasNewerContentBelow = false
+            #if os(iOS)
+            self.readerHistorySnapshot = nil
+            #else
             self.moveScrollPosition(to: self.scrollerBottomID)
+            #endif
             return
         }
-        let transcriptRows = self.transcriptRows
+        let transcriptRows = self.transcriptPresentation.rows
         let visibleTurnStartIDs = transcriptRows.compactMap { $0.startsTurn ? $0.id : nil }
         switch chatReaderUserTransition(
             previousID: self.lastTurnStartID,
             visibleIDs: visibleTurnStartIDs)
         {
         case let .removed(latestRemainingID):
+            self.scrollCommand.cancel(targetID: self.lastTurnStartID)
             self.lastTurnStartID = latestRemainingID
-            if case let .turn(messageID) = followTarget,
+            if case let .turn(messageID) = self.scroll.followTarget,
                !visibleTurnStartIDs.contains(messageID)
             {
-                self.followTarget = nil
-                self.hasNewerContentBelow = false
+                self.scroll.followTarget = nil
+                self.scroll.hasNewerContentBelow = false
             }
             return
         case let .added(latestTurnStartID):
             self.lastTurnStartID = latestTurnStartID
-            self.hasNewerContentBelow = false
+            #if !os(iOS)
+            self.scroll.hasNewerContentBelow = false
             // The anchored-question layout assumes a viewport tall enough to read the turn
             // below the anchor. With the keyboard up that space is gone and the reply streams
             // straight past the fold (#108692), so follow the live edge instead.
             if self.isKeyboardVisible {
-                self.followTarget = .latest
+                self.scroll.followTarget = .latest
                 self.moveScrollPosition(to: self.scrollerBottomID)
             } else {
-                self.followTarget = .turn(latestTurnStartID)
+                self.scroll.followTarget = .turn(latestTurnStartID)
                 self.moveScrollPosition(to: latestTurnStartID, anchor: Layout.newTurnAnchor)
             }
             return
+            #endif
         case .unchanged:
             break
         }
 
-        switch self.followTarget {
+        switch self.scroll.followTarget {
         case .latest:
-            self.hasNewerContentBelow = false
+            self.scroll.hasNewerContentBelow = false
+            #if !os(iOS)
             self.moveScrollPosition(to: self.scrollerBottomID)
+            #endif
         case let .turn(messageID):
-            // Reader policy stays on this turn after the one-shot scroll binding is released. Reissuing
+            // Reader policy stays on this turn after the one-shot scroll command completes. Reissuing
             // that target for every streaming delta can loop SwiftUI layout and starve interaction.
-            self.hasNewerContentBelow = chatReaderHasNewerContent(
+            self.scroll.hasNewerContentBelow = chatReaderHasNewerContent(
                 after: messageID,
                 visibleIDs: transcriptRows.map(\.id),
                 hasTransientContent: self.hasVisibleTransientContent)
         case nil:
-            self.hasNewerContentBelow = true
+            self.scroll.hasNewerContentBelow = true
         }
     }
 
@@ -1174,25 +1456,22 @@ extension OpenClawChatView {
         to id: UUID,
         anchor: UnitPoint = .bottom)
     {
-        var transaction = Transaction(animation: nil)
-        transaction.scrollTargetAnchor = anchor
-        withTransaction(transaction) {
-            self.scrollPosition = id
-        }
-        DispatchQueue.main.async {
-            guard self.scrollPosition == id else { return }
-            // Reader policy lives in followTarget. The binding is only a one-shot positioning request;
-            // keeping an overflowing transcript bound to any row can loop SwiftUI scroll layout.
-            self.scrollPosition = nil
-        }
+        // Explicit initial/jump/new-user-turn navigation must realize a recycled target.
+        // Streaming does not enqueue commands; the follow anchor owns continuous following.
+        self.scrollCommand.enqueue(
+            to: id,
+            anchor: anchor,
+            sessionTarget: self.viewModel.currentSessionTarget)
     }
 
+    #if !os(iOS)
     private func revealSearchMessage(_ messageID: UUID) {
-        self.followTarget = nil
-        self.hasNewerContentBelow = true
+        self.scroll.followTarget = nil
+        self.scroll.hasNewerContentBelow = true
         self.expandedUserMessageIDs.insert(messageID)
         self.moveScrollPosition(to: messageID, anchor: .top)
     }
+    #endif
 
     private func dismissKeyboardIfNeeded() {
         #if canImport(UIKit)
@@ -1203,95 +1482,17 @@ extension OpenClawChatView {
             for: nil)
         #endif
     }
-}
-
-extension OpenClawChatView {
-    private func mergeToolResults(in messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
-        var result: [OpenClawChatMessage] = []
-        result.reserveCapacity(messages.count)
-
-        for message in messages {
-            guard self.isToolResultMessage(message) else {
-                result.append(message)
-                continue
-            }
-
-            guard let toolCallId = message.toolCallId,
-                  let last = result.last,
-                  message.turnBoundary != true,
-                  !message.isForwardedTurnBoundary,
-                  !last.isForwardedTurnBoundary,
-                  message.transcriptRunID == nil || last.transcriptRunID == nil ||
-                  message.transcriptRunID == last.transcriptRunID,
-                  toolCallIds(in: last).contains(toolCallId)
-            else {
-                result.append(message)
-                continue
-            }
-
-            let toolText = self.toolResultText(from: message)
-            var content = last.content
-            // Preserve empty results too: receiving a result owns the outcome,
-            // independently of whether it contains display text.
-            content.append(
-                OpenClawChatMessageContent(
-                    type: "tool_result",
-                    text: toolText,
-                    thinking: nil,
-                    thinkingSignature: nil,
-                    mimeType: nil,
-                    fileName: nil,
-                    content: nil,
-                    id: toolCallId,
-                    name: message.toolName,
-                    arguments: nil,
-                    details: message.details,
-                    isError: message.isError))
-
-            let merged = OpenClawChatMessage(
-                id: last.id,
-                role: last.role,
-                content: content,
-                timestamp: last.timestamp,
-                transcriptMessageID: last.transcriptMessageID,
-                transcriptRunID: last.transcriptRunID,
-                isTruncated: last.isTruncated,
-                idempotencyKey: last.idempotencyKey,
-                toolCallId: last.toolCallId,
-                toolName: last.toolName,
-                usage: last.usage,
-                stopReason: last.stopReason,
-                errorMessage: last.errorMessage,
-                details: last.details,
-                isError: last.isError,
-                provenance: last.provenance,
-                historyMarker: last.historyMarker,
-                phase: last.phase,
-                turnBoundary: last.turnBoundary,
-                steerTargetRunID: last.steerTargetRunID,
-                streamFallback: last.streamFallback,
-                activity: message.activity.map { terminal in
-                    (last.activity ?? []).filter { $0.toolCallId != toolCallId } + terminal
-                } ?? last.activity)
-            result[result.count - 1] = merged
-        }
-
-        return result
-    }
-
-    private func isToolResultMessage(_ message: OpenClawChatMessage) -> Bool {
-        let role = message.role.lowercased()
-        return role == "toolresult" || role == "tool_result"
-    }
 
     private func shouldDisplayMessage(_ message: OpenClawChatMessage) -> Bool {
-        let primaryText = self.primaryText(in: message)
-        if self.hasInlineAttachments(in: message) {
+        let primaryText = ChatMessageVisibleText.displayText(
+            in: message,
+            includeThinking: self.displayOptions.contains(.reasoning))
+        if message.content.contains(where: \.isInlineAttachment) {
             return true
         }
 
-        if self.isToolResultMessage(message) {
-            return self.displayOptions.contains(.toolActivity)
+        if message.isToolResult {
+            return self.displayOptions.contains(.toolActivity) && message.hasDisplayableToolActivity
         }
 
         if !primaryText.isEmpty {
@@ -1306,43 +1507,7 @@ extension OpenClawChatView {
             }
         }
 
-        return self.displayOptions.contains(.toolActivity) &&
-            (!self.toolCalls(in: message).isEmpty || !self.inlineToolResults(in: message).isEmpty)
-    }
-
-    private func primaryText(in message: OpenClawChatMessage) -> String {
-        ChatMessageVisibleText.displayText(
-            in: message,
-            includeThinking: self.displayOptions.contains(.reasoning))
-    }
-
-    private func hasInlineAttachments(in message: OpenClawChatMessage) -> Bool {
-        message.content.contains(where: \.isInlineAttachment)
-    }
-
-    private func toolCalls(in message: OpenClawChatMessage) -> [OpenClawChatMessageContent] {
-        message.content.filter(\.isToolCall)
-    }
-
-    private func inlineToolResults(in message: OpenClawChatMessage) -> [OpenClawChatMessageContent] {
-        message.content.filter(\.isToolResult)
-    }
-
-    private func toolCallIds(in message: OpenClawChatMessage) -> Set<String> {
-        var ids = Set<String>()
-        for content in self.toolCalls(in: message) {
-            if let id = content.id {
-                ids.insert(id)
-            }
-        }
-        if let toolCallId = message.toolCallId {
-            ids.insert(toolCallId)
-        }
-        return ids
-    }
-
-    private func toolResultText(from message: OpenClawChatMessage) -> String {
-        self.primaryText(in: message)
+        return self.displayOptions.contains(.toolActivity) && message.hasDisplayableToolActivity
     }
 
     @ViewBuilder
@@ -1352,12 +1517,7 @@ extension OpenClawChatView {
             Button {
                 ChatPasteboard.copy(text)
             } label: {
-                Label {
-                    Text("Copy Message")
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "doc.on.doc")
-                }
+                chatActionLabel(Text("Copy Message"), systemImage: "doc.on.doc")
             }
         }
     }
@@ -1369,11 +1529,7 @@ extension OpenClawChatView {
             Button {
                 self.selectTextMessage = message
             } label: {
-                Label {
-                    Text("Select Text").font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "text.cursor")
-                }
+                chatActionLabel(Text("Select Text"), systemImage: "text.cursor")
             }
         }
     }
@@ -1392,18 +1548,13 @@ extension OpenClawChatView {
                     viewModel: self.viewModel,
                     messageID: messageID)
             } label: {
-                Label {
-                    Text("Open Full Message")
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "doc.text.magnifyingglass")
-                }
+                chatActionLabel(Text("Open Full Message"), systemImage: "doc.text.magnifyingglass")
             }
         }
     }
 
     @ViewBuilder
-    private func rewindMessageButton(for message: OpenClawChatMessage) -> some View {
+    private func messageSessionActions(for message: OpenClawChatMessage) -> some View {
         let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if self.showsComposer, role == "user",
            message.transcriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
@@ -1411,39 +1562,17 @@ extension OpenClawChatView {
             Button {
                 Task { await self.viewModel.rewindToMessage(message) }
             } label: {
-                Label {
-                    Text("Rewind to Here")
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "arrow.uturn.backward")
-                }
+                chatActionLabel(Text("Rewind to Here"), systemImage: "arrow.uturn.backward")
             }
-            .disabled(self.messageSessionActionsDisabled)
-        }
-    }
+            .disabled(!self.viewModel.canPerformMessageSessionAction)
 
-    @ViewBuilder
-    private func forkMessageButton(for message: OpenClawChatMessage) -> some View {
-        let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if self.showsComposer, role == "user",
-           message.transcriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-        {
             Button {
                 Task { await self.viewModel.forkAtMessage(message) }
             } label: {
-                Label {
-                    Text("Fork from Here")
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "arrow.triangle.branch")
-                }
+                chatActionLabel(Text("Fork from Here"), systemImage: "arrow.triangle.branch")
             }
-            .disabled(self.messageSessionActionsDisabled)
+            .disabled(!self.viewModel.canPerformMessageSessionAction)
         }
-    }
-
-    private var messageSessionActionsDisabled: Bool {
-        !self.viewModel.canPerformMessageSessionAction
     }
 
     @ViewBuilder
@@ -1457,12 +1586,7 @@ extension OpenClawChatView {
                     text: text,
                     senderLabel: self.replySenderLabel(forRole: role))
             } label: {
-                Label {
-                    Text(String(localized: "Reply"))
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "arrowshape.turn.up.left")
-                }
+                chatActionLabel(Text(String(localized: "Reply")), systemImage: "arrowshape.turn.up.left")
             }
         }
     }
@@ -1472,150 +1596,10 @@ extension OpenClawChatView {
         let name = self.assistantName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return name.isEmpty ? String(localized: "Assistant") : name
     }
-}
 
-private struct ChatAssistantIntroCard: View {
-    let text: String
-    let prompts: [OpenClawChatView.StarterPrompt]
-    let onPrompt: (OpenClawChatView.StarterPrompt) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // Rendered as a grey assistant bubble so the greeting reads like the
-            // agent's first message, matching the in-conversation bubble style.
-            Text(self.text)
-                .font(OpenClawChatTypography.body)
-                .foregroundStyle(OpenClawChatTheme.assistantText)
-                .multilineTextAlignment(.leading)
-                .padding(.vertical, 10)
-                .padding(.horizontal, 14)
-                .background(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(OpenClawChatTheme.assistantBubble))
-
-            ForEach(self.prompts) { prompt in
-                Button {
-                    self.onPrompt(prompt)
-                } label: {
-                    HStack(spacing: 8) {
-                        Text(prompt.title)
-                            .font(OpenClawChatTypography.body(size: 15, weight: .semibold, relativeTo: .callout))
-                            .multilineTextAlignment(.leading)
-                        Spacer(minLength: 8)
-                        Image(systemName: "arrow.up.right")
-                            .font(OpenClawChatTypography.captionSemiBold)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(OpenClawChatTheme.subtleCard))
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("chat-starter-\(prompt.id)")
-            }
-        }
-        .frame(maxWidth: 340, alignment: .leading)
-        .padding(.top, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-private struct ChatLoadingBubble: View {
-    var body: some View {
-        HStack(spacing: 8) {
-            ProgressView()
-                .controlSize(.small)
-            Text("Loading chat")
-                .font(OpenClawChatTypography.captionSemiBold)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.vertical, 9)
-        .padding(.horizontal, 12)
-        .background(
-            Capsule()
-                .fill(OpenClawChatTheme.subtleCard))
-        .padding(.leading, 10)
-    }
-}
-
-private struct ChatNoticeCard: View {
-    let systemImage: String
-    let title: String
-    let message: String
-    let actionTitle: String?
-    let action: (() -> Void)?
-
-    var body: some View {
-        // Native empty/error state: SwiftUI's standard ContentUnavailableView, not a custom card.
-        ContentUnavailableView {
-            Label(self.title, systemImage: self.systemImage)
-                .font(OpenClawChatTypography.headline)
-        } description: {
-            Text(self.message)
-                .font(OpenClawChatTypography.body)
-        } actions: {
-            if let actionTitle, let action {
-                Button(action: action) {
-                    Text(actionTitle)
-                        .font(OpenClawChatTypography.body(size: 15, weight: .semibold, relativeTo: .subheadline))
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-            }
-        }
-    }
-}
-
-private struct ChatNoticeBanner: View {
-    let systemImage: String
-    let title: String
-    let message: String
-    let tint: Color
-    let dismiss: () -> Void
-    let refresh: () -> Void
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: self.systemImage)
-                .font(OpenClawChatTypography.display(size: 15, weight: .semibold, relativeTo: .subheadline))
-                .foregroundStyle(self.tint)
-                .padding(.top, 1)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(self.title)
-                    .font(OpenClawChatTypography.captionSemiBold)
-
-                Text(self.message)
-                    .font(OpenClawChatTypography.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-
-            Spacer(minLength: 0)
-
-            Button(action: self.refresh) {
-                Image(systemName: "arrow.clockwise")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .help("Refresh")
-
-            Button(action: self.dismiss) {
-                Image(systemName: "xmark")
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .help("Dismiss")
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(OpenClawChatTheme.subtleCard)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)))
+    /// Measure the detail pane, not the screen: a visible sidebar and window resizing
+    /// change the space available to chat independently of device orientation.
+    private var columnLayout: ChatColumnLayout {
+        ChatColumnLayout(paneWidth: self.contentWidth)
     }
 }

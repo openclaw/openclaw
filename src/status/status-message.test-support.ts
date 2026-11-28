@@ -4,9 +4,13 @@ import { buildStatusMessageParts as renderStatusMessageParts } from "./status-me
 type StatusArgs = Parameters<typeof renderStatusMessageParts>[0];
 type StatusTestArgs = Omit<StatusArgs, "config"> & { config?: StatusArgs["config"] };
 
-/** Renderer fixtures supply explicit prepared model facts; this adapter only supplies config. */
+/** Renderer fixtures supply prepared model facts; default config and TTS facts stay local. */
 export function buildStatusMessageParts(args: StatusTestArgs) {
-  return renderStatusMessageParts({ ...args, config: args.config ?? {} });
+  return renderStatusMessageParts({
+    ...args,
+    config: args.config ?? {},
+    preparedTtsPreferences: args.preparedTtsPreferences ?? {},
+  });
 }
 
 export function buildStatusMessage(args: StatusTestArgs): string {

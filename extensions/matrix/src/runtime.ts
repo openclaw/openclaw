@@ -1,6 +1,5 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-// Matrix plugin module implements runtime behavior.
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 
 const {

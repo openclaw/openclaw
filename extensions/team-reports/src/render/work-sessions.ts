@@ -1,8 +1,8 @@
 import { buildControlUiSessionPath } from "openclaw/plugin-sdk/session-discussion";
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { WORK_SESSIONS_PAGE_SIZE } from "../limits.js";
 import type { PersonWorkSessions, WorkSession, WorkSessions } from "../work-sessions.js";
 import { banner, href, shell, type PageContext } from "./page.js";
-import { escapeHtml } from "./shared.js";
 
 function sessionRow(ctx: PageContext, session: WorkSession): string {
   const path = buildControlUiSessionPath({

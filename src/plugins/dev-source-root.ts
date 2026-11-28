@@ -1,15 +1,35 @@
-// Resolves development source roots for local plugin installs.
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveUserPath } from "../utils.js";
 import { isPluginInPackageBundledRoots, isSourceCheckoutRoot } from "./bundled-dir.js";
-import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
+import {
+  pluginCacheExistsSync,
+  pluginCacheRealpathSync,
+  readPluginCacheJsonFile,
+} from "./plugin-cache-files.js";
 import { getPluginCache } from "./plugin-cache.js";
 
 /** Env var that points bundled-plugin lookup at an OpenClaw source checkout. */
 const OPENCLAW_DEV_SOURCE_ROOT_ENV = "OPENCLAW_DEV_SOURCE_ROOT";
+
+/** Packaging records this only for same-commit plugins in a non-release image. */
+function readStagedOfficialPluginIds(packageRoot: string): readonly unknown[] {
+  const result = readPluginCacheJsonFile(path.join(packageRoot, "dist", "build-info.json"));
+  if (!result.ok || !isRecord(result.value)) {
+    return [];
+  }
+  const { commit, stagedOfficialPlugins } = result.value;
+  return typeof commit === "string" &&
+    /^[0-9a-f]{40}$/.test(commit) &&
+    isRecord(stagedOfficialPlugins) &&
+    stagedOfficialPlugins.commit === commit &&
+    Array.isArray(stagedOfficialPlugins.pluginIds)
+    ? stagedOfficialPlugins.pluginIds
+    : [];
+}
 
 function readPackageName(packageJsonPath: string): string | null {
   try {
@@ -51,7 +71,10 @@ export function resolveBundledPluginSourceRoot(
     return selected;
   }
   const hostRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
-  return hostRoot && isSourceCheckoutRoot(hostRoot) ? hostRoot : null;
+  return hostRoot &&
+    (isSourceCheckoutRoot(hostRoot) || readStagedOfficialPluginIds(hostRoot).length > 0)
+    ? hostRoot
+    : null;
 }
 
 export function formatSourceBundledPluginNotice(pluginId: string): string {
@@ -81,6 +104,14 @@ export function isBundledPluginInsideDevSourceRoot(params: {
   // Raw source can opt out of host builds; only compiled bundles gain automatic priority.
   const hostRoot = pluginCacheRealpathSync(devSourceRoot);
   const pluginRoot = pluginCacheRealpathSync(resolveUserPath(params.rootDir, params.env));
+  if (!isSourceCheckoutRoot(devSourceRoot)) {
+    return Boolean(
+      hostRoot &&
+      pluginRoot &&
+      readStagedOfficialPluginIds(hostRoot).includes(path.basename(pluginRoot)) &&
+      path.dirname(pluginRoot) === path.join(hostRoot, "dist", "extensions"),
+    );
+  }
   return Boolean(
     hostRoot &&
     pluginRoot &&

@@ -1,8 +1,8 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { formatUiExternalText } from "../format-error.ts";
-import { isSessionRunActive } from "../session-run-state.ts";
-import { projectSessionResultRows } from "./reconcile.ts";
+import { isSessionRunStateActive } from "../session-run-state.ts";
+import { mapSessionResultRows } from "./reconcile.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
@@ -16,23 +16,20 @@ export type SessionRunTerminal = {
   /** Latest session status after this owned model run leaves the active registry. */
   status: SessionRunStatus;
   errorMessage?: string;
+  suppressErrorNotice?: boolean;
   endedAt: number;
 };
 
 type SessionRunTerminalObservation = {
   agentId: (row: GatewaySessionRow) => string | null;
   project: (row: GatewaySessionRow) => GatewaySessionRow;
-  observe: (row: GatewaySessionRow, previous: GatewaySessionRow, fields: readonly string[]) => void;
+  observe: (row: GatewaySessionRow, previous: GatewaySessionRow) => void;
 };
 
 export function createSessionRunTerminalReconciler(
   terminal: SessionRunTerminal,
   observation?: SessionRunTerminalObservation,
 ): (row: GatewaySessionRow) => GatewaySessionRow {
-  const keys = terminal.sessionKeys.map((key) => key.trim()).filter(Boolean);
-  if (keys.length === 0) {
-    return (row) => row;
-  }
   const runId = terminal.runId?.trim() || null;
   // Match the Gateway's compact session error projection, redacting before truncation.
   const errorMessage = truncateUtf16Safe(
@@ -40,7 +37,7 @@ export function createSessionRunTerminalReconciler(
     160,
   );
   return (existing) => {
-    if (!keys.some((key) => areUiSessionKeysEquivalent(existing.key, key))) {
+    if (!terminal.sessionKeys.some((key) => areUiSessionKeysEquivalent(existing.key, key))) {
       return existing;
     }
     const agentId = observation
@@ -55,7 +52,7 @@ export function createSessionRunTerminalReconciler(
       return existing;
     }
     const row = observation?.project(existing) ?? existing;
-    const wasActive = row.hasActiveRun === true || isSessionRunActive(row);
+    const wasActive = row.hasActiveRun === true || isSessionRunStateActive(row);
     const previousTerminalRunId = row.lastRunId?.trim();
     const isTerminal = terminal.status !== "queued" && terminal.status !== "running";
     // An idle tuple may predate this run or belong to a newer completion.
@@ -82,7 +79,7 @@ export function createSessionRunTerminalReconciler(
         hasActiveRun: true,
         status: "running" as const,
       };
-      observation?.observe(next, row, ["activeRunIds", "hasActiveRun", "status"]);
+      observation?.observe(next, row);
       return next;
     }
     // Exact active ownership can precede the persisted lifecycle update. Replace
@@ -91,10 +88,11 @@ export function createSessionRunTerminalReconciler(
       wasActive && runId && previousTerminalRunId && previousTerminalRunId !== runId && isTerminal
         ? runId
         : undefined;
-    const lastRunError =
-      terminal.status === "failed" || terminal.status === "timeout"
-        ? errorMessage || (replacementRunId ? undefined : row.lastRunError)
-        : undefined;
+    const failed = terminal.status === "failed" || terminal.status === "timeout";
+    const lastRunError = failed
+      ? errorMessage || (replacementRunId ? undefined : row.lastRunError)
+      : undefined;
+    const suppressErrorNotice = terminal.suppressErrorNotice ?? false;
     const endedAt = replacementRunId ? terminal.endedAt : (row.endedAt ?? terminal.endedAt);
     const runtimeMs = replacementRunId
       ? undefined
@@ -108,33 +106,12 @@ export function createSessionRunTerminalReconciler(
         : replacementRunId || terminal.status === "running"
           ? false
           : row.abortedLastRun;
-    const fields = ["hasActiveRun", "status"];
-    if (activeRunIds !== undefined) {
-      fields.push("activeRunIds");
-    }
-    if (
-      (terminal.status !== "failed" && terminal.status !== "timeout") ||
-      errorMessage ||
-      replacementRunId
-    ) {
-      fields.push("lastRunError");
-    }
-    if (replacementRunId) {
-      fields.push("lastRunId", "startedAt", "endedAt", "runtimeMs");
-    } else if (row.endedAt == null) {
-      fields.push("endedAt");
-      if (typeof row.startedAt === "number") {
-        fields.push("runtimeMs");
-      }
-    }
-    if (replacementRunId || terminal.status === "killed" || terminal.status === "running") {
-      fields.push("abortedLastRun");
-    }
     const next =
       !replacementRunId &&
       row.hasActiveRun === false &&
       row.status === terminal.status &&
       row.lastRunError === lastRunError &&
+      (row.suppressErrorNotice ?? false) === suppressErrorNotice &&
       row.endedAt === endedAt &&
       row.runtimeMs === runtimeMs &&
       row.activeRunIds === activeRunIds &&
@@ -147,12 +124,12 @@ export function createSessionRunTerminalReconciler(
             hasActiveRun: false,
             status: terminal.status,
             lastRunError,
+            suppressErrorNotice,
             endedAt,
             runtimeMs,
             abortedLastRun,
           };
-    // Same-value terminal facts still precede an already-issued list response.
-    observation?.observe(next, row, fields);
+    observation?.observe(next, row);
     return next;
   };
 }
@@ -166,8 +143,5 @@ export function reconcileSessionRunTerminal(
     return result;
   }
   const reconcileRow = createSessionRunTerminalReconciler(terminal, observation);
-  return projectSessionResultRows(
-    result,
-    result.sessions.map((existing) => reconcileRow(existing)),
-  );
+  return mapSessionResultRows(result, reconcileRow);
 }

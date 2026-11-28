@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { expect, test, vi, type TestContext } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
@@ -51,7 +52,10 @@ test("abandonment fixture joins canceled startup and teardown before admitting a
     }
     return state;
   });
-  const child = { stdout: { resume() {} }, stderr: { resume() {} } };
+  const child = Object.assign(new EventEmitter(), {
+    stdout: { resume() {} },
+    stderr: { resume() {} },
+  });
   const spawn = vi.fn(() => child);
   const stopChild = vi.fn(async () => {});
   const disconnect = vi.fn(async () => {});
@@ -142,6 +146,7 @@ test("abandonment fixture joins canceled startup and teardown before admitting a
         },
       }));
       vi.doMock("../state/openclaw-state-db.js", () => ({
+        closeOpenClawStateDatabaseAsync: async () => {},
         closeOpenClawStateDatabaseForTest: closeDatabase,
         openOpenClawStateDatabase: vi.fn(),
       }));
@@ -150,7 +155,7 @@ test("abandonment fixture joins canceled startup and teardown before admitting a
         ["../agents/worktrees/registry.js", ["insertRegistryWorktree"]],
         ["../config/sessions/archive-compression.js", ["readSessionArchiveContentSync"]],
         ["../config/sessions/session-accessor.js", ["upsertSessionEntryCore"]],
-        ["./session-utils.js", ["loadGatewaySessionEntryReadOnly"]],
+        ["./session-utils.js", ["loadGatewaySessionEntryReadOnlyAsync"]],
         ["./worker-environments/placement-store.js", ["createWorkerSessionPlacementStore"]],
         ["./worker-environments/placement-test-fixtures.js", ["seedAttachedPlacementEnvironment"]],
         ["./worker-environments/store.js", ["createWorkerEnvironmentStore"]],
@@ -192,10 +197,23 @@ test("abandonment fixture joins canceled startup and teardown before admitting a
         },
         (error: unknown) => {
           bodyFinished = true;
+          if (error !== cancellation) {
+            throw error;
+          }
           return error;
         },
       );
-      await Promise.race([startupEntered.promise, body]);
+      const firstPhase = await Promise.race([
+        startupEntered.promise.then(() => "startup" as const),
+        cleanupEntered.promise.then(() => "cleanup" as const),
+        body.then(() => "settled" as const),
+      ]);
+      if (firstPhase !== "startup") {
+        // Join an early unwind before reporting its original body failure.
+        releaseCleanup.resolve();
+        await body;
+        throw new Error("Placement fixture settled before Gateway startup");
+      }
       expect(spawn).toHaveBeenCalledTimes(1);
       cancel.abort(cancellation);
       expect(finishers).toHaveLength(1);

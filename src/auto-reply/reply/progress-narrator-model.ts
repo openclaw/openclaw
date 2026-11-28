@@ -1,15 +1,14 @@
-// Utility-model preparation and completion for progress narration.
-import { runIsolatedCompletion } from "../../agents/isolated-completion.js";
-import { prepareUtilityCompletionForAgent } from "../../agents/utility-completion.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import {
+  prepareUtilityCompletionForAgent,
+  runUtilityCompletion,
+} from "../../agents/utility-completion.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { compactProgressText } from "../../shared/text-truncate.js";
 
-const NARRATION_TIMEOUT_MS = 10_000;
 const NOTES_IN_PROMPT = 15;
 const USER_MESSAGE_PROMPT_CHARS = 500;
-// Reasoning-capable utility models spend output tokens before the short
-// visible text; a tiny cap can leave no text (same budget as label generation).
-const NARRATION_MAX_TOKENS = 4_096;
 
 const NARRATION_SYSTEM_PROMPT = [
   "You write the live status line for an AI assistant that is working on a chat request.",
@@ -26,24 +25,8 @@ export type ProgressNarrationInput = {
   previousText: string;
 };
 
-export function truncateAtWordBoundary(text: string, maxChars: number): string {
-  const chars = Array.from(text);
-  if (chars.length <= maxChars) {
-    return text;
-  }
-  const head = chars
-    .slice(0, maxChars - 1)
-    .join("")
-    .trimEnd();
-  const boundary = head.search(/\s+\S*$/u);
-  if (boundary > Math.floor(maxChars * 0.6)) {
-    return `${head.slice(0, boundary).trimEnd()}…`;
-  }
-  return `${head}…`;
-}
-
 function buildNarrationUserPrompt(input: ProgressNarrationInput): string {
-  const request = truncateAtWordBoundary(
+  const request = compactProgressText(
     input.userMessage.replace(/\s+/g, " ").trim(),
     USER_MESSAGE_PROMPT_CHARS,
   );
@@ -72,33 +55,29 @@ export async function generateNarrationWithUtilityModel(params: {
   cfg: OpenClawConfig;
   prepared: NonNullable<Awaited<ReturnType<typeof prepareNarrationModel>>>;
   input: ProgressNarrationInput;
-  abortSignal?: AbortSignal;
+  abortSignal: AbortSignal;
+  /** The turn's admitted authority; execution skips utility candidates its role refuses. */
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+  timeoutMs: number;
 }): Promise<{ text: string | null; error?: string }> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), NARRATION_TIMEOUT_MS);
-  const signal = params.abortSignal
-    ? AbortSignal.any([params.abortSignal, controller.signal])
-    : controller.signal;
   try {
-    signal.throwIfAborted();
-    const result = await runIsolatedCompletion({
+    params.abortSignal.throwIfAborted();
+    const result = await runUtilityCompletion({
       ...params.prepared,
+      purpose: "progress-narration",
       config: params.cfg,
       systemPrompt: NARRATION_SYSTEM_PROMPT,
       prompt: buildNarrationUserPrompt(params.input),
-      timeoutMs: NARRATION_TIMEOUT_MS,
-      abortSignal: signal,
-      streamParams: {
-        maxTokens: NARRATION_MAX_TOKENS,
-        temperature: 0.3,
-      },
+      timeoutMs: params.timeoutMs,
+      abortSignal: params.abortSignal,
+      ...(params.operatorAuthority ? { operatorAuthority: params.operatorAuthority } : {}),
+      answerTokenBudget: 4_096,
+      streamParams: { temperature: 0.3 },
     });
     const text = result.text.trim();
     return { text: text || null };
   } catch (err) {
     logVerbose(`progress-narrator: completion failed: ${String(err)}`);
     return { text: null, error: String(err) };
-  } finally {
-    clearTimeout(timeout);
   }
 }

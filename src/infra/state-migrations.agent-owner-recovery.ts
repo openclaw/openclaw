@@ -1,15 +1,15 @@
 /** Doctor recovers only proven duplicate files, before either owner's schema changes. */
 import fs from "node:fs";
 import path from "node:path";
-import { checkpointDoctorSqliteFile } from "../commands/doctor-sqlite-compact.js";
+import { sameFileContentsSync } from "@openclaw/fs-safe/advanced";
 import { isSessionArchiveArtifactName } from "../config/sessions/artifacts.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import { readExistingAgentSchemaMeta } from "../state/openclaw-agent-db-schema-helpers.js";
+import { assertSupportedAgentMigrationSchemas } from "../state/openclaw-agent-db-session-migrations.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
-import { sameFileContentsSync } from "./fs-safe-advanced.js";
 import { FsSafeError } from "./fs-safe.js";
 import {
   openNodeSqliteDatabase,
@@ -19,6 +19,8 @@ import {
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { moveSqliteFilesAside } from "./sqlite-recovery-files.js";
+import { readSqliteUserVersion } from "./sqlite-user-version.js";
+import { truncateSqliteWal } from "./sqlite-wal-checkpoint.js";
 import { formatAgentDatabaseOwnershipRepairHint } from "./state-migrations.agent-owner-guidance.js";
 
 type Target = { agentId: string; path: string };
@@ -101,20 +103,18 @@ function checkpoint(target: Target, maintenance: OpenClawStateLeaseContext): voi
   );
   try {
     assertOpenClawAgentDatabaseOwner(database, { agentId: target.agentId, pathname: target.path });
+    assertSupportedAgentMigrationSchemas(database, target.path, readSqliteUserVersion(database));
     assertSqliteIntegrity(database, target.path);
     maintenance.assertOwned();
-    checkpointDoctorSqliteFile(database, target.path);
+    truncateSqliteWal(database, target.path);
   } finally {
     database.close();
   }
 }
 
-export function recoverMisplacedAgentDatabaseCopies(params: {
-  targets: readonly Target[];
-  maintenance: OpenClawStateLeaseContext;
-}): Map<string, Recovery> {
+function readTargetOwnerMetadata(targets: readonly Target[]) {
   const metadata = new Map<string, ReturnType<typeof readExistingAgentSchemaMeta>>();
-  for (const target of params.targets) {
+  for (const target of targets) {
     try {
       // Identity discovery must not replay journals or create/change WAL read marks.
       const database = openNodeSqliteDatabase(
@@ -132,20 +132,45 @@ export function recoverMisplacedAgentDatabaseCopies(params: {
       // Normal migration reports unreadable databases; this repair needs positive identity.
     }
   }
+  return metadata;
+}
+
+/** The owning agent recorded in a database that another agent's locator selects. */
+function misplacedOwnerId(
+  target: Target,
+  identity: ReturnType<typeof readExistingAgentSchemaMeta> | undefined,
+): string | undefined {
+  if (identity?.role !== "agent" || !identity.agentId) {
+    return undefined;
+  }
+  const ownerId = normalizeAgentId(identity.agentId);
+  return ownerId === target.agentId ? undefined : ownerId;
+}
+
+/** Read-only: whether `recoverMisplacedAgentDatabaseCopies` would recover or refuse a target. */
+export function hasMisplacedAgentDatabaseCopies(targets: readonly Target[]): boolean {
+  const metadata = readTargetOwnerMetadata(targets);
+  return targets.some(
+    (target) => misplacedOwnerId(target, metadata.get(target.path)) !== undefined,
+  );
+}
+
+export function recoverMisplacedAgentDatabaseCopies(params: {
+  targets: readonly Target[];
+  maintenance: OpenClawStateLeaseContext;
+}): Map<string, Recovery> {
+  const metadata = readTargetOwnerMetadata(params.targets);
   const results = new Map<string, Recovery>();
   for (const target of params.targets) {
     const identity = metadata.get(target.path);
-    if (
-      identity?.role !== "agent" ||
-      !identity.agentId ||
-      normalizeAgentId(identity.agentId) === target.agentId
-    ) {
+    const ownerId = misplacedOwnerId(target, identity);
+    if (!ownerId) {
       continue;
     }
-    const ownerId = normalizeAgentId(identity.agentId);
     const owners = params.targets.filter(
       (candidate) =>
-        candidate.agentId === ownerId && metadata.get(candidate.path)?.agentId === identity.agentId,
+        candidate.agentId === ownerId &&
+        metadata.get(candidate.path)?.agentId === identity?.agentId,
     );
     try {
       const owner = owners.length === 1 ? owners[0] : undefined;

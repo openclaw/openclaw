@@ -1,16 +1,27 @@
 ---
 name: openclaw-ci-limits
-description: Manage OpenClaw GitHub Actions and Blacksmith CI capacity, runner-registration budgets, fanout caps, main-push single-flight, shard sizing, hosted-runner offload, queue health, and safe ramp-down/ramp-up changes. Use when tuning `.github/workflows/*`, `docs/ci.md`, CI runner labels, matrix `max-parallel`, ClawSweeper/Blacksmith burst protection, CodeQL runner placement, or investigating slow/queued OpenClaw CI.
+description: "Diagnose OpenClaw CI queues and runner capacity, or tune workflow fanout, registration budgets, and runner placement."
 ---
 
 # OpenClaw CI Limits
 
 Use this skill for CI capacity changes, not ordinary test failure triage. The
 goal is to keep OpenClaw fast while distinguishing runner registration, runner
-availability, Blacksmith control-plane health, and downstream queue drains.
+availability, provider control-plane health, and downstream queue drains.
+
+Read [backend selection](references/backend.md) and
+[investigation](references/investigation.md) before changing capacity. Confirm
+the actual runner and bottleneck before applying provider-specific limits.
 
 ## Core Facts
 
+- Full main-tier CI runs hourly; ordinary main pushes run `security-fast`.
+  A green push is not evidence that the full suite passed. Ordinary PRs defer
+  Windows, macOS Node/Swift, iOS build/simulator, real-Gateway UI, published-driver
+  update, Knip, and most architecture proof. Import-cycle and Kysely guards
+  remain blocking. Use `docs/ci/scope-and-routing/selection.md` and the current
+  manifest for exact event, owner, and release-fallback selection; do not restore
+  deferred lanes while tuning capacity. Android screenshots remain release-only.
 - Do not assume the scarce resource. Prove whether pressure is runner
   registrations, eligible runner availability, Blacksmith capacity/control
   plane, workflow dependencies, test runtime, or a downstream queue writer.
@@ -29,501 +40,85 @@ availability, Blacksmith control-plane health, and downstream queue drains.
   scans should stay on GitHub-hosted runners unless measured evidence says
   Blacksmith is required.
 
+## Runner Cost Policy
+
+- Use the smallest runner that completes the required workload reliably. Keep
+  short control jobs hosted and ordinary trusted development proof local.
+- Treat physical 8-vCPU and larger runners as exceptions, not a default or generic retry. Record the
+  command and measured peak memory, a smaller-runner OOM, or a controlled
+  comparison showing lower total billed cost. Low CPU use alone does not prove
+  a memory-heavy job can move down. Preserve resource-based worker limits.
+- Routine OpenClaw Testboxes use the 4-class with a 60-minute total-job
+  default, including hydration. Keep the 15-minute idle ceiling. Shorter
+  deadlines are welcome for known short commands; do not request four hours
+  automatically or upsize only to obtain more time. Select
+  `.github/workflows/ci-check-high-memory-testbox.yml` explicitly only for a
+  named memory-heavy command; see `docs/reference/test/remote-proof.md`.
+  That workflow has at most four concurrent leases inside the shared 32-slot
+  Testbox pool. The high-memory profile uses 8 vCPUs; both profiles preserve
+  their pre-November 3 physical CPU and RAM. All Testbox profiles cap idle time at 15 minutes.
+- Allocate through the current OpenClaw wrapper with workflow ref `main`;
+  the source capsule preserves the checkout being tested. Do not dispatch an
+  old workflow ref to bypass spending limits. Queue age is checked before
+  checkout; an admitted lease keeps its job and idle deadlines.
+- Do not promote an entire workflow family because one command needs more RAM.
+  Keep proven high-memory CI rows scoped to their owning planner and evidence;
+  remeasure before changing their allocation. A 32-class label is not proof of
+  32 available CPUs. Compare observed resources and total billed job cost.
+
+## Select the affected controls
+
+Read only the references relevant to the selected change, each in full:
+
+| Surface                                                      | Guide                                                  |
+| ------------------------------------------------------------ | ------------------------------------------------------ |
+| Hosted controls, lint/typecheck placement, backend overrides | [Control jobs](references/control-jobs.md)             |
+| Build producers, warming, compile caches, locale sharing     | [Build and cache](references/build-and-cache.md)       |
+| Matrix coverage, platform tests, UI, Docker, QA              | [Test planning](references/test-planning.md)           |
+| Compact bins, worker budgets, measured runner sizing         | [Packing and sizing](references/packing-and-sizing.md) |
+| SDK boundary and API checks                                  | [Compiler checks](references/compiler-checks.md)       |
+| Reconsidering a previous optimization                        | [Rejected experiments](references/experiments.md)      |
+| Checking a change and observing a landed capacity change     | [Validation](references/validation.md)                 |
+
+## Resolve the active backend
+
+Read [Resolve the active backend](references/backend.md#resolve-the-active-backend).
+
 ## Rejected Experiments
 
-- **Hosted Mac exact dependencies (2026-09-01):** The same-head publisher and
-  consumer in [run 33458856298](https://github.com/openclaw/openclaw/actions/runs/33458856298)
-  successfully saved and restored a 1.66-GB dependency archive, but setup took
-  142s versus 86s with the ordinary store cache. Extraction took 82s versus 27s;
-  install improved only from 43s to 35s. Keep hosted Mac jobs on the ordinary
-  store cache. Reconsider only with measured total setup savings, including
-  transfer, extraction and frozen reconciliation, not a successful cache hit.
-- **Actions-artifact checkout (2026-08-16):** Do not recommend replacing the
-  shared Blacksmith Git fetch with a preflight-produced workspace or `.git`
-  artifact. [PR #124818](https://github.com/openclaw/openclaw/pull/124818)
-  measured a 16s Blacksmith checkout baseline versus 7s hosted. The best direct
-  artifact variant cost 1s to pack, 3s to upload, and 11s median to restore;
-  including the serial prefix left only about 1s median improvement and
-  regressed Blacksmith's fast-fetch runs. The official artifact client was
-  worse: [run 31971531521](https://github.com/openclaw/openclaw/actions/runs/31971531521)
-  measured 22s median download plus 2s materialization. Blacksmith's fast
-  Actions-cache path does not imply fast Actions-artifact downloads. Reconsider
-  only with measured end-to-end proof for a different transport, including its
-  producer cost and fast-fetch regressions.
+Read [Rejected Experiments](references/experiments.md#rejected-experiments).
 
 ## First Checks
 
-Before changing CI, collect current pressure:
-
-```bash
-gh api rate_limit --jq '{core:.resources.core,graphql:.resources.graphql,search:.resources.search,actions_runner_registration:.resources.actions_runner_registration}'
-gh run list -R openclaw/openclaw --limit 20 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
-gh run list -R openclaw/clawsweeper --limit 20 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
-gh api repos/openclaw/clawsweeper/actions/runs/<run-id>/jobs --paginate --jq '.jobs[] | {id,name,status,conclusion,labels,created_at,started_at,completed_at,runner_name,runner_group_name}'
-blacksmith testbox list --all
-curl -fsS https://clawsweeper.openclaw.ai/api/status | jq '{generated_at,fleet,diagnostics:{errors:.diagnostics.errors}}'
-curl -fsS https://clawsweeper.openclaw.ai/api/exact-review-queue | jq '{generated_at,review:.lanes.review,publication:.lanes.publication,state_writer,state_append}'
-node scripts/ci-run-timings.mjs --latest-main
-node scripts/ci-run-timings.mjs --recent 10
-```
-
-For a suspicious queued run, inspect its jobs. A run-level `queued` status does
-not reveal whether the job is waiting on dependencies or has no eligible
-runner. Compare `created_at`, `started_at`, `labels`, and `runner_name`. Recheck
-stale queued runs live before canceling them; cancel only runs proven obsolete.
-
-`scripts/ci-run-timings.mjs` start delay can include workflow dependency wait
-plus runner queue time. It is trend evidence, not runner-pressure proof alone.
-
-Read:
-
-- `.github/workflows/ci.yml`
-- `.github/workflows/codeql-critical-quality.yml`
-- `docs/ci.md`
-- `test/scripts/ci-workflow-guards.test.ts`
-- touched planner files under `scripts/lib/*ci*`, `scripts/lib/*test-plan*`, or
-  `scripts/ci-changed-scope.mjs`
+Read [First Checks](references/investigation.md#first-checks).
 
 ## Diagnose The Bottleneck
 
-Classify the issue before changing caps:
-
-- **Runner-registration throttle:** many jobs queued before runner assignment,
-  Blacksmith/GitHub reports 403/429 or spam-style 422 responses from
-  `generate-jitconfig`, and API core quota is still healthy. Treat 422 as this
-  signal only when the request payload is otherwise valid. Fix burstiness and
-  Blacksmith job count.
-- **Blacksmith capacity:** Blacksmith dashboard shows actual concurrency caps or
-  unavailable capacity. Do not solve this with GitHub workflow fanout alone.
-- **Blacksmith Testbox control plane:** list, warm, status, or run calls time out
-  before a lease is returned. This is separate from Actions runner registration
-  and Actions job capacity. Trusted source may use the documented local
-  fallback; untrusted source stays blocked.
-- **Unavailable runner label:** a job is queued with a custom `runs-on` label,
-  `started_at` and `runner_name` remain empty, and no eligible runner exists.
-  Restore an available hosted or registered label; fanout cannot fix it.
-- **Workflow dependency wait:** the job is queued but required predecessors are
-  not terminal. Fix or wait for the dependency; do not call the whole delay
-  runner queue pressure.
-- **OpenClaw test runtime:** jobs start quickly but one lane dominates wall time.
-  Use `$openclaw-test-performance` instead of runner tuning.
-- **Real failing CI:** one job fails after starting. Use `$github:gh-fix-ci` or
-  `$openclaw-testing`, not this skill.
-- **ClawSweeper review backlog:** review pending/ready grows while publication
-  and state writers remain healthy. Tune review admission/workers in
-  `openclaw/clawsweeper`.
-- **ClawSweeper publication backlog:** publication pending/ready and oldest age
-  grow, net drain is zero or negative, or dead letters rise. Inspect publication
-  batches, state-writer coordination, and GitHub mutation latency first.
-- **State materializer/append backlog:** `state_append.pending_rows`,
-  `pending_bytes`, or oldest age grows while the materializer is queued or
-  absent. Recover that sole drain first; more review workers make it worse.
+Read [Diagnose The Bottleneck](references/investigation.md#diagnose-the-bottleneck).
 
 ## Registration Budget Math
 
-Estimate worst-case registrations for a change before editing:
-
-```text
-new Blacksmith registrations ~= number of Blacksmith jobs that can become queued
-inside one 5 minute window
-```
-
-For matrix jobs, count every row that can start in the 5-minute window.
-`strategy.max-parallel` only caps simultaneous rows; short rows can turn over
-and register more runners before the window resets. Use job duration, retries,
-and queue turnover to justify any lower estimate. Add non-matrix Blacksmith jobs
-such as `preflight`, `security-fast`, `build-artifacts`, and platform lanes.
-
-For repeated pull-request pushes, multiply by the number of runs expected to
-reach Blacksmith admission in the same 5-minute window, including runs canceled
-after admission. Canonical `main` uses two run-number-parity slots. Each slot
-keeps one active non-canceling run and one coalesced pending tip. Budget for up
-to two active main matrices plus their two pending tips entering the next
-admission wave, not every intermediate merge.
-
-Reject a change unless the org-level worst case stays below about 60% of the
-live bucket. With the current 10,000-registration bucket, keep planned
-Blacksmith burst load under 6,000 registrations per 5 minutes with headroom for
-ClawSweeper, ClawHub, Clownfish, OpenClaw RTT, and Clawbench.
-
-The compact cap is 90 rows; the final Node matrix caps are 70 push and 130 PR rows. With the conservative 80 potentially eligible non-Node jobs, this bounds main at 150 registrations and PRs at 210. The retained four-main/21-PR arrival envelope is `4 × 150 + 21 × 210 = 5,010`, leaving 990 below the 6,000 reference target for adjacent repositories, releases and carryover. Relative to the former 64/120 Node caps, this reserves six additional registrations per push or ten per PR: `4 × 6 + 21 × 10 = 234` per envelope. Compact rows are part of the final Node matrix, so do not count their ten-row increase again. This is a conditional arrival bound, not live organization-wide capacity proof.
+Read [Registration Budget Math](references/investigation.md#registration-budget-math).
 
 ## Safe Levers
 
-Prefer these in order:
-
-1. Preserve cancel-in-progress for superseded pull-request heads.
-2. Preserve canonical `main` as two non-canceling parity slots; each slot's
-   default pending run coalesces to the newest tip.
-3. Move high-frequency, short, non-build jobs to `ubuntu-24.04`.
-4. Reduce matrix rows by bundling related tests inside one runner job when the
-   combined job stays under timeout and keeps useful failure names.
-5. Lower `strategy.max-parallel` for bursty Blacksmith matrices.
-6. Right-size runners from timing evidence. Use fewer/larger jobs only when
-   elapsed time improves enough to justify registration count.
-7. Split truly slow tests with `$openclaw-test-performance`; do not hide a slow
-   test problem by registering more runners.
-
-Do not:
-
-- add another Blacksmith installation expecting a higher registration bucket;
-- move CodeQL Critical Quality back to Blacksmith;
-- raise all `max-parallel` values at once;
-- make manual `workflow_dispatch` runs cancel normal push/PR validation;
-- delete coverage just to reduce runner count;
-- treat cancelled superseded pull-request runs as failures without checking the
-  newest run for the same ref.
-- cancel old queued runs from a stale snapshot; re-query the exact run first and
-  preserve any current run that still owns live work.
+Read [Safe Levers](references/investigation.md#safe-levers).
 
 ## Current OpenClaw Knobs
 
-These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
+These are intentionally guarded by the `ci-workflow-guards`,
+`ci-workflow-planning`, and `ci-workflow-evidence` tests under `test/scripts/`:
 
-- `CI` concurrency key version, PR cancellation, and canonical `main`'s two
-  non-canceling parity slots, each with one coalesced pending tip.
-- `preflight` starts immediately without a debounce or standalone admission job.
-  `security-fast` waits for its hosted budget decision and still runs after
-  preflight failure unless the workflow was canceled. The protected `vitest-cache-warm` workflow
-  publishes the immutable semantic dependency archive after setup succeeds,
-  before build and transform warming. Preflight and downstream Node jobs are
-  restore-only consumers on eligible self-hosted runners. Exact misses and
-  hosted paths, including Mac Node jobs, use the ordinary pnpm-store cache.
-- `ci-gate` always uses `ubuntu-24.04` for its Bash-only result aggregation,
-  without checkout or dependency setup. This removes one Blacksmith registration
-  from previously eligible runs; hosted assignment can still delay completion.
-  Trusted automatic hybrid first-attempt `preflight` requests the existing
-  16-class after hosted assignment stalled across three nearby runs while
-  Blacksmith security jobs succeeded. Its logical planner profile, cache trust,
-  and 20-minute deadline stay unchanged. Default Blacksmith preflight keeps the
-  4-class; hybrid retries, manual dispatches, untrusted/noncanonical contexts,
-  and the `github` override retain hosted routing. `security-fast` stays hosted
-  outside eligible hybrid first attempts and when the bounded hosted plan is admitted. Security hooks use pinned installed packages
-  and local hook definitions, without remote Git initialization. The `github`
-  outage override remains intact. Budget two control-job registrations per eligible
-  hybrid first attempt when optional hosted admission is closed, one when admitted,
-  and one per normal Blacksmith run. Both jobs already occur in the retained
-  conservative non-Node inventory, preserving the 5,010-registration cap model.
-  The aggregate uses `!cancelled()` to report failed prerequisites without
-  holding a superseded run open after workflow cancellation.
-- Automatic canonical hybrid first attempts count every selected hosted row in
-  preflight. `HYBRID_HOSTED_BASE_ROW_LIMIT = 40` admits at most five optional
-  rows within `HYBRID_HOSTED_ROW_LIMIT = 45`: security, three Control UI unit
-  rows, and only browser-extension E2E. Above 40 base rows, retain their
-  Blacksmith routes; an eligible base above 45 warns with counts and retains
-  the complete base manifest. The budget limits optional admission, not coverage.
-  Record base/total rows and compare the actual workflow expansion in guards.
-  This never expands test coverage or workers; Control UI E2E shards, QA,
-  real-Gateway, Android, and compiler-heavy jobs retain their existing routes.
-  Frozen/manual targets, retries, untrusted authors and fully hosted fallback
-  manifests remain outside this first-attempt limit, including existing >45-row
-  fallbacks. Do not change the backend variable or existing caps to enable it.
-- Current fast plugin/channel contract families each share one checkout/setup.
-  Their two weighted process envelopes run sequentially with unchanged include
-  lists and package commands; channel invocations retain four project slots and
-  one worker per project. Any nonzero exit stops admission of the next envelope.
-  Frozen targets retain their original separate rows.
-- CI matrix caps: fast/check lanes at 12, Node test shards at 96, Windows at 2,
-  and Android at 2. Every compact profile has an enforced 90-row budget, plugin
-  fallback has a 50-row budget, and the final Node matrix enforces 70 push or
-  130 PR rows, including precise plans. Preflight reserves actual appended
-  plugin Node rows in compact admission so existing hosted tooling compaction
-  can meet that tighter budget; dist rows remain outside the Node budget and
-  inside the compact cap. Excess inventory fails preflight.
-- Windows keeps two disjoint file inventories and at most two concurrent jobs.
-  Each job runs project processes serially with one Vitest worker on every
-  backend, after runtime preparation completes. Native allocation can be smaller
-  than the runner label. Native proof must cover available CPUs/RAM, fixture
-  memory and cleanup. This adds no runner registrations.
-- macOS Swift regular PR/main and PR `release_gate` CI runs complete app tests
-  plus lint/schema guards in `tests`, alongside independent OpenClawKit trait,
-  OpenClawKit test, and Swabble test graphs in `packages`.
-  Ordinary full-scope manual validation adds independent release compilation,
-  moves the guards to `release`, and retains health renders in `tests`.
-  All phases use GitHub-hosted `macos-26`, `max-parallel: 2`, and the existing
-  30-minute budget. This adds one hosted job and no Blacksmith registrations;
-  measure complete hosted timing including duplicated setup. Packages do not
-  restore or save app build products. Build caches stay phase-owned; the sole eligible shared
-  SwiftPM cache writer is regular `tests` or full-validation `release`.
-  Debug test/package builds disable indexing and use Swift line-table debug
-  information, retaining coverage and source-line backtraces. Test build caches
-  use the v7 profile; Release flags and v6 caches remain unchanged. Local debug
-  builds retain full debugger metadata.
-- Android regular CI uses four test/lint rows, including benchmark compilation
-  in the Kotlin-lint row when benchmark/build/dependency inputs change or the
-  changed-path manifest is unusable. Full manual validation retains all six
-  rows and memory-bounded phone/Wear/benchmark builds without duplicate lint.
-  The cap stays at two; frozen task contracts and npm native deferral are unchanged.
-- iOS regular PR/main and PR `release_gate` CI runs one required Debug build
-  and Swift lint smoke. Ordinary full-scope manual validation retains Release
-  and Debug/native-test phases, both screenshot shards, and the evidence reducer.
-  Frozen full-manual targets keep their Debug-only contract without screenshots;
-  npm qualification still defers native jobs. All iOS build phases and screenshot
-  shards use `macos-26` from the first attempt.
-  The conservative full-tier non-Node inventory, including Control UI performance, is
-  87 rows, or 88 for historical UI targets. Excluding those four hosted rows
-  plus all three macOS Swift phases and the always-hosted aggregate gate leaves at
-  most 80 potentially eligible jobs. The enforced Node caps therefore give
-  150 registrations per main run and 210 per PR:
-  `4 × 150 + 21 × 210 = 5,010` in the retained peak arrival envelope.
-  The old 19-arrival estimate is obsolete. The remaining 990 below
-  the 6,000 reference target must cover adjacent repositories, releases and
-  carryover; the bounded 2026-09-02 census did not prove that upper bound.
-  Treat a single PR concurrency trial separately from a global rollout.
-  A shared-token quota response does not establish organization-wide usage.
-  Budget all six npm qualification jobs and the actual full-release children;
-  ordinary manual check rows can still use Blacksmith outside hybrid mode.
-- Canonical PR Node tests use one precise changed-target job when possible;
-  broad, deleted or unknown changes fall back to the compact full-suite plan
-  plus affected plugin coverage. Current PR planner errors fail preflight.
-  Targeted plans retain the full built-artifact
-  boundary gate. `main` uses compact integration; manual and release runs use
-  full named shards.
-- The combined Node matrix admits compact and plugin descriptors by estimated
-  duration within the same cap. Catch-all, QA and provider configs use the
-  existing 90-file envelope budget with native Vitest sharding; retain complete
-  config discovery, exclusions and process isolation. Count every appended
-  plugin row, including the five added QA/provider rows, in the burst envelope.
-- Precise and fallback plugin groups retain separate child processes, including process-bounded
-  configs. Compatible envelopes, including repeated configs, run one at a time
-  within 240 predicted seconds without a pair-count limit; expanded serial compact
-  jobs use 210. The rebased 124-envelope inventory emits 50 extension rows and
-  125/119/130 PR Node rows on Blacksmith/hybrid/GitHub; push Node rows are
-  57/46/55 and compact PR rows are 77/71/82. These fit the landed 130/70/90
-  PR/push/compact caps without another increase. Runtime preparation stays separate. Each original envelope retains
-  its file/process bounds, native shard arguments and worker limits. The complete supplemental boundary list runs in one job
-  with four concurrent checks and one full-root focused-rule scan.
-- Measured Blacksmith chat/session, Gateway core-3 and infrastructure storage/state
-  outliers reuse the existing file splitter. Preserve serial execution, worker
-  pins and complete timing-history floors; no blanket increase in sharding.
-- Blacksmith and hybrid compact bins with multiple ordinary groups request the
-  existing 32-vCPU class and two child slots with a 360s aggregate budget.
-  Compatible two-slot bins use the time budget without the ten-group cutoff;
-  serial bins retain that cutoff. Blacksmith serial bins retain 200/276s, hybrid serial bins retain 210s,
-  exclusive bins retain 150s by default, and groups above their serial cap stay alone.
-  Complete ordinary hybrid bins containing only non-build CLI groups may use
-  250s and co-locate split siblings, provided each original child still fits
-  150s. Keep file splits, workers, process isolation and other profiles unchanged.
-  Initial packing separates runtime consumers from ordinary groups. Complete
-  hybrid main and PR runtime-placement observations apply only after file splitting;
-  precise changed-file templates retain their original capacity and floors.
-  Typed observations preserve configs, environment, complete files and build mode.
-  Prefer an exact measurement; otherwise use the maximum compatible contained
-  workload as an advisory floor, never sum overlaps or treat globs as whole files.
-  Whole pinned runtime groups may move to existing compatible ordinary jobs under
-  a 440s budget including the existing 100s build reserve. Keep runner anchors,
-  test partitions, invocation counts and worker limits. An ordinary recipient
-  becomes serial, explicitly retaining its old parallel groups' two-worker budget
-  while preserving their prepared timing identities and complete parent
-  generations. The CI executor applies the smaller of the
-  supplied job ceiling and group cap. This may add one runtime preparation while
-  reducing requested process slots; measure the tradeoff without adding jobs or
-  registrations. Equal maximum estimates prefer more recipient headroom.
-  Reapply shared family, group-count and budget admission to both replacements;
-  never suppress coverage or count a runtime subset as a complete parent.
-  An unfit optimization retains the runnable plan and its truthful estimate.
-  Compare recipients with the donor job's fixed anchor, not only its group class.
-  Exclusive, private-QA, dist and hosted policies stay unchanged.
-  Affordable generated CLI runtime children may share one preparation in an
-  exclusive serial bin within the same 150s budget; fixed stripe families remain
-  separate. Other hybrid exclusive/dist sharing is unchanged. Complete inventories
-  remain intact.
-  The canonical shard executor admits two CI children only with at least eight
-  available CPUs and 24 GiB actual memory; otherwise it admits one. Inner project
-  parallelism stays one and each overlapping child keeps two Vitest workers.
-  The primary GitHub profile remains serial at 210s. Failed-job-only hybrid
-  retries retain the original wider matrix on hosted Ubuntu, clamp to one child,
-  and keep two workers per child; they can exceed the eight-minute normal-run
-  objective without changing existing deadlines. Fewer jobs must retain native
-  elapsed-time, actual memory and cleanup proof; requested labels are not capacity.
-- The whole Blacksmith agent-support group requests `blacksmith-32vcpu-ubuntu-2404`.
-  Its file inventory and resource-derived worker policy remain unchanged.
-- Numbered Blacksmith tooling bins request the same 32-vCPU class after packing.
-  Keep their logical classes, names, file inventories, serial project/file
-  execution and two-worker pins. This adds no jobs and does not promote hosted
-  or hybrid tooling. The native two-CPU/8-GB tails require a larger-host timing
-  comparison; capacity alone is not a measured speedup.
-- Numbered tooling measurements are collected in `toolingFileSeconds` ahead of
-  planner activation, which remains blocked on hosted/hybrid row capacity. The daily refit samples the
-  newest five successful PR CI runs because main-push plans omit this family.
-  Those measurements describe the PR merge-ref and update only tooling files;
-  main compact and release sampling retain their existing provenance. Preserve
-  independent-run medians, runner profiles and partial-plan history. An explicit
-  `--tooling-run <id>` seed records its source and may use one successful run.
-  Verbose-only case sums are conservative packing costs when cases overlap,
-  not measured file walls. Do not discount them to make row caps pass.
-- The Docker seed job requests `blacksmith-16vcpu-ubuntu-2404`; its weighted
-  scheduler and serial declaration compiler policy stay unchanged.
-  Canonical PRs and `main` share `resolveChangedDockerSeedLanes` owner-path
-  selection; unknown paths retain the published survivor. Canonical manual CI
-  selects survivor when the target declares the Docker seed capability, retaining
-  `legacy-operator-state` with `auto-auth`. Full Release Validation reaches this
-  exact proof through `normal_ci`; expanded Package Acceptance scenarios alone
-  do not replace its restart mode.
-- `run_control_ui_performance` selects production UI, plugin browser, workspace
-  package, dependency/build/policy inputs and their relative import graph,
-  including tooling. Workspace package aliases require conservative package
-  ownership. Test-only files and unrelated runtime changes omit this lane;
-  manual runs, unknown paths and older planners retain coverage. Preserve the
-  target's existing performance-script capability checks.
-- Eligible Control UI E2E rows request the 16-vCPU class with unchanged live
-  backend/event/contributor routing and two/one-worker project limits. Every fresh
-  plan for a target with the named-project contract uses twelve Control UI shards
-  plus one browser-extension row, across backend profiles, attempts and frozen
-  targets. Historical targets without that contract retain four total rows on
-  Blacksmith or fourteen on GitHub/hybrid. Failed-job-only retries retain their
-  previously emitted matrix, including older six-shard Control UI plans; PR and
-  hybrid push retries use hosted Ubuntu. The 25-minute timeout, max-parallel 14
-  and conservative registration ceiling stay unchanged. The browser-extension row
-  stays on 8 unless the bounded hybrid plan admits it to hosted Ubuntu. The twelve-row 4:38 result in historical run 33695337496 used the
-  32-class with eight reported CPUs; it does not prove timing on the current
-  16-class route or refresh stale timing weights.
-- Eligible real-Gateway jobs request the existing 32-class for the private artifact
-  build's two canonical SDK cache misses. Overlap requires at least two available
-  CPUs and 25.5 GiB of observed remaining memory for unchanged 12-GiB heaps plus
-  768 MiB native headroom each. Unknown finite-cgroup usage or insufficient capacity
-  keeps compilation serial. Keep browser workers, inventory, build/read ordering,
-  routing, deadlines and all caps unchanged. This adds zero jobs or registrations.
-  Compiler-only AWS evidence does not prove CI timing; validate the complete job
-  through exact-head native CI before claiming an improvement.
-- Current-target `build-artifacts` uses the existing 16-class after a complete
-  four-CPU/15.42-GiB compute proof, including the unchanged parallel verifier wave.
-  The SDK memory owner keeps declarations serial when two heaps do not fit.
-  Eligible frozen or unclassified targets also request 16-class; hosted fallbacks, job counts,
-  concurrency and deadlines stay unchanged. Measured compute fit does not prove
-  queue savings; observe the next exact-head CI cycle.
-- Normal canonical hybrid first attempts use the existing four-part QA smoke
-  plan, removing two repeated checkouts, setups and private runtime builds.
-  Blacksmith profiles retain four parts; GitHub profiles and fresh hybrid
-  retry/manual plans retain six. Failed-job-only retries retain their original
-  matrix. Keep the complete scenario inventory, separate Matrix run, worker
-  limits, stagger, cleanup and deadlines. Measure the four-part jobs natively;
-  summed build intervals are not a wall-time saving estimate.
-  PR and main selection uses the existing QA/channel/packaging/orchestration
-  owners. Manual and Full Release Validation retain the full profile; unknown
-  paths or older selectors retain supported coverage. Integration detection
-  outside these owners now waits for manual/release validation. The burden
-  analysis projects about 1,526 Blacksmith vCPU-minutes/hour saved across Docker
-  and QA; zero failures in 20 Docker and 80 QA main jobs is limited evidence,
-  not a measured post-change saving. Keep backend settings, caps, budgets and
-  timeouts unchanged, and verify actual emitted rows and timings.
-- GitHub/hybrid test types use three jobs: two paired core rows run the original
-  stripes 1+2 and 3+4 sequentially; the central row runs stripe 5 before the
-  extensions/scripts/root tail. Keep every canonical core test graph, at most two compiler
-  children per stripe, and one builder per child. The central fifth stripe
-  retains the standalone core resource environment. A failing stripe stops its
-  row; other matrix rows keep running. Pure Blacksmith and targets without
-  stripe support retain the full central path. Measure the combined jobs
-  natively; fewer registrations alone do not prove the eight-minute target.
-- CPU-heavy test-type, core test-type stripe, and runtime-topology jobs in `ci.yml`
-  request `blacksmith-16vcpu-ubuntu-2404`. The separate `openclaw-npm-preflight.yml`
-  jobs retain `blacksmith-32vcpu-ubuntu-2404`. The 2026-09-01 x64 probe
-  [run 33538827388](https://github.com/openclaw/openclaw/actions/runs/33538827388)
-  measured requested 8/16/32 labels delivering 2/4/8 CPUs respectively. Treat
-  larger requests as a measured capacity workaround, never as worker counts.
-  Keep existing routing, fanout, and resource-based worker limits; reassess
-  sizing after provider allocation changes. See `docs/ci.md` for the full table.
-- lower-weight Node/check shards on `blacksmith-4vcpu-ubuntu-2404`.
-- heavy retained Linux/Android shards on `blacksmith-8vcpu-ubuntu-2404`.
-- CodeQL Critical Quality on `ubuntu-24.04` with no `blacksmith-` labels.
-- `OPENCLAW_CI_RUNNER_BACKEND=github` routes every configurable `ci.yml` job
-  to its existing GitHub-hosted fallback label. Unset or `blacksmith` preserves
-  the normal Blacksmith-first route.
-- Vitest transform and Node compile caches are restore-only in CI and use
-  immutable Actions caches; the main-push/daily/dispatch warmer is their sole
-  writer. Build, QA and test orchestration consume its shared Node compile seed.
-  PRs create no runtime-cache archives.
+Use the surface table above. When changing one knob, update `docs/ci.md` and the guard test in the same PR.
 
-When changing one knob, update `docs/ci.md` and the guard test in the same PR.
+## Provider Outage Circuit Breaker
 
-## Blacksmith Outage Circuit Breaker
-
-Use the repository variable only after confirming a Blacksmith outage or
-unavailable runner capacity. Do not set it merely for a failing test that has
-already started.
-
-```bash
-gh variable set OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw --body github
-```
-
-In degraded mode, `ci.yml` uses the same hosted labels and non-Blacksmith paths
-as manual dispatches and fork pull requests. Blacksmith-only Docker and sticky
-steps stay off, dependency setup uses the ordinary Actions pnpm-store cache,
-and Android's large build uses separate low-memory Gradle processes. Standard
-4-core hosted runners make builds and test lanes slower. Blacksmith runner
-registration is no longer part of the budget, while GitHub-hosted concurrency
-limits apply.
-
-Flip back after the outage by deleting the variable:
-
-```bash
-gh variable delete OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw
-```
-
-Scheduled health detection and automatic flipping are a follow-up, not part of
-the current circuit breaker.
+Read [Provider Outage Circuit Breaker](references/backend.md#provider-outage-circuit-breaker).
 
 ## Validation
 
-For workflow-only or docs/skill-only changes in a Codex worktree:
-
-```bash
-node scripts/run-vitest.mjs test/scripts/ci-workflow-guards.test.ts
-node --import tsx scripts/check-workflows.mts
-node scripts/docs-list.js
-./node_modules/.bin/oxfmt --check .github/workflows/ci.yml .github/workflows/codeql-critical-quality.yml docs/ci.md test/scripts/ci-workflow-guards.test.ts .agents/skills/openclaw-ci-limits/SKILL.md .agents/skills/openclaw-ci-limits/agents/openai.yaml
-git diff --check
-```
-
-If `pnpm docs:list` tries to reconcile dependencies in a linked Codex worktree,
-stop and use `node scripts/docs-list.js`.
-
-For a PR before requesting maintainer approval, bind the watcher to the PR's
-full 40-character head SHA:
-
-```bash
-.agents/skills/autoreview/scripts/autoreview --mode branch --base origin/main
-node scripts/watch-pr-ci.mjs <pr> <head-sha> --repo openclaw/openclaw
-```
-
-Use hosted exact-head gates for CI workflow tuning. Do not burn local
-`pnpm test` on unrelated full-suite proof.
-
-Only after the maintainer explicitly asks you to prepare or land the PR, run the
-repo-native mutating wrapper:
-
-```bash
-scripts/pr review-init <pr>
-scripts/pr review-artifacts-init <pr>
-scripts/pr review-validate-artifacts <pr>
-OPENCLAW_TESTBOX=1 scripts/pr prepare-run <pr>
-```
-
-`prepare-run` can push a prepared commit to the PR branch. Only run
-`scripts/pr merge-run <pr>` after the maintainer has explicitly asked you to
-land the PR. Both commands mutate GitHub state.
+Read [Validation](references/validation.md#validation).
 
 ## Post-Land Monitoring
 
-After merge, watch at least one fresh main cycle and the adjacent repos:
-
-```bash
-gh run list -R openclaw/openclaw --limit 20 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
-for repo in openclaw/clawsweeper openclaw/clawhub openclaw/clownfish openclaw/openclaw-rtt openclaw/clawbench; do
-  gh run list -R "$repo" --limit 12 --json databaseId,status,conclusion,workflowName,event,headBranch,createdAt,updatedAt,url
-done
-curl -fsS https://clawsweeper.openclaw.ai/api/exact-review-queue | jq '.'
-```
-
-Report:
-
-- exact PR/commit landed;
-- expected registration reduction or added headroom;
-- CI run status and slowest/queued jobs;
-- queued job labels, runner assignment, and dependency state for any outlier;
-- Blacksmith Actions runner evidence separately from Testbox control-plane
-  health;
-- ClawSweeper queue pending, dispatching, leased, oldest pending age;
-- publication net drain/dead letters, state-writer queued/waiting, and state
-  append rows/bytes/oldest item;
-- any real failures that remain outside runner registration.
+Read [Post-Land Monitoring](references/validation.md#post-land-monitoring).

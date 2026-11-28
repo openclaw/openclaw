@@ -1,36 +1,27 @@
 // Legacy diagnostics migrations are currently folded into the tuning-knob purge,
 // except compatibility repairs that need value-aware behavior.
-import {
-  defineLegacyConfigMigration,
-  getRecord,
-  type LegacyConfigMigrationContext,
-  type LegacyConfigMigrationSpec,
-  type LegacyConfigRule,
-} from "../../../config/legacy.shared.js";
-
-const UNSUPPORTED_OTEL_GRPC_PROTOCOL_RULE: LegacyConfigRule = {
-  path: ["diagnostics", "otel", "protocol"],
-  message:
-    'diagnostics.otel.protocol = "grpc" is no longer accepted because gRPC export is not implemented. Run "openclaw doctor --fix", then configure an OTLP/HTTP collector before re-enabling telemetry.',
-  match: (value) => value === "grpc",
-};
+import { getRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
 
 function hasLegacyGrpcOtlpSignals(otel: Record<string, unknown>): boolean {
-  const logsExporter = typeof otel.logsExporter === "string" ? otel.logsExporter : undefined;
   return (
     otel.traces !== false ||
     otel.metrics !== false ||
-    (otel.logs === true && logsExporter !== "stdout")
+    (otel.logs === true && otel.logsExporter !== "stdout")
   );
 }
 
-/** Legacy config migration specs for diagnostics runtime config. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_DIAGNOSTICS: LegacyConfigMigrationSpec[] = [
-  defineLegacyConfigMigration({
+  {
     id: "diagnostics.otel.grpc-protocol",
-    describe: "Remove unsupported diagnostics.otel.protocol grpc configs",
-    legacyRules: [UNSUPPORTED_OTEL_GRPC_PROTOCOL_RULE],
-    apply: (raw, changes, context?: LegacyConfigMigrationContext) => {
+    legacyRules: [
+      {
+        path: ["diagnostics", "otel", "protocol"],
+        message:
+          'diagnostics.otel.protocol = "grpc" is no longer accepted because gRPC export is not implemented. Run "openclaw doctor --fix", then configure an OTLP/HTTP collector before re-enabling telemetry.',
+        match: (value) => value === "grpc",
+      },
+    ],
+    apply: (raw, changes, context) => {
       const otel = getRecord(getRecord(raw.diagnostics)?.otel);
       const resolvedRoot = getRecord(context?.resolvedRaw ?? raw);
       const resolvedOtel = getRecord(getRecord(resolvedRoot?.diagnostics)?.otel);
@@ -49,5 +40,5 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_DIAGNOSTICS: LegacyConfigMigration
         );
       }
     },
-  }),
+  },
 ];

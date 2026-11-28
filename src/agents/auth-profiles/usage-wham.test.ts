@@ -100,6 +100,21 @@ describe("classifyWhamUsage", () => {
     ).toEqual({ cooldownMs: 15_000, blockedUntil: now + 363_981_000 });
   });
 
+  it("uses the additional quota's reset when credits cover the longer included window", () => {
+    expect(
+      classifyWhamUsage(
+        {
+          rate_limit: exhaustedWeeklyWindow,
+          credits: purchasedCredits,
+          additional_rate_limits: [
+            { rate_limit: { primary_window: { used_percent: 100, reset_after_seconds: 60 } } },
+          ],
+        },
+        now,
+      ),
+    ).toMatchObject({ blockedUntil: now + 60_000 });
+  });
+
   it("does not let credits override a reached spend control", () => {
     expect(
       classifyWhamUsage(

@@ -23,38 +23,33 @@ describe("memory migration schemas", () => {
   });
 
   it("requires a non-empty unique item selection for apply", () => {
+    const request = {
+      idempotencyKey: "memory-import-1",
+      agentId: "research",
+      providerId: "codex",
+      planFingerprint: "a".repeat(64),
+    };
     expect(
       Value.Check(MigrationsMemoryApplyParamsSchema, {
-        idempotencyKey: "memory-import-1",
-        agentId: "research",
-        providerId: "codex",
-        planFingerprint: "a".repeat(64),
+        ...request,
         itemIds: ["memory:codex:MEMORY.md"],
       }),
     ).toBe(true);
     expect(
       Value.Check(MigrationsMemoryApplyParamsSchema, {
-        idempotencyKey: "memory-import-1",
-        agentId: "research",
-        providerId: "codex",
-        planFingerprint: "a".repeat(64),
+        ...request,
         itemIds: [],
       }),
     ).toBe(false);
     expect(
       Value.Check(MigrationsMemoryApplyParamsSchema, {
-        idempotencyKey: "memory-import-1",
-        agentId: "research",
-        providerId: "codex",
-        planFingerprint: "a".repeat(64),
+        ...request,
         itemIds: ["memory:codex:MEMORY.md", "memory:codex:MEMORY.md"],
       }),
     ).toBe(false);
     expect(
       Value.Check(MigrationsMemoryApplyParamsSchema, {
-        idempotencyKey: "memory-import-1",
-        agentId: "research",
-        providerId: "codex",
+        ...request,
         planFingerprint: "not-a-fingerprint",
         itemIds: ["memory:codex:MEMORY.md"],
       }),

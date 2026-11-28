@@ -2,13 +2,13 @@ run_plugins_marketplace_scenario() {
   echo "Testing marketplace install and update flows..."
   marketplace_root="$HOME/.claude/plugins/marketplaces/fixture-marketplace"
   mkdir -p "$HOME/.claude/plugins" "$marketplace_root/.claude-plugin"
-  write_fixture_plugin \
+  node scripts/e2e/lib/fixture.mjs plugin \
     "$marketplace_root/plugins/marketplace-shortcut" \
     "marketplace-shortcut" \
     "0.0.1" \
     "demo.marketplace.shortcut.v1" \
     "Marketplace Shortcut"
-  write_fixture_plugin \
+  node scripts/e2e/lib/fixture.mjs plugin \
     "$marketplace_root/plugins/marketplace-direct" \
     "marketplace-direct" \
     "0.0.1" \
@@ -30,7 +30,7 @@ run_plugins_marketplace_scenario() {
 
   node scripts/e2e/lib/plugins/assertions.mjs marketplace-records
 
-  write_fixture_plugin \
+  node scripts/e2e/lib/fixture.mjs plugin \
     "$marketplace_root/plugins/marketplace-shortcut" \
     "marketplace-shortcut" \
     "0.0.2" \

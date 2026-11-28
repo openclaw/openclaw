@@ -16,12 +16,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { applyModelOverrideToSessionEntry } from "./model-overrides.js";
 
-type ModelOverrideSelection = {
-  provider: string;
-  model: string;
-  isDefault?: boolean;
-};
-
+// Released synchronous SDK callers retain this fallback through 2026-12-31.
 function resolvePinnedAuthProfileProvider(params: {
   cfg: OpenClawConfig;
   agentDir: string;
@@ -40,9 +35,12 @@ type SessionAuthProfilePreservationParams = {
   cfg: OpenClawConfig;
   agentDir: string;
   entry: SessionEntry;
-  currentProvider: string;
+  /** Undefined when the session had no model before this selection. */
+  currentProvider?: string;
   provider: string;
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
+  /** Presence records completed preparation, including authoritative credential absence. */
+  recordedProvider?: { provider: string | undefined };
 };
 
 /** Checks whether a pinned session auth profile can authenticate the selected provider. */
@@ -69,11 +67,13 @@ export function shouldPreserveSessionAuthProfileOverride(
         resolveProviderIdForAuth(provider, lookupParams),
     );
   };
-  const recordedProvider = resolvePinnedAuthProfileProvider({
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    profileId: profileOverride,
-  });
+  const recordedProvider = params.recordedProvider
+    ? (params.recordedProvider.provider ?? params.cfg.auth?.profiles?.[profileOverride]?.provider)
+    : resolvePinnedAuthProfileProvider({
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+        profileId: profileOverride,
+      });
   if (recordedProvider) {
     return resolvesToTargetProvider(recordedProvider, true);
   }
@@ -99,33 +99,21 @@ export function shouldPreserveUnavailableSessionAuthProfileOverride(
 }
 
 /** Applies a user model selection without dropping a compatible pinned auth profile. */
-export function applyModelOverrideWithAuthProfileCompatibility(params: {
-  cfg: OpenClawConfig;
-  agentDir: string;
-  entry: SessionEntry;
-  currentProvider: string;
-  selection: ModelOverrideSelection;
-  profileOverride?: string;
-  profileOverrideSource?: "auto" | "user";
-  selectionSource?: "auto" | "user";
-  explicitDefaultSelection?: boolean;
-  markLiveSwitchPending?: boolean;
-  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
-}): { updated: boolean } {
+export function applyModelOverrideWithAuthProfileCompatibility(
+  params: Omit<SessionAuthProfilePreservationParams, "provider"> &
+    Omit<
+      Parameters<typeof applyModelOverrideToSessionEntry>[0],
+      "preserveAuthProfileOverride" | "selection"
+    > & { selection: { provider: string; model: string; isDefault?: boolean } },
+): { updated: boolean } {
   return applyModelOverrideToSessionEntry({
     entry: params.entry,
     selection: params.selection,
-    ...(params.profileOverride ? { profileOverride: params.profileOverride } : {}),
-    ...(params.profileOverrideSource
-      ? { profileOverrideSource: params.profileOverrideSource }
-      : {}),
-    ...(params.selectionSource ? { selectionSource: params.selectionSource } : {}),
-    ...(params.explicitDefaultSelection
-      ? { explicitDefaultSelection: params.explicitDefaultSelection }
-      : {}),
-    ...(params.markLiveSwitchPending !== undefined
-      ? { markLiveSwitchPending: params.markLiveSwitchPending }
-      : {}),
+    profileOverride: params.profileOverride,
+    profileOverrideSource: params.profileOverrideSource || undefined,
+    selectionSource: params.selectionSource || undefined,
+    explicitDefaultSelection: params.explicitDefaultSelection,
+    markLiveSwitchPending: params.markLiveSwitchPending,
     preserveAuthProfileOverride:
       !params.profileOverride &&
       shouldPreserveSessionAuthProfileOverride({
@@ -139,6 +127,7 @@ export function applyModelOverrideWithAuthProfileCompatibility(params: {
         entry: params.entry,
         currentProvider: params.currentProvider,
         provider: params.selection.provider,
+        recordedProvider: params.recordedProvider,
         ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
       }),
   });

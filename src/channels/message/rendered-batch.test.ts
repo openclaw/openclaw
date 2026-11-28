@@ -41,6 +41,15 @@ describe("createRenderedMessageBatchPlan", () => {
       expected: ["/tmp/first.png", "/tmp/second.png"],
     },
     {
+      name: "distinct HTTPS attachments across both media fields",
+      payload: {
+        text: "result",
+        mediaUrl: "https://example.test/one.png",
+        mediaUrls: ["https://example.test/two.png"],
+      },
+      expected: ["https://example.test/one.png", "https://example.test/two.png"],
+    },
+    {
       name: "intentional repeated attachments in the ordered media list",
       payload: { mediaUrl: "/tmp/image.png", mediaUrls: ["/tmp/image.png", "/tmp/image.png"] },
       expected: ["/tmp/image.png", "/tmp/image.png"],

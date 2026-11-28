@@ -3,78 +3,63 @@ import { LOCAL_BUILD_METADATA_DIST_PATHS } from "./local-build-metadata-paths.mt
 const FORBIDDEN_PACKED_PATH_RULES = [
   ...LOCAL_BUILD_METADATA_DIST_PATHS.map((prefix) => ({
     prefix,
-    describe: (packedPath: string) =>
-      `npm package must not include local build metadata "${packedPath}".`,
+    kind: "local build metadata",
   })),
   {
     prefix: "dist-runtime/",
-    describe: (packedPath: string) =>
-      `npm package must not include local runtime build output "${packedPath}".`,
+    kind: "local runtime build output",
   },
   {
     prefix: "dist/OpenClaw.app/",
-    describe: (packedPath: string) =>
-      `npm package must not include local application build output "${packedPath}".`,
+    kind: "local application build output",
   },
   {
     prefix: "docs/.generated/",
-    describe: (packedPath: string) =>
-      `npm package must not include generated docs artifact "${packedPath}".`,
+    kind: "generated docs artifact",
   },
   {
     prefix: "docs/channels/qa-channel.md",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA channel docs "${packedPath}".`,
+    kind: "private QA channel docs",
   },
   {
     prefix: "dist/extensions/qa-channel/",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA channel artifact "${packedPath}".`,
+    kind: "private QA channel artifact",
   },
   {
     prefix: "dist/extensions/qa-lab/",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA lab artifact "${packedPath}".`,
+    kind: "private QA lab artifact",
   },
   {
     prefix: "dist/plugin-sdk/extensions/qa-channel/",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA channel type artifact "${packedPath}".`,
+    kind: "private QA channel type artifact",
   },
   {
     prefix: "dist/plugin-sdk/extensions/qa-lab/",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA lab type artifact "${packedPath}".`,
+    kind: "private QA lab type artifact",
   },
   {
     prefix: "dist/plugin-sdk/qa-channel.",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA channel SDK artifact "${packedPath}".`,
+    kind: "private QA channel SDK artifact",
   },
   {
     prefix: "dist/plugin-sdk/qa-channel-protocol.",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA channel SDK artifact "${packedPath}".`,
+    kind: "private QA channel SDK artifact",
   },
   {
     prefix: "dist/plugin-sdk/qa-lab.",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA lab SDK artifact "${packedPath}".`,
+    kind: "private QA lab SDK artifact",
   },
   {
     prefix: "dist/plugin-sdk/qa-runtime.",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA runtime SDK artifact "${packedPath}".`,
+    kind: "private QA runtime SDK artifact",
   },
   {
     prefix: "dist/qa-runtime-",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA runtime chunk "${packedPath}".`,
+    kind: "private QA runtime chunk",
   },
   {
     prefix: "qa/",
-    describe: (packedPath: string) =>
-      `npm package must not include private QA suite artifact "${packedPath}".`,
+    kind: "private QA suite artifact",
   },
 ] as const;
 
@@ -85,7 +70,7 @@ export function collectForbiddenPackedPathErrors(paths: Iterable<string>): strin
       packedPath.startsWith(rule.prefix),
     );
     if (matchedRule) {
-      errors.push(matchedRule.describe(packedPath));
+      errors.push(`npm package must not include ${matchedRule.kind} "${packedPath}".`);
     }
   }
   return errors.toSorted((left, right) => left.localeCompare(right));

@@ -1,0 +1,111 @@
+import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
+import { expect, it, vi } from "vitest";
+import {
+  getDatabaseEngineSelection,
+  installDatabaseEngineSelection,
+  withDatabaseEngineSelection,
+} from "../infra/database-engine/context.js";
+import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
+import { postgresIndexOrderingMigration } from "../infra/database-engine/postgres-index-ordering.js";
+import { createSqliteFamilyEngines } from "../infra/database-engine/selection-fixture.test-support.js";
+import { agentEngineSchema } from "./openclaw-agent-db-engine.js";
+import { stateEngineInput } from "./openclaw-state-db-engine-input.js";
+import { isStatePostgres, stateEngineSchema } from "./openclaw-state-db-engine.js";
+
+const postgresSqlReads = vi.hoisted(() => ({ count: 0 }));
+
+vi.mock("./postgres-schema.generated/agent-runtime.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./postgres-schema.generated/agent-runtime.js")>();
+  return {
+    ...actual,
+    agentPostgresRuntime: {
+      get sql() {
+        postgresSqlReads.count++;
+        return actual.agentPostgresRuntime.sql;
+      },
+    },
+  };
+});
+
+vi.mock("../infra/database-engine/postgres-index-ordering.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../infra/database-engine/postgres-index-ordering.js")>();
+  return {
+    ...actual,
+    postgresIndexOrderingMigration: vi.fn(actual.postgresIndexOrderingMigration),
+  };
+});
+
+it("does not derive PostgreSQL migrations for SQLite startup and retains the requested plan", () => {
+  expect(vi.mocked(postgresIndexOrderingMigration).mock.calls.length).toBe(0);
+  expect(postgresSqlReads.count).toBe(0);
+  for (const [index, schema] of [stateEngineSchema, agentEngineSchema].entries()) {
+    const migrations = schema.postgresMigrations;
+    expect(migrations?.at(-1)?.version).toBe(schema.version);
+    expect(postgresIndexOrderingMigration).toHaveBeenCalledTimes((index + 1) * 2);
+    expect(schema.postgresMigrations).toBe(migrations);
+    expect(postgresIndexOrderingMigration).toHaveBeenCalledTimes((index + 1) * 2);
+  }
+  expect(postgresSqlReads.count).toBe(1);
+});
+
+it("keeps the materialized PostgreSQL schema writable for Doctor rollback", () => {
+  for (const schema of [stateEngineSchema, agentEngineSchema]) {
+    const installed = { ...schema };
+    try {
+      schema.postgresMigrations = [];
+      Object.assign(schema, { postgres: "SELECT 1;" });
+      expect(schema.postgresMigrations).toEqual([]);
+      expect(schema.postgres).toBe("SELECT 1;");
+    } finally {
+      Object.assign(schema, installed);
+    }
+  }
+});
+
+it("preserves explicit backend selection and the test-only state connection fallback", () => {
+  const key = "openclaw.test.state.connection";
+  const previousConnection = getEnvironmentData(key);
+  const previousSelection = getDatabaseEngineSelection();
+  resetDatabaseEngineSelectionForTest();
+  try {
+    vi.stubEnv("NODE_ENV", "test");
+    setEnvironmentData(key, "postgres://fixture.invalid/fallback");
+    expect(stateEngineInput()).toEqual({
+      connection: "postgres://fixture.invalid/fallback",
+      schemaPrefix: "openclaw_test",
+    });
+    expect(isStatePostgres()).toBe(true);
+    withDatabaseEngineSelection({ effectiveEngines: createSqliteFamilyEngines() }, () => {
+      expect(stateEngineInput()).toBeUndefined();
+      expect(isStatePostgres()).toBe(false);
+    });
+    const postgres = {
+      connection: "postgres://fixture.invalid/selected",
+      schemaPrefix: "selected",
+    };
+    withDatabaseEngineSelection(
+      {
+        effectiveEngines: createSqliteFamilyEngines({ state: "postgres" }),
+        postgres,
+      },
+      () => {
+        expect(stateEngineInput()).toBe(postgres);
+        expect(isStatePostgres()).toBe(true);
+      },
+    );
+    vi.stubEnv("NODE_ENV", "production");
+    expect(stateEngineInput()).toBeUndefined();
+    vi.stubEnv("NODE_ENV", "test");
+    setEnvironmentData(key, 42);
+    expect(stateEngineInput()).toBeUndefined();
+  } finally {
+    setEnvironmentData(key, previousConnection);
+    resetDatabaseEngineSelectionForTest();
+    if (previousSelection) {
+      installDatabaseEngineSelection(previousSelection);
+    }
+    vi.unstubAllEnvs();
+  }
+});

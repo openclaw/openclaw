@@ -1,7 +1,12 @@
+import { afterEach, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   createChannelIngressMonitor,
   type CreateChannelIngressMonitorOptions,
 } from "./ingress-monitor.js";
+import { createChannelIngressQueue, type ChannelIngressQueue } from "./ingress-queue.js";
 
 export type RawEvent = { id: string; lane: string; text: string };
 export type StoredEvent = { version: 1; rawEvent: string };
@@ -15,7 +20,10 @@ export function createMonitor(
   activityOrMonitorOptions?:
     | MonitorOptions["onActivityChange"]
     | (Partial<Omit<MonitorOptions, "queue" | "deliver" | "payload" | "drain">> &
-        Pick<NonNullable<MonitorOptions["drain"]>, "retryPolicy" | "deferredLaneOccupancy">),
+        Pick<
+          NonNullable<MonitorOptions["drain"]>,
+          "retryPolicy" | "deferredLaneOccupancy" | "deriveLaneKey"
+        >),
   onError?: (error: unknown) => void,
   abortSignal?: AbortSignal,
   pollIntervalMs = 10,
@@ -25,7 +33,8 @@ export function createMonitor(
     typeof activityOrMonitorOptions === "function" ? activityOrMonitorOptions : undefined;
   const monitorOptions =
     typeof activityOrMonitorOptions === "object" ? activityOrMonitorOptions : {};
-  const { inspect, retryPolicy, deferredLaneOccupancy, ...baseMonitorOptions } = monitorOptions;
+  const { inspect, retryPolicy, deferredLaneOccupancy, deriveLaneKey, ...baseMonitorOptions } =
+    monitorOptions;
   return createChannelIngressMonitor<RawEvent, string, StoredEvent>({
     queue,
     inspect: inspect ?? ((raw) => ({ eventId: raw.id, laneKey: `lane:${raw.lane}` })),
@@ -42,6 +51,7 @@ export function createMonitor(
     ...baseMonitorOptions,
     drain: {
       adoptionStallTimeoutMs: 5_000,
+      deriveLaneKey,
       retryPolicy: retryPolicy ?? { baseMs: retryBaseMs, maxMs: retryBaseMs },
       ...(deferredLaneOccupancy ? { deferredLaneOccupancy } : {}),
       resolveNonRetryableFailure: (error) =>
@@ -53,4 +63,27 @@ export function createMonitor(
     ...(onError ? { onError } : {}),
     ...(abortSignal ? { abortSignal } : {}),
   });
+}
+
+export function useIngressMonitorQueueFixture() {
+  afterEach(() => {
+    resetGatewayWorkAdmission();
+    closeOpenClawStateDatabaseForTest();
+    vi.restoreAllMocks();
+  });
+
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  return async function withQueue<T>(
+    run: (queue: ChannelIngressQueue<StoredEvent>) => Promise<T>,
+  ): Promise<T> {
+    const stateDir = tempDirs.make("openclaw-ingress-monitor-");
+    try {
+      return await run(
+        createChannelIngressQueue<StoredEvent>({ channelId: "test", accountId: "a", stateDir }),
+      );
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+    }
+  };
 }

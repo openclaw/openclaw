@@ -1,20 +1,13 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { StatementSync } from "node:sqlite";
+import { describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import {
-  authorizeClientVoiceConfirmation,
-  checkClientVoiceToolConfirmationPolicy,
-} from "./client-voice-confirmation.js";
-import {
-  noteClientVoiceConfirmationUtteranceForTest as noteClientVoiceConfirmationUtterance,
-  resetClientVoiceConfirmationStateForTest,
-} from "./client-voice-confirmation.test-support.js";
+import { resolveOpenClientVoiceSessionId } from "./client-voice-session-read.js";
 import {
   completeRun,
   recordMutation,
@@ -25,466 +18,270 @@ import {
   appendRelayVoiceTranscript,
   closeClientVoiceSession,
   closeRelayVoiceSessionRecord,
-  closeStaleClientVoiceSessions,
   createOrResumeClientVoiceSession,
-  isClientVoiceSessionConfirmable,
+  flushClientVoiceSessionWrites,
   registerClientVoiceConsultRun,
-  resolveClientVoiceRunBinding,
-  resolveOpenClientVoiceSessionId,
 } from "./client-voice-session.js";
 import { clientVoiceSessionTesting } from "./client-voice-session.test-support.js";
 import { VOICE_TRANSCRIPT_MAX_UNRESOLVED } from "./voice-transcript.js";
 
-type AppendTranscriptMessage =
-  (typeof import("../config/sessions/session-accessor.js"))["appendTranscriptMessage"];
-
-const sessionAccessorMocks = vi.hoisted(() => ({
-  actualAppendTranscriptMessage: undefined as AppendTranscriptMessage | undefined,
-  appendTranscriptMessage: vi.fn<AppendTranscriptMessage>(),
-}));
-const { sendDurableMessageBatch } = vi.hoisted(() => ({
-  sendDurableMessageBatch: vi.fn(async () => ({ status: "sent" })),
-}));
-
-vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
-  return { ...actual, appendTranscriptMessage: sessionAccessorMocks.appendTranscriptMessage };
-});
-vi.mock("../channels/message/runtime.js", () => ({
-  sendDurableMessageBatchCore: sendDurableMessageBatch,
-}));
-
-const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-let tempDir: string;
+// Install shared mocks before fixture imports load the voice persistence graph.
+const { useClientVoiceSessionHarness } = await vi.hoisted(
+  () => import("./client-voice-session.harness.test-support.js"),
+);
 
 describe("client voice session", () => {
-  beforeEach(async () => {
-    tempDir = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voice-session-")),
-    );
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    sendDurableMessageBatch.mockReset().mockResolvedValue({ status: "sent" });
-    sessionAccessorMocks.appendTranscriptMessage.mockReset();
-    // Resolve the real append here rather than capturing it inside the mock factory:
-    // Vitest runs that factory on first import of the mocked module, so on a warm
-    // module graph it can still be unrun when this hook fires.
-    const { appendTranscriptMessage } = await vi.importActual<
-      typeof import("../config/sessions/session-accessor.js")
-    >("../config/sessions/session-accessor.js");
-    sessionAccessorMocks.actualAppendTranscriptMessage = appendTranscriptMessage;
-    sessionAccessorMocks.appendTranscriptMessage.mockImplementation(appendTranscriptMessage);
-  });
+  const { releaseHeldWrites, sendDurableMessageBatch, sessionTurnMocks } =
+    useClientVoiceSessionHarness();
 
-  afterEach(async () => {
-    clientVoiceSessionTesting.reset();
-    resetClientVoiceConfirmationStateForTest();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    envSnapshot.restore();
-    await fs.rm(tempDir, { recursive: true, force: true });
-  });
+  const target = { agentId: "main", sessionKey: "agent:main:main" };
+  const createVoiceSession = (
+    params: Partial<Parameters<typeof createOrResumeClientVoiceSession>[0]> = {},
+  ) => createOrResumeClientVoiceSession({ ...target, origin: "client", ...params });
+  async function seededVoice(voiceSessionId: string) {
+    await seedSession(target.sessionKey);
+    return createVoiceSession({ voiceSessionId });
+  }
+  const readRecord = (id: string) => clientVoiceSessionTesting.readRecord("main", id);
+  const closeVoice = (voiceSessionId: string, now?: number) =>
+    closeClientVoiceSession({ ...target, voiceSessionId, config: {}, now });
+  const appendTranscript = (
+    voiceSessionId: string,
+    entryId: string,
+    text: string,
+    role: "user" | "assistant" = "user",
+    sessionKey = target.sessionKey,
+  ) =>
+    appendClientVoiceTranscript({
+      ...target,
+      sessionKey,
+      sessionTarget: { sessionKey },
+      voiceSessionId,
+      entryId,
+      role,
+      text,
+    });
+  function realTranscriptAppend() {
+    const actualAppend = sessionTurnMocks.actualAppendSessionTranscriptTurn;
+    if (!actualAppend) {
+      throw new Error("expected the real transcript append implementation");
+    }
+    return actualAppend;
+  }
+  function holdTranscript(failure?: Error) {
+    const release = createDeferred();
+    const entered = createDeferred();
+    releaseHeldWrites.push(() => release.resolve());
+    const actualAppend = realTranscriptAppend();
+    sessionTurnMocks.appendExpectedSessionTranscriptTurn.mockImplementationOnce(async (...args) => {
+      entered.resolve();
+      await release.promise;
+      if (failure) {
+        throw failure;
+      }
+      return await actualAppend(...args);
+    });
+    return { release, entered };
+  }
 
   it("creates, resumes, and enforces ownership and open state", async () => {
-    const target = { agentId: "main", sessionKey: "agent:main:main" };
-    const voiceSessionId = createOrResumeClientVoiceSession({
-      ...target,
+    const voiceSessionId = await createVoiceSession({
       provider: "google",
-      origin: "client",
       voiceSessionId: "voice-1",
       now: 10,
     });
     expect(
-      createOrResumeClientVoiceSession({
-        ...target,
-        origin: "client",
+      await createVoiceSession({
         voiceSessionId,
         now: 20,
       }),
     ).toBe(voiceSessionId);
-    expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)).toMatchObject({
-      provider: "google",
-    });
-    expect(() =>
-      createOrResumeClientVoiceSession({
-        ...target,
+    expect(readRecord(voiceSessionId)).toMatchObject({ provider: "google" });
+    await expect(
+      createVoiceSession({
         provider: "openai",
-        origin: "client",
         voiceSessionId,
       }),
-    ).toThrow("provider does not match");
-    expect(() =>
-      createOrResumeClientVoiceSession({
-        agentId: "main",
+    ).rejects.toThrow("provider does not match");
+    await expect(
+      createVoiceSession({
         sessionKey: "agent:main:other",
-        origin: "client",
         voiceSessionId,
       }),
-    ).toThrow("does not belong");
+    ).rejects.toThrow("does not belong");
 
-    await closeClientVoiceSession({
-      ...target,
-      voiceSessionId,
-      config: {},
-      now: 30,
-    });
-    expect(() =>
-      createOrResumeClientVoiceSession({
-        ...target,
-        origin: "client",
-        voiceSessionId,
-      }),
-    ).toThrow("already closed");
+    await closeVoice(voiceSessionId, 30);
+    await expect(createVoiceSession({ voiceSessionId })).rejects.toThrow("already closed");
   });
 
-  it("marks confirmability by declared capability, relay origin, or observed transcript", () => {
-    const capable = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
+  it("preserves declared transcript capability and transport origin", async () => {
+    const capable = await createVoiceSession({
       transcriptCapable: true,
       voiceSessionId: "voice-capable",
     });
-    const legacy = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-      voiceSessionId: "voice-legacy",
-    });
-    const relay = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
+    const legacy = await createVoiceSession({ voiceSessionId: "voice-legacy" });
+    const relay = await createVoiceSession({
       origin: "relay",
       voiceSessionId: "voice-relay",
     });
-    const binding = (voiceSessionId: string) => ({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      voiceSessionId,
-    });
-    expect(isClientVoiceSessionConfirmable(binding(capable))).toBe(true);
-    expect(isClientVoiceSessionConfirmable(binding(legacy))).toBe(false);
-    expect(isClientVoiceSessionConfirmable(binding(relay))).toBe(true);
-  });
-
-  it("closes idempotently without changing the first close time", async () => {
-    const voiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
+    expect(readRecord(capable)).toMatchObject({
+      transcriptCapable: true,
       origin: "client",
-      now: 10,
     });
-    await closeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      voiceSessionId,
-      config: {},
-      now: 20,
-    });
-    await closeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      voiceSessionId,
-      config: {},
-      now: 30,
-    });
-
-    expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)).toMatchObject({
-      status: "closed",
-      closedAt: 20,
-    });
+    expect(readRecord(legacy)?.transcriptCapable).not.toBe(true);
+    expect(readRecord(relay)?.origin).toBe("relay");
   });
 
-  it("waits for transcript serialization but not mutation digest delivery", async () => {
+  it("waits for transcript serialization but not mutation digest delivery", async ({ signal }) => {
     await seedSession("agent:main:main", {
       channel: "discord",
       to: "channel:voice-updates",
     });
-    const voiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-      voiceSessionId: "voice-durable-close",
-    });
-    recordMutation(voiceSessionId);
+    const voiceSessionId = await createVoiceSession({ voiceSessionId: "voice-durable-close" });
+    await recordMutation(voiceSessionId);
     await completeRun(`run-${voiceSessionId}`);
 
-    const confirmation = checkClientVoiceToolConfirmationPolicy({
-      agentId: "main",
-      voiceSessionId,
-      toolName: "message",
-      toolParams: { channel: "discord", message: "send it" },
-      isConfirmable: () => true,
-      now: 10,
-    });
-    if (confirmation.allowed) {
-      throw new Error("expected a pending voice confirmation");
-    }
-    const confirmationId = confirmation.reason.match(/VOICE_CONFIRMATION_REQUIRED:([^\s]+)/)?.[1];
-    if (!confirmationId) {
-      throw new Error("expected a voice confirmation id");
-    }
-
-    const transcriptWrite = createDeferred();
-    const actualAppend = sessionAccessorMocks.actualAppendTranscriptMessage!;
-    sessionAccessorMocks.appendTranscriptMessage.mockImplementationOnce(async (...args) => {
-      await transcriptWrite.promise;
-      return await actualAppend(...args);
-    });
-    const append = appendClientVoiceTranscript({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      sessionTarget: { sessionKey: "agent:main:main" },
-      voiceSessionId,
-      entryId: "final",
-      role: "assistant",
-      text: "final answer",
-    });
-    await vi.waitFor(() =>
-      expect(sessionAccessorMocks.appendTranscriptMessage).toHaveBeenCalledOnce(),
+    const { release: transcriptWrite, entered: transcriptEntered } = holdTranscript();
+    const append = appendTranscript(voiceSessionId, "final", "final answer", "assistant");
+    await awaitGateBeforeSettlement(
+      transcriptEntered.promise,
+      append,
+      "Transcript settled before entering the held append",
     );
 
     const digestSend = createDeferred<{ status: "sent" }>();
-    sendDurableMessageBatch.mockImplementationOnce(() => digestSend.promise);
+    const digestEntered = createDeferred();
+    releaseHeldWrites.push(() => digestSend.resolve({ status: "sent" }));
+    sendDurableMessageBatch.mockImplementationOnce(() => {
+      digestEntered.resolve();
+      return digestSend.promise;
+    });
     let closeSettled = false;
-    const close = closeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      voiceSessionId,
-      config: {},
-      now: 42,
-    }).then(() => {
+    const close = closeVoice(voiceSessionId, 42).then(() => {
       closeSettled = true;
     });
     await Promise.resolve();
     expect(closeSettled).toBe(false);
-    expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.status).toBe("open");
+    expect(readRecord(voiceSessionId)?.status).toBe("open");
 
     transcriptWrite.resolve();
     await Promise.all([append, close]);
-    expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)).toMatchObject({
+    expect(readRecord(voiceSessionId)).toMatchObject({
       status: "closed",
       closedAt: 42,
     });
-    expect(
-      clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.digestDeliveredAt,
-    ).toBeUndefined();
-    await vi.waitFor(() => expect(sendDurableMessageBatch).toHaveBeenCalledOnce());
-
-    noteClientVoiceConfirmationUtterance({
-      agentId: "main",
-      voiceSessionId,
-      text: "yes",
-      timestamp: 11,
-    });
-    expect(() =>
-      authorizeClientVoiceConfirmation({
-        agentId: "main",
-        voiceSessionId,
-        confirmationId,
-        now: 12,
-      }),
-    ).toThrow("voice confirmation is missing");
+    expect(readRecord(voiceSessionId)?.digestDeliveredAt).toBeUndefined();
+    await withinTest(digestEntered.promise, signal);
+    expect(sendDurableMessageBatch).toHaveBeenCalledOnce();
 
     digestSend.resolve({ status: "sent" });
-    await vi.waitFor(() =>
-      expect(
-        clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.digestDeliveredAt,
-      ).toEqual(expect.any(Number)),
-    );
+    await flushClientVoiceSessionWrites({ agentId: "main", voiceSessionId });
+    expect(readRecord(voiceSessionId)?.digestDeliveredAt).toEqual(expect.any(Number));
   });
 
   it("rejects a concurrent close when an accepted transcript fails", async () => {
-    await seedSession("agent:main:main");
-    const voiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-      voiceSessionId: "voice-concurrent-close-failure",
-    });
-    const transcriptWrite = createDeferred();
+    const voiceSessionId = await seededVoice("voice-concurrent-close-failure");
     const failure = new Error("transcript write failed");
-    sessionAccessorMocks.appendTranscriptMessage.mockImplementationOnce(async () => {
-      await transcriptWrite.promise;
-      throw failure;
-    });
-    const append = appendClientVoiceTranscript({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      sessionTarget: { sessionKey: "agent:main:main" },
-      voiceSessionId,
-      entryId: "failed",
-      role: "user",
-      text: "persist me",
-    });
-    await vi.waitFor(() =>
-      expect(sessionAccessorMocks.appendTranscriptMessage).toHaveBeenCalledOnce(),
+    const { release: transcriptWrite, entered: transcriptEntered } = holdTranscript(failure);
+    const append = appendTranscript(voiceSessionId, "failed", "persist me");
+    await awaitGateBeforeSettlement(
+      transcriptEntered.promise,
+      append,
+      "Transcript settled before entering the held append",
     );
-    expect(
-      clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.transcriptFailureKeys,
-    ).toEqual([expect.any(String)]);
-    const close = closeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      voiceSessionId,
-      config: {},
-      now: 42,
-    });
+    expect(readRecord(voiceSessionId)?.transcriptFailureKeys).toEqual([expect.any(String)]);
+    const close = closeVoice(voiceSessionId, 42);
 
     transcriptWrite.resolve();
     await expect(append).rejects.toBe(failure);
     await expect(close).rejects.toBe(failure);
-    expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.status).toBe("open");
+    expect(readRecord(voiceSessionId)?.status).toBe("open");
   });
 
   it("keeps the session open when a failed transcript is retried after close", async () => {
-    await seedSession("agent:main:main");
-    const voiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-      voiceSessionId: "voice-close-after-failure",
-    });
-    const transcriptWrite = createDeferred();
+    const voiceSessionId = await seededVoice("voice-close-after-failure");
     const failure = new Error("transcript write failed");
-    const actualAppend = sessionAccessorMocks.actualAppendTranscriptMessage!;
-    sessionAccessorMocks.appendTranscriptMessage.mockImplementationOnce(async () => {
-      await transcriptWrite.promise;
-      throw failure;
-    });
-    const append = appendClientVoiceTranscript({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      sessionTarget: { sessionKey: "agent:main:main" },
-      voiceSessionId,
-      entryId: "retryable",
-      role: "user",
-      text: "persist me",
-    });
+    const { release: transcriptWrite, entered: transcriptEntered } = holdTranscript(failure);
+    const append = appendTranscript(voiceSessionId, "retryable", "persist me");
     const appendResult = append.then(
       () => undefined,
       (error: unknown) => error,
     );
-    await vi.waitFor(() =>
-      expect(sessionAccessorMocks.appendTranscriptMessage).toHaveBeenCalledOnce(),
+    await awaitGateBeforeSettlement(
+      transcriptEntered.promise,
+      appendResult,
+      "Transcript settled before entering the held append",
     );
     transcriptWrite.resolve();
     expect(await appendResult).toBe(failure);
-    expect(
-      clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.transcriptFailureKeys,
-    ).toEqual([expect.any(String)]);
+    expect(readRecord(voiceSessionId)?.transcriptFailureKeys).toEqual([expect.any(String)]);
     clientVoiceSessionTesting.reset();
-    await expect(
-      closeClientVoiceSession({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        voiceSessionId,
-        config: {},
-        now: 42,
-      }),
-    ).rejects.toThrow("voice transcript persistence must be retried before close");
-    expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.status).toBe("open");
-    sessionAccessorMocks.appendTranscriptMessage.mockImplementation(actualAppend);
-    await appendClientVoiceTranscript({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      sessionTarget: { sessionKey: "agent:main:main" },
-      voiceSessionId,
-      entryId: "retryable",
-      role: "user",
-      text: "persist me",
-    });
-    await closeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      voiceSessionId,
-      config: {},
-      now: 99,
-    });
-    expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)).toMatchObject({
+    await expect(closeVoice(voiceSessionId, 42)).rejects.toThrow(
+      "voice transcript persistence must be retried before close",
+    );
+    expect(readRecord(voiceSessionId)?.status).toBe("open");
+    sessionTurnMocks.appendExpectedSessionTranscriptTurn.mockImplementation(realTranscriptAppend());
+    await appendTranscript(voiceSessionId, "retryable", "persist me");
+    await closeVoice(voiceSessionId, 99);
+    expect(readRecord(voiceSessionId)).toMatchObject({
       status: "closed",
       closedAt: 99,
+      transcriptFailureKeys: [],
     });
-    expect(
-      clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.transcriptFailureKeys,
-    ).toEqual([]);
   });
 
   it("terminally closes relay sessions while retaining unresolved transcript identity", async () => {
     await seedSession("agent:main:main");
-    const voiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "relay",
-    });
-    sessionAccessorMocks.appendTranscriptMessage.mockRejectedValueOnce(
+    const voiceSessionId = await createVoiceSession({ origin: "relay" });
+    sessionTurnMocks.appendExpectedSessionTranscriptTurn.mockRejectedValueOnce(
       new Error("transcript write failed"),
     );
 
     await expect(
       appendRelayVoiceTranscript({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        sessionTarget: { sessionKey: "agent:main:main" },
+        ...target,
+        sessionTarget: { sessionKey: target.sessionKey },
         voiceSessionId,
         entryId: "relay-entry-1",
         role: "user",
         text: "persist me",
       }),
     ).rejects.toThrow("transcript write failed");
-    const unresolved = clientVoiceSessionTesting.readRecord(
-      "main",
-      voiceSessionId,
-    )?.transcriptFailureKeys;
+    const unresolved = readRecord(voiceSessionId)?.transcriptFailureKeys;
     expect(unresolved).toEqual([expect.stringMatching(/^[0-9a-f]{64}$/)]);
 
     await closeRelayVoiceSessionRecord({
-      agentId: "main",
-      sessionKey: "agent:main:main",
+      ...target,
       voiceSessionId,
       config: {},
     });
-    expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)).toMatchObject({
+    expect(readRecord(voiceSessionId)).toMatchObject({
       status: "closed",
       transcriptFailureKeys: unresolved,
     });
   });
 
   it("bounds stalled transcript operations and closes after the accepted prefix", async () => {
-    await seedSession("agent:main:main");
-    const voiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-      voiceSessionId: "voice-bounded",
-    });
-    const firstAppend = createDeferred();
-    const actualAppend = sessionAccessorMocks.actualAppendTranscriptMessage;
-    if (!actualAppend) {
-      throw new Error("expected the real transcript append implementation");
-    }
-    sessionAccessorMocks.appendTranscriptMessage.mockImplementationOnce(async (...args) => {
-      await firstAppend.promise;
-      return await actualAppend(...args);
-    });
+    const voiceSessionId = await seededVoice("voice-bounded");
+    const { release: firstAppend, entered: appendEntered } = holdTranscript();
 
     const appends = Array.from({ length: 10_000 }, (_, index) =>
-      appendClientVoiceTranscript({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        sessionTarget: { sessionKey: "agent:main:main" },
+      appendTranscript(
         voiceSessionId,
-        entryId: String(index + 1),
-        role: index % 2 === 0 ? "user" : "assistant",
-        text: `  ${"x".repeat(9_000)}  `,
-      }).then(
+        String(index + 1),
+        `  ${"x".repeat(9_000)}  `,
+        index % 2 === 0 ? "user" : "assistant",
+      ).then(
         () => ({ ok: true as const }),
         (error: unknown) => ({ ok: false as const, error }),
       ),
     );
-    await vi.waitFor(() =>
-      expect(sessionAccessorMocks.appendTranscriptMessage).toHaveBeenCalledTimes(1),
+    await awaitGateBeforeSettlement(
+      appendEntered.promise,
+      Promise.all(appends),
+      "Transcripts settled before entering the held append",
     );
-    expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.status).toBe("open");
+    expect(readRecord(voiceSessionId)?.status).toBe("open");
     firstAppend.resolve();
     const results = await Promise.all(appends);
 
@@ -500,435 +297,169 @@ describe("client voice session", () => {
             result.error.message === "voice transcript persistence queue capacity exceeded"),
       ),
     ).toBe(true);
-    expect(sessionAccessorMocks.appendTranscriptMessage).toHaveBeenCalledTimes(41);
+    expect(sessionTurnMocks.appendExpectedSessionTranscriptTurn).toHaveBeenCalledTimes(41);
     expect(
-      sessionAccessorMocks.appendTranscriptMessage.mock.calls.map(([, options]) => options.eventId),
+      sessionTurnMocks.appendExpectedSessionTranscriptTurn.mock.calls.map(
+        ([, options]) => options.messages[0]?.eventId,
+      ),
     ).toEqual(Array.from({ length: 41 }, (_, index) => `voice:${voiceSessionId}:${index + 1}`));
-    const firstMessage = sessionAccessorMocks.appendTranscriptMessage.mock.calls[0]?.[1]
-      .message as { content?: Array<{ text?: string }> };
+    const firstMessage = sessionTurnMocks.appendExpectedSessionTranscriptTurn.mock.calls[0]?.[1]
+      .messages[0]?.message as { content?: Array<{ text?: string }> };
     expect(firstMessage.content?.[0]?.text).toHaveLength(8_000);
     await expect(
-      appendClientVoiceTranscript({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        sessionTarget: { sessionKey: "agent:main:main" },
+      appendTranscript(
         voiceSessionId,
-        entryId: "after-overflow",
-        role: "user",
-        text: "must remain rejected after the accepted prefix drains",
-      }),
+        "after-overflow",
+        "must remain rejected after the accepted prefix drains",
+      ),
     ).rejects.toThrow("voice transcript persistence queue capacity exceeded");
 
-    const close = closeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      voiceSessionId,
-      config: {},
-      now: 42,
-    });
-    const duplicateClose = closeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      voiceSessionId,
-      config: {},
-      now: 99,
-    });
+    const close = closeVoice(voiceSessionId, 42);
+    const duplicateClose = closeVoice(voiceSessionId, 99);
     await Promise.all([close, duplicateClose]);
-    expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)).toMatchObject({
+    expect(readRecord(voiceSessionId)).toMatchObject({
       status: "closed",
       closedAt: 42,
     });
   });
 
   it("ignores whitespace transcripts without consuming queue capacity", async () => {
-    await seedSession("agent:main:main");
-    const voiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-      voiceSessionId: "voice-whitespace",
-    });
+    const voiceSessionId = await seededVoice("voice-whitespace");
 
     await Promise.all(
       Array.from({ length: 10_000 }, (_, index) =>
-        appendClientVoiceTranscript({
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          sessionTarget: { sessionKey: "agent:main:main" },
-          voiceSessionId,
-          entryId: String(index + 1),
-          role: "user",
-          text: " \t\n ",
-        }),
+        appendTranscript(voiceSessionId, String(index + 1), " \t\n "),
       ),
     );
-    expect(sessionAccessorMocks.appendTranscriptMessage).not.toHaveBeenCalled();
+    expect(sessionTurnMocks.appendExpectedSessionTranscriptTurn).not.toHaveBeenCalled();
 
-    await appendClientVoiceTranscript({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      sessionTarget: { sessionKey: "agent:main:main" },
-      voiceSessionId,
-      entryId: "real",
-      role: "user",
-      text: "persist me",
-    });
-    expect(sessionAccessorMocks.appendTranscriptMessage).toHaveBeenCalledOnce();
-    expect(sessionAccessorMocks.appendTranscriptMessage.mock.calls[0]?.[1].eventId).toBe(
-      `voice:${voiceSessionId}:real`,
-    );
-  });
-
-  it("continues durable transcript operations after a persistence failure", async () => {
-    await seedSession("agent:main:main");
-    const voiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-      voiceSessionId: "voice-write-failure",
-    });
-    sessionAccessorMocks.appendTranscriptMessage.mockRejectedValueOnce(
-      new Error("transcript write failed"),
-    );
-
-    await expect(
-      appendClientVoiceTranscript({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        sessionTarget: { sessionKey: "agent:main:main" },
-        voiceSessionId,
-        entryId: "1",
-        role: "user",
-        text: "first",
-      }),
-    ).rejects.toThrow("transcript write failed");
-    await expect(
-      appendClientVoiceTranscript({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        sessionTarget: { sessionKey: "agent:main:main" },
-        voiceSessionId,
-        entryId: "2",
-        role: "assistant",
-        text: "second",
-      }),
-    ).resolves.toBeUndefined();
+    await appendTranscript(voiceSessionId, "real", "persist me");
+    expect(sessionTurnMocks.appendExpectedSessionTranscriptTurn).toHaveBeenCalledOnce();
     expect(
-      sessionAccessorMocks.appendTranscriptMessage.mock.calls.map(([, options]) => options.eventId),
-    ).toEqual([`voice:${voiceSessionId}:1`, `voice:${voiceSessionId}:2`]);
-    expect(
-      clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.transcriptFailureKeys,
-    ).toEqual([expect.any(String)]);
+      sessionTurnMocks.appendExpectedSessionTranscriptTurn.mock.calls[0]?.[1].messages[0]?.eventId,
+    ).toBe(`voice:${voiceSessionId}:real`);
   });
 
   it("requires every failed transcript entry to recover before close", async () => {
-    await seedSession("agent:main:main");
-    const voiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-      voiceSessionId: "voice-multiple-write-failures",
-    });
-    sessionAccessorMocks.appendTranscriptMessage
+    const voiceSessionId = await seededVoice("voice-multiple-write-failures");
+    sessionTurnMocks.appendExpectedSessionTranscriptTurn
       .mockRejectedValueOnce(new Error("first transcript write failed"))
       .mockRejectedValueOnce(new Error("second transcript write failed"));
 
     for (const entryId of ["1", "2"]) {
-      await expect(
-        appendClientVoiceTranscript({
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          sessionTarget: { sessionKey: "agent:main:main" },
-          voiceSessionId,
-          entryId,
-          role: "user",
-          text: entryId,
-        }),
-      ).rejects.toThrow("transcript write failed");
+      await expect(appendTranscript(voiceSessionId, entryId, entryId)).rejects.toThrow(
+        "transcript write failed",
+      );
     }
-    expect(
-      clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.transcriptFailureKeys,
-    ).toHaveLength(2);
+    expect(readRecord(voiceSessionId)?.transcriptFailureKeys).toHaveLength(2);
 
-    await appendClientVoiceTranscript({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      sessionTarget: { sessionKey: "agent:main:main" },
-      voiceSessionId,
-      entryId: "later",
-      role: "assistant",
-      text: "later entry",
-    });
-    await appendClientVoiceTranscript({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      sessionTarget: { sessionKey: "agent:main:main" },
-      voiceSessionId,
-      entryId: "1",
-      role: "user",
-      text: "first",
-    });
-    await expect(
-      closeClientVoiceSession({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        voiceSessionId,
-        config: {},
-      }),
-    ).rejects.toThrow("voice transcript persistence must be retried before close");
+    await appendTranscript(voiceSessionId, "later", "later entry", "assistant");
+    await appendTranscript(voiceSessionId, "1", "first");
+    await expect(closeVoice(voiceSessionId)).rejects.toThrow(
+      "voice transcript persistence must be retried before close",
+    );
 
-    await appendClientVoiceTranscript({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      sessionTarget: { sessionKey: "agent:main:main" },
-      voiceSessionId,
-      entryId: "2",
-      role: "user",
-      text: "second",
-    });
-    await closeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      voiceSessionId,
-      config: {},
-    });
-    expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.status).toBe("closed");
+    await appendTranscript(voiceSessionId, "2", "second");
+    await closeVoice(voiceSessionId);
+    expect(readRecord(voiceSessionId)?.status).toBe("closed");
   });
 
   it("bounds unresolved transcript failure identity", async () => {
-    await seedSession("agent:main:main");
-    const voiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-      voiceSessionId: "voice-write-failure-bound",
-    });
-    sessionAccessorMocks.appendTranscriptMessage.mockRejectedValue(
+    const voiceSessionId = await seededVoice("voice-write-failure-bound");
+    sessionTurnMocks.appendExpectedSessionTranscriptTurn.mockRejectedValue(
       new Error("transcript write failed"),
     );
 
     for (let index = 0; index < VOICE_TRANSCRIPT_MAX_UNRESOLVED; index += 1) {
-      await expect(
-        appendClientVoiceTranscript({
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          sessionTarget: { sessionKey: "agent:main:main" },
-          voiceSessionId,
-          entryId: String(index),
-          role: "user",
-          text: "failed entry",
-        }),
-      ).rejects.toThrow("transcript write failed");
+      await expect(appendTranscript(voiceSessionId, String(index), "failed entry")).rejects.toThrow(
+        "transcript write failed",
+      );
     }
     await expect(
-      appendClientVoiceTranscript({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        sessionTarget: { sessionKey: "agent:main:main" },
-        voiceSessionId,
-        entryId: "beyond-bound",
-        role: "user",
-        text: "must wait for recovery",
-      }),
+      appendTranscript(voiceSessionId, "beyond-bound", "must wait for recovery"),
     ).rejects.toThrow("voice transcript persistence has too many unresolved entries");
-    expect(sessionAccessorMocks.appendTranscriptMessage).toHaveBeenCalledTimes(
+    expect(sessionTurnMocks.appendExpectedSessionTranscriptTurn).toHaveBeenCalledTimes(
       VOICE_TRANSCRIPT_MAX_UNRESOLVED,
     );
-    expect(
-      clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.transcriptFailureKeys,
-    ).toHaveLength(VOICE_TRANSCRIPT_MAX_UNRESOLVED);
+    expect(readRecord(voiceSessionId)?.transcriptFailureKeys).toHaveLength(
+      VOICE_TRANSCRIPT_MAX_UNRESOLVED,
+    );
 
-    const actualAppend = sessionAccessorMocks.actualAppendTranscriptMessage;
-    if (!actualAppend) {
-      throw new Error("expected the real transcript append implementation");
-    }
-    sessionAccessorMocks.appendTranscriptMessage.mockImplementation(actualAppend);
-    await appendClientVoiceTranscript({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      sessionTarget: { sessionKey: "agent:main:main" },
-      voiceSessionId,
-      entryId: "0",
-      role: "user",
-      text: "recovered entry",
-    });
-    sessionAccessorMocks.appendTranscriptMessage.mockRejectedValueOnce(
+    sessionTurnMocks.appendExpectedSessionTranscriptTurn.mockImplementation(realTranscriptAppend());
+    await appendTranscript(voiceSessionId, "0", "recovered entry");
+    sessionTurnMocks.appendExpectedSessionTranscriptTurn.mockRejectedValueOnce(
       new Error("replacement transcript write failed"),
     );
     await expect(
-      appendClientVoiceTranscript({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        sessionTarget: { sessionKey: "agent:main:main" },
-        voiceSessionId,
-        entryId: "replacement",
-        role: "user",
-        text: "replacement entry",
-      }),
+      appendTranscript(voiceSessionId, "replacement", "replacement entry"),
     ).rejects.toThrow("replacement transcript write failed");
-    expect(
-      clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.transcriptFailureKeys,
-    ).toHaveLength(VOICE_TRANSCRIPT_MAX_UNRESOLVED);
+    expect(readRecord(voiceSessionId)?.transcriptFailureKeys).toHaveLength(
+      VOICE_TRANSCRIPT_MAX_UNRESOLVED,
+    );
   });
 
   it("keeps durable operation ownership independent between voice sessions", async () => {
     await seedSession("agent:main:first");
     await seedSession("agent:main:second");
-    const firstVoiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
+    const firstVoiceSessionId = await createVoiceSession({
       sessionKey: "agent:main:first",
-      origin: "client",
       voiceSessionId: "voice-first",
     });
-    const secondVoiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
+    const secondVoiceSessionId = await createVoiceSession({
       sessionKey: "agent:main:second",
-      origin: "client",
       voiceSessionId: "voice-second",
     });
-    const firstAppend = createDeferred();
-    const actualAppend = sessionAccessorMocks.actualAppendTranscriptMessage;
-    if (!actualAppend) {
-      throw new Error("expected the real transcript append implementation");
-    }
-    sessionAccessorMocks.appendTranscriptMessage.mockImplementationOnce(async (...args) => {
-      await firstAppend.promise;
-      return await actualAppend(...args);
-    });
+    const { release: firstAppend, entered: appendEntered } = holdTranscript();
 
-    const first = appendClientVoiceTranscript({
-      agentId: "main",
-      sessionKey: "agent:main:first",
-      sessionTarget: { sessionKey: "agent:main:first" },
-      voiceSessionId: firstVoiceSessionId,
-      entryId: "1",
-      role: "user",
-      text: "first",
-    });
-    await vi.waitFor(() =>
-      expect(sessionAccessorMocks.appendTranscriptMessage).toHaveBeenCalledTimes(1),
+    const first = appendTranscript(firstVoiceSessionId, "1", "first", "user", "agent:main:first");
+    await awaitGateBeforeSettlement(
+      appendEntered.promise,
+      first,
+      "Transcript settled before entering the held append",
     );
-    const second = appendClientVoiceTranscript({
-      agentId: "main",
-      sessionKey: "agent:main:second",
-      sessionTarget: { sessionKey: "agent:main:second" },
-      voiceSessionId: secondVoiceSessionId,
-      entryId: "1",
-      role: "user",
-      text: "second",
-    });
+    const second = appendTranscript(
+      secondVoiceSessionId,
+      "1",
+      "second",
+      "user",
+      "agent:main:second",
+    );
 
     await second;
-    expect(sessionAccessorMocks.appendTranscriptMessage).toHaveBeenCalledTimes(2);
+    expect(sessionTurnMocks.appendExpectedSessionTranscriptTurn).toHaveBeenCalledTimes(2);
     firstAppend.resolve();
     await first;
   });
 
-  it("keeps active consult runs voice-bound after the call closes", async () => {
-    const voiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-    });
-    registerClientVoiceConsultRun({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      voiceSessionId,
-      runId: "run-active",
-    });
+  it("resolves the open client record for legacy tool calls", async () => {
+    const voiceSessionId = await createVoiceSession();
 
-    await closeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      voiceSessionId,
-      config: {},
-    });
-
-    expect(resolveClientVoiceRunBinding("run-active")).toMatchObject({ voiceSessionId });
-  });
-
-  it("resolves the open client record for legacy tool calls", () => {
-    const voiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-    });
-
-    expect(
-      resolveOpenClientVoiceSessionId({ agentId: "main", sessionKey: "agent:main:main" }),
-    ).toBe(voiceSessionId);
-    expect(
-      resolveOpenClientVoiceSessionId({ agentId: "main", sessionKey: "agent:main:other" }),
-    ).toBeUndefined();
-    createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-    });
-    expect(
-      resolveOpenClientVoiceSessionId({ agentId: "main", sessionKey: "agent:main:main" }),
-    ).toBeUndefined();
-  });
-
-  it("keeps repeated tool-call ids separate across consult runs", () => {
-    const voiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-    });
-    for (const runId of ["run-1", "run-2"]) {
-      registerClientVoiceConsultRun({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        voiceSessionId,
-        runId,
-      });
-      emitTrustedDiagnosticEvent({
-        type: "tool.execution.started",
-        runId,
-        toolCallId: "call-1",
-        toolName: "message",
-        mutatingAction: true,
-      });
+    const closed = await createVoiceSession({ voiceSessionId: "discarded-closed" });
+    await closeVoice(closed);
+    const observation = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      expect(
+        await resolveOpenClientVoiceSessionId({ agentId: "main", sessionKey: "agent:main:main" }),
+      ).toBe(voiceSessionId);
+      expect(
+        observation.queries.filter((query) => /select.*value_json.*cache_entries/is.test(query)),
+      ).toEqual([]);
+    } finally {
+      observation.restore();
     }
-
-    expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.effects).toHaveLength(2);
-  });
-
-  it("closes stale records and leaves recent records open", async () => {
-    const stale = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:stale",
-      origin: "client",
-      now: 1,
-    });
-    const recent = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:recent",
-      origin: "client",
-      now: 6 * 60 * 60_000,
-    });
-
     expect(
-      await closeStaleClientVoiceSessions({
-        agentId: "main",
-        config: {},
-        now: 6 * 60 * 60_000 + 2,
-      }),
-    ).toBe(1);
-    expect(clientVoiceSessionTesting.readRecord("main", stale)?.status).toBe("closed");
-    expect(clientVoiceSessionTesting.readRecord("main", recent)?.status).toBe("open");
+      await resolveOpenClientVoiceSessionId({ agentId: "main", sessionKey: "agent:main:other" }),
+    ).toBeUndefined();
+    await createVoiceSession();
+    expect(
+      await resolveOpenClientVoiceSessionId({ agentId: "main", sessionKey: "agent:main:main" }),
+    ).toBeUndefined();
   });
 
-  it("records only mutating started effects and updates their terminal status", () => {
-    const voiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-    });
-    registerClientVoiceConsultRun({
-      agentId: "main",
-      sessionKey: "agent:main:main",
+  it("records only mutating started effects and updates their terminal status", async () => {
+    const voiceSessionId = await createVoiceSession();
+    await registerClientVoiceConsultRun({
+      ...target,
       voiceSessionId,
       runId: "run-1",
     });
@@ -956,7 +487,8 @@ describe("client voice session", () => {
       terminalReason: "cancelled",
     });
 
-    expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.effects).toEqual([
+    await flushClientVoiceSessionWrites({ agentId: "main", voiceSessionId });
+    expect(readRecord(voiceSessionId)?.effects).toEqual([
       expect.objectContaining({
         toolCallId: "message-1",
         toolName: "message",

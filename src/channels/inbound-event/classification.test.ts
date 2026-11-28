@@ -43,12 +43,11 @@ describe("resolveUnmentionedGroupInboundPolicy", () => {
     const cfg = {
       messages: { groupChat: { unmentionedInbound: "user_request" } },
       agents: {
-        list: [
-          {
-            id: "room-agent",
+        entries: {
+          "room-agent": {
             groupChat: { unmentionedInbound: "room_event" },
           },
-        ],
+        },
       },
     } satisfies OpenClawConfig;
 

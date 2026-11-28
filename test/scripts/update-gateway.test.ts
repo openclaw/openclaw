@@ -40,9 +40,9 @@ describe("source-server updater bootstrap", () => {
       "hash-pin",
       "local-pin",
     ].flatMap((scenario) =>
-      (scenario === "rebase-failure" || scenario === "local-pin"
-        ? ["server"]
-        : ["main", "server"]
+      (scenario === "success"
+        ? ["main", "server"]
+        : [scenario === "rebase-failure" || scenario === "local-pin" ? "server" : "main"]
       ).map((branch) => ({ scenario, branch })),
     ),
   )("keeps checkout and restart boundaries for $scenario on $branch", ({ scenario, branch }) => {

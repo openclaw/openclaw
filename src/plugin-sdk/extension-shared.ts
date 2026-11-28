@@ -1,10 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Extension shared helpers expose cross-plugin runtime utilities that remain SDK-safe.
-import { createAmbientNodeProxyAgent, hasAmbientNodeProxyConfigured } from "@openclaw/proxyline";
 import type { z } from "zod";
 import { resolveActiveManagedProxyTlsOptions } from "../infra/net/proxy/managed-proxy-undici.js";
+import { loadProxyline } from "../infra/net/proxyline-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { runPassiveAccountLifecycle } from "./channel-lifecycle.core.js";
 import { createLoggerBackedRuntime } from "./runtime-logger.internal.js";
 export { safeParseJsonWithSchema, safeParseWithSchema } from "../utils/zod-parse.js";
 export { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
@@ -22,10 +21,6 @@ type PassiveChannelStatusSnapshot = {
 type TrafficStatusSnapshot = {
   lastInboundAt?: number | null;
   lastOutboundAt?: number | null;
-};
-
-type StoppableMonitor = {
-  stop: () => void;
 };
 
 type RequireOpenAllowFromFn = (params: {
@@ -73,23 +68,6 @@ export function buildTrafficStatusSummary(snapshot?: TrafficStatusSnapshot | nul
     lastInboundAt: snapshot?.lastInboundAt ?? null,
     lastOutboundAt: snapshot?.lastOutboundAt ?? null,
   };
-}
-
-/**
- * Runs a passive monitor until the supplied abort signal fires, then calls `stop()`.
- * This adapts simple plugin monitors to the shared passive account lifecycle.
- */
-export async function runStoppablePassiveMonitor<TMonitor extends StoppableMonitor>(params: {
-  abortSignal: AbortSignal;
-  start: () => Promise<TMonitor>;
-}): Promise<void> {
-  await runPassiveAccountLifecycle({
-    abortSignal: params.abortSignal,
-    start: params.start,
-    stop: async (monitor) => {
-      monitor.stop();
-    },
-  });
 }
 
 /**
@@ -244,6 +222,7 @@ export async function resolveAmbientNodeProxyAgent<TAgent>(params?: {
   protocol?: "http" | "https";
 }): Promise<TAgent | undefined> {
   const protocol = params?.protocol ?? "https";
+  const { createAmbientNodeProxyAgent, hasAmbientNodeProxyConfigured } = loadProxyline();
   if (!hasAmbientNodeProxyConfigured({ protocol })) {
     return undefined;
   }

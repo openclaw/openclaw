@@ -1,8 +1,10 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import type { CronJob } from "../api/types.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { compactCronJobFixture } from "../test-helpers/cron.ts";
+import { inboxMention } from "../components/sidebar-inbox.test-support.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { createSidebarCustomizationSuite } from "./sidebar-customization.test-support.ts";
 
@@ -26,7 +28,7 @@ async function expectInboxOnNextFrame(page: Page, populated: boolean) {
                 style?.visibility === "visible" &&
                 style.opacity === "1",
               ),
-              hasItem: Boolean(panel?.querySelector('[data-attention-kind="cronFailed"]')),
+              hasItem: Boolean(panel?.querySelector('[data-attention-kind="modelAuthExpired"]')),
               hasSkeleton: Boolean(panel?.querySelector('[class*="skeleton"]')),
             });
           });
@@ -42,70 +44,135 @@ async function expectInboxOnNextFrame(page: Page, populated: boolean) {
 }
 
 suite.define(() => {
-  it.each([false, true])("opens loaded Inbox on the next frame (items: %s)", async (populated) => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      reducedMotion: populated ? "no-preference" : "reduce",
-      viewport: { width: 1440, height: 900 },
-    });
-    const page = await context.newPage();
-    const jobs: CronJob[] = populated
-      ? [
-          {
-            id: "inbox-latency-job",
-            name: "Daily report",
-            enabled: true,
-            createdAtMs: 0,
-            updatedAtMs: 0,
-            schedule: { kind: "every", everyMs: 60_000 },
-            sessionTarget: "isolated",
-            wakeMode: "now",
-            payload: { kind: "agentTurn", message: "Prepare the report." },
-            state: { lastRunStatus: "error", lastError: "Report failed" },
-          },
-        ]
-      : [];
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": chatSessionListResponse(),
-        "cron.list": {
-          jobs: jobs.map(compactCronJobFixture),
-          snapshotRevision: "inbox-latency",
-          total: jobs.length,
-          offset: 0,
-          limit: 50,
-          hasMore: false,
-          nextOffset: null,
+  it.each(["reduce", "no-preference"] as const)(
+    "dismisses a mention before acknowledgement (%s)",
+    async (reducedMotion) => {
+      await suite.withPage(
+        { reducedMotion, viewport: { width: 1280, height: 800 } },
+        async ({ page }) => {
+          const first = inboxMention("first");
+          const second = inboxMention("second");
+          const gateway = await installMockGateway(page, {
+            presenceUsers: [
+              {
+                self: true,
+                id: "viewer",
+                identity: { type: "profile", id: "viewer" },
+                name: "Viewer",
+              },
+            ],
+            featureMethods: [
+              ...defaultControlUiFeatureMethods,
+              "mentions.list",
+              "mentions.dismiss",
+            ],
+            methodResponses: {
+              "mentions.list": {
+                gatewayInstanceId: "e2e-gateway-boot",
+                revision: 1,
+                items: [first, second],
+              },
+            },
+          });
+          await page.goto(suite.server.baseUrl + "activity");
+          await page.locator(".sidebar-issues-button:visible").click();
+          const panel = page.locator("#sidebar-issues-panel");
+          const tab = panel.getByRole("tab", { name: /Mentions/ });
+          await tab.click();
+          const row = panel.locator('[data-mention-id="first"]');
+          await gateway.deferNext("mentions.dismiss");
+          // Sample the actual exit in its starting task, not on a wall-clock deadline.
+          const opacity = await row.getByRole("button").evaluate((button) => {
+            if (!(button instanceof HTMLButtonElement)) {
+              throw new Error("Expected a mention dismiss button");
+            }
+            const article = button.closest("article")!;
+            button.focus();
+            button.click();
+            const exit = article.getAnimations()[0];
+            if (!exit?.effect) {
+              return null;
+            }
+            exit.pause();
+            exit.currentTime = Number(exit.effect.getComputedTiming().duration) / 2;
+            return Number(getComputedStyle(article).opacity);
+          });
+          await gateway.waitForRequest("mentions.dismiss");
+          expect(await tab.locator(".hub-tab__badge").textContent()).toBe("1");
+          expect(
+            await panel
+              .locator('[data-mention-id="second"] summary')
+              .evaluate((node) => node === document.activeElement),
+          ).toBe(true);
+          if (reducedMotion === "reduce") {
+            expect(opacity).toBeNull();
+          } else {
+            expect(opacity).toBeGreaterThan(0);
+            expect(opacity).toBeLessThan(1);
+            expect(await row.getAttribute("inert")).not.toBeNull();
+            await row.evaluate((node) => node.getAnimations()[0]!.finish());
+          }
+          await row.waitFor({ state: "detached" });
+          await gateway.rejectDeferred("mentions.dismiss", { message: "Dismissal failed" });
+          await row.waitFor();
+          expect(await tab.locator(".hub-tab__badge").textContent()).toBe("2");
+          await panel.getByText("Dismissal failed", { exact: true }).waitFor();
         },
-        "models.authStatus": { ts: 1, providers: [] },
+      );
+    },
+  );
+
+  it.each([false, true])("opens loaded Inbox on the next frame (items: %s)", async (populated) => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        reducedMotion: populated ? "no-preference" : "reduce",
+        viewport: { width: 1440, height: 900 },
       },
-    });
-    try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("cron.list");
-      await page.locator(".sidebar-issues-button").waitFor();
-      await page.waitForLoadState("networkidle");
-      await expectInboxOnNextFrame(page, populated);
-      await expectInboxOnNextFrame(page, populated);
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "sessions.list": chatSessionListResponse(),
+            "models.authStatus": {
+              ts: 1,
+              providers: populated
+                ? [{ provider: "openai", displayName: "OpenAI", status: "missing", profiles: [] }]
+                : [],
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}new`);
+        await gateway.waitForRequest("models.authStatus");
+        const button = page.locator(".sidebar-issues-button");
+        const emptyOrItem = page.locator(
+          populated
+            ? '#sidebar-issues-panel [data-attention-kind="modelAuthExpired"]'
+            : ".sidebar-issues-panel__empty",
+        );
+        await button.waitFor();
+        await button.click();
+        await emptyOrItem.waitFor();
+        await page.keyboard.press("Escape");
+        await page.locator("#sidebar-issues-panel").waitFor({ state: "detached" });
+        await expectInboxOnNextFrame(page, populated);
 
-      await page.locator(".sidebar-recent-session__link").first().click();
-      await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
-      await expectInboxOnNextFrame(page, populated);
+        await page.locator(".sidebar-recent-session__link").first().click();
+        await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+        await expectInboxOnNextFrame(page, populated);
 
-      const connections = await gateway.getRequests("connect");
-      await gateway.closeLatest();
-      await gateway.waitForRequest("connect", { after: connections.length });
-      await page.locator(".sidebar-issues-button").waitFor();
-      await expectInboxOnNextFrame(page, populated);
+        const connections = await gateway.getRequests("connect");
+        await gateway.closeLatest();
+        await gateway.waitForRequest("connect", { after: connections.length });
+        await page.locator(".sidebar-issues-button").waitFor();
+        await expectInboxOnNextFrame(page, populated);
 
-      const reads = await gateway.getRequests("cron.list");
-      await gateway.deferNext("cron.list");
-      await gateway.emitGatewayEvent("cron", { action: "finished" });
-      await gateway.waitForRequest("cron.list", { after: reads.length });
-      await expectInboxOnNextFrame(page, populated);
-      await gateway.resolveDeferred("cron.list");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+        const reads = await gateway.getRequests("cron.list");
+        await gateway.deferNext("cron.list");
+        await gateway.emitGatewayEvent("cron.inventory.changed", {});
+        await gateway.waitForRequest("cron.list", { after: reads.length });
+        await expectInboxOnNextFrame(page, populated);
+        await gateway.resolveDeferred("cron.list");
+      },
+    );
   });
 });

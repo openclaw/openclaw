@@ -5,29 +5,27 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isPluginInPackageBundledRoots } from "../plugins/bundled-dir.js";
 import { discoverConfiguredPluginLoadPaths } from "../plugins/discovery.js";
-import { inspectPluginSourceDependencies } from "../plugins/plugin-generation-source-inspection.js";
+import { inspectPluginSourceDependenciesAsync } from "../plugins/plugin-generation-worker.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
+import { ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
-import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
+import { isPathInside } from "./path-guards.js";
 import {
   resolveUpdateCandidatePluginPath,
   resolveUpdateCandidatePluginSourcePath,
 } from "./update-candidate-paths.js";
-import { resolveUpdateCandidatePluginSourceEntries } from "./update-candidate-plugin-sources.js";
+import { selectUpdateCandidatePluginFileAssets } from "./update-candidate-plugin-file-assets.js";
+import {
+  inspectUpdateCandidatePluginSourceAsync,
+  resolveUpdateCandidatePluginSourceEntries,
+} from "./update-candidate-plugin-sources.js";
 import {
   copyUpdateCandidatePluginTrees,
   prepareUpdateCandidatePluginTrees,
 } from "./update-candidate-plugin-tree.js";
 import { resolveUpdateRehearsalRoot } from "./update-rehearsal-paths.js";
-
-async function readOptionalFile(file: string): Promise<Buffer | undefined> {
-  return fs.readFile(file).catch((error: unknown) => {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
-}
+import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 
 /** Complete a published driver's private snapshot before candidate Doctor loads plugins. */
 export async function completeUpdateCandidatePluginRehearsal(params: {
@@ -42,10 +40,12 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     return { copiedFiles: 0, warnings };
   }
   const privateRoot = await fs.realpath(rehearsalRoot);
-  const assertPrivate = (file: string) => {
+  const signal = getAsyncWorkSignal();
+  const assertContained = (file: string, roots = [privateRoot]) => {
+    signal?.throwIfAborted();
+    const resolved = resolvePathViaExistingAncestorSync(file);
     if (
-      !isPathInside(privateRoot, path.resolve(file)) ||
-      !isPathInside(privateRoot, resolvePathViaExistingAncestorSync(file))
+      !roots.some((root) => isPathInside(root, path.resolve(file)) && isPathInside(root, resolved))
     ) {
       throw new Error(`Plugin dependency is outside the temporary update copy: ${file}`);
     }
@@ -78,6 +78,7 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
   if (!candidateRoot) {
     throw new Error("Cannot locate the staged OpenClaw installation for plugin setup");
   }
+  const dependencyRoots = [privateRoot, await fs.realpath(candidateRoot)];
   const discovery = discoverConfiguredPluginLoadPaths({
     loadPaths: [...sources],
     deduplicate: true,
@@ -91,37 +92,37 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     ),
     params.config,
   );
-  const originals: Array<{ rootDir: string; entryFile: string }> = [];
-  const comparedFiles = new Map<string, string>();
+  const originals: Array<Awaited<ReturnType<typeof inspectPluginSourceDependenciesAsync>>> = [];
   const project = (source: string) =>
     resolveUpdateCandidatePluginPath(privateRoot, privateRoot, source);
-  const assertMatchingFile = async (source: string, copied: string) => {
-    assertPrivate(copied);
-    const [original, existing] = await Promise.all([
-      readOptionalFile(source),
-      readOptionalFile(copied),
-    ]);
-    if (
-      (original === undefined) !== (existing === undefined) ||
-      (original && existing && !original.equals(existing))
-    ) {
-      throw new Error(
-        `Plugin source changed since the update snapshot: ${source}. Retry the update after plugin edits finish.`,
-      );
-    }
-  };
   for (const entry of entries) {
-    assertPrivate(entry.rootDir);
-    assertPrivate(entry.entryFile);
-    const copiedGraph = inspectPluginSourceDependencies([entry]);
+    assertContained(entry.rootDir);
+    assertContained(entry.entryFile);
+    const copiedGraph = await inspectUpdateCandidatePluginSourceAsync(entry, warnings, {
+      root: privateRoot,
+      onUnresolvable: (name, importer) => {
+        if (warnings.length < UPDATE_RUN_DIAGNOSTIC_LIMIT) {
+          warnings.push(
+            `Plugin dependency ${name} is unresolvable inside the temporary update copy: undeclared ancestor lookup from ${importer}. Continuing without this optional dependency.`.slice(
+              0,
+              UPDATE_RUN_TEXT_LIMIT,
+            ),
+          );
+        }
+      },
+    });
+    assertContained(entry.rootDir);
+    assertContained(entry.entryFile);
+    if (!copiedGraph) {
+      continue;
+    }
     for (const reference of copiedGraph.references) {
-      // Explicit external imports retain their source semantics. Lookups naming
-      // private paths must not escape through a symlink, including absolute paths.
+      // Only the private plugin copy is constrained. Explicit external imports
+      // and the trusted candidate's own dependency resolution retain their semantics.
       if (isPathInside(privateRoot, reference.source) && isPrivateLookup(reference.specifier)) {
-        assertPrivate(reference.target);
+        assertContained(reference.target, dependencyRoots);
       }
     }
-    copiedGraph.assertSourceCurrent();
     const unresolvedPrivate = copiedGraph.unresolved.filter(
       ({ source, specifier }) => isPathInside(privateRoot, source) && isPrivateLookup(specifier),
     );
@@ -146,23 +147,22 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
         return original ? [JSON.stringify([original, specifier])] : [];
       }),
     );
-    const canonicalSource = await fs.realpath(entryFile).catch((error: unknown) => {
-      if (hasNodeErrorCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
-    });
+    const canonicalSource = await fs.realpath(entryFile).catch(ignoreMissingUpdateCandidateFile);
     if (!canonicalSource) {
       warnings.push(`Plugin source for update checks is no longer available: ${entryFile}.`);
       continue;
     }
-    let available: ReturnType<typeof inspectPluginSourceDependencies>;
+    let available: Awaited<ReturnType<typeof inspectPluginSourceDependenciesAsync>>;
     try {
-      available = inspectPluginSourceDependencies([{ rootDir, entryFile }]);
-    } catch {
+      available = await inspectPluginSourceDependenciesAsync([{ rootDir, entryFile }]);
+      signal?.throwIfAborted();
+    } catch (error) {
+      signal?.throwIfAborted();
       // Source edits cannot invalidate an already runnable copy. Without a
       // supplied missing edge, candidate execution still owns optional imports.
-      warnings.push(`Update checks could not inspect the original plugin source: ${entryFile}.`);
+      warnings.push(
+        `Update checks could not inspect the original source for plugin ${entry.pluginId} (${entryFile}): ${String(error)}`,
+      );
       continue;
     }
     if (
@@ -172,85 +172,53 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     ) {
       continue;
     }
-    if (canonicalSource !== entryFile || (await fs.realpath(rootDir)) !== rootDir) {
-      throw new Error(`Plugin source location changed since the update snapshot: ${entryFile}.`);
-    }
-    for (const [source, copied] of [
-      [entryFile, copiedEntry],
-      [path.join(rootDir, "package.json"), path.join(copiedRoot, "package.json")],
-      [path.join(rootDir, "openclaw.plugin.json"), path.join(copiedRoot, "openclaw.plugin.json")],
-    ] as const) {
-      await assertMatchingFile(source, copied);
-      comparedFiles.set(source, copied);
-    }
-    available.assertSourceCurrent();
-    originals.push({ rootDir, entryFile });
+    originals.push(available);
   }
   if (originals.length === 0) {
     return { copiedFiles: 0, warnings };
   }
-  const graph = inspectPluginSourceDependencies(originals);
-  for (const source of graph.files) {
-    const copied = project(source);
-    assertPrivate(copied);
-    if (await readOptionalFile(copied)) {
-      comparedFiles.set(source, copied);
-    }
-  }
-  const assertCurrent = async () => {
-    if (
-      params.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1" ||
-      resolveUpdateRehearsalRoot(params.env) !== rehearsalRoot
-    ) {
-      throw new Error("Update authority changed during plugin dependency preparation");
-    }
-    graph.assertSourceCurrent();
-    for (const [source, copied] of comparedFiles) {
-      await assertMatchingFile(source, copied);
-    }
-    graph.assertSourceCurrent();
-  };
-  await assertCurrent();
+  // Fill missing private dependencies without comparing or overwriting existing bytes.
   const plan = await prepareUpdateCandidatePluginTrees({
     roots: new Map(
-      [...graph.packageRoots, ...graph.files].map((source) => [source, project(source)]),
+      originals
+        .flatMap((graph) => graph.packageRoots.concat(graph.files))
+        .map((source) => [source, project(source)]),
     ),
     project,
     targetStateDir: privateRoot,
     candidateRoot,
   });
+  const normalizedAssets = selectUpdateCandidatePluginFileAssets(plan);
   const missing: typeof plan.entries = [];
   for (const entry of plan.entries) {
     const destination = project(entry.path);
-    assertPrivate(destination);
-    const existing = await fs.lstat(destination).catch((error: unknown) => {
-      if (hasNodeErrorCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
-    });
+    assertContained(destination);
+    const existing = await fs.lstat(destination).catch(ignoreMissingUpdateCandidateFile);
     if (!existing) {
       missing.push(entry);
     } else if (
       (entry.kind === "directory" && !existing.isDirectory()) ||
       (entry.kind === "file" && !existing.isFile()) ||
-      (entry.kind === "symlink" && !existing.isSymbolicLink())
+      (entry.kind === "symlink" &&
+        !existing.isSymbolicLink() &&
+        !(normalizedAssets.has(entry.path) && existing.isFile()))
     ) {
       throw new Error(
         `Plugin dependency conflicts with the existing update snapshot: ${destination}`,
       );
     }
   }
-  await assertCurrent();
   if (missing.length > 0) {
-    await copyUpdateCandidatePluginTrees(
-      { ...plan, entries: missing },
-      {
-        targetStateDir: privateRoot,
-        candidateRoot,
-      },
-    );
-    await assertCurrent();
+    await copyUpdateCandidatePluginTrees(plan, {
+      targetStateDir: privateRoot,
+      candidateRoot,
+      onlyPaths: new Set(missing.map((entry) => entry.path)),
+    });
   }
-  return { copiedFiles: missing.filter((entry) => entry.kind === "file").length, warnings };
+  return {
+    copiedFiles: missing.filter(
+      (entry) => entry.kind === "file" || normalizedAssets.has(entry.path),
+    ).length,
+    warnings,
+  };
 }

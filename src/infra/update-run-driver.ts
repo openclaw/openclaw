@@ -1,11 +1,32 @@
 import { hostname } from "node:os";
+import type { z } from "zod";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
+import { captureNamespacedStateLeaseProcessOwner } from "./state-lease-process-owner.js";
+import {
+  RecordedUpdateRunDriverSchema,
+  type RecordedUpdateRunDriver,
+  type UpdateRunDriverSchema,
+} from "./update-run-driver-schema.js";
 
-export type UpdateRunDriver = {
-  host: string;
-  pid: number;
-  startIdentity: string;
-};
+export type { RecordedUpdateRunDriver } from "./update-run-driver-schema.js";
+export { toUpdateRunDriver } from "./update-run-record.js";
+export type UpdateRunDriver = z.infer<typeof UpdateRunDriverSchema>;
+
+/**
+ * A run's own driver also records the boot it ran in, so a later boot of the same
+ * host can show it gone. Only Linux and macOS read that; elsewhere it is not captured.
+ */
+export function readRecordedUpdateRunDriver(): RecordedUpdateRunDriver | undefined {
+  const driver = readUpdateRunDriver();
+  if (!driver || (process.platform !== "linux" && process.platform !== "darwin")) {
+    return driver;
+  }
+  // An unrecognized namespace records as unknown rather than failing adoption.
+  const namespace = RecordedUpdateRunDriverSchema.shape.namespace.safeParse(
+    captureNamespacedStateLeaseProcessOwner().namespace,
+  );
+  return { ...driver, namespace: namespace.data ?? null };
+}
 
 export function sameUpdateRunDriver(left: UpdateRunDriver, right: UpdateRunDriver): boolean {
   return (
@@ -13,9 +34,12 @@ export function sameUpdateRunDriver(left: UpdateRunDriver, right: UpdateRunDrive
   );
 }
 
-export function readUpdateRunDriver(): UpdateRunDriver | undefined {
+export function readUpdateRunDriver(pid = process.pid): UpdateRunDriver | undefined {
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    return undefined;
+  }
   const host = hostname();
-  const startedAt = getFileLockProcessStartTime(process.pid);
+  const startedAt = getFileLockProcessStartTime(pid);
   if (
     !host ||
     host.length > 255 ||
@@ -25,7 +49,7 @@ export function readUpdateRunDriver(): UpdateRunDriver | undefined {
   ) {
     return undefined;
   }
-  return { host, pid: process.pid, startIdentity: String(startedAt) };
+  return { host, pid, startIdentity: String(startedAt) };
 }
 
 export function inspectUpdateRunDriver(driver: UpdateRunDriver): "alive" | "dead" | "unknown" {

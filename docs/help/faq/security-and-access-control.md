@@ -22,7 +22,7 @@ read_when:
   <Accordion title="Is prompt injection only a concern for public bots?">
     No. Prompt injection is about **untrusted content**, not just who can DM the bot. If your assistant reads external content (web search/fetch, browser pages, emails, docs, attachments, pasted logs), that content can carry instructions that try to hijack the model - even if you are the only sender.
 
-    The biggest risk is when tools are enabled: the model can be tricked into exfiltrating context or calling tools on your behalf. Reduce the blast radius:
+    The biggest risk is when tools are enabled: the model can be tricked into exfiltrating context or calling tools on your behalf. Limit the damage a mistaken tool call could cause:
 
     - use a read-only or tool-disabled "reader" agent to summarize untrusted content
     - keep `web_search` / `web_fetch` / `browser` off for tool-enabled agents
@@ -48,7 +48,7 @@ read_when:
     openclaw gateway status
     ```
 
-    A safer baseline: Gateway bound to `loopback`, or exposed only through authenticated private access (tailnet, SSH tunnel, token/password auth, or a correctly configured trusted proxy); DMs in `pairing` or `allowlist` mode; group access limited to rooms you chose (group allowlists), with mention gating or sender allowlists where membership is broad or public; high-risk tools (`exec`, `browser`, `gateway`, `cron`) denied or tightly scoped for agents that read untrusted content; sandboxing enabled where tool execution needs a smaller blast radius.
+    A safer baseline: Gateway bound to `loopback`, or exposed only through authenticated private access (tailnet, SSH tunnel, token/password auth, or a correctly configured trusted proxy); DMs in `pairing` or `allowlist` mode; group access limited to rooms you chose (group allowlists), with mention gating or sender allowlists where membership is broad or public; high-risk tools (`exec`, `browser`, `gateway`, `cron`) denied or tightly scoped for agents that read untrusted content; sandboxing enabled where tool execution needs narrower access.
 
     Public binds without auth, open DMs/groups with tools, and exposed browser control are the findings to fix first. Details: [openclaw security audit](/gateway/security/running-the-audit#openclaw-security-audit).
 
@@ -64,7 +64,7 @@ read_when:
   </Accordion>
 
   <Accordion title="Should my bot have its own email, GitHub account, or phone number?">
-    Yes, for most setups. Isolating the bot with separate accounts and phone numbers reduces the blast radius if something goes wrong, and makes it easier to rotate credentials or revoke access without impacting your personal accounts.
+    Yes, for most setups. Isolating the bot with separate accounts and phone numbers limits the damage if something goes wrong, and makes it easier to rotate credentials or revoke access without impacting your personal accounts.
 
     Start small: give access only to the tools and accounts you actually need, and expand later if required.
 

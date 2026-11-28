@@ -4,90 +4,60 @@ import type {
   ProviderPrepareDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
-import * as liveCatalogRuntime from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { LLAMA_CPP_PROVIDER_ID } from "../defaults.js";
+import {
+  LiveModelCatalogHttpError,
+  runLiveProviderCatalog,
+} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   hasLlamaServerAuthorizationHeader,
-  resolveLlamaServerProviderHeaders,
-  resolveLlamaServerRuntimeApiKey,
-} from "./auth.js";
+  resolveLlamaServerRequestApiKey,
+} from "./auth-policy.js";
+import { resolveLlamaServerProviderHeaders, resolveLlamaServerRuntimeApiKey } from "./auth.js";
+import { LLAMA_APP_SERVER, LLAMA_CPP_SERVER, type LlamaServerIdentity } from "./defaults.js";
 import { discoverLlamaServer } from "./discovery.js";
 import { resolveLlamaServerEndpoint } from "./endpoint.js";
 import { buildLlamaServerProviderConfig } from "./models.js";
 
-// Published 2026.9.2 understands catalog outcomes but does not export this runner.
-// Remove this fallback when the declared plugin API floor excludes that host.
-const liveCatalogSdk: Partial<Pick<typeof liveCatalogRuntime, "runLiveProviderCatalog">> =
-  liveCatalogRuntime;
-type CatalogOutcome = NonNullable<NonNullable<ProviderCatalogResult>["outcomes"]>[number];
-
-async function runLlamaServerCatalog(
-  params: Parameters<typeof liveCatalogRuntime.runLiveProviderCatalog>[0],
-): Promise<ProviderCatalogResult> {
-  if (liveCatalogSdk.runLiveProviderCatalog) {
-    return await liveCatalogSdk.runLiveProviderCatalog(params);
-  }
-  const identity = {
-    provider: params.providerId,
-    ...(params.profileId ? { profileId: params.profileId } : {}),
-  };
-  try {
-    const result = await params.run();
-    return result
-      ? { ...result, outcomes: [...(result.outcomes ?? []), { ...identity, status: "ready" }] }
-      : result;
-  } catch (error) {
-    const rejected =
-      error instanceof liveCatalogRuntime.LiveModelCatalogHttpError &&
-      (error.status === 401 || error.status === 403);
-    const outcome: CatalogOutcome = rejected
-      ? { ...identity, status: "auth-rejected", rejectionScope: "catalog" }
-      : { ...identity, status: "unavailable" };
-    return { providers: {}, outcomes: [outcome] };
-  }
-}
-
-/** Discovers external llama-server models for provider runtime resolution. */
 export async function discoverLlamaServerProvider(
   ctx: ProviderCatalogContext,
+  server: LlamaServerIdentity = LLAMA_CPP_SERVER,
 ): Promise<ProviderCatalogResult> {
-  const configured = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
-  const auth = ctx.resolveProviderApiKey(LLAMA_CPP_PROVIDER_ID);
+  const configured = ctx.config.models?.providers?.[server.id];
+  const auth = ctx.resolveProviderApiKey(server.id);
   const headers = await resolveLlamaServerProviderHeaders({
+    server,
     config: ctx.config,
     env: ctx.env,
     headers: configured?.headers,
   });
-  const authApiKey = auth.discoveryApiKey ?? auth.apiKey;
-  const apiKey =
-    hasLlamaServerAuthorizationHeader(headers) ||
-    (authApiKey && isNonSecretApiKeyMarker(authApiKey))
-      ? undefined
-      : authApiKey;
-  return await runLlamaServerCatalog({
-    providerId: LLAMA_CPP_PROVIDER_ID,
+  const apiKey = hasLlamaServerAuthorizationHeader(headers)
+    ? undefined
+    : resolveLlamaServerRequestApiKey(server, auth.discoveryApiKey ?? auth.apiKey);
+  return await runLiveProviderCatalog({
+    providerId: server.id,
     profileId: apiKey ? auth.profileId : undefined,
     run: async () => {
       const discovery = await discoverLlamaServer({
+        server,
+        signal: ctx.signal,
+        useRuntimeDefaults: false,
         baseUrl: configured?.baseUrl,
+        requireAppListener: server.id === LLAMA_APP_SERVER.id && !configured,
         apiKey,
         headers,
-        cacheTtlMs: 0,
+        allowPrivateNetwork: configured?.request?.allowPrivateNetwork,
       });
       if (discovery.kind !== "success") {
         if (!configured && !apiKey && !headers) {
           return null;
         }
         throw discovery.kind === "http-error"
-          ? new liveCatalogRuntime.LiveModelCatalogHttpError(
-              LLAMA_CPP_PROVIDER_ID,
-              discovery.status,
-            )
+          ? new LiveModelCatalogHttpError(server.id, discovery.status)
           : discovery.error;
       }
       return {
         provider: buildLlamaServerProviderConfig({
+          server,
           configured,
           discoveredModels: discovery.models,
         }),
@@ -98,22 +68,26 @@ export async function discoverLlamaServerProvider(
 
 export async function prepareLlamaServerDynamicModel(
   ctx: ProviderPrepareDynamicModelContext,
+  server: LlamaServerIdentity = LLAMA_CPP_SERVER,
 ): Promise<ProviderRuntimeModel | undefined> {
   const apiKey = await resolveLlamaServerRuntimeApiKey({
+    server,
     config: ctx.config,
     agentDir: ctx.agentDir,
     profileId: ctx.authProfileId,
   });
   const headers = await resolveLlamaServerProviderHeaders({
+    server,
     config: ctx.config,
     env: process.env,
     headers: ctx.providerConfig?.headers,
   });
   const discovery = await discoverLlamaServer({
+    server,
     baseUrl: ctx.providerConfig?.baseUrl,
     apiKey: hasLlamaServerAuthorizationHeader(headers) ? undefined : apiKey,
     headers,
-    cacheTtlMs: 0,
+    allowPrivateNetwork: ctx.providerConfig?.request?.allowPrivateNetwork,
   });
   const model =
     discovery.kind === "success"
@@ -124,11 +98,8 @@ export async function prepareLlamaServerDynamicModel(
   }
   return {
     ...model.config,
-    provider: LLAMA_CPP_PROVIDER_ID,
+    provider: server.id,
     api: ctx.providerConfig?.api ?? "openai-completions",
-    baseUrl: resolveLlamaServerEndpoint(ctx.providerConfig?.baseUrl).inferenceBaseUrl,
-    input: model.config.input.filter(
-      (entry): entry is "text" | "image" => entry === "text" || entry === "image",
-    ),
+    baseUrl: resolveLlamaServerEndpoint(ctx.providerConfig?.baseUrl, server).inferenceBaseUrl,
   };
 }

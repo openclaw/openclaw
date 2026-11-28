@@ -8,24 +8,25 @@ import {
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
-import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
+import {
+  buildChannelGroupsScopeTree,
+  createRestrictSendersChannelSecurity,
+  resolveScopeRequireMention,
+} from "openclaw/plugin-sdk/channel-policy";
 import {
   createChannelDirectoryAdapter,
   createResolvedDirectoryEntriesLister,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveLineAccount } from "./accounts.js";
-import { lineBindingsAdapter } from "./bindings.js";
 import { lineChannelPluginCommon } from "./channel-shared.js";
 import { lineConfigAdapter } from "./config-adapter.js";
 import { lineDoctor } from "./doctor.js";
 import { lineGatewayAdapter } from "./gateway.js";
-import { resolveLineGroupLookupIds } from "./group-keys.js";
-import { resolveLineGroupRequireMention } from "./group-policy.js";
+import { resolveExactLineGroupConfigKey, resolveLineGroupLookupIds } from "./group-keys.js";
 import { inferLineTargetChatType, normalizeLineMessagingTarget } from "./messaging-target.js";
 import { lineMessageAdapter, lineOutboundAdapter } from "./outbound.js";
 import { lineMessageActions } from "./rich-messages.js";
-import { getLineRuntime } from "./runtime.js";
 import { lineSetupContract } from "./setup-core.js";
 import { lineSetupWizard } from "./setup-surface.js";
 import { lineStatusAdapter } from "./status.js";
@@ -49,6 +50,15 @@ const lineSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedLineAcc
   normalizeDmEntry: (raw) => raw.replace(/^line:(?:user:)?/i, ""),
 });
 
+function normalizeLineConversationId(raw?: string | null): string | null {
+  const trimmed = raw?.trim() ?? "";
+  if (!trimmed) {
+    return null;
+  }
+  const prefixed = trimmed.match(/^line:(?:(?:user|group|room):)?(.+)$/i)?.[1];
+  return (prefixed ?? trimmed).trim() || null;
+}
+
 function normalizeLineDirectoryId(entry: string, kind: "direct" | "group"): string | null {
   const id = normalizeLineMessagingTarget(entry);
   // Authorization symbols are not sendable addresses; reuse the outbound classifier.
@@ -63,7 +73,17 @@ export const linePlugin: LineChannelPlugin = createChatChannelPlugin({
     ...lineChannelPluginCommon,
     setupWizard: lineSetupWizard,
     groups: {
-      resolveRequireMention: resolveLineGroupRequireMention,
+      resolveRequireMention: (params) => {
+        const tree = buildChannelGroupsScopeTree(params.cfg, "line", params.accountId);
+        const matchedKey = resolveExactLineGroupConfigKey({
+          groups: tree.scopes,
+          groupId: params.groupId,
+        });
+        return resolveScopeRequireMention({
+          tree,
+          path: matchedKey ? [matchedKey] : [],
+        });
+      },
     },
     allowlist: buildDmGroupAccountAllowlistAdapter({
       channelId: "line",
@@ -109,7 +129,12 @@ export const linePlugin: LineChannelPlugin = createChatChannelPlugin({
           to: peerId,
         });
       },
-      resolveInboundConversation: lineBindingsAdapter.resolveInboundConversation,
+      resolveInboundConversation: (params) => {
+        const conversationId =
+          normalizeLineConversationId(params.conversationId) ??
+          normalizeLineConversationId(params.to);
+        return conversationId ? { conversationId } : null;
+      },
       targetResolver: {
         looksLikeId: (id) => {
           const trimmed = id?.trim();
@@ -159,7 +184,29 @@ export const linePlugin: LineChannelPlugin = createChatChannelPlugin({
     },
     message: lineMessageAdapter,
     actions: lineMessageActions,
-    bindings: lineBindingsAdapter,
+    bindings: {
+      compileConfiguredBinding: ({ conversationId }) => {
+        const normalized = normalizeLineConversationId(conversationId);
+        return normalized ? { conversationId: normalized } : null;
+      },
+      matchInboundConversation: ({ compiledBinding, conversationId }) => {
+        const normalizedIncoming = normalizeLineConversationId(conversationId);
+        if (!normalizedIncoming || compiledBinding.conversationId !== normalizedIncoming) {
+          return null;
+        }
+        return {
+          conversationId: normalizedIncoming,
+          matchPriority: 2,
+        };
+      },
+      resolveCommandConversation: (params) => {
+        const conversationId =
+          normalizeLineConversationId(params.originatingTo) ??
+          normalizeLineConversationId(params.commandTo) ??
+          normalizeLineConversationId(params.fallbackTo);
+        return conversationId ? { conversationId } : null;
+      },
+    },
     conversationBindings: {
       defaultTopLevelPlacement: "current",
     },
@@ -181,16 +228,14 @@ export const linePlugin: LineChannelPlugin = createChatChannelPlugin({
       message: "OpenClaw: your access has been approved.",
       normalizeAllowEntry: createPairingPrefixStripper(/^line:(?:user:)?/i),
       notify: async ({ cfg, id, message, accountId }) => {
-        const account = (getLineRuntime().channel.line?.resolveLineAccount ?? resolveLineAccount)({
+        const account = resolveLineAccount({
           cfg,
           accountId,
         });
         if (!account.channelAccessToken) {
           throw new Error("LINE channel access token not configured");
         }
-        const pushMessageLine =
-          getLineRuntime().channel.line?.pushMessageLine ??
-          (await loadLineChannelRuntime()).pushMessageLine;
+        const { pushMessageLine } = await loadLineChannelRuntime();
         await pushMessageLine(id, message, {
           cfg,
           accountId: account.accountId,

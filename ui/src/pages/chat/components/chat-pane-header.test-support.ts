@@ -1,9 +1,113 @@
-import { html, nothing, render } from "lit";
-import { vi } from "vitest";
+import { createComponent, createSignal, flush, merge } from "solid-js";
+import { expect, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
-import { renderChatPaneHeader } from "./chat-pane-header.ts";
+import { EMPTY_SESSION_MENU_DATA } from "../../../components/session-menu-data.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { ChatPaneHeader, PaneHeaderView } from "./chat-pane-header.tsx";
+import type { ChatPaneHeaderPresentation, ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
+import "./chat-header-session-menu.ts";
+import type { ChatSessionSharingProps } from "./chat-session-sharing-shared.tsx";
 
-export type ChatPaneHeaderProps = Parameters<typeof renderChatPaneHeader>[0];
+export function chatPaneHeaderSessionMenu(): NonNullable<ChatPaneHeaderProps["sessionMenuAction"]> {
+  return {
+    session: EMPTY_SESSION_MENU_DATA,
+    worktreePath: null,
+    onboarding: false,
+    preferencesBrowserOnly: false,
+    compact: false,
+    bubbleModeEnabled: false,
+    mainKey: "main",
+    copyMarkdownAllowed: false,
+    splitAllowed: false,
+    settings: { chatShowThinking: false, chatShowToolCalls: false },
+    sessionActions: [],
+    sharing: null,
+    groups: [],
+    currentOwner: null,
+    actionDisabledReasons: {},
+    forkDisabled: false,
+    forkFromLastCompleted: false,
+    archiveAllowed: false,
+    archiveShortcut: false,
+    deleteAllowed: false,
+    onOpen: vi.fn(),
+    onOpenCommandPalette: vi.fn(),
+    onSettingsChange: vi.fn(),
+    onAction: vi.fn(),
+  };
+}
+
+const mountedHeaders = new WeakMap<HTMLElement, (value: ChatPaneHeaderPresentation) => void>();
+
+export function renderPaneHeaderInto(value: ChatPaneHeaderPresentation, container: HTMLElement) {
+  const update = mountedHeaders.get(container);
+  if (update) {
+    update(value);
+    flush();
+    return;
+  }
+  const [current, setCurrent] = createSignal(value);
+  const mounted = mountSolid(
+    () =>
+      createComponent(
+        PaneHeaderView,
+        merge(() => current()),
+      ),
+    { container },
+  );
+  mountedHeaders.set(container, setCurrent);
+  onTestFinished(() => {
+    mountedHeaders.delete(container);
+    mounted.unmount();
+  });
+}
+
+export function chatPaneHeaderSharing(
+  patch: Partial<ChatSessionSharingProps> = {},
+): ChatSessionSharingProps {
+  return {
+    session: chatPaneHeaderSessionRow({ visibility: "shared", sharingRole: "owner" }),
+    state: undefined,
+    onOpen: vi.fn(),
+    onVisibilityChange: vi.fn(),
+    onMemberChange: vi.fn(),
+    ...patch,
+  };
+}
+
+async function settleNativeMenu() {
+  flush();
+  await Promise.resolve();
+  flush();
+}
+
+export async function openNativeMenu(menu: Element, readyValue?: string) {
+  await settleNativeMenu();
+  const panel = menu.querySelector<HTMLElement>(".oc-menu")!;
+  if (!panel.matches(":popover-open")) {
+    menu.querySelector<HTMLButtonElement>(".oc-menu-trigger")!.click();
+    await settleNativeMenu();
+  }
+  expect(panel.matches(":popover-open")).toBe(true);
+  if (readyValue) {
+    await vi.dynamicImportSettled();
+    await waitForSolid(() =>
+      expect(menu.querySelector(`button[data-value="${readyValue}"]`)).not.toBeNull(),
+    );
+  }
+}
+
+export async function selectNativeMenu(menu: Element, value: string) {
+  await openNativeMenu(menu, value);
+  const item = menu.querySelector<HTMLButtonElement>(`button[data-value="${value}"]`);
+  if (!item) {
+    throw new Error(`Expected native menu action: ${value}`);
+  }
+  expect(item.disabled).toBe(false);
+  item.click();
+  await settleNativeMenu();
+}
 
 export function chatPaneHeaderSessionRow(
   patch: Partial<GatewaySessionRow> = {},
@@ -12,8 +116,8 @@ export function chatPaneHeaderSessionRow(
 }
 
 /**
- * Mounts the header with every required prop filled in. Callers own teardown so each suite
- * keeps its own afterEach; `containers` collects the mounted nodes for removal.
+ * Mounts a retained native header with complete props and test-scoped disposal.
+ * `containers` lets callers keep their existing DOM cleanup.
  */
 export function mountChatPaneHeader(
   containers: HTMLElement[],
@@ -24,6 +128,7 @@ export function mountChatPaneHeader(
   containers.push(container);
   const props: ChatPaneHeaderProps = {
     paneId: "pane-1",
+    presented: true,
     narrow: false,
     mergedChrome: false,
     title: "Session title",
@@ -42,14 +147,6 @@ export function mountChatPaneHeader(
     canReveal: true,
     copiedAction: null,
     renameDisabledReason: undefined,
-    panelActions: nothing,
-    panelLayoutActions: nothing,
-    discussionAction: nothing,
-    diffAction: nothing,
-    backgroundTasksAction: nothing,
-    workspaceAction: nothing,
-    sessionRailAction: nothing,
-    sessionMenuAction: nothing,
     onBeginRename: vi.fn(),
     onRenameInput: vi.fn(),
     onCommitRename: vi.fn(),
@@ -57,11 +154,31 @@ export function mountChatPaneHeader(
     onMenuOpenChange: vi.fn(),
     onMenuAction: vi.fn(),
     onOpenParentSession: vi.fn(),
+    onOpenAgentSettings: vi.fn(),
     onBranchSelect: vi.fn(),
     ...patch,
   };
-  render(html`${renderChatPaneHeader(props)}`, container);
-  return { container, props };
+  const [current, setCurrent] = createSignal(props);
+  const mounted = mountSolid(
+    () =>
+      createComponent(
+        ChatPaneHeader,
+        merge(() => current()),
+      ),
+    { container },
+  );
+  onTestFinished(mounted.unmount);
+  return {
+    container,
+    get props() {
+      return current();
+    },
+    unmount: mounted.unmount,
+    update(this: void, changes: Partial<ChatPaneHeaderProps>) {
+      setCurrent({ ...current(), ...changes });
+      flush();
+    },
+  };
 }
 
 export function mockWorkspaceIconFetch() {

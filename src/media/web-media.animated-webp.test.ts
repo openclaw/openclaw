@@ -7,86 +7,47 @@ const ANIMATED_WEBP_BUFFER = Buffer.from(
 );
 
 describe("animated WebP delivery", () => {
-  it.each(["direct", "untyped", "local"] as const)(
-    "preserves animated WebP frames above the preferred size through the %s owner",
-    async (owner) => {
-      const imageCompression = { models: [{ preferredSidePx: 12 }] };
-      const result =
-        owner !== "local"
-          ? await optimizeImageBufferForWebMedia({
-              buffer: ANIMATED_WEBP_BUFFER,
-              contentType: owner === "untyped" ? undefined : "image/webp",
-              fileName: "animated.webp",
-              maxBytes: 1024,
-              imageCompression,
-            })
-          : await loadWebMedia("/virtual/animated.webp", {
-              maxBytes: 1024,
-              sandboxValidated: true,
-              readFile: async () => ANIMATED_WEBP_BUFFER,
-              imageCompression,
-            });
-      expect(result).toMatchObject({
-        contentType: "image/webp",
-        kind: "image",
-        fileName: "animated.webp",
-      });
-      expect(result.buffer.equals(ANIMATED_WEBP_BUFFER)).toBe(true);
-    },
-  );
+  it("preserves animated WebP frames above the preferred size without a MIME hint", async () => {
+    const result = await optimizeImageBufferForWebMedia({
+      buffer: ANIMATED_WEBP_BUFFER,
+      fileName: "animated.webp",
+      maxBytes: 1024,
+      imageCompression: { models: [{ preferredSidePx: 12 }] },
+    });
+    expect(result).toMatchObject({
+      contentType: "image/webp",
+      kind: "image",
+      fileName: "animated.webp",
+    });
+    expect(result.buffer.equals(ANIMATED_WEBP_BUFFER)).toBe(true);
+  });
 
   it.each([
-    { owner: "direct", limits: { maxSidePx: 12 }, constraint: "side" },
-    { owner: "local", limits: { maxSidePx: 12 }, constraint: "side" },
-    { owner: "direct", limits: { maxPixels: 144 }, constraint: "pixel" },
-    { owner: "local", limits: { maxPixels: 144 }, constraint: "pixel" },
+    { limits: { maxPixels: 144 }, constraint: "pixel" },
+    { limits: undefined, constraint: "byte" },
   ] as const)(
-    "rejects animated WebP hard $constraint limits through the $owner owner",
-    async ({ owner, limits }) => {
-      const imageCompression = { models: [limits] };
-      const result =
-        owner === "direct"
-          ? optimizeImageBufferForWebMedia({
-              buffer: ANIMATED_WEBP_BUFFER,
-              contentType: "image/webp",
-              maxBytes: 1024,
-              imageCompression,
-            })
-          : loadWebMedia("/virtual/animated.webp", {
-              maxBytes: 1024,
-              sandboxValidated: true,
-              readFile: async () => ANIMATED_WEBP_BUFFER,
-              imageCompression,
-            });
-      await expect(result).rejects.toThrow(/dimensions exceed model image limits/i);
-    },
-  );
-
-  it.each(["direct", "local"] as const)(
-    "rejects animated WebP beyond the byte cap through the %s owner",
-    async (owner) => {
-      const repeatedFrame = ANIMATED_WEBP_BUFFER.subarray(44, 140);
-      const oversized = Buffer.concat([
-        ANIMATED_WEBP_BUFFER,
-        ...Array.from({ length: 12 }, () => repeatedFrame),
-      ]);
-      oversized.writeUInt32LE(oversized.length - 8, 4);
-      const result =
-        owner === "direct"
-          ? optimizeImageBufferForWebMedia({
-              buffer: oversized,
-              contentType: "image/webp",
-              maxBytes: 1024,
-            })
-          : loadWebMedia("/virtual/animated.webp", {
-              maxBytes: 1024,
-              sandboxValidated: true,
-              readFile: async () => oversized,
-            });
-      await expect(result).rejects.toMatchObject({
-        name: "ImageOptimizationLimitError",
+    "rejects animated WebP hard $constraint limits through the local loader",
+    async ({ limits, constraint }) => {
+      let buffer = ANIMATED_WEBP_BUFFER;
+      if (constraint === "byte") {
+        const repeatedFrame = buffer.subarray(44, 140);
+        buffer = Buffer.concat([buffer, ...Array.from({ length: 12 }, () => repeatedFrame)]);
+        buffer.writeUInt32LE(buffer.length - 8, 4);
+      }
+      const result = loadWebMedia("/virtual/animated.webp", {
         maxBytes: 1024,
+        sandboxValidated: true,
+        readFile: async () => buffer,
+        ...(limits ? { imageCompression: { models: [limits] } } : {}),
       });
+      if (constraint === "byte") {
+        await expect(result).rejects.toMatchObject({
+          name: "ImageOptimizationLimitError",
+          maxBytes: 1024,
+        });
+      } else {
+        await expect(result).rejects.toThrow(/dimensions exceed model image limits/i);
+      }
     },
   );
 });

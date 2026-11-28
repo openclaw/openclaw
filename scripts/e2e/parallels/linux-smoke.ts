@@ -1,5 +1,4 @@
 #!/usr/bin/env -S pnpm tsx
-// Linux Smoke script supports OpenClaw repository automation.
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -23,13 +22,10 @@ import {
   shouldSkipSnapshotRestore,
   shellQuote,
   validateSnapshotRestoreMode,
-  warn,
   withProgressOnStderr,
   writeJson,
   writeSummaryMarkdown,
-  type Mode,
   type PackageArtifact,
-  type Provider,
   type ProviderAuth,
   type SnapshotInfo,
 } from "./common.ts";
@@ -48,91 +44,30 @@ import {
   printSmokeTargetSummary,
   posixAgentTurnScript,
   posixStopGatewayScript,
+  posixRefOnboardArgs,
   parseSmokeCliArgs,
   SmokeRunController,
+  smokeDefaultOptions,
+  smokeDefaultStatus,
+  verifyPosixGateway,
   type SmokeCliOptions,
 } from "./smoke-common.ts";
 
-// Older published baselines predate this warning, but still need update coverage.
-const BAD_PLUGIN_DIAGNOSTIC_MIN_VERSION = "2026.5.7";
 // Restored Ubuntu snapshots may immediately run package maintenance for hours.
 // Reuse an existing downloader before touching apt, then bound the fallback.
 const APT_LOCK_RETRY_SECONDS = 900;
 const BOOTSTRAP_TIMEOUT_SECONDS = 1200;
 
-function parseOpenClawPackageVersion(value: string): string | null {
-  return value.match(/\b(\d{4}\.\d{1,2}\.\d{1,2}(?:-[A-Za-z0-9.]+)?)\b/u)?.[1] ?? null;
-}
-
-function compareOpenClawPackageVersions(left: string, right: string): number {
-  const parse = (value: string): [number, number, number] => {
-    const match = parseOpenClawPackageVersion(value)?.match(/^(\d{4})\.(\d+)\.(\d+)/u);
-    if (!match) {
-      return [0, 0, 0];
-    }
-    const [, year, month, patch] = match;
-    if (!year || !month || !patch) {
-      return [0, 0, 0];
-    }
-    return [Number(year), Number(month), Number(patch)];
-  };
-  const [leftYear, leftMonth, leftPatch] = parse(left);
-  const [rightYear, rightMonth, rightPatch] = parse(right);
-  for (const delta of [leftYear - rightYear, leftMonth - rightMonth, leftPatch - rightPatch]) {
-    if (delta !== 0) {
-      return delta;
-    }
-  }
-  return 0;
-}
-
 interface LinuxOptions extends SmokeCliOptions {
   vmNameExplicit: boolean;
 }
 
-interface LinuxSummary {
-  vm: string;
-  snapshotHint: string;
-  snapshotId: string;
-  mode: Mode;
-  provider: Provider;
-  latestVersion: string;
-  installVersion: string;
-  targetPackageSpec: string;
-  currentHead: string;
-  runDir: string;
-  daemon: string;
-  freshMain: {
-    status: string;
-    version: string;
-    gateway: string;
-    agent: string;
-  };
-  upgrade: {
-    status: string;
-    latestVersionInstalled: string;
-    mainVersion: string;
-    gateway: string;
-    agent: string;
-  };
-}
-
 const defaultOptions = (): LinuxOptions => ({
+  ...smokeDefaultOptions,
   apiKeyEnv: undefined,
-  hostIp: undefined,
   hostPort: 18427,
-  hostPortExplicit: false,
   installUrl: "https://openclaw.ai/install.sh",
-  installVersion: "",
-  json: false,
-  keepServer: false,
-  latestVersion: "",
-  mode: "both",
-  modelId: undefined,
-  npmRegistry: undefined,
-  provider: "openai",
   snapshotHint: "fresh",
-  targetPackageSpec: "",
   vmName: "Ubuntu 26.04",
   vmNameExplicit: false,
 });
@@ -192,16 +127,8 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
   private guestEnv: Record<string, string> = {};
 
   protected status = {
+    ...smokeDefaultStatus,
     daemon: "systemd-user-unavailable",
-    freshAgent: "skip",
-    freshGateway: "skip",
-    freshMain: "skip",
-    freshVersion: "skip",
-    latestInstalledVersion: "skip",
-    upgrade: "skip",
-    upgradeAgent: "skip",
-    upgradeGateway: "skip",
-    upgradeVersion: "skip",
   };
 
   constructor(options: LinuxOptions) {
@@ -218,7 +145,7 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
     this.phases = new PhaseRunner(this.runDir);
     this.tgzDir = await makeTempDir("openclaw-parallels-linux-tgz.");
     try {
-      this.options.vmName = this.resolveVmName();
+      this.options.vmName = resolveUbuntuVmName(this.options.vmName, this.options.vmNameExplicit);
       validateSnapshotRestoreMode(this.options.mode, "Linux smoke");
       this.snapshot = shouldSkipSnapshotRestore()
         ? currentRunningSnapshotInfo(this.options.vmName)
@@ -252,110 +179,75 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
     return this.options.targetPackageSpec ? "target package tgz" : "current main tgz";
   }
 
-  private resolveVmName(): string {
-    return resolveUbuntuVmName(this.options.vmName, this.options.vmNameExplicit);
+  protected runFreshLane(): Promise<void> {
+    return this.runInstallLane("fresh");
   }
 
-  protected async runFreshLane(): Promise<void> {
-    await this.phase("fresh.restore-snapshot", 180, () => this.restoreSnapshot());
-    await this.phase("fresh.bootstrap-guest", BOOTSTRAP_TIMEOUT_SECONDS, () =>
+  protected runUpgradeLane(): Promise<void> {
+    return this.runInstallLane("upgrade");
+  }
+
+  private async runInstallLane(lane: "fresh" | "upgrade"): Promise<void> {
+    await this.phases.phase(`${lane}.restore-snapshot`, 180, () => this.restoreSnapshot());
+    await this.phases.phase(`${lane}.bootstrap-guest`, BOOTSTRAP_TIMEOUT_SECONDS, () =>
       this.bootstrapGuest(),
     );
-    await this.phase("fresh.reset-state", 180, () => this.resetState());
-    await this.phase("fresh.preflight", 90, () => this.logGuestPreflight());
-    await this.phase("fresh.ensure-runtime", 420, () =>
-      ensureSmokeGuestRuntime({
-        runShell: (script) => this.guestBash(script),
-        bootstrap: () => this.installLatestRelease(),
-      }),
+    await this.phases.phase(`${lane}.reset-state`, 180, () => this.resetState());
+    await this.phases.phase(`${lane}.preflight`, 90, () => this.logGuestPreflight());
+    if (lane === "fresh") {
+      await this.phases.phase("fresh.ensure-runtime", 420, () =>
+        ensureSmokeGuestRuntime({
+          runShell: (script) => this.guest.bash(script),
+          bootstrap: () => this.installLatestRelease(),
+        }),
+      );
+    } else {
+      await this.phases.phase("upgrade.install-latest", 420, () => this.installLatestRelease());
+      this.status.latestInstalledVersion = await this.extractLastVersion("upgrade.install-latest");
+      await this.phases.phase("upgrade.verify-latest-version", 90, () =>
+        this.verifyVersionContains(this.latestVersion),
+      );
+    }
+    await this.phases.phase(`${lane}.install-main`, 420, () =>
+      this.installMainTgz(`openclaw-main-${lane}.tgz`),
     );
-    await this.phase("fresh.install-main", 420, () =>
-      this.installMainTgz("openclaw-main-fresh.tgz"),
+    this.status[`${lane}Version`] = await this.extractLastVersion(`${lane}.install-main`);
+    await this.phases.phase(`${lane}.verify-main-version`, 90, () => this.verifyTargetVersion());
+    if (lane === "fresh") {
+      await this.phases.phase("fresh.install-companions", 600, () =>
+        installSmokeRuntimeCompanions({
+          provider: this.options.provider,
+          readCli: (args) => this.guest.exec(["openclaw", ...args]),
+          installCli: (args) => {
+            this.guest.exec(["openclaw", ...args]);
+          },
+        }),
+      );
+      await this.phases.phase("fresh.onboard-ref", 420, () => this.runRefOnboard());
+    }
+    await this.phases.phase(`${lane}.inject-bad-plugin`, 90, () => this.injectBadPluginFixture());
+    if (lane === "upgrade") {
+      await this.phases.phase("upgrade.onboard-ref", 420, () => this.runRefOnboard());
+    }
+    await this.phases.phase(`${lane}.gateway-start`, 240, () => this.startGatewayBackground());
+    await this.phases.phase(`${lane}.bad-plugin-diagnostic`, 90, () =>
+      this.verifyBadPluginDiagnostic(lane),
     );
-    this.status.freshVersion = await this.extractLastVersion("fresh.install-main");
-    await this.phase("fresh.verify-main-version", 90, () => this.verifyTargetVersion());
-    await this.phase("fresh.install-companions", 600, () =>
-      installSmokeRuntimeCompanions({
-        provider: this.options.provider,
-        readCli: (args) => this.guestExec(["openclaw", ...args]),
-        installCli: (args) => {
-          this.guestExec(["openclaw", ...args]);
-        },
-      }),
-    );
-    await this.phase("fresh.onboard-ref", 420, () => this.runRefOnboard());
-    await this.phase("fresh.inject-bad-plugin", 90, () =>
-      this.maybeInjectBadPluginFixture("fresh"),
-    );
-    await this.phase("fresh.gateway-start", 240, () => this.startGatewayBackground());
-    await this.phase("fresh.bad-plugin-diagnostic", 90, () =>
-      this.maybeVerifyBadPluginDiagnostic("fresh"),
-    );
-    await this.phase("fresh.gateway-status", 240, () => this.verifyGatewayStatus());
-    this.status.freshGateway = "pass";
-    await this.phase("fresh.first-local-agent-turn", this.agentTimeoutSeconds, () =>
+    await this.phases.phase(`${lane}.gateway-status`, 240, () => this.verifyGatewayStatus());
+    this.status[`${lane}Gateway`] = "pass";
+    await this.phases.phase(`${lane}.first-local-agent-turn`, this.agentTimeoutSeconds, () =>
       this.verifyLocalTurn(),
     );
-    this.status.freshAgent = "pass";
+    this.status[`${lane}Agent`] = "pass";
   }
-
-  protected async runUpgradeLane(): Promise<void> {
-    await this.phase("upgrade.restore-snapshot", 180, () => this.restoreSnapshot());
-    await this.phase("upgrade.bootstrap-guest", BOOTSTRAP_TIMEOUT_SECONDS, () =>
-      this.bootstrapGuest(),
-    );
-    await this.phase("upgrade.reset-state", 180, () => this.resetState());
-    await this.phase("upgrade.preflight", 90, () => this.logGuestPreflight());
-    await this.phase("upgrade.install-latest", 420, () => this.installLatestRelease());
-    this.status.latestInstalledVersion = await this.extractLastVersion("upgrade.install-latest");
-    await this.phase("upgrade.verify-latest-version", 90, () =>
-      this.verifyVersionContains(this.latestVersion),
-    );
-    await this.phase("upgrade.install-main", 420, () =>
-      this.installMainTgz("openclaw-main-upgrade.tgz"),
-    );
-    this.status.upgradeVersion = await this.extractLastVersion("upgrade.install-main");
-    await this.phase("upgrade.verify-main-version", 90, () => this.verifyTargetVersion());
-    await this.phase("upgrade.inject-bad-plugin", 90, () =>
-      this.maybeInjectBadPluginFixture("upgrade"),
-    );
-    await this.phase("upgrade.onboard-ref", 420, () => this.runRefOnboard());
-    await this.phase("upgrade.gateway-start", 240, () => this.startGatewayBackground());
-    await this.phase("upgrade.bad-plugin-diagnostic", 90, () =>
-      this.maybeVerifyBadPluginDiagnostic("upgrade"),
-    );
-    await this.phase("upgrade.gateway-status", 240, () => this.verifyGatewayStatus());
-    this.status.upgradeGateway = "pass";
-    await this.phase("upgrade.first-local-agent-turn", this.agentTimeoutSeconds, () =>
-      this.verifyLocalTurn(),
-    );
-    this.status.upgradeAgent = "pass";
-  }
-
-  private phase = async (name: string, timeoutSeconds: number, fn: () => Promise<void> | void) =>
-    await this.phases.phase(name, timeoutSeconds, fn);
-
-  private remainingPhaseTimeoutMs = (fallbackMs?: number): number | undefined =>
-    this.phases.remainingTimeoutMs(fallbackMs);
 
   private logGuestPreflight(): void {
-    this.guestBash(String.raw`set -euo pipefail
+    this.guest.bash(String.raw`set -euo pipefail
 printf 'preflight.user=%s\n' "$(whoami)"
 printf 'preflight.home=%s\n' "$HOME"
 printf 'preflight.path=%s\n' "$PATH"
 printf 'preflight.umask=%s\n' "$(umask)"
 printf 'preflight.npmRoot=%s\n' "$(npm root -g 2>/dev/null || true)"`);
-  }
-
-  private log = (text: string): void => this.phases.append(text);
-
-  private guestExec = (
-    args: string[],
-    options: { check?: boolean; timeoutMs?: number } = {},
-  ): string => this.guest.exec(args, options);
-
-  private guestBash(script: string): string {
-    return this.guest.bash(script);
   }
 
   private waitForGuestReady(timeoutSeconds = 180): void {
@@ -364,13 +256,12 @@ printf 'preflight.npmRoot=%s\n' "$(npm root -g 2>/dev/null || true)"`);
       if (
         run("prlctl", ["exec", this.options.vmName, "/usr/bin/env", "HOME=/root", "/bin/true"], {
           check: false,
-          quiet: true,
-          timeoutMs: this.remainingPhaseTimeoutMs(),
+          timeoutMs: this.phases.remainingTimeoutMs(),
         }).status === 0
       ) {
         return;
       }
-      run("sleep", ["2"], { quiet: true });
+      run("sleep", ["2"]);
     }
     die(`guest did not become ready in ${this.options.vmName}`);
   }
@@ -385,22 +276,21 @@ printf 'preflight.npmRoot=%s\n' "$(npm root -g 2>/dev/null || true)"`);
     }
     say(`Restore snapshot ${this.options.snapshotHint} (${this.snapshot.id})`);
     run("prlctl", ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id], {
-      quiet: true,
-      timeoutMs: this.remainingPhaseTimeoutMs(),
+      timeoutMs: this.phases.remainingTimeoutMs(),
     });
     ensureVmRunning(this.options.vmName, 180, {
-      probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000),
-      transitionTimeoutMs: () => this.remainingPhaseTimeoutMs(120_000),
+      probeTimeoutMs: () => this.phases.remainingTimeoutMs(30_000),
+      transitionTimeoutMs: () => this.phases.remainingTimeoutMs(120_000),
     });
     this.waitForGuestReady();
   }
 
   private bootstrapGuest(): void {
     const hostNow = `@${Math.floor(Date.now() / 1000)}`;
-    this.guestExec(["date", "-u", "-s", hostNow]);
-    this.guestExec(["hwclock", "--systohc"], { check: false });
-    this.guestExec(["timedatectl", "set-ntp", "true"], { check: false });
-    this.guestExec(["systemctl", "restart", "systemd-timesyncd"], { check: false });
+    this.guest.exec(["date", "-u", "-s", hostNow]);
+    this.guest.exec(["hwclock", "--systohc"], { check: false });
+    this.guest.exec(["timedatectl", "set-ntp", "true"], { check: false });
+    this.guest.exec(["systemctl", "restart", "systemd-timesyncd"], { check: false });
     this.guest.bash(`
 set -e
 if command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; then
@@ -438,7 +328,7 @@ run_apt_with_lock_retry apt-get -o DPkg::Lock::Timeout=30 install -y curl ca-cer
   }
 
   private resetState(): void {
-    this.guestBash(String.raw`set -euo pipefail
+    this.guest.bash(String.raw`set -euo pipefail
 pkill -f '[o]penclaw.*gateway run' >/dev/null 2>&1 || true
 pkill -f '[o]penclaw-gateway' >/dev/null 2>&1 || true
 pkill -f '[o]penclaw.mjs gateway' >/dev/null 2>&1 || true
@@ -449,26 +339,15 @@ rm -f /tmp/openclaw-parallels-linux-gateway.log`);
 
   private installLatestRelease(): void {
     this.downloadGuestFile(this.options.installUrl, "/tmp/openclaw-install.sh");
-    if (this.options.installVersion) {
-      this.guestExec([
-        "/usr/bin/env",
-        "OPENCLAW_NO_ONBOARD=1",
-        "bash",
-        "/tmp/openclaw-install.sh",
-        "--version",
-        this.options.installVersion,
-        "--no-onboard",
-      ]);
-    } else {
-      this.guestExec([
-        "/usr/bin/env",
-        "OPENCLAW_NO_ONBOARD=1",
-        "bash",
-        "/tmp/openclaw-install.sh",
-        "--no-onboard",
-      ]);
-    }
-    this.guestExec(["openclaw", "--version"]);
+    this.guest.exec([
+      "/usr/bin/env",
+      "OPENCLAW_NO_ONBOARD=1",
+      "bash",
+      "/tmp/openclaw-install.sh",
+      ...(this.options.installVersion ? ["--version", this.options.installVersion] : []),
+      "--no-onboard",
+    ]);
+    this.guest.exec(["openclaw", "--version"]);
   }
 
   private downloadGuestFile(url: string, outputPath: string): void {
@@ -490,8 +369,8 @@ fi`);
     this.guestEnv = npmRegistryEnv(this.options.npmRegistry ?? this.server.registry?.url);
     const tgzUrl = this.server.urlFor(this.artifact.path);
     this.downloadGuestFile(tgzUrl, `/tmp/${tempName}`);
-    this.guestExec(["npm", "install", "-g", `/tmp/${tempName}`, "--no-fund", "--no-audit"]);
-    this.guestExec(["openclaw", "--version"]);
+    this.guest.exec(["npm", "install", "-g", `/tmp/${tempName}`, "--no-fund", "--no-audit"]);
+    this.guest.exec(["openclaw", "--version"]);
   }
 
   private async verifyTargetVersion(): Promise<void> {
@@ -506,39 +385,18 @@ fi`);
   }
 
   private verifyVersionContains(needle: string): void {
-    const version = this.guestExec(["openclaw", "--version"]);
+    const version = this.guest.exec(["openclaw", "--version"]);
     if (!version.includes(needle)) {
       throw new Error(`version mismatch: expected substring ${needle}`);
     }
   }
 
   private runRefOnboard(): void {
-    this.guestExec([
-      "/usr/bin/env",
-      `${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`,
-      "openclaw",
-      "onboard",
-      "--non-interactive",
-      "--mode",
-      "local",
-      "--auth-choice",
-      this.auth.authChoice,
-      ...(this.auth.tokenProvider ? ["--token-provider", this.auth.tokenProvider] : []),
-      "--secret-input-mode",
-      "ref",
-      "--gateway-port",
-      "18789",
-      "--gateway-bind",
-      "loopback",
-      "--skip-skills",
-      "--skip-health",
-      "--accept-risk",
-      "--json",
-    ]);
+    this.guest.exec(posixRefOnboardArgs(this.auth));
   }
 
   private injectBadPluginFixture(): void {
-    this.guestBash(String.raw`set -euo pipefail
+    this.guest.bash(String.raw`set -euo pipefail
 plugin_dir=/root/.openclaw/test-bad-plugin
 mkdir -p "$plugin_dir"
 cat >"$plugin_dir/package.json" <<'JSON'
@@ -579,31 +437,9 @@ config_path.write_text(json.dumps(config, indent=2) + "\n")
 PY`);
   }
 
-  private versionForLane(lane: "fresh" | "upgrade"): string {
-    return lane === "fresh" ? this.status.freshVersion : this.status.upgradeVersion;
-  }
-
-  private shouldExpectBadPluginDiagnostic(lane: "fresh" | "upgrade"): boolean {
-    const version = parseOpenClawPackageVersion(this.versionForLane(lane));
-    if (!version) {
-      return true;
-    }
-    return compareOpenClawPackageVersions(version, BAD_PLUGIN_DIAGNOSTIC_MIN_VERSION) >= 0;
-  }
-
-  private maybeInjectBadPluginFixture(lane: "fresh" | "upgrade"): void {
-    if (!this.shouldExpectBadPluginDiagnostic(lane)) {
-      this.log(
-        `Skipping bad plugin diagnostic fixture for ${lane}: installed ${this.versionForLane(lane)} predates ${BAD_PLUGIN_DIAGNOSTIC_MIN_VERSION}\n`,
-      );
-      return;
-    }
-    this.injectBadPluginFixture();
-  }
-
   private startGatewayBackground(): void {
     const bonjourEnv = this.disableBonjour ? " OPENCLAW_DISABLE_BONJOUR=1" : "";
-    this.guestBash(
+    this.guest.bash(
       String.raw`pkill -f "openclaw gateway run" >/dev/null 2>&1 || true
 rm -f /tmp/openclaw-parallels-linux-gateway.log
 setsid sh -lc ` +
@@ -616,50 +452,28 @@ setsid sh -lc ` +
     );
     const deadline = Date.now() + 240_000;
     while (Date.now() < deadline) {
-      if (this.showGatewayStatusCompat(false)) {
+      if (this.showGatewayStatusCompat()) {
         return;
       }
-      run("sleep", ["2"], { quiet: true });
+      run("sleep", ["2"]);
     }
     throw new Error("gateway did not become ready");
   }
 
-  private showGatewayStatusCompat(check = true): boolean {
-    const help = this.guestExec(["openclaw", "gateway", "status", "--help"], { check: false });
+  private showGatewayStatusCompat(): boolean {
+    const help = this.guest.exec(["openclaw", "gateway", "status", "--help"], { check: false });
     const args = help.includes("--require-rpc")
       ? ["openclaw", "gateway", "status", "--deep", "--require-rpc"]
       : ["openclaw", "gateway", "status", "--deep"];
     const result = this.guest.run(args, { check: false });
-    if (check && result.status !== 0) {
-      throw new Error("gateway status failed");
-    }
     return result.status === 0;
   }
 
   private verifyGatewayStatus(): void {
-    for (let attempt = 1; attempt <= 8; attempt++) {
-      const result = this.guest.run(
-        ["openclaw", "gateway", "status", "--deep", "--require-rpc", "--timeout", "15000"],
-        { check: false },
-      );
-      if (result.status === 0) {
-        return;
-      }
-      if (attempt < 8) {
-        warn(`gateway-status retry ${attempt}`);
-        run("sleep", ["5"], { quiet: true });
-      }
-    }
-    throw new Error("gateway status did not become RPC-ready");
+    verifyPosixGateway(this.guest);
   }
 
-  private async maybeVerifyBadPluginDiagnostic(lane: "fresh" | "upgrade"): Promise<void> {
-    if (!this.shouldExpectBadPluginDiagnostic(lane)) {
-      this.log(
-        `Skipping bad plugin diagnostic assertion for ${lane}: installed ${this.versionForLane(lane)} predates ${BAD_PLUGIN_DIAGNOSTIC_MIN_VERSION}\n`,
-      );
-      return;
-    }
+  private async verifyBadPluginDiagnostic(lane: "fresh" | "upgrade"): Promise<void> {
     const warning =
       "channel plugin manifest declares test-bad-plugin without channelConfigs metadata";
     const gatewayStartLog = await readFile(
@@ -669,8 +483,8 @@ setsid sh -lc ` +
     if (!gatewayStartLog.includes(warning)) {
       throw new Error(`bad plugin diagnostic missing: ${warning}`);
     }
-    this.log(warning);
-    this.guestBash(String.raw`set -euo pipefail
+    this.phases.append(warning);
+    this.guest.bash(String.raw`set -euo pipefail
 python3 - <<'PY'
 import json
 from pathlib import Path
@@ -690,7 +504,7 @@ rm -rf /root/.openclaw/test-bad-plugin`);
   }
 
   private restrictAgentTurnPlugins(): void {
-    this.guestBash(
+    this.guest.bash(
       posixProviderOnlyPluginIsolationScript({
         fallbackPluginId: this.options.provider,
         modelId: this.auth.modelId,
@@ -699,18 +513,18 @@ rm -rf /root/.openclaw/test-bad-plugin`);
   }
 
   private verifyLocalTurn(): void {
-    this.guestBash(`set -euo pipefail\n${posixStopGatewayScript()}`);
-    this.guestExec(["openclaw", "models", "set", this.auth.modelId]);
+    this.guest.bash(`set -euo pipefail\n${posixStopGatewayScript()}`);
+    this.guest.exec(["openclaw", "models", "set", this.auth.modelId]);
     const modelProviderConfigBatch = modelProviderConfigBatchJson(this.auth.modelId, "linux");
     if (modelProviderConfigBatch) {
-      this.guestBash(`provider_config_batch="$(mktemp)"
+      this.guest.bash(`provider_config_batch="$(mktemp)"
 cat >"$provider_config_batch" <<'JSON'
 ${modelProviderConfigBatch}
 JSON
 openclaw config set --batch-file "$provider_config_batch" --strict-json
 rm -f "$provider_config_batch"`);
     }
-    this.guestExec([
+    this.guest.exec([
       "openclaw",
       "config",
       "set",
@@ -718,10 +532,10 @@ rm -f "$provider_config_batch"`);
       "true",
       "--strict-json",
     ]);
-    this.guestExec(["openclaw", "config", "set", "tools.profile", "minimal"]);
+    this.guest.exec(["openclaw", "config", "set", "tools.profile", "minimal"]);
     this.restrictAgentTurnPlugins();
-    this.prepareAgentWorkspace();
-    this.guestBash(
+    this.guest.bash(posixAgentWorkspaceScript("Parallels Linux smoke test assistant."));
+    this.guest.bash(
       `${posixCodexPlatformPackageRepairFunction()}
 ${posixAgentTurnScript({
   command: `/usr/bin/env OPENCLAW_ALLOW_ROOT=1 ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} openclaw agent --local --agent main --session-id "$session_id" --message ${shellQuote(
@@ -734,10 +548,6 @@ ${posixAgentTurnScript({
     );
   }
 
-  private prepareAgentWorkspace(): void {
-    this.guestBash(posixAgentWorkspaceScript("Parallels Linux smoke test assistant."));
-  }
-
   private async extractLastVersion(phaseId: string): Promise<string> {
     return await extractLastOpenClawVersion(
       this.runDir,
@@ -748,7 +558,7 @@ ${posixAgentTurnScript({
 
   protected async writeSummary(): Promise<string> {
     const summaryPath = path.join(this.runDir, "summary.json");
-    const summary: LinuxSummary = {
+    const summary = {
       daemon: this.status.daemon,
       ...buildCommonSmokeSummary({
         artifact: this.artifact,

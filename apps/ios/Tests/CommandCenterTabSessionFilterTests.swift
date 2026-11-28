@@ -1,8 +1,129 @@
-import Testing
+import Foundation
 import OpenClawChatUI
+import Testing
 @testable import OpenClaw
 
+@MainActor
 struct CommandCenterTabSessionFilterTests {
+    @Test func `cached browsing scopes remain available offline while archives require a connection`() {
+        #expect(SessionStatusScope.available(isConnected: false) == [.active, .snoozed, .automations])
+        #expect(SessionStatusScope.available(isConnected: true) == [.active, .snoozed, .automations, .archived])
+    }
+
+    @Test @MainActor
+    func `automation scope preserves selection without leaking archived sessions into active`() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let entries = try JSONDecoder().decode([OpenClawChatSessionEntry].self, from: Data("""
+        [
+          {"key":"agent:main:cron:daily"},
+          {"key":"agent:main:cron:archived","archived":true},
+          {"key":"conversation"},
+          {"key":"agent:main:main"}
+        ]
+        """.utf8))
+        func keys(_ scope: SessionStatusScope, selected: String? = nil) -> [String] {
+            let currentKey = ChatSessionSidebarModel.selectedSessionKey(
+                sessions: entries, currentSessionKey: selected ?? "", mainSessionKey: "main", activeAgentID: "main")
+            return entries.filter {
+                CommandCenterTab.isListedChatSession(
+                    $0.key, mainSessionKey: "agent:main:main", defaultSessionKey: "main") &&
+                    scope.includes($0, at: now, currentSessionKey: currentKey)
+            }.map(\.key)
+        }
+        #expect(keys(.active) == ["conversation", "agent:main:main"])
+        #expect(keys(.active, selected: "cron:daily") == ["agent:main:cron:daily", "conversation", "agent:main:main"])
+        #expect(keys(.active, selected: "agent:main:cron:archived") == ["conversation", "agent:main:main"])
+        #expect(keys(.automations) == ["agent:main:cron:daily"])
+        #expect(keys(.archived) == ["agent:main:cron:archived"])
+    }
+
+    @Test func `status scopes separate future snoozes and archives while expired snoozes return to active`() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let entries = try JSONDecoder().decode([OpenClawChatSessionEntry].self, from: Data("""
+        [
+          {"key":"awake"},
+          {"key":"later","snoozedUntil":1800000060000},
+          {"key":"expired","snoozedUntil":1799999999999},
+          {"key":"boundary","snoozedUntil":1800000000000},
+          {"key":"archived","archived":true},
+          {"key":"archived-snooze","archived":true,"snoozedUntil":1800000060000}
+        ]
+        """.utf8))
+
+        let active = entries.filter { SessionStatusScope.active.includes($0, at: now) }
+        #expect(active.map(\.key) == ["awake", "expired", "boundary"])
+        #expect(entries.filter { SessionStatusScope.snoozed.includes($0, at: now) }.map(\.key) == ["later"])
+        #expect(entries.filter { SessionStatusScope.archived.includes($0, at: now) }.map(\.key) == [
+            "archived", "archived-snooze",
+        ])
+        let sections = CommandSessionGrouping.sections(from: active)
+        #expect(sections.flatMap(\.entries).map(\.key).sorted() == ["awake", "boundary", "expired"])
+        #expect(SessionPresentation.detail(entries[1], now: now).hasPrefix("Wakes "))
+        #expect(!SessionPresentation.detail(entries[2], now: now).hasPrefix("Wakes "))
+    }
+
+    @Test(arguments: ["main", "work"], [false, true]) @MainActor
+    func `all sessions includes one existing main row without changing recent chats`(
+        base: String, qualifiedMain: Bool) throws
+    {
+        let mainKey = "agent:one:\(base)"
+        let configuredMain = qualifiedMain ? mainKey : base
+        var main = OpenClawChatSessionEntry(key: mainKey, label: "Original topic")
+        main.sessionId = "existing-main-history"
+        let other = OpenClawChatSessionEntry(key: "agent:one:conversation", label: "Packing")
+        let sessions = [
+            main, other,
+            OpenClawChatSessionEntry(key: "agent:two:\(base)"),
+            OpenClawChatSessionEntry(key: "agent:one:\(base):thread:42"),
+            OpenClawChatSessionEntry(key: "agent:one:node-device"),
+        ] + (qualifiedMain ? [OpenClawChatSessionEntry(key: base)] : [])
+        // The configured canonical row wins over its bare alias when both are present.
+        let resolvedMain = ChatSessionSidebarModel.selectedSessionKey(
+            sessions: sessions,
+            currentSessionKey: configuredMain,
+            mainSessionKey: configuredMain,
+            activeAgentID: "one",
+            sessionRoutingContract: "per-sender|\(base)|one")
+        let listed = sessions.filter {
+            CommandCenterTab.isListedChatSession(
+                $0.key, mainSessionKey: resolvedMain, defaultSessionKey: configuredMain)
+        }
+        #expect(listed.map(\.key) == [mainKey, other.key])
+        let row = try #require(listed.first { $0.key == resolvedMain })
+        #expect(!CommandCenterTab.isRecentChatSession(row.key, defaultSessionKey: configuredMain))
+        #expect(!ChatSessionSidebarModel.canDeleteSession(key: row.key, mainSessionKey: resolvedMain))
+        #expect(!ChatSessionSidebarModel.canArchiveSession(row, mainSessionKey: resolvedMain))
+        #expect(ChatSessionSidebarModel.canDeleteSession(key: other.key, mainSessionKey: resolvedMain))
+        #expect(SessionPresentation.workItem(for: row, currentSessionKey: resolvedMain).state == "open")
+        #expect(SessionPresentation.title(main) == "Original topic")
+        #expect(SessionPresentation.title(other) == "Packing")
+    }
+
+    @Test(arguments: [true, false]) @MainActor
+    func `custom main filtering retains the configured base with an incomplete roster`(mainPresent: Bool) {
+        let main = OpenClawChatSessionEntry(key: "agent:one:work")
+        let other = OpenClawChatSessionEntry(key: "agent:one:conversation")
+        let sessions = (mainPresent ? [main] : []) + [
+            other, OpenClawChatSessionEntry(key: "agent:one:work:thread:42"),
+            OpenClawChatSessionEntry(key: "agent:two:work"),
+        ]
+        let resolvedMain = ChatSessionSidebarModel.selectedSessionKey(
+            sessions: sessions, currentSessionKey: main.key, mainSessionKey: main.key, activeAgentID: "one")
+        let listed = sessions.filter {
+            CommandCenterTab.isListedChatSession($0.key, mainSessionKey: resolvedMain, defaultSessionKey: main.key)
+        }
+        #expect(listed.map(\.key) == (mainPresent ? [main.key, other.key] : [other.key]))
+        let sidebar = RootSidebarModel.sections(
+            sessions: sessions,
+            query: "",
+            currentSessionKey: other.key,
+            mainSessionKey: main.key,
+            activeAgentID: "one",
+            groups: [],
+            rosterIsComplete: mainPresent)
+        #expect(!sidebar.flatMap(\.nodes).contains { $0.session.key == main.key })
+    }
+
     @Test func `hides direct agent device sessions`() {
         #expect(!CommandCenterTab.isRecentChatSession("main", defaultSessionKey: "main"))
         #expect(!CommandCenterTab.isRecentChatSession("agent:main:main", defaultSessionKey: "main"))
@@ -72,12 +193,17 @@ struct CommandCenterTabSessionFilterTests {
         }
 
         #expect(
-            CommandCenterTab.sessionTitle(
+            SessionPresentation.title(
                 entry(key: "agent:main:ios-abc123", displayName: "Compare session naming"))
                 == "Compare session naming")
-        #expect(CommandCenterTab.sessionTitle(entry(key: "agent:main:ios-abc123")) == "iOS chat")
+        let untitled = entry(key: "agent:main:ios-abc123")
+        #expect(SessionPresentation.title(untitled) == "iOS chat")
+        #expect(SessionPresentation.title(untitled, includesRoutingFallback: false) == nil)
+        #expect(SessionPresentation.title(
+            entry(key: untitled.key, displayName: "Compare session naming"),
+            includesRoutingFallback: false) == "Compare session naming")
         #expect(
-            CommandCenterTab.sessionTitle(
+            SessionPresentation.title(
                 entry(
                     key: "agent:main:ios-abc123",
                     displayName: "Compare session naming",
@@ -86,15 +212,62 @@ struct CommandCenterTabSessionFilterTests {
 
         let nodeKey = "agent:main:node-1234567890ab"
         let autoLabel = "OpenClaw App · Pixel · 1234567890ab"
-        #expect(CommandCenterTab.sessionTitle(entry(key: nodeKey, autoLabel: autoLabel)) == autoLabel)
+        #expect(SessionPresentation.title(entry(key: nodeKey, autoLabel: autoLabel)) == autoLabel)
         #expect(
-            CommandCenterTab.sessionTitle(
+            SessionPresentation.title(
                 entry(key: nodeKey, displayName: "Compare session naming", autoLabel: autoLabel))
                 == "Compare session naming")
         let manualLabel = "OpenClaw App · Release planning · 1234567890ab"
         #expect(
-            CommandCenterTab.sessionTitle(
+            SessionPresentation.title(
                 entry(key: nodeKey, displayName: "Compare session naming", label: manualLabel, autoLabel: autoLabel))
                 == manualLabel)
+    }
+
+    @Test func `the main session and pending dashboard sessions never show their raw key`() {
+        #expect(SessionPresentation.title(OpenClawChatSessionEntry(key: "agent:main:main")) == "Main chat")
+        #expect(SessionPresentation.title(OpenClawChatSessionEntry(key: "main")) == "Main chat")
+        #expect(SessionPresentation.title(OpenClawChatSessionEntry(key: "agent:work:main")) == "Main chat")
+        #expect(SessionPresentation.title(OpenClawChatSessionEntry(key: "agent:main:main:thread:1")) != "Main chat")
+        #expect(SessionPresentation.title(
+            OpenClawChatSessionEntry(key: "agent:main:dashboard:0f3c2b7e-1111-4222-8333-444455556666")) ==
+            "New session")
+        // The chat header keeps its own fallback (the agent's name) for an untitled main session.
+        #expect(SessionPresentation.title(
+            OpenClawChatSessionEntry(key: "agent:main:main"), includesRoutingFallback: false) == nil)
+        // A real title still wins.
+        #expect(SessionPresentation.title(
+            OpenClawChatSessionEntry(key: "agent:main:main", label: "Daily standup")) == "Daily standup")
+    }
+
+    @Test func `an untitled session reads as its derived title, its given name, or Untitled session`() {
+        var derived = OpenClawChatSessionEntry(key: "agent:main:ios-7d2ab138-a982-4b1a-8ecc-fd334a61f76a")
+        derived.derivedTitle = "Plan a weekend in Porto"
+        #expect(SessionPresentation.title(derived) == "Plan a weekend in Porto")
+        var mainWithDerived = OpenClawChatSessionEntry(key: "agent:main:main")
+        mainWithDerived.derivedTitle = "A friendly greeting"
+        #expect(SessionPresentation.title(mainWithDerived) == "Main chat")
+        // A tail someone named reads as the name, as on the web.
+        #expect(SessionPresentation.title(OpenClawChatSessionEntry(key: "agent:main:iv-lane-1")) == "iv-lane-1")
+        #expect(SessionPresentation.title(OpenClawChatSessionEntry(key: "agent:main:explicit:release-notes")) ==
+            "release-notes")
+        // An opaque id is not a name: never a fragment, never the key.
+        #expect(SessionPresentation.title(
+            OpenClawChatSessionEntry(key: "agent:main:run-0f3c2b7e-1111-4222-8333-444455556666")) == "Untitled session")
+        #expect(SessionPresentation.title(OpenClawChatSessionEntry(key: "agent:main:node-1234567890ab")) ==
+            "Untitled session")
+        #expect(SessionPresentation.title(OpenClawChatSessionEntry(key: "agent:main:abc123def4")) ==
+            "Untitled session")
+        #expect(SessionPresentation.title(OpenClawChatSessionEntry(key: "agent:main:abc123def")) == "abc123def")
+    }
+
+    @Test func `a key copied into the label or display name never becomes the session title`() throws {
+        let sessions = try JSONDecoder().decode([OpenClawChatSessionEntry].self, from: Data("""
+        [
+          {"key":"agent:main:work","label":"agent:main:work","displayName":"Release prep"},
+          {"key":"agent:main:fresh","displayName":"agent:main:fresh","autoLabel":"Fix the flaky test"}
+        ]
+        """.utf8))
+        #expect(sessions.map(SessionPresentation.title) == ["Release prep", "Fix the flaky test"])
     }
 }

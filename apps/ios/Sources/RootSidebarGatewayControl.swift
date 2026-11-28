@@ -7,18 +7,22 @@ struct SidebarGatewayPresentation {
     let entries: [GatewaySettingsStore.GatewayRegistryEntry]
     let focusedID: String?
     let state: GatewayDisplayState
+    /// The status owner's plain-words reason, read out when the state is an error.
+    let problemText: String?
 
     init(
         registry: GatewaySettingsStore.GatewayRegistry,
         connectionID: String?,
         connectedID: String?,
-        state: GatewayDisplayState)
+        state: GatewayDisplayState,
+        problemText: String? = nil)
     {
         self.entries = registry.entries
         // A saved selection can precede TLS review. Keep the current route's
         // identity until the connection owner actually hands off to the target.
         self.focusedID = connectionID ?? connectedID ?? registry.activeStableID
         self.state = state
+        self.problemText = problemText
     }
 
     var showsPicker: Bool {
@@ -38,6 +42,23 @@ struct SidebarGatewayPresentation {
         }
     }
 
+    /// Online keeps its green dot: on this control the connection is a signal worth showing even when it is fine.
+    func showsOnlineDot(isSwitching: Bool) -> Bool {
+        !self.entries.isEmpty && !isSwitching && self.state == .connected
+    }
+
+    /// The control's spoken state, one for each mark it shows, online included.
+    func accessibilityStatus(isSwitching: Bool) -> String {
+        if self.entries.isEmpty { return "" }
+        if isSwitching { return String(localized: "Connecting") }
+        switch self.state {
+        case .connected: return String(localized: "Online")
+        case .connecting: return String(localized: "Connecting")
+        case .disconnected: return String(localized: "Offline")
+        case .error: return self.problemText ?? String(localized: "Needs attention")
+        }
+    }
+
     func rowTitle(_ entry: GatewaySettingsStore.GatewayRegistryEntry) -> String {
         // The background fleet does not publish per-row health. Do not label
         // 'keep connected' intent as Online or invent Offline for other rows.
@@ -50,7 +71,7 @@ struct SidebarGatewayPicker: View {
     let presentation: SidebarGatewayPresentation
     let fallbackName: String
     let isSwitching: Bool
-    let selectGateway: (String) -> Void
+    let selectGateway: @MainActor (String) -> Void
     let openSettings: () -> Void
 
     var body: some View {
@@ -103,7 +124,7 @@ struct SidebarGatewayPicker: View {
         .buttonStyle(.plain)
         .foregroundStyle(OpenClawSidebarPalette.text)
         .accessibilityLabel(self.controlName)
-        .accessibilityValue(self.presentation.entries.isEmpty ? "" : self.presentation.statusTitle)
+        .accessibilityValue(self.presentation.accessibilityStatus(isSwitching: self.isSwitching))
         .accessibilityHint(self.presentation.showsPicker
             ? String(localized: "Switch gateway or manage saved gateways")
             : String(localized: "Open gateway setup and connection settings"))
@@ -114,33 +135,48 @@ struct SidebarGatewayPicker: View {
         return self.presentation.focusedEntry?.name ?? self.fallbackName
     }
 
+    @ViewBuilder
     private var controlLabel: some View {
-        HStack(spacing: 9) {
-            if self.isSwitching {
+        // Each state has its own mark, told apart by shape as well as color: a green dot when online,
+        // a spinner while connecting, a slashed antenna when offline, a warning badge on an error.
+        let state = self.presentation.entries.isEmpty ? GatewayDisplayState.connected : self.presentation.state
+        ZStack {
+            if self.isSwitching || state == .connecting {
                 ProgressView()
                     .controlSize(.small)
-                    .accessibilityLabel("Switching Gateway")
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(verbatim: self.controlName)
-                    .font(OpenClawType.subheadSemiBold)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                if !self.presentation.entries.isEmpty {
-                    Text(verbatim: self.presentation.statusTitle)
-                        .font(OpenClawType.captionMedium)
-                        .foregroundStyle(OpenClawSidebarPalette.muted)
-                }
-            }
-            if self.presentation.showsPicker {
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(OpenClawType.captionSemiBold)
-                    .accessibilityHidden(true)
+                    .tint(OpenClawSidebarPalette.muted)
+            } else {
+                Image(systemName: state == .disconnected
+                    ? "antenna.radiowaves.left.and.right.slash"
+                    : "antenna.radiowaves.left.and.right")
+                    .font(.system(size: 17, weight: .regular))
+                    .environment(\.symbolVariants, .none)
+                    .foregroundStyle(state == .disconnected
+                        ? OpenClawSidebarPalette.muted
+                        : OpenClawSidebarPalette.text)
+                    .frame(width: 22, height: 22)
+                    .overlay(alignment: .topTrailing) {
+                        if self.presentation.showsOnlineDot(isSwitching: self.isSwitching) {
+                            Circle()
+                                .fill(OpenClawBrand.ok)
+                                .frame(width: 8, height: 8)
+                                .overlay(Circle().stroke(OpenClawSidebarPalette.background, lineWidth: 1.5))
+                                .offset(x: 3, y: -2)
+                        } else if state == .error {
+                            Image(systemName: "exclamationmark.circle.fill")
+                                .font(.system(size: 11, weight: .bold))
+                                .symbolRenderingMode(.palette)
+                                .foregroundStyle(OpenClawSidebarPalette.background, OpenClawBrand.warn)
+                                .background(Circle().fill(OpenClawSidebarPalette.background).padding(-1.5))
+                                .offset(x: 5, y: -3)
+                        }
+                    }
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-        .padding(.horizontal, 10)
-        .contentShape(Rectangle())
+        .accessibilityHidden(true)
+        .frame(width: 44, height: 44)
+        .contentShape(Circle())
+        .glassEffect(.regular.interactive(), in: Circle())
     }
 }
 
@@ -152,13 +188,17 @@ struct RootSidebarGatewayControl: View {
     let fallbackName: String
     let openSettings: () -> Void
 
+    /// Always the connection control: it shows the connection and switches it. The person's identity
+    /// belongs to Settings, not to this bar.
     var body: some View {
+        let status = GatewayStatusBuilder.source(for: self.appModel.connection.node, appModel: self.appModel)
         SidebarGatewayPicker(
             presentation: SidebarGatewayPresentation(
                 registry: self.registry,
                 connectionID: self.appModel.activeGatewayConnectConfig?.effectiveStableID,
                 connectedID: self.appModel.connectedGatewayID,
-                state: GatewayStatusBuilder.build(appModel: self.appModel)),
+                state: status.displayState,
+                problemText: status.displayState == .error ? status.statusText : nil),
             fallbackName: self.fallbackName,
             isSwitching: self.appModel.isGatewayPickerRequestInFlight ||
                 self.gatewayController.hasPendingConnectionHandoff,
@@ -182,12 +222,7 @@ struct RootSidebarGatewayControl: View {
     }
 
     private func refreshRegistry() {
-        // Demo/capture screens must not expose the installed user's saved hosts.
-        guard !self.appModel.isAppleReviewDemoModeEnabled, !self.appModel.isScreenshotFixtureModeEnabled else {
-            self.registry = .empty
-            return
-        }
-        self.registry = GatewaySettingsStore.loadGatewayRegistry()
+        self.registry = self.appModel.loadDisplayedGatewayRegistry()
     }
 
     private func switchGateway(_ stableID: String) {

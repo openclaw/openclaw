@@ -1,12 +1,4 @@
-/**
- * Matrix Poll Types (MSC3381)
- *
- * Defines types for Matrix poll events:
- * - m.poll.start - Creates a new poll
- * - m.poll.response - Records a vote
- * - m.poll.end - Closes a poll
- */
-
+// Matrix polls follow MSC3381.
 import {
   M_POLL_KIND_DISCLOSED,
   type PollKind as MatrixPollKind,
@@ -18,12 +10,12 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export const M_POLL_START = "m.poll.start" as const;
+const M_POLL_START = "m.poll.start" as const;
 const M_POLL_RESPONSE = "m.poll.response" as const;
 const M_POLL_END = "m.poll.end" as const;
 
-const ORG_POLL_START = "org.matrix.msc3381.poll.start" as const;
-const ORG_POLL_RESPONSE = "org.matrix.msc3381.poll.response" as const;
+export const ORG_POLL_START = "org.matrix.msc3381.poll.start" as const;
+export const ORG_POLL_RESPONSE = "org.matrix.msc3381.poll.response" as const;
 const ORG_POLL_END = "org.matrix.msc3381.poll.end" as const;
 
 const POLL_EVENT_TYPES = [
@@ -71,18 +63,9 @@ export type PollStartContent = {
   "org.matrix.msc1767.text"?: string;
 };
 
-type PollSummary = {
-  eventId: string;
-  roomId: string;
-  sender: string;
-  senderName: string;
+type PollResultsSummary = {
   question: string;
-  answers: string[];
   kind: PollKind;
-  maxSelections: number;
-};
-
-type PollResultsSummary = PollSummary & {
   entries: Array<{
     id: string;
     text: string;
@@ -137,10 +120,7 @@ function getTextContent(text?: unknown): string {
 }
 
 export function parsePollStart(content: PollStartContent): ParsedPollStart | null {
-  const poll =
-    (content as Record<string, PollStartSubtype | undefined>)[M_POLL_START] ??
-    (content as Record<string, PollStartSubtype | undefined>)[ORG_POLL_START] ??
-    (content as Record<string, PollStartSubtype | undefined>)["m.poll"];
+  const poll = content[M_POLL_START] ?? content[ORG_POLL_START] ?? content["m.poll"];
   if (!poll) {
     return null;
   }
@@ -158,7 +138,7 @@ export function parsePollStart(content: PollStartContent): ParsedPollStart | nul
       id: isRecord(answer) && typeof answer.id === "string" ? answer.id : "",
       text: getTextContent(answer),
     }))
-    .filter((answer) => answer.id.trim().length > 0 && answer.text.length > 0);
+    .filter((answer) => answer.id.length > 0 && answer.text.length > 0);
   if (answers.length === 0) {
     return null;
   }
@@ -179,30 +159,12 @@ export function parsePollStart(content: PollStartContent): ParsedPollStart | nul
   };
 }
 
-export function parsePollStartContent(content: PollStartContent): PollSummary | null {
-  const parsed = parsePollStart(content);
-  if (!parsed) {
-    return null;
-  }
-
-  return {
-    eventId: "",
-    roomId: "",
-    sender: "",
-    senderName: "",
-    question: parsed.question,
-    answers: parsed.answers.map((answer) => answer.text),
-    kind: parsed.kind,
-    maxSelections: parsed.maxSelections,
-  };
-}
-
-export function formatPollAsText(summary: PollSummary): string {
+export function formatPollAsText(summary: ParsedPollStart): string {
   const lines = [
     "[Poll]",
     summary.question,
     "",
-    ...summary.answers.map((answer, idx) => `${idx + 1}. ${answer}`),
+    ...summary.answers.map((answer, idx) => `${idx + 1}. ${answer.text}`),
   ];
   return lines.join("\n");
 }
@@ -219,25 +181,24 @@ export function resolvePollReferenceEventId(content: unknown): string | null {
   return eventId.length > 0 ? eventId : null;
 }
 
-function parsePollResponseAnswerIds(content: unknown): string[] | null {
-  if (!content || typeof content !== "object") {
-    return null;
+function parsePollResponseAnswerIds(
+  content: Record<string, unknown> | undefined,
+  answerIds: ReadonlySet<string>,
+): string[] {
+  const response = content?.[M_POLL_RESPONSE] ?? content?.[ORG_POLL_RESPONSE];
+  if (!isRecord(response) || !Array.isArray(response.answers)) {
+    return [];
   }
-  const response =
-    (content as Record<string, PollResponseSubtype | undefined>)[M_POLL_RESPONSE] ??
-    (content as Record<string, PollResponseSubtype | undefined>)[ORG_POLL_RESPONSE];
-  if (!response || !Array.isArray(response.answers)) {
-    return null;
-  }
-  return response.answers.filter((answer): answer is string => typeof answer === "string");
+  // An unknown ID spoils the whole response, even beyond the selection limit.
+  const answers: unknown[] = response.answers;
+  return answers.every((id): id is string => typeof id === "string" && answerIds.has(id))
+    ? answers
+    : [];
 }
 
 export function buildPollResultsSummary(params: {
-  pollEventId: string;
-  roomId: string;
   sender: string;
-  senderName: string;
-  content: PollStartContent;
+  poll: ParsedPollStart;
   relationEvents: Array<{
     event_id?: string;
     sender?: string;
@@ -248,11 +209,8 @@ export function buildPollResultsSummary(params: {
       redacted_because?: unknown;
     };
   }>;
-}): PollResultsSummary | null {
-  const parsed = parsePollStart(params.content);
-  if (!parsed) {
-    return null;
-  }
+}): PollResultsSummary {
+  const parsed = params.poll;
 
   let pollClosedAt = Number.POSITIVE_INFINITY;
   for (const event of params.relationEvents) {
@@ -272,16 +230,9 @@ export function buildPollResultsSummary(params: {
   }
 
   const answerIds = new Set(parsed.answers.map((answer) => answer.id));
-  const latestVoteBySender = new Map<
-    string,
-    {
-      ts: number;
-      eventId: string;
-      answerIds: string[];
-    }
-  >();
+  const latestVoteBySender = new Map<string, string[]>();
 
-  const orderedRelationEvents = [...params.relationEvents].toSorted((left, right) => {
+  const orderedRelationEvents = params.relationEvents.toSorted((left, right) => {
     const leftTs = asFiniteNumber(left.origin_server_ts) ?? Number.POSITIVE_INFINITY;
     const rightTs = asFiniteNumber(right.origin_server_ts) ?? Number.POSITIVE_INFINITY;
     if (leftTs !== rightTs) {
@@ -305,20 +256,8 @@ export function buildPollResultsSummary(params: {
     if (eventTs > pollClosedAt) {
       continue;
     }
-    const rawAnswers = parsePollResponseAnswerIds(event.content) ?? [];
-    const normalizedAnswers = Array.from(
-      new Set(
-        rawAnswers
-          .map((answerId) => normalizeOptionalString(answerId) ?? "")
-          .filter((answerId) => answerIds.has(answerId))
-          .slice(0, parsed.maxSelections),
-      ),
-    );
-    latestVoteBySender.set(senderId, {
-      ts: eventTs,
-      eventId: typeof event.event_id === "string" ? event.event_id : "",
-      answerIds: normalizedAnswers,
-    });
+    const answers = parsePollResponseAnswerIds(event.content, answerIds);
+    latestVoteBySender.set(senderId, [...new Set(answers.slice(0, parsed.maxSelections))]);
   }
 
   const voteCounts = new Map<string, number>(
@@ -326,24 +265,18 @@ export function buildPollResultsSummary(params: {
   );
   let totalVotes = 0;
   for (const latestVote of latestVoteBySender.values()) {
-    if (latestVote.answerIds.length === 0) {
+    if (latestVote.length === 0) {
       continue;
     }
     totalVotes += 1;
-    for (const answerId of latestVote.answerIds) {
+    for (const answerId of latestVote) {
       voteCounts.set(answerId, (voteCounts.get(answerId) ?? 0) + 1);
     }
   }
 
   return {
-    eventId: params.pollEventId,
-    roomId: params.roomId,
-    sender: params.sender,
-    senderName: params.senderName,
     question: parsed.question,
-    answers: parsed.answers.map((answer) => answer.text),
     kind: parsed.kind,
-    maxSelections: parsed.maxSelections,
     entries: parsed.answers.map((answer) => ({
       id: answer.id,
       text: answer.text,
@@ -380,13 +313,6 @@ function buildTextContent(body: string): TextContent {
   };
 }
 
-function buildPollFallbackText(question: string, answers: string[]): string {
-  if (answers.length === 0) {
-    return question;
-  }
-  return `${question}\n${answers.map((answer, idx) => `${idx + 1}. ${answer}`).join("\n")}`;
-}
-
 export function buildPollStartContent(poll: PollInput): PollStartContent {
   const normalized = normalizePollInput(poll);
   const answers = normalized.options.map((option, idx) => ({
@@ -395,15 +321,14 @@ export function buildPollStartContent(poll: PollInput): PollStartContent {
   }));
 
   const isMultiple = normalized.maxSelections > 1;
-  const fallbackText = buildPollFallbackText(
-    normalized.question,
-    answers.map((answer) => getTextContent(answer)),
-  );
+  const fallbackText = `${normalized.question}\n${normalized.options.map((option, idx) => `${idx + 1}. ${option}`).join("\n")}`;
 
   return {
-    [M_POLL_START]: {
+    [ORG_POLL_START]: {
       question: buildTextContent(normalized.question),
-      kind: isMultiple ? "m.poll.undisclosed" : "m.poll.disclosed",
+      kind: isMultiple
+        ? "org.matrix.msc3381.poll.undisclosed"
+        : "org.matrix.msc3381.poll.disclosed",
       max_selections: normalized.maxSelections,
       answers,
     },
