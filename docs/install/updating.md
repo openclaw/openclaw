@@ -1134,6 +1134,12 @@ recovery, or an actionable failure. Lost ownership, named data risk, and
 unverifiable runtime identity still keep the Gateway stopped. The helper that starts the update must contain this
 change; staging a newer candidate cannot repair an older helper.
 
+Interrupted managed recovery requires a successful health RPC and the expected
+identity from the same authenticated connection; HTTP readiness alone is not
+recovery proof. Existing data-risk and process-ownership refusals still apply.
+The managed helper that starts the update must contain this change; a candidate
+installed by an older helper cannot retrofit it.
+
 During overlapping Gateway restarts, config recovery reads health facts through
 the same isolated read-only transaction used for startup plugin metadata while
 the previous database owner is verified alive. It avoids copying unrelated

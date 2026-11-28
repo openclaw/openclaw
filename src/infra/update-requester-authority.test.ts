@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { captureCommandOwnerIdentity } from "../auto-reply/command-owner-facts.js";
 import { ensureCliPluginRegistryLoaded } from "../cli/plugin-registry-loader.js";
+import { createUpdateCommandAuthority } from "../cli/update-cli/update-command-authority.js";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveChannelOperatorAdminAuthority } from "../gateway/channel-operator-authority.js";
@@ -20,6 +21,12 @@ import {
 } from "../state/user-channel-identities.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import {
+  installPackageDir,
+  requestDeferredPackageDirInstall,
+  resolvePackageDirInstallTransaction,
+} from "./install-package-dir.js";
+import { createExistingInstallFixture, updateOptions } from "./install-package-dir.test-support.js";
 import { updateRepairParentMessageSchema } from "./update-repair-protocol.js";
 import {
   createDelegatedUpdateRequesterAuthority,
@@ -104,6 +111,53 @@ beforeEach(async () => {
   await writeConfig(allowed);
   vi.mocked(ensureCliPluginRegistryLoaded).mockReset().mockResolvedValue(undefined);
   doctorSource.unprepared = undefined;
+});
+
+it("does not reload requester policy for every file removed by finalizer package settlement", async () => {
+  const { sourceDir, targetDir } = await createExistingInstallFixture(root);
+  for (let i = 0; i < 32; i++) {
+    await fs.writeFile(path.join(targetDir, String(i) + ".txt"), "old");
+  }
+  const requesterAuthority = await authorityFor();
+  const readPolicy = vi.fn(requesterAuthority.isCurrent);
+  const assertNativeOwner = vi.fn();
+  const run = {
+    runId: "package-settlement",
+    env,
+    executorFence: { assertCurrent: assertNativeOwner },
+    requesterAuthority: { ...requesterAuthority, isCurrent: readPolicy },
+  };
+  const { assertCurrent: assertPackageOwner, assertRequesterCurrent } =
+    createUpdateCommandAuthority({
+      opts: { run },
+      checkRequesterOnce: true,
+    });
+  let backupDir = "";
+  const installed = await installPackageDir(
+    requestDeferredPackageDirInstall(
+      {
+        ...updateOptions(sourceDir, targetDir),
+        afterBackup: async (backup) => {
+          backupDir = backup;
+          return { ok: true };
+        },
+      },
+      assertPackageOwner,
+    ),
+  );
+  expect(installed.ok).toBe(true);
+  const transaction = resolvePackageDirInstallTransaction(installed);
+  if (!transaction) {
+    throw new Error("Expected a retained package transaction");
+  }
+  const beforeCommit = assertNativeOwner.mock.calls.length;
+  await transaction.commit();
+  await expect(fs.access(backupDir)).rejects.toHaveProperty("code", "ENOENT");
+  await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("new");
+  expect(readPolicy).toHaveBeenCalledOnce();
+  expect(assertNativeOwner.mock.calls.length - beforeCommit).toBeGreaterThan(32);
+  await writeConfig({ commands: { ownerAllowFrom: ["another-owner"] } });
+  expect(assertRequesterCurrent).toThrow(UpdateRequesterRevokedError);
 });
 
 async function linkedAdmins() {

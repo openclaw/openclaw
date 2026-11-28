@@ -10,6 +10,7 @@ export function createUpdateCommandAuthority(
     executorFence?: UpdateRecoveryFence;
     assertCurrent?: () => void;
     onAuthorityRefused?: () => void;
+    checkRequesterOnce?: true;
   },
   label = "Update",
 ) {
@@ -17,6 +18,7 @@ export function createUpdateCommandAuthority(
   const executorFence = run?.executorFence ?? params.executorFence;
   const runId = run?.runId;
   const requester = run?.requesterAuthority;
+  let requesterAdmitted = false;
   let authorityFailure: { error: unknown } | undefined;
   const refuseAuthority = (error: unknown): never => {
     authorityFailure ??= { error };
@@ -41,10 +43,16 @@ export function createUpdateCommandAuthority(
       if (requester?.isCurrent() === false) {
         throw new UpdateRequesterRevokedError();
       }
+      requesterAdmitted = true;
     });
   const assertCurrent = () =>
     checkAuthority(() => {
-      assertRequesterCurrent();
+      // The admitted operation can run to completion. Keep executor and local
+      // ownership checks live, including inside recursive package cleanup.
+      // A new child admission can still explicitly check fresh requester policy.
+      if (!params.checkRequesterOnce || !requesterAdmitted) {
+        assertRequesterCurrent();
+      }
       params.assertCurrent?.();
       executorFence?.assertCurrent();
     });

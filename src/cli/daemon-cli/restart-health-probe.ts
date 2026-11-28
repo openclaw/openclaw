@@ -74,6 +74,7 @@ export async function readGatewayStartupPhase(params: {
 
 export type GatewayReachability = {
   reachable: boolean;
+  healthRpcVerified?: true;
   gatewayVersion: string | null;
   gatewayBootId?: string;
   gatewayBuildId: string | null | undefined;
@@ -342,6 +343,9 @@ export async function confirmGatewayReachable(params: {
       },
     });
     result.reachable = true;
+    if (asOptionalRecord(health)?.ok === true && result.gatewayVersion) {
+      result.healthRpcVerified = true;
+    }
     result.activatedPluginErrors = readActivatedPluginErrors(health);
     result.unavailablePlugins = readUnavailablePlugins(health);
     const errors: GatewayReachability["channelProbeErrors"] = [];

@@ -320,6 +320,13 @@ describe("restart health", () => {
       outcome: "healthy",
     },
     {
+      label: "matching HTTP identity with RPC required",
+      requireChannelHealth: false,
+      requireHealthRpc: true,
+      build: "candidate-build",
+      outcome: "auth-rejected",
+    },
+    {
       label: "HTTP build mismatch",
       requireChannelHealth: false,
       build: "old-build",
@@ -352,6 +359,7 @@ describe("restart health", () => {
       expectedVersion: "2026.10.8",
       expectedBuildId: "candidate-build",
       requireChannelHealth: scenario.requireChannelHealth,
+      requireHealthRpc: scenario.requireHealthRpc,
       timeoutMs: 1_800_000,
       delayMs: 30_000,
     });
