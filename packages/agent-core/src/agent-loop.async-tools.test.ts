@@ -253,13 +253,15 @@ it("forwards unchanged updates without copying events or inspecting prior conten
       if (event.type === "message_update") {
         expect(event.assistantMessageEvent).toBe(updates[readsAtUpdate.length]);
         readsAtUpdate.push(blockReads);
+        blockReads = 0;
         expect(event.message).not.toBe(message);
       }
     },
     undefined,
     () => fixtures.reply(message, [{ type: "start", partial: message }, ...updates]),
   );
-  expect(readsAtUpdate).toEqual(updates.map(() => 0));
+  // The repetition guard reads the active reasoning block, never the prior block.
+  expect(readsAtUpdate).toEqual([1, 1, 1, 0, 0, 0, 0, 0]);
 });
 
 it("does not commit an async fragment when a listener changes an ordinary update type", async () => {
