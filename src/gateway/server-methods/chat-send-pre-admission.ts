@@ -4,7 +4,10 @@ import { isSessionTranscriptProjectionUnavailableError } from "../../config/sess
 import { sameSessionTranscriptStorePath } from "../../config/sessions/transcript-store-identity.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
-import { getRpcSourceForGateway } from "../../sessions/session-controller.rpc-sources.js";
+import {
+  getRpcSourceForGateway,
+  getRpcSourceIdentity,
+} from "../../sessions/session-controller.rpc-sources.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
@@ -88,13 +91,6 @@ export function resolveChatSendRequestConflict(
       entry: entries[1],
     })?.payload.attemptId === ownPendingAttemptId;
   const retryEntries = ownPendingAttempt ? entries.slice(0, 1) : entries;
-  if (
-    !comparison &&
-    request.requestIdentity !== undefined &&
-    retryEntries.some((entry) => entry?.requestIdentity === request.requestIdentity)
-  ) {
-    return undefined;
-  }
   const knownRetry =
     comparison?.submitted !== undefined ||
     retryEntries.some(Boolean) ||
@@ -104,7 +100,15 @@ export function resolveChatSendRequestConflict(
   if (!knownRetry) {
     return undefined;
   }
+  // Matching RAM identity cannot settle a retry until the durable lookup has run.
   const mismatch = compareChatSendSubmittedInput(request, session, comparison);
+  if (
+    !comparison?.submitted &&
+    request.requestIdentity !== undefined &&
+    retryEntries.some((entry) => entry?.requestIdentity === request.requestIdentity)
+  ) {
+    return undefined;
+  }
   return mismatch ? chatSendRequestConflictError(mismatch === "unverifiable") : undefined;
 }
 
@@ -141,16 +145,17 @@ export async function consumeChatSendCurrent<T>(
   return invoke();
 }
 
-async function respondPreparedChatSendRetry(
-  params: ChatSendRetryParams,
-  readRecordedInput = false,
-): Promise<boolean> {
+async function respondPreparedChatSendRetry(params: ChatSendRetryParams): Promise<boolean> {
+  const comparison = await readChatSendRetryComparison(params.session)?.catch((error: unknown) => ({
+    error,
+  }));
   try {
-    const pending =
-      prepareChatSendRetryComparison(params) ??
-      (readRecordedInput ? readChatSendRetryComparison(params.session) : undefined);
-    const comparison = pending ? await pending : undefined;
-    return await consumeChatSendCurrent(params, () => respondChatSendRetry(params, comparison));
+    return await consumeChatSendCurrent(params, () => {
+      if (comparison && "error" in comparison) {
+        throw comparison.error;
+      }
+      return respondChatSendRetry(params, comparison);
+    });
   } catch (error) {
     if (!isSessionTranscriptProjectionUnavailableError(error)) {
       throw error;
@@ -158,6 +163,54 @@ async function respondPreparedChatSendRetry(
     respondChatSendAdmissionError(error, params.respond);
     return true;
   }
+}
+
+/** Queued bytes alone do not prove delivery or grant custody to an external retry. */
+function respondUnconsumedQueuedRetry(
+  { context, respond, session }: ChatSendRetryParams,
+  inputId: string,
+): boolean {
+  const { agentId, clientRunId, entry, sessionKey, storePath } = session;
+  const matchesStore = (path: string) =>
+    path === storePath || sameSessionTranscriptStorePath(path, session.readSource?.path);
+  const matchesSession = (target: { agentId?: string; sessionKey: string; sessionId: string }) =>
+    target.agentId === agentId &&
+    target.sessionKey === sessionKey &&
+    target.sessionId === entry?.sessionId;
+  const queued = readQueuedChatInputAdmission(clientRunId)?.target;
+  if (queued && matchesSession(queued) && matchesStore(queued.storePath)) {
+    // Only internal graceful replay can readmit the exact retained queued input.
+    return false;
+  }
+  const source = getRpcSourceForGateway(clientRunId, context.resolveGatewayContext);
+  const sourcePath = source?.input.target?.storeScope;
+  const live =
+    source &&
+    sourcePath &&
+    !source.input.abortSignal.aborted &&
+    matchesStore(sourcePath) &&
+    matchesSession(getRpcSourceIdentity(source));
+  const recovery = entry?.resumeAfterRestart;
+  if (
+    live ||
+    (recovery?.queuedInputIds.includes(inputId) && recovery.queuedInputSources?.[inputId])
+  ) {
+    respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
+      cached: true,
+      runId: clientRunId,
+    });
+  } else {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        "Chat input is still queued, but its delivery cannot be confirmed. Retry the same request.",
+        { retryable: true },
+      ),
+    );
+  }
+  return true;
 }
 
 /** Consume prepared comparison and current RAM ownership without yielding before reservation. */
@@ -172,6 +225,31 @@ export function respondChatSendRetry(
   if (conflict) {
     respond(false, undefined, conflict);
     return true;
+  }
+  const disposition = comparison?.disposition;
+  if (disposition && !disposition.consumed) {
+    if (disposition.state === "cancelled") {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          disposition.userStopped
+            ? "Chat input was stopped before it ran. Use a new message ID to send again."
+            : "Chat input was cancelled before it ran. Use a new message ID to send again.",
+          {
+            details: {
+              reason: "chat-input-cancelled",
+              ...(disposition.userStopped ? { endCause: "user-stop" } : {}),
+            },
+          },
+        ),
+      );
+      return true;
+    }
+    if (disposition.state === "queued") {
+      return respondUnconsumedQueuedRetry(params, disposition.inputId);
+    }
   }
   const cached = readChatSendDedupeResponse(context.dedupe, clientRunId);
   if (cached) {
@@ -215,18 +293,6 @@ export function respondChatSendRetry(
     return true;
   }
   if (comparison?.submitted) {
-    const queued = readQueuedChatInputAdmission(clientRunId)?.target;
-    if (
-      comparison.source === "pending" &&
-      queued?.agentId === session.agentId &&
-      (queued.storePath === session.storePath ||
-        sameSessionTranscriptStorePath(queued.storePath, session.readSource?.path)) &&
-      queued.sessionKey === session.sessionKey &&
-      queued.sessionId === session.entry?.sessionId
-    ) {
-      // A gracefully retained queued input re-enters ordinary admission before it can run.
-      return false;
-    }
     // RAM reservations cover concurrent sends before their durable input exists.
     // A crash before either record leaves the original key available for retry.
     const payload = {
@@ -349,7 +415,7 @@ export async function runChatSendPreAdmission(
     };
     let res: Awaited<ReturnType<typeof abortChatRunsForSessionKeyWithPartials>>;
     try {
-      if (await respondPreparedChatSendRetry(params, true)) {
+      if (await respondPreparedChatSendRetry(params)) {
         return false;
       }
       if (sessionRoutingChanged(cfg)) {
@@ -453,7 +519,7 @@ export async function runChatSendPreAdmission(
 
   // A completed input can outlive its RAM receipt; compare stored bytes before
   // admitting its ID as fresh work, without adopting the old input's custody.
-  if (!request.goalOperation && (await respondPreparedChatSendRetry(params, true))) {
+  if (!request.goalOperation && (await respondPreparedChatSendRetry(params))) {
     return false;
   }
 

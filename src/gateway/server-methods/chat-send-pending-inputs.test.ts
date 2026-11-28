@@ -431,8 +431,13 @@ describe("ordinary chat input admission", () => {
     expectStarted(ack);
     await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2));
     const accepted = await pending(fixture);
+    const runId = fixture.params.idempotencyKey;
+    fixture.context.dedupe.set("chat:" + runId, {
+      ...fixture.context.dedupe.get("chat:" + runId)!,
+      payload: { runId, status: "ok" },
+    });
     const reconnect = await fixture.send();
-    expectInFlight(reconnect, fixture.params.idempotencyKey);
+    expectInFlight(reconnect, runId);
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
     expect(await pending(fixture)).toMatchObject({
       total: 1,
@@ -814,7 +819,7 @@ describe("ordinary chat input admission", () => {
     { restart: true, attachment: true },
     { restart: false, attachment: false },
   ])(
-    "acknowledges closed recorded input without dispatching again (%j)",
+    "rejects cancelled recorded input without dispatching again (%j)",
     async ({ restart, attachment }) => {
       await using fixture = await createBrowserFollowupFixture({ preserveContent: true });
       const profile = ensureProfileForEmail("restart-input@example.test");
@@ -851,10 +856,13 @@ describe("ordinary chat input admission", () => {
         dispatchInboundMessageMock.mockClear();
         const ack = await fixture.send();
         expect(ack).toHaveBeenCalledWith(
-          true,
-          { runId: fixture.params.idempotencyKey, status: "ok" },
+          false,
           undefined,
-          expect.objectContaining({ cached: true }),
+          expect.objectContaining({
+            code: "INVALID_REQUEST",
+            message: expect.stringContaining("Use a new message ID"),
+            details: { reason: "chat-input-cancelled" },
+          }),
         );
         expect((await pending(fixture)).items).toEqual([{ ...original, state: "cancelled" }]);
         if (restart) {
@@ -891,7 +899,7 @@ describe("ordinary chat input admission", () => {
         fixture.params.message += " Changed request.";
       }
       const response = await fixture.send();
-      expect(response.mock.calls[0]?.[0]).toBe(change === "cancelled");
+      expect(response.mock.calls[0]?.[0]).toBe(false);
       if (change === "sender") {
         expect(response).toHaveBeenCalledWith(
           false,
@@ -906,6 +914,12 @@ describe("ordinary chat input admission", () => {
           false,
           undefined,
           expect.objectContaining({ details: { reason: "chat-request-conflict" } }),
+        );
+      } else {
+        expect(response).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ details: { reason: "chat-input-cancelled" } }),
         );
       }
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();

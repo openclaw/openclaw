@@ -3,8 +3,10 @@ import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import type { PendingInputSourceSnapshot } from "./session-pending-input-operations.types.js";
+import type { SessionPendingInputState } from "./session-pending-input-receipt.types.js";
 import type { PendingInputScope } from "./session-pending-input-store.js";
 import { parseSessionPendingInputMessage } from "./session-pending-input-value.js";
+import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
 import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
@@ -89,15 +91,24 @@ async function readPendingInputSource<T>(
   );
 }
 
+export type SubmittedInputWithSource = {
+  message: PersistedUserTurnMessage;
+  source: "pending" | "transcript";
+  messageSeq?: number;
+  disposition?: {
+    inputId: string;
+    state: SessionPendingInputState;
+    consumed: boolean;
+    userStopped: boolean;
+  };
+};
+
 /** Read one admitted source for explicit retry comparison; this never authorizes replay. */
 export function readSessionSubmittedInput(
   scope: PendingInputScope,
   idempotencyKey: string,
   options: { includeSource: true },
-): Promise<
-  | { message: PersistedUserTurnMessage; source: "pending" | "transcript"; messageSeq?: number }
-  | undefined
->;
+): Promise<SubmittedInputWithSource | undefined>;
 export function readSessionSubmittedInput(
   scope: PendingInputScope,
   idempotencyKey: string,
@@ -109,19 +120,41 @@ export async function readSessionSubmittedInput(
 ) {
   return readPendingInputSource(scope, idempotencyKey, false, (snapshot) => {
     if (!snapshot.current) {
+      if (options?.includeSource) {
+        throw new SessionTranscriptProjectionUnavailableError(scope.sessionId, "window-changed");
+      }
       return undefined;
     }
     const { pending, committed, committedMessageSeq } = snapshot;
     const message = pending ? parseSessionPendingInputMessage(pending.message_json) : committed;
     if (!message || readMessageIdempotencyKey(message) !== idempotencyKey) {
+      if (options?.includeSource && pending) {
+        throw new Error("Retained pending input does not match its idempotency key");
+      }
       return undefined;
     }
-    return options?.includeSource
-      ? {
-          message,
-          source: pending ? ("pending" as const) : ("transcript" as const),
-          ...(committedMessageSeq !== undefined ? { messageSeq: committedMessageSeq } : {}),
-        }
-      : message;
+    if (!options?.includeSource) {
+      return message;
+    }
+    const result: SubmittedInputWithSource = {
+      message,
+      source: pending ? "pending" : "transcript",
+      ...(committedMessageSeq !== undefined ? { messageSeq: committedMessageSeq } : {}),
+    };
+    if (pending) {
+      const { state } = pending;
+      if (state !== "queued" && state !== "cancelled" && state !== "interrupted") {
+        throw new Error("Pending input has an invalid disposition");
+      }
+      // Both the disk kernel and actor memory return the row in the same snapshot as the bytes.
+      result.disposition = {
+        inputId: pending.input_id,
+        state,
+        consumed: pending.consumed_event_id != null,
+        userStopped:
+          message.display === false || message["__openclaw"]?.pendingInputCancelledByUser === true,
+      };
+    }
+    return result;
   });
 }

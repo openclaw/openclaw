@@ -12,6 +12,7 @@ import {
   readSessionSubmittedInput,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import type { SubmittedInputWithSource } from "../../config/sessions/session-pending-input-source.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -46,13 +47,16 @@ import {
 const submittedInput = vi.hoisted(() =>
   vi.fn<() => Promise<Awaited<ReturnType<typeof readSessionSubmittedInput>>>>(),
 );
+const submittedSource = vi.hoisted(() => ({
+  value: {} as Partial<Pick<SubmittedInputWithSource, "source" | "disposition" | "messageSeq">>,
+}));
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
   readSessionSubmittedInput: vi.fn(
     async (_scope: unknown, _key: string, options?: { includeSource: true }) => {
       const message = await submittedInput();
       return message && options?.includeSource
-        ? { message, source: "transcript" as const }
+        ? { message, source: "transcript" as const, ...submittedSource.value }
         : message;
     },
   ),
@@ -158,8 +162,41 @@ let params: ReturnType<typeof createFixture>;
 beforeEach(() => {
   vi.mocked(readSessionSubmittedInput).mockClear();
   submittedInput.mockReset().mockResolvedValue(undefined);
+  submittedSource.value = {};
   params = createFixture();
 });
+
+it.each(["cached success", "abort marker", "legacy Stop"] as const)(
+  "reports durable cancellation instead of replaying success (%s)",
+  async (receipt) => {
+    if (receipt === "cached success") {
+      cacheSuccess(params, 100, params.request.requestIdentity);
+    } else {
+      params.context.chatRunState.getOrCreate(params.session.clientRunId).abortMarker =
+        createChatAbortMarker(200);
+    }
+    submittedInput.mockResolvedValue(submittedMessage(params));
+    submittedSource.value = {
+      source: "pending",
+      disposition: {
+        inputId: "pending-id",
+        state: "cancelled",
+        consumed: false,
+        userStopped: receipt === "legacy Stop",
+      },
+    };
+    expect(await runChatSendPreAdmission(params)).toBe(false);
+    expectFailure(params.respond, {
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("Use a new message ID"),
+      details: {
+        reason: "chat-input-cancelled",
+        ...(receipt === "legacy Stop" ? { endCause: "user-stop" } : {}),
+      },
+    });
+    expect(params.respond).toHaveBeenCalledOnce();
+  },
+);
 
 it("stops admitted session work while preserving a detached producer", () =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -360,6 +397,25 @@ it.each(["pending", "active", "accepted", "terminal", "metadata"] as const)(
   },
 );
 
+it.each(["queued", "cancelled"] as const)(
+  "preserves idempotence for a consumed %s row, even without an active transcript sequence",
+  async (state) => {
+    submittedInput.mockResolvedValue(submittedMessage(params));
+    submittedSource.value = {
+      source: "pending",
+      disposition: { inputId: "consumed-id", state, consumed: true, userStopped: false },
+    };
+    expect(await runChatSendPreAdmission(params)).toBe(false);
+    expectCached(
+      { runId: params.session.clientRunId, status: "ok" },
+      {
+        cached: true,
+        runId: params.session.clientRunId,
+      },
+    );
+  },
+);
+
 it("replays explicit cancellation before a retained accepted input marker", async () => {
   const { clientRunId } = params.session;
   params.context.dedupe.set(`chat:${clientRunId}`, {
@@ -422,6 +478,12 @@ it("readmits a retained queued input only from its admitted physical store", () 
       clientRunId: session.clientRunId,
       submitted: message,
       source: "pending" as const,
+      disposition: {
+        inputId: "retained-queued-input",
+        state: "queued" as const,
+        consumed: false,
+        userStopped: false,
+      },
     };
     for (const storePath of [loaded.readSource.path, foreignStorePath]) {
       params.respond.mockClear();
@@ -445,10 +507,7 @@ it("readmits a retained queued input only from its admitted physical store", () 
         expect(params.respond).not.toHaveBeenCalled();
       } else {
         expect(handled).toBe(true);
-        expectCached(
-          { runId: session.clientRunId, status: "ok" },
-          { cached: true, runId: session.clientRunId },
-        );
+        expectFailure(params.respond, { code: "UNAVAILABLE", retryable: true });
       }
     }
   }));
@@ -537,14 +596,19 @@ it.each(["missing", "work context", "redacted"] as const)(
   },
 );
 
-it("refuses stale projection evidence before replaying a cached response", async () => {
-  cacheSuccess(params, 100);
-  submittedInput.mockRejectedValue(
-    new SessionTranscriptProjectionUnavailableError(params.session.entry!.sessionId),
-  );
-  expect(await runChatSendPreAdmission(params)).toBe(false);
-  expectFailure(params.respond, { code: "UNAVAILABLE", retryable: true });
-});
+it.each(["stale projection", "unreadable input"] as const)(
+  "fails closed on %s before replaying a matching cached response",
+  async (failure) => {
+    cacheSuccess(params, 100, params.request.requestIdentity);
+    submittedInput.mockRejectedValue(
+      failure === "stale projection"
+        ? new SessionTranscriptProjectionUnavailableError(params.session.entry!.sessionId)
+        : new Error("Stored input cannot be parsed"),
+    );
+    expect(await runChatSendPreAdmission(params)).toBe(false);
+    expectFailure(params.respond, { code: "UNAVAILABLE", retryable: true });
+  },
+);
 
 it("rejects a competing identity published while submitted comparison yields", async () => {
   cacheSuccess(params, 100);

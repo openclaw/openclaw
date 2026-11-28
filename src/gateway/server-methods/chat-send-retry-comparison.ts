@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { readSessionSubmittedInput } from "../../config/sessions/session-accessor.js";
+import type { SubmittedInputWithSource } from "../../config/sessions/session-pending-input-source.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
@@ -20,6 +21,7 @@ export type ChatSendRetryComparison = {
   submitted: Awaited<ReturnType<typeof readSessionSubmittedInput>>;
   source?: "pending" | "transcript";
   messageSeq?: number;
+  disposition?: SubmittedInputWithSource["disposition"];
 };
 
 export function chatSendRequestConflictError(unverifiable = false) {
@@ -43,8 +45,8 @@ export function readChatSendRetryComparison(session: ComparisonSession) {
     { agentId, storePath, sessionKey, sessionId },
     `${clientRunId}:user`,
     { includeSource: true },
-  ).then((submitted): ChatSendRetryComparison => {
-    return {
+  ).then(
+    (submitted): ChatSendRetryComparison => ({
       agentId,
       storePath,
       sessionKey,
@@ -54,8 +56,17 @@ export function readChatSendRetryComparison(session: ComparisonSession) {
       submitted: submitted?.message,
       source: submitted?.source,
       messageSeq: submitted?.messageSeq,
-    };
-  });
+      disposition: submitted?.disposition,
+    }),
+    (error: unknown) => {
+      if (error instanceof SessionTranscriptProjectionUnavailableError) {
+        throw error;
+      }
+      throw new SessionTranscriptProjectionUnavailableError(sessionId, "rebuilding", {
+        cause: error,
+      });
+    },
+  );
 }
 
 export function compareChatSendSubmittedInput(

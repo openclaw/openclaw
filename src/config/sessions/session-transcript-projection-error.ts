@@ -16,9 +16,11 @@ export class SessionTranscriptProjectionUnavailableError extends Error {
   constructor(
     readonly sessionId: string,
     readonly reason: "rebuilding" | "window-changed" = "rebuilding",
+    options?: ErrorOptions,
   ) {
     super(
       `Session transcript ${reason === "rebuilding" ? "projection is rebuilding" : "history window changed"}: ${sessionId}`,
+      options,
     );
     this.name = "SessionTranscriptProjectionUnavailableError";
   }

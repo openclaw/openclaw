@@ -65,6 +65,39 @@ it("does not create missing storage for a submitted-input lookup", async () => {
   expect(fs.existsSync(storePath)).toBe(false);
 });
 
+it.each(["user stop", "hidden dismissal"] as const)(
+  "reads the legacy %s disposition without modifying retained bytes",
+  async (ending) => {
+    const receipt = await stage("user-ended", false);
+    const retainedMessage =
+      ending === "user stop"
+        ? {
+            ...receipt.message,
+            __openclaw: { ...receipt.message["__openclaw"], pendingInputCancelledByUser: true },
+          }
+        : { ...receipt.message, display: false };
+    database()
+      .db.prepare(
+        "UPDATE session_pending_inputs SET state = 'cancelled', message_json = ? WHERE input_id = ?",
+      )
+      .run(JSON.stringify(retainedMessage), receipt.inputId);
+    await readOnly(async () => {
+      expect(
+        await readSessionSubmittedInput(scope(), "user-ended:user", { includeSource: true }),
+      ).toEqual({
+        message: retainedMessage,
+        source: "pending",
+        disposition: {
+          inputId: receipt.inputId,
+          state: "cancelled",
+          consumed: false,
+          userStopped: true,
+        },
+      });
+    });
+  },
+);
+
 it.each(["pending", "committed"] as const)(
   "rejects malformed or oversized %s source bytes without changing storage",
   async (source) => {
@@ -74,7 +107,16 @@ it.each(["pending", "committed"] as const)(
     ).toEqual({
       message: receipt.message,
       source: source === "committed" ? "transcript" : "pending",
-      ...(source === "committed" ? { messageSeq: 1 } : {}),
+      ...(source === "committed"
+        ? { messageSeq: 1 }
+        : {
+            disposition: {
+              inputId: receipt.inputId,
+              state: "queued",
+              consumed: false,
+              userStopped: false,
+            },
+          }),
     });
     const db = database().db;
     const invalidMessages = [
