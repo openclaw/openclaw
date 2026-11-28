@@ -65,7 +65,10 @@ import { resolveExistingAttemptTranscriptState } from "./attempt-transcript-help
 import type { EmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt-transcript-policy.js";
 import { createUserTranscriptContextRegistry } from "./attempt-user-transcript-context-registry.js";
-import { installMessageToolTerminalHook } from "./message-tool-terminal.js";
+import {
+  installMessageToolTerminalHook,
+  resolveMessageToolSameChannelThreadRequired,
+} from "./message-tool-terminal.js";
 import {
   type InitialUserTurnReplayPreparation,
   prepareInitialPersistedUserTurnCohort,
@@ -209,6 +212,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   const markSourceReplyDelivered = () => {
     didDeliverSourceReplyViaMessageTool = true;
   };
+  const sameChannelThreadRequired = resolveMessageToolSameChannelThreadRequired(input);
   installMessageToolTerminalHook({
     agent: activeSession.agent,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
@@ -220,6 +224,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     currentChannelId: attempt.currentChannelId,
     currentMessagingTarget: attempt.currentMessagingTarget,
     currentThreadId: attempt.currentThreadTs,
+    sameChannelThreadRequired,
     currentMessageId: attempt.currentMessageId,
     replyToMode: attempt.replyToMode,
     hasRepliedRef: attempt.hasRepliedRef,
@@ -235,6 +240,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     hasDeliveredSourceReply: () => didDeliverSourceReplyViaMessageTool,
     hookRunner,
     markSourceReplyDelivered,
+    sameChannelThreadRequired,
     setActiveSessionSystemPrompt,
     settingsManager,
     refreshTools: () => {

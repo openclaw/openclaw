@@ -329,6 +329,7 @@ export async function prepareToolExecutionEnd(
         currentMessagingTarget: ctx.params.currentMessagingTarget,
         currentThreadId: ctx.params.currentThreadId,
         sessionKey: ctx.params.sessionKey,
+        sameChannelThreadRequired: ctx.params.sameChannelThreadRequired,
         deliveredPayload: extractionResult,
       }),
       deliveryConfirmed: didDeliverMessagingResult,
