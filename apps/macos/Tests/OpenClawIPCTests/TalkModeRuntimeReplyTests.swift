@@ -16,6 +16,7 @@ enum TalkCustodyCase: Equatable, Sendable {
 private actor TalkReplyWire {
     enum Scenario: Equatable, Sendable {
         case terminalAck
+        case namedProviderVoice
         case terminalSendFailure
         case startupRefusals
         case acceptedTimeout
@@ -42,6 +43,7 @@ private actor TalkReplyWire {
     private var waitRunIDs: [String] = []
     private var sendKeys: [String] = []
     private var sendMessages: [String] = []
+    private(set) var spokenVoice: String?
     private var waitCount = 0
     private var historyCount = 0
     private var historyInputRunIDs: [[String]?] = []
@@ -111,6 +113,7 @@ private actor TalkReplyWire {
         case "talk.config":
             return #"{"config":{"talk":{"resolved":{"provider":"fixture","config":{}},"interruptOnSpeech":false}}}"#
         case "talk.speak":
+            self.spokenVoice = params["voiceId"] as? String
             // Capture the real TTS wire request without starting desktop audio.
             return #"{"provider":"fixture","audiobase64":""}"#
         case "chat.send":
@@ -206,6 +209,10 @@ private actor TalkReplyWire {
             """#
         }
         let messages: String = switch self.scenario {
+        case .namedProviderVoice:
+            Self.message(
+                id: "named-voice", runID: Self.runID, text: "", content:
+                #"[{"type":"text","text":"{\"voice\":\"nova\",\"once\":true}\nMeeting starts now."}]"#)
         case .truncatedHistory:
             Self.message(id: "msg-1", runID: Self.runID, text: "cut", truncated: true)
         case .unsupportedHistory(truncated: true):
@@ -408,6 +415,14 @@ extension TalkModeRuntime {
 
 @Suite(.testWaitLimit)
 struct TalkModeRuntimeReplyTests {
+    @Test func `named provider voice reaches speech request`() async throws {
+        try await withTalkReplyFixture(.namedProviderVoice) { runtime, wire, sink in
+            await runtime.sendAndSpeak("synthetic")
+            #expect(await sink.snapshot() == ["Meeting starts now."])
+            #expect(await wire.spokenVoice == "nova")
+        }
+    }
+
     @Test func `startup refusal keeps the spoken turn until admitted once`() async throws {
         try await withTalkReplyFixture(.startupRefusals) { runtime, wire, sink in
             await runtime.sendAndSpeak("synthetic")
