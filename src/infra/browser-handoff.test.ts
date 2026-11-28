@@ -4,10 +4,11 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { openUrlPrivately } from "./browser-handoff.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
+import * as tmpRoot from "./tmp-openclaw-dir.js";
 import * as windowsPrivate from "./windows-private-directory.js";
 
 const { openLocalFileMock } = vi.hoisted(() => ({
-  openLocalFileMock: vi.fn<(filePath: string) => Promise<boolean>>(),
+  openLocalFileMock: vi.fn<typeof import("./browser-open.js").openLocalFile>(),
 }));
 
 vi.mock("./browser-open.js", async (importOriginal) => ({
@@ -30,28 +31,32 @@ afterEach(async () => {
   );
 });
 
-it("hands the browser a private file path instead of the credential URL", async () => {
-  await expect(openUrlPrivately(targetUrl)).resolves.toBe(true);
+it.each([undefined, { browserCommand: ["fixture-browser"] }])(
+  "hands the selected or default browser a private file path instead of the credential URL (%j)",
+  async (options) => {
+    await expect(openUrlPrivately(targetUrl, options)).resolves.toBe(true);
 
-  expect(openLocalFileMock).toHaveBeenCalledTimes(1);
-  const file = openedPath();
-  expect(file).not.toContain("secret-handoff-token");
+    expect(openLocalFileMock).toHaveBeenCalledTimes(1);
+    const file = openedPath();
+    expect(file).not.toContain("secret-handoff-token");
+    expect(openLocalFileMock.mock.calls[0]).toEqual(options ? [file, options] : [file]);
 
-  const dir = path.dirname(file);
-  const dirStat = await fs.stat(dir);
-  expect(path.dirname(dir)).toBe(path.resolve(resolvePreferredOpenClawTmpDir()));
-  expect(path.basename(dir)).toMatch(/^openclaw-browser-handoff-/);
-  if (process.platform !== "win32") {
-    expect((dirStat.mode & 0o777).toString(8)).toBe("700");
-    const fileStat = await fs.stat(file);
-    expect((fileStat.mode & 0o777).toString(8)).toBe("600");
-  }
-  const content = await fs.readFile(file, "utf8");
-  const normalized = new URL(targetUrl).toString();
-  expect(content).toContain(`url=${normalized.replaceAll("&", "&amp;")}`);
-  expect(content).toContain(`location.replace(${JSON.stringify(normalized)})`);
-  expect(content).not.toContain('a"b<c>');
-});
+    const dir = path.dirname(file);
+    const dirStat = await fs.stat(dir);
+    expect(path.dirname(dir)).toBe(path.resolve(resolvePreferredOpenClawTmpDir()));
+    expect(path.basename(dir)).toMatch(/^openclaw-browser-handoff-/);
+    if (process.platform !== "win32") {
+      expect((dirStat.mode & 0o777).toString(8)).toBe("700");
+      const fileStat = await fs.stat(file);
+      expect((fileStat.mode & 0o777).toString(8)).toBe("600");
+    }
+    const content = await fs.readFile(file, "utf8");
+    const normalized = new URL(targetUrl).toString();
+    expect(content).toContain(`url=${normalized.replaceAll("&", "&amp;")}`);
+    expect(content).toContain(`location.replace(${JSON.stringify(normalized)})`);
+    expect(content).not.toContain('a"b<c>');
+  },
+);
 
 it.runIf(process.platform !== "win32")(
   "creates Windows handoffs with owner-only ACL helpers",
@@ -68,6 +73,10 @@ it.runIf(process.platform !== "win32")(
         const close = () => fsSync.closeSync(fd);
         return { fd, close, [Symbol.dispose]: close };
       });
+    // Keep the simulated Windows ACL case on the native host’s actual temp root.
+    const root = resolvePreferredOpenClawTmpDir();
+    using tmp = vi.spyOn(tmpRoot, "resolvePreferredOpenClawTmpDir");
+    tmp.mockReturnValue(root);
     using _ = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     await expect(openUrlPrivately(targetUrl)).resolves.toBe(true);
     const file = openedPath();

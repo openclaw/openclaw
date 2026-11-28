@@ -6,8 +6,11 @@ import {
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import * as gatewayCall from "../gateway/call.js";
 import * as uiLinks from "../gateway/control-ui-links.js";
+import { resolveLeastPrivilegeOperatorScopesForMethod } from "../gateway/method-scopes.js";
+import { createPresenceRecipientProjection } from "../gateway/presence-projection.js";
 import * as browserHandoff from "../infra/browser-handoff.js";
 import * as browserOpen from "../infra/browser-open.js";
+import * as browserChoice from "../infra/control-ui-browser.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import * as handoff from "./control-ui-handoff.js";
 import { runBrowserHatchHandoff } from "./onboard-browser-handoff.js";
@@ -20,6 +23,7 @@ function createMocks() {
     hasVerifiedControlUiLoopbackAlias: vi.spyOn(handoff, "hasVerifiedControlUiLoopbackAlias"),
     detectBrowserOpenSupport: vi.spyOn(browserOpen, "detectBrowserOpenSupport"),
     openUrlPrivately: vi.spyOn(browserHandoff, "openUrlPrivately"),
+    resolveControlUiBrowser: vi.spyOn(browserChoice, "resolveControlUiBrowser"),
     resolveAdvertisedControlUiLinks: vi.spyOn(uiLinks, "resolveAdvertisedControlUiLinks"),
   };
 }
@@ -64,6 +68,7 @@ beforeEach(async () => {
   }));
   sharedMocks.detectBrowserOpenSupport.mockResolvedValue({ ok: false });
   sharedMocks.openUrlPrivately.mockResolvedValue(true);
+  sharedMocks.resolveControlUiBrowser.mockResolvedValue({ canOpen: true });
 });
 
 afterEach(() => {
@@ -97,6 +102,35 @@ it("opens utility-only setup on the custodian route", async () => {
   const url = new URL(sharedMocks.openUrlPrivately.mock.calls[0]![0]);
   expect(url).toMatchObject({ pathname: "/custodian", search: "?onboarding=1" });
   expect(url.hash).toContain("bootstrapToken=one-time-bootstrap");
+});
+
+it("acknowledges a new dashboard connection through the Gateway presence projection", async () => {
+  sharedMocks.detectBrowserOpenSupport.mockResolvedValue({ ok: true });
+  let opened = false;
+  sharedMocks.openUrlPrivately.mockImplementation(async () => {
+    opened = true;
+    return true;
+  });
+  sharedMocks.callGateway.mockReset().mockImplementation(async (options) => {
+    const scopes =
+      options.scopes ??
+      resolveLeastPrivilegeOperatorScopesForMethod(options.method, options.params);
+    return createPresenceRecipientProjection({
+      cfg: {},
+      presence: opened ? [{ ...connectedControlUiPresence, text: "" }] : [],
+    })({
+      connect: {
+        minProtocol: 1,
+        maxProtocol: 1,
+        role: "operator",
+        scopes,
+        client: { id: "cli", version: "test", platform: "test", mode: "cli" },
+      },
+    });
+  });
+
+  expect(await runHandoff({}, 60_000)).toBe(true);
+  expect(displayedNotes()).toContain("Dashboard connected — continuing in your browser.");
 });
 
 it.each(["heartbeat", "disconnect", "new-tab"] as const)(
@@ -264,3 +298,16 @@ it.each(["suppressed", "disabled", "document", "abort", "presence", "bootstrap"]
     }
   },
 );
+
+it("uses the selected browser while retaining the connected-client proof", async () => {
+  const openOptions = { browserCommand: ["/usr/bin/firefox"] };
+  sharedMocks.detectBrowserOpenSupport.mockResolvedValue({ ok: true });
+  sharedMocks.resolveControlUiBrowser.mockResolvedValue({
+    canOpen: true,
+    openOptions,
+    notice: "Opening Firefox for this session.",
+  });
+  expect(await runHandoff()).toBe(true);
+  expect(sharedMocks.openUrlPrivately).toHaveBeenCalledWith(browserUrl, openOptions);
+  expect(displayedNotes()).toContain("Dashboard connected");
+});
