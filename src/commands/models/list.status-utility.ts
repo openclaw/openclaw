@@ -5,6 +5,7 @@ import { selectUtilityModel } from "../../agents/utility-model-selection.js";
 import { readUtilityModelSetting } from "../../agents/utility-model-setting.js";
 import { resolveUtilityModelSelectionForAgent } from "../../agents/utility-model.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 
 /**
  * Narration/titles ride the utility model on a plain API auth path that can differ
@@ -79,10 +80,13 @@ export function isUtilityModelNotOffered(params: {
     return false;
   }
   const model = (ref: string) => splitTrailingAuthProfile(ref).model.toLowerCase();
+  // Load the manifests explicitly: a command like Doctor has no current snapshot,
+  // and without the provider's declaration every primary would look substituted.
   const declared = selectUtilityModel({
     cfg: params.cfg,
     agentId: params.agentId,
     catalog: { entries: [], authoritative: false },
+    metadataSnapshot: loadManifestMetadataSnapshot({ config: params.cfg }),
   });
   return (
     model(published) === `${primary.provider}/${primary.model}`.toLowerCase() &&
