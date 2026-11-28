@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   tokenizer,
   type AnyNode,
@@ -397,16 +398,13 @@ function rewriteCheckSource(script: string, condition: boolean, main: boolean): 
 }
 
 export function retireCronScriptJob(job: Record<string, unknown>): { paused?: string } | undefined {
-  const payload = job.payload as Record<string, unknown> | undefined;
+  const payload = isRecord(job.payload) ? job.payload : undefined;
   const condition = Object.hasOwn(job, "trigger");
   const standalone = payload?.kind === "script";
   if (!condition && !standalone) {
     return undefined;
   }
-  const trigger =
-    typeof job.trigger === "object" && job.trigger !== null
-      ? (job.trigger as Record<string, unknown>)
-      : undefined;
+  const trigger = isRecord(job.trigger) ? job.trigger : undefined;
   const source = condition ? trigger?.script : payload?.script;
   const original = typeof source === "string" ? source : undefined;
   const legacy =

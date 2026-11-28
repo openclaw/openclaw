@@ -1618,7 +1618,7 @@ src/cron/isolated-agent/run-config.ts	1
 src/cron/isolated-agent/run-current-context.ts	1
 src/cron/job-session-bindings.ts	1
 src/cron/normalize.ts	2
-src/cron/persisted-shape.ts	3
+src/cron/persisted-shape.ts	2
 src/cron/retry-hint.ts	3
 src/cron/run-diagnostics-normalize.ts	2
 src/cron/runtime-authority.ts	2
