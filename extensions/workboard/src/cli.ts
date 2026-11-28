@@ -65,16 +65,6 @@ function formatCardLine(card: WorkboardCard): string {
   return terminalText`${card.id.slice(0, 8)}  ${card.status.padEnd(8)}  ${card.priority.padEnd(6)}  ${boardId}${agent}  ${card.title}${archived}`;
 }
 
-function writeCards(cards: WorkboardCard[], options: JsonOptions): void {
-  if (options.json) {
-    writeJson({ cards: cards.map(redactClaimToken) });
-    return;
-  }
-  for (const card of cards) {
-    writeLine(formatCardLine(card));
-  }
-}
-
 function writeCard(card: WorkboardCard, options: JsonOptions): void {
   if (options.json) {
     writeJson({ card: redactClaimToken(card) });
@@ -147,16 +137,30 @@ export function registerWorkboardCli(params: {
           includeArchived?: boolean;
         },
       ) => {
-        // Text output hides archived cards like /workboard list, while --json
-        // keeps the shipped full-card contract for existing scripts.
         let cards = (await list(options.board)).cards;
-        if (!options.json && options.includeArchived !== true) {
-          cards = cards.filter((card) => !card.metadata?.archivedAt);
-        }
         if (options.status) {
           cards = cards.filter((card) => card.status === options.status);
         }
-        writeCards(cards, options);
+        if (options.json) {
+          writeJson({ cards: cards.map(redactClaimToken) });
+          return;
+        }
+        const visible = options.includeArchived
+          ? cards
+          : cards.filter((card) => !card.metadata?.archivedAt);
+        if (visible.length === 0 && process.stdout.isTTY) {
+          if (cards.length > 0) {
+            writeLine("Only archived cards match. Use --include-archived to see them.");
+          } else {
+            writeLine(
+              options.board || options.status ? "No matching cards." : "No Workboard cards.",
+            );
+          }
+          return;
+        }
+        for (const card of visible) {
+          writeLine(formatCardLine(card));
+        }
       },
     );
 

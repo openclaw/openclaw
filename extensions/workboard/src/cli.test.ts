@@ -48,6 +48,32 @@ describe("registerWorkboardCli", () => {
     delete process.env.OPENCLAW_GATEWAY_URL;
   });
 
+  it("reports an empty result in the terminal without adding rows to piped output", async () => {
+    const original = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+    try {
+      Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+      expect(await captureCli("list")).toBe("No Workboard cards.\n");
+      const card = await store.create({ title: "Queued work", status: "todo" });
+      await store.archive(card.id, true);
+      expect(await captureCli("list", "--status", "todo")).toContain("--include-archived");
+      expect(await captureCli("list", "--status", "todo", "--include-archived")).toContain(
+        card.title,
+      );
+      expect(await captureCli("list", "--status", "blocked")).toBe("No matching cards.\n");
+      expect(JSON.parse(await captureCli("list", "--status", "blocked", "--json"))).toEqual({
+        cards: [],
+      });
+      Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
+      expect(await captureCli("list", "--status", "blocked")).toBe("");
+    } finally {
+      if (original) {
+        Object.defineProperty(process.stdout, "isTTY", original);
+      } else {
+        Reflect.deleteProperty(process.stdout, "isTTY");
+      }
+    }
+  });
+
   it("rejects invalid list status filters instead of reporting an empty board", async () => {
     const running = await store.create({ title: "Active work", status: "running" });
     await store.create({ title: "Queued work", status: "todo" });

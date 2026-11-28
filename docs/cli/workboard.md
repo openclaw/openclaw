@@ -46,6 +46,8 @@ Text output is compact:
 
 Columns are id prefix, status, priority, board id, optional agent id, and title.
 
+In a terminal, `list` tells you when the board is empty, when no cards match your filters, or when only archived cards match. If you pipe or redirect the text output, an empty result produces no lines.
+
 An invalid `--status` exits with an error listing the allowed values instead of returning an empty list.
 
 | Flag                 | Purpose                                       |
