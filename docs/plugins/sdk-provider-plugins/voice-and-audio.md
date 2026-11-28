@@ -123,6 +123,14 @@ Register each capability inside `register(api)` alongside your existing
     boundaries, including reconnects. Callers that omit the callback retain
     the existing session behavior.
 
+    `onError` reports errors the session recovers from as well as errors
+    that end it. The helper passes `{ terminal: true }` as the second
+    argument only when the session has stopped and will not reconnect: the
+    reconnect limit, a send-buffer overflow, or lost authority. A provider
+    that ends the session itself with `transport.closeNow()` passes the same
+    flag. Other errors arrive while the session keeps running or retrying,
+    so consumers should not close on them.
+
     Batch STT providers that POST multipart audio should use
     `buildAudioTranscriptionFormData(...)` from
     `openclaw/plugin-sdk/provider-http`. The helper normalizes upload

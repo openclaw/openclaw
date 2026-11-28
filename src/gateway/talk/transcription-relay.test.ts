@@ -459,6 +459,29 @@ describe("talk transcription gateway relay", () => {
     expect(sttSession.close).toHaveBeenCalledOnce();
   });
 
+  it("keeps dictation open through provider errors until the provider session stops", async () => {
+    const sttSession = createSttSessionMock();
+    const { events, session, request, logGateway } = await createStartedRelaySession(sttSession);
+
+    sendAudio(session);
+    request.onError?.(new Error("Unexpected server response: 503"));
+    request.onTranscript?.("heard after reconnect");
+
+    expect(hasType(events, "error")).toBe(false);
+    expect(hasType(events, "close")).toBe(false);
+    expect(sttSession.close).not.toHaveBeenCalled();
+    expect(relayPayloads(events).map(({ text }) => text)).toContain("heard after reconnect");
+    expect(logGateway.warn).toHaveBeenCalledWith(
+      "transcription provider error: Unexpected server response: 503",
+    );
+
+    request.onError?.(new Error("reconnect limit reached"), { terminal: true });
+
+    expect(findPayloadByType(events, "error").message).toBe("reconnect limit reached");
+    expect(findPayloadByType(events, "close").reason).toBe("error");
+    expect(sttSession.close).toHaveBeenCalledOnce();
+  });
+
   it("terminates graceful draining immediately when the provider reports an error", async () => {
     const sttSession = createSttSessionMock();
     const { events, session, request } = await createStartedRelaySession(sttSession);
