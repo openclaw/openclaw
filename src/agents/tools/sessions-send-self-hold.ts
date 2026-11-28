@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { getAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
-import { resolveReplyOperatorAuthorityKey } from "../../auto-reply/reply/reply-tool-authority.js";
+import { resolveReplyOperatorAuthorityKey } from "../../auto-reply/reply/reply-tool-authority-operator.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";

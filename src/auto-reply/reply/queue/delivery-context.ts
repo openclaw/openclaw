@@ -12,8 +12,8 @@ import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { replyCallbackCustody } from "../reply-callback-custody.js";
+import { resolveReplyOperatorAuthorityKey } from "../reply-tool-authority-operator.js";
 import {
-  resolveReplyOperatorAuthorityKey,
   resolveReplyPersonalToolTargets,
   resolveReplyToolAuthorityContext,
 } from "../reply-tool-authority.js";
