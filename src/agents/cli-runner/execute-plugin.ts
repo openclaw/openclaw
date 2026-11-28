@@ -300,6 +300,7 @@ export async function executePluginOwnedProcess(params: {
   noOutputTimeoutMs: number;
   consumeStdout: (chunk: string) => void;
   onOutstandingWorkChange?: (active: boolean) => void;
+  onContinuationHoldChange?: (deadlineAtMs: number | undefined) => void;
   activeToolCount?: () => number;
   compactionActive?: () => boolean;
   setOnCompactionActiveChange?: (listener: (() => void) | undefined) => void;
@@ -360,6 +361,10 @@ export async function executePluginOwnedProcess(params: {
     background: 0,
     observed: false,
     replayUnsafe: false,
+    // The plugin marks a successful result interim when it holds the turn for a
+    // native continuation; that answer is already committed for delivery.
+    answered: false,
+    awaitingContinuation: false,
   };
   const reportOutstandingWork = () => {
     // Parsed tools are deliberately absent here: diagnostics tracks them itself via
@@ -424,12 +429,18 @@ export async function executePluginOwnedProcess(params: {
       activeToolCount: () => Math.max(params.activeToolCount?.() ?? 0, outstanding.approvals),
       backgroundTaskCount: () => outstanding.background,
       compactionActive: () => params.compactionActive?.() ?? false,
+      awaitingContinuation: () => outstanding.awaitingContinuation,
       hasObservedActivity: () => outstanding.observed,
       hasReplayUnsafeActivity: () => outstanding.replayUnsafe,
       onNoOutputTimeout: (error) => {
         termination.reason = "no-output-timeout";
         params.onNoOutputTimeout?.(error);
         controller.abort(error);
+      },
+      onOverallDeadlineChange: (deadlineAtMs) => {
+        if (outstanding.awaitingContinuation) {
+          params.onContinuationHoldChange?.(deadlineAtMs);
+        }
       },
       onOverallTimeout: () => {
         termination.reason = "overall-timeout";
@@ -470,6 +481,9 @@ export async function executePluginOwnedProcess(params: {
     const { prepareCredentialUse } = params.context.preparedBackend;
     // Warm transports retain their first turn's async context. Bind every host
     // callback here so reused transports enter the current turn's source scope.
+    // This watchdog owns the suspension-adjusted execution budget. A second wall-clock
+    // deadline can stop the attempt before this timer credits a host pause.
+    run.diagnosticOwner?.watchdogAttempt?.setExecutionDeadline(undefined);
     const execution = params.execute({
       command,
       argv0: params.executionArgv0,
@@ -559,6 +573,18 @@ export async function executePluginOwnedProcess(params: {
         outstanding.background = next.value.tasks.filter(isRecord).length;
         reportOutstandingWork();
       }
+      // The backend owns native task ancestry and whether a steered input has started.
+      const awaitingContinuation =
+        typeof next.value.openclaw_continuation_wait === "boolean"
+          ? next.value.openclaw_continuation_wait
+          : outstanding.awaitingContinuation;
+      outstanding.answered ||= next.value.openclaw_interim_result === true;
+      if (awaitingContinuation !== outstanding.awaitingContinuation) {
+        outstanding.awaitingContinuation = awaitingContinuation;
+        params.onContinuationHoldChange?.(
+          awaitingContinuation ? watchdog.overallDeadlineAtMs() : undefined,
+        );
+      }
       params.consumeStdout(`${JSON.stringify(next.value)}\n`);
       outstanding.observed = true;
       if (
@@ -582,6 +608,14 @@ export async function executePluginOwnedProcess(params: {
         throw createCliAbortError();
       }
       termination.reason = "manual-cancel";
+    }
+    if (
+      outstanding.answered &&
+      (termination.reason === "no-output-timeout" || termination.reason === "overall-timeout")
+    ) {
+      // A deadline after a committed answer ends the wait for its continuation,
+      // not the answer itself.
+      params.onInterrupted?.("timeout");
     }
     if (termination.reason === "exit" && terminalResult !== "error") {
       if (
@@ -610,6 +644,7 @@ export async function executePluginOwnedProcess(params: {
     params.setOnActiveLoopbackAskUserDeadlineChange?.(undefined);
     params.setOnCompactionActiveChange?.(undefined);
     params.onOutstandingWorkChange?.(false);
+    params.onContinuationHoldChange?.(undefined);
     // Permission callbacks can be retained by the plugin or its subprocess.
     // Closing the turn fences those capabilities before any outer cleanup runs.
     controller.abort(new Error("CLI plugin runtime turn is no longer active."));

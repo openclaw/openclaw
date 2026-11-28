@@ -346,6 +346,7 @@ export async function executeCliProcess(params: {
           }
         },
         onOutstandingWorkChange: backendActivity?.setOutstandingWork,
+        onContinuationHoldChange: backendActivity?.holdUntil,
         activeToolCount: params.events.activeParsedToolCount,
         compactionActive: params.events.hasActiveCompaction,
         setOnCompactionActiveChange: params.events.setOnCompactionActiveChange,

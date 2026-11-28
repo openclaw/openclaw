@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { once } from "node:events";
 import { PassThrough } from "node:stream";
 import type {
   CliBackendExecuteContext,
@@ -15,9 +14,11 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasClaudeRawToolInvocation } from "./cli-output.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
 import { prepareClaudeCliTransportArgs } from "./cli-runtime-args.js";
+import { writeTurnEvent } from "./cli-runtime-events.js";
 import * as promptHooks from "./cli-runtime-prompt-context.js";
 import { createClaudeTurnStatus } from "./cli-runtime-status.js";
 import * as tasks from "./cli-runtime-tasks.js";
+import { createUserInput, rejectInjectedInputs } from "./cli-runtime-user-input.js";
 import { createClaudeCliTransport } from "./cli-transport.js";
 import { createClaudeCliUserInputAuthorizer } from "./cli-user-input.js";
 
@@ -40,6 +41,7 @@ type ClaudeCliTurn = {
   /** Hook reruns carry no input UUID and may rewrite text; retain their native input owner. */
   promptInputUuid: string;
   sawTerminalResult: boolean;
+  awaitingContinuation?: boolean;
   interrupted: boolean;
   foregroundTaskIds: Set<string>;
   foregroundBashToolUseIds: Set<string>;
@@ -222,43 +224,6 @@ async function handleRequest(
   throw new Error("Unknown Claude CLI hook callback.");
 }
 
-function createUserInput(
-  context: CliBackendExecuteContext,
-  text: string,
-  uuid: string,
-  hostGenerated = false,
-  images: readonly CliBackendInputImage[] = [],
-) {
-  return {
-    type: "user",
-    // Same-turn images go to the model as native content blocks; the first prompt uses @paths.
-    message: {
-      role: "user",
-      content: images.length
-        ? [
-            // Anthropic rejects empty text blocks; an image-only input sends just the images.
-            ...(text ? [{ type: "text", text }] : []),
-            ...images.map(({ data, mimeType }) => ({
-              type: "image",
-              source: { type: "base64", media_type: mimeType, data },
-            })),
-          ]
-        : text,
-    },
-    parent_tool_use_id: null,
-    uuid,
-    // Claude saves synthetic input as a meta row: the model reads it, history never shows it.
-    ...(hostGenerated ? { isSynthetic: true } : {}),
-    ...(context.sessionId ? { session_id: context.sessionId } : {}),
-  };
-}
-
-function rejectInjectedInputs(turn: ClaudeCliTurn, error: Error) {
-  for (const input of turn.injectedInputs.values()) {
-    input.started.reject(error);
-  }
-}
-
 function canInjectInput(session: ClaudeCliSession, turn: ClaudeCliTurn): boolean {
   return session.hasInputLifecycle && turn.promptSubmitted && activeTurn(session) === turn;
 }
@@ -315,7 +280,7 @@ function closeSession(session: ClaudeCliSession, error?: unknown) {
   session.currentTurn = undefined;
   if (turn) {
     turn.error = toErrorObject(error, "Claude CLI live session closed.");
-    rejectInjectedInputs(turn, turn.error);
+    rejectInjectedInputs(turn.injectedInputs.values(), turn.error);
     turn.controller.abort();
     turn.events.end();
   }
@@ -331,7 +296,7 @@ function completeTurn(session: ClaudeCliSession, turn: ClaudeCliTurn) {
   // Unfinished injected input would run as an orphan native turn; the host replays it instead.
   const orphanedInput = turn.injectedInputs.size > 0;
   rejectInjectedInputs(
-    turn,
+    turn.injectedInputs.values(),
     new Error("Claude CLI turn ended before its injected input completed."),
   );
   turn.controller.abort();
@@ -352,9 +317,13 @@ async function emitHeldInterimResult(turn: ClaudeCliTurn) {
     return;
   }
   turn.heldResult = undefined;
-  if (!turn.events.write({ ...heldResult, openclaw_interim_result: true })) {
-    await once(turn.events, "drain", { signal: turn.controller.signal });
-  }
+  // Releasing an answer for an already-started input is not a background wait.
+  turn.awaitingContinuation = false;
+  await writeTurnEvent(turn, {
+    ...heldResult,
+    openclaw_interim_result: true,
+    openclaw_continuation_wait: false,
+  });
 }
 
 async function acceptMessage(session: ClaudeCliSession, message: Record<string, unknown>) {
@@ -415,7 +384,9 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
     if (injected && injectedUuid && message.state === "started") {
       turn.promptInputUuid = injectedUuid;
       injected.started.resolve();
+      turn.awaitingContinuation = false;
       await emitHeldInterimResult(turn);
+      await writeTurnEvent(turn, { ...message, openclaw_continuation_wait: false });
     } else if (
       injected &&
       injectedUuid &&
@@ -443,9 +414,7 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
         turn.pendingBackgroundTaskIds.size === 0
       ) {
         turn.heldResult = undefined;
-        if (!turn.events.write(heldResult)) {
-          await once(turn.events, "drain", { signal: turn.controller.signal });
-        }
+        await writeTurnEvent(turn, heldResult);
         completeTurn(session, turn);
       }
     }
@@ -495,6 +464,24 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
       // Older inputs still consume their own ordered notification result.
       turn.taskNotifications.set(taskId, "queued");
     }
+  }
+  // Task ancestry is owned here, not reconstructed by the host watchdog.
+  if (
+    turn.awaitingContinuation &&
+    (!replayedTaskId || session.taskOwners.get(replayedTaskId) === turn.inputUuid) &&
+    message.parent_tool_use_id == null &&
+    ((message.type !== "system" && message.type !== "result") ||
+      (message.subtype === "task_notification" &&
+        taskId &&
+        !parentRuns &&
+        message.status !== "stopped" &&
+        session.taskOwners.get(taskId) === turn.inputUuid) ||
+      (message.subtype === "task_notification" &&
+        message.status === "stopped" &&
+        turn.pendingBackgroundTaskIds.size === 0 &&
+        turn.taskNotifications.size === 0))
+  ) {
+    turn.awaitingContinuation = false;
   }
   let completesTurn = false;
   let holdsForInput = false;
@@ -546,6 +533,7 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
       completesTurn = (turn.pendingBackgroundTaskIds.size === 0 && !queuedContinuation) || failed;
       // Injected input holds a successful result until its lifecycle says whether it was the last.
       holdsForInput = completesTurn && !failed && turn.injectedInputs.size > 0;
+      turn.awaitingContinuation = !completesTurn;
     }
   }
   if (holdsForInput) {
@@ -558,9 +546,14 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
     message.type === "result" && !completesTurn
       ? { ...message, openclaw_interim_result: true }
       : message;
-  if (!turn.events.write(outputMessage)) {
-    await once(turn.events, "drain", { signal: turn.controller.signal });
-  }
+  const hostMessage =
+    turn.awaitingContinuation === undefined
+      ? outputMessage
+      : {
+          ...outputMessage,
+          openclaw_continuation_wait: turn.awaitingContinuation,
+        };
+  await writeTurnEvent(turn, hostMessage);
   if (completesTurn) {
     completeTurn(session, turn);
   }
@@ -726,16 +719,12 @@ export async function* executeClaudeCli(
           // Native interrupt would persist a false user stop in the resumable transcript.
           turn.sawTerminalResult = true;
           // Native output owns the session ID; the input ID may still name a fork's parent.
-          if (
-            !turn.events.write({
-              type: "result",
-              subtype: "success",
-              is_error: false,
-              result: "",
-            })
-          ) {
-            await once(turn.events, "drain", { signal: turn.controller.signal });
-          }
+          await writeTurnEvent(turn, {
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            result: "",
+          });
           completeTurn(session, turn);
           session.handle.close("idle");
           await session.handle.waitForExit();

@@ -170,6 +170,14 @@ for await (const line of createInterface({ input: process.stdin })) {
           useResume: turns.length > 0,
         }),
       )) {
+        if (
+          record.type === "system" &&
+          record.subtype === "task_notification" &&
+          String(record.task_id).startsWith("inner-") &&
+          turns.length === 0
+        ) {
+          expect(record.openclaw_continuation_wait).toBe(true);
+        }
         if (record.type !== "result") {
           continue;
         }
@@ -236,4 +244,51 @@ for await (const line of createInterface({ input: process.stdin })) {
   const next = resultDetail(await collect({ ...context, useResume: true }));
   expect(next).toMatchObject({ answer: "parent final" });
   expect(next.pid).not.toBe(first.pid);
+});
+
+it("keeps the current background hold across an earlier input's replay and result", async () => {
+  const fixture = String.raw`
+import { createInterface } from "node:readline";
+const send = (record) => process.stdout.write(JSON.stringify(record) + "\n");
+const task = (id) => ({ task_id: id, task_type: "local_agent", run_id: id + "-run" });
+const system = (subtype, fields) => send({ type: "system", subtype, ...fields });
+const result = (answer, fields = {}) => send({ type: "result", subtype: "success", is_error: false,
+  session_id: "fixture-session", result: JSON.stringify({ answer }), num_turns: 1, stop_reason: "end_turn", ...fields });
+let input = 0;
+for await (const line of createInterface({ input: process.stdin })) {
+  const message = JSON.parse(line);
+  if (message.type === "control_request") {
+    send({ type: "control_response", response: { subtype: "success", request_id: message.request_id, response: {} } });
+    system("init", { capabilities: ["msg_lifecycle_v1"] });
+    continue;
+  }
+  send({ type: "command_lifecycle", state: "started", command_uuid: message.uuid });
+  if (++input === 1) {
+    system("task_started", { ...task("prior"), is_backgrounded: false });
+    system("task_notification", { ...task("prior"), status: "completed" });
+    result("first");
+    continue;
+  }
+  system("background_tasks_changed", { tasks: [task("current")] });
+  result("waiting");
+  system("task_notification", { ...task("prior"), status: "completed" });
+  send({ type: "user", isReplay: true, parent_tool_use_id: null, uuid: "prior-replay",
+    origin: { kind: "task-notification" }, message: { role: "user", content: "<task-notification><task-id>prior</task-id></task-notification>" } });
+  result("prior answer", { origin: { kind: "task-notification", runId: "prior-run" } });
+  system("task_notification", { ...task("current"), status: "completed" });
+  result("final", { origin: { kind: "task-notification", runId: "current-run" } });
+}
+`;
+  const context = await harness.context(fixture, { liveSession: createLiveSession() });
+  await collect(context);
+  const records = await collect({ ...context, useResume: true });
+  expect(records.find((record) => record.uuid === "prior-replay")).toMatchObject({
+    openclaw_continuation_wait: true,
+  });
+  expect(
+    records.find(
+      (record) => record.type === "result" && String(record.result).includes("prior answer"),
+    ),
+  ).toMatchObject({ openclaw_continuation_wait: true });
+  expect(resultDetail(records)).toMatchObject({ answer: "final" });
 });

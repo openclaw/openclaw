@@ -26,10 +26,12 @@ export function createCliPluginWatchdog(params: {
   activeToolCount: () => number;
   backgroundTaskCount: () => number;
   compactionActive: () => boolean;
+  awaitingContinuation: () => boolean;
   hasObservedActivity: () => boolean;
   hasReplayUnsafeActivity: () => boolean;
   onNoOutputTimeout: (error: FailoverError) => void;
   onOverallTimeout: () => void;
+  onOverallDeadlineChange?: (deadlineAtMs: number) => void;
 }) {
   const noOutputTimeoutMs = params.noOutputTimeoutMs;
   const overallTimeoutMs = params.overallTimeoutMs;
@@ -93,7 +95,18 @@ export function createCliPluginWatchdog(params: {
         return;
       }
     }
-    if (noOutputTimeoutMs !== undefined && nowMs >= noOutputDeadlineMs) {
+    if (suspendedMs > 0 && overallActiveRemainingMs !== undefined) {
+      params.onOverallDeadlineChange?.(nowMs + overallActiveRemainingMs);
+    }
+    if (
+      noOutputTimeoutMs !== undefined &&
+      nowMs >= noOutputDeadlineMs &&
+      params.awaitingContinuation()
+    ) {
+      // The answer is complete and the CLI is waiting for its own background work to
+      // report back. Quiet is expected there, so only the overall deadline bounds it.
+      noOutputDeadlineMs = nowMs + noOutputTimeoutMs;
+    } else if (noOutputTimeoutMs !== undefined && nowMs >= noOutputDeadlineMs) {
       const quietDurationMs = nowMs - lastOutputAtMs;
       const askUserDeadline = params.getActiveAskUserDeadline?.();
       const decision = noOutputPolicy.resolveCliNoOutputTimeoutDecision({
@@ -155,5 +168,7 @@ export function createCliPluginWatchdog(params: {
     },
     reset,
     dispose,
+    overallDeadlineAtMs: () =>
+      overallActiveRemainingMs === undefined ? undefined : lastTickAtMs + overallActiveRemainingMs,
   };
 }

@@ -121,10 +121,18 @@ export function beginDiagnosticBackendActivity(params: {
     },
   });
   let quietAllowanceMs = noOutputTimeoutMs;
+  let quietDeadlineAtMs = Date.now() + noOutputTimeoutMs;
+  let holdDeadlineAtMs: number | undefined;
+  let holdWait: typeof ownedWait;
   const registration = resolveCurrentDiagnosticOwner(owner, assertCurrent);
   const backendActivity: DiagnosticBackendActivity = {
-    deadlineAtMs: Date.now() + noOutputTimeoutMs,
+    deadlineAtMs: quietDeadlineAtMs,
     assertCurrent,
+  };
+  // A backend-owned hold outranks the quiet clock; output during the hold cannot shorten it.
+  const publishDeadline = () => {
+    backendActivity.deadlineAtMs = Math.max(quietDeadlineAtMs, holdDeadlineAtMs ?? 0);
+    ownedWait?.updateDeadline(backendActivity.deadlineAtMs);
   };
   if (registration) {
     registration.backendActivity = backendActivity;
@@ -143,8 +151,8 @@ export function beginDiagnosticBackendActivity(params: {
         return false;
       }
       const now = Date.now();
-      backendActivity.deadlineAtMs = now + quietAllowanceMs;
-      ownedWait?.updateDeadline(backendActivity.deadlineAtMs);
+      quietDeadlineAtMs = now + quietAllowanceMs;
+      publishDeadline();
       const progressed = modelProgress
         ? (attempt?.progressModel("model_call:stream_progress") ?? false)
         : (attempt?.progress("transport", "model_call:stream_progress") ?? false);
@@ -174,8 +182,8 @@ export function beginDiagnosticBackendActivity(params: {
         return false;
       }
       const now = Date.now();
-      backendActivity.deadlineAtMs = now + quietAllowanceMs;
-      ownedWait?.updateDeadline(backendActivity.deadlineAtMs);
+      quietDeadlineAtMs = now + quietAllowanceMs;
+      publishDeadline();
       if (activity && tool) {
         touchSessionActivity(activity, `tool:${tool.toolName}:subagent_progress`, now);
       }
@@ -189,13 +197,32 @@ export function beginDiagnosticBackendActivity(params: {
         ? Math.max(noOutputTimeoutMs, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS)
         : noOutputTimeoutMs;
       // Work-state changes preserve the last output's origin, not a new progress clock.
-      backendActivity.deadlineAtMs += allowanceMs - quietAllowanceMs;
+      quietDeadlineAtMs += allowanceMs - quietAllowanceMs;
       quietAllowanceMs = allowanceMs;
-      ownedWait?.updateDeadline(backendActivity.deadlineAtMs);
+      publishDeadline();
+    },
+    holdUntil: (deadlineAtMs: number | undefined) => {
+      if (closed || (attempt ? !ownsAttempt() : !currentActivity())) {
+        return;
+      }
+      holdDeadlineAtMs = deadlineAtMs;
+      if (deadlineAtMs === undefined) {
+        holdWait?.close();
+        holdWait = undefined;
+      } else if (!holdWait) {
+        holdWait = attempt?.beginWait({
+          // The CLI watchdog owns the active-time bound, including host suspension.
+          kind: "runtime_owned",
+          releaseStartsSemanticWindow: true,
+          isCurrent: ownsAttempt,
+        });
+      }
+      publishDeadline();
     },
     close: () => {
       closed = true;
       ownedWait?.close();
+      holdWait?.close();
       // Compare-release remains valid after abort and cannot retire a later attempt.
       const current = activeDiagnosticOwners.get(owner.generation);
       if (current?.owner === owner && current.backendActivity === backendActivity) {
