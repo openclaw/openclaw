@@ -20,7 +20,7 @@ type LifecycleFields = {
   computeProviderKey: () => string;
   ensureProviderInitialized: () => Promise<void>;
   resetProviderInitializationForRetry: () => void;
-  markLocalEmbeddingProviderDegraded: (error: unknown) => void;
+  markEmbeddingProviderFailure: (error: unknown) => void;
   activateFallbackProvider: (reason: string) => Promise<boolean>;
   withTimeout: <T>(promise: Promise<T>, timeoutMs: number, message: string) => Promise<T>;
   indexFile: (entry: MemoryIndexWorkItem["entry"], source: "memory") => Promise<void>;
@@ -191,7 +191,7 @@ describe("memory index", () => {
       close: async () => {},
     };
 
-    fields.markLocalEmbeddingProviderDegraded(providerFixture.createLocalWorkerExitError());
+    fields.markEmbeddingProviderFailure(providerFixture.createLocalWorkerExitError());
 
     expect(manager.getCachedEmbeddingAvailability()).toBeNull();
     await expect(manager.probeEmbeddingAvailability()).resolves.toMatchObject({
@@ -212,7 +212,7 @@ describe("memory index", () => {
       } else {
         assert.ok(fields.provider, "Expected a test embedding provider");
         fields.provider.id = "local";
-        fields.markLocalEmbeddingProviderDegraded(providerFixture.createLocalWorkerExitError());
+        fields.markEmbeddingProviderFailure(providerFixture.createLocalWorkerExitError());
       }
       await vi.waitFor(() => expect(providerFixture.providerCloseCalls).toBe(1));
       const callsBefore = providerFixture.providerCalls.length;
@@ -343,7 +343,7 @@ describe("memory index", () => {
     try {
       const embeddingsStarted = Promise.all([firstEmbedding.entered, secondEmbedding.entered]);
       await fields.withTimeout(embeddingsStarted, 5_000, "concurrent embeddings did not start");
-      fields.markLocalEmbeddingProviderDegraded(providerFixture.createLocalWorkerExitError());
+      fields.markEmbeddingProviderFailure(providerFixture.createLocalWorkerExitError());
       await vi.waitFor(() => expect(fields.provider).toBeNull());
       fallbackPromise = fields.activateFallbackProvider("local worker exited");
       firstEmbedding.release();

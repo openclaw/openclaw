@@ -213,10 +213,12 @@ describe("Gateway-client question outcome ownership", () => {
     "recovers a committed $action when a peer mounts before its ordered RPC response",
     async ({ resolve, status }) => {
       const resolution = createDeferred<QuestionResolveResult>();
+      const requested = createDeferred();
       const list = createDeferred<{ questions: unknown[] }>();
       const client: QuestionClient = {
         request: vi.fn((method) => {
           if (method === "question.resolve") {
+            requested.resolve();
             return resolution.promise;
           }
           if (method === "question.list") {
@@ -233,6 +235,7 @@ describe("Gateway-client question outcome ownership", () => {
         ...(status === "answered" ? { answers } : {}),
       };
       const submission = resolve(submitter);
+      await requested.promise;
       const hydrating = createState(client);
       refreshPendingQuestionsWithRetry(hydrating, client);
       expect(vi.mocked(client.request).mock.calls.map(([method]) => method)).toEqual([
@@ -315,14 +318,19 @@ describe("Gateway-client question outcome ownership", () => {
     "publishes a committed $action to surviving peers after the submitting pane is disposed",
     async ({ resolve, status }) => {
       const pending = createDeferred<QuestionResolveResult>();
+      const requested = createDeferred();
       const client: QuestionClient = {
-        request: vi.fn(() => pending.promise),
+        request: vi.fn(() => {
+          requested.resolve();
+          return pending.promise;
+        }),
       };
       const onSubmitterChange = vi.fn();
       const submitter = connectQuestionState(client, onSubmitterChange);
       const peer = connectQuestionState(client);
       const sidebar = connectQuestionState(client);
       const submission = resolve(submitter);
+      await requested.promise;
       onSubmitterChange.mockClear();
       disposeQuestionPromptState(submitter);
       const result: QuestionResolveResult =
@@ -513,12 +521,17 @@ describe("Gateway-client question outcome ownership", () => {
 
   it("does not publish an old request rejected when its Gateway reconnects", async () => {
     const pending = createDeferred<QuestionResolveResult>();
+    const requested = createDeferred();
     const client: QuestionClient = {
-      request: vi.fn(() => pending.promise),
+      request: vi.fn(() => {
+        requested.resolve();
+        return pending.promise;
+      }),
     };
     const submitter = connectQuestionState(client);
     const peer = connectQuestionState(client);
     const submission = cancelQuestionPrompt(submitter, "question-1");
+    await requested.promise;
     // The protocol rejects pending requests before its reconnect lifecycle.
     pending.reject(new Error("gateway closed"));
     for (const projection of [submitter, peer]) {

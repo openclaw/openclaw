@@ -228,6 +228,7 @@ try {
             bootstrap: {
               ...buildBootstrapBudgetState({ files: [] }),
               bootstrapMode: "full",
+              bootstrapCompleted: false,
               contextFiles: [],
               bootstrapInjectionStats: [],
               shouldRecordCompletedBootstrapTurn: false,

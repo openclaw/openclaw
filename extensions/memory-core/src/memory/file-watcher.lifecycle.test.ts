@@ -6,6 +6,7 @@ import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryFileWatcher, type MemoryFileWatcherOptions } from "./file-watcher.js";
 import { MemoryWatchPolicy } from "./watch-policy.js";
+import { MEMORY_WATCH_MAX_PATHS } from "./watch-settle.js";
 
 const observer = await vi.hoisted(async () => {
   const { createMemoryObservationHarness } = await import("./watcher-test-support.js");
@@ -173,7 +174,7 @@ describe("Memory observation lifecycle", () => {
     await agents[0]!.watcher.close();
     expect(entry.close).not.toHaveBeenCalled();
     invalidate();
-    expect(agents.map(({ onDirty }) => onDirty.mock.calls.length)).toEqual([1, 2]);
+    expect(agents.map(({ onDirty }) => onDirty.mock.calls.length)).toEqual([2, 3]);
     const joined = createDeferred<void>();
     entry.close.mockImplementationOnce(() => joined.promise);
     let closed = false;
@@ -184,7 +185,7 @@ describe("Memory observation lifecycle", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(closed).toBe(false);
     invalidate();
-    expect(agents.map(({ onDirty }) => onDirty.mock.calls.length)).toEqual([1, 2]);
+    expect(agents.map(({ onDirty }) => onDirty.mock.calls.length)).toEqual([2, 3]);
     joined.resolve();
     await closing;
     await start({ extraPaths: [extra] });
@@ -380,21 +381,26 @@ describe("Memory observation lifecycle", () => {
   );
 
   it("routes selected structural and ancestor changes to the affected agents", async () => {
-    const first = await start();
+    const firstSettled = createDeferred<void>();
+    const secondSettled = createDeferred<void>();
+    const first = await start({ onChange: vi.fn(() => firstSettled.resolve()) });
     const secondWorkspace = path.join(path.dirname(state.workspaceDir), "second-workspace");
     await fs.mkdir(path.join(secondWorkspace, "memory"), { recursive: true });
     const second = await start({
       agentId: "second",
       workspaceDir: secondWorkspace,
+      onChange: vi.fn(() => secondSettled.resolve()),
     });
     expect(observer.observations).toHaveLength(1);
     const entry = observer.observations[0]!;
     dirty(entry, selectedPath(entry, "memory/gone.md"), "structural");
     await vi.advanceTimersByTimeAsync(0);
-    expect(calls(first.onDirty, second.onDirty)).toEqual([1, 0]);
+    await firstSettled.promise;
+    expect(calls(first.onDirty, second.onDirty)).toEqual([2, 0]);
     dirty(entry, ".", "structural");
     await vi.advanceTimersByTimeAsync(0);
-    expect(calls(first.onDirty, second.onDirty)).toEqual([2, 1]);
+    await secondSettled.promise;
+    expect(calls(first.onDirty, second.onDirty)).toEqual([4, 2]);
   });
 
   it.each([undefined, "ENOTSUP"])("reports fallback polling once with reason %s", async (code) => {
@@ -530,7 +536,7 @@ describe("Memory observation lifecycle", () => {
       await fs.writeFile(file, "First write.");
       const indexed = createDeferred<void>();
       const onChange = vi.fn(() => indexed.resolve());
-      const { entry } = await start({ onChange });
+      const { entry, onDirty } = await start({ onChange });
       const samples = Array.from({ length: 3 }, () => createDeferred<void>());
       const open = entry.root.open.bind(entry.root);
       let sample = 0;
@@ -568,8 +574,42 @@ describe("Memory observation lifecycle", () => {
       await indexed.promise;
       expect(onChange).toHaveBeenCalledOnce();
       expect(sampling).toHaveBeenCalledTimes(3);
+      expect(onDirty).toHaveBeenCalledTimes(3);
+      expect(onDirty.mock.invocationCallOrder.at(-1)).toBeLessThan(
+        onChange.mock.invocationCallOrder[0]!,
+      );
     },
   );
+
+  it("retains selected-batch invalidation across overflow and a reentrant change", async () => {
+    const release = createDeferred<void>();
+    const secondChange = createDeferred<void>();
+    const onChange = vi.fn<() => void | Promise<void>>(() => secondChange.resolve());
+    const { entry, onDirty } = await start({ onChange });
+    onChange.mockImplementationOnce(() => {
+      dirty(entry, selectedPath(entry, "memory/reentrant.md"), "structural");
+      return release.promise;
+    });
+    entry.dirty(
+      Array.from({ length: MEMORY_WATCH_MAX_PATHS + 1 }, (_, index) => ({
+        path: selectedPath(entry, "memory/overflow-" + index + ".md"),
+        type: "structural" as const,
+      })),
+    );
+    expect(onDirty).toHaveBeenCalledTimes(MEMORY_WATCH_MAX_PATHS + 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onChange).toHaveBeenCalledOnce();
+    // The emptied queue still owns a follow-up invalidation, followed by the reentrant event.
+    expect(onDirty).toHaveBeenCalledTimes(MEMORY_WATCH_MAX_PATHS + 3);
+    release.resolve();
+    await vi.advanceTimersByTimeAsync(1);
+    await secondChange.promise;
+    expect(onChange).toHaveBeenCalledTimes(2);
+    expect(onDirty).toHaveBeenCalledTimes(MEMORY_WATCH_MAX_PATHS + 4);
+    expect(onDirty.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      onChange.mock.invocationCallOrder[1]!,
+    );
+  });
 
   it("invalidates before slow retirement and reacquires scan failures under the same pinned Root", async () => {
     const physical = createDeferred<void>();

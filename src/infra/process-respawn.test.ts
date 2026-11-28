@@ -77,6 +77,15 @@ it("does not respawn or schedule a launchd handoff while Doctor owns maintenance
   }
 });
 
+it("leaves an update successor of a launcher child to its launcher", () => {
+  process.env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-respawn-launcher-");
+  delete process.env.OPENCLAW_NO_RESPAWN;
+  process.env.OPENCLAW_LAUNCHER_IPC = "1";
+  spawnMock.mockReturnValue(mockDetachedChild(6262));
+  expect(respawnGatewayProcessForUpdate()).toEqual({ mode: "supervised", exitCode: 0 });
+  expect(spawnMock).not.toHaveBeenCalled();
+});
+
 afterEach(() => {
   envSnapshot.restore();
   process.argv = [...originalArgv];

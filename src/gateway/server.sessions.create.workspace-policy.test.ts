@@ -162,7 +162,7 @@ async function openWorkspaceEditor(fixture: Awaited<ReturnType<typeof setupReset
 async function makeNonGitTempDir(prefix: string): Promise<string> {
   let root = await fs.realpath(os.tmpdir());
   for (;;) {
-    const checkoutRoot = findGitCheckoutRoot(root);
+    const checkoutRoot = await findGitCheckoutRoot(root);
     if (!checkoutRoot) {
       return tempDirs.make(prefix, root);
     }
@@ -331,6 +331,23 @@ test("an ordinary session created through a workspace alias can adopt without ac
     );
     await fs.unlink(alias);
     await fs.symlink(workspace, alias, directoryLinkType);
+    await expect(
+      adoptUnboundPullRequestWorkspace({
+        ...input,
+        async verifyBeforeBinding() {
+          await fs.unlink(alias);
+          await fs.symlink(other, alias, directoryLinkType);
+        },
+      }),
+    ).rejects.toThrow("workspace path alias points to a different current target");
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+      sessionId: entry.sessionId,
+    });
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.worktree,
+    ).toBeUndefined();
+    await fs.unlink(alias);
+    await fs.symlink(workspace, alias, directoryLinkType);
     const adopted = await adoptUnboundPullRequestWorkspace(input);
     adoptedId = adopted.worktree?.id;
     expect(adoptedId).toBeDefined();
@@ -413,20 +430,10 @@ test("sessions.create requires admin for full permission mode", async () => {
   });
 });
 
-test("sessions.create uses a non-git Gateway cwd directly but not as a worktree source", async () => {
+test("sessions.create names a non-git requested cwd when refusing a worktree", async () => {
   const cwd = await makeNonGitTempDir("openclaw-session-direct-cwd-");
-  const direct = await createSession({ cwd });
-  expect(direct.ok).toBe(true);
-  expect(direct.payload?.entry?.spawnedCwd).toBe(cwd);
-
-  const isolated = await createSession({ cwd, worktree: true });
-  expectInvalid(isolated, `requested working directory is not a git checkout: ${cwd}`);
-});
-
-test("sessions.create keeps its cwd contract absolute-only", async () => {
-  const created = await directSessionReq("sessions.create", { cwd: "~/repo" });
-
-  expectInvalid(created, "sessions.create cwd must be absolute");
+  const created = await createSession({ cwd, worktree: true });
+  expectInvalid(created, `requested working directory is not a git checkout: ${cwd}`);
 });
 
 test.each([

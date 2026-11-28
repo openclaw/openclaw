@@ -31,6 +31,20 @@ export function ChatPermissionCard(
   );
 }
 
+const CreatedAutomations = lazy(() => import("./chat-created-automations.tsx"), {
+  export: "ChatCreatedAutomations",
+});
+
+export function AutomationCreationCard(
+  props: Parameters<typeof import("./chat-created-automations.tsx").ChatCreatedAutomations>[0],
+) {
+  return (
+    <ChatLazyBoundary>
+      <CreatedAutomations {...props} />
+    </ChatLazyBoundary>
+  );
+}
+
 const TemplatePluginReceipt = lazy(() => import("./chat-template-plugin-card.tsx"), {
   export: "ChatTemplatePluginCards",
 });
@@ -141,7 +155,7 @@ const ExpandedContent = lazy(() => import("./chat-tool-expanded.solid.tsx"), {
 export function ExpandedToolCardContent(props: ToolCardContentProps) {
   return (
     <ChatLazyBoundary>
-      <ExpandedContent card={props.card} output={props.output} options={props.options} />
+      <ExpandedContent {...props} />
     </ChatLazyBoundary>
   );
 }

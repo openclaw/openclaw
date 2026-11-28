@@ -18,7 +18,7 @@ import type { MemoryConfig } from "./config.js";
 import { createEmbeddings, isMemoryRecallTimeoutError } from "./embeddings.js";
 import memoryPlugin from "./index.js";
 import { looksLikeEnvelopeSludge } from "./memory-capture-sanitization.js";
-import { detectCategory, normalizeRecallQuery, shouldCapture } from "./memory-policy.js";
+import { normalizeRecallQuery, shouldCapture } from "./memory-policy.js";
 import { installTmpDirHarness } from "./test-helpers.js";
 
 const moduleMocks = vi.hoisted(() => ({
@@ -232,10 +232,8 @@ function memoryRow(text: string, overrides: Record<string, unknown> = {}) {
 }
 
 function firstAddedMemory(add: ReturnType<typeof vi.fn>) {
-  const batch = firstMockArg(add as MockCallSource, "memory add") as
-    | Array<Record<string, unknown>>
-    | undefined;
-  return expectDefined(batch?.[0], "first added memory");
+  const table = firstMockArg(add as MockCallSource, "memory add") as import("apache-arrow").Table;
+  return expectDefined(table.get(0), "first added memory");
 }
 
 function embeddingInputs(mock: ReturnType<typeof vi.fn>) {
@@ -1193,6 +1191,7 @@ describe("memory plugin e2e", () => {
       on,
       vectorSearch,
     } = setupMemoryHarness({
+      embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-small", dimensions: 3 },
       autoCapture: true,
       autoRecall: false,
     });
@@ -1229,16 +1228,17 @@ describe("memory plugin e2e", () => {
     expect(embeddingsCreate).toHaveBeenCalledWith({
       model: "text-embedding-3-small",
       input: "I prefer Helix for editing code every day.",
+      dimensions: 3,
     });
     expect(vectorSearch).toHaveBeenCalledTimes(1);
     expect(add).toHaveBeenCalledTimes(1);
     const memory = firstAddedMemory(add);
     expect(memory).toMatchObject({
       text: "I prefer Helix for editing code every day.",
-      vector: [0.1, 0.2, 0.3],
       importance: 0.7,
       category: "preference",
     });
+    expect([...memory.vector]).toEqual([Math.fround(0.1), Math.fround(0.2), Math.fround(0.3)]);
   });
 
   function preferences(...values: string[]) {
@@ -1385,7 +1385,7 @@ describe("memory plugin e2e", () => {
       "I prefer Fish for shell commands every day.",
     ]);
     expect(
-      harness.add.mock.calls.flatMap(([entries]) => entries).map((entry) => entry.text),
+      harness.add.mock.calls.flatMap(([table]) => table.toArray()).map((entry) => entry.text),
     ).toContain("I prefer Fish for shell commands every day.");
     expect(harness.logger.warn.mock.calls.map(([message]) => String(message))).toEqual([
       "memory-lancedb: capture failed: Error: temporary embedding failure",
@@ -1819,27 +1819,7 @@ describe("memory plugin e2e", () => {
   });
 
   test("shouldCapture applies real capture rules", () => {
-    expect(
-      shouldCapture("I always read docs and I saw 'Sender:' described in the API reference"),
-    ).toBe(true);
-    expect(shouldCapture("I prefer dark mode")).toBe(true);
-    expect(shouldCapture("Remember that my name is John")).toBe(true);
-    expect(shouldCapture("My email is test@example.com")).toBe(true);
-    expect(shouldCapture("Call me at +1234567890123")).toBe(true);
-    expect(shouldCapture("I always want verbose output")).toBe(true);
-    expect(shouldCapture("记住这个")).toBe(true);
-    expect(shouldCapture("我喜欢")).toBe(true);
-    expect(shouldCapture("以后都用这个")).toBe(true);
-    expect(shouldCapture("重要")).toBe(true);
-    expect(shouldCapture("覚えて")).toBe(true);
-    expect(shouldCapture("私は猫が好き")).toBe(true);
-    expect(shouldCapture("기억해줘")).toBe(true);
-    expect(shouldCapture("중요")).toBe(true);
     expect(shouldCapture("blue", { customTriggers: ["blue"] })).toBe(false);
-    expect(shouldCapture("记住这个", { customTriggers: ["记住"] })).toBe(true);
-    expect(shouldCapture("use the azure profile", { customTriggers: ["azure profile"] })).toBe(
-      true,
-    );
     expect(shouldCapture("x")).toBe(false);
     expect(shouldCapture("<relevant-memories>injected</relevant-memories>")).toBe(false);
     expect(shouldCapture("<system>status</system>")).toBe(false);
@@ -2018,14 +1998,6 @@ describe("memory plugin e2e", () => {
     });
     expect(semanticNeighbor.details?.action).toBe("created");
     expect(add).toHaveBeenCalledTimes(2);
-  });
-
-  test("detectCategory classifies using production logic", () => {
-    expect(detectCategory("I prefer dark mode")).toBe("preference");
-    expect(detectCategory("We decided to use React")).toBe("decision");
-    expect(detectCategory("My email is test@example.com")).toBe("entity");
-    expect(detectCategory("The server is running on port 3000")).toBe("fact");
-    expect(detectCategory("Random note")).toBe("other");
   });
 
   test("memory_forget reports authoritative delete receipts", async () => {

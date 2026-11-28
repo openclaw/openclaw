@@ -150,6 +150,12 @@ function listToBlock(
     return undefined;
   }
   const items: InputRichBlockListItem[] = [];
+  // `<ol start="N">` numbers from N, matching the Markdown path's parsed markers.
+  const start =
+    node.name === "ol" ? strictNumber(parseHtmlAttrs(node.raw).get("start"), /^\d+$/u) : undefined;
+  // Telegram stores each label as int32; leave room for the last item too.
+  const firstValue =
+    start !== undefined && start <= 2 ** 31 - countChildren(node.children, "li") ? start : 1;
   for (const child of node.children) {
     if (child.kind !== "element") {
       continue;
@@ -171,7 +177,10 @@ function listToBlock(
         item.is_checked = true;
       }
     }
-    items.push(node.name === "ol" ? { ...item, value: items.length + 1 } : item);
+    // Without `type`, Telegram renders the item with a bullet even when `value` is set.
+    items.push(
+      node.name === "ol" ? { ...item, value: firstValue + items.length, type: "1" } : item,
+    );
   }
   if (items.length === 0) {
     return undefined;

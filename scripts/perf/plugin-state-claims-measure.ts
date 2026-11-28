@@ -21,6 +21,7 @@ import { parseArgs } from "node:util";
 import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 
 const { values } = parseArgs({
@@ -159,12 +160,7 @@ try {
     await run(active.length * 20);
     gc();
     if (values.allocations) {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 4096,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 4096);
     }
     const hostLoadBefore = loadavg();
     const memoryBefore = process.memoryUsage();

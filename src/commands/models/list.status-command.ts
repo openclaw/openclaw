@@ -90,7 +90,7 @@ import {
 } from "./list.auth-overview.js";
 import { groupByProvider, isRich } from "./list.format.js";
 import type { runAuthProbes } from "./list.probe.js";
-import { resolveStatusUtilityModel } from "./list.status-utility.js";
+import { formatStatusUtilityModel, resolveStatusUtilityModel } from "./list.status-utility.js";
 import type {
   ModelsStatusOptions,
   ProviderAuthOverview,
@@ -99,7 +99,6 @@ import type {
 } from "./list.types.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
-  DEFAULT_MODEL,
   DEFAULT_PROVIDER,
   ensureFlagCompatibility,
   formatMs,
@@ -296,23 +295,19 @@ async function runModelsStatusCommand(
         cfg,
         agentId,
         defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
         ...DISPLAY_MODEL_PARSE_OPTIONS,
       });
 
       const rawDefaultsModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ?? "";
       const rawModel = agentModelPrimary ?? rawDefaultsModel;
-      const resolvedLabel = modelKey(resolved.provider, resolved.model);
+      const resolvedLabel = resolved && modelKey(resolved.provider, resolved.model);
       const defaultLabel = rawModel || resolvedLabel;
       const defaultsFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
       const fallbacks = agentFallbacksOverride ?? defaultsFallbacks;
+      const textModelRefs = [...(defaultLabel ? [defaultLabel] : []), ...fallbacks];
       const imageModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel) ?? "";
       const imageFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel);
-      const {
-        ref: utilityModelRef,
-        fallbacks: utilityFallbacks,
-        source: utilityModelSource,
-      } = resolveStatusUtilityModel({ cfg, agentId: workspaceAgentId, gatewayCatalog });
+      const utility = resolveStatusUtilityModel({ cfg, agentId: workspaceAgentId, gatewayCatalog });
       const configuredAllowRefs = [
         ...resolveConfiguredModelPolicyAllow({ cfg, agentId: workspaceAgentId }).refs,
       ];
@@ -347,7 +342,7 @@ async function runModelsStatusCommand(
           ...DISPLAY_MODEL_PARSE_OPTIONS,
         })?.ref;
       };
-      const textUsesOpenAI = [defaultLabel, ...fallbacks].some(
+      const textUsesOpenAI = textModelRefs.some(
         (raw) =>
           normalizeProviderId(resolveStatusModelRef(raw)?.provider ?? "") === OPENAI_PROVIDER_ID,
       );
@@ -376,10 +371,10 @@ async function runModelsStatusCommand(
       const modelCandidates: string[] = [];
       const providerUseRefs: StatusProviderUseRef[] = [];
       for (const [refs, routeScope, allowCodexRuntimeFallback] of [
-        [[defaultLabel, ...fallbacks], "text", true],
+        [textModelRefs, "text", true],
         [[imageModel, ...imageFallbacks], "image", false],
         // Utility completions use their own text route without the primary's runtime fallback.
-        [[utilityModelRef, ...utilityFallbacks], "text", false],
+        [[utility.ref, ...utility.fallbacks], "text", false],
         [configuredAllowRefs, undefined, false],
       ] as const) {
         for (const raw of refs) {
@@ -404,12 +399,10 @@ async function runModelsStatusCommand(
       }
       // Display the canonical provider/model: utilityModel accepts aliases, and
       // route issues/probes always report the resolved ref.
-      const resolvedUtilityRef = utilityModelRef
-        ? resolveStatusModelRef(utilityModelRef)
-        : undefined;
+      const resolvedUtilityRef = utility.ref ? resolveStatusModelRef(utility.ref) : undefined;
       const utilityModelDisplayRef = resolvedUtilityRef
         ? modelKey(normalizeProviderId(resolvedUtilityRef.provider), resolvedUtilityRef.model)
-        : (utilityModelRef ?? null);
+        : (utility.ref ?? null);
 
       const providersFromEnv = new Set<string>();
       // Use the shared provider-env registry so `models status` stays aligned with
@@ -481,8 +474,8 @@ async function runModelsStatusCommand(
       const visibilityPolicy = createModelVisibilityPolicy({
         cfg,
         catalog: catalog.entries,
-        defaultProvider: resolved.provider,
-        defaultModel: resolved,
+        defaultProvider: resolved?.provider ?? DEFAULT_PROVIDER,
+        ...(resolved ? { defaultModel: resolved } : {}),
         agentId: workspaceAgentId,
         ...DISPLAY_MODEL_PARSE_OPTIONS,
       });
@@ -1070,13 +1063,13 @@ async function runModelsStatusCommand(
           configPath,
           ...(agentId ? { agentId } : {}),
           agentDir,
-          defaultModel: defaultLabel,
-          resolvedDefault: resolvedLabel,
+          defaultModel: defaultLabel || null,
+          resolvedDefault: resolvedLabel ?? null,
           fallbacks,
           imageModel: imageModel || null,
           imageFallbacks,
-          utilityModel: { ref: utilityModelDisplayRef, source: utilityModelSource },
-          utilityFallbacks,
+          utilityModel: { ref: utilityModelDisplayRef, source: utility.source },
+          utilityFallbacks: utility.fallbacks,
           ...(agentId
             ? {
                 modelConfig: {
@@ -1112,7 +1105,7 @@ async function runModelsStatusCommand(
       }
 
       if (opts.plain) {
-        writeRuntimeStdout(runtime, terminalText`${resolvedLabel}`);
+        writeRuntimeStdout(runtime, terminalText`${resolvedLabel ?? ""}`);
         finishModelsStatusOutput(runtime, opts.check, checkStatus);
         return;
       }
@@ -1147,8 +1140,9 @@ async function runModelsStatusCommand(
         runtime.log("");
         runtime.log(colorize(rich, theme.heading, heading));
       };
-      const displayDefault =
-        rawModel && rawModel !== resolvedLabel
+      const displayDefault = !resolvedLabel
+        ? "not configured"
+        : rawModel && rawModel !== resolvedLabel
           ? `${resolvedLabel} (from ${rawModel})`
           : resolvedLabel;
 
@@ -1168,14 +1162,10 @@ async function runModelsStatusCommand(
       );
       logField(
         "Utility model",
-        utilityModelDisplayRef
-          ? `${utilityModelDisplayRef}${utilityModelSource === "provider-default" ? " (provider default)" : ""}`
-          : utilityModelSource === "disabled"
-            ? "off"
-            : "-",
+        formatStatusUtilityModel(utilityModelDisplayRef, utility),
         utilityModelDisplayRef ? theme.success : theme.muted,
       );
-      logList("Utility fallbacks", utilityFallbacks, theme.warn);
+      logList("Utility fallbacks", utility.fallbacks, theme.warn);
       logField(
         "Image model",
         imageModel || "-",

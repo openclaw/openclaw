@@ -66,6 +66,10 @@ function lacksDeviceCapableRuntimeRoute(cfg: OpenClawConfig): boolean {
   const registry = getActivePluginRegistry();
   return listAgentIds(cfg).every((agentId) => {
     const model = resolveDefaultModelForAgent({ cfg, agentId });
+    if (!model) {
+      // No configured model runs nothing on a plugin harness.
+      return false;
+    }
     const runtime = resolveEffectiveAgentRuntime({
       cfg,
       provider: model.provider,

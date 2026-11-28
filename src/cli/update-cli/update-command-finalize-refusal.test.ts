@@ -22,7 +22,6 @@ import {
   getUpdateRun,
   listUpdateRuns,
 } from "../../infra/update-run-ledger.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import * as utils from "../../utils.js";
@@ -316,8 +315,9 @@ it.each([true, false])(
       );
     } else {
       expect(defaultRuntime.log).toHaveBeenCalledWith(
-        expect.stringContaining(`Doctor maintenance remains pending. ${nextAction}`),
+        expect.stringContaining("Doctor maintenance remains pending."),
       );
+      expect(defaultRuntime.log).toHaveBeenCalledWith(expect.stringContaining(nextAction));
     }
     const run = listUpdateRuns()[0]!;
     expect(run).toMatchObject({
@@ -325,12 +325,6 @@ it.each([true, false])(
       reason: "doctor-maintenance-pending",
       origin: { nextAction },
     });
-    const report = renderUpdateRunReport(run);
-    expect(report.headline).toBe(
-      "ℹ️ OpenClaw repair pending: Doctor maintenance remains unfinished.",
-    );
-    expect(report.markdown).toContain(nextAction);
-    expect(report.markdown.indexOf(nextAction)).toBeLessThan(report.markdown.indexOf("Details:"));
     expect(run.steps).toContainEqual(
       expect.objectContaining({ step: "warning:finalize:doctor:0", status: "completed" }),
     );
@@ -418,11 +412,6 @@ it.each([
       exitCode: 1,
     }),
   );
-  if (code !== "service-definition-changed") {
-    expect(renderUpdateRunReport(run).markdown).toContain("terminal outside");
-    expect(renderUpdateRunReport(run).markdown).toContain("openclaw update repair");
-    expect(renderUpdateRunReport(run).markdown).not.toContain("Run openclaw triage");
-  }
   expect(native.events).toEqual(["running-holder"]);
   expect(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).not.toHaveBeenCalled();
   expect(plugins.updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
@@ -484,12 +473,6 @@ it.each([
       expect(verifyUpdateFailureRecovery).toHaveBeenLastCalledWith(
         expect.objectContaining({ result: expect.objectContaining({ reason }) }),
       );
-      if (!inherited) {
-        expect(renderUpdateRunReport(run).headline).toBe(
-          "⚠️ OpenClaw repair failed: repair-failed.",
-        );
-        expect(renderUpdateRunReport(run).markdown).toContain("diagnose this repair failure");
-      }
       expect(native.inspecting).toBe(false);
       expect(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).not.toHaveBeenCalled();
       expect(inspect).toHaveBeenCalledExactlyOnceWith(19483, expect.anything());

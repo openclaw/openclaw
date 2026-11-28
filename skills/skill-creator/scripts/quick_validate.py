@@ -114,6 +114,7 @@ def validate_skill(skill_path):
     allowed_properties = {
         "name",
         "description",
+        "version",
         "homepage",
         "license",
         "allowed-tools",

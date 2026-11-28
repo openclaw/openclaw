@@ -54,6 +54,8 @@ The Home dock uses the same session read permissions as the full page. If you ca
 
 Your Home draft and attachments follow the conversation between the page and dock. Files still being prepared keep their progress and Remove action, and Send waits until preparation finishes.
 
+To see pull requests or saved task progress, open Home full page and select **Details**. Neither appears above the dock composer.
+
 Home can include a bounded, quoted work-context reference with your message. Before sending, that reference follows the page's agent, session, title, and visible file, not merely the Home conversation receiving it. You can remove it before sending.
 
 Sent messages show **Context attached** below your words instead of displaying the generated context as message text. Open it to inspect the captured session, page, agent, workspace, file, or selection; **Technical details** shows the snapshot as JSON. The snapshot is frozen when you send, including through queues and retries. Copying or editing your message does not include the generated reference. It remains reference data, not instructions or permission to access another conversation. Older messages without a recorded attachment are left unchanged.
@@ -197,7 +199,7 @@ resized while its reported dimensions remain unchanged.
 
 Browser tabs appear directly in the Chat side-panel header, with the URL toolbar below. Each tab shows its page favicon when automatic favicon fetching is enabled and an icon is available. Closing the last browser tab leaves the Browser panel open so you can create another tab with **+**. When Browser is moved to the main area, its tabs appear above its own toolbar.
 
-When the Gateway browser is stopped, choose **Start browser**. The panel shows a loading indicator while startup is pending. If startup fails, it shows the error and restores **Start browser** so you can retry.
+When managed Chrome is stopped, the first nonblank edit in the address field starts it in the background. The address stays in the field until you submit it. An unused startup expires after 30 seconds; opening a page or explicitly starting the browser keeps it running. You can also choose **Start browser** without typing. The panel shows a loading indicator while startup is pending. If startup fails, it shows the error and restores **Start browser** so you can retry.
 
 While an Agent browser preview refreshes, the current page stays visible and the reload icon spins in the toolbar. A loading skeleton appears only before the first page image is available. If refreshing fails, the panel keeps the previous image and shows the error above it.
 
@@ -206,6 +208,8 @@ To paste into an Agent browser tab or Browser dashboard, click the page's input 
 To copy from an Agent browser tab or Browser dashboard, press **⌘C** or **Ctrl+C** with the page focused, use your browser's Copy command, or choose **Copy selection** in the Browser actions menu. The panel reads the text the remote page has selected and writes it to your local clipboard; a **Copied** notice confirms it, and an empty selection or failure shows a notice naming the next step. The panel cannot select text in the page itself, so ask the agent to select it first. Text selected inside fields, same-origin frames, and shadow DOM is copied, capped at 1,000,000 characters. Password fields and cross-origin frames are not copied. **Copy selection** is disabled, with the reason as its tooltip, when nothing is selected or the Gateway has `browser.evaluateEnabled` off, because the panel reads the selection with a page script. Copy is handled locally and is not forwarded to the page. Mac tabs copy natively with **⌘C**.
 
 In the macOS app, the same panel also hosts **Mac tabs**, rendered natively by WebKit, alongside **Agent browser tabs** from the Gateway. Mac tabs are available without `browser.request`; Agent browser tabs retain the Gateway and operator-access requirements above. External links clicked in the dashboard open as Mac tabs in the chat side panel, or in the shell-level Browser dock on non-chat routes. While Settings is open, external links open in the default browser because the Browser panel is hidden. Mac tabs have a tab strip, URL bar, back/forward/reload/stop, open-in-default-browser, and close controls. Mac tabs show the page’s own icon. Mac tabs belong to the chat session that opened them: another session starts with its own empty Browser panel, and returning restores the original session’s tabs. The window retains those tabs until they are closed or the window ends. Opening the same link reuses its existing tab only within that session, including a retained original URL after a redirect. The non-chat Browser dock has its own tabs. Login cookies remain shared within the window. Selecting another tab while a link is opening keeps your selection when the open request completes.
+
+In the macOS dashboard, press **⌘T** to open a blank Mac tab in the Browser panel without leaving the conversation. This also works while another Mac tab has focus. In a regular web browser, **⌘T** keeps its usual behavior.
 
 Session-local Mac tabs require both the Mac app and Gateway-served Control UI to support session ownership. During staggered upgrades, older app/UI combinations keep their existing shared-tab behavior so browsing continues to work. Tabs created without session ownership remain window-shared until closed or the window ends; new tabs become session-local once both sides are updated.
 
@@ -238,18 +242,23 @@ can contribute the same docked reader surface through the
 
 Click a GitHub issue, pull request, or commit link to read it in a browser-style
 tab beside the conversation. Each tab has a GitHub icon, a title, and a close
-control; the address bar and **Open on GitHub** link stay visible. Opening the
-same item from chat selects its existing tab. Links inside the reader and URLs
-entered in the address bar navigate the current tab, with independent Back and
-Forward history. The **+** button opens a new tab. Up to ten tabs stay in memory,
-including their loaded documents while you switch between them.
+control. Once an item loads, **Refresh** and **Open on GitHub** appear in the
+document header. A link to an item that already has a tab selects that tab, and
+links to other supported items inside the reader open in their own tab. Use
+**+** (or choose **Link reader** from the Chat side panel's **+** menu) to open
+an empty tab where you can enter a URL. Up to ten tabs stay in memory, keeping
+their loaded documents while you switch between them.
+
+Hold Ctrl or Cmd to suppress link hover previews while opening several links.
+Pressing either key also dismisses an open preview and cancels a pending one.
+Normal hover and keyboard-focus previews resume on the next interaction after release.
 
 Loaded reader documents and link previews stay visible while the same Gateway
-reconnects. The reader refreshes after reconnect without clearing its address
-draft. Changing Gateway or losing reader access clears the protected content.
+reconnects. The reader refreshes after reconnect. Changing Gateway or losing
+reader access clears the protected content.
 
 Opening or loading an item keeps keyboard focus where you are typing. The
-**+** button focuses the address bar so you can enter a new URL.
+Adding an empty tab to a reader that is already open focuses its URL field.
 
 The reader shows descriptions, issue and pull-request discussion comments,
 commit comments, published inline PR review comments with file/line and diff

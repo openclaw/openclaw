@@ -23,8 +23,14 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   TResult
 > & {
   displaySummary?: string;
-  /** Keep this tool model-visible; hidden catalog bridges cannot preserve its result contract. */
-  catalogMode?: "direct-only";
+  /**
+   * Catalog placement when Tool Search or Code Mode is active.
+   * - `direct-only`: always model-visible; hidden catalog bridges cannot preserve its result contract.
+   * - `on-demand`: deferred in the catalog until the session first calls it by name, then a
+   *   direct tool for the rest of the prompt series. Catalog bridges refuse it, so its results
+   *   and turn handoffs still run only through a direct call.
+   */
+  catalogMode?: "direct-only" | "on-demand";
   /** Gateway client capabilities required before this tool can be assembled. */
   requiredClientCaps?: string[];
   /**
@@ -33,8 +39,16 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
    * tool results alone never grant it.
    */
   canDeliverSourceReply?: boolean;
-  /** Tool-owned execution and transport wait budget, before any harness completion grace. */
-  getExecutionTimeoutMs?: (args: unknown) => number | undefined;
+  /**
+   * Tool-owned execution and transport wait budget, before any harness completion grace.
+   * Embedded execution publishes this as a liveness allowance without adding a timer.
+   * Its optional context supplies the remaining parent budget (the default agent
+   * budget for an unlimited parent); other harnesses may resolve their own lifetime.
+   */
+  getExecutionTimeoutMs?: (
+    args: unknown,
+    context?: { parentTimeoutMs: number },
+  ) => number | undefined;
   prepareBeforeToolCallParams?: (
     params: unknown,
     ctx: { toolCallId?: string; hookContext?: unknown; signal?: AbortSignal },

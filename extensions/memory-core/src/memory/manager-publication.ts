@@ -152,7 +152,15 @@ async function publishMemorySourceOnce(params: {
   const inline = memoryPublicationInline(replacement);
   if (inline) {
     return publish(
-      () => execute({ type: "source.replace.inline", input: { ...inline, state: state() } }),
+      () =>
+        execute({
+          type: "source.replace.inline",
+          input: {
+            header: memoryPublicationHeader(replacement),
+            fragments: inline.fragments,
+            state: state(),
+          },
+        }),
       prepare,
     );
   }
@@ -163,7 +171,11 @@ async function publishMemorySourceOnce(params: {
       await scope.execute({ type: "stage.append", input: { fragments } });
     }
     const result = await publish(
-      () => scope.execute({ type: "source.replace", input: { state: state() } }),
+      () =>
+        scope.execute({
+          type: "source.replace",
+          input: { state: state(), verifiedFile: replacement.verifiedFile },
+        }),
       prepare,
     );
     assertPublished?.();

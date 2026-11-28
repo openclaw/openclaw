@@ -218,6 +218,7 @@ export function buildReplyRunStateParams(run: FollowupRun["run"]) {
     inputProvenance: run.inputProvenance,
     senderIsOwner: run.senderIsOwner,
     gitContributorProfileId: run.gitContributorProfileId,
+    mcpRequesterProfileId: run.mcpRequesterProfileId,
     conversationToolPolicy: run.conversationToolPolicy,
     requesterOrigin: run.requesterOrigin,
     operatorProfileId: run.operatorProfileId,
@@ -226,7 +227,9 @@ export function buildReplyRunStateParams(run: FollowupRun["run"]) {
     approvalReviewerDeviceId: run.approvalReviewerDeviceId,
     terminalReplyExpectation: run.terminalReplyExpectation,
     clientCaps: run.clientCaps,
+    pinnedWidgetAuthoring: run.internalEventExecution?.pinnedWidgetAuthoring,
     bootstrapUserProfileId: run.bootstrapUserProfileId,
+    sessionUserProfileId: run.sessionUserProfileId,
     gatewayUiCommandTarget: run.gatewayUiCommandTarget,
     taskSuggestionDeliveryMode: run.taskSuggestionDeliveryMode,
   };

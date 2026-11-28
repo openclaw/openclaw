@@ -113,6 +113,14 @@ enum ChatWorkingDurationFormatter {
         return parts.joined(separator: " ")
     }
 
+    /// A completed run's elapsed time, or nil when it has none: two rounded units, and
+    /// milliseconds below one second (web src/infra/format-time/format-duration-internal.ts:27-37).
+    static func completed(milliseconds: Double) -> String? {
+        guard milliseconds.isFinite, milliseconds > 0 else { return nil }
+        let rounded = milliseconds.rounded()
+        return rounded < 1000 ? "\(Int(rounded))ms" : self.compact(milliseconds: milliseconds)
+    }
+
     static func full(milliseconds: Double, locale: Locale = .current) -> String {
         let formatter = DateComponentsFormatter()
         formatter.allowedUnits = [.day, .hour, .minute, .second]
@@ -148,6 +156,12 @@ enum ChatWorkingIdentity {
         }
         return "\(sessionKey):generation:\(fallbackGeneration)"
     }
+}
+
+struct ChatTurnRecapObservation: Equatable {
+    let sessionKey: String
+    let indicatorVisible: Bool
+    let row: ChatTurnRecapSessionRow?
 }
 
 struct ChatTurnRecap: Equatable, Sendable {

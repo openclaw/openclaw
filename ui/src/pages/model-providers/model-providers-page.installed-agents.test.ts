@@ -282,11 +282,10 @@ it("lists every reported agent with its installation status only when advertised
   );
   const page = await mountAgents(context);
   await waitForSolid(() => expect(agentRow(page, "pi")).not.toBeNull());
-  expect(agentText(page)).not.toContain("Models available");
-  // A missing app has no switch to flip; it is named on the shared not-detected line.
+  // A missing app has no switch to flip; with others detected, it is not named at all.
   expect(agentRow(page, "qwen")).toBeNull();
-  expect(page.querySelector("[data-installed-agents-missing]")?.textContent).toContain(
-    "Not found on the computer running OpenClaw: Qwen Code. Install one, then check again.",
+  expect(page.querySelector(".model-providers__installed-agents")?.textContent).not.toContain(
+    "Qwen Code",
   );
   expect(agentRow(page, "pi")?.textContent).toContain("Not verified");
   expect(agentRow(page, "kilo")?.textContent).toContain("Use Kilo");
@@ -332,7 +331,8 @@ it("keeps pending discovery silent and lets Check again recover failed models", 
   await waitForProviders(page);
   await waitForSolid(() => {
     expect(agentRow(page, "qwen")?.textContent).toMatch(/sign-in required/i);
-    expect(agentRow(page, "kilocode")?.textContent).toMatch(/models unavailable/i);
+    expect(agentRow(page, "kilocode")?.textContent).toMatch(/installed/i);
+    expect(agentRow(page, "kilocode")?.textContent).not.toMatch(/models unavailable/i);
     expect(agentText(page)).not.toMatch(/discovering models/i);
     expect(agentText(page)).toMatch(/installed/i);
     expect(agentText(page)).not.toMatch(/sign.in/i);
@@ -520,10 +520,10 @@ it("releases the initial provider gate after inventory failure and recovers on r
   const page = appendPage(context);
   await waitForSolid(() => expect(requestCount(request, "acpx.agents.list")).toBe(1));
   expect(agentRow(page, "opencode")).toBeNull();
-  expect(page.querySelector(".model-providers__search")).toBeNull();
+  expect(page.querySelector("[data-models-catalog]")).toBeNull();
   initial.reject(new Error("Inventory unavailable"));
   await waitForProviders(page);
-  await waitForSolid(() => expect(page.querySelector(".model-providers__search")).not.toBeNull());
+  await waitForSolid(() => expect(page.querySelector("[data-models-catalog]")).not.toBeNull());
   const section = page.querySelector<HTMLElement>(".model-providers__installed-agents")!;
   const message = "Couldn’t complete the request. Try again. Inventory unavailable";
   await waitForSolid(() =>

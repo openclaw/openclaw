@@ -566,6 +566,13 @@
   padding-inline-start: var(--chat-markdown-indent);
 }
 
+.chat-text :where(ul, ol) {
+  /* Separate item formatting contexts keep WebKit's native selection paint
+     on the text instead of extending it across the list at item boundaries. */
+  display: flex;
+  flex-direction: column;
+}
+
 .chat-text :where(li + li) {
   margin-top: 0.4em;
 }
@@ -708,13 +715,14 @@
   --chat-text-link-hover: var(--link-hover);
 }
 
-.chat-text :where(a) {
+/* Attachment actions own their color even when rendered inline with Markdown. */
+.chat-text :where(a:not(.chat-assistant-attachment-card__action)) {
   color: var(--chat-text-link, var(--link));
   text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
   text-underline-offset: 2px;
 }
 
-.chat-text :where(a:hover) {
+.chat-text :where(a:not(.chat-assistant-attachment-card__action):hover) {
   color: var(--chat-text-link-hover, var(--link-hover));
 }
 
@@ -912,7 +920,7 @@
 
 :is(.chat-text, .sidebar-markdown, .chat-reply-attribution, .chat-question-panel__source)
   a.markdown-session-link--titled {
-  display: inline-grid;
+  display: inline-block;
   max-width: min(28em, 100%);
   padding: 0.08em 0.45em;
   padding-inline-start: 1.5em;
@@ -923,12 +931,14 @@
   white-space: nowrap;
 }
 
-/* The grid supplies the text baseline; only its label clips for ellipsis. */
+/* Keep the label inline-level so native paragraph selection crosses the chip.
+   Clip only horizontally: visible vertical overflow preserves its text baseline. */
 :is(.chat-text, .sidebar-markdown, .chat-reply-attribution, .chat-question-panel__source)
   .markdown-session-link--titled
   > .session-label {
-  min-width: 0;
-  overflow: hidden;
+  display: inline-block;
+  max-width: 100%;
+  overflow-x: clip;
   text-overflow: ellipsis;
 }
 

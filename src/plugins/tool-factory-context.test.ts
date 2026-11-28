@@ -2,12 +2,6 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, expectTypeOf, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
-import {
-  captureGatewayToolCallerAssertion,
-  withGatewayToolCallerIdentity,
-} from "../agents/tools/gateway-caller-context.js";
-import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { createPluginRuntimeMock } from "../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { InvocationFrame } from "./plugin-instance-invocation.js";
 import { markPluginRegistryRetired } from "./registry-lifecycle.js";
@@ -79,14 +73,6 @@ const declarations = (readNames: () => string[] | undefined) =>
       return readNames();
     },
   });
-
-const continuation = (isCurrent: () => boolean) => ({
-  isCurrent,
-  assertCurrent: () => assert(isCurrent(), "owner closed"),
-  senderId: "original-owner",
-  channel: "discord",
-  accountId: "original-account",
-});
 
 it("enters the registered owner's scopes and retains the execution cancellation scope", async () => {
   const observed: string[] = [];
@@ -204,105 +190,6 @@ it.each([false, true])("preserves V1 callbacks with host authority=%s", async (h
   expect(effect).toHaveBeenCalledOnce();
 });
 
-it.each([false, true])(
-  "does not promote legacy continuation factories, preserving direct owner=%s",
-  (directOwner) => {
-    const create = vi.fn(() => null);
-    const direct = { senderIsOwner: directOwner, requesterSenderId: "direct-sender" };
-    const { entry, context } = register(create, {
-      context: direct,
-      ownerContinuation: continuation(() => true),
-    });
-    entry.factory(context);
-    expect(create).toHaveBeenCalledWith(expect.objectContaining(direct));
-    expect([context.messageChannel, context.agentAccountId]).toEqual([undefined, undefined]);
-  },
-);
-
-it.each([false, true])(
-  "prepares invocation source facts and keeps revocation live (%s)",
-  async (revoke) => {
-    const entered = createDeferred();
-    const resume = createDeferred();
-    const effect = vi.fn();
-    const release = vi.fn();
-    let active = true;
-    const assertCurrent = () => {
-      if (!active) {
-        throw new Error("source revoked");
-      }
-    };
-    const receiptAuthority = composeSessionSourceAssertion([
-      Object.assign(
-        () => {
-          throw new Error("source facts require preparation");
-        },
-        {
-          prepareSessionSourceScope: async () => ({
-            checks: [],
-            assertCurrent,
-            release,
-          }),
-        },
-      ),
-    ]);
-    const registration = register(
-      {
-        contextVersion: 2,
-        create: (context) => ({
-          ...probe(effect),
-          async execute() {
-            context.assertInvocationCurrent();
-            entered.resolve();
-            await resume.promise;
-            context.assertInvocationCurrent();
-            effect();
-            return { content: [], details: {} };
-          },
-        }),
-      },
-      { assertInvocationCurrent: () => {} },
-    );
-    const tool = registration.tool();
-    await withGatewayToolCallerIdentity(
-      { agentId: "main", sessionKey: "agent:main:probe", receiptAuthority },
-      async () => {
-        const pending = tool.execute("prepared-source", {});
-        const result = revoke
-          ? expect(pending).rejects.toThrow("source revoked")
-          : expect(pending).resolves.toMatchObject({ details: {} });
-        await Promise.race([entered.promise, result]);
-        active = !revoke;
-        resume.resolve();
-        await result;
-      },
-    );
-    expect(effect).toHaveBeenCalledTimes(revoke ? 0 : 1);
-    expect(release).toHaveBeenCalledOnce();
-  },
-);
-
-it("rejects an operational caller that has no live receipt authority", async () => {
-  await withGatewayToolCallerIdentity(
-    {
-      agentId: "main",
-      sessionKey: "agent:main:probe",
-      operationalRunInstance: createOperationalRunInstanceRef("missing-receipt"),
-    },
-    async () => {
-      const { context } = register(
-        { contextVersion: 2, create: () => null },
-        {
-          assertInvocationCurrent: captureGatewayToolCallerAssertion(),
-        },
-      );
-      expect(() => context.assertInvocationCurrent?.()).toThrow(
-        "caller authority is no longer active",
-      );
-    },
-  );
-});
-
 it.each(["probe", "records"])("checks memory audience currency for slot owner=%s", (slotOwner) => {
   const checkAudience = vi.fn(() => assert.fail("memory audience is no longer current"));
   const { context } = register(() => null, {
@@ -341,13 +228,12 @@ it("allows metadata construction but rejects V2 effects without an admitted invo
   expect(effect).not.toHaveBeenCalled();
 });
 
-it.each(["allowed", "owner-close", "run-close", "plugin-close"] as const)(
+it.each(["allowed", "run-close", "plugin-close"] as const)(
   "checks %s before the asynchronous tool's final effect and in retained preparers",
   async (mode) => {
     const entered = createDeferred();
     const release = createDeferred();
     const effect = vi.fn();
-    let ownerCurrent = true;
     let runCurrent = true;
     const registration = register(
       {
@@ -369,21 +255,12 @@ it.each(["allowed", "owner-close", "run-close", "plugin-close"] as const)(
         assertInvocationCurrent() {
           assert(runCurrent, "run closed");
         },
-        ownerContinuation: continuation(() => ownerCurrent),
       },
     );
-    const { context } = registration;
-    expect(context).toMatchObject({
-      senderIsOwner: true,
-      requesterSenderId: "original-owner",
-      messageChannel: "discord",
-      agentAccountId: "original-account",
-    });
     const tool = registration.tool();
     const work = tool.execute("probe", {});
     void work.catch(() => {});
     await entered.promise;
-    ownerCurrent = mode !== "owner-close";
     runCurrent = mode !== "run-close";
     if (mode === "plugin-close") {
       markPluginRegistryRetired(registration.registry);

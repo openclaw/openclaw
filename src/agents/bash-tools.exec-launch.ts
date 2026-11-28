@@ -30,12 +30,9 @@ export function createExecLaunchLifecycle(
     },
     release,
     async prepare(
-      assertSource: (() => void) | undefined,
       beforeSpawn: (() => Promise<AgentToolResult<ExecToolDetails> | undefined>) | undefined,
     ) {
-      assertSource?.();
       const denied = await beforeSpawn?.();
-      assertSource?.();
       if (denied) {
         throw new ExecProcessPreflightError(denied);
       }

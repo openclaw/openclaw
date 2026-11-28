@@ -7,7 +7,7 @@ import path from "node:path";
 import * as fileDurability from "@openclaw/fs-safe/durability";
 import JSZip from "jszip";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createClosedChunkStream } from "../../test-support/streaming-error-response.js";
 
@@ -363,6 +363,58 @@ describe("managed installer archive admission", () => {
     });
     await expect(install()).resolves.toEqual({ command });
     await expectEntries(installDir, ["ggml-base.dll", "llama-server.exe"]);
+  });
+});
+
+describe("runtime download failures", () => {
+  it.each(["server", "dependency"] as const)(
+    "identifies a blocked %s download and the existing manual repair path",
+    async (stage) => {
+      const { root, asset, runtime } = await createCpuArchive();
+      const originalFetch = mocks.fetchWithSsrFGuard.getMockImplementation()!;
+      const blocked = new Error("upstream connection refused");
+      mocks.fetchWithSsrFGuard.mockImplementation(async (params: { url: string }) => {
+        if (stage === "server" || params.url === runtime.url) {
+          throw blocked;
+        }
+        return await originalFetch(params);
+      });
+      mocks.execFile.mockImplementation(
+        (
+          _command: string,
+          _args: string[],
+          _options: unknown,
+          callback: (error: Error | null, stdout: string, stderr: string) => void,
+        ) => {
+          callback(new Error("missing runtime DLL"), "", "");
+        },
+      );
+      const result = ensureLlamaServerInstalled({ asset });
+      await expect(result).rejects.toThrow(stage === "server" ? asset.name : runtime.name);
+      await expect(result).rejects.toThrow(
+        stage === "server" ? "github.com" : "download.visualstudio.microsoft.com",
+      );
+      await expect(result).rejects.toThrow("If this source is unreachable, check");
+      await expect(result).rejects.toThrow("localService.command");
+      await expect(result).rejects.toThrow("upstream connection refused");
+      await expect(fs.stat(resolveManagedLlamaServerPaths(asset).command)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(await fs.readdir(root)).toEqual([]);
+    },
+  );
+
+  it("preserves cancellation instead of reporting a download failure", async () => {
+    const { root, asset } = await createCpuArchive();
+    const controller = new AbortController();
+    mocks.fetchWithSsrFGuard.mockImplementation(async () => {
+      controller.abort();
+      throw new Error("fetch aborted");
+    });
+    await expect(
+      ensureLlamaServerInstalled({ asset, signal: controller.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(await fs.readdir(root)).toEqual([]);
   });
 });
 

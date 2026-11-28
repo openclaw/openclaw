@@ -295,6 +295,11 @@ const V1_BODIES: Record<StatementType, Check> = {
         peer_keys: list(irohKey, 1),
         invite_id: nullable(randomId),
       }),
+      set_member_recovery_kit: object({
+        op: oneOf(["set_member_recovery_kit"]),
+        account_id: nonEmptyText,
+        device_pub: nullable(ed25519Key),
+      }),
       add_member_device: object({
         op: oneOf(["add_member_device"]),
         account_id: nonEmptyText,
@@ -358,6 +363,11 @@ const V1_BODIES: Record<StatementType, Check> = {
     new_root_pub: ed25519Key,
     binding_seq: positive,
     issued_at: seconds,
+  }),
+  // Added to v1-draft in place (pre-release); see docs/versioning.md, "Claw unlink".
+  ClawUnlink: object({
+    claw_id: clawId,
+    binding_seq: positive,
   }),
 };
 

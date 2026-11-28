@@ -30,8 +30,21 @@ ranked search never proves that an inventory is complete.
 
 Queries accept 1–64 word tokens within 500 characters. Punctuation separates
 tokens; `OR`, `NOT`, column syntax, and quotes are not executed as FTS syntax.
-Matching is case- and diacritic-insensitive. There is no stemming, prefix search,
-or language-specific segmentation, so unsegmented CJK substrings may not match.
+Matching is case-insensitive. Decomposed diacritics fold away in any script, so
+decomposed `άλφα` and unaccented `αλφα` match alike. Precomposed letters with
+diacritics fold to their base letters across the Latin script, including Latin
+Extended-A (`cafe` matches `café`, and `c` matches `č`): an unaccented query
+does not reach a composed accented word in other scripts. There is no stemming,
+prefix search, or language-specific segmentation, so unsegmented CJK substrings
+may not match.
+Canonically equivalent Unicode spellings (composed NFC and decomposed NFD, e.g.
+Greek `άλφα`) retrieve the same records: in `all` and `any` modes each word
+matches its original spelling plus both canonical forms, so a partially
+normalized token still matches verbatim and any word may be stored in a
+different canonical form. Phrase mode matches whole phrases, so each
+alternative spells the phrase one way: a uniformly spelled phrase query can
+miss a record that mixes NFC and NFD spellings across different words. Stored
+text, hashes, revisions, and snippet offsets stay exact.
 
 Exact lookup accepts up to 200 characters. IDs are case-sensitive; names and
 aliases are normalized (NFKC, lowercase, trimmed, whitespace collapsed) but never
@@ -97,7 +110,10 @@ validation, then reconciles per-scope FTS5 projections in the store's
 `state.sqlite`: one for the searched records and one for superseded records
 whose replacement chain reaches a current record. Only records whose content
 hash changed are re-indexed. These tables are not shared with `memory-core` or
-other plugins.
+other plugins. Persistent-index reconciliation commits before filtered search
+builds its connection-local temporary FTS corpus and ranks results. A fresh index
+is read without reserving the database writer; changed records still require an
+index update before results can be returned.
 
 - A complete publication receipt's `indexed: false` (shown by
   `knowledge_mutation` and `knowledge_history`) means indexing is pending until

@@ -43,9 +43,11 @@ function groupDependencies(group: MessageGroup): readonly unknown[] {
     group.replyCurrentSource?.key,
     group.replyCurrentSource?.message,
     group.visibleContent,
+    group.startsActivityGroup,
     group.timestamp,
     group.isStreaming,
     group.runId,
+    group.compaction,
     ...group.messages.flatMap((source) => [
       source.key,
       source.message,
@@ -113,7 +115,7 @@ export function transcriptContextDependencies(
   props: Pick<
     ChatThreadProps,
     | "onRetryRun"
-    | "failedMessageEditSource"
+    | "onStartNewSession"
     | "failureActionsRunId"
     | "modelCatalog"
     | "displayFacts"
@@ -124,9 +126,10 @@ export function transcriptContextDependencies(
   if (item.kind === "notice") {
     return [
       props.onRetryRun,
-      props.failedMessageEditSource,
+      props.onStartNewSession,
       props.failureActionsRunId,
-      item.modelChange ? props.modelCatalog : undefined,
+      // Model names and the failure heading's provider name come from the catalog.
+      item.modelChange || item.runError?.cause ? props.modelCatalog : undefined,
     ];
   }
   const dependencies: unknown[] = [];

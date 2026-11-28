@@ -9,7 +9,13 @@ type SignalReplyContextRecordBase = {
 
 export type SignalReplyContextRecord = SignalReplyContextRecordBase &
   (
-    | { kind: "resolved"; author: string; body?: string; media?: MediaPlaceholderTextFact[] }
+    | {
+        kind: "resolved";
+        author: string;
+        body?: string;
+        media?: MediaPlaceholderTextFact[];
+        sentByOpenClaw?: true;
+      }
     | { kind: "ambiguous" }
   );
 

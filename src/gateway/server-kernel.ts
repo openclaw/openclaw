@@ -8,6 +8,7 @@ import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { prepareRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
+import { createLegacyPluginSdkReplyDispatch } from "../plugins/legacy-sdk-reply-dispatch.js";
 import {
   LegacyPluginSdkResourceHost,
   bindLegacyPluginSdkResourceHost,
@@ -105,6 +106,7 @@ type GatewayKernelOptions = {
   deferEarlyRuntime?: boolean;
   /** HTTP startup binds its listener before awaiting session projection readiness. */
   deferRequestRuntime?: boolean;
+  waitForPostReadyWork?: () => Promise<void>;
   sdkResourceHost?: LegacyPluginSdkResourceHost;
 };
 
@@ -119,7 +121,9 @@ export async function createGatewayKernel(
     opts.startupConfigSnapshotRead?.databaseEngineSelection,
   );
   const scheduler = new GatewayScheduler();
-  const sdkResourceHost = options.sdkResourceHost ?? new LegacyPluginSdkResourceHost();
+  const sdkResourceHost =
+    options.sdkResourceHost ??
+    new LegacyPluginSdkResourceHost(createLegacyPluginSdkReplyDispatch());
   sdkResourceHost.bindScheduler(scheduler);
   return await sdkResourceHost.run(() =>
     createGatewayKernelWithSdkHost(port, opts, options, sdkResourceHost, scheduler),
@@ -255,6 +259,7 @@ async function createGatewayKernelWithSdkHost(
         log,
         logHealth,
         hostLifecycle: opts.hostLifecycle,
+        waitForPostReadyWork: options.waitForPostReadyWork,
       }),
     );
     if (!options.deferRequestRuntime) {

@@ -6,20 +6,17 @@ import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admiss
 import { runWithGatewayRootWorkAdmissionForTest } from "../../process/gateway-work-admission.test-helpers.js";
 import {
   agentConfig,
-  expectRecordFields,
   expectRespondErrorContaining,
   expectRespondOk,
   getAgentList,
-  mockCallArg,
 } from "./agents-mutate.test-support.js";
-import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers } from "./types.js";
 
 type AgentCreateMocks = {
   loadConfigReturn: Record<string, unknown>;
   captureDeletedAgentDatabaseFences: Mock<() => [string, string][]>;
   reviveAgentDatabases: Mock<(agentIds: readonly string[]) => Promise<void>>;
-  captureGatewayOperatorRunAuthority: Mock;
+  prepareGatewayOperatorRunAuthority: Mock;
   configApplicationStatus: Mock<() => RuntimeConfigWriteApplicationStatus>;
   prepareAgentOnboarding: Mock;
   completeAgentOnboarding: Mock;
@@ -51,7 +48,7 @@ export function registerAgentCreateTests({
     beforeEach(() => {
       mocks.captureDeletedAgentDatabaseFences.mockReturnValue([]);
       mocks.reviveAgentDatabases.mockReset().mockResolvedValue(undefined);
-      mocks.captureGatewayOperatorRunAuthority.mockReset();
+      mocks.prepareGatewayOperatorRunAuthority.mockReset();
       mocks.loadConfigReturn = agentConfig({ main: {} });
     });
 
@@ -160,14 +157,14 @@ export function registerAgentCreateTests({
         internal: { authenticatedOperator: true },
       };
       const hasCurrentClientAuthority = vi.fn(() => true);
-      mocks.captureGatewayOperatorRunAuthority.mockImplementationOnce(async () => {
+      mocks.prepareGatewayOperatorRunAuthority.mockImplementationOnce(async () => {
         expect(hasCurrentClientAuthority()).toBe(true);
         return { authority: operatorAuthority, release: releaseAuthority };
       });
       let response!: ReturnType<typeof vi.fn<(ok: boolean) => void>>;
       await runWithGatewayRootWorkAdmissionForTest(async () => {
         response = vi.fn((_ok: boolean) => {
-          expect(mocks.captureGatewayOperatorRunAuthority).toHaveBeenCalledOnce();
+          expect(mocks.prepareGatewayOperatorRunAuthority).toHaveBeenCalledOnce();
         });
         const handler = expectDefined(agentsHandlers["agents.create"], "agents.create handler");
         await handler({
@@ -199,74 +196,6 @@ export function registerAgentCreateTests({
       expect(mocks.writeConfigFile).not.toHaveBeenCalled();
       expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
       expect(mocks.completeAgentOnboarding).not.toHaveBeenCalled();
-    });
-    it("rechecks caller authority after workspace preparation without an expected owner", async () => {
-      let authorityCurrent = true;
-      mocks.prepareAgentOnboarding.mockImplementationOnce(
-        async (options: GatewayRequestHandlerOptions) => ({
-          ...preparation(),
-          assertAuthorityCurrent: readGatewayRequestMutationAuthority(options).assertCurrent,
-        }),
-      );
-      const prepareWorkspace = expectDefined(
-        mocks.ensureAgentWorkspace.getMockImplementation(),
-        "workspace preparation",
-      );
-      mocks.ensureAgentWorkspace.mockImplementationOnce(async (...args) => {
-        const workspace = await prepareWorkspace(...args);
-        authorityCurrent = false;
-        return workspace;
-      });
-      const respond = vi.fn();
-      const handler = expectDefined(agentsHandlers["agents.create"], "agents.create handler");
-      await expect(
-        handler({
-          params: previewRequest,
-          respond,
-          context: createContext() as never,
-          req: { type: "req", id: "creation-authority", method: "agents.create" },
-          client: null,
-          hasCurrentClientAuthority: () => authorityCurrent,
-          isWebchatConnect: () => false,
-        }),
-      ).rejects.toThrow("Gateway requester authority changed");
-      expect(respond).not.toHaveBeenCalled();
-      expect(mocks.ensureAgentWorkspace).toHaveBeenCalledOnce();
-      expect(mocks.writeConfigFile).not.toHaveBeenCalled();
-      expect(mocks.rootWrite).not.toHaveBeenCalled();
-      expect(mocks.completeAgentOnboarding).not.toHaveBeenCalled();
-    });
-    it("creates an agent with an explicit workspace, model, and identity", async () => {
-      const respond = await create({
-        name: "Fancy Agent",
-        workspace: "/tmp/ws",
-        model: "sonnet-4.6",
-        emoji: "🤖",
-        avatar: "https://example.com/avatar.png",
-      });
-      expectRespondOk(respond, {
-        ok: true,
-        agentId: "fancy-agent",
-        name: "Fancy Agent",
-        model: "sonnet-4.6",
-      });
-      expect(mocks.ensureAgentWorkspace).toHaveBeenCalled();
-      expect(mocks.writeConfigFile).toHaveBeenCalled();
-      expect(mocks.reviveAgentDatabases).not.toHaveBeenCalled();
-      expect(mocks.completeAgentOnboarding).not.toHaveBeenCalled();
-      expectRecordFields(mockCallArg(mocks.applyAgentConfig, 0, 1), {
-        model: "sonnet-4.6",
-        identity: expect.objectContaining({
-          name: "Fancy Agent",
-          emoji: "🤖",
-          avatar: "https://example.com/avatar.png",
-        }),
-      });
-      expectRecordFields(mockCallArg(mocks.rootWrite), {
-        rootDir: "/resolved/tmp/ws",
-        relativePath: "IDENTITY.md",
-        data: "# IDENTITY.md - Agent Identity\n\n- Name: Fancy Agent\n- Emoji: 🤖\n- Avatar: https://example.com/avatar.png\n",
-      });
     });
     it("persists a display name independently of the stable internal agent id", async () => {
       const agentId = "bot-00000000-0000-4000-8000-000000000001";

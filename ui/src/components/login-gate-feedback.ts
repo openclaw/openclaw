@@ -4,6 +4,7 @@ import {
   type readPairingConnectErrorDetails,
 } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
+import type { BROWSER_WEBSOCKET_SECURITY_ERROR_CODE } from "../api/gateway-browser-socket.ts";
 import {
   redactLoginFailureError,
   resolveAuthHintKind,
@@ -13,6 +14,10 @@ import {
 import { formatGatewayHost } from "../lib/gateway-host.ts";
 import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
 import { t } from "../lib/reactive/i18n.ts";
+
+// Keep lazy sign-in tied to the emitted code without pulling in the socket transport.
+const browserSecurityErrorCode: typeof BROWSER_WEBSOCKET_SECURITY_ERROR_CODE =
+  "BROWSER_WEBSOCKET_SECURITY_ERROR";
 
 function isPasswordModeErrorCode(code: string | null): boolean {
   return (
@@ -289,6 +294,15 @@ export function resolveLoginFailureFeedback(
       kind: "auth-rate-limited",
       tone: "warn",
       stepKeys: ["stepStop", "stepWait", "stepCheckClients"],
+    });
+  }
+
+  if (lastErrorCode === browserSecurityErrorCode) {
+    return buildFeedback(rawError, "login.failure.browserBlocked", {
+      kind: "insecure-context",
+      placement: "form",
+      docsHref: "https://docs.openclaw.ai/web/control-ui/connect-and-pair#insecure-http",
+      stepKeys: [],
     });
   }
 

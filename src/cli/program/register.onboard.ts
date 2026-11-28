@@ -88,7 +88,7 @@ export function registerOnboardAuthOptions(command: Command): Command {
     .option("--token-expires-in <duration>", "Optional token expiry duration (e.g. 365d, 12h)")
     .option(
       "--secret-input-mode <mode>",
-      "Credential persistence mode: plaintext|ref (default: plaintext)",
+      "Credential input mode: plaintext (direct entry) or ref (external reference); supported channel credentials entered directly are saved in the secret store (default: plaintext)",
     )
     .option("--cloudflare-ai-gateway-account-id <id>", "Cloudflare Account ID")
     .option("--cloudflare-ai-gateway-gateway-id <id>", "Cloudflare AI Gateway ID");

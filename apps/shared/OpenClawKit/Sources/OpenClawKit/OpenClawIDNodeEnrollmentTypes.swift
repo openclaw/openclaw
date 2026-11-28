@@ -56,6 +56,8 @@ public struct OpenClawIDNodeEnrollmentLink: Sendable {
     public let rootFingerprint: String
     public let hostname: String
     public let relayURL: URL
+    /// The Discovery API origin the creating Gateway stated in the optional `d` field.
+    public let discoveryOrigin: URL?
     private var secret: Data
 
     /// Erase the owned invite bytes once the signed redemption is prepared. Swift may retain COW copies;
@@ -67,7 +69,8 @@ public struct OpenClawIDNodeEnrollmentLink: Sendable {
         return try body(self.secret)
     }
 
-    /// Strictly decodes the protocol's five-field link, rejecting duplicate and unknown fields.
+    /// Strictly decodes the protocol's five required fields and optional `d`, rejecting duplicate and
+    /// unknown fields.
     public init(_ text: String) throws {
         guard text.utf16.count <= 2048, text.hasPrefix("openclaw-node://join#"),
               let url = URLComponents(string: text), url.scheme == "openclaw-node", url.host == "join",
@@ -84,7 +87,7 @@ public struct OpenClawIDNodeEnrollmentLink: Sendable {
             else { throw OpenClawIDNodeEnrollmentError.invalidLink }
             fields[key] = value
         }
-        guard Set(fields.keys) == ["i", "c", "r", "h", "relay"] else {
+        guard Set(fields.keys).subtracting(["d"]) == ["i", "c", "r", "h", "relay"] else {
             throw OpenClawIDNodeEnrollmentError.invalidLink
         }
         let invite = fields["i"]!.split(separator: ".", omittingEmptySubsequences: false)
@@ -98,9 +101,10 @@ public struct OpenClawIDNodeEnrollmentLink: Sendable {
         self.rootFingerprint = "fp:" + fields["r"]!
         self.hostname = fields["h"]!
         self.relayURL = try Self.routingURL(fields["relay"]!, originOnly: false)
+        self.discoveryOrigin = try fields["d"].map { try Self.routingURL($0, originOnly: true) }
     }
 
-    /// Discovery is supplied separately; no hostname/relay inference or deployment default exists.
+    /// Validates an explicit Discovery origin; no hostname/relay inference or deployment default exists.
     public static func discoveryOrigin(_ text: String) throws -> URL {
         guard !text.isEmpty else { throw OpenClawIDNodeEnrollmentError.discoveryOriginRequired }
         return try self.routingURL(text, originOnly: true)

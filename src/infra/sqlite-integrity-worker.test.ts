@@ -14,6 +14,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import * as processUrls from "./runtime-process-url.js";
 import { readSqliteDatabaseIntegrityVerification } from "./sqlite-database-admission.js";
+import { installSqliteFtsTokenizerMismatch } from "./sqlite-index-corruption.test-support.js";
 import { runSqliteIntegrityOperationInWorker } from "./sqlite-integrity-operation.js";
 import { SqliteIntegrityWorkerInterruptedError } from "./sqlite-integrity-worker-error.js";
 import {
@@ -207,10 +208,37 @@ describe("SQLite integrity child", () => {
     );
   });
 
+  it("does not publish full integrity verification when a worker tolerates stale FTS", async () => {
+    const ddl = "CREATE VIRTUAL TABLE search USING fts5(text);";
+    const { source } = fixture(
+      "stale-fts",
+      ddl + "INSERT INTO search(text) VALUES ('ab'||char(65534)||'cd');",
+    );
+    installSqliteFtsTokenizerMismatch(source, "search");
+    using database = openNodeSqliteDatabase(source);
+    const check = "full" as const;
+    await expect(
+      assertSqliteIntegrityInWorker(source, 5_000, new AbortController().signal),
+    ).rejects.toThrow(/malformed inverted index/u);
+    runSqliteIntegrityCheckInWorkerSync({
+      database,
+      databaseLabel: source,
+      check,
+      ftsSchemas: [ddl],
+    });
+    expect(readSqliteDatabaseIntegrityVerification(database)).toBeUndefined();
+    await runSqliteIntegrityOperationInWorker(
+      sqliteIntegrityCheckSteps(database, source, undefined, { check, ftsSchemas: [ddl] }),
+      { busyTimeoutMs: 5_000, signal: new AbortController().signal, beforeResume: () => {} },
+    );
+    expect(readSqliteDatabaseIntegrityVerification(database)).toBeUndefined();
+  });
+
   it("reports bounded progress while native integrity is blocked and stops after cancellation", async () => {
     const { source } = fixture("progress");
     progress.mockClear();
     const worker = createIntegrityChild();
+    const send = vi.spyOn(worker, "send");
     worker.kill = vi.fn(() => {
       queueMicrotask(() => worker.emit("close", null, "SIGKILL"));
       return true;
@@ -220,7 +248,7 @@ describe("SQLite integrity child", () => {
     vi.useFakeTimers();
     try {
       const check = inScope(() => inspect(source, controller.signal));
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
       worker.emit("message", { type: "phase", phase: "checking" });
       await vi.advanceTimersByTimeAsync(30_000);
       expect(progress).toHaveBeenCalledTimes(3);
@@ -255,6 +283,7 @@ describe("SQLite integrity child", () => {
     fs.writeFileSync(source, bytes);
     const timing: SqliteIntegrityCheckTiming = {};
     vi.mocked(fork).mockClear();
+    const stat = vi.spyOn(fs, "statSync");
     const check = inScope(() => inspect(source, undefined, timing));
     await expect(check).rejects.toMatchObject({
       name: "SqliteIntegrityError",
@@ -263,6 +292,7 @@ describe("SQLite integrity child", () => {
       ),
     });
     expectForksClosed();
+    expect(stat.mock.calls.filter(([pathname]) => pathname === source)).toHaveLength(0);
   });
 
   it("reports a SIGTERM close without an integrity verdict as an interruption", async () => {

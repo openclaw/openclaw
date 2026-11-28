@@ -113,7 +113,7 @@ const target = {
 export const AnnotateInput = Type.Object(
   {
     ...target,
-    annotations: RecordAnnotations,
+    annotations: Type.Optional(RecordAnnotations),
     entities: Type.Optional(
       Type.Array(id, {
         maxItems: 100,

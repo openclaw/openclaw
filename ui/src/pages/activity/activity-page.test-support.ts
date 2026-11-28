@@ -106,7 +106,7 @@ export const activityHello = (recoveryScope = "activity-owner-a"): GatewayHelloO
   auth: { role: "operator", scopes: ["operator.read"], recoveryScope },
 });
 
-export function createActivityGatewayStub(): ApplicationContext["gateway"] {
+function createActivityGatewayStub(): ApplicationContext["gateway"] {
   const snapshot = { ...createApplicationGateway().gateway.snapshot, sessionKey: "main" };
   // SAFETY: Static route tests only read the snapshot and register these observers.
   return {

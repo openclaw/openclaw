@@ -93,7 +93,6 @@ export function createExecution(
         logGateway: { error: vi.fn(), warn: vi.fn() },
       },
       io: { emitAcceptance: vi.fn(), emitFinal: vi.fn() },
-      releaseCronContinuationClaimWithRecovery: async () => true,
     } as unknown as Parameters<typeof startAgentRunExecution>[0],
   };
 }
@@ -226,6 +225,7 @@ export function bindFollowupCompletion(execution: ReturnType<typeof createExecut
       signal: custody.signal,
       assertCurrent: () => custody.signal.throwIfAborted(),
       run: (work) => work(),
+      runWithRequester: (work) => work(),
       release: () => custody.abort(),
     },
   });

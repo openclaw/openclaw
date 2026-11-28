@@ -65,7 +65,13 @@ const expectedSystemRequester = {
   prepareDispatchCredential: expect.any(Function),
   signal: expect.any(AbortSignal),
   prepareSource: expect.any(Function),
-  snapshot: { version: 1, actor: { kind: "system" }, scopes: ["operator.admin"], grant: null },
+  snapshot: {
+    version: 1,
+    authenticationSource: "non-member",
+    actor: { kind: "system" },
+    scopes: ["operator.admin"],
+    grant: null,
+  },
   assertCurrent: expect.any(Function),
   assertInvocationCurrent: expect.any(Function),
 };
@@ -311,7 +317,7 @@ describe("sessions.github.publish", () => {
     },
   );
 
-  it("rejects a publication whose session authorization changes while verification waits", async () => {
+  it("retains admitted publication permission while verification waits", async () => {
     const request = createDeferredCore<Awaited<ReturnType<typeof mocks.request>>>();
     const entered = createDeferredCore();
     mocks.request.mockImplementationOnce(() => {
@@ -341,10 +347,10 @@ describe("sessions.github.publish", () => {
     expect(requester.snapshot).toEqual(expectedSystemRequester.snapshot);
     expect(() => requester.assertCurrent()).not.toThrow();
     authorized = false;
-    expect(() => requester.assertCurrent()).toThrow(GitHubPublicationRequesterUnavailableError);
+    expect(() => requester.assertCurrent()).not.toThrow();
     request.resolve({ ...acceptedPublication, requestId: "publication-revoked" });
 
-    await expect(pending).rejects.toBe(changed);
+    expectReply(await pending, { ...acceptedPublication, requestId: "publication-revoked" });
     expectPublication({ idempotencyKey: "publication-revoked", requester });
   });
 });

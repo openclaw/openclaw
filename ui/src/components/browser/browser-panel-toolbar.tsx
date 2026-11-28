@@ -1,5 +1,6 @@
 import { createMemo } from "@solidjs/signals";
 import { createSignal, onSettled, Show } from "solid-js";
+import { hasNativeBrowserBridge } from "../../app/native-browser-bridge.ts";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import {
@@ -20,6 +21,7 @@ import { Icon } from "../solid/icon.tsx";
 import { Menu, type MenuItem } from "../solid/menu.tsx";
 import { PanelIconButton } from "../solid/panel-icon-button.tsx";
 import { StrokeIcon } from "../solid/stroke-icon.tsx";
+import { startBrowser } from "./browser-client.ts";
 import type { BrowserSelectionProbe } from "./browser-panel-input-owner.ts";
 import type { BrowserPanel } from "./browser-panel-owner.ts";
 import { bareNameAddress } from "./browser-url.ts";
@@ -63,7 +65,11 @@ export function BrowserToolbar(
   const hasView = createMemo(() => Boolean(nativeTab() || props.controller.view));
   const activeUrl = createMemo(
     () =>
-      nativeTab()?.url || props.controller.view?.metrics?.url || props.controller.view?.url || "",
+      nativeTab()?.url ||
+      props.controller.view?.metrics?.url ||
+      props.controller.view?.url ||
+      props.controller.tabs.find((tab) => tab.id === props.controller.activeTargetId)?.url ||
+      "",
   );
   // Take-over covers browsers this Gateway hosts, as the Gateway confirmed for this route;
   // node-routed and native app tabs have no fence.
@@ -182,7 +188,7 @@ export function BrowserToolbar(
       id: "open",
       label: t("browser.openExternal"),
       icon: <Icon name="externalLink" />,
-      disabled: !hasView(),
+      disabled: !activeUrl(),
     },
     ...(!props.controller.host.dashboardTarget?.sessionScoped
       ? [
@@ -267,6 +273,9 @@ export function BrowserToolbar(
           !event.currentTarget.contains(event.relatedTarget)
         ) {
           props.controller.urlDraftEditing = false;
+          if (!props.controller.loading) {
+            props.controller.setState("urlDraft", activeUrl());
+          }
         }
       }}
     >
@@ -360,7 +369,6 @@ export function BrowserToolbar(
             aria-label={t("browser.address")}
             aria-invalid={invalid() ? "true" : undefined}
             aria-describedby={invalid() ? hintId : undefined}
-            title={props.controller.urlDraft}
             disabled={Boolean(props.controller.host.fixedTab && !props.controller.activeTargetId)}
             placeholder={t("browser.urlPlaceholder")}
             value={props.controller.urlDraft}
@@ -376,7 +384,22 @@ export function BrowserToolbar(
             }}
             onInput={(event) => {
               setInvalid(false);
-              props.controller.setState("urlDraft", event.currentTarget.value);
+              const panel = props.controller;
+              const value = event.currentTarget.value;
+              if (
+                panel.running === false &&
+                !panel.urlDraft.trim() &&
+                value.trim() &&
+                !panel.host.fixedTab &&
+                !panel.host.dashboardTarget &&
+                !hasNativeBrowserBridge()
+              ) {
+                const client = panel.operations.captureClient();
+                if (client) {
+                  void startBrowser(client, "/prewarm").catch(() => {});
+                }
+              }
+              panel.setState("urlDraft", value);
             }}
             onCompositionEnd={recordCompositionEnd}
             onKeyUp={clearCompositionEnd}
@@ -391,8 +414,16 @@ export function BrowserToolbar(
                   event.currentTarget.blur();
                 }
               } else if (event.key === "Escape") {
-                props.controller.resetUrlDraftFromView();
-                event.currentTarget.blur();
+                if (invalid() || props.controller.urlDraft !== activeUrl()) {
+                  // Cancel the address edit before the surrounding panel handles Escape.
+                  event.preventDefault();
+                  props.controller.setState("urlDraft", activeUrl());
+                  setInvalid(false);
+                  const address = event.currentTarget;
+                  onSettled(() => address.select());
+                } else {
+                  event.currentTarget.blur();
+                }
               }
             }}
           />
@@ -407,6 +438,7 @@ export function BrowserToolbar(
             <button
               type="button"
               class="bp-toolbar-go"
+              title={url}
               // Keep focus in the field so the option stays open while it is clicked.
               onMouseDown={(event) => event.preventDefault()}
               onClick={(event) => {

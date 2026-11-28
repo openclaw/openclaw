@@ -56,6 +56,7 @@ export type SessionCapability = Pick<
   | "acknowledgeHiddenRuns"
   | "archiveVisibility"
   | "beginArchive"
+  | "setInvolvement"
   | "assignOwner"
   | "retireModelOverride"
   | "settingsPreview"
@@ -71,6 +72,7 @@ export type SessionCapability = Pick<
     | "subscribeList"
     | "observeList"
     | "refreshList"
+    | "wakeList"
     | "refresh"
     | "refreshReplacement"
   > &
@@ -80,6 +82,8 @@ export type SessionCapability = Pick<
   } & {
     readonly githubPublication: Pick<ReturnType<typeof createSessionGitHubPublication>, "attach">;
     readonly state: SessionState;
+    /** Current drop preview, never persisted in the saved catalog. */
+    readonly pendingSectionOrder?: readonly string[];
     /** Broad observer outage, independent of query and operation errors. */
     readonly eventSubscriptionError: string | null;
     /** Current primary list failure, excluding mutation and observer errors. */

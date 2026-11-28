@@ -40,9 +40,11 @@ import {
 import { tryBeginGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import * as userTurnTranscript from "../sessions/user-turn-transcript.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { captureGatewayAuthPolicy } from "./auth-policy.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
+import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import { installAuthorityProofGateway } from "./server.agent-runtime-authority-proof.test-support.js";
 import { createRegisteredCompletionPair } from "./server.subagent-completion-authority.test-support.js";
 import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
@@ -99,18 +101,28 @@ async function createCompletion(context: GatewayRequestContext) {
     requesterSessionKey,
     gatewayContextResolver: context.resolveGatewayContext,
   });
-  const revoked = new AbortController();
+  const generation = `native-credential-${id}`;
+  const credentialOwner = new SharedGatewaySessionGenerationState({
+    current: generation,
+    required: null,
+  });
+  const previousCredentialOwner = context.sharedGatewaySessionGenerationState;
+  context.sharedGatewaySessionGenerationState = credentialOwner;
   const client = createOperatorClient({
     profileName: "native-completion",
     scopes: ["operator.write"],
   });
-  const source = (await captureGatewayOperatorRunAuthority({
+  client.internal = { authenticatedOperator: true };
+  client.authPolicy = captureGatewayAuthPolicy(context.getRuntimeConfig(), {
+    role: "operator",
+    authMethod: "token",
+  });
+  client.usesSharedGatewayAuth = true;
+  client.sharedGatewaySessionGeneration = generation;
+  const source = (await prepareGatewayOperatorRunAuthority({
     client,
     context,
-    sourceAuthority: {
-      signal: revoked.signal,
-      assertCurrent: () => revoked.signal.throwIfAborted(),
-    },
+    sourceAuthority: null,
   }))!;
   client.internal = { operatorRunAuthority: source.authority };
   const root = tryBeginGatewayRootWorkAdmission("test:native-completion")!;
@@ -139,7 +151,7 @@ async function createCompletion(context: GatewayRequestContext) {
       pendingTotal: async () => (await listSessionPendingInputs(sessionScope)).total,
       async changeOwner(change: OwnerChange) {
         if (change === "operator-revoked") {
-          revoked.abort(new Error("operator completion authority revoked"));
+          credentialOwner.publish({ current: `rotated-${id}`, required: `rotated-${id}` });
         } else if (change === "requester-replaced") {
           await sessionAccessor.replaceSessionEntry(sessionScope, {
             sessionId: `replacement-${id}`,
@@ -158,10 +170,14 @@ async function createCompletion(context: GatewayRequestContext) {
           result: "Retained child result",
           isSourceSessionAdmissionAllowed: () => retainedCustody.isCurrent(),
         }),
-      [Symbol.dispose]: () => retainedCustody.release(),
+      [Symbol.dispose]: () => {
+        retainedCustody.release();
+        context.sharedGatewaySessionGenerationState = previousCredentialOwner;
+      },
     };
   } catch (error) {
     custody?.release();
+    context.sharedGatewaySessionGenerationState = previousCredentialOwner;
     throw error;
   } finally {
     // End the original request; only retained completion custody owns the handoff.
@@ -248,7 +264,7 @@ describe("native completion final-effect authority", () => {
         await pair.settle();
         await settleRequests(true);
         expect(attempts.toSorted()).toEqual(pair.runs.map((run) => run.runId).toSorted());
-        const allowed = pair.runs.filter((_, index) => index !== revokedIndex);
+        const allowed = pair.runs;
         expect(requesterCommands).toBe(allowed.length);
         expect(agentCommandMock).toHaveBeenCalledTimes(2 + allowed.length);
         const events = sessionAccessor.loadTranscriptEventsSync(pair.requesterScope);
@@ -263,15 +279,9 @@ describe("native completion final-effect authority", () => {
         const runtimeContext = JSON.stringify(requesterRuntimeContext);
         for (const [index, run] of pair.runs.entries()) {
           expect(sources[index]).toBe(run.source.authority.source);
-          expect(stored.get(run.runId)?.delivery?.status === "delivered").toBe(
-            index !== revokedIndex,
-          );
-          expect(runtimeContext.includes(run.result)).toBe(index !== revokedIndex);
-          if (index === revokedIndex) {
-            expect(context.dedupe.has(`agent:${run.idempotencyKey}`)).toBe(false);
-          } else {
-            expect(context.dedupe.get(`agent:${run.idempotencyKey}`)).toMatchObject({ ok: true });
-          }
+          expect(stored.get(run.runId)?.delivery?.status).toBe("delivered");
+          expect(runtimeContext).toContain(run.result);
+          expect(context.dedupe.get(`agent:${run.idempotencyKey}`)).toMatchObject({ ok: true });
           expect(JSON.stringify(events)).not.toContain(run.result);
           resumeSubagentRun(run.runId);
         }
@@ -290,7 +300,7 @@ describe("native completion final-effect authority", () => {
   );
 
   it.for(["operator-revoked", "requester-replaced"] as const)(
-    "revalidates %s authority at real Gateway input staging",
+    "lets admitted work finish after %s while preserving requester incarnation fences",
     async (change, { signal }) => {
       const context = getContext();
       using completion = await createCompletion(context);
@@ -301,16 +311,25 @@ describe("native completion final-effect authority", () => {
       const executionModule = await import("./agent-turn/agent-run-execution-phase.js");
       const execution = vi.spyOn(executionModule, "startAgentRunExecution");
       const settleRequests = trackRequests(context);
-      const stage = pendingInputs.stageSessionPendingInput;
-      vi.spyOn(pendingInputs, "stageSessionPendingInput").mockImplementationOnce(
-        async (...args) => {
+      if (change === "requester-replaced") {
+        const stage = pendingInputs.stageSessionPendingInput;
+        vi.spyOn(pendingInputs, "stageSessionPendingInput").mockImplementationOnce(
+          async (...args) => {
+            entered.resolve();
+            // Hold before acquiring the writer so a requester replacement can commit.
+            await resume.promise;
+            return await stage(...args);
+          },
+        );
+      }
+      agentCommandMock.mockImplementation(async (input) => {
+        if (change === "operator-revoked") {
+          // Pending-input staging precedes operator admission; hold the started command.
           entered.resolve();
-          // Hold before acquiring the writer so a requester replacement can commit.
           await resume.promise;
-          return await stage(...args);
-        },
-      );
-      agentCommandMock.mockImplementation((input) => receiveCompletion(input as AgentCommandOpts));
+        }
+        return receiveCompletion(input as AgentCommandOpts);
+      });
       const delivery = completion.deliver();
       try {
         await reachBoundary(entered.promise, delivery);
@@ -319,12 +338,18 @@ describe("native completion final-effect authority", () => {
         const result = await delivery;
         // The RPC responds before its request owner releases the unaccepted reservation.
         await settleRequests();
-        expect(result.delivered).toBe(false);
-        expect(execution).not.toHaveBeenCalled();
-        expect(agentCommandMock).not.toHaveBeenCalled();
+        if (change === "operator-revoked") {
+          expect(result.delivered).toBe(true);
+          expect(agentCommandMock).toHaveBeenCalledOnce();
+          expect(completion.transcript()).not.toEqual(before);
+        } else {
+          expect(result.delivered).toBe(false);
+          expect(execution).not.toHaveBeenCalled();
+          expect(agentCommandMock).not.toHaveBeenCalled();
+          expect(completion.transcript()).toEqual(before);
+          expect(context.dedupe.get(`agent:${completion.idempotencyKey}`)).toBeUndefined();
+        }
         expect(await completion.pendingTotal()).toBe(0);
-        expect(completion.transcript()).toEqual(before);
-        expect(context.dedupe.get(`agent:${completion.idempotencyKey}`)).toBeUndefined();
       } finally {
         release();
         await Promise.allSettled([delivery, settleRequests()]);
@@ -334,7 +359,7 @@ describe("native completion final-effect authority", () => {
   );
 
   it.for(["live", "operator-revoked", "requester-replaced"] as const)(
-    "revalidates %s authority after the real recorder during automatic compaction",
+    "keeps admitted %s completion through compaction while fencing requester replacement",
     async (change, { signal }) => {
       const context = getContext();
       using completion = await createCompletion(context);
@@ -424,7 +449,7 @@ describe("native completion final-effect authority", () => {
             expect(inject).not.toHaveBeenCalled();
             await completion.changeOwner(change);
             resume.resolve();
-            if (change === "live") {
+            if (change !== "requester-replaced") {
               await reachBoundary(queued.promise, delivery);
               expect(inject).toHaveBeenCalledOnce();
               resumeCompaction.resolve();

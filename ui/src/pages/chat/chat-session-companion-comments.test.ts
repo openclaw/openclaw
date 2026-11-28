@@ -204,9 +204,12 @@ it("waits for saved comments before sending and retires them only after capturin
   pending.resolve(found());
   await submitted;
   expect(ask).toHaveBeenCalledTimes(1);
-  expect(ask).toHaveBeenCalledWith(annotation.sessionKey, "Use my saved comment", [
-    expect.objectContaining({ selectionAnnotation: annotation }),
-  ]);
+  expect(ask).toHaveBeenCalledWith(
+    annotation.sessionKey,
+    "Use my saved comment",
+    [expect.objectContaining({ selectionAnnotation: annotation })],
+    expect.any(String),
+  );
   await settle();
   expect(storage.write.mock.calls[0]?.[1].selectionAnnotations).toEqual([]);
   expect(current.view().attachments).toEqual([]);
@@ -293,7 +296,12 @@ it.each([false, true])(
     expect(current.error).toHaveBeenCalledTimes(1);
     const ask = vi.fn(async () => ({ answer: "done", ts: 1 }));
     await current.threads.submit(annotation.sessionKey, "My memory-only question", ask, "main");
-    expect(ask).toHaveBeenCalledWith(annotation.sessionKey, "My memory-only question", undefined);
+    expect(ask).toHaveBeenCalledWith(
+      annotation.sessionKey,
+      "My memory-only question",
+      undefined,
+      expect.any(String),
+    );
     expect(current.view()).toMatchObject({
       draft: "",
       turns: [{ status: "answered", answer: "done" }],

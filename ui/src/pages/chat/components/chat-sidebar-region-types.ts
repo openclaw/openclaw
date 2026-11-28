@@ -23,6 +23,7 @@ export type SidebarPanelDefinition = {
   shortcut?: KeyboardShortcutCombo;
   available: boolean;
   unavailableReason?: string;
+  prepare?: () => void;
   content: JSX.Element;
   /** Explicit host for caller-owned panel content. */
   panelHost?: SidebarPanelHost;

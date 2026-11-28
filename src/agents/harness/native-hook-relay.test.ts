@@ -1160,9 +1160,7 @@ describe("native hook relay registry", () => {
     setActivePluginRegistry(policyRegistry);
     initializeGlobalHookRunner(hookRegistry);
 
-    const relay = registerRelay({
-      preToolUseLoopDetection: false,
-    });
+    const relay = registerRelay();
 
     expect(relay.shouldRelayEvent("pre_tool_use")).toBe(true);
     expect(relay.toolMatcherForEvent("pre_tool_use")).toEqual(["apply_patch", "exec"]);
@@ -1714,7 +1712,7 @@ describe("native hook relay registry", () => {
         ]),
       );
       const relay = alias
-        ? registerRelay({ preToolUseLoopDetection: false })
+        ? registerRelay()
         : registerAgentRelay(kind === "stale command" ? { channelId: "telegram" } : {});
       if (alias) {
         expect(relay.toolMatcherForEvent("pre_tool_use")).toEqual([toolName]);
@@ -2201,7 +2199,6 @@ describe("native hook relay registry", () => {
       sessionKey: "agent:main:session-1",
       config: config as never,
       allowedEvents: ["pre_tool_use"],
-      preToolUseLoopDetection: false,
     });
 
     expect(relay.shouldRelayEvent("pre_tool_use")).toBe(true);

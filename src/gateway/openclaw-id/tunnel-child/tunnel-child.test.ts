@@ -302,7 +302,7 @@ describe.skipIf(!binding)("tunnel child for a linked claw", () => {
 
   it("serves on the key file that holds the bound K_srv", async () => {
     const keyPath = path.join(dir, "bound", "endpoint.key");
-    const expected = `iroh:${ed25519PublicKeyHex(loadOrCreateEndpointKey(keyPath).key)}`;
+    const expected = `iroh:${ed25519PublicKeyHex((await loadOrCreateEndpointKey(keyPath)).key)}`;
     expect(await startBound(keyPath, expected)).toMatchObject({
       state: "running",
       endpointKey: expected,
@@ -311,8 +311,8 @@ describe.skipIf(!binding)("tunnel child for a linked claw", () => {
 
   it("promotes a staged K_srv that the binding names", async () => {
     const keyPath = path.join(dir, "staged", "endpoint.key");
-    loadOrCreateEndpointKey(keyPath);
-    const { key: next } = loadOrCreateEndpointKey(stagedKeyPath(keyPath));
+    await loadOrCreateEndpointKey(keyPath);
+    const { key: next } = await loadOrCreateEndpointKey(stagedKeyPath(keyPath));
     const expected = `iroh:${ed25519PublicKeyHex(next)}`;
     expect(await startBound(keyPath, expected)).toMatchObject({
       state: "running",
@@ -324,7 +324,7 @@ describe.skipIf(!binding)("tunnel child for a linked claw", () => {
 
   it("stays off without creating a key when the bound K_srv is gone", async () => {
     const keyPath = path.join(dir, "lost", "endpoint.key");
-    const expected = `iroh:${ed25519PublicKeyHex(loadOrCreateEndpointKey(keyPath).key)}`;
+    const expected = `iroh:${ed25519PublicKeyHex((await loadOrCreateEndpointKey(keyPath)).key)}`;
     fs.rmSync(keyPath);
     expect(await startBound(keyPath, expected)).toEqual({
       state: "key_refused",

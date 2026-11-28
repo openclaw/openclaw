@@ -66,10 +66,9 @@ Hosting controllers that freeze or snapshot a running process can use the
 host-neutral suspension handshake:
 
 1. Stop admitting external ingress controlled by the host.
-2. Call `gateway.suspend.prepare` with a stable, unique `requestId`.
-3. If the response is `busy`, keep the process running and retry later. To hold
-   admission closed while already-admitted work finishes, request the optional
-   drain mode and poll `gateway.suspend.status` instead.
+2. Call `gateway.suspend.prepare` with a stable, unique `requestId`. Keep
+   `drain: false` and `terminalPolicy: "preserve"` to require an idle Gateway.
+3. If the response is `busy`, keep the process running and retry later.
 4. If the response is `ready`, save the returned `suspensionId`, then freeze or
    snapshot the process before `expiresAtMs`.
 5. After thaw, or if suspension is abandoned, call `gateway.suspend.resume`
@@ -92,7 +91,7 @@ lease expiry reopens admission automatically: 45 seconds for a drain, or two
 minutes for an idle freeze/snapshot lease.
 
 Closing the Gateway cancels background work queued by operator reconnects without
-waiting for suspension expiry. Shutdown still waits for work already running to finish.
+waiting for suspension expiry.
 
 Lifecycle operator requests take priority over unrelated queued work. Their
 authentication, live authority checks, and same-connection mutation ordering
@@ -119,23 +118,27 @@ The RPC contract is:
 - `gateway.suspend.handoff` — `operator.admin`; params
   `{ "suspensionId": "id-from-prepare", "target": { "pid": 123, "processInstanceId": "id-from-system-info" }, "commit": true }`
 
-`terminalPolicy` and `drain` are optional. `terminalPolicy` accepts only
-`"preserve"` or `"terminate"` and defaults to `"preserve"`; `drain` defaults
-to `false`. The terminal policy applies to both immediate preparation and drain
-mode:
+`terminalPolicy` and `drain` are optional. `terminalPolicy` accepts `"preserve"`
+or `"terminate"` and defaults to `"preserve"`. `drain` defaults to `false`.
 
-- `"preserve"`: open terminal sessions block suspension. Use this for host
-  freeze/snapshot operations that must preserve the running process.
-- `"terminate"`: open process-local terminal sessions do not block suspension.
-  Use this for release updates that will restart the Gateway. Preparation does
-  not close terminals; the actual Gateway restart ends their PTYs and commands.
+With these defaults, preparation returns `busy` for tracked work, including open
+terminals. The deprecated `gateway.restart.preflight` preview can miss open
+terminals and pending chat writes. Check that the work you expect has finished,
+then use default preparation to reserve the idle interval.
 
-Pending final chat-state writes (`terminal-persistence`) and all other tracked
-work still block preparation under either policy.
+`"terminate"` excludes open terminal sessions from the active
+count and blockers. Neither policy closes terminals during preparation.
+
+With `drain: true`, preparation can return `ready` immediately while agents or
+terminals remain active, even under `"preserve"`. Readiness in this mode requires only
+that protected writes, including final chat-state writes (`terminal-persistence`),
+have settled. Committing shutdown can abort running turns and end terminal commands.
 
 IDs are trimmed, must contain a non-whitespace character, and are limited to
 128 characters. A busy prepare result has `status: "busy"`, `reason`,
-`retryAfterMs`, `activeCount`, and `blockers`. A ready result has this shape:
+`retryAfterMs`, `activeCount`, `blockers`, and `writeCustody`. Older Gateways can
+omit `writeCustody`. In that case, pending writes are unknown.
+An idle Gateway returns the following prepare result.
 
 ```json
 {
@@ -143,13 +146,13 @@ IDs are trimmed, must contain a non-whitespace character, and are limited to
   "suspensionId": "2c3f...",
   "expiresAtMs": 1770000000000,
   "activeCount": 0,
-  "blockers": []
+  "blockers": [],
+  "writeCustody": []
 }
 ```
 
-If `drain: true` finds active work, preparation acquires a bounded lease,
-pauses new automatic cron scheduling, closes admission to unrelated new work,
-and returns:
+If `drain: true` finds pending protected writes, preparation holds admission closed,
+pauses automatic cron scheduling, and returns the following response.
 
 ```json
 {
@@ -159,19 +162,16 @@ and returns:
   "retryAfterMs": 5000,
   "activeCount": 2,
   "blockers": [
-    { "kind": "root-request", "count": 1, "message": "1 active request" },
-    { "kind": "terminal-session", "count": 1, "message": "1 open terminal session" }
-  ]
+    { "kind": "root-request", "count": 1, "message": "1 active gateway request(s)" },
+    { "kind": "terminal-persistence", "count": 1, "message": "1 pending terminal session write(s)" }
+  ],
+  "writeCustody": [{ "phase": "terminal-persistence", "count": 1 }]
 }
 ```
 
-Already-admitted work and its owned completions continue naturally; unrelated
-new runs, sessions, scheduled jobs, and independent work stay rejected. With
-`terminalPolicy: "preserve"`, an open terminal can keep the lease draining until
-it closes, the controller resumes the Gateway, or the lease expires. With
-`terminalPolicy: "terminate"`, that same terminal remains open but does not
-block readiness. Neither policy terminates or detaches terminals during
-preparation, polling, renewal, resume, or lease expiry.
+Already-admitted work and its owned completions continue until shutdown commits.
+Unrelated new work stays rejected while the lease is held. A ready prepare result
+still includes `activeCount` and `blockers`, which can show remaining activity.
 
 Drain leases expire **45 seconds after initial preparation**: a 30-second drain
 budget plus 15 seconds for handoff or cleanup. Repeating prepare, polling, and
@@ -188,11 +188,10 @@ presence events.
 Poll `gateway.suspend.status` with the returned `suspensionId`, honoring
 `retryAfterMs`. A held drain recommends five-second polling so completed work
 does not leave new work waiting through the longer busy-preparation retry.
-While blockers remain, status returns `status: "draining"`
-together with `expiresAtMs`, `retryAfterMs`, `activeCount`, and `blockers`.
-Each status call immediately returns a fresh active-work snapshot, including
-pending protected lifecycle or final-chat writes. Polling never waits for those
-writes, cancels work, releases custody, or renews the lease. The handoff owner
+While protected writes are pending, drain status returns `status: "draining"` with
+`expiresAtMs`, `retryAfterMs`, `activeCount`, `blockers`, and `writeCustody`.
+Each status call inspects current activity and protected writes. Polling never
+waits for writes, cancels work, releases custody, or renews the lease. The handoff owner
 checks write custody again before authorizing a stop. If a final chat write arrives
 after readiness, handoff waits for settlement within the original 30-second drain
 budget; it does not consume the 15-second cleanup grace or extend the lease.
@@ -201,9 +200,9 @@ RPC error `details.terminalPersistence` include the pending count, oldest observ
 terminal-event age in milliseconds (`null` when unavailable), and up to eight
 redacted run IDs, each capped at 256 characters. Session keys are omitted.
 Idle freeze handoffs remain immediate.
-Once every blocker has finished, the same lease transitions to
-`{"status":"ready","expiresAtMs":...}`.
-Status preserves the original response shape by default for published validators.
+Once protected writes settle, drain status returns `ready` with `expiresAtMs` and
+`writeCustody`. Ready status omits `activeCount` and `blockers`, even if activity
+remains.
 Opt into lifecycle metadata with `includeLifecycle: true` to receive `ownerId`,
 the original `requestId`; draining status also includes `phase: "draining"`.
 Use an updated response validator when requesting this metadata.
@@ -226,8 +225,8 @@ openclaw gateway call gateway.suspend.status \
 openclaw gateway resume '<suspension-id>'
 ```
 
-For a release update, use the same handshake with `terminalPolicy: "terminate"`
-so an open terminal cannot hold the drain indefinitely:
+For a release update, the same handshake can exclude open terminal sessions
+from activity diagnostics with `terminalPolicy: "terminate"`.
 
 ```bash
 openclaw gateway call gateway.suspend.prepare \
@@ -235,11 +234,8 @@ openclaw gateway call gateway.suspend.prepare \
   --json
 ```
 
-Wait for the lease to become `ready` before performing the checked restart. With
-`drain: true`, readiness waits for persistence custody to clear, rather than for
-agent work to finish. Preparation is reversible and does not mark or abort sessions;
-the committed stop/restart performs that step.
-Terminal commands and scrollback are not recovered after restart; see
+Wait for `ready` before the checked restart. Preparation is reversible.
+Terminal commands and scrollback are not recovered after restart. See
 [Restart recovery](/gateway/restart-recovery#what-is-not-resumed).
 
 An external deployment controller that explicitly authorizes interrupting
@@ -296,13 +292,11 @@ returned retry delay. WebSocket clients are bucketed by device and IP. Admin HTT
 controllers are bucketed by resolved client IP, so controllers behind one
 proxy can share a budget.
 
-Without `drain: true`, preparation remains refuse-only: OpenClaw closes new
-root/session/command admission, pauses automatic cron ticks, and inspects work
-synchronously. If anything is active, it resumes the scheduler and reopens
-admission before returning `busy`; it does not interrupt or drain that work.
-With `drain: true`, the same suspension owner instead keeps admission closed
-and cron scheduling paused until existing work settles. Already-owned cron
-completion and reconciliation continue.
+Preparation closes new root/session/command admission, pauses automatic cron
+ticks, and inspects work synchronously. Without drain mode, activity causes
+`busy` and admission reopens. Drain mode holds admission closed while protected
+writes settle and after readiness. Already-owned cron completion and
+reconciliation continue.
 
 The lease budget starts before work inspection: 45 seconds with `drain: true`,
 or two minutes for refuse-only freeze/snapshot preparation. Preparation that
@@ -336,12 +330,10 @@ stop. `activeCount` is the aggregate tracked-work count, while `blockers`
 contains non-zero native category counts and bounded summary messages. Categories
 include `background-exec`, `cron-run`, `agent-run`, `acp-run`, and
 `media-generation`, alongside request, queue, reply, session, and terminal work.
-Categories can overlap, so the count is not a number of unique jobs. This is not
-a general process-quiescence barrier. Blockers contain no command text, output,
-operating system process IDs, or session or scope identifiers. Channel health, maintenance,
-cache refresh, established
-plugin WebSocket sessions, and unregistered plugin-owned background work can
-remain active.
+A single job can count in several categories. Blocker messages can include
+run IDs and session keys. Redact them before sharing the response.
+Channel health checks, maintenance, cache refresh, established plugin WebSocket
+sessions, and unregistered plugin work can remain active.
 The hosting platform must freeze or snapshot the full process tree and its
 filesystem consistently; unregistered work cannot be proven idle by this first
 contract.

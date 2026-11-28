@@ -247,7 +247,7 @@ it.each(["view", "connection", "pending"])(
 
 it("denies transcript reads without a compatible read scope", async () => {
   params.context.gateway.snapshot.hello!.auth!.scopes = [];
-  await rejectCopy(t("sessionsView.actionRequiresScope", { scope: "operator.sessions.read" }));
+  await rejectCopy(t("sessionsView.actionPermissionDenied"));
   expect(request).not.toHaveBeenCalled();
 });
 

@@ -412,6 +412,7 @@ export function projectClawHubPluginInspection(params: {
     },
     origin: "global",
     entryConfig: runtimePlugin?.installed ? config.plugins?.entries?.[runtimePlugin.id] : undefined,
+    conversationAccessAccepted: "if-declared",
   });
   const catalog = joinClawHubPluginDetail({ remote, local });
   return {

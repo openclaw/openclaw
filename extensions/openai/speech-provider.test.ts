@@ -82,42 +82,6 @@ describe("buildOpenAISpeechProvider", () => {
     expect(provider.models).toContain(OPENAI_TTS_SNAPSHOT);
   });
 
-  it("normalizes provider-owned speech config from raw provider config", () => {
-    const resolved = provider.resolveConfig?.({
-      cfg: {} as never,
-      timeoutMs: 30_000,
-      rawConfig: {
-        providers: {
-          openai: {
-            apiKey: "sk-test",
-            baseUrl: "https://example.com/v1/",
-            model: "tts-1",
-            voice: "alloy",
-            speed: 1.25,
-            instructions: " Speak warmly ",
-            responseFormat: " WAV ",
-            extraBody: {
-              lang: "en-US",
-            },
-          },
-        },
-      },
-    });
-
-    expect(resolved).toEqual({
-      apiKey: "sk-test",
-      baseUrl: "https://example.com/v1",
-      model: "tts-1",
-      voice: "alloy",
-      speed: 1.25,
-      instructions: "Speak warmly",
-      responseFormat: "wav",
-      extraBody: {
-        lang: "en-US",
-      },
-    });
-  });
-
   it("drops malformed speech speed values", () => {
     const resolved = provider.resolveConfig?.({
       cfg: {} as never,

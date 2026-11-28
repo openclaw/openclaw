@@ -7,7 +7,7 @@ import {
   handleMarkdownCodeBlockClick,
   renderMarkdownCodeBlock,
 } from "../../../components/markdown-code-blocks.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createInitializationContext } from "../chat-application-context.test-support.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
@@ -39,6 +39,7 @@ import {
 } from "./chat-transcript-geometry.ts";
 import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import { TranscriptRowRefs } from "./chat-transcript-row-refs.ts";
+import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -440,8 +441,14 @@ it.each([false, true])(
     const flushFrames = stubAnimationFrames();
     transcriptDomState.measuredRowHeight = 1200;
     const rows = contentRows(1, "reply", "Reply");
-    const { container, transcript, renderRows } = await mountTestTranscript("coalesced-end", rows);
+    const { container, transcript, renderRows, session } = await mountTestTranscript(
+      "coalesced-end",
+      rows,
+    );
     try {
+      if (!(session instanceof ChatSessionVirtualizerHost)) {
+        throw new Error("Expected the session virtualizer owner");
+      }
       setTranscriptViewport(container, 1200);
       // Native scrolling clamps without invoking the JavaScript geometry getter under test.
       container.scrollTo = (options?: ScrollToOptions | number) => {
@@ -455,6 +462,18 @@ it.each([false, true])(
       flushFrames();
       renderRows(rows);
       flushFrames();
+      // Join native scroll idle and the owner's stable end before counting idle work.
+      await waitForSolid(() => {
+        flushFrames();
+        expect(session.initialRange.pending).toBe(false);
+        expect(session.initialRange.preparingEnd).toBe(false);
+        expect(session.virtualizer.isScrolling).toBe(false);
+      });
+      const row = requireElement(container, ".chat-virtual-row");
+      expect(row.dataset.rowSize).toBe("1200");
+      expect(transcriptSize(container)).toBe(1200);
+      expect(requireElement(container, ".chat-thread-inner").style.visibility).toBe("");
+      expect(container.scrollTop).toBe(600);
       const readHeight = vi.fn(() => 1200);
       Object.defineProperty(container, "scrollHeight", {
         configurable: true,
@@ -466,7 +485,6 @@ it.each([false, true])(
       flushFrames();
       expect(readHeight).not.toHaveBeenCalled();
 
-      const row = requireElement(container, ".chat-virtual-row");
       for (let index = 0; index < 4; index++) {
         emitTranscriptResize(row, 800, 1240 + index);
         renderRows(rows);

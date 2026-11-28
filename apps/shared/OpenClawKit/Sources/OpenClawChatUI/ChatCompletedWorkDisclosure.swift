@@ -15,21 +15,17 @@ struct ChatCompletedWorkDisclosure<Content: View>: View {
             }
             .padding(.top, 8)
         } label: {
-            Text(self.label)
-                .font(OpenClawChatTypography.caption)
-                .fixedSize(horizontal: false, vertical: true)
-                #if os(iOS)
-                .foregroundStyle(Color.secondary)
-                .frame(minHeight: 44)
-                #else
-                .foregroundStyle(.secondary)
+            Text(ChatCompletedWorkSummary.label(work: self.work))
+                #if !os(iOS)
+                    .font(OpenClawChatTypography.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .foregroundStyle(.secondary)
                 #endif
         }
+        #if os(iOS)
+        .disclosureGroupStyle(ChatInlineDisclosureStyle())
+        #endif
         .accessibilityIdentifier("chat-completed-work-\(self.work.anchorID)")
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var label: String {
-        ChatCompletedWorkSummary.label(work: self.work, expanded: self.isExpanded)
     }
 }

@@ -133,6 +133,7 @@ async function fixture() {
         data: { phase: "start", name: "read", toolCallId, args: { path: "README.md" } },
       } satisfies AgentEventPayload);
       const toolIdentity = buildToolStreamIdentity(runId, toolCallId);
+      await vi.dynamicImportSettled();
       await vi.waitFor(() => {
         expect(target.chatRunId).toBe(runId);
         expect(target.toolStreamById.has(toolIdentity)).toBe(true);

@@ -317,17 +317,6 @@ afterEach(async () => {
 });
 
 describe("Discord monitor dispatch", () => {
-  it("tracks inbound messages before their handlers complete", async () => {
-    const blocked = pause(async () => {});
-    const { client, onEvent } = createHarness({ messageHandler: blocked.run });
-    await blocked.during(
-      client.dispatchGatewayEvent("MESSAGE_CREATE", { channel_id: "ch-1" }),
-      () => {
-        expect(onEvent).toHaveBeenCalledOnce();
-      },
-    );
-  });
-
   it("detaches interaction handling and reports its eventual failure", async () => {
     const { client, logger, onEvent } = createHarness();
     const pending = createDeferred<void>();

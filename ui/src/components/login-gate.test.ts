@@ -155,7 +155,7 @@ describe("login gate failure recovery", () => {
     expect(failure.dataset.kind).toBe("trusted-proxy");
     expectText(failure, "failure-raw").toBe("unauthorized");
     expect(failure.querySelectorAll(".login-gate__failure-steps code")).toHaveLength(0);
-    expect(steps).toContain("Open the dashboard through the sign-in proxy");
+    expect(steps).toContain("Open OpenClaw through the sign-in proxy");
     expect(part(failure, "failure-docs").getAttribute("href")).toBe(
       "https://docs.openclaw.ai/gateway/trusted-proxy-auth",
     );
@@ -208,7 +208,10 @@ describe("login gate failure recovery", () => {
       "unauthorized: bootstrap token invalid",
       Codes.AUTH_BOOTSTRAP_TOKEN_INVALID,
     );
+    element.props = { ...element.props, gatewayUrl: "wss://home.example.test" };
+    await element.updateComplete;
     const failure = part(element, "failure");
+    expectText(failure, "hero-label", true).toBe("Run on the computer running OpenClaw");
     expectText(failure, "failure-title", true).toBe("Pairing link is no longer valid");
     expectText(failure, "failure-summary").toMatch(/expired|already been used/);
     expectText(failure, "command--hero code", true).toBe("openclaw dashboard");
@@ -308,6 +311,7 @@ describe("login gate failure recovery", () => {
     try {
       part(element, "failure-refresh").click();
       expect(reload).not.toHaveBeenCalled();
+      await vi.dynamicImportSettled();
       await vi.waitFor(() => {
         expectText(element, ".app-toast__description").toContain("Unsaved starts will be lost.");
       });
@@ -417,6 +421,28 @@ describe("login gate failure recovery", () => {
         entry.textContent?.trim(),
       ),
     ).toEqual(["openclaw status", "openclaw gateway run", "openclaw dashboard --no-open"]);
+  });
+
+  it("keeps the Gateway URL editable when the browser blocks the connection", async () => {
+    const reason = "Browser refused the Gateway WebSocket for security reasons.";
+    const element = await mountFailure(reason, "BROWSER_WEBSOCKET_SECURITY_ERROR");
+    expectText(element, "failure-summary").toContain("wss://");
+    const url = element.querySelector<HTMLInputElement>("#login-gate-url")!;
+    expect(url.closest("details:not([open])")).toBeNull();
+    expectText(element, "failure-raw", true).toBe(reason);
+  });
+
+  it("does not mark a secure Gateway URL invalid when the browser refuses it", async () => {
+    const reason = "Check the Gateway WebSocket URL and browser security policy.";
+    const element = await mountFailure(reason, "BROWSER_WEBSOCKET_SECURITY_ERROR");
+    element.props = { ...element.props, gatewayUrl: "wss://gateway.example" };
+    await element.updateComplete;
+
+    const url = element.querySelector<HTMLInputElement>("#login-gate-url")!;
+    expect(url.value).toBe("wss://gateway.example");
+    expect(url.getAttribute("aria-invalid")).not.toBe("true");
+    expectText(element, "failure-summary").toContain("open Show details");
+    expectText(part(element, "failure-detail"), "failure-raw", true).toBe(reason);
   });
 
   it("offers only supported recovery for an insecure browser context", async () => {

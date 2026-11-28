@@ -4,6 +4,7 @@ import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { sessionParticipantIdentityKey } from "../lib/chat/sender-label.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { SidebarPanelFilter, SidebarPanelHeader } from "./app-sidebar-panel-headers.tsx";
+import { SidebarNewSessionAction, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import { InlineAlert } from "./solid/inline-alert.tsx";
 import { Picker } from "./solid/select-picker.tsx";
@@ -63,7 +64,6 @@ function SidebarOwnerPicker(props: { host: SessionListHost }) {
         params: {
           id: "sidebar-session-owner-title",
           class: "sidebar-session-owner-filter",
-          triggerIcon: "chevronsUpDown" as const,
           label: t("sessionsView.owners"),
           value: props.host.sessionInvolvingMeFilterActive
             ? "involving-me"
@@ -108,7 +108,9 @@ export function countSidebarSessionFilters(host: Pick<SessionListHost, "sessions
   return Number(host.sessionsStatusFilter !== "active");
 }
 
-export function renderSessionListToolbar(host: SessionListHost & { onToggleSidebar?: () => void }) {
+export function renderSessionListToolbar(
+  host: SessionListHost & Pick<AppSidebarRenderHost, "onToggleSidebar">,
+) {
   const statusLabel = () =>
     host.sessionsStatusFilter === "active"
       ? t("common.active")
@@ -124,6 +126,10 @@ export function renderSessionListToolbar(host: SessionListHost & { onToggleSideb
         title={t("chat.sidebar.sortSessions")}
         label={`${t("chat.sidebar.sortSessions")} · ${statusLabel()}`}
         description={`${t("sessionsView.status")}: ${statusLabel()}`}
+      />
+      <SidebarNewSessionAction
+        host={host}
+        class="sidebar-session-toolbar__button sidebar-new-session"
       />
     </SidebarPanelHeader>
   );

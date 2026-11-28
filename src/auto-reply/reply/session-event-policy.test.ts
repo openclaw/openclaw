@@ -22,6 +22,74 @@ import { getSessionEventRuntimeConfig } from "./session-event-target.js";
 afterEach(() => clearRuntimeConfigSnapshot());
 
 it.each([
+  ["audit logging", { logging: { audit: { executionIdentity: true } } }, true],
+  ["log level", { logging: { level: "debug" } }, true],
+  ["diagnostics", { diagnostics: { enabled: true } }, true],
+  ["UI preferences", { ui: { prefs: { themeMode: "dark" } } }, true],
+  ["cold storage", { session: { maintenance: { coldStorage: { enabled: true } } } }, true],
+  ["telemetry", { telemetry: { enabled: true } }, true],
+  ["update checks", { update: { checkOnStart: false } }, true],
+  ["session send policy", { session: { sendPolicy: { default: "deny" } } }, false],
+  ["session sharing", { session: { sharing: { readOnly: true } } }, false],
+  ["tools", { tools: { deny: ["exec"] } }, false],
+  ["channel", { channels: { telegram: { enabled: false } } }, false],
+  ["model", { agents: { defaults: { model: "openai/changed" } } }, false],
+  ["auth", { auth: { profiles: { selected: { provider: "openai", mode: "oauth" } } } }, false],
+] satisfies Array<[string, OpenClawConfig, boolean]>)(
+  "rechecks only event authority after a %s publication",
+  (_change, patch, retained) => {
+    for (const publishBeforeCapture of [false, true]) {
+      const before: OpenClawConfig = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(before);
+      const after = { ...before, ...patch };
+      if (publishBeforeCapture) {
+        setRuntimeConfigSnapshot(after);
+      }
+      // Admission may still hold the previous publication when it captures policy.
+      const policy = captureSessionEventConfigPolicy(before, "main", makeCronJob({}));
+      policy.selectModel({ provider: "openai", model: "model" });
+      if (!publishBeforeCapture) {
+        setRuntimeConfigSnapshot(after);
+      }
+      const check = () => policy.assertCurrent(getSessionEventRuntimeConfig(), ["telegram"]);
+      if (retained) {
+        expect(check).not.toThrow();
+        expect(policy.changed).toBe(false);
+      } else {
+        expect(check).toThrow("Session event configuration changed");
+        expect(policy.changed).toBe(true);
+      }
+    }
+  },
+);
+
+it.each([
+  ["logging.file", true],
+  ["diagnostics.otel.headers.Authorization", true],
+  ["ui.seamColor", true],
+  ["session.maintenance.pruneAfter", true],
+  ["session.store", false],
+] as const)("scopes authored values and resolution facts at %s", (path, retained) => {
+  const before: OpenClawConfig = {};
+  const after: OpenClawConfig = {};
+  setConfigResolutionFacts(before, createConfigResolutionFacts([]));
+  setConfigResolutionFacts(
+    after,
+    createConfigResolutionFacts(
+      [{ varName: "SYNTHETIC_SETTING", configPath: path }],
+      new Map([[path, "SYNTHETIC_SETTING"]]),
+    ),
+  );
+  const policy = captureSessionEventConfigRelevance(
+    captureRuntimeConfigWithSource(before, before),
+    "main",
+    makeCronJob({}),
+  );
+  expect(policy(captureRuntimeConfigWithSource(before, after), [])).toBe(retained);
+  expect(policy(captureRuntimeConfigWithSource(after, before), [])).toBe(retained);
+});
+
+it.each([
   ["another agent's entry", { other: {} }, undefined, true],
   ["its own agent's tools", { main: { tools: { deny: ["exec"] } } }, undefined, false],
   ["its own agent's avatar", { main: { identity: { avatar: "avatar.png" } } }, undefined, true],

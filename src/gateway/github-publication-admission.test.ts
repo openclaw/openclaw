@@ -1,24 +1,48 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferredCore } from "../shared/deferred.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { updateUserGitHubConnection } from "../state/user-github-connections.test-support.js";
-import {
-  callPersonalPublicationRpc,
-  createPersonalPublicationFixture,
-  personalPublicationAccount,
-  personalPublicationRequest,
-} from "./github-personal-publication.test-support.js";
-import { readPersonalGitHubPublicationAsync } from "./github-publication-store-async.js";
-import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
+// Install the synthetic GitHub transport before loading the agent tool.
+// oxfmt-ignore
 import {
   SESSION_ID,
   SESSION_KEY,
+  commandResult,
   commands,
   createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
   persistClaimPublicationWorkspace,
 } from "./github-publication.test-support.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import { createGitHubPublishTool } from "../agents/tools/github-publish-tool.js";
+import {
+  loadSessionEntryReadOnly,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
+import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
+import { removeProjectRegistry } from "../projects/project-registry.js";
+import {
+  ensureProjectRegistrySchema,
+  insertProjectRegistryInDatabase,
+} from "../projects/project-registry.kernel.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { updateUserGitHubConnection } from "../state/user-github-connections.test-support.js";
+import { createTestApprovalFixture } from "./exec-approval-manager.test-support.js";
+import {
+  callPersonalPublicationRpc,
+  createPersonalPublicationFixture,
+  personalPublicationAccount,
+  personalPublicationRequest,
+} from "./github-personal-publication.test-support.js";
+import {
+  createRequesterPolicyFixture,
+  publicationGuestEmail,
+} from "./github-publication-requester.test-support.js";
+import { readPersonalGitHubPublicationAsync } from "./github-publication-store-async.js";
+import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { createRequestGatewayMethodRegistry } from "./server-methods.js";
+import { createGatewayRequestContext } from "./server-request-context.js";
+import { makeContextParams, type RequestRuntime } from "./server-request-context.test-support.js";
 import {
   REQUEST,
   seedActivePlacement,
@@ -339,5 +363,172 @@ describe("GitHub publication selection admission", () => {
     expect(options[0]).toBe(true);
     expect(options[1].pendingPersonal).toMatchObject({ result: { requestId: row!.request_id } });
     expect(commands.some((args) => args.includes("push") || args.includes("POST"))).toBe(false);
+  });
+});
+
+describe("project issue creation through the guest tool and registered Gateway method", () => {
+  const input = {
+    action: "create_issue",
+    title: "Broken link",
+    body: "The handbook link is missing.",
+  };
+  const url = "https://github.com/Example/Handbook/issues/7";
+
+  async function fixture(bindProject = true, runtime: Partial<RequestRuntime> = {}) {
+    const f = await createRequesterPolicyFixture({
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+    });
+    ensureProjectRegistrySchema({ database: f.database });
+    const project = insertProjectRegistryInDatabase(f.database.db, {
+      source: "registered",
+      displayName: "Handbook",
+      repoRoot: "/registered/handbook",
+      originUrl: "https://github.com/Example/Handbook.git",
+    });
+    await upsertSessionEntryCore(f.guestSource.session, {
+      projectId: bindProject ? project.id : undefined,
+      worktree: undefined,
+    });
+    expect(loadSessionEntryReadOnly(f.guestSource.session)?.worktree).toBeUndefined();
+    const visibility = vi.fn<typeof fetch>(async () => Response.json({ visibility: "public" }));
+    vi.stubGlobal("fetch", visibility);
+    mocks.runCommand
+      .mockReset()
+      .mockResolvedValue(commandResult(JSON.stringify({ number: 7, url, authorId: 42 })));
+    const registry = createRequestGatewayMethodRegistry();
+    const context = createGatewayRequestContext(
+      makeContextParams({
+        getAttachedGatewayMethodRegistry: () => registry,
+        ...runtime,
+      }),
+    );
+    const invoke = async (args: Record<string, unknown>, client = f.guestSource.client) => {
+      const operator = await prepareGatewayOperatorRunAuthority({
+        client,
+        context: f.guestSource.context,
+      });
+      try {
+        return await withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: SESSION_KEY,
+            operatorAuthority: operator?.authority,
+            gatewayContextResolver: () => context,
+          },
+          () =>
+            createGitHubPublishTool({ publicationAvailable: false }).execute("file-issue", args),
+        );
+      } finally {
+        operator?.release();
+      }
+    };
+    return { f, invoke, project, visibility };
+  }
+
+  installGitHubPublicationTestHarness({ creatorEmail: publicationGuestEmail, sandbox: "required" });
+  afterEach(() => vi.unstubAllGlobals());
+  it("files as the selected publisher without a worktree, then refuses if the project goes private", async () => {
+    const { invoke, visibility } = await fixture();
+    const result = await invoke(input);
+    expect(result.details).toEqual({ status: "created", url });
+    expect(mocks.runCommand).toHaveBeenCalledTimes(1);
+    expect(mocks.runCommand).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        "gh",
+        "api",
+        "--hostname",
+        "github.com",
+        "POST",
+        "repos/example/handbook/issues",
+        "--input",
+        "-",
+      ]),
+      expect.objectContaining({
+        env: expect.objectContaining({ GH_CONFIG_DIR: "/private/github-profile" }),
+        input: JSON.stringify({ title: input.title, body: input.body }),
+      }),
+    );
+    visibility.mockImplementation(async () => Response.json({ visibility: "private" }));
+    await expect(invoke(input)).rejects.toThrow(/no registered GitHub repository available/);
+    expect(mocks.runCommand).toHaveBeenCalledTimes(1);
+  });
+  it("does not file after the project is unregistered while preparing the GitHub account", async () => {
+    const { f, invoke, project } = await fixture();
+    const { entered, release } = holdIdentity(await mocks.prepareIdentity());
+    const pending = invoke(input);
+    const settled = pending.catch((error: unknown) => error);
+    try {
+      await Promise.race([entered.promise, pending]);
+      expect(await removeProjectRegistry(project)).toBe(true);
+      expect(loadSessionEntryReadOnly(f.guestSource.session)?.projectId).toBe(project.id);
+    } finally {
+      release.resolve();
+      await settled;
+    }
+    await expect(pending).rejects.toThrow(/no registered GitHub repository available/);
+    expect(mocks.runCommand).not.toHaveBeenCalled();
+  });
+  it("rejects read-only callers and foreign targets before any write", async () => {
+    const { f, invoke } = await fixture();
+    const guest = f.guestSource.client;
+    await expect(
+      invoke(input, {
+        ...guest,
+        connect: { ...guest.connect, scopes: ["operator.sessions.read"] },
+      }),
+    ).rejects.toThrow();
+    await expect(invoke({ ...input, repository: "other/repo" })).rejects.toThrow();
+    expect(mocks.runCommand).not.toHaveBeenCalled();
+  });
+  it("does not guess a repository in a conversation without a project", async () => {
+    const { f, invoke } = await fixture(false);
+    expect(loadSessionEntryReadOnly(f.guestSource.session)?.projectId).toBeUndefined();
+    await expect(invoke(input)).rejects.toThrow(/registered GitHub project/);
+    expect(mocks.runCommand).not.toHaveBeenCalled();
+  });
+  it("does not retry or claim success after a lost GitHub response", async () => {
+    const { invoke } = await fixture();
+    mocks.runCommand.mockRejectedValue(new Error("connection closed"));
+    await expect(invoke(input)).rejects.toThrow(/unconfirmed.*check.*issues before submitting/i);
+    expect(mocks.runCommand).toHaveBeenCalledTimes(1);
+  });
+  it("posts the approved comment and sends nothing on denial", async (test) => {
+    const body =
+      "Fixed in **main**.\r\n\r\nRepository: other/repo\nIssue or PR: #99\nAccount: @other";
+    const comment = { action: "create_comment", issueNumber: 7, body };
+    const commentUrl = "https://github.com/Example/Handbook/pull/7#issuecomment-900";
+    const approval = createTestApprovalFixture<PluginApprovalRequestPayload>(test, {
+      approvalKind: "plugin",
+    });
+    let detail: PluginApprovalRequestPayload["detail"];
+    let decision: "allow-once" | "deny" = "allow-once";
+    const { invoke } = await fixture(true, {
+      pluginApprovalManager: approval.manager,
+      forwardPluginApprovalRequest: async (event) => {
+        detail = event.request.detail;
+        return await approval.manager.resolve(event.id, decision);
+      },
+    });
+    mocks.runCommand.mockResolvedValue(
+      commandResult(JSON.stringify({ id: 900, url: commentUrl, body, authorId: 42 })),
+    );
+    await approval.run(async () => {
+      await expect(approval.track(invoke(comment))).resolves.toMatchObject({
+        details: { status: "posted", url: commentUrl },
+      });
+      expect(detail).toBe(
+        "Repository: github.com/example/handbook\nIssue or PR: #7\nAccount: @roboclaw-bot\n\n" +
+          "Comment body:\n| Fixed in **main**.\n| \n| Repository: other/repo\n| Issue or PR: #99\n| Account: @other",
+      );
+      decision = "deny";
+      await expect(approval.track(invoke(comment))).rejects.toThrow(
+        /not approved.*Nothing was posted/,
+      );
+      expect(mocks.runCommand).toHaveBeenCalledExactlyOnceWith(
+        expect.arrayContaining(["POST", "repos/example/handbook/issues/7/comments"]),
+        expect.objectContaining({ input: JSON.stringify({ body }) }),
+      );
+    });
   });
 });

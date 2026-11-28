@@ -9,7 +9,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { inspectTarArchive } from "@openclaw/fs-safe/archive";
 import { root as openRoot } from "@openclaw/fs-safe/root";
-import { extract as extractTar, list as listTar, type ReadEntry } from "tar";
+import { extract as extractTar, list as listTar, type ReadEntry } from "tar/raw";
 import { coerceErrorMessage } from "./lib/error-format.mts";
 import { collectNpmPackInventory, compareNpmPackInventory } from "./lib/npm-pack-inventory.mts";
 import { assertNpmShrinkwrapDependencies } from "./lib/npm-shrinkwrap-dependencies.mjs";

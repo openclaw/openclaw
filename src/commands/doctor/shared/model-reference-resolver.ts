@@ -1,4 +1,4 @@
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
+import { DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
 import {
   buildModelAliasIndex,
@@ -17,11 +17,9 @@ export function createDoctorModelRefResolver(cfg: OpenClawConfig) {
         allowPluginNormalization: false,
         allowManifestNormalization: false,
       };
-      const defaultProvider = resolveConfiguredModelRef({
-        ...options,
-        defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
-      }).provider;
+      const defaultProvider =
+        resolveConfiguredModelRef({ ...options, defaultProvider: DEFAULT_PROVIDER })?.provider ??
+        DEFAULT_PROVIDER;
       const aliasIndex = buildModelAliasIndex({ ...options, defaultProvider });
       resolve = (value) => {
         const ref = resolveModelRefFromString({

@@ -13,7 +13,7 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import {
-  captureOpenClawAgentDatabaseExecution,
+  captureOpenClawAgentDatabaseExecutionAsync,
   supportsOpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
 import {
@@ -263,10 +263,12 @@ export async function readSessionTranscriptIndexStatus(
     return false;
   }
   const execution = supportsOpenClawAgentDatabaseExecution(options)
-    ? captureOpenClawAgentDatabaseExecution(options)
+    ? await captureOpenClawAgentDatabaseExecutionAsync(options)
     : undefined;
   let client: OpenClawAgentSqliteWorkerStore<TranscriptProjectionPublicationOperations> | undefined;
   try {
+    signal?.throwIfAborted();
+    assertCurrent?.();
     if (execution) {
       client = await openOpenClawAgentSqliteWorkerStore<TranscriptProjectionPublicationOperations>(
         options,

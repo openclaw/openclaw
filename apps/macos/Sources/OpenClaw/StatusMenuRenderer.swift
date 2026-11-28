@@ -262,7 +262,7 @@ final class StatusMenuRenderer: NSObject {
         case .openClawIDSignIn:
             (String(localized: "Sign in with OpenClaw ID…"), "person.crop.circle")
         case .dashboard:
-            (String(localized: "Open Dashboard"), "gauge")
+            (String(localized: "Open OpenClaw"), "gauge")
         case .quickChat:
             (String(localized: "Quick Chat"), "text.bubble")
         case .talkMode:

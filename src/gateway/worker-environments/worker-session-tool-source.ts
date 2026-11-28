@@ -103,7 +103,7 @@ export function createWorkerSessionToolSourceRunner(params: {
             operation.request.toolName,
           )
         ) {
-          throw new Error("Worker tool authority changed");
+          throw new Error("Worker turn ended or lacks this tool. Start a new turn.");
         }
       },
     );

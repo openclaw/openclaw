@@ -193,14 +193,14 @@ describe("skills library CLI", () => {
       "skills.library.list",
       expect.anything(),
       { scope: "all", sessionKey },
-      { signal: undefined },
+      undefined,
     );
     await parse(["read", skillId, "--session", sessionKey, "--revision", revision, "--json"]);
     expect(mocks.call).toHaveBeenLastCalledWith(
       "skills.library.read",
       expect.anything(),
       { skillId, sessionKey, revision },
-      { signal: undefined },
+      undefined,
     );
     expect(mocks.writeJson).toHaveBeenLastCalledWith(read);
     const work = new AsyncWorkScope();

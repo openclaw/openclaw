@@ -162,12 +162,19 @@ defineDiscordVoiceTests((harness) => {
       expect(await startTranscripts(f.manager, f.sink)).toMatchObject({ ok: true });
       await f.audio(OWNER, 1);
       await emitFinalRealtimeUserTranscript(lastRealtimeBridgeParams(), "Keep the meeting note.");
-      expect(f.sink).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          text: "Keep the meeting note.",
-          speaker: { id: OWNER, label: "Owner" },
-        }),
-      );
+      expect(f.sink).toHaveBeenCalledExactlyOnceWith({
+        sessionId: "notes-1",
+        startedAt: expect.any(String),
+        final: true,
+        speaker: { id: OWNER, label: "Owner" },
+        text: "Keep the meeting note.",
+        metadata: {
+          channel: "discord",
+          guildId: "g1",
+          channelId: "1001",
+          voiceSessionKey: f.entry.voiceSessionKey,
+        },
+      });
       expect(agentCommandMock).not.toHaveBeenCalled();
       const reply = vi.fn();
       const command = createDiscordVoiceCommand({
@@ -349,6 +356,10 @@ defineDiscordVoiceTests((harness) => {
       expect(currentSink).toHaveBeenLastCalledWith(
         expect.objectContaining({ text: "New capture note." }),
       );
+      if (captureState === "same") {
+        // Two audio inputs share this provider generation, so the final has no single start.
+        expect(currentSink.mock.lastCall?.[0]).not.toHaveProperty("startedAt");
+      }
     },
   );
 

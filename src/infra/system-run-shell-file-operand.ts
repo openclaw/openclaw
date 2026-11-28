@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { extractEnvAssignmentKeysFromDispatchWrappers } from "./dispatch-wrapper-resolution.js";
 import { parseInlineOptionToken } from "./inline-option-token.js";
 import {
   advancePosixInlineOptionScan,
@@ -10,15 +11,6 @@ import {
   POSIX_SHELLS_WITH_PLUS_OPTIONS,
 } from "./shell-wrapper-resolution.js";
 
-const POSIX_SHELL_OPTIONS_WITH_VALUE = new Set([
-  "--init-file",
-  "--rcfile",
-  "--startup-script",
-  "-O",
-  "-o",
-  "+O",
-  "+o",
-]);
 const POSIX_SHELL_CODE_LOADING_OPTIONS = new Set(["--init-file", "--rcfile", "--startup-script"]);
 
 function normalizeOptionFlag(token: string): string {
@@ -67,13 +59,13 @@ export function resolvePosixShellScriptOperandIndex(
     }
     if (!afterDoubleDash && isPosixShellOptionToken(token, supportsPlusOptions)) {
       const flag = normalizeOptionFlag(token);
-      if (POSIX_SHELL_OPTIONS_WITH_VALUE.has(flag)) {
+      if (POSIX_SHELL_CODE_LOADING_OPTIONS.has(flag)) {
         if (!token.includes("=")) {
           i += 1;
         }
         continue;
       }
-      i += advancePosixInlineOptionScan(token) - 1;
+      i += advancePosixInlineOptionScan(token, executable) - 1;
       continue;
     }
     return i;
@@ -107,7 +99,7 @@ export function hasPosixShellCodeLoadingOption(argv: string[], executable: strin
     ) {
       return true;
     }
-    i += advancePosixInlineOptionScan(token) - 1;
+    i += advancePosixInlineOptionScan(token, executable) - 1;
   }
   return false;
 }
@@ -123,5 +115,10 @@ export function hasPosixShellStartupEnvironment(params: {
   if (params.env?.BASH_ENV?.trim() || params.env?.ENV?.trim()) {
     return true;
   }
-  return params.argv.some((token) => /^(?:BASH_ENV|ENV)=/u.test(token.trim()));
+  return (
+    params.argv.some((token) => /^(?:BASH_ENV|ENV)=/u.test(token.trim())) ||
+    extractEnvAssignmentKeysFromDispatchWrappers(params.argv).some(
+      (key) => key === "BASH_ENV" || key === "ENV",
+    )
+  );
 }

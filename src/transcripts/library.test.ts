@@ -26,7 +26,6 @@ import {
   createTranscriptLibraryStoreFixture,
   transcriptLibrarySession as session,
 } from "./library.store.test-support.js";
-import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 import { readTranscriptLibraryStatus } from "./status.js";
 import { deriveMeetingTranscriptSummaryColumns } from "./store-columns.js";
 import { cursorScope, encodeCursor } from "./store-read.js";
@@ -34,6 +33,7 @@ import { readTranscriptSessionMatches } from "./store-sqlite-read.js";
 import { meetingTranscriptDb } from "./store-sqlite.js";
 import { transcriptSessionSelector } from "./store.js";
 import { summarizeTranscripts } from "./summary.js";
+import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
@@ -229,6 +229,52 @@ describe("transcript library SQLite reads", () => {
       speakerId: "speaker-id",
       text: "Saved speech",
     });
+  });
+
+  it("keeps source identities with duplicate labels separate across list and get", async () => {
+    const { download, get, list, seed, summary } = fixture();
+    const target = session("duplicate-speaker-labels");
+    const utterances = [
+      { text: "First", speaker: { id: "speaker-1", label: " Sam " } },
+      { text: "Second", speaker: { id: "speaker-2", label: "Sam" } },
+      { text: "Third", speaker: { label: "Sam" } },
+      { text: "Fourth", speaker: { id: "speaker-1", label: "Samuel" } },
+    ];
+    await seed(target, utterances);
+    await summary(target, utterances);
+
+    const expected = ["Sam", "Sam (2)", "Sam (3)"];
+    expect((await list()).sessions).toMatchObject([
+      { sessionId: target.sessionId, participants: expected },
+    ]);
+    expect((await get(target)).session.participants).toEqual(expected);
+    expect(contents(await download(target, "markdown"))).toContain(
+      "- Sam: First\n- Sam (2): Second\n- Sam (3): Third\n- Sam: Fourth",
+    );
+    expect(
+      jsonLines(await download(target, "jsonl")).map(({ speakerId, speakerLabel }) => ({
+        speakerId,
+        speakerLabel,
+      })),
+    ).toEqual([
+      { speakerId: "speaker-1", speakerLabel: " Sam " },
+      { speakerId: "speaker-2", speakerLabel: "Sam" },
+      { speakerId: undefined, speakerLabel: "Sam" },
+      { speakerId: "speaker-1", speakerLabel: "Samuel" },
+    ]);
+  });
+
+  it("does not transfer opaque speaker ids in public roster reads", async () => {
+    const { get, list, seed } = fixture();
+    const target = session("large-private-speaker-id");
+    await seed(target, [
+      { text: "Saved speech", speaker: { id: "x".repeat(2 * READ_LIMIT), label: "Sam" } },
+    ]);
+
+    expect((await list()).sessions).toMatchObject([
+      { sessionId: target.sessionId, participants: ["Sam"] },
+    ]);
+    expect((await get(target)).session.participants).toEqual(["Sam"]);
   });
 
   it("combines literal title/source search, exact owner/account/provider filters and inclusive/exclusive dates", async () => {
@@ -674,7 +720,10 @@ describe("transcript library SQLite query budgets", () => {
       for (const target of [first, later, collision]) {
         await store.writeSession(target);
       }
-      await store.appendUtteranceForSession(later, { text: "Summarize this speech" });
+      await store.appendUtteranceForSession(later, {
+        text: "Summarize this speech",
+        metadata: { private: "x".repeat(1024 * 1024) },
+      });
       const db = database();
       seedExportBookkeeping(db);
       const malformedSummaryColumns = deriveMeetingTranscriptSummaryColumns("{malformed");
@@ -706,13 +755,24 @@ describe("transcript library SQLite query budgets", () => {
         expect(await store.readSummarySnapshot(later, 20)).toMatchObject({
           nextSequence: 1,
           summaryRevision: "",
-          utterances: [{ text: "Summarize this speech" }],
+          turns: [{ text: "Summarize this speech" }],
         });
         expect(reads.some((read) => read.rows > 0)).toBe(true);
       }
       expect(reads.reduce((bytes, read) => bytes + read.bytes, 0)).toBeLessThan(2_048);
     },
   );
+  it("skips covered live summary inputs and reads the next append", async () => {
+    const { store, database, target } = await captured("live-checkpoint", [{ text: "Opening" }]);
+    const reads = observeArchiveReads(store, database());
+
+    expect(await store.readSummarySnapshot(target, 1, 2)).toBeUndefined();
+    expect(reads.filter((read) => read.executions > 0).map((read) => read.rows)).toEqual([0]);
+
+    await store.appendUtteranceForSession(target, { text: "Follow-up" });
+    expect((await store.readSummarySnapshot(target, 1, 2))?.nextSequence).toBe(2);
+  });
+
   it("stops active status descriptor reads when the public result budget is consumed", async () => {
     const { store, database } = fixture();
     for (let index = 0; index < 6; index++) {

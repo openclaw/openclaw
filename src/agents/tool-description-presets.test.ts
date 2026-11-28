@@ -53,6 +53,24 @@ it.each([describeSessionsListTool, describeSessionsHistoryTool, describeSessions
   },
 );
 
+it.each([describeSessionsHistoryTool, describeSessionsSearchTool])(
+  "describes exact memory session-hit follow-up in %s",
+  (describe) => {
+    const description = describe();
+    expect(description).toContain("sessionKey, messageId and sessionId");
+    expect(description).toContain("Search line numbers are not history offsets");
+    expect(description).toContain("never read raw transcript files");
+  },
+);
+
+it("describes the dashboard filter and distinguishes absence from unknown", () => {
+  const description = describeSessionsListTool();
+  expect(description).toContain("hasBoard, kind/agent/activity/archive");
+  expect(description).toContain(
+    "hasBoard reports saved dashboard presence without content; omitted means unknown, not empty.",
+  );
+});
+
 it("distinguishes sessions_send local context selection from exact external addressing", () => {
   const description = describeSessionsSendTool();
   expect(SESSIONS_SEND_TOOL_DISPLAY_SUMMARY).toContain("same-Gateway");
@@ -65,9 +83,6 @@ it("distinguishes sessions_send local context selection from exact external addr
   expect(description).toContain('`targetDisposition: "queued"` or `"steered"`');
   expect(description).toContain("neither proves target completion");
   expect(description).toContain("Ordinary peer sends start a separate turn.");
-  expect(description).toContain(
-    "A zero-wait send to your own busy child or an eligible run-scoped target may use its active input queue.",
-  );
   expect(description).toContain("An idle recipient or a default self-send starts a new turn");
   expect(description).toContain(
     "mode:followup always starts a separate turn and preserves its independent reply",
@@ -84,6 +99,13 @@ it("bounds sessions_spawn API investigation handoffs without delegating quick lo
   expect(description).toContain(
     "A PR/report, long runtime, or isolated worktree alone does not justify a sidebar session. A request for a subagent does not request a separate session. No spawn for quick lookup/single read.",
   );
+  expect(description).toContain(
+    "Brief each child with objective, output, write scope, and verification",
+  );
+  expect(description).toContain("taskName is a stable handle; label is for UI");
+  expect(description).toContain("collectors require explicit collection, not completion events");
+  expect(description).toContain("announcing children use sessions_yield when available");
+  expect(description).toContain("Never loop-poll subagents list or sessions_list");
   expect(description).not.toContain("trial-and-error");
   expect(description).not.toContain("auth probing");
 });

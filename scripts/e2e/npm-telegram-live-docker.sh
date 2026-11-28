@@ -226,6 +226,8 @@ docker_e2e_build_or_reuse "$IMAGE_NAME" npm-telegram-live "$ROOT_DIR/scripts/e2e
 mkdir -p "$ROOT_DIR/.artifacts/qa-e2e"
 mkdir -p "$OUTPUT_DIR_HOST"
 npm_prefix_host="$(mktemp -d "$ROOT_DIR/.artifacts/qa-e2e/npm-telegram-live-prefix.XXXXXX")"
+# The disposable package prefix is shared with the container's non-root appuser.
+chmod a+rwx "$npm_prefix_host"
 harness_root="$(mktemp -d "$ROOT_DIR/.artifacts/qa-e2e/npm-telegram-live-harness.XXXXXX")"
 harness_package_json="$harness_root/package.json"
 cp "$ROOT_DIR/package.json" "$harness_package_json"
@@ -233,9 +235,28 @@ node --import tsx "$ROOT_DIR/scripts/e2e/lib/npm-telegram-live/prepare-package.m
 cleanup() {
   local rc=$?
   trap - EXIT
-  printf 'schema=1\nexit_code=%s\nlive_output=job_log\n' "$rc" > "$OUTPUT_DIR_HOST/run-metadata.txt"
-  rm -rf "$npm_prefix_host"
-  rm -rf "$harness_root"
+  # The appuser owns entries in both mounts. Return them to the host uploader
+  # and cleanup without widening modes or following links outside this run.
+  if ! docker_e2e_docker_with_timeout 30s run --rm --network none --user 0:0 \
+    -v "$OUTPUT_DIR_HOST:/output" -v "$npm_prefix_host:/npm-global" "$IMAGE_NAME" \
+    find -P /output /npm-global -exec chown -h "$(id -u):$(id -g)" '{}' +; then
+    echo "Could not return Telegram artifacts and npm prefix to the host user." >&2
+    if [ "$rc" -eq 0 ]; then
+      rc=1
+    fi
+  fi
+  if ! rm -rf -- "$npm_prefix_host" "$harness_root" 2>/dev/null; then
+    echo "Could not fully remove Telegram npm prefix or harness scratch directory." >&2
+    if [ "$rc" -eq 0 ]; then
+      rc=1
+    fi
+  fi
+  if ! printf 'schema=1\nexit_code=%s\nlive_output=job_log\n' "$rc" > "$OUTPUT_DIR_HOST/run-metadata.txt"; then
+    echo "Could not write Telegram run metadata." >&2
+    if [ "$rc" -eq 0 ]; then
+      rc=1
+    fi
+  fi
   exit "$rc"
 }
 trap cleanup EXIT
@@ -447,6 +468,13 @@ if [ -n "${OPENCLAW_NPM_TELEGRAM_COMMAND_SCENARIO:-}" ]; then
   fi
   command_scenario_mount_args=(-v "$OPENCLAW_NPM_TELEGRAM_COMMAND_SCENARIO:/app/qa/scenarios/channels/telegram-repeated-command-authorization.yaml:ro")
 fi
+if [ -n "${OPENCLAW_NPM_TELEGRAM_CONTEXT_SCENARIO:-}" ]; then
+  if [ ! -f "$OPENCLAW_NPM_TELEGRAM_CONTEXT_SCENARIO" ]; then
+    echo "Frozen Telegram context scenario is missing" >&2
+    exit 1
+  fi
+  command_scenario_mount_args+=(-v "$OPENCLAW_NPM_TELEGRAM_CONTEXT_SCENARIO:/app/qa/scenarios/channels/telegram-context-command.yaml:ro")
+fi
 run_logged_print_heartbeat "npm-telegram-live-suite" 60 docker_e2e_run_with_harness \
   "${docker_env[@]}" \
   -v "$ROOT_DIR/.artifacts:/app/.artifacts" \
@@ -483,7 +511,7 @@ cleanup_recovery() {
 }
 trap cleanup_recovery EXIT
 
-dump_hotpath_logs() {
+dump_debug_logs() {
   local status="$1"
   echo "installed-package onboarding recovery hot path failed with exit code $status" >&2
   for file in \
@@ -499,7 +527,7 @@ dump_hotpath_logs() {
     fi
   done
 }
-trap 'status=$?; dump_hotpath_logs "$status"; exit "$status"' ERR
+openclaw_e2e_enable_failure_diagnostics
 
 test -x "$sut_command"
 openclaw_e2e_run_command "$sut_command" --version
@@ -586,7 +614,12 @@ if [ "${OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH:-0}" != "1" ]; then
   plugin_install_help="$(openclaw_e2e_run_command "$sut_command" plugins install --help)"
   fixture_consent="$(printf '%s' "$plugin_install_help" | node scripts/e2e/lib/package-compat.mjs fixture-consent)"
   if [ -n "$fixture_consent" ]; then
-    openclaw_e2e_fixture_plugin_command "$sut_command" -- plugins install @openclaw/codex \
+    codex_install_args=("@openclaw/codex")
+    if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+      # A mounted candidate must use its sealed npm companion, not a published ClawHub fallback.
+      codex_install_args=("npm:@openclaw/codex@${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:?missing candidate version}" --pin)
+    fi
+    openclaw_e2e_fixture_plugin_command "$sut_command" -- plugins install "${codex_install_args[@]}" \
       >/tmp/openclaw-npm-telegram-codex-install.log 2>&1 </dev/null
   fi
   OPENAI_API_KEY="$hotpath_model_value" openclaw_e2e_run_command "$sut_command" onboard \

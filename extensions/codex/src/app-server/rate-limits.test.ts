@@ -66,12 +66,14 @@ describe("formatCodexUsageLimitErrorMessage", () => {
     {
       name: "reports authoritative unexhausted usage",
       options: {
+        message: "Quota exceeded. Check your plan and billing details.",
         rateLimits: {
           rateLimits: bucket({ primary: window(0, null, null), rateLimitReachedType: null }),
         },
         rateLimitsAuthoritative: true,
       },
-      expected: /current account usage does not report an exhausted limit/,
+      expected:
+        /current account usage does not report an exhausted limit.*Quota exceeded\. Check your plan and billing details\./,
       rejected: /subscription usage limit|could not determine a reset time/,
     },
     {

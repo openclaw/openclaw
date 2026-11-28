@@ -369,6 +369,7 @@ export async function handleBrowserGatewayRequest({
       if (
         path === "/tabs/open" ||
         path === "/tabs/action" ||
+        path === "/prewarm" ||
         path === "/start" ||
         path === "/stop" ||
         path === "/reset-profile" ||

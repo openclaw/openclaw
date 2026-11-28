@@ -1,14 +1,12 @@
 import { describe, expect, it } from "vitest";
+import type { PersistedUserTurnMessage } from "./user-turn-input.types.js";
 import {
   attachRuntimeUserTurnTranscriptContext,
   attachRuntimeUserTurnTranscriptRecorder,
   takeRuntimeUserTurnTranscriptContext,
   takeRuntimeUserTurnTranscriptRecorder,
 } from "./user-turn-transcript-runtime-context.js";
-import type {
-  PersistedUserTurnMessage,
-  UserTurnTranscriptRecorder,
-} from "./user-turn-transcript.types.js";
+import type { UserTurnTranscriptRecorder } from "./user-turn-transcript.types.js";
 
 function createRecorder(): UserTurnTranscriptRecorder {
   return {

@@ -208,6 +208,14 @@ function ViewportContent(
           />
         )}
       </Match>
+      <Match when={!props.controller.view && props.controller.screenshotUnavailable}>
+        <PanelEmptyState
+          presentation={props.mobilePresentation ? "mobile" : "desktop"}
+          icon={<Icon name="globe" />}
+          heading={t("chat.sidePanel.browser")}
+          description={t("browser.previewUnavailable")}
+        />
+      </Match>
       <Match when={!props.controller.view && props.controller.loading}>
         <PanelLoadingSkeleton variant="browser-viewport" label={t("browser.loading")} />
       </Match>
