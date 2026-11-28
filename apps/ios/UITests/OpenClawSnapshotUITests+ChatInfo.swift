@@ -187,13 +187,19 @@ extension OpenClawSnapshotUITests {
         style: String,
         arguments: [String]) throws -> XCUIApplication
     {
-        self.launchApp(for: target, appearance: style, additionalArguments: [
-            "--openclaw-chat-info-fixture", "--openclaw-chat-switch-fixture", "--openclaw-activity-fixture",
-            "--openclaw-activity-fixture-pr-only", "--openclaw-info-populated",
-        ] + arguments)
+        // These scenarios exercise the saved chat, not the drawer's opening transition.
+        self.launchApp(
+            for: target,
+            appearance: style,
+            initialSidebarVisible: true,
+            additionalArguments: [
+                "--openclaw-chat-info-fixture", "--openclaw-chat-switch-fixture", "--openclaw-activity-fixture",
+                "--openclaw-activity-fixture-pr-only", "--openclaw-info-populated",
+            ] + arguments)
         let app = try XCTUnwrap(self.app)
-        app.buttons["RootTabs.Sidebar.Show"].tap()
-        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Launch plan")).firstMatch.tap()
+        let row = app.buttons["Launch plan"]
+        XCTAssertTrue(row.wait(for: \.isHittable, toEqual: true, timeout: 5))
+        row.tap()
         XCTAssertTrue(app.staticTexts["OPENCLAW_SWITCH_B_LATEST"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "#148")).firstMatch
             .waitForExistence(timeout: 8))
