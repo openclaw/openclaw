@@ -5,6 +5,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -148,3 +149,60 @@ it.each([
     expect(context.params.prompt).toMatch(/^restored context\n\n/);
   },
 );
+
+it("renders one system prompt for every turn source of a conversation", async () => {
+  const conversation = {
+    sessionKey: "agent:main:telegram:direct:1222",
+    sessionEntry: {
+      sessionId: "session-test",
+      updatedAt: 1,
+      chatType: "direct" as const,
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "1222", accountId: "default" },
+        origin: { provider: "telegram", surface: "telegram", chatType: "direct" },
+      }),
+    },
+  };
+  const user = await prepareAuthorized({
+    ...conversation,
+    messageChannel: "telegram",
+    messageProvider: "telegram",
+    agentAccountId: "default",
+  });
+  // sessions_send turns run on the internal channel with no route of their own.
+  const peer = await prepareAuthorized({
+    ...conversation,
+    messageChannel: "webchat",
+    messageProvider: "webchat",
+    inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+  });
+
+  expect(user.systemPrompt).toContain("channel=telegram");
+  expect(peer.systemPrompt).toBe(user.systemPrompt);
+});
+
+it("keeps a Control UI session's prompt when a heartbeat turn routes to another channel", async () => {
+  const conversation = {
+    sessionKey: "agent:main:main",
+    sessionEntry: {
+      sessionId: "session-test",
+      updatedAt: 1,
+      delivery: normalizeSessionDeliveryState({ context: { channel: "webchat" } }),
+    },
+  };
+  const user = await prepareAuthorized({
+    ...conversation,
+    messageChannel: "webchat",
+    messageProvider: "webchat",
+  });
+  // A heartbeat that delivers to Telegram runs this session's turn on the Telegram channel.
+  const heartbeat = await prepareAuthorized({
+    ...conversation,
+    messageChannel: "telegram",
+    messageProvider: "telegram",
+    agentAccountId: "default",
+  });
+
+  expect(conversation.sessionEntry.delivery.kind).toBe("internal");
+  expect(heartbeat.systemPrompt).toBe(user.systemPrompt);
+});

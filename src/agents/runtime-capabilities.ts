@@ -6,10 +6,12 @@
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntriesLower } from "@openclaw/normalization-core/string-normalization";
+import type { ChatType } from "../channels/chat-type.js";
 import { supportsThreadBindingSpawn } from "../channels/conversation-resolution.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import { resolveThreadBindingSpawnPolicy } from "../channels/thread-bindings-policy.js";
 import { resolveChannelCapabilities } from "../config/channel-capabilities.js";
+import type { SessionDeliveryState } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../utils/message-channel-normalize.js";
@@ -90,6 +92,40 @@ export function collectRuntimeChannelCapabilities(params: {
     ...internalChannelCapabilities,
     ...threadSpawnCapabilities,
   ]);
+}
+
+/**
+ * Channel inputs for a session's system prompt. Presentation follows the session's recorded
+ * delivery, so every turn source renders the same prompt; the current turn's routing and
+ * authority stay with the run.
+ */
+export function resolveSessionPromptRoute(params: {
+  sessionDelivery?: SessionDeliveryState;
+  channel?: string;
+  accountId?: string | null;
+  requester?: SpawnRequesterConversationSource;
+  chatType?: ChatType;
+}) {
+  const delivery = params.sessionDelivery;
+  if (delivery?.kind === "external") {
+    return {
+      channel: delivery.context.channel,
+      accountId: delivery.context.accountId,
+      requester: { agentTo: delivery.context.to, agentThreadId: delivery.context.threadId },
+      chatType: delivery.origin.chatType,
+    };
+  }
+  return {
+    channel:
+      delivery?.kind === "internal"
+        ? INTERNAL_MESSAGE_CHANNEL
+        : delivery
+          ? undefined
+          : params.channel,
+    accountId: params.accountId,
+    requester: params.requester,
+    chatType: params.chatType,
+  };
 }
 
 /** Shared channel facts for ordinary and compaction system prompts. */

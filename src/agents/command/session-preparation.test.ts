@@ -364,11 +364,7 @@ it.each([
   },
 );
 
-it.each([
-  { deliver: true, replyAccountId: "rich", markup: "markdown_telegram_rich" },
-  { deliver: true, replyAccountId: "plain", markup: "markdown" },
-  { deliver: false, replyAccountId: undefined, markup: undefined },
-])("uses the delivering account's format once ($deliver, $replyAccountId)", async (testCase) => {
+function registerTelegramFormatPlugin() {
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -389,6 +385,24 @@ it.each([
       },
     ]),
   );
+}
+
+const telegramConversation: SessionEntry = {
+  sessionId: "conversation-id",
+  updatedAt: 1,
+  chatType: "direct",
+  delivery: normalizeSessionDeliveryState({
+    context: { channel: "telegram", to: "1222", accountId: "rich" },
+    origin: { provider: "telegram", surface: "telegram", chatType: "direct" },
+  }),
+};
+
+it.each([
+  { deliver: true, replyAccountId: "rich", markup: "markdown_telegram_rich" },
+  { deliver: true, replyAccountId: "plain", markup: "markdown" },
+  { deliver: false, replyAccountId: undefined, markup: undefined },
+])("uses the delivering account's format once ($deliver, $replyAccountId)", async (testCase) => {
+  registerTelegramFormatPlugin();
   const ctx: TemplateContext = {
     Provider: "telegram",
     Surface: "telegram",
@@ -406,15 +420,7 @@ it.each([
       runContext: { messageChannel: "telegram", currentChannelId: "1222", accountId: "rich" },
     },
     sessionKey: "agent:main:telegram:direct:1222",
-    sessionEntry: {
-      sessionId: "conversation-id",
-      updatedAt: 1,
-      chatType: "direct",
-      delivery: normalizeSessionDeliveryState({
-        context: { channel: "telegram", to: "1222", accountId: "rich" },
-        origin: { provider: "telegram", surface: "telegram", chatType: "direct" },
-      }),
-    },
+    sessionEntry: telegramConversation,
   });
   const prompt = prepared.extraSystemPrompt ?? "";
   expect(prompt).toContain('"account_id": "rich"');
@@ -430,4 +436,27 @@ it.each([
       ].join("\n\n"),
     );
   }
+});
+
+it("describes the session's conversation on internal-channel peer turns", async () => {
+  registerTelegramFormatPlugin();
+  const turn = (opts: Omit<Prepare["opts"], "message">) =>
+    prepare({
+      opts: { message: "Peer message.", ...opts },
+      sessionKey: "agent:main:telegram:direct:1222",
+      sessionEntry: telegramConversation,
+    }).then((prepared) => prepared.opts.extraSystemPrompt);
+  const delivering = await turn({
+    deliver: true,
+    inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+    runContext: { messageChannel: "telegram", currentChannelId: "1222", accountId: "rich" },
+  });
+  // sessions_send runs on the internal channel; its prompt still names the stored chat.
+  const peer = await turn({
+    channel: "webchat",
+    inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+  });
+
+  expect(delivering).toContain("### Delivery Format");
+  expect(peer).toBe(delivering);
 });
