@@ -3,10 +3,7 @@ import { applyChannelAccountRemoval } from "../../channels/plugins/account-confi
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { listReadOnlyChannelPluginsForConfigAsync } from "../../channels/plugins/read-only.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import {
-  formatUnknownChannelMessage,
-  formatUnsupportedChannelActionMessage,
-} from "../../cli/error-format.js";
+import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -170,29 +167,39 @@ export async function channelsRemoveCommand(
         },
       });
       if (!removal.ok) {
-        runtime.error(
-          removal.error.kind !== "unsupported-action"
-            ? (() => {
-                const kind = removal.error.kind;
-                const requestedAccount = useWizard
-                  ? accountId
-                  : normalizeOptionalString(opts.account);
-                const accountIds = removal.error.accountIds;
-                const label = channelLabel(resolvedChannel);
-                const inspect = `Run ${formatCliCommand(`openclaw channels status --channel ${resolvedChannel}`)} to inspect configured accounts.`;
-                const known = accountIds.length ? ` Known accounts: ${accountIds.join(", ")}.` : "";
-                if (kind === "nothing-to-remove") {
-                  return `${label} account "${accountId}" has no configuration to delete.${known} ${inspect}`;
-                }
-                if (!requestedAccount) {
-                  return `${label} has no ${DEFAULT_ACCOUNT_ID} account to remove.${known} Name an account with ${formatCliCommand("--account <id>")}. ${inspect}`;
-                }
-                return `${label} has no account "${requestedAccount}" to remove.${known} ${inspect}`;
-              })()
-            : removal.error.action === "delete"
-              ? `${formatUnsupportedChannelActionMessage({ channel: resolvedChannel, action: "delete" })} Use ${formatCliCommand("openclaw channels remove --channel " + resolvedChannel)} to disable it without deleting config.`
-              : `${formatUnsupportedChannelActionMessage({ channel: resolvedChannel, action: "disable" })} Use ${formatCliCommand("openclaw channels remove --channel " + resolvedChannel + " --delete")} only if you want to remove config.`,
-        );
+        if (removal.error.kind === "unsupported-action") {
+          const action = removal.error.action;
+          const agent = opts.agent?.trim();
+          const target = `--channel ${resolvedChannel} --account ${accountId}${agent ? ` --agent ${agent}` : ""}`;
+          const command = `openclaw channels remove ${target}`;
+          let message = `Channel "${resolvedChannel}" does not support ${action}.`;
+          if (action === "delete" && plugin.config.setAccountEnabled) {
+            message += ` Use ${formatCliCommand(command)} to disable this account and keep its configuration.`;
+          } else if (action === "disable" && plugin.config.deleteAccount) {
+            message += ` Use ${formatCliCommand(`${command} --delete`)} only if you want to delete this account's configuration. It runs without confirmation.`;
+          }
+          runtime.error(message);
+        } else {
+          const kind = removal.error.kind;
+          const requestedAccount = useWizard ? accountId : normalizeOptionalString(opts.account);
+          const accountIds = removal.error.accountIds;
+          const label = channelLabel(resolvedChannel);
+          const inspect = `Run ${formatCliCommand(`openclaw channels status --channel ${resolvedChannel}`)} to inspect configured accounts.`;
+          const known = accountIds.length ? ` Known accounts: ${accountIds.join(", ")}.` : "";
+          if (kind === "nothing-to-remove") {
+            runtime.error(
+              `${label} account "${accountId}" has no configuration to delete.${known} ${inspect}`,
+            );
+          } else if (!requestedAccount) {
+            runtime.error(
+              `${label} has no ${DEFAULT_ACCOUNT_ID} account to remove.${known} Name an account with ${formatCliCommand("--account <id>")}. ${inspect}`,
+            );
+          } else {
+            runtime.error(
+              `${label} has no account "${requestedAccount}" to remove.${known} ${inspect}`,
+            );
+          }
+        }
         runtime.exit(1);
         return;
       }
