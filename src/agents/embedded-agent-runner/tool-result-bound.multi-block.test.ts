@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { boundToolResult } from "./tool-result-bound.js";
@@ -7,19 +8,23 @@ type Block = { type: string; text?: string; data?: string; mimeType?: string };
 // A whole frame, raw or JSON-escaped: start marker through the end marker with the same id.
 const FRAME =
   /<<<EXTERNAL_UNTRUSTED_CONTENT id=(\\*)"([a-f0-9]{16})\1">>>[\s\S]*?<<<END_EXTERNAL_UNTRUSTED_CONTENT id=\1"\2\1">>>/gu;
-const NOTICE = /\[\.\.\. (\d+) chars omitted\]/gu;
+const NOTICE = /\[\.\.\. (\d+) chars omitted(?:\. Full output: ([^\]\n]+))?\]/gu;
 const ELISION = "\n…\n";
 const textOf = (content: unknown[]) =>
   content.map((block) => ((block as Block).type === "text" ? ((block as Block).text ?? "") : ""));
 
 /**
- * The fail-closed contract: untrusted text (every payload carries `UNTRUSTED-`) appears only
- * inside a whole frame, every start marker has its end marker, one trusted notice sits outside
- * every frame with the true omitted count, and the text is a fixed point of the bound (an image
- * the share cannot hold is the context guard's to drop).
+ * The fail-closed contract: untrusted text (every payload carries `UNTRUSTED-` and long filler
+ * runs) appears only inside a whole frame, every start marker has its end marker, one trusted
+ * notice sits outside every frame with the true omitted count, and the text is a fixed point of
+ * the bound (an image the share cannot hold is the context guard's to drop).
  */
-async function expectFailClosed(content: Block[], contextWindowTokens: number) {
-  const bounded = await boundToolResult({ content, details: {} }, contextWindowTokens, false);
+async function expectFailClosed(
+  content: Block[],
+  contextWindowTokens: number,
+  spill: Parameters<typeof boundToolResult>[2] = false,
+) {
+  const bounded = await boundToolResult({ content, details: {} }, contextWindowTokens, spill);
   const texts = textOf(bounded.content);
   const shown: string[] = [];
   for (const text of texts) {
@@ -27,7 +32,7 @@ async function expectFailClosed(content: Block[], contextWindowTokens: number) {
       shown.push(frame);
       return "";
     });
-    expect(outside).not.toMatch(/UNTRUSTED-|EXTERNAL_UNTRUSTED_CONTENT/u);
+    expect(outside).not.toMatch(/UNTRUSTED-|EXTERNAL_UNTRUSTED_CONTENT|(.)\1{39}/u);
   }
   const notices = texts.flatMap((text) => [...text.matchAll(NOTICE)]);
   expect(notices).toHaveLength(1);
@@ -41,7 +46,7 @@ async function expectFailClosed(content: Block[], contextWindowTokens: number) {
   const textOnly = bounded.content.filter((block) => (block as Block).type === "text");
   const again = await boundToolResult({ content: textOnly }, contextWindowTokens, false);
   expect(again.content).toBe(textOnly);
-  return { bounded, shown };
+  return { bounded, shown, notice };
 }
 
 const page = (label: string) =>
@@ -141,4 +146,15 @@ describe("untrusted-content frames survive the bound", () => {
       );
     },
   );
+
+  // Where the reader can open Gateway files, the one notice names the file with the full text.
+  it("names the saved file in the notice outside every frame", async () => {
+    const results = Array.from({ length: 5 }, (_, i) => ({
+      snippet: wrapWebContent(`UNTRUSTED-snippet-${i} ${"s".repeat(8_000)}`),
+    }));
+    const full = JSON.stringify({ results });
+    const { notice } = await expectFailClosed([{ type: "text", text: full }], 16_000, {});
+    expect(notice[2]).toBeDefined();
+    expect(await fs.readFile(notice[2]!, "utf8")).toBe(full);
+  });
 });

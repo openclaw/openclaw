@@ -353,22 +353,34 @@ export function wrapExternalContent(content: string, options: WrapExternalConten
   ].join("\n");
 }
 
+/** Offsets of one frame in its text: `start..bodyStart` and `bodyEnd..end` are its kept ends. */
+export type ExternalContentFrame = {
+  start: number;
+  bodyStart: number;
+  bodyEnd: number;
+  end: number;
+};
+
 /**
  * The `wrapExternalContent` frames inside text, in order: each from its warning (when one
  * directly precedes it) or start marker through the end marker with the same id. Markers inside
  * JSON-escaped text (`id=\"…\"`) count too, so wrapped values serialized into one JSON block are
  * found. A size bound keeps `start..bodyStart` and `bodyEnd..end` whole and cuts only the body.
+ * Linear in the text: end markers are indexed once, so unmatched start markers cost nothing.
  */
-export function findExternalContentFrames(
-  text: string,
-): Array<{ start: number; bodyStart: number; bodyEnd: number; end: number }> {
-  const frames: Array<{ start: number; bodyStart: number; bodyEnd: number; end: number }> = [];
+export function findExternalContentFrames(text: string): ExternalContentFrame[] {
+  const marker = (name: string) => new RegExp(`<<<${name} id=(\\\\*)"([a-f0-9]{16})\\1">>>`, "gu");
+  // Each id's end markers in order, and how many of them earlier frames consumed or passed.
+  const ends = new Map<string, { at: number[]; next: number }>();
+  for (const end of text.matchAll(marker(EXTERNAL_CONTENT_END_NAME))) {
+    const key = `${end[1]}${end[2]}`;
+    const list = ends.get(key) ?? { at: [], next: 0 };
+    list.at.push(end.index);
+    ends.set(key, list);
+  }
+  const frames: ExternalContentFrame[] = [];
   const warned = `${EXTERNAL_CONTENT_WARNING}\n\n\n`;
-  const opens = new RegExp(
-    `<<<${EXTERNAL_CONTENT_START_NAME} id=(\\\\*)"([a-f0-9]{16})\\1">>>`,
-    "gu",
-  );
-  for (const open of text.matchAll(opens)) {
+  for (const open of text.matchAll(marker(EXTERNAL_CONTENT_START_NAME))) {
     if (open.index < (frames.at(-1)?.end ?? 0)) {
       continue;
     }
@@ -376,14 +388,23 @@ export function findExternalContentFrames(
     const header = /\n(?:(?:Source|Task|From|Subject): [^\n]*\n)+---\n/y;
     header.lastIndex = open.index + open[0].length;
     const bodyStart = header.test(text) ? header.lastIndex : open.index + open[0].length;
-    const close = `<<<${EXTERNAL_CONTENT_END_NAME} id=${open[1]}"${open[2]}${open[1]}">>>`;
-    const bodyEnd = text.indexOf(close, bodyStart);
-    if (bodyEnd < 0) {
+    const closes = ends.get(`${open[1]}${open[2]}`);
+    if (closes === undefined) {
       continue;
     }
+    while (closes.next < closes.at.length && closes.at[closes.next]! < bodyStart) {
+      closes.next += 1;
+    }
+    const bodyEnd = closes.at[closes.next];
+    if (bodyEnd === undefined) {
+      continue;
+    }
+    closes.next += 1;
     const warning = open.index - warned.length;
     const start = warning >= 0 && text.startsWith(warned, warning) ? warning : open.index;
-    frames.push({ start, bodyStart, bodyEnd, end: bodyEnd + close.length });
+    const closeLength = `<<<${EXTERNAL_CONTENT_END_NAME} id=${open[1]}"${open[2]}${open[1]}">>>`
+      .length;
+    frames.push({ start, bodyStart, bodyEnd, end: bodyEnd + closeLength });
   }
   return frames;
 }

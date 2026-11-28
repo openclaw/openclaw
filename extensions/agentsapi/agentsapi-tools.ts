@@ -80,8 +80,8 @@ export type AgentsApiToolSurface = {
 /**
  * The function output: each text block, and a placeholder for each other block, one per line.
  * Without `withText` it is only what serialization adds, which the result bound reserves. The
- * bound never adds a block (a cut notice replaces the first omitted text block), so the reserve
- * computed before the cut covers the output after it.
+ * bound never adds a block (its notice goes into a text block it keeps, and it only removes
+ * others), so the reserve computed before the cut covers the output after it.
  */
 function serializeFunctionOutput(content: readonly unknown[], withText = true): string {
   return content

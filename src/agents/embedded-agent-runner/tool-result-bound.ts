@@ -1,6 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { findExternalContentFrames } from "../../security/external-content.js";
+import {
+  findExternalContentFrames,
+  type ExternalContentFrame,
+} from "../../security/external-content.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
   writePrivateTempFile,
@@ -64,10 +67,12 @@ function keepEnds(text: string, chars: number, context: number) {
  * while they fit; the first piece that does not fit keeps its head and tail (a frame keeps its
  * warning and both markers, and only its body is cut, or is left out whole when even those do
  * not fit); everything after it is left out. One trusted notice with the true omitted count
- * follows the cut, outside every frame, in the block that was cut, so no block is added.
+ * follows the cut, outside every frame, in the last kept text block, so no block is added.
+ * A cut JSON block is no longer valid JSON; its frames stay whole.
  */
 function cutFrames<T extends { content: unknown[] }>(
   result: T,
+  frames: ExternalContentFrame[][],
   budget: ToolResultBudget,
   nonText: number,
   suffix: (omittedChars: number) => string,
@@ -95,7 +100,7 @@ function cutFrames<T extends { content: unknown[] }>(
   };
   let omitted = 0;
   let stopped = false;
-  const content = result.content.flatMap((block) => {
+  const content = result.content.flatMap((block, index) => {
     if (!isToolResultTextBlock(block)) {
       return [block];
     }
@@ -106,7 +111,7 @@ function cutFrames<T extends { content: unknown[] }>(
     // Text between frames, then each frame as [ends before body, body, ends after body].
     const pieces: Array<[string, string, string]> = [];
     let at = 0;
-    for (const frame of findExternalContentFrames(block.text)) {
+    for (const frame of frames[index] ?? []) {
       pieces.push(["", block.text.slice(at, frame.start), ""]);
       pieces.push([
         block.text.slice(frame.start, frame.bodyStart),
@@ -125,8 +130,8 @@ function cutFrames<T extends { content: unknown[] }>(
       } else {
         stopped = true;
         if (take(`${open}${close}`)) {
+          // Nothing after this piece is taken but the reserved notice.
           const middle = keepEnds(body, chars, context);
-          take(middle.text);
           kept += `${open}${middle.text}${close}`;
           omitted += body.length - middle.kept;
         } else {
@@ -186,16 +191,16 @@ export async function boundToolResult<T extends { content: unknown[]; details?: 
     return result;
   }
   const nonText = contextChars(result.content.filter((block) => !isToolResultTextBlock(block)));
-  const framed = result.content.some(
-    (block) => isToolResultTextBlock(block) && findExternalContentFrames(block.text).length > 0,
+  const frames = result.content.map((block) =>
+    isToolResultTextBlock(block) ? findExternalContentFrames(block.text) : [],
   );
   // One text block keeps head and tail at every budget; several blocks keep the truncator's
   // short-record rules.
   const minKeepChars =
     result.content.filter((block) => isToolResultTextBlock(block)).length === 1 ? 0 : undefined;
   const cut = (suffix: (omittedChars: number) => string = formatOmittedCharsNotice) => {
-    if (framed) {
-      return cutFrames(result, budget, nonText, suffix);
+    if (frames.some((found) => found.length > 0)) {
+      return cutFrames(result, frames, budget, nonText, suffix);
     }
     const loose = truncateToolResultMessage(result, budget.maxChars, { suffix, minKeepChars });
     // Images that cannot fit at all stay with the context guard, which drops them.
