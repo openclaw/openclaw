@@ -1,0 +1,2 @@
+# Regression: recreate commands deleted before PATCH, finish obsolete deletes, and reuse the deployment hash.
+45
