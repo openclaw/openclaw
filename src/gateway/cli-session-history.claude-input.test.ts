@@ -214,13 +214,3 @@ it.each([
   );
   expect(message).toMatchObject({ role: "assistant", stopReason: expected });
 });
-
-it("omits native meta retries but keeps the same text when a human sends it", () => {
-  const text =
-    '[System] Your previous reply was not delivered because you did not call message(action=send). Your reply text was: "Synthetic answer."';
-  const meta = claudeUser(text, { isMeta: true });
-  expect(
-    parseClaudeCliHistoryEntry(meta, "native-session", 1, new Map(), { reseedMode: "recover" }),
-  ).toBeNull();
-  expect(parseImportedUser(text)).toMatchObject({ role: "user", content: text });
-});

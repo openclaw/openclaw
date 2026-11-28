@@ -1,8 +1,6 @@
 import { expect, it, vi } from "vitest";
-import { resolveReplyExpectation } from "../../agents/reply-completion.js";
 import { attachToolAllowlistIntersection } from "../../agents/tool-policy-shared.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
-import { resolveFollowupCurrentMessageId } from "./agent-runner-utils.js";
 import { completeFollowupRunLifecycle, markFollowupRunEnqueued } from "./queue/lifecycle.js";
 import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
@@ -113,26 +111,3 @@ it.each(["isRoomEvent", "sendPolicyDenied", "successfulSourceReplyDelivery"] as 
     expect(recover({ [key]: true })).toEqual({ kind: "none" });
   },
 );
-
-it("keeps the source reply obligation and second-miss diagnostic on the host retry", () => {
-  const base = createMockFollowupRun({ prompt: "question", messageId: "source-message" });
-  base.run.inputProvenance = { kind: "external_user" };
-  base.run.terminalReplyExpectation = undefined;
-  const expectation = resolveReplyExpectation({
-    ...base.run,
-    scheduledAutomation: base.run.scheduledAutomation !== undefined,
-  });
-  const run = retry(base);
-  expect(run.run.inputProvenance).toEqual({
-    kind: "internal_system",
-    sourceTool: "stranded_reply_retry",
-  });
-  expect(
-    resolveReplyExpectation({
-      ...run.run,
-      scheduledAutomation: run.run.scheduledAutomation !== undefined,
-    }),
-  ).toBe(expectation);
-  expect(resolveFollowupCurrentMessageId(run)).toBe("source-message");
-  expect(recover({ base: run })).toMatchObject({ kind: "diagnostic" });
-});

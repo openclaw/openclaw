@@ -173,9 +173,6 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
         thinkLevel: "low",
         reasoningLevel: "on",
         sourceReplyDeliveryMode: "message_tool_only",
-        inputProvenance: params.strandedReplyRetry
-          ? { kind: "internal_system", sourceTool: "stranded_reply_retry" }
-          : { kind: "external_user" },
         extraSystemPrompt: "Use message(action=send) for all visible replies.",
         terminalReplyExpectation:
           params.terminalReplyExpectation ??
@@ -344,8 +341,6 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
         config: initial.followupRun.run.config,
         extraSystemPrompt: initial.followupRun.run.extraSystemPrompt,
         sourceReplyDeliveryMode: "message_tool_only",
-        inputProvenance: { kind: "internal_system", sourceTool: "stranded_reply_retry" },
-        terminalReplyExpectation: "required",
         suppressNextUserMessagePersistence: true,
       });
       expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[3]).toBe("none");
@@ -366,11 +361,8 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
         toolsAllow: ["message"],
         extraSystemPrompt: initial.followupRun.run.extraSystemPrompt,
         sourceReplyDeliveryMode: "message_tool_only",
-        inputProvenance: { kind: "internal_system", sourceTool: "stranded_reply_retry" },
-        terminalReplyExpectation: "required",
         suppressNextUserMessagePersistence: true,
       });
-      expect(initial.followupRun.run.inputProvenance).toEqual({ kind: "external_user" });
       expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
       expect(warnPrivateFinalSpy).toHaveBeenCalledOnce();
       const deliverable = normalizeReplyPayloads(retry.result).filter(

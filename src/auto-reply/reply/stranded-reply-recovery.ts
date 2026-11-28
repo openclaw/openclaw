@@ -74,12 +74,6 @@ export function resolveStrandedReplyRecovery(params: {
       run: {
         ...params.base.run,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-        // Preserve the source turn's obligation before changing its provenance.
-        terminalReplyExpectation: resolveReplyExpectation({
-          ...params.base.run,
-          scheduledAutomation: params.base.run.scheduledAutomation !== undefined,
-        }),
-        inputProvenance: { kind: "internal_system", sourceTool: "stranded_reply_retry" },
         suppressNextUserMessagePersistence: true,
         skillLibraryAuthoring: expireSkillLibraryAuthoring(
           params.base.run.skillLibraryAuthoring,
