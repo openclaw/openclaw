@@ -2519,12 +2519,46 @@ The updater in a checkout built from `main` between 2026-11-17 and 2026-11-19 (i
 releases under `git-install/releases/<release>/build`) never rebuilds the checkout, so after a
 database migration neither it nor the checkout's `openclaw` command can open the migrated data.
 That updater runs first and cannot be patched. When the new release would migrate state, its own
-check stops the update before the release is switched: the checkout and the Gateway stay as they
-were, the release link names at most a release of the code that already serves (the first run
-creates one), and the output names the schema change and the rebuild below. Running
-`openclaw update` again stops at the same point with the same message until the checkout is
-rebuilt. Nothing rebuilds it automatically, on any platform. Run the printed line once from the
-checkout. With the default state directory it reads:
+check stops that updater before the release is switched and finishes the update itself, on
+Linux with a systemd user Gateway service and on macOS with a launchd Gateway LaunchAgent:
+
+1. The check keeps the release the updater just built (it moves to `git-install/recovery`) and
+   starts a recovery job that outlives the updater and the Gateway restarts: a transient systemd
+   user service (`openclaw-update-recovery`) or a separate launchd job in your login session
+   (`ai.openclaw.update-recovery`). The updater then reports this one update as failed; its
+   output says the new release is finishing the update and how to follow it.
+2. The recovery waits for the updater to exit, fast-forwards the checkout's branch to the
+   release's commit, and restarts the Gateway on the release the updater built, which migrates
+   state at startup.
+3. It rebuilds the checkout (`pnpm install --frozen-lockfile` and `pnpm build`) while that
+   release serves, then restarts the Gateway on the rebuilt checkout.
+4. It removes the older updater's link `git-install/lib/node_modules/openclaw`, its releases
+   and the kept release, and records the outcome for `openclaw update status`.
+
+The Gateway is down only for the two restarts: the first lasts as long as the boot migration, the
+second a few seconds. Until the rebuild finishes, the checkout's `openclaw` command may fail or
+refuse the migrated data. Follow the job with `systemctl --user status openclaw-update-recovery`
+and `journalctl --user -u openclaw-update-recovery` on Linux, or in
+`<state dir>/logs/update-recovery.log` on macOS. The definition of the Gateway service from
+before the recovery stays beside it with the suffix `.before-update-recovery`.
+
+If the release fails to start before it migrated anything, the recovery puts the previous build
+back and it serves. If something fails after the migration (for example `pnpm build` in the
+checkout), the Gateway keeps serving the release, and the recorded outcome and the job's log name
+the one command that finishes the update, run from the checkout:
+
+```sh
+pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force
+```
+
+Nothing in the checkout is reset, stashed or forced. The check prints the reason and the
+by-hand rebuild below instead, and changes nothing, when the recovery cannot run: another
+platform, no systemd user manager or no launchd login session, a Gateway service that is stopped
+or runs another installation, a dirty checkout or one that cannot fast-forward to the release,
+an `openclaw` command on `PATH` from another installation, less than 4 GiB free, no `pnpm`, or
+unreadable schema versions. Running `openclaw update` again stops at the same point with the same
+message until the checkout is rebuilt. Run the printed line once from the checkout. With the
+default state directory it reads:
 
 ```sh
 oc_link= && git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && oc_link=$(readlink "$HOME/.openclaw/git-install/lib/node_modules/openclaw" || true) && rm -f "$HOME/.openclaw/git-install/lib/node_modules/openclaw" && openclaw gateway install --force || { [ -z "$oc_link" ] || [ -L "$HOME/.openclaw/git-install/lib/node_modules/openclaw" ] || ln -s "$oc_link" "$HOME/.openclaw/git-install/lib/node_modules/openclaw"; openclaw gateway start; false; }
@@ -2534,7 +2568,7 @@ The printed line names your state directory relative to `$HOME`. For a state dir
 it, the line starts by requiring `OPENCLAW_STATE_DIR` in the shell and changes nothing without it.
 On Windows the update prints the same steps to run one at a time.
 
-The Gateway is down while the checkout builds. The older updater's release link
+With the printed line, the Gateway is down while the checkout builds. The older updater's release link
 (`git-install/lib/node_modules/openclaw`) is removed after the build, because while it exists
 `openclaw gateway install` binds the service to that updater's launcher, which keeps serving the
 old release. The reinstalled service then starts the rebuilt Gateway, which migrates state at
@@ -2547,9 +2581,9 @@ Later `openclaw update` runs use the rebuilt checkout's updater. The release the
 named stays on disk (about 4.4 GiB under `git-install/releases`) and is no longer used. To free
 that space, remove that release directory, then run `git worktree prune` in the checkout. Updates that change no schema still
 go through the older updater; when its Gateway fails at startup (the web search case above), run
-them from a terminal with the checkout's `openclaw`, not from the Control UI. This check stays
-until there is evidence that those updaters can cross a schema change on their own; a published
-release does not replace the updater these checkouts run.
+them from a terminal with the checkout's `openclaw`, not from the Control UI. The check and the
+automatic recovery stay until there is evidence that no installed updater from that range still
+needs them; a published release does not replace the updater these checkouts run.
 
 The inspection reports data at risk only on evidence: a schema that moved, or a store it
 cannot read after a new-version Doctor or boot check may have written it. When no
