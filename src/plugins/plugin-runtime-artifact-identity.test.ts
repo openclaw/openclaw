@@ -213,7 +213,7 @@ describe("fingerprintPluginRuntimeArtifact", () => {
     expect(fingerprintPluginRuntimeArtifact(record)).not.toBe(first);
   });
 
-  it("hashes source when a bundled plugin opts out of core dist", () => {
+  it("hashes source entries and package-local output within the plugin root", () => {
     const rootDir = temp.make("openclaw-plugin-artifact-");
     const source = path.join(rootDir, "index.ts");
     const staleDistSource = path.join(rootDir, "dist", "index.js");
@@ -224,7 +224,6 @@ describe("fingerprintPluginRuntimeArtifact", () => {
       origin: "bundled" as const,
       rootDir,
       source,
-      packageBuild: { bundledDist: false },
     };
     const first = fingerprintPluginRuntimeArtifact(record);
 
