@@ -51,7 +51,9 @@ it("says the Composio sign-in and Gmail link are checked by each run, and follow
     "Each run first checks the Composio CLI's sign-in and its Gmail link",
   );
   const prompt = dialog.querySelector("textarea")!;
-  expect(prompt.value).toBe(runPrompt(scribeSetup("mail", "ongoing", defaultOptions("mail"), timezone)));
+  expect(prompt.value).toBe(
+    runPrompt(scribeSetup("mail", "ongoing", defaultOptions("mail"), timezone)),
+  );
   dialog.querySelector<HTMLInputElement>("#scribe-mail-sent")!.click();
   const select = dialog.querySelector<HTMLSelectElement>("select")!;
   select.value = "30d";
@@ -78,7 +80,9 @@ it("changes which mail a started Mail scribe lists on its automation", async () 
     runPrompt(scribeSetup("mail", "ongoing", { ...defaultOptions("mail"), sent }, "UTC"));
   const schedule = { kind: "cron", expr: "0 8,12,16 * * 1-5", tz: "UTC" };
   const { render, ui, calls, page } = fixture({
-    sessions: { "Scribe · Learn from Mail": { key: "s-mail", displayName: "Scribe · Learn from Mail" } },
+    sessions: {
+      "Scribe · Learn from Mail": { key: "s-mail", displayName: "Scribe · Learn from Mail" },
+    },
     jobs: [
       {
         ...reviewJob,

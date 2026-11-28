@@ -71,7 +71,8 @@ export const pluginStateText = (plugin: ScribePlugin, readiness: PluginReadiness
 
 /** What each run checks that the page can't, for a plugin that has such checks. */
 export const runCheckText = (plugin: ScribePlugin) =>
-  plugin.checkedByRun && `Each run first checks ${plugin.checkedByRun}, and stops with a failure that says which is missing.`;
+  plugin.checkedByRun &&
+  `Each run first checks ${plugin.checkedByRun}, and stops with a failure that says which is missing.`;
 
 // The control that fixes a needed plugin, by readiness; a ready plugin needs none.
 const PLUGIN_ACTION: Record<Exclude<PluginReadiness, "ready">, (name: string) => string> = {

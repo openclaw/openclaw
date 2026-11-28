@@ -54,7 +54,11 @@ const cli = (args) =>
           reject(new ReadError("cli-missing", "The Composio CLI (composio) is not on PATH."));
           return;
         }
-        resolve({ code: error ? (typeof error.code === "number" ? error.code : 1) : 0, stdout, stderr });
+        resolve({
+          code: error ? (typeof error.code === "number" ? error.code : 1) : 0,
+          stdout,
+          stderr,
+        });
       },
     );
   });
@@ -67,8 +71,10 @@ const firstLine = (text) =>
     .find(Boolean)
     ?.slice(0, 300) ?? "";
 
-const LINK_WORDS = /\b(?:no (?:active )?connected account|not connected|composio link|connect(?:ion)? (?:required|not found)|link gmail)\b/i;
-const LOGIN_WORDS = /\b(?:composio login|not (?:logged|signed) in|log in again|unauthori[sz]ed|api key)\b/i;
+const LINK_WORDS =
+  /\b(?:no (?:active )?connected account|not connected|composio link|connect(?:ion)? (?:required|not found)|link gmail)\b/i;
+const LOGIN_WORDS =
+  /\b(?:composio login|not (?:logged|signed) in|log in again|unauthori[sz]ed|api key)\b/i;
 
 // Run one allowlisted read and return its data. `tool` is a key of READS, never a slug.
 async function read(tool, input, account) {
@@ -87,7 +93,8 @@ async function read(tool, input, account) {
   } catch {
     result = undefined;
   }
-  const error = typeof result?.error === "string" ? result.error : JSON.stringify(result?.error ?? "");
+  const error =
+    typeof result?.error === "string" ? result.error : JSON.stringify(result?.error ?? "");
   const said = firstLine(result?.error ? error : "") || firstLine(stderr) || firstLine(stdout);
   if (code === 75) {
     throw new ReadError("temporary", said || slug + " can safely run again");
@@ -112,7 +119,10 @@ async function check(account) {
   // `composio whoami` exits 0 with nothing on stdout when signed out.
   const whoami = await cli(["whoami"]);
   if (whoami.code !== 0 || !whoami.stdout.trim()) {
-    throw new ReadError("signed-out", "composio whoami reports no signed-in user; run composio login.");
+    throw new ReadError(
+      "signed-out",
+      "composio whoami reports no signed-in user; run composio login.",
+    );
   }
   const profile = await read("profile", { user_id: "me" }, account);
   const address = typeof profile?.emailAddress === "string" ? profile.emailAddress.trim() : "";
@@ -124,10 +134,14 @@ async function check(account) {
 
 // Gmail historyIds are decimal strings too large for a Number; compare them by length, then text.
 const historyOrder = (a, b) =>
-  a.historyId.length - b.historyId.length || (a.historyId < b.historyId ? -1 : a.historyId > b.historyId ? 1 : 0);
+  a.historyId.length - b.historyId.length ||
+  (a.historyId < b.historyId ? -1 : a.historyId > b.historyId ? 1 : 0);
 
 async function list(after, sent, account) {
-  const base = "after:" + after + " -category:promotions -category:social -category:forums -in:chats -in:draft";
+  const base =
+    "after:" +
+    after +
+    " -category:promotions -category:social -category:forums -in:chats -in:draft";
   const queries = sent ? [base, "after:" + after + " in:sent -in:draft"] : [base + " -in:sent"];
   const threads = new Map();
   for (const query of queries) {
@@ -141,7 +155,13 @@ async function list(after, sent, account) {
       }
       const data = await read(
         "threads",
-        { user_id: "me", query, max_results: PAGE_SIZE, verbose: false, ...(pageToken ? { page_token: pageToken } : {}) },
+        {
+          user_id: "me",
+          query,
+          max_results: PAGE_SIZE,
+          verbose: false,
+          ...(pageToken ? { page_token: pageToken } : {}),
+        },
         account,
       );
       for (const thread of Array.isArray(data?.threads) ? data.threads : []) {
@@ -159,7 +179,7 @@ async function list(after, sent, account) {
       }
     }
   }
-  return { after, queries, threads: [...threads.values()].sort(historyOrder) };
+  return { after, queries, threads: [...threads.values()].toSorted(historyOrder) };
 }
 
 async function fetchThreads(ids, account, dir) {
@@ -173,9 +193,16 @@ async function fetchThreads(ids, account, dir) {
       const messages = [];
       for (let pageToken, page = 0; ; page++) {
         if (page === MAX_PAGES) {
-          throw new ReadError("gmail-error", "Thread " + id + " has more than " + MAX_PAGES + " pages");
+          throw new ReadError(
+            "gmail-error",
+            "Thread " + id + " has more than " + MAX_PAGES + " pages",
+          );
         }
-        data = await read("thread", { user_id: "me", thread_id: id, ...(pageToken ? { page_token: pageToken } : {}) }, account);
+        data = await read(
+          "thread",
+          { user_id: "me", thread_id: id, ...(pageToken ? { page_token: pageToken } : {}) },
+          account,
+        );
         messages.push(...(Array.isArray(data?.messages) ? data.messages : []));
         pageToken = data?.nextPageToken ?? data?.next_page_token;
         if (typeof pageToken !== "string" || !pageToken) {
@@ -189,7 +216,7 @@ async function fetchThreads(ids, account, dir) {
     }
   };
   await Promise.all(Array.from({ length: Math.min(FETCHES_AT_ONCE, queue.length) }, worker));
-  return written.sort();
+  return written.toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
 async function run(argv) {
@@ -229,13 +256,18 @@ async function run(argv) {
     const address = await check(account);
     const listed = await list(after, options.get("sent") === true, account);
     await writeFile(output, JSON.stringify({ account: address, ...listed }));
-    process.stdout.write(JSON.stringify({ ok: true, account: address, threads: listed.threads.length }) + "\n");
+    process.stdout.write(
+      JSON.stringify({ ok: true, account: address, threads: listed.threads.length }) + "\n",
+    );
     return;
   }
   if (command === "threads") {
     const dir = options.get("output-dir");
     if (!ids.length || !dir || ids.some((id) => !GMAIL_ID.test(id ?? ""))) {
-      throw new ReadError("gmail-error", "threads needs Gmail thread IDs (--id) and --output-dir DIR");
+      throw new ReadError(
+        "gmail-error",
+        "threads needs Gmail thread IDs (--id) and --output-dir DIR",
+      );
     }
     const files = await fetchThreads([...new Set(ids)], account, dir);
     process.stdout.write(JSON.stringify({ ok: true, files }) + "\n");

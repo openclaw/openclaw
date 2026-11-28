@@ -162,7 +162,10 @@ describe("scribes catalog", () => {
     expect(once).toContain("from today on (new mail only)");
     expect(once).toContain("- Sent mail: list only threads with mail the owner received;");
     expect(once).not.toContain("Each run:");
-    expect(scribeById("mail")!.plugin).toMatchObject({ id: "composio", catalogPath: "composio/composio" });
+    expect(scribeById("mail")!.plugin).toMatchObject({
+      id: "composio",
+      catalogPath: "composio/composio",
+    });
   });
 
   // Every choice of each scribe with editable settings, as the start dialog offers them.
@@ -209,7 +212,7 @@ describe("scribes catalog", () => {
     // A changed digest means existing scribes' run messages no longer read as generated, so the
     // Scribes page can't read or change their settings. Add the replaced wording to RUN_WORDINGS
     // in scribes-catalog.ts (unless only new choices were added), then update this digest.
-    expect(digest).toBe("ecad3dcede50e762d8af051d8d11df744dc742c535b8cb0aaf809f27f185ae59");
+    expect(digest).toBe("3c52404a08278ee140ebbc10c03e2eb09cb420abbd3532d10aeed43e3b5427e1");
   });
 
   it("recognizes run messages earlier versions generated and keeps edited ones", () => {

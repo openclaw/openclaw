@@ -1,6 +1,11 @@
 /** The Mail scribe's start dialog choices: how often, whether sent mail is listed, and how far back. */
 import { choice, el } from "./page-dom.js";
-import { defaultOptions, MAIL_SCHEDULE, type MailSince, type ScribeMode } from "./scribes-catalog.js";
+import {
+  defaultOptions,
+  MAIL_SCHEDULE,
+  type MailSince,
+  type ScribeMode,
+} from "./scribes-catalog.js";
 
 const MAIL_SINCE: readonly MailSince[] = ["7d", "30d", "today"];
 

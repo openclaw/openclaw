@@ -147,6 +147,7 @@ owner's time zone) and whether threads with mail the owner sent are listed too.
    Run every `gmail-read.mjs` command the same way, and stop the same way when
    one fails. When several Gmail accounts are linked, Composio asks for one:
    that is a `gmail-error` to report, not one to choose for the owner.
+
 2. **Checkpoint.** `knowledge_lookup` the note page
    `Knowledge scribe checkpoint · Learn from Mail`. Its first lines are
    `Start: YYYY-MM-DD` (the start date the prompt set when the page was
@@ -229,6 +230,7 @@ owner's time zone) and whether threads with mail the owner sent are listed too.
    ingests and the most it triages; without one, triage and ingest every
    listed thread. The ingest number is a target, not a limit: compaction keeps
    what you published, so a long run is no reason to stop early.
+
 8. **Record.** When every listed thread has a line, set `Listed through` to
    the time noted in step 3 with `knowledge_edit_body`. A run that left
    threads for later keeps the old value, so the next run lists them again.

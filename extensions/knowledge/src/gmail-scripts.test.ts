@@ -177,7 +177,13 @@ it("prefilters Gmail threads and asks the decision model about the rest", async 
   const digest = async (thread: unknown) => {
     await writeFile(path.join(dir, "again.json"), JSON.stringify(thread));
     return JSON.parse(
-      run("gmail-normalize.mjs", ["triage", "--account", "owner@example.com", "--input", path.join(dir, "again.json")]),
+      run("gmail-normalize.mjs", [
+        "triage",
+        "--account",
+        "owner@example.com",
+        "--input",
+        path.join(dir, "again.json"),
+      ]),
     ).messages_digest;
   };
   expect(await digest(opened)).toBe(rows[0].messages_digest);
@@ -411,15 +417,28 @@ it("reads Gmail through the Composio CLI with read-only tools only", async () =>
     "after:1795651200 -category:promotions -category:social -category:forums -in:chats -in:draft -in:sent",
   ]);
 
-  const fetched = read(["threads", "--id", "18c0ffee0001", "--id", "18c0ffee00b1", "--output-dir", "t"]);
+  const fetched = read([
+    "threads",
+    "--id",
+    "18c0ffee0001",
+    "--id",
+    "18c0ffee00b1",
+    "--output-dir",
+    "t",
+  ]);
   expect(JSON.parse(fetched.stdout).files).toHaveLength(2);
   // Every page of a long thread is read into one file.
-  expect(JSON.parse(await readFile(path.join(dir, "t", "18c0ffee0001.json"), "utf8"))).toStrictEqual(
-    { threadId: "18c0ffee0001", messages: [{ messageId: "m1" }, { messageId: "m2" }] },
-  );
+  expect(
+    JSON.parse(await readFile(path.join(dir, "t", "18c0ffee0001.json"), "utf8")),
+  ).toStrictEqual({
+    threadId: "18c0ffee0001",
+    messages: [{ messageId: "m1" }, { messageId: "m2" }],
+  });
   // Every tool the script ran reads Gmail; nothing else reached the CLI.
-  const slugs = new Set([...listCalls, ...(await calls())].flatMap((call) => (call[0] === "execute" ? [call[1]] : [])));
-  expect([...slugs].sort()).toStrictEqual([
+  const slugs = new Set(
+    [...listCalls, ...(await calls())].flatMap((call) => (call[0] === "execute" ? [call[1]] : [])),
+  );
+  expect([...slugs].toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
     "GMAIL_FETCH_MESSAGE_BY_THREAD_ID",
     "GMAIL_GET_PROFILE",
     "GMAIL_LIST_THREADS",

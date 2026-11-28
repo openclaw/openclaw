@@ -25,12 +25,19 @@ const RUBRIC = "learn-from-mail-1";
 const EXCERPT = 300;
 const DECISION_MESSAGES = 3;
 
+// Plain code-unit order, the same on every host.
+const byText = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
 const record = (value) =>
   value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
 
 // The messages of one saved thread: Composio's answer, or Gmail's own thread shape.
 function messagesOf(data, file) {
-  for (const body of [record(data), record(record(data)?.response_data), record(record(data)?.thread)]) {
+  for (const body of [
+    record(data),
+    record(record(data)?.response_data),
+    record(record(data)?.thread),
+  ]) {
     if (Array.isArray(body?.messages)) {
       return { body, messages: body.messages.map(record).filter(Boolean) };
     }
@@ -175,7 +182,10 @@ function withoutQuotes(text) {
 }
 
 const millis = (message) => {
-  if (typeof message.messageTimestamp === "string" && Number.isFinite(Date.parse(message.messageTimestamp))) {
+  if (
+    typeof message.messageTimestamp === "string" &&
+    Number.isFinite(Date.parse(message.messageTimestamp))
+  ) {
     return Date.parse(message.messageTimestamp);
   }
   const internal = Number(message.internalDate);
@@ -203,16 +213,28 @@ function parse(message, threadId, account) {
   if (at === undefined) {
     throw new Error("Message " + id + " has no time");
   }
-  const labels = (Array.isArray(message.labelIds) ? message.labelIds : []).filter((label) => typeof label === "string");
-  const [from = { name: "", address: "" }] = addresses(message.sender ?? message.from ?? headerOf(message, "from"));
+  const labels = (Array.isArray(message.labelIds) ? message.labelIds : []).filter(
+    (label) => typeof label === "string",
+  );
+  const [from = { name: "", address: "" }] = addresses(
+    message.sender ?? message.from ?? headerOf(message, "from"),
+  );
   const to = addresses(message.to ?? headerOf(message, "to")).map((entry) => entry.address);
   const cc = addresses(headerOf(message, "cc")).map((entry) => entry.address);
-  const subject = String(message.subject ?? record(message.preview)?.subject ?? headerOf(message, "subject") ?? "").trim();
+  const subject = String(
+    message.subject ?? record(message.preview)?.subject ?? headerOf(message, "subject") ?? "",
+  ).trim();
   const parts = allParts(record(message.payload));
   const calendar =
     parts.some((part) => {
-      const type = String(part.mimeType ?? "") + " " + String(partHeader(part, "content-type") ?? "");
-      return /text\/calendar/i.test(type) && /\bmethod=\s*"?(?:REQUEST|REPLY|CANCEL|PUBLISH|COUNTER|DECLINECOUNTER|REFRESH|ADD)\b/i.test(type);
+      const type =
+        String(part.mimeType ?? "") + " " + String(partHeader(part, "content-type") ?? "");
+      return (
+        /text\/calendar/i.test(type) &&
+        /\bmethod=\s*"?(?:REQUEST|REPLY|CANCEL|PUBLISH|COUNTER|DECLINECOUNTER|REFRESH|ADD)\b/i.test(
+          type,
+        )
+      );
     }) || CALENDAR_SUBJECT.test(subject);
   const precedence = (headerOf(message, "precedence") ?? "").toLowerCase();
   const replyTo = addresses(headerOf(message, "reply-to"))[0]?.address;
@@ -251,7 +273,11 @@ async function readThreads(inputs, account) {
     if (!/^[0-9a-f]{6,32}$/i.test(threadId)) {
       throw new Error(file + " names no Gmail thread ID");
     }
-    const thread = threads.get(threadId) ?? { id: threadId, historyId: undefined, messages: new Map() };
+    const thread = threads.get(threadId) ?? {
+      id: threadId,
+      historyId: undefined,
+      messages: new Map(),
+    };
     if (body.historyId !== undefined) {
       thread.historyId = String(body.historyId);
     }
@@ -264,12 +290,12 @@ async function readThreads(inputs, account) {
     }
     threads.set(threadId, thread);
   }
-  return [...threads.values()].map((thread) => ({
-    ...thread,
-    messages: [...thread.messages.values()]
+  return [...threads.values()].map((thread) => {
+    const messages = [...thread.messages.values()]
       .filter((message) => !message.draft)
-      .sort((a, b) => a.at - b.at || a.id.localeCompare(b.id)),
-  }));
+      .toSorted((a, b) => a.at - b.at || a.id.localeCompare(b.id));
+    return { id: thread.id, historyId: thread.historyId, messages };
+  });
 }
 
 const link = (account, threadId) =>
@@ -297,7 +323,8 @@ const QUESTIONS = {
     type: "choice",
     instructions: "What is this email thread mainly about?",
     criteria: {
-      commitment: "Someone promises, requests or asks for something, in either direction, or follows up on it",
+      commitment:
+        "Someone promises, requests or asks for something, in either direction, or follows up on it",
       decision: "A decision is made, announced or asked for",
       relationship: "An introduction, a new contact, or news about a person",
       project: "News, plans or status of a project, company or deal",
@@ -312,7 +339,9 @@ function triage(thread, account) {
   const newest = messages.at(-1);
   const all = thread.messages;
   const inbound = messages.filter((message) => !message.owner);
-  const ownerWrote = messages.some((message) => message.owner && !message.calendar && message.content.trim());
+  const ownerWrote = messages.some(
+    (message) => message.owner && !message.calendar && message.content.trim(),
+  );
   const every = (test) => inbound.length > 0 && inbound.every(test);
   const prefilter = !newest
     ? "no-mail"
@@ -336,7 +365,12 @@ function triage(thread, account) {
     ...(thread.historyId ? { history_id: thread.historyId } : {}),
     // Which messages the thread holds: it changes when one is added or deleted, not with labels.
     messages_digest: createHash("sha256")
-      .update(messages.map((message) => message.id).sort().join("\n"))
+      .update(
+        messages
+          .map((message) => message.id)
+          .toSorted(byText)
+          .join("\n"),
+      )
       .digest("hex")
       .slice(0, 16),
     newest_message_id: newest?.id ?? null,
@@ -351,10 +385,13 @@ function triage(thread, account) {
     const labels = [
       ...new Set(
         messages.flatMap((message) =>
-          message.labels.filter((label) => label.startsWith("CATEGORY_") || label === "IMPORTANT" || label === "STARRED"),
+          message.labels.filter(
+            (label) =>
+              label.startsWith("CATEGORY_") || label === "IMPORTANT" || label === "STARRED",
+          ),
         ),
       ),
-    ].sort();
+    ].toSorted(byText);
     row.rubric = RUBRIC;
     row.decision = {
       contractVersion: 2,
@@ -381,7 +418,9 @@ function triage(thread, account) {
 }
 
 function messageRows(thread, account) {
-  const byRfcId = new Map(thread.messages.flatMap((message) => (message.rfcId ? [[message.rfcId, message.id]] : [])));
+  const byRfcId = new Map(
+    thread.messages.flatMap((message) => (message.rfcId ? [[message.rfcId, message.id]] : [])),
+  );
   const id = (messageId) => thread.id + "/" + messageId;
   const rows = thread.messages.map((message) => {
     const occurredAt = new Date(message.at).toISOString();
@@ -420,7 +459,9 @@ function messageRows(thread, account) {
       sha256: createHash("sha256").update(canonical).digest("hex"),
     };
   });
-  return rows.sort((a, b) => a.occurred_at.localeCompare(b.occurred_at) || a.id.localeCompare(b.id));
+  return rows.toSorted(
+    (a, b) => a.occurred_at.localeCompare(b.occurred_at) || a.id.localeCompare(b.id),
+  );
 }
 
 async function run(argv) {
@@ -451,7 +492,9 @@ async function run(argv) {
   const threads = await readThreads(inputs, account);
   let lines;
   if (command === "triage") {
-    lines = threads.map((thread) => triage(thread, account)).sort((a, b) => a.thread_id.localeCompare(b.thread_id));
+    lines = threads
+      .map((thread) => triage(thread, account))
+      .toSorted((a, b) => a.thread_id.localeCompare(b.thread_id));
   } else if (command === "messages") {
     if (threads.length !== 1) {
       throw new Error("messages normalizes one thread; the inputs hold " + threads.length);
