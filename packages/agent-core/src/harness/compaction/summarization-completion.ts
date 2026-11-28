@@ -170,8 +170,13 @@ export async function runSummarizationCompletionFromSource(
     }
     const omissionNote =
       conversation.omittedEntries > 0 ? `${OMITTED_ENTRIES_INSTRUCTION}\n\n` : "";
+    const prefix = "<conversation>\n";
     const context = createSummarizationContext(
-      `<conversation>\n${conversation.text}\n</conversation>\n\n${omissionNote}${instructions}`,
+      `${prefix}${conversation.text}\n</conversation>\n\n${omissionNote}${instructions}`,
+      conversation.dataRanges?.map(({ start, end }) => ({
+        start: prefix.length + start,
+        end: prefix.length + end,
+      })),
     );
     response = params.streamFn
       ? await consumeAgentCoreStream(
