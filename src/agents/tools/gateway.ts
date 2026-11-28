@@ -1,10 +1,6 @@
-import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -12,6 +8,7 @@ import {
 import { SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY } from "../../../packages/gateway-protocol/src/system-run-execution-context.js";
 import { getRuntimeConfig, resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createAgentRuntimeAutomaticChangePolicyHandoff } from "../../gateway/agent-runtime-automatic-change-policy.js";
 import {
   createAgentRuntimeExecutionLineageHandoff,
   readAgentRuntimeExecutionLineage,
@@ -51,6 +48,7 @@ import {
   isStaleGatewayNodeInvokeTurnSourceRejection,
   staleGatewayAgentRuntimeIdentityError,
 } from "./gateway-transport-errors.js";
+import { canonicalizeToolGatewayWsUrl } from "./gateway-url.js";
 
 export type GatewayCallOptions = {
   gatewayUrl?: string;
@@ -72,35 +70,6 @@ export function readGatewayCallOptions(params: Record<string, unknown>): Gateway
     gatewayToken: readToolStringParam(params, "gatewayToken", { trim: false }),
     timeoutMs: readPositiveIntegerParam(params, "timeoutMs"),
   };
-}
-
-function canonicalizeToolGatewayWsUrl(raw: string): { origin: string; key: string } {
-  const input = raw.trim();
-  let url: URL;
-  try {
-    url = new URL(input);
-  } catch (error) {
-    const message = formatErrorMessage(error);
-    throw new Error(`invalid gatewayUrl: ${input} (${message})`, { cause: error });
-  }
-
-  if (url.protocol !== "ws:" && url.protocol !== "wss:") {
-    throw new Error(`invalid gatewayUrl protocol: ${url.protocol} (expected ws:// or wss://)`);
-  }
-  if (url.username || url.password) {
-    throw new Error("invalid gatewayUrl: credentials are not allowed");
-  }
-  if (url.search || url.hash) {
-    throw new Error("invalid gatewayUrl: query/hash not allowed");
-  }
-  // Agents/tools expect the gateway websocket on the origin, not arbitrary paths.
-  if (url.pathname && url.pathname !== "/") {
-    throw new Error("invalid gatewayUrl: path not allowed");
-  }
-
-  const origin = url.origin;
-  const key = `${url.protocol}//${normalizeLowercaseStringOrEmpty(url.host)}`;
-  return { origin, key };
 }
 
 function resolveLocalGatewayUrlKeys(cfg: OpenClawConfig): Set<string> {
@@ -244,6 +213,7 @@ const APPROVAL_RUNTIME_METHODS = new Set<string>([
 const AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
   "exec.approval.request",
   "plugin.approval.request",
+  "openclaw.chat",
   "wake",
   "cron.list",
   "cron.get",
@@ -434,6 +404,9 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
     throw new Error("trusted operational run instance required for this gateway call");
   }
   let lineageHandoff: ReturnType<typeof createAgentRuntimeExecutionLineageHandoff>;
+  let automaticChangePolicyHandoff: ReturnType<
+    typeof createAgentRuntimeAutomaticChangePolicyHandoff
+  >;
   try {
     const sessionSpawnContext = getGatewaySessionSpawnContext();
     const parentExecutionIdentityToken = getGatewaySessionSpawnParentExecutionIdentityToken();
@@ -462,18 +435,40 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
     }
     // A request lifetime narrows inherited tool lifetimes; neither may replace the other.
     const approvalSignals =
-      params.method === "exec.approval.request" || params.method === "plugin.approval.request"
+      params.method === "exec.approval.request" ||
+      params.method === "plugin.approval.request" ||
+      params.method === "openclaw.chat"
         ? [...(identity.approvalSignals ?? []), ...(params.signal ? [params.signal] : [])]
         : undefined;
     const approvalAuthority =
       activeAuthority && approvalSignals?.length
         ? claimAgentRunApprovalAuthority(activeAuthority, approvalSignals)
         : activeAuthority;
+    // Hand the current-policy closure to the target Gateway for a signed wire Full Access
+    // grant. The token carries only this opaque id; the closure itself never leaves the
+    // process as data, and a missing closure still routes the change to a human.
+    automaticChangePolicyHandoff =
+      params.method === "openclaw.chat" &&
+      identity.fullPermission === true &&
+      identity.assertAutoApproveChangesCurrent &&
+      approvalAuthority
+        ? createAgentRuntimeAutomaticChangePolicyHandoff({
+            agentId: identity.agentId,
+            sessionKey: identity.sessionKey,
+            operationalRunInstance: identity.operationalRunInstance,
+            delegatedAuthority: approvalAuthority,
+            assertion: identity.assertAutoApproveChangesCurrent,
+          })
+        : undefined;
     const prepared: AgentRuntimeIdentityTokenParams = {
       ...identity,
       operationalRunInstance: identity.operationalRunInstance,
       approvalAuthority,
+      fullPermission: params.method === "openclaw.chat" && identity.fullPermission === true,
       ...(lineageHandoff ? { executionIdentityToken: undefined } : {}),
+      ...(automaticChangePolicyHandoff
+        ? { automaticChangePolicyHandoffId: automaticChangePolicyHandoff.id }
+        : {}),
       ...(lineageHandoff
         ? { executionLineageHandoffId: lineageHandoff.id }
         : sessionSpawnContext
@@ -490,6 +485,7 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
     return runtimeIdentity;
   } catch (error) {
     lineageHandoff?.revoke();
+    automaticChangePolicyHandoff?.revoke();
     if (optionalLocalIdentity && !params.required) {
       return undefined;
     }

@@ -16,7 +16,13 @@ import {
 } from "../../infra/agent-run-registry.js";
 import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
+import { DelegatedChangeApprovalRequiredError } from "../../system-agent/delegated-change-policy.js";
 import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
+import {
+  createAgentRuntimeAutomaticChangePolicyHandoff,
+  redeemAgentRuntimeAutomaticChangePolicyHandoff,
+  withAgentRuntimeAutomaticChangePolicyAssertion,
+} from "../agent-runtime-automatic-change-policy.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import type { WorkerSessionTurnClaim } from "../worker-environments/placement-record.js";
 import { prepareDelegatedSystemAgentApproval } from "./system-agent-approval.js";
@@ -138,6 +144,60 @@ function pausedApply() {
     },
   );
   return { started, release, effect, resolve };
+}
+
+function wireIdentity(params: {
+  operationalRunInstance: ReturnType<typeof createOperationalRunInstanceRef>;
+  delegatedAuthority: ReturnType<typeof claimAgentRunDelegatedAuthority> & { kind: "local" };
+  fullPermission?: boolean;
+  assertion?: () => void;
+}) {
+  const identity = {
+    kind: "agentRuntime" as const,
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    operationalRunInstance: params.operationalRunInstance,
+    delegatedAuthority: params.delegatedAuthority,
+    ...(params.fullPermission === undefined ? {} : { fullPermission: params.fullPermission }),
+  };
+  return params.assertion
+    ? withAgentRuntimeAutomaticChangePolicyAssertion(identity, params.assertion)
+    : identity;
+}
+
+function resolveWireProposal(params: {
+  context: GatewayRequestContext;
+  session: SystemAgentChatSession;
+  sessions: Map<string, SystemAgentChatSession>;
+  proposal: NonNullable<ReturnType<SystemAgentChatSession["engine"]["getPendingOperatorProposal"]>>;
+  trustedAgentRuntime: Parameters<
+    typeof prepareDelegatedSystemAgentApproval
+  >[0]["trustedAgentRuntime"];
+}) {
+  return resolveTestProposal({
+    context: params.context,
+    sessions: params.sessions,
+    session: params.session,
+    sessionId: "delegate-wire",
+    delegation: { agentId: "main", sessionKey: "agent:main:main" },
+    proposal: params.proposal,
+    trustedAgentRuntime: params.trustedAgentRuntime,
+  });
+}
+
+function wireApprovalContext(testContext: TestContext) {
+  const manager = createTestApprovalManager<SystemAgentApprovalRequestPayload>(testContext, {
+    approvalKind: "system-agent",
+    resolveAllowedDecisions: (request) => request.allowedDecisions,
+    validateAgentRuntimeDelegatedAuthority: (authority) =>
+      validateAgentRunDelegatedAuthority(authority),
+  });
+  const context = {
+    systemAgentApprovalManager: manager,
+    broadcast: vi.fn(),
+    validateAgentRuntimeApprovalAuthority: () => true,
+  } as unknown as GatewayRequestContext;
+  return { manager, context };
 }
 
 describe("prepareDelegatedSystemAgentApproval", () => {
@@ -368,5 +428,179 @@ describe("prepareDelegatedSystemAgentApproval", () => {
     const completion = session.pendingApproval?.completion;
     await manager.expire(firstApprovalId);
     await completion;
+  });
+
+  it("applies a wire Full Access change automatically when the signed grant asserts current policy", async () => {
+    const resolve = vi.fn().mockResolvedValue({ text: "Applied", action: "none", applied: true });
+    const proposal = { operation: { kind: "gateway-restart" as const }, hash: "b".repeat(64) };
+    const session = approvalSession(proposal, resolve);
+    const operationalRunInstance = createOperationalRunInstanceRef("wire-full-access-run");
+    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    const assertion = vi.fn();
+    const resolution = await resolveWireProposal({
+      context: {
+        validateAgentRuntimeApprovalAuthority: () => true,
+      } as unknown as GatewayRequestContext,
+      session,
+      sessions: new Map([["delegate-wire", session]]),
+      proposal,
+      trustedAgentRuntime: wireIdentity({
+        operationalRunInstance,
+        delegatedAuthority: { kind: "local", ...authority },
+        fullPermission: true,
+        assertion,
+      }),
+    });
+    expect(assertion).toHaveBeenCalledOnce();
+    expect(resolve.mock.calls[0]?.[0]).toBe("allow-once");
+    expect(resolve.mock.calls[0]?.[1]).toBe(proposal.hash);
+    expect(resolve.mock.calls[0]?.[2]).toBeTypeOf("function");
+    expect(resolution.kind).toBe("completed");
+    expect(resolution.kind === "completed" ? resolution.reply.applied : undefined).toBe(true);
+    expect(session.pendingApproval).toBeUndefined();
+  });
+
+  it("falls back to a human decision when the wire policy assertion refuses automatic apply", async (testContext) => {
+    const resolve = vi.fn().mockResolvedValue({ text: "Applied", action: "none", applied: true });
+    const proposal = { operation: { kind: "gateway-restart" as const }, hash: "c".repeat(64) };
+    const session = approvalSession(proposal, resolve);
+    const { manager, context } = wireApprovalContext(testContext);
+    const operationalRunInstance = createOperationalRunInstanceRef("wire-retired-grant-run");
+    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    const reason = "Full Access was retired before this change; approve it explicitly.";
+    const resolution = await resolveWireProposal({
+      context,
+      session,
+      sessions: new Map([["delegate-wire", session]]),
+      proposal,
+      trustedAgentRuntime: wireIdentity({
+        operationalRunInstance,
+        delegatedAuthority: { kind: "local", ...authority },
+        fullPermission: true,
+        assertion: () => {
+          throw new DelegatedChangeApprovalRequiredError(reason);
+        },
+      }),
+    });
+    expect(resolve).not.toHaveBeenCalled();
+    expect(resolution.kind).toBe("approval");
+    if (resolution.kind !== "approval") {
+      throw new Error("expected a human approval request");
+    }
+    const record = await manager.getSnapshot(resolution.id);
+    expect(record?.request.description).toContain(reason);
+    await manager.expire(resolution.id);
+    await session.pendingApproval?.completion;
+  });
+
+  it("requires a human decision when a wire Full Access grant carries no policy assertion", async (testContext) => {
+    const resolve = vi.fn().mockResolvedValue({ text: "Applied", action: "none", applied: true });
+    const proposal = { operation: { kind: "gateway-restart" as const }, hash: "d".repeat(64) };
+    const session = approvalSession(proposal, resolve);
+    const { manager, context } = wireApprovalContext(testContext);
+    const operationalRunInstance = createOperationalRunInstanceRef("wire-unbound-run");
+    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    const resolution = await resolveWireProposal({
+      context,
+      session,
+      sessions: new Map([["delegate-wire", session]]),
+      proposal,
+      trustedAgentRuntime: wireIdentity({
+        operationalRunInstance,
+        delegatedAuthority: { kind: "local", ...authority },
+        fullPermission: true,
+      }),
+    });
+    expect(resolve).not.toHaveBeenCalled();
+    expect(resolution.kind).toBe("approval");
+    if (resolution.kind !== "approval") {
+      throw new Error("expected a human approval request");
+    }
+    await manager.expire(resolution.id);
+    await session.pendingApproval?.completion;
+  });
+});
+
+describe("agent runtime automatic change policy handoff", () => {
+  function handoffFixture() {
+    const operationalRunInstance = createOperationalRunInstanceRef("policy-handoff-run");
+    const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    const assertion = vi.fn();
+    const handoff = createAgentRuntimeAutomaticChangePolicyHandoff({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      operationalRunInstance,
+      delegatedAuthority,
+      assertion,
+    });
+    if (!handoff) {
+      throw new Error("expected a policy handoff");
+    }
+    return {
+      assertion,
+      operationalRunInstance,
+      delegatedAuthority,
+      redeem: (
+        overrides: Partial<
+          Parameters<typeof redeemAgentRuntimeAutomaticChangePolicyHandoff>[0]
+        > = {},
+      ) =>
+        redeemAgentRuntimeAutomaticChangePolicyHandoff({
+          id: handoff.id,
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          operationalRunInstance,
+          delegatedAuthority,
+          ...overrides,
+        }),
+    };
+  }
+
+  it("redeems the closure only for the exact signed owner", () => {
+    const fixture = handoffFixture();
+    expect(fixture.redeem()).toBe(fixture.assertion);
+    // A mismatched correlation id is consumed, not left lingering.
+    expect(fixture.redeem({ agentId: "other" })).toBeUndefined();
+    expect(fixture.redeem()).toBeUndefined();
+  });
+
+  it("refuses a handoff whose run instance disagrees with its admission", () => {
+    const operationalRunInstance = createOperationalRunInstanceRef("policy-handoff-mismatch");
+    const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    expect(() =>
+      createAgentRuntimeAutomaticChangePolicyHandoff({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        operationalRunInstance: createOperationalRunInstanceRef("policy-handoff-other"),
+        delegatedAuthority,
+        assertion: () => {},
+      }),
+    ).toThrow("automatic change policy handoff disagrees with its parent admission");
+  });
+
+  it("drops the closure when the preparing host revokes the handoff", () => {
+    const operationalRunInstance = createOperationalRunInstanceRef("policy-handoff-revoked");
+    const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    const handoff = createAgentRuntimeAutomaticChangePolicyHandoff({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      operationalRunInstance,
+      delegatedAuthority,
+      assertion: () => {},
+    });
+    if (!handoff) {
+      throw new Error("expected a policy handoff");
+    }
+    const redeem = () =>
+      redeemAgentRuntimeAutomaticChangePolicyHandoff({
+        id: handoff.id,
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        operationalRunInstance,
+        delegatedAuthority,
+      });
+    expect(redeem()).toBeDefined();
+    handoff.revoke();
+    expect(redeem()).toBeUndefined();
   });
 });

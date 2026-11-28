@@ -12,6 +12,7 @@ import {
   validateSystemAgentSetupDetectParams,
   validateSystemAgentSetupAutoParams,
   validateSystemAgentSetupVerifyParams,
+  type SystemAgentChatParams,
   type SystemAgentChatQuestion,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
@@ -365,10 +366,32 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     const reject = (error: ReturnType<typeof errorShape>) => respond(false, undefined, error);
     const authority = readGatewayRequestMutationAuthority(options);
     const approvalSignals = getGatewayToolCallerIdentity()?.approvalSignals;
-    const params = sanitizeSystemAgentChatParams(rawParams);
-    if (!assertValidParams(params, validateSystemAgentChatParams, "openclaw.chat", respond)) {
+    const inputParams = sanitizeSystemAgentChatParams(rawParams);
+    const trustedAgentRuntime = client?.internal?.agentRuntimeIdentity;
+    if (!assertValidParams(inputParams, validateSystemAgentChatParams, "openclaw.chat", respond)) {
       return;
     }
+    const params: SystemAgentChatParams = trustedAgentRuntime
+      ? {
+          ...inputParams,
+          delegation: {
+            agentId: trustedAgentRuntime.agentId,
+            sessionKey: trustedAgentRuntime.sessionKey,
+            ...(trustedAgentRuntime.turnSourceChannel
+              ? { turnSourceChannel: trustedAgentRuntime.turnSourceChannel }
+              : {}),
+            ...(trustedAgentRuntime.turnSourceTo
+              ? { turnSourceTo: trustedAgentRuntime.turnSourceTo }
+              : {}),
+            ...(trustedAgentRuntime.turnSourceAccountId
+              ? { turnSourceAccountId: trustedAgentRuntime.turnSourceAccountId }
+              : {}),
+            ...(trustedAgentRuntime.turnSourceThreadId !== undefined
+              ? { turnSourceThreadId: trustedAgentRuntime.turnSourceThreadId }
+              : {}),
+          },
+        }
+      : inputParams;
     const inputError = getSystemAgentChatInputError(params);
     if (inputError) {
       reject(errorShape(ErrorCodes.INVALID_REQUEST, inputError));
@@ -651,6 +674,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             session,
             sessionId,
             delegation: params.delegation,
+            ...(trustedAgentRuntime ? { trustedAgentRuntime } : {}),
           });
         }
         const turnReply = await runSystemAgentChatInput({

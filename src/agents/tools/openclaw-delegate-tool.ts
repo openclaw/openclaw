@@ -30,6 +30,7 @@ import type { OpenClawToolsOptions } from "../openclaw-tools.types.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
 import type { PreparedToolConstruction } from "../tool-construction-preparation.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../tool-fs-policy.js";
+import { DEFAULT_ASK_USER_TIMEOUT_SECONDS } from "./ask-user-tool-normalization.js";
 import { jsonResult, readToolStringParam, type AnyAgentTool } from "./common.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { callInProcessGatewayTool } from "./in-process-gateway.js";
@@ -281,7 +282,9 @@ export function createOpenClawDelegateToolsForRun(
                   ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
                 },
               },
-              { signal },
+              // Match the established human-interaction budget. The outer CLI owner
+              // retains its separate grace for post-decision completion.
+              { signal, timeoutMs: DEFAULT_ASK_USER_TIMEOUT_SECONDS * 1_000 },
             ),
           ),
         ),

@@ -25,6 +25,10 @@ import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
+  redeemAgentRuntimeAutomaticChangePolicyHandoff,
+  withAgentRuntimeAutomaticChangePolicyAssertion,
+} from "./agent-runtime-automatic-change-policy.js";
+import {
   redeemAgentRuntimeExecutionLineageHandoff,
   withAgentRuntimeExecutionLineageRedemption,
 } from "./agent-runtime-execution-lineage.js";
@@ -51,6 +55,8 @@ export type AgentRuntimeIdentity = {
   sessionKey: string;
   operationalRunInstance: OperationalRunInstanceRef;
   delegatedAuthority: AgentRuntimeDelegatedAuthority;
+  /** Host-prepared tool posture; absent or false never bypasses operator approval. */
+  fullPermission?: boolean;
   approvalOwnerPluginId?: string;
   /** Signed host-admission provenance for approval visibility, never public request input. */
   approvalRequesterProfileId?: string;
@@ -85,6 +91,7 @@ export type { AgentRuntimeSessionSpawnContext } from "./agent-runtime-session-sp
 type AgentRuntimeIdentityTokenPayload = Omit<AgentRuntimeIdentity, "kind"> & {
   kind: typeof AGENT_RUNTIME_IDENTITY_TOKEN_KIND;
   executionLineageHandoffId?: string;
+  automaticChangePolicyHandoffId?: string;
 };
 
 const normalizedRequiredStringSchema = z
@@ -238,6 +245,7 @@ const agentRuntimeIdentityTokenPayloadSchema = z.object({
   sessionKey: z.string(),
   operationalRunInstance: operationalRunInstanceSchema,
   delegatedAuthority: delegatedAuthoritySchema,
+  fullPermission: z.literal(true).optional(),
   approvalOwnerPluginId: z.string().optional().catch(undefined),
   executionIdentity: z.unknown().optional(),
   turnSourceChannel: z.string().optional().catch(undefined),
@@ -257,6 +265,7 @@ const agentRuntimeIdentityTokenPayloadSchema = z.object({
   cronManagementGrant: cronCreatorAuthorityGrantSchema.optional(),
   sessionSpawnContext: sessionSpawnContextSchema.optional(),
   executionLineageHandoffId: normalizedRequiredStringSchema.optional(),
+  automaticChangePolicyHandoffId: normalizedRequiredStringSchema.optional(),
 });
 
 function decodeDelegatedAuthority(
@@ -400,6 +409,7 @@ function parsePayload(value: unknown, nowMs: number): AgentRuntimeIdentityTokenP
     }
     const sessionSpawnContext = raw.sessionSpawnContext;
     const executionLineageHandoffId = raw.executionLineageHandoffId;
+    const automaticChangePolicyHandoffId = raw.automaticChangePolicyHandoffId;
     const cronToolsAllowCapture = raw.cronToolsAllowCapture;
     const cronExecToolTarget = cronToolsAllowCapture ? raw.cronExecToolTarget : undefined;
     const cronCreatorAuthorityGrant = raw.cronCreatorAuthorityGrant;
@@ -419,6 +429,7 @@ function parsePayload(value: unknown, nowMs: number): AgentRuntimeIdentityTokenP
       sessionKey,
       operationalRunInstance,
       delegatedAuthority,
+      ...(raw.fullPermission === true ? { fullPermission: true as const } : {}),
       ...(approvalOwnerPluginId ? { approvalOwnerPluginId } : {}),
       ...(turnSourceChannel ? { turnSourceChannel } : {}),
       ...(turnSourceLocal ? { turnSourceLocal } : {}),
@@ -435,6 +446,7 @@ function parsePayload(value: unknown, nowMs: number): AgentRuntimeIdentityTokenP
       ...(cronSelfManagementContext ? { cronSelfManagementContext } : {}),
       ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
       ...(executionLineageHandoffId ? { executionLineageHandoffId } : {}),
+      ...(automaticChangePolicyHandoffId ? { automaticChangePolicyHandoffId } : {}),
       ...(cronToolsAllowCapture ? { cronToolsAllowCapture } : {}),
       ...(cronExecToolTarget ? { cronExecToolTarget } : {}),
       ...(cronCreatorAuthorityGrant ? { cronCreatorAuthorityGrant } : {}),
@@ -453,10 +465,13 @@ export type AgentRuntimeIdentityTokenParams = Omit<
   | "executionIdentity"
   | "cronSelfManagementContext"
   | "approvalRequesterProfileId"
+  | "fullPermission"
 > & {
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
   cronSelfManagementJobId?: string;
   executionLineageHandoffId?: string;
+  automaticChangePolicyHandoffId?: string;
+  fullPermission?: boolean;
   workerTurnClaim?: WorkerSessionTurnClaim;
   approvalAuthority?: AgentRunDelegatedAuthority;
 };
@@ -477,6 +492,12 @@ function prepareAgentRuntimeIdentityTokenPayload(
   }
   const sessionSpawnContext = parsedSessionSpawnContext?.data;
   const executionLineageHandoffId = normalizeOptionalString(params.executionLineageHandoffId);
+  const automaticChangePolicyHandoffId = normalizeOptionalString(
+    params.automaticChangePolicyHandoffId,
+  );
+  if (automaticChangePolicyHandoffId && params.fullPermission !== true) {
+    throw new Error("automatic change policy handoff requires a signed full-permission grant");
+  }
   if (executionLineageHandoffId && (sessionSpawnContext || params.executionIdentityToken)) {
     throw new Error("execution lineage handoff cannot duplicate private spawn facts");
   }
@@ -557,6 +578,7 @@ function prepareAgentRuntimeIdentityTokenPayload(
       runId: operationalRunId,
     },
     delegatedAuthority,
+    ...(params.fullPermission === true ? { fullPermission: true as const } : {}),
     ...(normalizeOptionalString(params.approvalOwnerPluginId)
       ? { approvalOwnerPluginId: normalizeOptionalString(params.approvalOwnerPluginId) }
       : {}),
@@ -586,6 +608,7 @@ function prepareAgentRuntimeIdentityTokenPayload(
     ...(params.cronManagementGrant ? { cronManagementGrant: params.cronManagementGrant } : {}),
     ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
     ...(executionLineageHandoffId ? { executionLineageHandoffId } : {}),
+    ...(automaticChangePolicyHandoffId ? { automaticChangePolicyHandoffId } : {}),
     ...(params.executionIdentityToken?.runId === operationalRunId
       ? { executionIdentity: params.executionIdentityToken }
       : {}),
@@ -656,11 +679,26 @@ function resolveAgentRuntimeIdentityPayload(
   if (payload.executionLineageHandoffId && !handoff) {
     return undefined;
   }
+  // Correlation alone never grants automatic changes: redeem only for the exact signed owner.
+  const automaticChangePolicyAssertion =
+    payload.automaticChangePolicyHandoffId && payload.fullPermission === true
+      ? redeemAgentRuntimeAutomaticChangePolicyHandoff({
+          id: payload.automaticChangePolicyHandoffId,
+          agentId: payload.agentId,
+          sessionKey: payload.sessionKey,
+          operationalRunInstance: payload.operationalRunInstance,
+          delegatedAuthority: payload.delegatedAuthority,
+        })
+      : undefined;
+  if (payload.automaticChangePolicyHandoffId && !automaticChangePolicyAssertion) {
+    return undefined;
+  }
   const executionIdentity = handoff?.executionIdentity ?? payload.executionIdentity;
   const sessionSpawnContext = handoff?.sessionSpawnContext ?? payload.sessionSpawnContext;
   const {
     kind: _kind,
     executionLineageHandoffId: _handoffId,
+    automaticChangePolicyHandoffId: _policyHandoffId,
     executionIdentity: _executionIdentity,
     sessionSpawnContext: _sessionSpawnContext,
     ...admitted
@@ -671,7 +709,10 @@ function resolveAgentRuntimeIdentityPayload(
     ...(executionIdentity ? { executionIdentity } : {}),
     ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
   };
-  return handoff
+  const lineageBound = handoff
     ? withAgentRuntimeExecutionLineageRedemption(identity, handoff.redemption)
     : identity;
+  return automaticChangePolicyAssertion
+    ? withAgentRuntimeAutomaticChangePolicyAssertion(lineageBound, automaticChangePolicyAssertion)
+    : lineageBound;
 }
