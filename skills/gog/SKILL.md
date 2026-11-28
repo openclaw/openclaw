@@ -8,6 +8,7 @@ metadata:
       {
         "emoji": "🎮",
         "requires": { "bins": ["gog"] },
+        "primaryEnv": "GOG_KEYRING_PASSWORD",
         "install":
           [
             {
