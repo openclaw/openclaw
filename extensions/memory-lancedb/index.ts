@@ -27,7 +27,7 @@ import {
   MemoryRecallEmbeddingError,
 } from "./embeddings.js";
 import { MemoryDB, type MemoryEntry } from "./lancedb-store.js";
-import { dropMediaNoteLines, sanitizeForMemoryCapture } from "./memory-capture-sanitization.js";
+import { dropMediaNoteLines } from "./memory-capture-sanitization.js";
 import { registerMemoryCli } from "./memory-cli.js";
 import { MEMORY_CATEGORIES } from "./memory-policy-data.js";
 import {
@@ -44,6 +44,7 @@ import {
   prepareAutoCaptureMessages,
   projectMemorySearchResult,
   shouldCapture,
+  userTextForCapture,
 } from "./memory-policy.js";
 import {
   createEmbeddingHealthTracker,
@@ -623,7 +624,7 @@ export default definePluginEntry({
                 continue;
               }
               for (const text of extractUserTextContent(message)) {
-                const sanitized = sanitizeForMemoryCapture(text);
+                const sanitized = userTextForCapture(text);
                 if (
                   !sanitized ||
                   !shouldCapture(sanitized, {
