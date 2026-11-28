@@ -1,4 +1,3 @@
-import { normalizeChannelDmPolicy } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   buildChannelInboundEventContext,
   buildMentionRegexes,
@@ -47,6 +46,7 @@ import {
 } from "../targets.js";
 import type { IMessageDmHistoryContext } from "./dm-history.js";
 import type { SentMessageCache } from "./echo-cache.js";
+import { resolveIMessageIngressWithFailClosedStore } from "./inbound-store-ingress.js";
 import { resolveIMessageInboundMentionPolicy } from "./mention-policy.js";
 import {
   type IMessageReactionContext,
@@ -315,7 +315,7 @@ export async function resolveIMessageInboundDecision(params: {
   allowLegacyConversationAllowFromForGroup?: boolean;
   groupPolicy: string;
   dmPolicy: string;
-  readStoreAllowFrom: () => Promise<string[]>;
+  readStoreAllowFrom?: () => Promise<string[]>;
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
   echoCache?: IMessageEchoCache;
@@ -447,44 +447,25 @@ export async function resolveIMessageInboundDecision(params: {
     sender,
     chatId,
   });
-  let storeAllowFrom: Promise<string[]> | undefined;
-  const ingressResolver = getIMessageRuntime().channel.inbound.ingress.createResolver({
-    channelId: "imessage",
-    accountId: params.accountId,
-    identity: imessageIngressIdentity,
-    cfg: params.cfg,
-    readStoreAllowFrom: () => (storeAllowFrom ??= params.readStoreAllowFrom()),
-  });
-  const resolveChannelIngress = (contextBinding?: ChannelIngressContextBinding) =>
-    ingressResolver.message({
-      subject: {
-        stableId: sender,
-        aliases: {
-          ...(chatId != null ? { "imessage-chat-id": String(chatId) } : {}),
-          ...(chatGuid ? { "imessage-chat-guid": chatGuid } : {}),
-          ...(chatIdentifier ? { "imessage-chat-identifier": chatIdentifier } : {}),
-        },
-      },
-      conversation: {
-        kind: isGroup ? "group" : "direct",
-        id: chatId != null ? String(chatId) : sender,
-      },
-      contextBinding,
-      dmPolicy: normalizeChannelDmPolicy(params.dmPolicy) ?? "pairing",
-      groupPolicy:
-        params.groupPolicy === "open" || params.groupPolicy === "disabled"
-          ? params.groupPolicy
-          : "allowlist",
-      policy: { groupAllowFromFallbackToAllowFrom: false },
+  const { resolveChannelIngress, accessDecision } = await resolveIMessageIngressWithFailClosedStore(
+    {
+      cfg: params.cfg,
+      accountId: params.accountId,
+      identity: imessageIngressIdentity,
+      createResolver: getIMessageRuntime().channel.inbound.ingress.createResolver,
+      sender,
+      chatId,
+      chatGuid,
+      chatIdentifier,
+      isGroup,
+      dmPolicy: params.dmPolicy,
+      groupPolicy: params.groupPolicy,
       allowFrom: params.allowFrom,
       groupAllowFrom: groupAllowFromForAccess,
-      command: {
-        allowTextCommands: isGroup,
-        hasControlCommand: hasControlCommandInMessage,
-        directGroupAllowFrom: "effective",
-      },
-    });
-  const accessDecision = await resolveChannelIngress();
+      hasControlCommandInMessage,
+      readStoreAllowFrom: params.readStoreAllowFrom,
+    },
+  );
   const { commandAccess, senderAccess } = accessDecision;
   const effectiveGroupAllowFrom = senderAccess.effectiveGroupAllowFrom;
 
