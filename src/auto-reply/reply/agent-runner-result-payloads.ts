@@ -271,7 +271,7 @@ export async function prepareReplyAgentPayloads(state: {
       : createMissingReplyNotice();
   const buildStrandedRetryMissingDeliveryDiagnostic = (): ReplyPayload | undefined => {
     if (
-      !missingReplyNoticeAllowed ||
+      // This host retry still owes the source turn's diagnostic, not a background notice.
       authoredSilence ||
       automationNoChange ||
       !sessionKey ||

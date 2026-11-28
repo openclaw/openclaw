@@ -2,6 +2,8 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveReplyFailureSummary } from "../../auto-reply/reply/agent-runner-failure-reply.js";
+import { resolveStrandedReplyRecovery } from "../../auto-reply/reply/stranded-reply-recovery.js";
+import { createMockFollowupRun } from "../../auto-reply/reply/test-helpers.js";
 import type {
   CliBackendExecute,
   CliBackendExecuteContext,
@@ -169,6 +171,34 @@ describe("plugin-owned CLI execution host boundary", () => {
       promptContext: context.promptContext,
       systemPrompt: "Follow host policy.\nKeep credentials private.",
     });
+  });
+
+  it("sends a stranded-reply recovery as host input without reclassifying the human turn", async () => {
+    const base = createMockFollowupRun({ prompt: "Please answer." });
+    base.run.inputProvenance = { kind: "external_user" };
+    const recovery = resolveStrandedReplyRecovery({
+      base,
+      payloads: [],
+      finalText: "The answer is ready.",
+      terminalReply: { disposition: "visible", text: "The answer is ready." },
+      sourceReplyDeliveryMode: "message_tool_only",
+      sendPolicyDenied: false,
+      successfulSourceReplyDelivery: false,
+      isRoomEvent: false,
+    });
+    expect(recovery.kind).toBe("retry");
+    if (recovery.kind !== "retry") {
+      throw new Error("Expected recovery run");
+    }
+    const { context } = await createExecution();
+    context.params.prompt = recovery.run.prompt;
+    context.params.inputProvenance = recovery.run.run.inputProvenance;
+    expect(await runTurn(context, (execution) => execution.promptOrigin)).toBe("host");
+
+    // Identical text from a human remains native user input; content is not authority.
+    context.params.inputProvenance = base.run.inputProvenance;
+    expect(await runTurn(context, (execution) => execution.promptOrigin)).toBeUndefined();
+    expect(base.run.inputProvenance).toEqual({ kind: "external_user" });
   });
 
   it.each([
