@@ -87,6 +87,11 @@ test("observes retained Gateway owners through fixture teardown", async () => {
     selectorsIntact: [...selectors].every(([key, value]) => process.env[key] === value),
   });
   const retained = { home: true, state: true, sessions: true, selectorsIntact: true };
+  gatewayHelpers.installGatewayTestHooks({ scope: "suite" });
+  const unstartedSuite = takeHooks();
+  expect(unstartedSuite.cleanup.length).toBeGreaterThan(0);
+  await runHooks(unstartedSuite.cleanup.toReversed());
+  expect(readState()).toEqual(retained);
   const releaseProducer = createDeferredCore();
   let phase = "before-cleanup";
   const producer = releaseProducer.promise.then(() => {
