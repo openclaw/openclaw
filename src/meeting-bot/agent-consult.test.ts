@@ -1,5 +1,9 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  isGatewaySubordinateWorkAdmissionClosed,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import type { RealtimeVoiceBridgeSession } from "../talk/session-runtime.js";
 
 const consultRealtimeVoiceAgent = vi.hoisted(() => vi.fn(async () => ({ text: "done" })));
@@ -80,4 +84,46 @@ it.each([
   );
   expect(submitToolResult).toHaveBeenCalledTimes(1);
   expect(events.map((event) => event.type)).toEqual(["tool.progress"]);
+});
+
+it("consults successfully under a fresh admission after the meeting's creation-request root released", async () => {
+  const creationRoot = tryBeginGatewayRootWorkAdmission("ws:googlemeet.create");
+  expect(creationRoot).not.toBeNull();
+  let admissionClosedDuringConsult: boolean | undefined;
+  consultRealtimeVoiceAgent.mockImplementationOnce(async () => {
+    admissionClosedDuringConsult = isGatewaySubordinateWorkAdmissionClosed();
+    return { text: "done" };
+  });
+
+  let continueConsult = () => {};
+  const gate = new Promise<void>((resolve) => {
+    continueConsult = resolve;
+  });
+  let consultResult: Promise<{ text: string }> | undefined;
+  // Mirrors the real bug: the transcript callback that triggers a consult is
+  // registered during the meeting-creation request and only fires later, so
+  // it inherits that request's AsyncLocalStorage root via Node's automatic
+  // async context propagation, not a lexical reference to it.
+  await creationRoot?.run(async () => {
+    consultResult = (async () => {
+      await gate;
+      return createMeetingRealtimeEngineBindings({
+        platform: TEST_MEETING_PLATFORM_METADATA,
+        config: { realtime: { toolPolicy: "safe-read-only" } },
+        fullConfig: { agents: { entries: { operator: {} } } },
+        runtime: { agent: {} } as never,
+        logger: {} as never,
+      }).consultAgent({
+        meetingSessionId: "meeting-1",
+        args: { question: "What should I say?" },
+        transcript: [],
+      });
+    })();
+  });
+
+  creationRoot?.release();
+  continueConsult();
+
+  await expect(consultResult).resolves.toEqual({ text: "done" });
+  expect(admissionClosedDuringConsult).toBe(false);
 });
