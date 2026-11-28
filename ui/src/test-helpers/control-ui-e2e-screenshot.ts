@@ -263,6 +263,7 @@ async function createControlUiFramePreparation(page: Page, disableAnimations: bo
     const transitionStyles = new Map<Document | ShadowRoot, HTMLStyleElement>();
     const listeners = new Map<Document | ShadowRoot, () => void>();
     const carets = new Map<HTMLElement, { value: string; priority: string }>();
+    const readOnlyFields = new Map<HTMLInputElement | HTMLTextAreaElement, boolean>();
     const decoded = new Map<HTMLImageElement, string>();
     const visibleImages = () =>
       roots()
@@ -316,6 +317,14 @@ async function createControlUiFramePreparation(page: Page, disableAnimations: bo
                 priority: element.style.getPropertyPriority("caret-color"),
               });
               element.style.setProperty("caret-color", "transparent", "important");
+              // Forced colors overrides caret-color; a read-only field paints no caret.
+              if (
+                element === root.activeElement &&
+                (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)
+              ) {
+                readOnlyFields.set(element, element.readOnly);
+                element.readOnly = true;
+              }
             }
           }
         }
@@ -380,6 +389,9 @@ async function createControlUiFramePreparation(page: Page, disableAnimations: bo
         }
         for (const [element, caret] of carets) {
           element.style.setProperty("caret-color", caret.value, caret.priority);
+        }
+        for (const [field, readOnly] of readOnlyFields) {
+          field.readOnly = readOnly;
         }
         for (const animation of resumed) {
           animation.play();
