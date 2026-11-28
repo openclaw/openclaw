@@ -211,6 +211,8 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       let forceCloseTimer: ReturnType<typeof setTimeout> | undefined;
       let timedOut = false;
       let aborted = false;
+      // The native turn reported completion; persistence and settlement are host-bounded work.
+      let settled = false;
       let abortPromise: Promise<void> | undefined;
       let failure: unknown;
       let activeAttachment: ReturnType<typeof setActiveEmbeddedRun> | undefined;
@@ -250,9 +252,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         if (!abortPromise) {
           // An interrupt ack is not settlement. Retire an unresponsive host so
           // cancellation cannot leave a turn waiting indefinitely.
-          forceCloseTimer = setTimeout(() => {
-            void runtime.close();
-          }, 5000);
+          forceCloseTimer = setTimeout(() => void runtime.close(), 5000);
           forceCloseTimer.unref();
           const nativeTurn = turn;
           abortPromise = (async () => {
@@ -271,9 +271,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         aborted = true;
         await stop();
       };
-      const onAbort = () => {
-        void abort().catch(() => runtime.close());
-      };
+      const onAbort = () => void abort().catch(() => runtime.close());
       const handle = {
         kind: "embedded" as const,
         runId: params.runId,
@@ -283,8 +281,12 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         queueMessage: async () => {
           throw new Error("Muse live steering is not supported; wait for the active turn.");
         },
-        isStreaming: () => !aborted,
+        isStreaming: () => !aborted && !settled,
         isAborted: () => aborted,
+        isStopped: () => settled || aborted,
+        // Only an open native turn owns liveness: Muse bounds it with this attempt's deadline, and an
+        // unlimited Gateway budget stays unlimited (as with Codex). Completion hands settlement back.
+        ownsLiveness: () => !aborted && !timedOut && !settled,
         isCompacting: () => false,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
         cancel: onAbort,
@@ -449,6 +451,11 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
             ? { reasoningEffort: params.thinkLevel === "off" ? "minimal" : params.thinkLevel }
             : {}),
         });
+        // Native completion must release liveness even while host consumers are still draining.
+        const markSettled = () => {
+          settled = true;
+        };
+        void turn.completed.then(markSettled, markSettled);
         lifecycle.emitLifecycleStart({ provider: "meta", model: params.modelId });
         lifecycle.emitExecutionPhaseOnce("accepted", { phase: "turn_accepted" });
         // Publish the binding only once Muse accepted the turn carrying any fresh-session
@@ -555,6 +562,8 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
           ...(failure ? { error: failure } : {}),
         });
       } finally {
+        // Every exit, not only a completed native turn, hands liveness back to the host.
+        settled = true;
         await abortPromise?.catch(() => undefined);
         clearTimeout(timer);
         clearTimeout(forceCloseTimer);
