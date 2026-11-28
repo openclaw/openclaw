@@ -68,7 +68,6 @@ it.each(["trigger", "payload"] as const)(
             },
           },
         ]);
-        plugins.setActivePluginRegistry(registry);
         const runtime = createCronScriptRuntime({ config, loadPluginRegistry: () => registry });
         const signal = new AbortController().signal;
         const invoke = async (accountId: string, channel?: string) => {
@@ -119,6 +118,16 @@ it.each(["trigger", "payload"] as const)(
             clearCronJobActive(jobId, marker);
           }
         };
+        plugins.setActivePluginRegistry(createTestRegistry([]));
+        const scopedOnly = await invoke("work", "telegram");
+        expect(scopedOnly).toMatchObject({
+          kind: "error",
+          error: expect.stringContaining(
+            'Scheduled account "work" is unavailable on channel "telegram". Process registry: plugin not loaded; scoped registry: account listed.',
+          ),
+        });
+        expect(sendText).not.toHaveBeenCalled();
+        plugins.setActivePluginRegistry(registry);
         const expected =
           entry === "trigger" ? { kind: "evaluated", fire: false } : { kind: "completed" };
         for (const [accountId, channel, error, sends] of [

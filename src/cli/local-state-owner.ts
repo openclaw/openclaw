@@ -16,6 +16,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/path-existence.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { waitForGatewayRootWorkIdle } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { registerSignalExitGate } from "./signal-exit-barrier.js";
 
@@ -55,6 +56,21 @@ class LocalStateOwnerError extends Error {
   }
 }
 
+/**
+ * Detached work a one-shot command admitted (subagent completion, announcements) writes through
+ * the command's databases; every owner that closes them lets that work finish unless the user
+ * interrupts.
+ */
+export async function waitForLocalBackgroundWork(signal: AbortSignal | undefined): Promise<void> {
+  await waitForGatewayRootWorkIdle({
+    signal,
+    onWaiting: (count) =>
+      process.stderr.write(
+        `Waiting for ${count} background ${count === 1 ? "task" : "tasks"} to finish. Press Ctrl-C to stop.\n`,
+      ),
+  });
+}
+
 /** Select one owner before domain admission and retain offline custody through resource settlement. */
 export async function runWithLocalStateOwner<T>(params: {
   method: string;
@@ -85,6 +101,8 @@ export async function runWithLocalStateOwner<T>(params: {
     | ((scope: Omit<LocalMutationScope, "config"> & { requestOwner: OwnerRequest }) => Promise<T>);
   assertTargetCurrent?: () => void;
   runLocal: (scope: LocalMutationScope) => Promise<T>;
+  /** Interrupts the wait for detached work before databases close (Ctrl-C). */
+  signal?: AbortSignal;
 }): Promise<T> {
   const parent = localOwnerScope.getStore();
   parent?.assertCurrent();
@@ -436,6 +454,12 @@ export async function runWithLocalStateOwner<T>(params: {
         throw error;
       } finally {
         uncertainCleanup ||= cleanup.outcome === "uncertain";
+        if (resources) {
+          // The CLI signal gate aborts `controller`; `agent --local` owns SIGINT through its bridge.
+          await waitForLocalBackgroundWork(
+            params.signal ? AbortSignal.any([controller.signal, params.signal]) : controller.signal,
+          );
+        }
         // Failed cleanup keeps physical custody; release cannot race accepted worker/native work.
         await resources?.close();
         // Stop lending this owner, but keep physical custody until uncertain children exit.

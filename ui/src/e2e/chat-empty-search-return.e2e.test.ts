@@ -8,7 +8,6 @@ import {
   waitForTranscriptScrollIdle,
 } from "./chat-flow.test-support.ts";
 import { historyMessageCount } from "./chat-history-pagination-probe.test-support.ts";
-import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -44,7 +43,6 @@ function firstVisibleMessage(thread: Locator) {
 suite.define(() => {
   it("finds a match beyond the next older page after a compact opening", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      await seedChatSettings(page, suite.server.baseUrl, { compactSessionOpening: true });
       const history = (start: number, end: number) => ({
         sessionId: "find-session",
         messages: historyMessages.slice(start, end),

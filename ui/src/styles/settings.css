@@ -2618,3 +2618,36 @@ openclaw-settings-save-indicator:empty {
 .cfg-object--quiet:not([open]) > .cfg-object__summary .settings-row__desc {
   display: none;
 }
+
+/* Keep the distinctive end of the worktree name beside its actions. */
+openclaw-worktrees-page .settings-row:has(.worktree-row__name) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+
+  > .settings-row__control {
+    width: auto;
+  }
+}
+
+.worktree-row__name,
+.worktree-row__details summary {
+  white-space: nowrap;
+}
+
+.worktree-row__name {
+  display: flex;
+
+  > :last-child {
+    flex: none;
+  }
+}
+
+.worktree-row__name > :first-child,
+.worktree-row__details summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.worktree-row__details summary {
+  cursor: var(--cursor-action);
+}

@@ -243,6 +243,8 @@ function DesktopHostSetupNotice(props: { setup: DesktopHostSetup; loading: boole
 
 export function DesktopPicker(props: {
   automatic: boolean;
+  notice?: string | null;
+  onDisconnect: () => void;
   environments: EnvironmentSummary[];
   hostSetup?: DesktopHostSetup | null;
   loading: boolean;
@@ -284,11 +286,24 @@ export function DesktopPicker(props: {
           {props.hostSetup ? (
             <DesktopHostSetupNotice setup={props.hostSetup} loading={props.loading} />
           ) : (
-            <div class="desktop-status" role="status">
-              <button class="desktop-button" type="button" onClick={() => props.onRefresh()}>
-                {t("common.retry")}
-              </button>
-            </div>
+            (props.loading || props.notice) && (
+              <PanelEmptyState
+                presentation={props.presentation}
+                icon={<Icon name="monitor" />}
+                heading={t("desktop.title")}
+                description={props.loading ? t("desktop.loading") : (props.notice ?? "")}
+                action={
+                  <button
+                    class="desktop-button desktop-source-retry"
+                    type="button"
+                    aria-label={props.loading ? t("desktop.disconnect") : undefined}
+                    onClick={() => (props.loading ? props.onDisconnect() : props.onRefresh())}
+                  >
+                    {t(props.loading ? "desktop.disconnect" : "common.retry")}
+                  </button>
+                }
+              />
+            )
           )}
         </>
       ) : (

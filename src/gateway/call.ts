@@ -40,7 +40,6 @@ import type {
   CallGatewayBaseOptions,
   CallGatewayCliOptions,
   CallGatewayOptions,
-  GatewayRequestFunction,
 } from "./call-options.js";
 import { ensureGatewaySupportsRequiredFeatures } from "./call-required-features.js";
 import { fitScopesToStoredDeviceGrant, resolveCliScopeRetry } from "./call-scopes.js";
@@ -709,9 +708,8 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
         stopAfterAbortHook();
         return;
       }
-      const request: GatewayRequestFunction = client.request.bind(client);
       void Promise.resolve()
-        .then(() => opts.onSignalAbort?.(request))
+        .then(() => opts.onSignalAbort?.(client.request.bind(client)))
         .catch(() => {})
         .finally(stopAfterAbortHook);
     };
@@ -731,6 +729,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
       clientDisplayName: resolveGatewayClientDisplayName(opts),
       clientVersion: opts.clientVersion ?? VERSION,
       caps: ["ultrafast", ...(opts.caps ?? [])],
+      onEvent: opts.onEvent,
       platform: opts.platform,
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
       ...(opts.approvalRuntimeToken ? { approvalRuntimeToken: opts.approvalRuntimeToken } : {}),

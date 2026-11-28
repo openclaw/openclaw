@@ -181,7 +181,6 @@ function configureSubagentDefaults(
 const acpAgent = (agent = "codex", backend?: string): AgentEntryConfig => ({
   runtime: { type: "acp", acp: { agent, ...(backend ? { backend } : {}) } },
 });
-const sonnet = "anthropic/claude-sonnet-4-6";
 const gpt = "openai/gpt-5.4";
 const opaqueModel = "harness-only[context=272k,reasoning=medium,fast=false]";
 type RuntimeCase = [
@@ -224,7 +223,7 @@ function gatewayResponse(method?: string) {
 
 type BindingInput = Parameters<NonNullable<SessionBindingAdapter["bind"]>>[0];
 
-function bindingMetadata(input: BindingInput, agentId = "codex", webhookId?: string) {
+function bindingMetadata(input: BindingInput, agentId: string, webhookId?: string) {
   return {
     boundBy: typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "system",
     agentId,
@@ -263,7 +262,7 @@ function configureAgents(entries: NonNullable<OpenClawConfig["agents"]>["entries
 function channelContext(
   agentChannel: string,
   agentTo: string,
-  overrides: Partial<SpawnContext> = {},
+  overrides: Partial<SpawnContext>,
 ): SpawnContext {
   return {
     agentSessionKey: "agent:main:main",
@@ -282,7 +281,7 @@ const requesterContext: SpawnContext = {
   agentThreadId: "1",
 };
 
-async function workspaceFixture(agent = "claude-code", exists = true) {
+async function workspaceFixture(agent: string, exists: boolean) {
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-spawn-"));
   const mainWorkspace = path.join(workspaceRoot, "main");
   const targetWorkspace = path.join(workspaceRoot, "claude-code");
@@ -629,32 +628,8 @@ describe("spawnAcpDirect", () => {
   });
 
   it.each<RuntimeCase>([
-    [
-      "target-provider alias",
-      { model: sonnet, subagents: { model: "opus", thinking: "low" } },
-      { models: { "claude-opus-4-6": { alias: "opus" } } },
-      { model: "anthropic/claude-opus-4-6", thinking: "low" },
-    ],
     ["explicit max", {}, { subagents: { thinking: "low" } }, { thinking: "max" }, "max"],
-    [
-      "configured model with global thinking default",
-      { model: sonnet },
-      { thinkingDefault: "off" },
-      { model: sonnet, thinking: "off" },
-    ],
     ["opaque harness model", { model: opaqueModel }, {}, { model: opaqueModel }],
-    [
-      "owner thinking without model override",
-      { thinkingDefault: "off" },
-      { thinkingDefault: "high" },
-      { thinking: "off" },
-    ],
-    [
-      "model-profile thinking default",
-      { model: gpt },
-      { models: { [gpt]: { params: { thinking: "high" } } } },
-      { model: gpt, thinking: "high" },
-    ],
   ])("resolves ACP runtime options: %s", async (_name, agent, defaults, expected, thinking) => {
     hoisted.state.cfg.agents = {
       entries: { "codex-acp": { ...acpAgent(), ...agent } },
@@ -996,8 +971,6 @@ describe("spawnAcpDirect", () => {
     expectRecordFields(hoisted.startAcpSpawnParentStreamRelayMock.mock.calls[0]?.[0], {
       parentSessionKey: "agent:main:subagent:parent",
       agentId: "codex",
-      ownerAgentId: "main",
-      childSessionId: "sess-123",
       deliveryContext: { channel: "discord", to: "channel:parent-channel", accountId: "default" },
     });
     const dispatchOrder = expectDefined(

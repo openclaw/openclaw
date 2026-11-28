@@ -117,7 +117,6 @@ it("collects direct open-policy warnings without mention gating", () => {
   const options = {
     ...policy,
     ...warning,
-    defaultGroupPolicy: "allowlist" as const,
     mentionGated: false,
   };
   const collect = createOpenGroupPolicyRestrictSendersWarningCollector(options);

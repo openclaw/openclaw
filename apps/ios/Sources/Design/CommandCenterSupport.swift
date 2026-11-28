@@ -2,74 +2,6 @@ import OpenClawChatUI
 import OpenClawKit
 import SwiftUI
 
-struct CommandSessionRow: View {
-    let item: SessionPresentation.WorkItem
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            Image(systemName: self.item.icon)
-                .font(OpenClawType.captionSemiBold)
-                .foregroundStyle(self.item.color)
-                .frame(width: 30, height: 30)
-                .background {
-                    RoundedRectangle(cornerRadius: OpenClawRadius.sm, style: .continuous)
-                        .fill(self.item.color.opacity(0.12))
-                }
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    if self.item.isUnread {
-                        Circle()
-                            .fill(OpenClawBrand.accent)
-                            .frame(width: 7, height: 7)
-                            .accessibilityHidden(true)
-                    }
-                    Text(verbatim: self.item.title)
-                        .font(OpenClawType.subheadSemiBold)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.82)
-                    Spacer(minLength: 6)
-                    if self.item.isPinned {
-                        Image(systemName: "pin.fill")
-                            .font(OpenClawType.caption2Medium)
-                            .foregroundStyle(OpenClawBrand.accent)
-                            .accessibilityHidden(true)
-                    }
-                    Text(verbatim: "chat")
-                        .font(OpenClawType.caption2Medium)
-                        .foregroundStyle(.secondary)
-                }
-                HStack(spacing: 8) {
-                    Text(verbatim: self.item.detail)
-                        .font(OpenClawType.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    Spacer(minLength: 6)
-                    Text(self.stateLabel)
-                        .font(OpenClawType.captionSemiBold)
-                        .foregroundStyle(self.item.color)
-                        .lineLimit(1)
-                        .frame(width: 48, alignment: .trailing)
-                }
-            }
-        }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 6)
-        .overlay(alignment: .leading) {
-            OpenClawSessionColorStripe(color: self.item.sessionColor)
-        }
-        .contentShape(Rectangle())
-    }
-
-    private var stateLabel: String {
-        switch self.item.state {
-        case "open": String(localized: "open")
-        case "default": String(localized: "default")
-        case "recent": String(localized: "recent")
-        default: self.item.state
-        }
-    }
-}
-
 struct CommandSessionActionsModifier: ViewModifier {
     typealias Mutation = (any OpenClawChatTransport) async throws -> Void
 
@@ -91,6 +23,7 @@ struct CommandSessionActionsModifier: ViewModifier {
     let preview: (() -> AnyView)?
 
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(\.openClawToastPresenter) private var toastPresenter
     @State private var editor: Editor?
     @State private var draftText = ""
     @State private var confirmsDelete = false
@@ -131,8 +64,11 @@ struct CommandSessionActionsModifier: ViewModifier {
                 titleVisibility: .visible)
             {
                 Button(role: .destructive) {
-                    self.performMutation(self.session.key) { transport in
-                        try await transport.deleteSession(key: self.session.key)
+                    self.run(
+                        self.failureText(String(localized: "Couldn’t delete “%@”.")),
+                        resetActiveSessionKey: self.session.key)
+                    {
+                        try await $0.deleteSession(key: self.session.key)
                     }
                 } label: {
                     Text("Delete Session")
@@ -156,12 +92,28 @@ struct CommandSessionActionsModifier: ViewModifier {
         archived: Bool? = nil,
         unread: Bool? = nil)
     {
-        self.performMutation(archived == true ? self.session.key : nil) { transport in
+        let failure = switch (archived, pinned, label) {
+        case (true?, _, _): self.failureText(String(localized: "Couldn’t archive “%@”."))
+        case (false?, _, _): self.failureText(String(localized: "Couldn’t unarchive “%@”."))
+        case (_, true?, _): self.failureText(String(localized: "Couldn’t pin “%@”."))
+        case (_, false?, _): self.failureText(String(localized: "Couldn’t unpin “%@”."))
+        case (_, _, .some): self.failureText(String(localized: "Couldn’t rename “%@”."))
+        default: self.failureText(String(localized: "Couldn’t update “%@”."))
+        }
+        // The row leaves the list, so archiving says so and offers Undo. Unarchive in Sessions › Archived
+        // is the other way back.
+        let success = archived == true
+            ? OpenClawToast(
+                String(localized: "Archived"),
+                systemImage: "archivebox",
+                action: .undo { self.patch(archived: false) })
+            : nil
+        self.run(failure, resetActiveSessionKey: archived == true ? self.session.key : nil, success: success) {
             if let pinned {
                 try await self.appModel.setPersonalSidebarPin(self.session.key, pinned: pinned)
                 return
             }
-            try await transport.patchSession(
+            try await $0.patchSession(
                 key: self.session.key,
                 expectedSessionID: archived == nil ? nil : self.session.sessionId,
                 label: label,
@@ -174,12 +126,57 @@ struct CommandSessionActionsModifier: ViewModifier {
     }
 
     private func patchSnooze(_ snoozedUntil: OpenClawChatSnoozePatch) {
-        self.performMutation(nil) { transport in
-            try await transport.patchSession(
+        let failure: String
+        var success: OpenClawToast?
+        switch snoozedUntil {
+        case let .until(wakeAt):
+            failure = self.failureText(String(localized: "Couldn’t snooze “%@”."))
+            // The row leaves the list until then; Wake session in its menu is the other way back.
+            success = OpenClawToast(
+                String(
+                    format: String(localized: "Snoozed until %@"),
+                    OpenClawChatSessionSnooze.wakeDescription(wakeAt)),
+                systemImage: "clock",
+                action: .undo { self.patchSnooze(.wake) })
+        case .wake:
+            failure = self.failureText(String(localized: "Couldn’t wake “%@”."))
+        }
+        self.run(failure, resetActiveSessionKey: nil, success: success) {
+            try await $0.patchSession(
                 key: self.session.key,
                 expectedSessionID: self.session.sessionId,
                 snoozedUntil: snoozedUntil)
         }
+    }
+
+    private func failureText(_ format: String) -> String {
+        String(format: format, SessionPresentation.title(self.session))
+    }
+
+    /// Runs a row action through the screen that owns the list. A failure is a toast with Try again,
+    /// which repeats the same action; `success` shows once the action lands.
+    private func run(
+        _ failure: String,
+        resetActiveSessionKey: String?,
+        success: OpenClawToast? = nil,
+        _ operation: @escaping Mutation)
+    {
+        let toasts = self.toastPresenter
+        let perform = self.performMutation
+        func attempt() {
+            perform(resetActiveSessionKey) { transport in
+                do {
+                    try await operation(transport)
+                } catch {
+                    if !(error is CancellationError) {
+                        await toasts?.post(.failure(failure, retry: attempt))
+                    }
+                    throw error
+                }
+                if let success { await toasts?.post(success) }
+            }
+        }
+        attempt()
     }
 
     private var canSnooze: Bool {

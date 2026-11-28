@@ -7,9 +7,14 @@ import { findMenuSearch, registerMenuShortcuts } from "../menu-shortcuts.ts";
 import { observeMenuSpacing } from "../menu-spacing.ts";
 import type { OverlayPlacement } from "../overlay-anchor.ts";
 import { createOverlay, type Overlay } from "../overlay-lifecycle.ts";
-import { containsComposed, registryFor } from "../overlay-registry.ts";
+import { registryFor } from "../overlay-registry.ts";
 import { Icon } from "./icon.tsx";
-import { focusMenuRow, MENU_FORM_CONTROL_SELECTOR } from "./menu-form-controls.ts";
+import {
+  compareMenuElements,
+  focusMenuRow,
+  MENU_FORM_CONTROL_SELECTOR,
+  ownsMenuTarget,
+} from "./menu-form-controls.ts";
 import { useMenuMachine, type MenuBinding, type MenuControls } from "./menu-machine.ts";
 import { MenuNavigationError } from "./menu-navigation-error.tsx";
 import { useOverlayControl } from "./overlay-control.ts";
@@ -217,17 +222,12 @@ export function Menu(props: BranchProps): JSX.Element {
   const registeredElements = (): HTMLElement[] =>
     [...new Set([...binding.items(false), ...(props.controls?.elements ?? [])])]
       .filter((element) => overlay.surface.contains(element))
-      .toSorted((left, right) =>
-        left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
-      );
+      .toSorted(compareMenuElements);
   const formControls = (): HTMLElement[] =>
     registeredElements().filter(
       (control) =>
         control.matches(MENU_FORM_CONTROL_SELECTOR) &&
-        control.closest('[role="menu"]') === overlay.surface &&
-        ![...overlay.children].some(
-          (child) => child.open && containsComposed(child.surface, control),
-        ) &&
+        ownsMenuTarget(overlay, control) &&
         (control.tabIndex >= 0 || control.closest('[role^="menuitem"]')) &&
         !control.matches(':disabled, [aria-disabled="true"]') &&
         !control.closest("[inert]") &&
@@ -351,11 +351,7 @@ export function Menu(props: BranchProps): JSX.Element {
       return;
     }
     const target = event.target;
-    if (
-      !(target instanceof HTMLElement) ||
-      target.closest('[role="menu"]') !== overlay.surface ||
-      [...overlay.children].some((child) => child.open && containsComposed(child.surface, target))
-    ) {
+    if (!(target instanceof HTMLElement) || !ownsMenuTarget(overlay, target)) {
       return;
     }
     const search = searchInput();
@@ -387,9 +383,7 @@ export function Menu(props: BranchProps): JSX.Element {
       return;
     }
     const candidates = controls.includes(target)
-      ? [...controls, ...ownItems()].toSorted((left, right) =>
-          left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
-        )
+      ? [...controls, ...ownItems()].toSorted(compareMenuElements)
       : controls;
     const next = (event.shiftKey ? candidates.toReversed() : candidates).find(
       (candidate) =>
@@ -478,6 +472,25 @@ export function Menu(props: BranchProps): JSX.Element {
         return (
           <Show when={actionable()} fallback={fallback()}>
             {(item) => {
+              const renderLabel = (content?: () => JSX.Element) => (
+                <>
+                  <Show when={item().icon}>
+                    <span class="oc-menu-item__icon">{item().icon}</span>
+                  </Show>
+                  <span
+                    class={[
+                      "oc-menu-item__label",
+                      { "oc-menu-item__label--text": content?.() === undefined },
+                      item().labelClass,
+                    ]}
+                  >
+                    {content?.() ?? item().label}
+                  </span>
+                  <Show when={item().details}>
+                    <span class="oc-menu-item__details">{item().details}</span>
+                  </Show>
+                </>
+              );
               const Leaf = () => {
                 // The keyed leaf retains its renderer; its live bindings carry item changes.
                 const initialRenderCustom = untrack(() => item().render);
@@ -541,22 +554,7 @@ export function Menu(props: BranchProps): JSX.Element {
                           </Show>
                         </span>
                       </Show>
-                      <Show when={item().icon}>
-                        <span class="oc-menu-item__icon">{item().icon}</span>
-                      </Show>
-                      <span
-                        class={[
-                          "oc-menu-item__label",
-                          { "oc-menu-item__label--text": item().content === undefined },
-                          item().labelClass,
-                        ]}
-                      >
-                        {item().content ?? item().label}
-                      </span>
-
-                      <Show when={item().details}>
-                        <span class="oc-menu-item__details">{item().details}</span>
-                      </Show>
+                      {renderLabel(() => item().content)}
                     </Item>
                   );
                 };
@@ -580,28 +578,7 @@ export function Menu(props: BranchProps): JSX.Element {
                         items={childEntries()}
                         controls={props.controls}
                         placement={childPlacement()}
-                        trigger={
-                          item().trigger ?? (
-                            <>
-                              <Show when={item().icon}>
-                                <span class="oc-menu-item__icon">{item().icon}</span>
-                              </Show>
-                              <span
-                                class={[
-                                  "oc-menu-item__label",
-                                  "oc-menu-item__label--text",
-                                  item().labelClass,
-                                ]}
-                              >
-                                {item().label}
-                              </span>
-
-                              <Show when={item().details}>
-                                <span class="oc-menu-item__details">{item().details}</span>
-                              </Show>
-                            </>
-                          )
-                        }
+                        trigger={item().trigger ?? renderLabel()}
                         parent={overlay}
                         root={menuRoot}
                         parentBinding={binding}

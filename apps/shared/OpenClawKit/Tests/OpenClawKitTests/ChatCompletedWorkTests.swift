@@ -405,7 +405,7 @@ struct ChatCompletedWorkTests {
         ].map(Self.decode)
         let rows = ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: messages))
 
-        let works = Self.work(in: ChatTranscriptRow.collapseCompletedWork(rows, runWorking: false))
+        let works = Self.work(in: ChatTranscriptRow.collapseCompletedWork(rows.answeredByOpenAI(), runWorking: false))
         #expect(works.count == 1)
         let work = try #require(works.first)
         #expect(work.durationMilliseconds == 1_655_000)
@@ -445,7 +445,7 @@ struct ChatCompletedWorkTests {
         let rows = try ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: json.map(Self.decode)))
         // Automatic continuations resume the same request (web chat-turn-boundary.ts:88-102).
         #expect(rows.filter(\.startsTurn).count == 1)
-        let collapsed = ChatTranscriptRow.collapseCompletedWork(rows, runWorking: false)
+        let collapsed = ChatTranscriptRow.collapseCompletedWork(rows.answeredByOpenAI(), runWorking: false)
         let projected = collapsed.dropFirst().map { row -> String? in
             switch row {
             case let .message(message): ChatMessageVisibleText.visibleText(in: message)
@@ -498,7 +498,7 @@ struct ChatCompletedWorkTests {
         let rows = ChatTranscriptRow.collapseCompletedWork(ChatTranscriptRow.build(from: merged), runWorking: false)
         let logs = Self.work(in: rows)
         #expect(logs.map(\.isActivityRun) == [true, true])
-        #expect(logs.map { ChatCompletedWorkSummary.label(work: $0) } == ["Ran commands", "Ran commands, read files"])
+        #expect(logs.map { ChatCompletedWorkSummary.label(work: $0) } == ["Ran commands", "Read files, ran commands"])
         // Narration and a lone command between it stay in place; a failure stays inside its log.
         #expect(Self.visibleIDs(rows) == [user.id, merged[3].id, merged[6].id, merged[7].id])
         #expect(logs.last.map { ChatToolActivity.items(message: $0.messages[0]).map(\.isError) } == [true])
@@ -549,7 +549,7 @@ struct ChatCompletedWorkTests {
         // Answered: the other tools fold into "Worked"; the launch stays beside the answer.
         let answer = Self.message("assistant", "Auditor is on it.", at: 3, run: "p", phase: "final_answer")
         let done = ChatTranscriptRow.collapseCompletedWork(
-            ChatTranscriptRow.build(from: merged + [answer]), runWorking: false)
+            ChatTranscriptRow.build(from: (merged + [answer]).answeredByOpenAI()), runWorking: false)
         #expect(Self.visibleIDs(done) == [user.id, launchRow.id, answer.id])
         #expect(Self.work(in: done).map(\.messages.count) == [4])
         #expect(Self.work(in: done).map(\.isActivityRun) == [false])
@@ -589,7 +589,8 @@ struct ChatCompletedWorkTests {
     }
 
     private static func collapse(_ messages: [OpenClawChatMessage], working: Bool = false) -> [ChatTranscriptRow] {
-        ChatTranscriptRow.collapseCompletedWork(ChatTranscriptRow.build(from: messages), runWorking: working)
+        ChatTranscriptRow.collapseCompletedWork(
+            ChatTranscriptRow.build(from: messages.answeredByOpenAI()), runWorking: working)
     }
 
     private static func work(in rows: [ChatTranscriptRow]) -> [ChatTranscriptRow.CompletedWork] {

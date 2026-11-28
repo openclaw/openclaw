@@ -20,4 +20,18 @@ struct ChatTranscriptTimeTests {
         }
         #expect(ChatMessageClock(timestamp: nil) == nil)
     }
+
+    @Test func `user status only takes space for visible send states`() {
+        for phase: ChatUserSendPresentation.Phase? in [nil, .sending, .uploading, .queued, .notSent, .deliveryUnknown] {
+            let host = UIHostingController(rootView: VStack(spacing: 4) {
+                Color.clear.frame(height: 40)
+                ChatUserMessageStatus(send: phase.map { ChatUserSendPresentation(phase: $0) })
+            })
+            let height = host.sizeThatFits(in: CGSize(width: 320, height: 500)).height
+            switch phase {
+            case nil, .sending, .uploading: #expect(height == 40)
+            case .queued, .notSent, .deliveryUnknown: #expect(height > 44)
+            }
+        }
+    }
 }

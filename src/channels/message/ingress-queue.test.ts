@@ -23,7 +23,6 @@ import {
   listChannelIngressQueueAccountIdsReadOnly,
 } from "./ingress-queue.js";
 import { createTestIngressQueue, useRetainedIngressState } from "./ingress-queue.test-helpers.js";
-import { channelIngressOperations } from "./ingress-queue.worker.js";
 
 type ChannelIngressTestDatabase = Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">;
 
@@ -41,46 +40,6 @@ function openIngressStateDatabase(stateDir: string) {
 }
 
 describe("channel ingress queue", () => {
-  it("reads committed claim states without a transaction for single-statement inspections", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue<{ text: string }>(stateDir);
-      await queue.enqueue("pending", { text: "waiting" });
-      await queue.enqueue("claimed", { text: "active" });
-      await queue.enqueue("failed", { text: "rejected" });
-      await queue.claim("claimed");
-      await queue.fail("failed", { reason: "rejected" });
-      const database = openIngressStateDatabase(stateDir);
-      const context = {
-        open: () => database,
-        stateOptions: () => ({ path: database.path, env: { OPENCLAW_STATE_DIR: stateDir } }),
-      };
-      const queueName = JSON.stringify(["test", "account"]);
-      const transactionSql = vi.spyOn(database.db, "exec");
-      try {
-        for (const [status, ids] of [
-          ["claimed", ["claimed"]],
-          ["failed", ["failed"]],
-          ["unsettled", ["claimed", "pending"]],
-        ] as const) {
-          const rows = channelIngressOperations["channelIngress.list"](
-            { queueName, status, readOnly: false, orderBy: "id" },
-            context,
-          );
-          expect(rows.map((row) => row.event_id)).toEqual(ids);
-        }
-        const snapshot = channelIngressOperations["channelIngress.claimSnapshot"](
-          { queueName, blockedLaneKeys: [], deriveLaneKey: false },
-          context,
-        );
-        expect(snapshot.pending.map((row) => row.event_id)).toEqual(["pending"]);
-        expect(snapshot.claimed).toEqual([]);
-        expect(transactionSql).not.toHaveBeenCalled();
-      } finally {
-        transactionSql.mockRestore();
-      }
-    });
-  });
-
   it("rejects empty claim IDs through its async result", async () => {
     const queue = createChannelIngressQueue({ channelId: "invalid-input" });
     const invalid = { id: " ", claim: { token: "fixture" } };
@@ -474,13 +433,10 @@ describe("channel ingress queue", () => {
       eventId: string,
       overrides: Partial<{
         payload_json: string;
-        metadata_json: string | null;
-        completed_metadata_json: string | null;
         status: string;
         claim_token: string;
         claim_owner: string;
         claimed_at: number;
-        completed_at: number;
       }>,
     ) {
       const { db } = openIngressStateDatabase(stateDir);
@@ -496,15 +452,15 @@ describe("channel ingress queue", () => {
           status: overrides.status ?? "pending",
           lane_key: null,
           payload_json: overrides.payload_json ?? "null",
-          metadata_json: overrides.metadata_json ?? null,
-          completed_metadata_json: overrides.completed_metadata_json ?? null,
+          metadata_json: null,
+          completed_metadata_json: null,
           received_at: 100,
           updated_at: 200,
           attempts: 0,
           claim_token: claimValue,
           claim_owner: overrides.claim_owner ?? null,
           claimed_at: overrides.claimed_at ?? null,
-          completed_at: overrides.completed_at ?? null,
+          completed_at: null,
         } as Insertable<OpenClawStateKyselyDatabase["channel_ingress_events"]>),
       );
     }

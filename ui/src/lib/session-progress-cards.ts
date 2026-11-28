@@ -44,6 +44,7 @@ type ProgressCardEntry = {
   dirty: boolean;
   hydratedScope?: object;
   refreshPending?: boolean;
+  clearingRevision?: number;
   card?: ProgressCard | null;
   error?: SessionProgressCardLoadError;
   load?: Promise<ProgressCard | null>;
@@ -71,7 +72,10 @@ export type SessionProgressCardStore = {
   dismiss: (target: ProgressCardGetParams, card: ProgressCard) => Promise<boolean>;
   refresh: (target: ProgressCardGetParams, card: ProgressCard) => void;
   getRefreshState: (target: ProgressCardGetParams) => SessionProgressCardRefreshState | undefined;
-  get: (target: ProgressCardGetParams) => ProgressCard | null | undefined;
+  get: (
+    target: ProgressCardGetParams,
+    view?: "visible" | "saved",
+  ) => ProgressCard | null | undefined;
   getReadCompletion: (target: ProgressCardGetParams) => Promise<ProgressCard | null> | undefined;
   getLifetime: (target: ProgressCardGetParams) => object | undefined;
   getError: (target: ProgressCardGetParams) => SessionProgressCardLoadError | undefined;
@@ -601,41 +605,55 @@ export function sessionProgressCardsForGateway(
       }
       const resolved = resolveTarget(target);
       const entry = entries.get(resolved.key);
-      if (!entry || entry.card !== card) {
+      if (!entry || entry.card !== card || entry.clearingRevision === card.revision) {
         return false;
       }
       const current = () =>
-        entries.get(resolved.key) === entry && gateway.snapshot.client === client;
-      const result = await client
-        .request<ProgressCardPutResult>("progressCard.put", {
+        entries.get(resolved.key) === entry &&
+        gateway.snapshot.client === client &&
+        entry.clearingRevision === card.revision;
+      entry.clearingRevision = card.revision;
+      delete entry.error;
+      notify();
+      try {
+        const result = await client.request<ProgressCardPutResult>("progressCard.put", {
           ...progressCardRequestTarget(entry.target),
           expectedRevision: card.revision,
-        })
-        .catch((error: unknown) => {
-          if (current()) {
-            recordRequestError(entry, error, "put");
-          }
-          throw error;
         });
-      const resultCard = parseProgressCard(result, entry.wireKey);
-      if (!current()) {
-        return false;
+        if (!current()) {
+          return false;
+        }
+        const resultCard = parseProgressCard(result, entry.wireKey);
+        if ((entry.card?.revision ?? 0) <= (resultCard?.revision ?? card.revision)) {
+          entry.readRetry?.reset();
+          entry.card = resultCard;
+          acceptLifetime(resolved.key, entry.target, resultCard);
+          entry.dirty = false;
+          delete entry.error;
+          remember(resolved.key, entry);
+        }
+        return resultCard === null;
+      } catch (error) {
+        if (!current() || entry.card?.revision !== card.revision) {
+          return false;
+        }
+        delete entry.clearingRevision;
+        recordRequestError(entry, error, "put");
+        throw error;
+      } finally {
+        if (current()) {
+          delete entry.clearingRevision;
+          notify();
+        }
       }
-      const dismissed = resultCard === null;
-      if ((entry.card?.revision ?? 0) <= (resultCard?.revision ?? card.revision)) {
-        entry.readRetry?.reset();
-        entry.card = resultCard;
-        acceptLifetime(resolved.key, entry.target, resultCard);
-        entry.dirty = false;
-        delete entry.error;
-        remember(resolved.key, entry);
-        notify();
-      }
-      return dismissed;
     },
-    get: (target) => {
+    get: (target, view = "visible") => {
       syncLifetimeScope();
-      return entries.get(resolveTarget(target).key)?.card;
+      const entry = entries.get(resolveTarget(target).key);
+      // Only the clicked revision is projected away; snapshots and card lifetime stay authoritative.
+      return view === "visible" && entry?.card && entry.clearingRevision === entry.card.revision
+        ? null
+        : entry?.card;
     },
     getLifetime: (target) => {
       syncLifetimeScope();
