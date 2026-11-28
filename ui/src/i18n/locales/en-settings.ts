@@ -500,6 +500,7 @@ const enSettings = {
     useDefaultValue: "Use default ({value})",
     defaultOption: "{value} (default)",
     select: "Select…",
+    noAvailableChoices: "No available choices",
     required: "Required",
     enumOn: "On",
     enumOff: "Off",
