@@ -158,6 +158,7 @@ it("answers an ordinary inbound message with account bindings disabled without p
 
 it.each([
   ["channel", "channel"],
+  ["enabled", "enabled"],
   ["enabled", "channel"],
   ["channel", "enabled"],
 ] as const)("keeps replacement owner: %s → %s", async (previous, next) => {
@@ -171,10 +172,37 @@ it.each([
   } else {
     await expectAvailableEmptyOwner();
   }
+  await current.handleUpdate({
+    update_id: 1002,
+    message: { message_id: 102, date: 1736380800, chat, from, text: "hello again" },
+  });
+  expect(apiCalls.mock.calls.filter(([method]) => method === "sendMessage")).toEqual([
+    ["sendMessage", expect.objectContaining({ text: "ordinary reply" })],
+  ]);
   await current.stop();
   await current.stop();
   await expectUnavailableOwner();
   expect(storedBindings()).toEqual([]);
+});
+
+it("does not let canceled bot setup retire the active binding owner", async () => {
+  const cfg = await prepareConfig("enabled");
+  const current = await createNativeBot(false, true, cfg, false, accountId);
+  const owner = getTelegramThreadBindingManager(accountId);
+  await expect(
+    createTelegramBotCore({
+      token,
+      accountId,
+      config: cfg,
+      botInfo: telegramBotInfoForTest,
+      accountAbortSignal: AbortSignal.abort(),
+      telegramTransport: { fetch, sourceFetch: fetch, close: async () => {} },
+    }),
+  ).rejects.toMatchObject({ name: "AbortError" });
+  expect(getTelegramThreadBindingManager(accountId)).toBe(owner);
+  await expect(service.resolveByConversationAsync(conversation)).resolves.toBeNull();
+  await current.stop();
+  await expectUnavailableOwner();
 });
 
 it("does not retain an owner when the real bot constructor fails with enabled bindings", async () => {

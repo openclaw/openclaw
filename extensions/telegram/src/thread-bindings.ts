@@ -36,6 +36,7 @@ import {
   pendingBindingValue,
   getThreadBindingsState,
   listBindingsForAccount,
+  type TelegramThreadBindingOwner,
 } from "./thread-bindings-state.js";
 import {
   normalizeMetadataForStore,
@@ -55,6 +56,7 @@ type TelegramThreadBindingManagerParams = {
   idleTimeoutMs?: number;
   maxAgeMs?: number;
   enableSweeper?: boolean;
+  replaceExisting?: boolean;
   prepareAcpSession?: Parameters<typeof reconcileTelegramAcpBindingsOnStartup>[0]["prepareSession"];
 };
 
@@ -83,7 +85,11 @@ async function initializeThreadBindingManager(
 ): Promise<TelegramThreadBindingManager> {
   const existing = getThreadBindingsState().managersByAccountId.get(accountId);
   if (existing) {
-    return existing;
+    if (!params.replaceExisting) {
+      return existing;
+    }
+    // Prior binding writes have joined this account's queue. The new bot owns its own adapter.
+    existing.retireInQueue();
   }
 
   // Adapter calls can run in another plugin's instance (for example `/codex detach`),
@@ -140,7 +146,7 @@ async function initializeThreadBindingManager(
     return conversationId ? captureBindingMutation(manager, runtime, conversationId) : undefined;
   };
 
-  const manager: TelegramThreadBindingManager = {
+  const manager: TelegramThreadBindingOwner = {
     accountId,
     shouldPersistMutations: () => persist,
     getIdleTimeoutMs: () => idleTimeoutMs,
@@ -256,34 +262,29 @@ async function initializeThreadBindingManager(
       }
       return next;
     },
-    stop: () => {
-      if (stopping) {
-        return stopping;
-      }
+    retireInQueue: () => {
       if (sweepTimer) {
         clearInterval(sweepTimer);
         sweepTimer = null;
       }
-      stopping = queueBindingWork(accountId, async () => {
-        unregisterSessionBindingAdapter({
-          channel: "telegram",
-          accountId,
-          adapter: sessionBindingAdapter,
-        });
-        const state = getThreadBindingsState();
-        const existingManager = state.managersByAccountId.get(accountId);
-        if (existingManager === manager) {
-          state.managersByAccountId.delete(accountId);
-          // Live bindings belong to this manager generation; persisted rows reload on restart.
-          for (const binding of listBindingsForAccount(accountId)) {
-            state.bindingsByAccountConversation.delete(
-              resolveBindingKey({ accountId, conversationId: binding.conversationId }),
-            );
-          }
-        }
+      const state = getThreadBindingsState();
+      if (state.managersByAccountId.get(accountId) !== manager) {
+        return;
+      }
+      unregisterSessionBindingAdapter({
+        channel: "telegram",
+        accountId,
+        adapter: sessionBindingAdapter,
       });
-      return stopping;
+      state.managersByAccountId.delete(accountId);
+      // Live bindings belong to this manager generation; persisted rows reload on restart.
+      for (const binding of listBindingsForAccount(accountId)) {
+        state.bindingsByAccountConversation.delete(
+          resolveBindingKey({ accountId, conversationId: binding.conversationId }),
+        );
+      }
     },
+    stop: () => (stopping ??= queueBindingWork(accountId, async () => manager.retireInQueue())),
   };
 
   const projectSessionBinding = (record: TelegramThreadBindingRecord) =>

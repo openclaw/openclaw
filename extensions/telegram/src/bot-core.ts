@@ -366,11 +366,13 @@ export async function createTelegramBotCore(
   handlers.register(nativeCommandCallbackDispatcher);
 
   const originalStop = bot.stop.bind(bot);
-  // Acquire the account owner only after bot setup has succeeded.
+  // Canceled setup can finish after the replacement has already registered its owner.
+  opts.accountAbortSignal?.throwIfAborted();
   const threadBindingManager = threadBindingPolicy.enabled
     ? await createTelegramThreadBindingManager({
         cfg,
         accountId: account.accountId,
+        replaceExisting: true,
         idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel(threadBindingScope),
         maxAgeMs: resolveThreadBindingMaxAgeMsForChannel(threadBindingScope),
       })
