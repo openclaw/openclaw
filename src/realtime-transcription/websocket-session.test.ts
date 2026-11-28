@@ -131,6 +131,21 @@ function encodeSequence(value: number): Buffer {
   return frame;
 }
 
+it("fails finite pre-ready audio overflow without retaining a truncated tail", () => {
+  const onError = vi.fn();
+  const session = createSession({
+    url: "ws://127.0.0.1:1",
+    lifecycle: "utterance",
+    maxQueuedBytes: 2,
+    callbacks: { onError },
+  });
+  session.sendAudio(Buffer.from("abc"));
+  expect(onError).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ message: expect.stringContaining("queue exceeded") }),
+  );
+  expect(session.isConnected()).toBe(false);
+});
+
 it.each(["closed", "reconnect"] as const)("retains the audio tail: %s", async (phase) => {
   const reconnect = phase === "reconnect";
   const { session, frames, waitFrames, connection } = await setup({

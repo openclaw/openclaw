@@ -12,6 +12,10 @@ function createRuntimeFacade<T extends { [K in keyof T]: (...args: never[]) => u
     }
     const value = { ...source };
     for (const method of methods) {
+      // Optional SDK operations must stay absent on older/custom hosts.
+      if (source[method] === undefined) {
+        continue;
+      }
       Object.defineProperty(value, method, {
         configurable: true,
         enumerable: true,
@@ -61,6 +65,7 @@ export function createPluginRuntimeFacades(invokeSelectedRuntime: <T>(run: () =>
         "extractStructuredWithModel",
         "describeVideoFile",
         "transcribeAudioFile",
+        "transcribeAudioStream",
       ],
     ),
     modelAuth: createRuntimeFacade<PluginRuntime["modelAuth"]>(invokeSelectedRuntime, [

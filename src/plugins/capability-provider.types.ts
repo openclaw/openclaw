@@ -16,6 +16,7 @@ import type {
   RealtimeTranscriptionSessionCreateRequest,
 } from "../realtime-transcription/provider-contexts.js";
 import type {
+  RealtimeTranscriptionAudioFormat,
   RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderId,
   RealtimeTranscriptionSession,
@@ -649,6 +650,10 @@ export type RealtimeTranscriptionProviderPlugin = {
   defaultModel?: string;
   models?: readonly string[];
   autoSelectOrder?: number;
+  utterance?: {
+    formats: readonly RealtimeTranscriptionAudioFormat[];
+    models?: readonly string[];
+  };
   resolveConfig?: (
     ctx: RealtimeTranscriptionProviderResolveConfigContext,
   ) => RealtimeTranscriptionProviderConfig;

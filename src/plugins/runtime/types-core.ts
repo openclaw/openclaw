@@ -387,6 +387,8 @@ export type PluginRuntimeCore = {
     extractStructuredWithModel: MediaUnderstandingRuntime["extractStructuredWithModel"];
     describeVideoFile: MediaUnderstandingRuntime["describeVideoFile"];
     transcribeAudioFile: MediaUnderstandingRuntime["transcribeAudioFile"];
+    /** Optional for older hosts; unsupported selections retain the batch path. */
+    transcribeAudioStream?: MediaUnderstandingRuntime["transcribeAudioStream"];
   };
   imageGeneration: {
     generate: (

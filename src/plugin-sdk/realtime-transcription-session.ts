@@ -7,6 +7,7 @@ export type {
   RealtimeTranscriptionSessionCreateRequest,
 } from "../realtime-transcription/provider-contexts.js";
 export type {
+  RealtimeTranscriptionAudioFormat,
   RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderId,
   RealtimeTranscriptionSession,
@@ -17,3 +18,7 @@ export {
   type RealtimeTranscriptionWebSocketSessionOptions,
   type RealtimeTranscriptionWebSocketTransport,
 } from "../realtime-transcription/websocket-session.js";
+export {
+  createFiniteRealtimeTranscriptionSession,
+  type FiniteRealtimeTranscriptionSessionOptions,
+} from "../realtime-transcription/finite-session.js";

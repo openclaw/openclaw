@@ -44,6 +44,8 @@ export type RealtimeTranscriptionWebSocketSessionOptions<Event = unknown> = {
     | (() => Record<string, string> | Promise<Record<string, string>>);
   maxQueuedBytes?: number;
   maxReconnectAttempts?: number;
+  /** Finite audio must never be silently dropped or resumed on a new provider session. */
+  lifecycle?: "continuous" | "utterance";
   onClose?: (transport: RealtimeTranscriptionWebSocketTransport) => void;
   onMessage?: (event: Event, transport: RealtimeTranscriptionWebSocketTransport) => void;
   onOpen?: (transport: RealtimeTranscriptionWebSocketTransport) => void;
@@ -147,6 +149,10 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     this.clearQueuedAudio();
     const socket = this.ws;
     const transport = this.transport;
+    if (this.options.lifecycle === "utterance") {
+      this.forceClose(socket);
+      return;
+    }
     if (!socket || socket.readyState !== WEBSOCKET_OPEN || !transport) {
       this.forceClose(socket);
       return;
@@ -422,6 +428,17 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
             );
             return;
           }
+          if (this.options.lifecycle === "utterance") {
+            this.closed = true;
+            this.clearQueuedAudio();
+            this.forceClose(socket);
+            this.emitError(
+              new Error(
+                `${this.options.providerId} transcription connection lost before completion`,
+              ),
+            );
+            return;
+          }
           void this.attemptReconnect(generation);
         });
       })();
@@ -474,6 +491,17 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
   }
 
   private queueAudio(audio: Buffer): void {
+    if (
+      this.options.lifecycle === "utterance" &&
+      this.queuedBytes + audio.byteLength >
+        (this.options.maxQueuedBytes ?? DEFAULT_MAX_QUEUED_BYTES)
+    ) {
+      this.close();
+      this.emitError(
+        new Error(`${this.options.providerId} transcription audio queue exceeded its byte limit`),
+      );
+      return;
+    }
     const queued = copyOwnedBuffer(audio);
     this.queuedAudio.push(queued);
     this.queuedBytes += queued.byteLength;

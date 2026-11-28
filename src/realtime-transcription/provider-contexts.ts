@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
+  RealtimeTranscriptionAudioFormat,
   RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionSessionCallbacks,
 } from "./provider-types.js";
@@ -23,5 +24,7 @@ export type RealtimeTranscriptionProviderConfiguredContext = {
 /** Inputs passed to a provider when creating a transcription session. */
 export type RealtimeTranscriptionSessionCreateRequest = RealtimeTranscriptionSessionCallbacks & {
   cfg?: OpenClawConfig;
+  agentId?: string;
+  utterance?: { format: RealtimeTranscriptionAudioFormat; signal: AbortSignal };
   providerConfig: RealtimeTranscriptionProviderConfig;
 };
