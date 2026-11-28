@@ -27,6 +27,8 @@ pub struct BindOptions {
     pub ip_transports: Option<bool>,
     /// QUIC connection keep-alive interval in milliseconds (nonzero).
     pub keep_alive_ms: Option<u32>,
+    /// Initial peer-opened bidirectional stream credit; omitted uses iroh's default.
+    pub max_concurrent_bi_streams: Option<u32>,
 }
 
 /// Binds an endpoint with the Minimal preset (no pkarr, no n0 DNS, no n0 relays) and our relay only.
@@ -51,16 +53,17 @@ pub async fn bind(opts: BindOptions) -> Result<Endpoint> {
         .secret_key(SecretKey::from_bytes(&key))
         .alpns(alpns)
         .relay_mode(relay);
+    let mut transport = QuicTransportConfig::builder();
+    if let Some(max) = opts.max_concurrent_bi_streams {
+        transport = transport.max_concurrent_bidi_streams(max.into());
+    }
     if let Some(ms) = opts.keep_alive_ms {
         if ms == 0 {
             return Err(js_err("keepAliveMs must be positive"));
         }
-        b = b.transport_config(
-            QuicTransportConfig::builder()
-                .keep_alive_interval(Duration::from_millis(u64::from(ms)))
-                .build(),
-        );
+        transport = transport.keep_alive_interval(Duration::from_millis(u64::from(ms)));
     }
+    b = b.transport_config(transport.build());
     if opts.ip_transports == Some(false) {
         b = b.clear_ip_transports();
     }

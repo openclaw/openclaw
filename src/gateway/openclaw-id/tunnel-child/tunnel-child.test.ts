@@ -209,6 +209,29 @@ describe.skipIf(!binding)("tunnel child", () => {
     }
   }, 20_000);
 
+  it("grants only 64 streams at handshake", async () => {
+    const { client, session } = await admittedClient();
+    try {
+      for (let i = 0; i < 64; i += 1) {
+        const stream = await session.conn.openBi();
+        // Announce each stream, keeping its HEAD incomplete so none can finish.
+        await stream.send.write(Buffer.from([0]));
+      }
+      let opened = false;
+      // Consume the rejection when closing the client cancels the queued open.
+      void session.conn.openBi().then(
+        () => {
+          opened = true;
+        },
+        () => {},
+      );
+      await sleep(100);
+      expect(opened).toBe(false);
+    } finally {
+      await client.close();
+    }
+  }, 20_000);
+
   it("resets a stream with a malformed HEAD", async () => {
     const { client, session } = await admittedClient();
     try {
