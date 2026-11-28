@@ -573,7 +573,9 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     // Skills uses the shared agent selection in place; opening chat would
     // discard the discovery page instead of updating its workspace scope.
     if (this.activeRouteId !== "skills") {
-      if (this.connected) {
+      // The last hello still supplies routing defaults for this Gateway during reconnect.
+      // Chat owns loading and send readiness; switching here only changes navigation.
+      if (this.connected || this.context.gateway.snapshot.hello) {
         this.selectSession(
           resolveKey({
             agentId,

@@ -1,5 +1,9 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import {
+  waitForControlUiGatewayReady,
+  waitForControlUiGatewayReconnecting,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { agentRoster } from "./agent-roster.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -35,6 +39,35 @@ function projectRow(page: Page, agentId: string) {
 }
 
 suite.define(() => {
+  it("opens the selected agent's chat when switching during reconnect", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
+        sessions: ["main", "writer"].map((agentId) =>
+          createControlUiSessionRow(`agent:${agentId}:main`, agentId, 1_789_540_000_000, {
+            agentId,
+          }),
+        ),
+        historyMessages: [{ role: "assistant", content: "Synthetic agent-switch conversation." }],
+        methodResponses: {
+          "agents.list": agentRoster({ main: "Main", writer: "Writer" }, "main", "per-sender"),
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat/main`);
+      await page.getByText("Synthetic agent-switch conversation.", { exact: true }).waitFor();
+      await gateway.setOnline(false);
+      await waitForControlUiGatewayReconnecting(page);
+
+      await switchAgent(page, "writer");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/writer");
+
+      await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
+      await gateway.waitForRequest("chat.startup", { match: { sessionKey: "agent:writer:main" } });
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/writer");
+    });
+  });
+
   it("shows selected rows before history and restores warm rows before the replacement list", async () => {
     await suite.withPage(
       {

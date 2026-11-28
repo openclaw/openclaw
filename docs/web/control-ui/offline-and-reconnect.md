@@ -18,6 +18,9 @@ pane header, for example **Reconnecting… · Saved conversation**, without movi
 header controls or the transcript. Resolving a session link or loading
 history does not imply a lost connection.
 
+In an already connected tab, the sidebar's agent switcher can still open the
+selected agent's conversation while the Gateway reconnects.
+
 Returning to a suspended tab or regaining network connectivity can recover a
 stale connection. These signals do not retry a connection that requires a page
 reload, corrected credentials, or a new pairing request. Follow the displayed
