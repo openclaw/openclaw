@@ -126,7 +126,10 @@ Open the chip to choose whose sessions appear. **Involving me** also includes
 participation and mentions. External catalog entries appear in **Involving me**
 only when their adopted OpenClaw conversation is in the Gateway-filtered list.
 Shared or imported catalog access alone does not establish involvement; use
-**All owners** to browse those sources. The separate filter button controls the
+**All owners** to browse those sources. **Hide from Involving me** removes the row
+from your personal list immediately. If the change fails, the row returns. The session
+remains in **All owners**, where **Advanced → Show in Involving me** reverses the choice.
+The separate filter button controls the
 remaining session filters. On mobile chat, open navigation and choose **Sessions**
 to reach **New session** in the list header. The conversation header keeps its
 two right-hand controls for **Session actions** and **Panels**. Other mobile pages

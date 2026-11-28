@@ -1,5 +1,6 @@
 import type {
   SessionOwner,
+  SessionsSetInvolvementParams,
   SessionsAssignOwnerParams,
   SessionsAssignOwnerResult,
   SessionsPatchManyParams,
@@ -64,6 +65,8 @@ export function createSessionMutations(host: SessionMutationsHost) {
     color: createOptimisticRowField(host, "color"),
     category: optimisticCategories,
   };
+  const involvement = createOptimisticRowField(host, "hiddenFromInvolvingMe");
+  const involvementWrites = new Map<string, Promise<void>>();
   const optimisticUnread = createOptimisticRowField(host, "unread");
   const acknowledgeHiddenRuns = createHiddenRunReads(host, optimisticUnread);
   const optimisticArchive = createOptimisticArchivePatches(host);
@@ -75,6 +78,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     >
   > = [
     optimisticPins,
+    involvement,
     optimisticUnread,
     optimisticArchive,
     ...Object.values(metadataFields),
@@ -453,6 +457,52 @@ export function createSessionMutations(host: SessionMutationsHost) {
     settingsPreview(this: void, key: string, agentId?: string) {
       const conversation = resolvePendingConversation(host.snapshot(), key, agentId);
       return conversation ? settingsPatches.read(conversation.identity) : undefined;
+    },
+    async setInvolvement(params: SessionsSetInvolvementParams): Promise<boolean> {
+      const scope = host.connection.capture();
+      const conversation = resolvePendingConversation(host.snapshot(), params.key, params.agentId);
+      if (!scope || !conversation) {
+        return false;
+      }
+      const target = { ...conversation, sessionId: params.expectedSessionId };
+      const confirm = host.capturePatchFields(target);
+      const token = involvement.prepare(() => params.hidden)(target);
+      // Hide and Show can come from different menus. Project the latest click now,
+      // but send both decisions in click order, even if the first write fails.
+      const key = JSON.stringify([scope.epoch, target.identity, target.sessionId]);
+      const previous = involvementWrites.get(key);
+      const dispatch = async () => {
+        if (host.connection.isCurrent(scope)) {
+          await scope.client.request("sessions.setInvolvement", params);
+          confirm({
+            ...target,
+            updatedAt: null,
+            readCutoff: host.readRevision(),
+            fields: { hiddenFromInvolvingMe: params.hidden },
+          });
+        }
+      };
+      const write = previous ? previous.then(dispatch, dispatch) : dispatch();
+      involvementWrites.set(key, write);
+      const latest = () => host.connection.isCurrent(scope) && involvementWrites.get(key) === write;
+      let confirmed = false;
+      try {
+        await write;
+        confirmed = true;
+        return latest();
+      } catch (error) {
+        if (latest()) {
+          throw error;
+        }
+        return false;
+      } finally {
+        if (involvementWrites.get(key) === write) {
+          involvementWrites.delete(key);
+        }
+        if (token) {
+          involvement.settle(target, token, confirmed, host.connection.isCurrent(scope));
+        }
+      }
     },
     patchMany,
     acknowledgeHiddenRuns,

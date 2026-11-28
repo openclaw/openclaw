@@ -28,9 +28,6 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   createLiveSessionContext,
-  createContext,
-  createGateway,
-  createManagedSessions,
   createPage,
   createRenderedPage,
   liveSessions,
@@ -470,14 +467,14 @@ describe("sessions command outcomes", () => {
     const pending = createDeferred<{ ok: boolean }>();
     const failure = new Error("Personal visibility unavailable. Try again.");
     let fail = true;
-    const request = vi.fn((method: string) =>
-      method === "sessions.setInvolvement"
-        ? fail
-          ? pending.promise
-          : Promise.resolve({ ok: true })
-        : Promise.resolve({ profiles: [] }),
-    );
-    const connection = createGateway({ request } as unknown as GatewayBrowserClient);
+    const row = sessionRow("personal-retry", { hiddenFromInvolvingMe: true });
+    const { request, connection, context } = liveSessions({
+      "sessions.list": () => sessionsResult([{ ...row, hiddenFromInvolvingMe: fail }], 1),
+      "sessions.describe": () => ({ session: { ...row, hiddenFromInvolvingMe: fail } }),
+      "sessions.setInvolvement": () => (fail ? pending.promise : { ok: true }),
+      "sessions.subscribe": () => ({ subscribed: true }),
+      "users.list": () => ({ profiles: [] }),
+    });
     connection.emit({
       hello: {
         ...gatewayHelloForMethods(
@@ -487,9 +484,7 @@ describe("sessions command outcomes", () => {
         policy: { hasMultipleSessionSharingIdentities: true },
       },
     });
-    const managed = createManagedSessions();
-    const row = sessionRow("personal-retry", { hiddenFromInvolvingMe: true });
-    const context = createContext(connection.gateway, managed.sessions);
+    const refreshList = vi.spyOn(context.sessions, "refreshList");
     const page = await createRenderedPage(context, sessionsResult([row], 1));
     const menu = await openRowMenu(page, row);
     await openSubmenu(menu, "Advanced");
@@ -506,29 +501,36 @@ describe("sessions command outcomes", () => {
       }),
     );
     await waitForFast(() => expect(page.textContent).toContain("Working"));
+    const projected = await openRowMenu(page, row);
+    await openSubmenu(projected, "Advanced");
+    expect(projected.querySelector('[value="toggle-involving-me"]')?.textContent).toContain(
+      "Hide from Involving me",
+    );
     pending.reject(failure);
     await waitForFast(() => {
       const alerts = page.querySelectorAll('[role="alert"]');
-      expect(alerts).toHaveLength(1);
-      expect(alerts[0]?.textContent).toContain(failure.message);
+      expect([...alerts].map((alert) => alert.textContent)).toEqual([failure.message]);
       expect(page.textContent).not.toContain("Working");
     });
 
-    const refreshCalls = managed.refreshList.mock.calls.length;
+    expect(page.result?.sessions[0]?.hiddenFromInvolvingMe).toBe(true);
+    const refreshCalls = refreshList.mock.calls.length;
     page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
     await waitForFast(() => {
-      expect(managed.refreshList).toHaveBeenCalledTimes(refreshCalls + 1);
+      expect(refreshList).toHaveBeenCalledTimes(refreshCalls + 1);
       expect(page.querySelector('[role="alert"]')).toBeNull();
     });
     page.onSortChange("key", "asc");
     await page.updateComplete;
     expect(page.querySelector('[role="alert"]')).toBeNull();
     fail = false;
-    const retry = await openRowMenu(page, row);
-    await openSubmenu(retry, "Advanced");
-    await selectMenuValue(retry, "toggle-involving-me");
-    await waitForFast(() => expect(managed.refreshList).toHaveBeenCalledTimes(refreshCalls + 2));
-    expect(managed.sessions.patch).not.toHaveBeenCalled();
+    expect(projected.querySelector('[value="toggle-involving-me"]')?.textContent).toContain(
+      "Show in Involving me",
+    );
+    await selectMenuValue(projected, "toggle-involving-me");
+    await waitForFast(() => expect(refreshList).toHaveBeenCalledTimes(refreshCalls + 2));
+    expect(page.result?.sessions[0]?.hiddenFromInvolvingMe).toBe(false);
+    expect(request.mock.calls.some(([method]) => method === "sessions.patch")).toBe(false);
   });
 
   it("keeps a failed roster refresh visible after a successful deletion", async () => {

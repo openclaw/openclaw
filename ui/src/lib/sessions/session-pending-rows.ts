@@ -23,6 +23,7 @@ type PendingRowCopyHost = PendingRowHost & {
 export type SessionPinFields = { pinned: boolean; pinnedAt: number | undefined };
 type SessionFastModeFields = Pick<GatewaySessionRow, "fastMode" | "effectiveFastMode">;
 export const optimisticSessionRowFields = [
+  "hiddenFromInvolvingMe",
   "pinned",
   "pinnedAt",
   "unread",
@@ -60,6 +61,7 @@ export type SessionPatchRowFact = {
     | { icon: GatewaySessionRow["icon"] }
     | { color: GatewaySessionRow["color"] }
     | { category: GatewaySessionRow["category"] }
+    | Pick<GatewaySessionRow, "hiddenFromInvolvingMe">
     | SessionPinFields
     | { pinned: true }
     | SessionReadFields
@@ -330,6 +332,7 @@ export function createOptimisticRowPatches<T>(
 
 export function createOptimisticRowField<
   Field extends
+    | "hiddenFromInvolvingMe"
     | "label"
     | "icon"
     | "color"

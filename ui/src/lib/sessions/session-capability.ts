@@ -56,6 +56,7 @@ export type SessionCapability = Pick<
   | "acknowledgeHiddenRuns"
   | "archiveVisibility"
   | "beginArchive"
+  | "setInvolvement"
   | "assignOwner"
   | "retireModelOverride"
   | "settingsPreview"

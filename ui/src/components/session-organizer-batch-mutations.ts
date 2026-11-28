@@ -14,7 +14,6 @@ import {
   type SessionMethodAccessRequest,
 } from "../lib/session-method-access.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
-import { requestSessionInvolvement } from "../lib/sessions/session-requests.ts";
 import type {
   SidebarRecentSession,
   SidebarSessionMutationResult,
@@ -292,24 +291,15 @@ export async function setSessionInvolvement(
     return;
   }
   try {
-    await requestSessionInvolvement(scope.client, {
+    const latest = await scope.sessions.setInvolvement({
       key: session.key,
       agentId,
       expectedSessionId: session.sessionId,
       hidden,
     });
-    if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-      return;
+    if (latest && deps.sessionData.isSessionMutationScopeCurrent(scope)) {
+      await deps.sessionData.refreshSidebarSessions(agentId);
     }
-    scope.sessions.patchRowLocal(
-      session.key,
-      { hiddenFromInvolvingMe: hidden },
-      {
-        agentId,
-        sessionId: session.sessionId,
-      },
-    );
-    await deps.sessionData.refreshSidebarSessions(agentId);
   } catch (error) {
     if (deps.sessionData.isSessionMutationScopeCurrent(scope)) {
       deps.sessionData.publishSessionMutationError(scope, error);

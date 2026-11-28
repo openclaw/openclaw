@@ -679,6 +679,7 @@ export function createSessionCapability(
     archiveVisibility: mutations.archiveVisibility,
     beginArchive: mutations.beginArchive,
     assignOwner: mutations.assignOwner,
+    setInvolvement: mutations.setInvolvement,
     retireModelOverride: mutations.retireModelOverride,
     think: thinkingClaims.get,
     settingsPreview: mutations.settingsPreview,
