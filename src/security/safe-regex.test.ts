@@ -29,7 +29,7 @@ describe("safe regex", () => {
   });
 
   it("compiles common safe filter regex", () => {
-    const re = expectCompiledRegex("^agent:.*:discord:");
+    const re = expectCompiledRegex("  ^agent:.*:discord:  ");
     expect(re.test("agent:main:discord:channel:123")).toBe(true);
     expect(re.test("agent:main:telegram:channel:123")).toBe(false);
   });

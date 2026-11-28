@@ -7,7 +7,7 @@ import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import { AutomationLastMeaningfulResultSchema } from "../../packages/gateway-protocol/src/schema/cron-automation-result.js";
 import { CyberAccessProgramSchema } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
-import { compileSafeRegex } from "../security/safe-regex.js";
+import { compileSafeRegexSource } from "../security/safe-regex.js";
 import { assertCronActiveHours } from "./active-hours.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { decodePluginCommandSchedule } from "./plugin-command-schedule.js";
@@ -234,7 +234,7 @@ export function getInvalidPersistedCronJobReason(
       return "invalid-schedule";
     }
     if (mode === "match") {
-      if (!compileSafeRegex(scheduleRecord.match as string)) {
+      if (!compileSafeRegexSource(scheduleRecord.match as string).regex) {
         return "invalid-schedule";
       }
     }
