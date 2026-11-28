@@ -28,7 +28,7 @@ struct RootTabsPresentationTests {
             .systems: .dashboard("/systems"),
             .skillWorkshop: .dashboard("/skills/workshop"), .instances: .dashboard("/settings/devices"),
             .dreaming: .dashboard("/settings/memory/dreams"), .usage: .dashboard("/usage"),
-            .cron: .dashboard("/automations"),
+            .cron: .automations,
         ]
         #expect(Set(expected.keys) == Set(RootTabs.SidebarDestination.allCases))
         for destination in RootTabs.SidebarDestination.allCases {

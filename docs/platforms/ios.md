@@ -42,6 +42,8 @@ The app requires iOS 26.2 or iPadOS 26.2 or later.
 - **Settings** in the sidebar opens native app settings. **Advanced** opens the Dashboard settings with full Gateway access.
 - Speaks assistant messages on demand: press and hold a reply and choose **Listen**. The app plays supported Gateway `tts.speak` clips with the configured TTS provider and falls back to on-device speech when Gateway audio is unavailable or unplayable. Playback stops on session switch or backgrounding.
 
+Open **Automations** in the sidebar to schedule a task for the selected agent. Choose a time, a repeat pattern, and the chat to run in, then tap **Create**. Open an existing automation to edit it, pause it, run it now, see its run history, or delete it. **Open in Dashboard** opens advanced settings for options such as delivery and event triggers.
+
 ## Chat text size
 
 Chat text follows the system text styles, like Messages: message text is 17
@@ -152,7 +154,6 @@ navigation chrome:
 | Instances           | `/settings/devices`       |
 | Dreaming            | `/settings/memory/dreams` |
 | Usage               | `/usage`                  |
-| Automations         | `/automations`            |
 
 These pages require the same connected `operator.admin` session as Settings.
 Without that access, they show the native Gateway connection guidance. Instances
