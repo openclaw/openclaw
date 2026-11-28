@@ -454,6 +454,13 @@ const enCron = {
       reload: "Reload scratch",
       save: "Save scratch",
       clear: "Remove scratch",
+      loadFailed: "Couldn’t load scratch. Use Load scratch to try again.",
+      reloadFailed:
+        "Couldn’t reload scratch. Copy any edits you want to keep before trying Reload scratch again.",
+      saveUnconfirmed:
+        "OpenClaw couldn’t confirm the save. Copy any edits you want to keep, then use Reload scratch to check what’s saved.",
+      removeUnconfirmed:
+        "OpenClaw couldn’t confirm removal. Copy any edits you want to keep, then use Reload scratch to check what’s saved.",
       empty:
         "No scratch saved yet. Saving an empty editor creates empty scratch; removing it leaves scratch unset.",
       limit: "{bytes} / {max} bytes",
