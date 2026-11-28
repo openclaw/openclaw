@@ -699,4 +699,17 @@ describe("publish model catalog v2", () => {
       ),
     ).toEqual(["claude-opus-5", "gpt-6.1-sol-20261001"]);
   });
+
+  it("recommends DeepSeek's canonical Flash id from the curated list", () => {
+    const curated = JSON.parse(
+      fs.readFileSync(path.join("scripts", "lib", "recommended-models.json"), "utf8"),
+    );
+    expect(
+      projectRecommendedModels(curated, [
+        { id: "deepseek-v4-flash", name: "DeepSeek V4.1 Flash (Legacy Alias)" },
+        { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" },
+        { id: "deepseek-flash", name: "DeepSeek V4.1 Flash" },
+      ]),
+    ).toEqual(["deepseek-flash", "deepseek-v4-pro"]);
+  });
 });
