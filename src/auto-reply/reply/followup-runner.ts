@@ -187,6 +187,7 @@ export function createFollowupRunner(
       turn: AdmittedFollowupTurn,
       payloads: ReplyPayload[],
       kind: "tool" | "block",
+      observeReply = true,
     ) => {
       const delivery = await deliverFollowupDecision({
         decision: { kind: "deliver", payloads },
@@ -195,7 +196,7 @@ export function createFollowupRunner(
         runId: turn.runId,
         runFollowup,
         kind,
-        onObservedReplyDelivery,
+        onObservedReplyDelivery: observeReply ? onObservedReplyDelivery : undefined,
       });
       deliveryPending ||= delivery.kind === "pending";
     };
@@ -217,6 +218,7 @@ export function createFollowupRunner(
       ) => {
         const source = turn.queued.queuedFollowupReplyDisposition;
         if (
+          phase !== "memory_flush" &&
           phase !== "memory_flush_degraded" &&
           source?.kind === "deliver" &&
           source.deliver.ownsCompletion?.(turn.queued.originatingChannel)
@@ -224,7 +226,9 @@ export function createFollowupRunner(
           admissionNotices.push(payload);
           return;
         }
-        await deliverProgress(turn, [payload], "block");
+        // The flush notice precedes the responder; observing it as the reply would close the
+        // source's progress (Discord freezes its preview) before the answer exists.
+        await deliverProgress(turn, [payload], "block", phase !== "memory_flush");
       };
       const admission = await prepareReplyAgentTurn({
         queued,

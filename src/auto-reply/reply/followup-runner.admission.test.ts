@@ -182,6 +182,38 @@ it("suppresses a deferred compaction notice after preflight refreshes policy to 
 });
 
 it.each([false, true])(
+  "delivers the memory-save notice while the flush is still running (source owns completion=%s)",
+  async (ownsCompletion) => {
+    const sessionKey = `agent:main:followup-memory-notice-${ownsCompletion}`;
+    const sessionEntry: InternalSessionEntry = { sessionId: `${sessionKey}-session`, updatedAt: 1 };
+    const queued = createQueuedRun(sessionKey);
+    queued.run.config = { agents: { defaults: { compaction: { notifyUser: true } } } };
+    if (ownsCompletion) {
+      const deliver = Object.assign(
+        vi.fn(async () => {}),
+        { ownsCompletion: () => true },
+      );
+      queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver };
+    }
+    let deliveredDuringFlush = 0;
+    state.preflight.mockImplementation(async (input) => {
+      await input.onCompactionNotice?.("memory_flush");
+      // The flush turn would run now, for minutes; the notice must already be out.
+      deliveredDuringFlush = state.deliver.mock.calls.length;
+      return input.sessionEntry;
+    });
+    await drain(queued, { sessionEntry, sessionStore: { [sessionKey]: sessionEntry } });
+    expect(deliveredDuringFlush).toBe(1);
+    expect(state.deliver.mock.calls[0]?.[0]).toMatchObject({
+      kind: "block",
+      decision: { payloads: [{ text: "🧹 Saving memory before compaction..." }] },
+    });
+    // A status notice is not the reply: the source's progress must stay open for the answer.
+    expect(state.deliver.mock.calls[0]?.[0].onObservedReplyDelivery).toBeUndefined();
+  },
+);
+
+it.each([false, true])(
   "prepares queued execution with current requester scopes (narrowed=%s)",
   async (narrowed) => {
     await withOpenClawTestState(

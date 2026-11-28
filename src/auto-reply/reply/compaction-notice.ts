@@ -16,6 +16,7 @@ export type CompactionNoticePhase =
   | "incomplete"
   | "skipped"
   | "context_bounded"
+  | "memory_flush"
   | "memory_flush_degraded";
 
 const COMPACTION_NOTICE_TEXT: Record<CompactionNoticePhase, string> = {
@@ -25,6 +26,7 @@ const COMPACTION_NOTICE_TEXT: Record<CompactionNoticePhase, string> = {
     "⚠️ Compaction completed with a degraded summary. Older details, exact identifiers, or pending requests may be missing. Resend important context; /new or a larger model can help.",
   incomplete: "🧹 Compaction incomplete",
   skipped: "🧹 Compaction not needed",
+  memory_flush: "🧹 Saving memory before compaction...",
   memory_flush_degraded: "⚠️ Memory maintenance temporarily failed; continuing your reply.",
   context_bounded: BOUNDED_CONTEXT_NOTICE,
 };

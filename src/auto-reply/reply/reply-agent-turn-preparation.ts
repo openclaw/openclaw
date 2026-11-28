@@ -494,6 +494,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
               if (
                 kind === "queued_followup" &&
                 phase !== "start" &&
+                phase !== "memory_flush" &&
                 phase !== "memory_flush_degraded"
               ) {
                 pendingTerminalCompactionNotice = { phase, text };

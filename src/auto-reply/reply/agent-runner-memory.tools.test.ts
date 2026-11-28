@@ -216,11 +216,19 @@ describe("provider-owned memory flush", () => {
     await replaceTranscriptEvents(scope, [transcript.getHeader(), ...transcript.getEntries()]);
     await waitForSessionTranscriptProjection(scope);
     runEmbeddedAgentMock.mockImplementationOnce(persist);
+    const onCompactionNotice = vi.fn();
 
-    const result = await runDefaultMemoryFlush(entry, { ...overrides, promptForEstimate: "" });
+    const result = await runDefaultMemoryFlush(entry, {
+      ...overrides,
+      promptForEstimate: "",
+      onCompactionNotice,
+    });
 
     expect(result.outcome).toBe("completed");
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    // The flush turn can take minutes; the chat hears about it before the model is called.
+    expect(onCompactionNotice.mock.calls).toEqual([["memory_flush"]]);
+    expect(onCompactionNotice).toHaveBeenCalledBefore(runEmbeddedAgentMock);
     expect(loadSessionEntry(scope)).toMatchObject({
       totalTokens: 2,
       totalTokensFresh: false,
@@ -234,13 +242,16 @@ describe("provider-owned memory flush", () => {
       totalTokensFresh: true,
     });
 
+    const onCompactionNotice = vi.fn();
     const result = await runDefaultMemoryFlush(entry, {
       ...overrides,
       promptForEstimate: "x".repeat(310_000),
+      onCompactionNotice,
     });
 
     expect(result.outcome).toBe("skipped");
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(onCompactionNotice).not.toHaveBeenCalled();
   });
 
   it("does not resolve a legacy file plan for a session that cannot write its workspace", async () => {
