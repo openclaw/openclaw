@@ -58,7 +58,7 @@ import {
   type ImageMetadata,
 } from "./media-services.js";
 import { extractOriginalFilename, getMediaDir } from "./store.js";
-import { formatMediaSize, SaveMediaSourceError } from "./store.shared.js";
+import { formatMediaSize, mediaCapExceededError } from "./store.shared.js";
 
 export { getDefaultLocalRootsCore, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
@@ -259,14 +259,6 @@ export async function pruneStaleTrustedGeneratedHtmlMarkers(): Promise<void> {
   await pruneGeneratedHtmlProvenance(captureOpenClawStateWorkerContext());
 }
 
-function formatCapLimit(label: string, cap: number, size: number): string {
-  return `${label} exceeds ${formatMediaSize(cap)} limit (got ${formatMediaSize(size)})`;
-}
-
-function formatCapReduce(label: string, cap: number, size: number): string {
-  return `${label} could not be reduced below ${formatMediaSize(cap)} (got ${formatMediaSize(size)})`;
-}
-
 // Queue custody keeps artifact paths; public image names describe the encoded bytes.
 function reconcileImageFileName(media: WebMediaResult): WebMediaResult {
   if (media.kind !== "image" || !media.fileName) {
@@ -457,7 +449,7 @@ export async function optimizeImageBufferForWebMedia(params: {
   if (originalContentType === "image/gif" || isAnimatedWebp) {
     if (params.buffer.length > cap) {
       const format = isAnimatedWebp ? "Animated WebP" : "GIF";
-      throw new ImageOptimizationLimitError(formatCapLimit(format, cap, params.buffer.length), cap);
+      throw ImageOptimizationLimitError.overCap(format, cap, params.buffer.length);
     }
     assertImageSatisfiesHardDimensionPolicy(params.buffer, params.imageCompression);
   } else {
@@ -515,10 +507,7 @@ export async function optimizeImageBufferForWebMedia(params: {
     transparency: "auto",
   });
   if (optimized.data.length > cap) {
-    throw new ImageOptimizationLimitError(
-      formatCapReduce("Media", cap, optimized.data.length),
-      cap,
-    );
+    throw ImageOptimizationLimitError.notReduced(cap, optimized.data.length, params.buffer.length);
   }
   return reconcileImageFileName({
     buffer: optimized.data,
@@ -581,7 +570,7 @@ async function loadWebMediaInternal(
     }
     if (params.buffer.length > cap) {
       const label = params.kind === "image" && params.contentType === "image/gif" ? "GIF" : "Media";
-      throw new SaveMediaSourceError("too-large", formatCapLimit(label, cap, params.buffer.length));
+      throw mediaCapExceededError(label, cap, params.buffer.length);
     }
     if (params.kind === "image") {
       assertImageSatisfiesHardDimensionPolicy(params.buffer, imageCompression);

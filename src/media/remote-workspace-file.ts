@@ -123,7 +123,7 @@ export function createBoundedRemoteFileReader(binding: {
         if (chunk.dataBase64 !== "") {
           throw new Error("Remote workspace artifact returned invalid or oversized chunk data.");
         }
-        throw SaveMediaSourceError.tooLarge(params.maxBytes);
+        throw SaveMediaSourceError.tooLarge(params.maxBytes, { sizeBytes: chunk.size });
       }
       const expectedChunkBytes = Math.min(chunkBytes, expectedSize - offset);
       if (chunk.dataBase64.length > Math.ceil(expectedChunkBytes / 3) * 4) {

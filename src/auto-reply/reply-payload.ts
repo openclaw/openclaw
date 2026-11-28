@@ -1,3 +1,4 @@
+import { formatByteSize } from "@openclaw/normalization-core";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -59,6 +60,10 @@ export type ReplyMediaFailure = {
   kind: "image" | "audio" | "video" | "document";
   label: string;
   mimeType?: string;
+  /** Source size in bytes, when the reader learned it before refusing a `file-too-large` source. */
+  sizeBytes?: number;
+  /** Byte limit that refused a `file-too-large` source. */
+  maxBytes?: number;
 };
 
 export function readAskUserQuestionId(
@@ -105,18 +110,57 @@ export type ReplyDeliveryContext = {
   replyToMode: ReplyToMode;
 };
 
+const FILE_TOO_LARGE_RECOVERY = "Look for this file in Files.";
+
 const REPLY_MEDIA_FAILURE_MESSAGES: Record<ReplyMediaFailureCode, string> = {
   "file-not-found": "File not found. Check the path and try again.",
-  "file-too-large": "Too large to attach. Look for this file in Files.",
+  "file-too-large": `Too large to attach. ${FILE_TOO_LARGE_RECOVERY}`,
   "unsupported-format": "Rejected by the local attachment allowlist. Send a supported file type.",
   "delivery-failed": "Delivery failed. Try sending this file again.",
   "invalid-reference":
     "Use a public HTTPS URL without credentials or attach a local file by a safe path.",
 };
 
+function formatAttachmentBytes(bytes: number): string {
+  return formatByteSize(bytes, {
+    style: "legacy-binary",
+    maxUnit: "giga",
+    separator: " ",
+    // One decimal at most, and none when it would read ".0".
+    fractionDigits: (value) => (Number.isInteger(Number(value.toFixed(1))) ? 0 : 1),
+  });
+}
+
+function isByteCount(value: number | undefined): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+/** States the size and the limit so a person can tell how much smaller the file must be. */
+function formatTooLargeFacts(failure: ReplyMediaFailure): string | undefined {
+  const limit = isByteCount(failure.maxBytes) ? formatAttachmentBytes(failure.maxBytes) : undefined;
+  let size = isByteCount(failure.sizeBytes) ? formatAttachmentBytes(failure.sizeBytes) : undefined;
+  if (size && limit && size === limit) {
+    // Rounding can make a file just over the limit print as the limit itself.
+    size = `over ${limit}`;
+  }
+  if (size && limit) {
+    return `${size}, limit ${limit}`;
+  }
+  return size ?? (limit ? `limit ${limit}` : undefined);
+}
+
+function formatReplyMediaFailureMessage(failure: ReplyMediaFailure): string {
+  const message = REPLY_MEDIA_FAILURE_MESSAGES[failure.code];
+  if (failure.code !== "file-too-large") {
+    return message;
+  }
+  const facts = formatTooLargeFacts(failure);
+  return facts ? `Too large to attach (${facts}). ${FILE_TOO_LARGE_RECOVERY}` : message;
+}
+
 function formatReplyMediaFailures(failures: readonly ReplyMediaFailure[]): string {
   return failures
-    .map((failure) => `⚠️ ${failure.label}: ${REPLY_MEDIA_FAILURE_MESSAGES[failure.code]}`)
+    .map((failure) => `⚠️ ${failure.label}: ${formatReplyMediaFailureMessage(failure)}`)
     .join("\n");
 }
 

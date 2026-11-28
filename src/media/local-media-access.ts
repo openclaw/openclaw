@@ -284,6 +284,8 @@ export async function openLocalMediaFile(
       throw new FsSafeError(
         "too-large",
         `file exceeds limit of ${options.maxBytes} bytes (got ${opened.stat.size})`,
+        // Callers explain the rejection from these facts instead of reparsing the message.
+        { details: { sizeBytes: opened.stat.size, maxBytes: options.maxBytes } },
       );
     }
     readScope?.assertCurrent();

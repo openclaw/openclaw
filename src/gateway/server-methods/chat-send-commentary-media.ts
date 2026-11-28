@@ -25,11 +25,11 @@ import { withChannelReadAuthority } from "../../shared/channel-read-authority.js
 import { readAssistantTextBlocksForPhase } from "../../shared/chat-message-content.js";
 import {
   attachManagedOutgoingMediaToMessage,
-  buildManagedMediaFailureBlock,
   createManagedOutgoingMediaBlocks,
   prepareOutgoingMediaFromReplyPayload,
   removeManagedOutgoingMediaBlocks,
 } from "../managed-image-attachments.js";
+import { buildManagedMediaFailureBlock } from "../managed-media-failure-block.js";
 import { formatForLog } from "../ws-log.js";
 import type { AssistantDisplayContentBlock } from "./chat-assistant-content.js";
 import {

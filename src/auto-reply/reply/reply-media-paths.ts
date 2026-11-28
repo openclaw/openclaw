@@ -36,7 +36,7 @@ import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import { resolveOutboundAttachmentFromUrl } from "../../media/outbound-attachment.js";
 import { resolveAgentScopedHostOutboundMediaAccess } from "../../media/read-capability.js";
 import { saveMediaFile } from "../../media/store.js";
-import { SaveMediaSourceError } from "../../media/store.shared.js";
+import { readMediaSizeFacts, SaveMediaSourceError } from "../../media/store.shared.js";
 import { captureChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import {
   appendReplyMediaFailures,
@@ -102,11 +102,15 @@ function resolveReplyMediaFailureCode(error: unknown): ReplyMediaFailure["code"]
 function createReplyMediaFailure(media: string, index: number, error: unknown): ReplyMediaFailure {
   const mimeType = mimeTypeFromFilePath(media);
   const kind = mediaKindFromMime(mimeType);
+  const code = resolveReplyMediaFailureCode(error);
+  // Only size rejections explain themselves with byte counts; other failures keep their shape.
+  const sizeFacts = code === "file-too-large" ? readMediaSizeFacts(error) : {};
   return {
-    code: resolveReplyMediaFailureCode(error),
+    code,
     kind: kind === "image" || kind === "audio" || kind === "video" ? kind : "document",
     label: resolveReplyMediaFailureLabel(media, index),
     ...(mimeType ? { mimeType } : {}),
+    ...sizeFacts,
   };
 }
 
