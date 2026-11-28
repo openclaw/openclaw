@@ -24,6 +24,8 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
   page.inventories.runtimeConfig.read();
   const cron = page.cron();
   const agentsList = page.inventories.agents.read().agentsList;
+  let modelAgentId: string | undefined;
+  let canLinkReport = false;
   let models: CronModelSource = { catalog: undefined, agent: undefined };
   let timezoneSuggestions: string[] = [];
   let accountSuggestions: string[] = [];
@@ -43,7 +45,8 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
         )
       : [];
     const channel = cron.cronForm.deliveryChannel.trim() || "last";
-    const modelAgentId = page.resolveModelAgentId(cron);
+    modelAgentId = page.resolveModelAgentId(cron);
+    canLinkReport = cron.cronCreateOpen && page.deliveryDirectory.canLinkReport(modelAgentId);
     models = {
       catalog: page.cronModelCatalog(),
       agent: agentsList?.agents.find((entry) => entry.id === modelAgentId),
@@ -106,6 +109,9 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
   return {
     ...page.actions,
     gateway: page.context().gateway,
+    sessions: page.context().sessions,
+    conversationAgentId: modelAgentId,
+    canLinkReport,
     getActionRetired: page.getActionRetired,
     onRunMount: page.registerRun,
     listError: page.cron().cronJobsError,

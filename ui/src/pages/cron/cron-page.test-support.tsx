@@ -147,6 +147,7 @@ export function createContext(
     acquireChannels: () => channels,
     runtimeConfig: {
       state: { configSnapshot: null },
+      ensureLoaded: vi.fn(async () => undefined),
       subscribe,
     },
     agentSelection: {

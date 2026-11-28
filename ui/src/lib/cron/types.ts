@@ -90,6 +90,7 @@ export type CronFormState = {
 };
 
 export type CronFieldKey =
+  | "recentChatSource"
   | "name"
   | "eventServer"
   | "eventName"

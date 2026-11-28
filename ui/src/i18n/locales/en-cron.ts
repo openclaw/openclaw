@@ -32,6 +32,8 @@ const enCron = {
       unknown: "Couldn’t start this automation. Try again.",
     },
     errors: {
+      recentChatSourceRequired:
+        "Choose the conversation whose recent messages this automation should read.",
       activeHoursTime: "Enter HH:MM (24:00 is allowed only for the end).",
       activeHoursTimezone: "Enter a valid IANA time zone, local, or user.",
       scheduleAtInvalid: "Enter a valid date and time.",
@@ -228,6 +230,16 @@ const enCron = {
       activeHoursTimezoneHelp: "Leave blank to use your time zone.",
       runsIn: "Runs in",
       mainSession: "Main session",
+      currentSession: "Its own session with recent chat",
+      reportTo: "Report to",
+      defaultDestination: "Default destination",
+      recentChatSource: "Use recent chat from",
+      chooseConversation: "Choose a conversation",
+      recentChatSourceHelp:
+        "The automation reads recent messages here. Announcements return here unless another destination is configured.",
+      reportToHelp: "This chat gets the result when no channel destination is configured.",
+      searchConversations: "Find a conversation",
+      conversationSearchFailed: "Couldn’t load conversations. Try searching again.",
       isolatedSession: "Its own session",
       sessionHelp:
         "Main adds the task to the agent’s main session. Isolated starts a reply in a separate session.",
@@ -308,7 +320,7 @@ const enCron = {
         "Removes the automation after one successful run. Good for one-time reminders.",
       sessionKey: "Session key",
       sessionKeyHelp:
-        "The session that gets results when this automation isn’t linked to a chat. Most automations leave this blank.",
+        "Links a new automation to a conversation. Changing this key on a saved automation keeps its original reporting link.",
       sessionKeyPlaceholder: "Default",
       exactTiming: "Run at the exact time",
       exactTimingHelp:

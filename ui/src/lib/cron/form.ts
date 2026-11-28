@@ -61,8 +61,14 @@ function parsesAsCron(expr: string, timezone?: string): boolean {
   }
 }
 
-export function validateCronForm(form: CronFormState): CronFieldErrors {
+export function validateCronForm(
+  form: CronFormState,
+  editingJob?: CronJob | null,
+): CronFieldErrors {
   const errors: CronFieldErrors = {};
+  if (!editingJob && form.sessionTarget === "current" && !form.sessionKey.trim()) {
+    errors.recentChatSource = "cron.errors.recentChatSourceRequired";
+  }
   if (form.scheduleKind === "event" && form.payloadKind !== "agentTurn") {
     errors.payloadText = "cron.events.agentTurnRequired";
   }

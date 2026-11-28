@@ -8,13 +8,13 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { CronScratchEditor } from "./scratch-editor.tsx";
 import { EnabledSwitch } from "./view-controls.tsx";
+import { ConversationFields } from "./view-conversations.tsx";
 import { Advanced } from "./view-delivery.tsx";
 import {
   collectBlockingFields,
   focusFormField,
   errorIdForField,
   inputIdForField,
-  CronSelect,
   FieldRow,
 } from "./view-fields.tsx";
 import { CronModelControls } from "./view-model-controls.tsx";
@@ -104,8 +104,6 @@ export function Editor(props: EditorProps & { phoneLayout: boolean }) {
   const { payloadLocked, isAgentTurn, supportsAnnounce, selectedDeliveryMode } =
     payloadFacts(props);
   const { blockingFields, blockedByValidation } = createSubmitState(props);
-  const sessionTarget = () => props.form.sessionTarget;
-  const knownSessionTarget = () => sessionTarget() === "main" || sessionTarget() === "isolated";
   const formDisabled = () => props.busy || !props.canManage;
   const editableJob = () =>
     props.mode === "job" && props.phoneLayout && props.canManage ? props.editingJob : undefined;
@@ -136,20 +134,7 @@ export function Editor(props: EditorProps & { phoneLayout: boolean }) {
           </Show>
           <fieldset class="cron-editor-section" disabled={formDisabled()}>
             <AgentRow {...props} disabled={formDisabled()} />
-            <CronSelect
-              {...props}
-              field="sessionTarget"
-              label={t("cron.form.runsIn")}
-              help={t("cron.form.sessionHelp")}
-              quietHelp
-              options={[
-                { value: "main", label: t("cron.form.mainSession") },
-                { value: "isolated", label: t("cron.form.isolatedSession") },
-                ...(knownSessionTarget()
-                  ? []
-                  : [{ value: sessionTarget(), label: sessionTarget() }]),
-              ]}
-            />
+            <ConversationFields {...props} />
           </fieldset>
         </div>
         <fieldset class="cron-editor-section cron-editor-extra" disabled={formDisabled()}>
