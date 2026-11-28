@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -9,8 +9,6 @@ import {
 } from "../commands/doctor-database-preflight.js";
 import type { DoctorPendingDecisions } from "../commands/doctor-maintenance-pending.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
-import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { databaseFixture } from "../state/database-preflight-fixtures.test-support.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -32,6 +30,18 @@ import {
 } from "../test-utils/store-snapshot.test-support.js";
 import { resolveDoctorHealthContributions } from "./doctor-health-contributions.test-support.js";
 import { decideDoctorPendingBeforeStop } from "./doctor-health-pending-before-stop.js";
+
+const children = vi.hoisted(() => ({ spawned: [] as ChildProcess[] }));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const recorded = ((...args: Parameters<typeof actual.spawn>) => {
+    const child = actual.spawn(...args);
+    children.spawned.push(child);
+    return child;
+  }) as typeof actual.spawn;
+  const mocked = { ...actual, spawn: recorded };
+  return { ...mocked, default: mocked };
+});
 
 // Doctor --fix decides every step's and contribution's pending answer before it stops the
 // Gateway. These run that evaluation on a healthy install: beside connections that hold the
@@ -197,17 +207,18 @@ describe("Doctor pending decisions before the stop", () => {
     );
     try {
       await once(gateway.stdout, "data");
-      // Doctor's command runs inside a read-only worker scope that lasts until it exits.
-      const outer = await withSqliteReadOnlyWorkerScope(
-        async () => {
-          const decisions = await decide(preflight);
-          expect(decisions.get("config-flow.agent-databases")).toMatch(/^(?:none|work)$/u);
-          return readOnlyWorkerScope.getStore();
-        },
-        { signal: new AbortController().signal, deadlineOwnedByCaller: false },
-      );
-      // No reader the evaluation started outlives it into the stop.
-      expect(outer?.worker).toBeUndefined();
+      const before = children.spawned.length;
+      const decisions = await decide(preflight);
+      expect(decisions.get("config-flow.agent-databases")).toMatch(/^(?:none|work)$/u);
+      // SQLite reader processes stay pooled with their stores open after their scope closes.
+      const readers = children.spawned
+        .slice(before)
+        .filter((child) => child.spawnargs.some((arg) => arg.includes("sqlite-readonly")));
+      expect(readers.length).toBeGreaterThan(0);
+      // None the evaluation started is still running when it returns.
+      expect(
+        readers.filter((child) => child.exitCode === null && child.signalCode === null),
+      ).toEqual([]);
       expect(isOpenClawStateDatabaseOpen(databases.statePath)).toBe(false);
       expect(isOpenClawAgentDatabaseOpen(databases.agentPath("main"))).toBe(false);
     } finally {
