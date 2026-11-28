@@ -32,6 +32,7 @@ import {
   selectMessageMetadata,
   type MessageRangeSelection,
   parseActiveTranscriptMessageRow,
+  selectBoundedMessagePayload,
   type CurrentTranscriptProjection,
   type SessionTranscriptMessageEvent,
 } from "./session-accessor.sqlite-projection-read.js";
@@ -522,29 +523,41 @@ export function readVisibleMessageRange(
   projection: CurrentTranscriptProjection,
   start: number,
   endExclusive: number,
+  standInAboveBytes?: number,
 ): SessionTranscriptMessageEvent[] {
-  return Array.from(iterateVisibleMessageRange(projection, start, endExclusive));
+  return Array.from(iterateVisibleMessageRange(projection, start, endExclusive, standInAboveBytes));
 }
 
 export function* iterateVisibleMessageRange(
   projection: CurrentTranscriptProjection,
   start: number,
   endExclusive: number,
+  /** History pages pass their stand-in bound; context reads decode every payload whole. */
+  standInAboveBytes?: number,
 ): IterableIterator<SessionTranscriptMessageEvent> {
   for (const range of selectVisibleMessageRanges(projection, start, endExclusive)) {
     const rows =
-      "positions" in range
+      standInAboveBytes !== undefined
         ? iterateSqliteQuerySync(
             projection.database.db,
-            selectMessagePayload(
+            selectBoundedMessagePayload(
+              projection.database,
               selectMessageRows(projection.database, projection.resolved.sessionId, range),
+              standInAboveBytes,
             ),
           )
-        : getMessageRangeReaders(projection.database).messages({
-            sessionId: projection.resolved.sessionId,
-            start: range.start,
-            endExclusive: range.endExclusive,
-          });
+        : "positions" in range
+          ? iterateSqliteQuerySync(
+              projection.database.db,
+              selectMessagePayload(
+                selectMessageRows(projection.database, projection.resolved.sessionId, range),
+              ),
+            )
+          : getMessageRangeReaders(projection.database).messages({
+              sessionId: projection.resolved.sessionId,
+              start: range.start,
+              endExclusive: range.endExclusive,
+            });
     for (const row of rows) {
       yield parseActiveTranscriptMessageRow(row, projection);
     }

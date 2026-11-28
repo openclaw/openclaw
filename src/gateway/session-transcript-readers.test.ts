@@ -26,6 +26,7 @@ import {
   readSessionMessagesWithSourceAsync as readSource,
 } from "./session-transcript-readers.js";
 import * as readers from "./session-transcript-readers.js";
+import { MAX_OVERSIZED_TRANSCRIPT_RECORD_BYTES } from "./session-transcript-record-parser.js";
 import { readLatestSessionUsageFromTranscriptAsync as readUsage } from "./session-transcript-usage.js";
 
 describe("session transcript reader facade", () => {
@@ -52,8 +53,14 @@ describe("session transcript reader facade", () => {
     model: "claude-sonnet-4-6",
     usage: { input, output, cost: { total: 0.001 } },
   });
-  const expectHistoryOverflow = (read: Promise<unknown>) =>
-    expect(read).rejects.toThrow("Chat history message exceeds the 8388608-byte page limit");
+  const oversizedStandIn = [{ type: "text", text: "[chat.history omitted: message too large]" }];
+  /** The oversized row keeps its place and its id, and costs the page only its bound. */
+  const expectBoundedStandInPage = (messages: unknown[]) => {
+    expect(messages.map(readChatHistoryMessageId)).toEqual(["first", "huge", "last"]);
+    expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThan(
+      MAX_OVERSIZED_TRANSCRIPT_RECORD_BYTES,
+    );
+  };
 
   test("prepares byte, usage and taint facts without host transcript SQL", async () => {
     const events = [
@@ -209,7 +216,7 @@ describe("session transcript reader facade", () => {
     });
   });
 
-  test("bounds source pages by bytes and rejects a message larger than one page", async () => {
+  test("bounds source pages by bytes and stands in for a message larger than one page", async () => {
     const sessionId = "reader-source-page-bytes";
     const content = "a".repeat(3 * 1024 * 1024);
     const scope = await writeTranscript(
@@ -235,18 +242,166 @@ describe("session transcript reader facade", () => {
       event("oversized", null, { role: "user", content: "b".repeat(8 * 1024 * 1024) }),
     ]);
     expect(await readCount(scope)).toBe(1);
+    // Model-context source pages still refuse a row they cannot carry whole.
     await expect(readSource(scope, { mode: "page" })).rejects.toThrow(
       "Chat history message exceeds the 8388608-byte page limit",
     );
-    await expectHistoryOverflow(readPage(scope, { offset: 0, maxMessages: 1 }));
-    await expectHistoryOverflow(readRecent(scope, { maxMessages: 1 }));
-    await expectHistoryOverflow(readAround(scope, { messageId: "oversized", maxMessages: 1 }));
+    // History pages serve the documented stand-in rather than failing the page.
+    await expect(readPage(scope, { offset: 0, maxMessages: 1 })).resolves.toMatchObject({
+      messages: [{ content: oversizedStandIn }],
+    });
+    await expect(readRecent(scope, { maxMessages: 1 })).resolves.toMatchObject({
+      messages: [{ content: oversizedStandIn }],
+    });
+    await expect(
+      readAround(scope, { messageId: "oversized", maxMessages: 1 }),
+    ).resolves.toMatchObject({ found: true, messages: [{ content: oversizedStandIn }] });
     database()
       .db.prepare("DELETE FROM transcript_event_identities WHERE session_id = ?")
       .run(sessionId);
+    // Exact reads stay whole; they are the fetchable reference behind the stand-in.
     await expect(readById(scope, "oversized")).resolves.toMatchObject({ found: true });
-    await expectHistoryOverflow(readAround(scope, { messageId: "oversized", maxMessages: 1 }));
+    await expect(
+      readAround(scope, { messageId: "oversized", maxMessages: 1 }),
+    ).resolves.toMatchObject({ found: true, messages: [{ content: oversizedStandIn }] });
   });
+
+  // docs/web/webchat.md promises an oversized entry becomes
+  // "[chat.history omitted: message too large]" rather than exceeding the page budget;
+  // one such row must not make a whole session unreadable.
+  test("keeps history readable across an inline-image row larger than one page", async () => {
+    const scope = await writeTranscript("reader-oversized-row", [
+      event("first", null, { role: "user", content: "first prompt" }),
+      event("huge", "first", {
+        role: "user",
+        content: Array.from({ length: 5 }, () => ({
+          type: "image",
+          source: { type: "base64", media_type: "image/png", data: "A".repeat(2 * 1024 * 1024) },
+        })),
+      }),
+      event("last", "huge", { role: "assistant", content: "last answer" }),
+    ]);
+    expect(await readCount(scope)).toBe(3);
+    expectBoundedStandInPage((await readPage(scope, { offset: 0, maxMessages: 3 })).messages);
+    expectBoundedStandInPage((await readRecent(scope, { maxMessages: 3 })).messages);
+    expectBoundedStandInPage(
+      (await readAround(scope, { messageId: "huge", maxMessages: 3 })).messages,
+    );
+    // Anchoring on a neighbor has to keep the window expanding across the huge row:
+    // truncating it would drop the rows past it with nothing disclosed to the client.
+    expectBoundedStandInPage(
+      (await readAround(scope, { messageId: "last", maxMessages: 3 })).messages,
+    );
+    // The chat.history kernel behind the Control UI serves the same bounded page.
+    const history = await readChatHistoryPageKernel(
+      {
+        entry: undefined,
+        provider: undefined,
+        sessionId: scope.sessionId,
+        storePath: scope.storePath,
+        sessionAgentId: scope.agentId,
+        canonicalKey: scope.sessionKey,
+        max: 3,
+        maxHistoryBytes: 8 * 1024 * 1024,
+        effectiveMaxChars: 1_000_000,
+        offset: 0,
+        messageId: undefined,
+      },
+      { readers },
+    );
+    expectBoundedStandInPage(history.messages);
+  });
+
+  // A display row that is not a message (compaction, reset, custom_message) is charged
+  // the stand-in bound at admission like any other oversized row, so the page must not
+  // select its payload either.
+  test("stands in for an oversized non-message display row", async () => {
+    const scope = await writeTranscript("reader-oversized-display-row", [
+      event("first", null, { role: "user", content: "first prompt" }),
+      {
+        type: "custom_message",
+        id: "huge",
+        parentId: "first",
+        timestamp: "2026-08-11T18:00:00.000Z",
+        customType: "run-failed-before-reply",
+        content: "c".repeat(9 * 1024 * 1024),
+        display: true,
+      },
+      event("last", "huge", { role: "assistant", content: "last answer" }),
+    ]);
+    expectBoundedStandInPage((await readPage(scope, { offset: 0, maxMessages: 3 })).messages);
+    expectBoundedStandInPage((await readRecent(scope, { maxMessages: 3 })).messages);
+    expectBoundedStandInPage(
+      (await readAround(scope, { messageId: "huge", maxMessages: 3 })).messages,
+    );
+  });
+
+  // Admission charges an oversized row only the stand-in bound, so the reader must not
+  // select its payload either: sixteen such rows would otherwise fit one page's charge
+  // while the history worker materialized every body.
+  test.each([false, true])(
+    "serves an oversized row from its identity without selecting its payload (historical=%s)",
+    async (historical) => {
+      const sessionId = `reader-oversized-unselected-${historical}`;
+      const events: unknown[] = [
+        event("first", null, { role: "user", content: "first prompt" }),
+        event("huge", "first", { role: "user", content: "h".repeat(9 * 1024 * 1024) }),
+        event("last", "huge", { role: "assistant", content: "last answer" }),
+      ];
+      if (historical) {
+        events.push({
+          type: "reset",
+          id: "reset",
+          parentId: "last",
+          timestamp: "2026-10-01T00:00:00.000Z",
+        });
+      }
+      const scope = await writeTranscript(sessionId, events);
+      // Keep the recorded size but poison the body: any reader that selects it fails to parse.
+      database()
+        .db.prepare(
+          `UPDATE transcript_events
+             SET event_utf8_bytes = coalesce(event_utf8_bytes, octet_length(event_json)),
+                 event_json = '{malformed'
+           WHERE session_id = ? AND seq = (
+             SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = 'huge'
+           )`,
+        )
+        .run(sessionId, sessionId);
+      // The reset that closes the interval takes one slot of an anchored page.
+      const max = historical ? 4 : 3;
+      const kernel = (messageId: string | undefined) =>
+        readChatHistoryPageKernel(
+          {
+            entry: undefined,
+            provider: undefined,
+            sessionId: scope.sessionId,
+            storePath: scope.storePath,
+            sessionAgentId: scope.agentId,
+            canonicalKey: scope.sessionKey,
+            max,
+            maxHistoryBytes: 8 * 1024 * 1024,
+            effectiveMaxChars: 1_000_000,
+            offset: undefined,
+            messageId,
+          },
+          { readers },
+        );
+      if (!historical) {
+        expectBoundedStandInPage((await readPage(scope, { offset: 0, maxMessages: 3 })).messages);
+        expectBoundedStandInPage((await readRecent(scope, { maxMessages: 3 })).messages);
+        expectBoundedStandInPage((await kernel(undefined)).messages);
+      }
+      const messagesOf = (page: { messages: unknown[] }) =>
+        page.messages.filter((message) => readChatHistoryMessageId(message) !== "reset");
+      for (const messageId of ["huge", "last"]) {
+        expectBoundedStandInPage(
+          messagesOf(await readAround(scope, { messageId, maxMessages: max })),
+        );
+        expectBoundedStandInPage(messagesOf(await kernel(messageId)));
+      }
+    },
+  );
 
   test("bounds unbounded anchor windows and caps payloads before decoding", async () => {
     const sessionId = "reader-anchor-page-bytes";

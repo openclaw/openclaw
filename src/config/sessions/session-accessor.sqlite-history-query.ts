@@ -4,7 +4,14 @@ import type {
   SessionTranscriptDisplayDeltaResult,
   SessionTranscriptMessageByIdOptions,
 } from "../../gateway/session-transcript-read.types.js";
-import { SOURCE_PAGE_MAX_BYTES } from "../../gateway/session-transcript-source-pages.js";
+import {
+  MAX_OVERSIZED_TRANSCRIPT_RECORD_BYTES,
+  oversizedTranscriptStandIn,
+} from "../../gateway/session-transcript-record-parser.js";
+import {
+  resolveTranscriptStandInThresholdBytes,
+  SOURCE_PAGE_MAX_BYTES,
+} from "../../gateway/session-transcript-source-pages.js";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -97,17 +104,28 @@ function retainHistoryWindowOwner(database: CurrentTranscriptProjection["databas
 function readBoundaryEvents(
   projection: CurrentTranscriptProjection,
   boundaries: Iterable<VisibleHistoryBoundary>,
+  /** Page readers bound their rows; exact-read context decodes payloads whole. */
+  standInAboveBytes = Number.POSITIVE_INFINITY,
 ): Map<number, TranscriptEvent> {
-  const eventSeqs = Array.from(boundaries, (boundary) => boundary.eventSeq);
-  if (eventSeqs.length === 0) {
-    return new Map();
+  const events = new Map<number, TranscriptEvent>();
+  const whole: number[] = [];
+  for (const boundary of boundaries) {
+    // Admission charged an oversized display row the bounded stand-in, exactly as it
+    // does an oversized message. Selecting its payload at all would hand the reader the
+    // bytes the ceiling refused, so build the stand-in from the identity already in hand.
+    if (boundary.serializedBytes > standInAboveBytes) {
+      events.set(
+        boundary.eventSeq,
+        oversizedTranscriptStandIn({ id: boundary.eventId }) as TranscriptEvent,
+      );
+    } else {
+      whole.push(boundary.eventSeq);
+    }
   }
-  return new Map(
-    readSnapshotEventRows(projection, eventSeqs).map((row) => [
-      row.seq,
-      parseStoredTranscriptEvent(readTranscriptPayload(row)),
-    ]),
-  );
+  for (const row of whole.length > 0 ? readSnapshotEventRows(projection, whole) : []) {
+    events.set(row.seq, parseStoredTranscriptEvent(readTranscriptPayload(row)));
+  }
+  return events;
 }
 
 function readVisibleHistoryRange(
@@ -115,13 +133,24 @@ function readVisibleHistoryRange(
   start: number,
   endExclusive: number,
   history: VisibleHistoryProjection,
+  /** Page readers bound their rows; exact-read context decodes payloads whole. */
+  standInAboveBytes?: number,
 ): SessionTranscriptMessageEvent[] {
   const range = resolveVisibleHistoryRange(history, start, endExclusive);
   if (range.boundedEnd <= range.boundedStart) {
     return [];
   }
-  const messages = readVisibleMessageRange(projection, range.messageStart, range.messageEnd);
-  const boundaryEvents = readBoundaryEvents(projection, range.boundaries.values());
+  const messages = readVisibleMessageRange(
+    projection,
+    range.messageStart,
+    range.messageEnd,
+    standInAboveBytes,
+  );
+  const boundaryEvents = readBoundaryEvents(
+    projection,
+    range.boundaries.values(),
+    standInAboveBytes,
+  );
   return positionTranscriptDisplayEvents(
     projection,
     history.displaySource,
@@ -201,17 +230,18 @@ function resolveRecentHistoryStart(
       if (serializedBytes === undefined) {
         continue;
       }
-      if (allowOversizedFirst && selectedCount === 0 && serializedBytes > SOURCE_PAGE_MAX_BYTES) {
-        throw new Error(
-          `Chat history message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`,
-        );
-      }
-      if ((!allowOversizedFirst || selectedCount > 0) && bytes + serializedBytes > maxBytes) {
+      // A row served as a stand-in costs the page that bound, not its real size, so it
+      // never blocks the neighbors that make the session readable.
+      const rowBytes =
+        serializedBytes > resolveTranscriptStandInThresholdBytes(maxBytes)
+          ? MAX_OVERSIZED_TRANSCRIPT_RECORD_BYTES
+          : serializedBytes;
+      if ((!allowOversizedFirst || selectedCount > 0) && bytes + rowBytes > maxBytes) {
         break;
       }
       selectedStart = displayPosition;
       selectedCount += 1;
-      bytes += serializedBytes;
+      bytes += rowBytes;
     }
   } finally {
     metadata.return?.();
@@ -374,7 +404,10 @@ function readRecentHistoryInSnapshot(
         ),
         maxMessages,
       );
-  const events = empty ? [] : readVisibleHistoryRange(projection, start, history.total, history);
+  // Recent reads clamp their budget to the ceiling, so that is their stand-in bound.
+  const events = empty
+    ? []
+    : readVisibleHistoryRange(projection, start, history.total, history, SOURCE_PAGE_MAX_BYTES);
   const page: SessionTranscriptMessageEventPage = {
     activeLeafEntryId: projection.state.leafEventId,
     ...(deltaCursor ? { deltaCursor } : {}),
@@ -497,12 +530,13 @@ export function readSessionTranscriptHistoryEventPageFromProjection(
   }
   const maxMessages = resolveIntegerOption(options.maxMessages, 0, { min: 0 });
   const requestedStart = Math.max(0, endExclusive - maxMessages);
+  const maxBytes = resolveIntegerOption(options.maxBytes, SOURCE_PAGE_MAX_BYTES, { min: 1024 });
   const boundedStart = resolveRecentHistoryStart(
     projection,
     requestedStart,
     endExclusive,
     history,
-    resolveIntegerOption(options.maxBytes, SOURCE_PAGE_MAX_BYTES, { min: 1024 }),
+    maxBytes,
     maxMessages,
     options.allowOversizedFirst ?? options.maxBytes === undefined,
   ).start;
@@ -515,7 +549,13 @@ export function readSessionTranscriptHistoryEventPageFromProjection(
   // Skip its source position explicitly; callers disclose the omission to readers.
   const omittedOversized = maxMessages > 0 && endExclusive > 0 && boundedStart === endExclusive;
   const consumedStart = omittedOversized ? endExclusive - 1 : boundedStart;
-  const events = readVisibleHistoryRange(projection, boundedStart, endExclusive, history);
+  const events = readVisibleHistoryRange(
+    projection,
+    boundedStart,
+    endExclusive,
+    history,
+    resolveTranscriptStandInThresholdBytes(maxBytes),
+  );
   return {
     activeLeafEntryId: projection.state.leafEventId,
     events,
@@ -694,14 +734,24 @@ export function readSessionTranscriptHistoryAnchorPageFromProjection(
     }
     sizes.set(displayPosition++, row.serialized_bytes);
   }
+  // Admission and projection have to agree on which rows become stand-ins, or the
+  // window is cut at a row the reader would have bounded anyway.
+  const standInAboveBytes = resolveTranscriptStandInThresholdBytes(limit);
   const { start, endExclusive } = boundHistoryAnchorPageRange(
     range,
     anchorSeq - 1,
     Math.max(1024, limit),
     (position) => visible.boundaries.get(position)?.serializedBytes ?? sizes.get(position) ?? 0,
-    options.maxBytes === undefined,
+    false,
+    standInAboveBytes,
   );
-  const events = readVisibleHistoryRange(projection, start, endExclusive, history);
+  const events = readVisibleHistoryRange(
+    projection,
+    start,
+    endExclusive,
+    history,
+    standInAboveBytes,
+  );
   return {
     events,
     ...(windowChange ? { windowReset: true } : {}),

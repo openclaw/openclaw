@@ -1,3 +1,4 @@
+import { MAX_OVERSIZED_TRANSCRIPT_RECORD_BYTES } from "../gateway/session-transcript-record-parser.js";
 import type { TranscriptReadWindow } from "./transcript-read-window.js";
 
 export type TranscriptRecentReadLimits = {
@@ -70,26 +71,33 @@ export function resolveHistoryAnchorPageRange(
   };
 }
 
-/** Admit a contiguous range around the anchor before loading any payloads. */
+/**
+ * Admit a contiguous range around the anchor before loading any payloads.
+ * A row above `standInAboveBytes` is served as a bounded stand-in, so it is charged
+ * that bound at every position: charging its real size would truncate the window at an
+ * oversized neighbor and drop the rows past it with nothing disclosed to the client.
+ */
 export function boundHistoryAnchorPageRange(
   range: ReturnType<typeof resolveHistoryAnchorPageRange>,
   anchorPosition: number,
   maxBytes: number,
   byteSize: (position: number, remainingBytes: number) => number,
   rejectOversized = false,
+  standInAboveBytes = Number.POSITIVE_INFINITY,
 ) {
   let start = Math.min(Math.max(anchorPosition, range.readStart), range.endExclusive);
   let endExclusive = start;
   let bytes = 2;
   const include = (position: number) => {
     const size = byteSize(position, maxBytes - bytes);
-    if (bytes + size > maxBytes) {
+    const charged = size > standInAboveBytes ? MAX_OVERSIZED_TRANSCRIPT_RECORD_BYTES : size;
+    if (bytes + charged > maxBytes) {
       if (rejectOversized && start === endExclusive) {
         throw new Error(`Chat history message exceeds the ${maxBytes}-byte page limit`);
       }
       return false;
     }
-    bytes += size;
+    bytes += charged;
     return true;
   };
   if (start < range.endExclusive) {

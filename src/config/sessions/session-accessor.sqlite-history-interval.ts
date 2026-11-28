@@ -1,6 +1,9 @@
 import { sql, type Expression, type RawBuilder, type SqlBool } from "kysely";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../../agents/internal-runtime-context.js";
-import { SOURCE_PAGE_MAX_BYTES } from "../../gateway/session-transcript-source-pages.js";
+import {
+  resolveTranscriptStandInThresholdBytes,
+  SOURCE_PAGE_MAX_BYTES,
+} from "../../gateway/session-transcript-source-pages.js";
 import { engineIndexHint } from "../../infra/database-engine/index-hint.js";
 import { jsonArrayElements } from "../../infra/database-engine/json-values.js";
 import {
@@ -23,6 +26,7 @@ import { findUnindexedActiveTranscriptEntry } from "./session-accessor.sqlite-hi
 import {
   getActiveTranscriptKysely,
   readSnapshotEventRows,
+  readSnapshotEventStandIns,
   selectActiveTranscriptIdentityRows,
   type SessionTranscriptMessageAnchorPage,
   type CurrentTranscriptProjection,
@@ -291,36 +295,44 @@ function readHistoricalDisplayEventRange(
     SOURCE_PAGE_MAX_BYTES,
     Math.max(1_024, Math.floor(maxBytes ?? SOURCE_PAGE_MAX_BYTES)),
   );
+  // Admission and projection have to agree on which rows become stand-ins, or the
+  // interval is cut at an oversized row the reader would have bounded anyway.
+  const standInAboveBytes = resolveTranscriptStandInThresholdBytes(limit);
   const selectedRange = boundHistoryAnchorPageRange(
     { readStart: 0, endExclusive: ranged.length, hasOverreadContext: false, offset: 0 },
     anchorOptions ? anchor.displayPosition - start : ranged.length - 1,
     limit,
     (position) => ranged[position]!.serialized_bytes,
-    anchorOptions !== undefined && maxBytes === undefined,
+    false,
+    standInAboveBytes,
   );
   const selected = ranged.slice(selectedRange.start, selectedRange.endExclusive);
   if (selected.length === 0) {
     return [];
   }
-  const payloads = readSnapshotEventRows(
+  // Rows admitted as stand-ins are built from their identity; their payload is never selected.
+  const standIns = readSnapshotEventStandIns(
     projection,
-    selected.map((row) => row.event_seq),
+    selected.filter((row) => row.serialized_bytes > standInAboveBytes).map((row) => row.event_seq),
   );
+  const whole = selected.filter((row) => row.serialized_bytes <= standInAboveBytes);
+  const payloads =
+    whole.length === 0
+      ? []
+      : readSnapshotEventRows(
+          projection,
+          whole.map((row) => row.event_seq),
+        );
   const payloadBySeq = new Map(payloads.map((row) => [row.seq, readTranscriptPayload(row)]));
   return positionTranscriptDisplayEvents(
     projection,
     displaySource,
     selected.flatMap((row) => {
       const eventJson = payloadBySeq.get(row.event_seq);
-      return eventJson === undefined
-        ? []
-        : [
-            {
-              event: parseStoredTranscriptEvent(eventJson),
-              eventSeq: row.event_seq,
-              seq: row.displaySeq,
-            },
-          ];
+      const event =
+        standIns.get(row.event_seq) ??
+        (eventJson === undefined ? undefined : parseStoredTranscriptEvent(eventJson));
+      return event === undefined ? [] : [{ event, eventSeq: row.event_seq, seq: row.displaySeq }];
     }),
   );
 }

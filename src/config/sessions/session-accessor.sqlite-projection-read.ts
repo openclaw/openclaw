@@ -1,5 +1,6 @@
 import { sql, type InferResult, type RawBuilder } from "kysely";
 import type { TranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
+import { oversizedTranscriptStandIn } from "../../gateway/session-transcript-record-parser.js";
 import { jsonArrayElements } from "../../infra/database-engine/json-values.js";
 import {
   createSqliteQueryCache,
@@ -37,7 +38,11 @@ import type {
   SessionTranscriptProjectionFacts,
 } from "./session-transcript-projection-facts.types.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
-import { readTranscriptPayload, type TranscriptPayloadRecord } from "./transcript-payload.js";
+import {
+  readTranscriptPayload,
+  transcriptPredicateSql,
+  type TranscriptPayloadRecord,
+} from "./transcript-payload.js";
 
 type ActiveTranscriptDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -209,6 +214,60 @@ export function readSnapshotEventRows(
   return rows;
 }
 
+type OversizedRowIdentity = {
+  event_id?: string | null;
+  parent_id?: string | null;
+  event_type?: string | null;
+  message_role?: string | null;
+};
+
+/** Indexed identities for rows a page serves as stand-ins; never selects a payload. */
+export function readSnapshotEventStandIns(
+  projection: CurrentTranscriptProjection,
+  eventSeqs: readonly number[],
+): Map<number, TranscriptEvent> {
+  if (eventSeqs.length === 0) {
+    return new Map();
+  }
+  const query = getActiveTranscriptKysely(projection.database)
+    .selectFrom("transcript_events as event")
+    .leftJoin("transcript_event_identities as identity", (join) =>
+      join
+        .onRef("identity.session_id", "=", "event.session_id")
+        .onRef("identity.seq", "=", "event.seq"),
+    )
+    .select([
+      "event.seq",
+      "identity.event_id",
+      "identity.parent_id",
+      "identity.event_type",
+      transcriptPredicateSql(projection.database.db, "message_role", "event").as("message_role"),
+    ])
+    .where("event.session_id", "=", projection.resolved.sessionId)
+    .where(
+      "event.seq",
+      "in",
+      /* kysely-allow-raw: bind physical sequences already selected in this snapshot. */
+      sql<number>`(SELECT CAST(value AS BIGINT) FROM ${jsonArrayElements(projection.database.db, sql.val(JSON.stringify(eventSeqs)))})`,
+    );
+  return new Map(
+    executeSqliteQuerySync(projection.database.db, query).rows.map((row) => [
+      row.seq,
+      oversizedRowStandIn(row),
+    ]),
+  );
+}
+
+function oversizedRowStandIn(row: OversizedRowIdentity): TranscriptEvent {
+  // Non-message rows keep the untyped stand-in the boundary reader serves.
+  return oversizedTranscriptStandIn({
+    id: row.event_id,
+    parentId: row.parent_id,
+    type: row.event_type === "message" ? "message" : undefined,
+    role: row.message_role,
+  }) as TranscriptEvent;
+}
+
 export function readProjectionTranscriptPayload(
   projection: Pick<CurrentTranscriptProjection, "readColdPayload">,
   row: Pick<TranscriptPayloadRecord, "event_json" | "event_zstd" | "event_utf8_bytes">,
@@ -223,16 +282,21 @@ export function parseActiveTranscriptMessageRow(
   row: Pick<TranscriptPayloadRecord, "event_json" | "event_zstd" | "event_utf8_bytes"> & {
     event_seq: number;
     message_position: number | null;
-  },
+    /** Set by selectBoundedMessagePayload when the payload was not selected. */
+    oversized?: number | null;
+  } & OversizedRowIdentity,
   projection: Pick<CurrentTranscriptProjection, "readColdPayload">,
 ): SessionTranscriptMessageEvent {
   if (row.message_position === null) {
     throw new Error("Active transcript message row is missing its message position");
   }
-  const eventJson = readProjectionTranscriptPayload(projection, row, row.event_seq);
   return {
     // SAFETY: The active projection indexes serialized TranscriptEvent rows.
-    event: JSON.parse(eventJson) as TranscriptEvent,
+    event: row.oversized
+      ? oversizedRowStandIn({ ...row, event_type: "message" })
+      : (JSON.parse(
+          readProjectionTranscriptPayload(projection, row, row.event_seq),
+        ) as TranscriptEvent),
     eventSeq: row.event_seq,
     // Gateway cursors use the visible-message ordinal, matching the JSONL index.
     // Raw event seq includes headers/control rows and would make pages overlap.
@@ -278,6 +342,49 @@ export function selectMessagePayload(query: ReturnType<typeof selectMessageRows>
     "event.event_zstd",
     "event.event_utf8_bytes",
   ]);
+}
+
+/**
+ * Display pages select an oversized message's indexed identity, never its payload, so
+ * the stand-in bound page admission charged is also all the reader holds in memory.
+ * Compressed and cold rows are capped below every stand-in threshold by the schema.
+ */
+export function selectBoundedMessagePayload(
+  database: Pick<TranscriptReadDatabase, "db">,
+  query: ReturnType<typeof selectMessageRows>,
+  standInAboveBytes: number,
+) {
+  return query
+    .leftJoin("transcript_event_identities as identity", (join) =>
+      join
+        .onRef("identity.session_id", "=", "active.session_id")
+        .onRef("identity.seq", "=", "active.event_seq"),
+    )
+    .select((eb) => {
+      // Page admission charges recorded bytes plus one JSONL separator.
+      const oversized = eb(
+        eb(transcriptEventReadBytesSql("event"), "+", 1),
+        ">",
+        standInAboveBytes,
+      );
+      return [
+        "active.event_seq",
+        "active.message_position",
+        eb
+          .case()
+          .when(oversized)
+          .then(null)
+          .else(eb.ref("event.event_json"))
+          .end()
+          .as("event_json"),
+        "event.event_zstd",
+        "event.event_utf8_bytes",
+        eb.case().when(oversized).then(1).else(0).end().as("oversized"),
+        "identity.event_id",
+        "identity.parent_id",
+        transcriptPredicateSql(database.db, "message_role", "event").as("message_role"),
+      ];
+    });
 }
 
 export function selectMessageMetadata(query: ReturnType<typeof selectMessageRows>) {

@@ -16,6 +16,11 @@ const OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS = 64 * 1024;
 const OVERSIZED_TRANSCRIPT_METADATA_SUFFIX_CHARS = 64 * 1024;
 const MAX_OVERSIZED_TRANSCRIPT_RECOVERY_CANDIDATES = 32;
 const TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER = "[chat.history omitted: message too large]";
+/**
+ * Every stand-in a reader serves for an oversized row stays within the parse-line
+ * bound, so a history page can charge this instead of the row's real size.
+ */
+export const MAX_OVERSIZED_TRANSCRIPT_RECORD_BYTES = MAX_TRANSCRIPT_PARSE_LINE_BYTES;
 
 const TRANSCRIPT_STRING_FIELD_REGEXES = {
   id: /"id"\s*:\s*"((?:\\.|[^"\\])*)"/,
@@ -269,7 +274,9 @@ export function parseTranscriptRecord(line: string): TranscriptRecord | null {
   const prefix = line.slice(0, OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS);
   const messageMatch = /"message"\s*:/.exec(prefix);
   const recordPrefix = messageMatch ? prefix.slice(0, messageMatch.index) : prefix;
-  const id = extractJsonStringFieldPrefix(prefix, "id");
+  // Only the record's own fields, never an `id` nested in the payload: promoting a
+  // content-block id would point the stand-in's exact read at a row that cannot exist.
+  const id = extractJsonStringFieldPrefix(recordPrefix, "id");
   const parentId = TRANSCRIPT_PARENT_ID_NULL_RE.test(prefix)
     ? null
     : extractJsonStringFieldPrefix(prefix, "parentId");
@@ -297,5 +304,27 @@ export function parseTranscriptRecord(line: string): TranscriptRecord | null {
     byteLength,
     ...(id ? { id } : {}),
     record,
+  };
+}
+
+/**
+ * The bounded stand-in for a row a reader selected only the indexed identity of. Its
+ * payload is never read, so the bytes the page ceiling refused never reach memory.
+ */
+export function oversizedTranscriptStandIn(identity: {
+  id?: string | null;
+  parentId?: string | null;
+  type?: string | null;
+  role?: string | null;
+}): Record<string, unknown> {
+  return {
+    ...(identity.type ? { type: identity.type } : {}),
+    ...(identity.id ? { id: identity.id } : {}),
+    ...(identity.parentId ? { parentId: identity.parentId } : {}),
+    message: {
+      role: identity.role ?? "assistant",
+      content: [{ type: "text", text: TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER }],
+      __openclaw: { truncated: true, reason: "oversized" },
+    },
   };
 }
