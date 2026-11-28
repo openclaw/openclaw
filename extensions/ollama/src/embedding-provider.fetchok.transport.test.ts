@@ -113,7 +113,7 @@ function expectRequest(server: OllamaServer, headers: Partial<OllamaRequest>) {
       authorization: undefined,
       proxyAuthorization: undefined,
       proxyAuth: undefined,
-      body: JSON.stringify({ model: "test-embedding", input: "hello" }),
+      body: JSON.stringify({ model: "test-embedding", input: "hello", truncate: false }),
       ...headers,
     },
   ]);
@@ -124,6 +124,27 @@ describe("Ollama embedding provider real transport", () => {
     vi.unstubAllEnvs();
     const pending = servers.splice(0);
     await Promise.all(pending.map((server) => server.close()));
+  });
+
+  it("rejects oversized input instead of silently embedding a truncated prefix", async () => {
+    const input = `${"synthetic context ".repeat(16)}retain the final fact`;
+    const server = await startOllamaServer((request) => {
+      const body = JSON.parse(request.body) as { truncate?: boolean };
+      // Ollama defaults to truncation; opting out must expose its context error.
+      return body.truncate === false
+        ? {
+            status: 400,
+            body: JSON.stringify({ error: "the input length exceeds the context length" }),
+          }
+        : { status: 200, body: JSON.stringify({ embeddings: [[1, 0]] }) };
+    });
+    const { provider } = await createOllamaEmbeddingProvider(createOptions(server.baseUrl));
+    await expect(provider.embed(input, { inputType: "query" })).rejects.toThrow(
+      "the input length exceeds the context length",
+    );
+    expectRequest(server, {
+      body: JSON.stringify({ model: "test-embedding", input, truncate: false }),
+    });
   });
 
   it.each([false, true])(

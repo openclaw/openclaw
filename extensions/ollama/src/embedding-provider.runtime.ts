@@ -336,7 +336,7 @@ export async function createOllamaEmbeddingProvider(
         init: {
           method: "POST",
           headers: client.headers,
-          body: JSON.stringify({ model: client.model, input }),
+          body: JSON.stringify({ model: client.model, input, truncate: false }),
         },
       });
       try {
