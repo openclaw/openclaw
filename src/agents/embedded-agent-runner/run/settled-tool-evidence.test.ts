@@ -18,7 +18,7 @@ const CONTINUATION =
   "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current transcript. Do not repeat completed tool calls or restart from scratch. Do not call tools in this step. Summarize the recorded results in plain text.";
 
 function continuation(
-  attemptOverrides: Partial<EmbeddedRunAttemptResult> = {},
+  attemptOverrides: Partial<EmbeddedRunAttemptResult>,
   overrides: Partial<
     Omit<Parameters<typeof resolveSettledToolTerminalContinuation>[0], "attempt">
   > = {},
@@ -79,7 +79,7 @@ function failedToolInput(
   };
 }
 
-function emptyStop(overrides: Partial<EmbeddedRunAttemptResult> = {}) {
+function emptyStop(overrides: Partial<EmbeddedRunAttemptResult>) {
   const assistant = textAssistant();
   return {
     assistantTexts: [],
