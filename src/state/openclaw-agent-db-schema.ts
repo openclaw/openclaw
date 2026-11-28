@@ -177,7 +177,7 @@ function ensureAgentSchema(
       const identityMigration = targetVersion >= 18 && schemaMigration;
       if (identityMigration && metadata?.schemaVersion !== previousVersion) {
         throw new Error(
-          `Agent schema markers disagree for ${pathname}; repair ownership metadata before migration.`,
+          `Agent schema markers disagree for ${pathname}; stop the Gateway and preserve the state directory. Restore a verified backup into a fresh directory with openclaw backup restore <archive.tar.gz> --target <fresh-directory>, or see https://docs.openclaw.ai/cli/update/repair-and-recovery#agent-schema-markers-disagree.`,
         );
       }
       if (previousVersion > targetVersion) {
