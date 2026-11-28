@@ -199,6 +199,24 @@ test("concurrent sessions.create requests adopt one canonical keyed session", as
   expect(persistedSessionId).toBe(canonicalSessionId);
 });
 
+test("createGatewaySession preserves the main session when its reset commit guard rejects", async () => {
+  try {
+    const key = "agent:main:main";
+    const original = sessionStoreEntry("main-before-guard-close");
+    testState.sessionConfig = { dmScope: "main" };
+    await writeSessionStore({ entries: { main: original } });
+    const commitGuard = vi.fn(() => {
+      if (commitGuard.mock.calls.length > 1) {
+        throw new Error("session create authority closed");
+      }
+    });
+    await expect(resetMain({ commitGuard })).rejects.toThrow("session create authority closed");
+    expect(readEntry(key)).toMatchObject(original);
+  } finally {
+    testState.sessionConfig = undefined;
+  }
+});
+
 test("sessions.create preserves keyed draft adoption idempotency", async () => {
   const key = "agent:main:dashboard:idempotent-draft";
   const first = await createSession({ key, visibility: "draft" });
@@ -524,6 +542,10 @@ test("sessions.create replays an identical creation once and rejects conflicting
     expectOk(differentOwner);
     expect(differentOwner.payload?.key).not.toBe(first.payload?.key);
     expect(chatSend).toHaveBeenCalledTimes(2);
+    // Initial-input custody must stay distinct when two owners reuse the public key.
+    expect(chatSend.mock.calls[1]?.[0].params.idempotencyKey).not.toBe(
+      chatSend.mock.calls[0]?.[0].params.idempotencyKey,
+    );
   } finally {
     chatSend.mockRestore();
   }
