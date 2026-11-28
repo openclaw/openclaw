@@ -11,11 +11,6 @@ struct ChatProTab: View {
         case error
     }
 
-    private struct TranscriptShareItem: Identifiable {
-        let id = UUID()
-        let fileURL: URL
-    }
-
     @Environment(NodeAppModel.self) private var appModel
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -41,10 +36,26 @@ struct ChatProTab: View {
         self.appModel.chatPresentation.viewModel
     }
 
-    @State private var transcriptShareItem: TranscriptShareItem?
     @State private var showsTranscriptExportError = false
     @Environment(\.dismiss) private var dismiss
     @State private var compactToolbarInset: CGFloat = 0
+    @State private var infoVisit: ChatInfoVisit?
+    @State private var checkoutChanges: (read: ChatInfoCheckoutRead, value: ChatInfoCheckoutChanges)?
+
+    private var checkoutRead: ChatInfoCheckoutRead? {
+        guard self.childKey == nil, !self.isMainChat, !self.isGatewayTransitionPending,
+              self.appModel.chatPresentation.ownerID == self.appModel.chatViewModelOwnerID,
+              let model = self.viewModel, !model.isNewChatDraft, let entry = model.currentSessionEntry(),
+              entry.worktree != nil || entry.repository != nil else { return nil }
+        let branch = OpenClawChatInfoPullRequests.checkoutBranch(for: model)
+        guard branch?.additions == nil, branch?.deletions == nil else { return nil }
+        return ChatInfoCheckoutRead(
+            target: model.currentSessionTarget,
+            gatewayID: self.appModel.chatTranscriptCacheGatewayID,
+            presentationID: self.appModel.chatPresentation.presentationID,
+            branch: entry.worktree?.branch ?? entry.repository?["branch"]?.value as? String)
+    }
+
     @State private var showsNewSessionOptions = false
     @State private var speech: OpenClawChatSpeechController?
     @State private var isGatewayStatusManuallyExpanded = false
@@ -121,6 +132,21 @@ struct ChatProTab: View {
                 }
             }
             .environment(\.openClawChatUsesFloatingComposer, true)
+            .navigationDestination(item: self.$infoVisit) { visit in
+                ChatInfoPage(visit: visit, writesDisabled: self.areSessionActionsDisabled)
+            }
+            .task(id: self.checkoutRead) {
+                self.checkoutChanges = nil
+                guard let read = self.checkoutRead, let changes = await read.changes(in: self.appModel),
+                      !Task.isCancelled else { return }
+                self.checkoutChanges = (read, changes)
+            }
+            .onChange(of: self.viewModel?.currentSessionTarget) { _, target in
+                if let visit = self.infoVisit, target != visit.target { self.infoVisit = nil }
+            }
+            .onChange(of: self.appModel.chatPresentation.presentationID) { _, _ in
+                if let visit = self.infoVisit, self.viewModel !== visit.model { self.infoVisit = nil }
+            }
             .sheet(isPresented: self.$showsNewSessionOptions) {
                 if let viewModel {
                     ScrollView {
@@ -395,13 +421,32 @@ struct ChatProTab: View {
             self.sessionHeaderText(title: childName, subtitle: self.viewModel?.subagentChatStatus(for: childKey))
         } else if self.viewModel?.isNewChatDraft == true {
             Color.clear.frame(width: 0, height: 0).accessibilityHidden(true)
-        } else if self.isMainChat, !self.usesSideToolbar {
-            self.mainChatIdentity
         } else {
-            self.headerAgentIdentityLabel
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(Text(verbatim: self.headerAgentAccessibilityLabel))
-                .accessibilityIdentifier("chat-agent-identity")
+            Button {
+                guard let viewModel, self.childKey == nil else { return }
+                // Media and Automations load inside the page; opening never waits on the Gateway.
+                self.infoVisit = ChatInfoVisit(
+                    model: viewModel,
+                    kind: self.isMainChat ? .mainProfile : .chat,
+                    agentName: self.agentDisplayName,
+                    badge: self.agentBadge,
+                    avatar: self.agentAvatarImage,
+                    gatewayID: self.appModel.chatTranscriptCacheGatewayID,
+                    agentID: self.currentAgentID,
+                    uncommittedChanges: self.checkoutChanges.flatMap { $0.read == self.checkoutRead ? $0.value : nil })
+            } label: {
+                if self.isMainChat, !self.usesSideToolbar {
+                    self.mainChatIdentity
+                } else {
+                    self.headerAgentIdentityLabel
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(self.viewModel == nil || self.childKey != nil || self.isGatewayTransitionPending ||
+                self.isAttachmentOwnerPinned && self.appModel.chatPresentation.ownerID != self.appModel
+                .chatViewModelOwnerID)
+            .accessibilityLabel(Text(verbatim: self.headerAgentAccessibilityLabel))
+            .accessibilityIdentifier("chat-agent-identity")
         }
     }
 
@@ -583,37 +628,12 @@ struct ChatProTab: View {
         ChatActionsMenu(
             viewModel: self.viewModel,
             isMainChat: self.isMainChat,
+            hasInfoPage: self.childKey == nil && self.viewModel?.isNewChatDraft == false,
             isDisabled: self.areSessionActionsDisabled,
             newChat: {
                 guard !self.areSessionActionsDisabled else { return }
                 self.appModel.requestNewChat()
             })
-    }
-
-    private func exportTranscript() {
-        guard let viewModel else { return }
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OpenClawTranscripts", isDirectory: true)
-        do {
-            let fileURL = try Self.writeTranscript(for: viewModel, in: directory)
-            self.transcriptShareItem = TranscriptShareItem(fileURL: fileURL)
-        } catch {
-            self.showsTranscriptExportError = true
-        }
-    }
-
-    static func writeTranscript(for viewModel: OpenClawChatViewModel, in directory: URL) throws -> URL {
-        let title = viewModel.currentSessionEntry()?.displayName
-        let key = viewModel.sessionKey
-        let filename = ChatTranscriptExporter.filename(sessionTitle: title, sessionKey: key)
-        let markdown = ChatTranscriptExporter.markdown(
-            sessionTitle: title,
-            sessionKey: key,
-            messages: viewModel.messages)
-        let fileURL = directory.appendingPathComponent(filename, isDirectory: false)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try markdown.write(to: fileURL, atomically: true, encoding: .utf8)
-        return fileURL
     }
 
     /// Chat follows the operator session; buildChat reports connected only when it can serve chat.

@@ -219,7 +219,9 @@ struct LocalFixtureChatTransport: OpenClawChatGoalTransport, OpenClawChildStopTr
             // After the view model records the watch, as a Gateway's first push would arrive.
             try? await Task.sleep(for: .milliseconds(300))
             await store.publish(.sessionPullRequestsChanged(OpenClawSessionPullRequestsChangedEvent(
-                sessions: [key: ActivityPillsFixture.pullRequests()])))
+                sessions: [key: ScreenshotFixtureMode.chatInfoEnabled
+                    ? .init(pullRequests: Array(ActivityPillsFixture.pullRequests().pullRequests.prefix(1)))
+                    : ActivityPillsFixture.pullRequests()])))
         }
         return true
     }
@@ -978,7 +980,7 @@ actor LocalFixtureChatStore {
             var launchPlan = OpenClawChatSessionEntry(
                 key: ScreenshotFixtureMode.chatSwitchSecondSessionKey,
                 kind: "chat",
-                displayName: "Launch plan",
+                displayName: ScreenshotFixtureMode.chatSwitchSecondSessionTitle,
                 surface: "ios",
                 updatedAt: Date().timeIntervalSince1970 * 1000 - 60000,
                 sessionId: "\(self.fixture.sessionIDPrefix)-launch-plan",
@@ -991,6 +993,7 @@ actor LocalFixtureChatStore {
                     "microphone tests, backup locations and recording notes for the return journey"
                 launchPlan.spawnedCwd = "/projects/Fieldnotes"
             }
+            ScreenshotFixtureMode.decorateChatInfo(&launchPlan)
             sessions.append(launchPlan)
         }
         return OpenClawChatSessionsListResponse(
