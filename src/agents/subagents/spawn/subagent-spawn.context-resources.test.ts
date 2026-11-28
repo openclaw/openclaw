@@ -70,7 +70,6 @@ function createEngineFixture(
     read,
     retired,
     rollback,
-    engineDisposal,
     expectClosed() {
       expect(retired).toHaveBeenCalledOnce();
       expect(engineDisposal).toHaveBeenCalledOnce();

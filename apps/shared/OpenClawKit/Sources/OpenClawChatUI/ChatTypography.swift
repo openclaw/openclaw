@@ -12,10 +12,6 @@ enum OpenClawChatTypography {
     static let composerChevronGlyph = Font.system(size: 8, weight: .medium)
     static let composerAttachmentGlyph = Font.system(size: 17, weight: .medium)
     static let composerPrimaryGlyph = Font.system(size: 17, weight: .semibold)
-    /// Composer menu labels read close to the draft's size in a medium weight, as in the Control UI.
-    static var composerControlLabel: Font {
-        body(size: 16, weight: .medium, relativeTo: .callout)
-    }
 
     /// Chat text reads at the system text styles, like Messages: body is 17 pt at the default Dynamic
     /// Type size and follows every setting, up and down. Each role names its style; `readable` keeps a

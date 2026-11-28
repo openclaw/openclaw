@@ -83,14 +83,6 @@ suite.define(() => {
       const { gateway, composer } = await openOutbox(page, {
         sessionKey,
         sessions: [outboxSession(sessionKey, "Release notes")],
-        methodResponses: {
-          "chat.history": {
-            messages: [],
-            sessionId: `session:${sessionKey}`,
-            sessionInfo: { hasActiveRun: false, status: "done" },
-            thinkingLevel: null,
-          },
-        },
       });
       await gateway.deferNext("chat.send");
       await composer.fill("Please review the release notes before publishing.");

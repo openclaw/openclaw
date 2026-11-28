@@ -8,10 +8,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   fork: () => {
     const child = Object.assign(new EventEmitter(), {
-      exitCode: null as number | null,
-      signalCode: null as string | null,
       kill: vi.fn(() => {
-        child.signalCode = "SIGKILL";
         queueMicrotask(() => child.emit("exit", null, "SIGKILL"));
       }),
       send: vi.fn((_message: unknown, callback: (error: Error | null) => void) => {
