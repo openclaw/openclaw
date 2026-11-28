@@ -28,192 +28,208 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-it.each(["terminal", "reset", "rebind", "already rebound", "revoked", "policy", "quiet"] as const)(
-  "scopes detached Telegram typing through %s",
-  async (scenario) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const cfg = {
-        session: { store: state.path("sessions.json") },
-        agents: {
-          defaults: {
-            typingIntervalSeconds: 1,
-            typingMode: scenario === "policy" ? "never" : "instant",
-          },
+it.each([
+  "terminal",
+  "reset",
+  "rebind",
+  "already rebound",
+  "revoked",
+  "policy",
+  "quiet",
+  "other channel",
+  "no typing",
+] as const)("scopes detached typing through %s", async (scenario) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg = {
+      session: { store: state.path("sessions.json") },
+      agents: {
+        defaults: {
+          typingIntervalSeconds: 1,
+          typingMode: scenario === "policy" ? "never" : "instant",
         },
-      } satisfies OpenClawConfig;
-      setRuntimeConfigSnapshot(cfg);
-      vi.mocked(callGateway).mockResolvedValue({ status: "pending" });
-      vi.mocked(bindGatewayLifecycleRequest).mockReturnValue(callGateway);
-      vi.mocked(onAgentEvent).mockReturnValue(() => {});
-      const sends: Array<Parameters<NonNullable<ChannelHeartbeatAdapter["sendTypingGuarded"]>>[0]> =
-        [];
-      let pendingSend: Promise<void> | undefined;
-      const enteredSend = createDeferredCore();
-      const typing = createLifecycleTypingManager({
-        getConfig: () => cfg,
-        isAvailable: () => true,
-        resolveAdapter: async () => ({
-          sendTypingGuarded: async (target) => {
-            if (pendingSend) {
-              enteredSend.resolve();
-              await pendingSend;
-            }
-            target.assertPlatformSendAuthorized?.();
-            sends.push(target);
-          },
-        }),
-      });
-      const context = createContext();
-      context.lifecycleRuntime = createMockGatewayLifecycleRuntime({
-        startTyping: (params) => typing.start(params),
-      });
-      const fixture = operatorFixture("typing-source", true, context);
-      const source = { channel: "telegram", accountId: "work", to: "-100123", threadId: 7 };
-      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-      try {
-        for (const [runId, origin] of [
-          ["one", source],
-          ["two", source],
-          ["other", { ...source, accountId: "personal", to: "456", threadId: 9 }],
-        ] as const) {
-          const requesterId = runId === "two" ? "one" : runId;
-          const requesterSessionKey = `agent:main:telegram:${requesterId}`;
-          if (runId !== "two") {
-            await upsertSessionEntryCore(
-              { agentId: "main", sessionKey: requesterSessionKey, storePath: cfg.session.store },
-              {
-                sessionId: `parent-${requesterId}`,
-                updatedAt: Date.now(),
-                delivery: normalizeSessionDeliveryState({
-                  context:
-                    scenario === "already rebound" && runId === "one"
-                      ? { ...origin, to: "forbidden" }
-                      : origin,
-                }),
+      },
+    } satisfies OpenClawConfig;
+    setRuntimeConfigSnapshot(cfg);
+    vi.mocked(callGateway).mockResolvedValue({ status: "pending" });
+    vi.mocked(bindGatewayLifecycleRequest).mockReturnValue(callGateway);
+    vi.mocked(onAgentEvent).mockReturnValue(() => {});
+    const sends: Array<Parameters<NonNullable<ChannelHeartbeatAdapter["sendTypingGuarded"]>>[0]> =
+      [];
+    let pendingSend: Promise<void> | undefined;
+    const enteredSend = createDeferredCore();
+    // Core must follow the channel's declared typing capability, never its name.
+    const channel =
+      scenario === "other channel" ? "discord" : scenario === "no typing" ? "plain" : "telegram";
+    const typing = createLifecycleTypingManager({
+      getConfig: () => cfg,
+      isAvailable: () => true,
+      resolveAdapter: async (resolved) =>
+        resolved !== channel || channel === "plain"
+          ? {}
+          : {
+              sendTypingGuarded: async (target) => {
+                if (pendingSend) {
+                  enteredSend.resolve();
+                  await pendingSend;
+                }
+                target.assertPlatformSendAuthorized?.();
+                sends.push(target);
               },
-            );
-          }
-          await withPluginRuntimeGatewayRequestScope(
-            { ...fixture, isWebchatConnect: () => false },
-            () =>
-              registerSubagentRun({
-                runId,
-                childAgentId: "main",
-                childSessionKey: `agent:main:subagent:${runId}`,
-                sessionEntry: { sessionId: `child-${runId}` },
-                requesterSessionKey,
-                requesterAgentId: "main",
-                requesterDisplayKey: "source",
-                requesterOrigin: origin,
-                completionRequesterSessionId: `parent-${requesterId}`,
-                gatewayContextResolver: fixture.resolveGatewayContext,
-                expectsCompletionMessage: scenario !== "quiet",
-                task: "detached work",
-                cleanup: "keep",
+            },
+    });
+    const context = createContext();
+    context.lifecycleRuntime = createMockGatewayLifecycleRuntime({
+      startTyping: (params) => typing.start(params),
+    });
+    const fixture = operatorFixture("typing-source", true, context);
+    const source = { channel, accountId: "work", to: "-100123", threadId: 7 };
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      for (const [runId, origin] of [
+        ["one", source],
+        ["two", source],
+        ["other", { ...source, accountId: "personal", to: "456", threadId: 9 }],
+      ] as const) {
+        const requesterId = runId === "two" ? "one" : runId;
+        const requesterSessionKey = `agent:main:telegram:${requesterId}`;
+        if (runId !== "two") {
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: requesterSessionKey, storePath: cfg.session.store },
+            {
+              sessionId: `parent-${requesterId}`,
+              updatedAt: Date.now(),
+              delivery: normalizeSessionDeliveryState({
+                context:
+                  scenario === "already rebound" && runId === "one"
+                    ? { ...origin, to: "forbidden" }
+                    : origin,
               }),
+            },
           );
         }
-        await vi.dynamicImportSettled();
-        if (scenario === "already rebound") {
-          expect(sends.map(({ to }) => to)).toEqual(["456"]);
-          await vi.advanceTimersByTimeAsync(1000);
-          expect(sends.map(({ to }) => to)).toEqual(["456", "456"]);
-          return;
-        }
-        if (scenario === "policy" || scenario === "quiet") {
-          await vi.advanceTimersByTimeAsync(3000);
-          expect(sends).toEqual([]);
-          expect(vi.getTimerCount()).toBe(0);
-          return;
-        }
-        expect(sends.map(({ accountId, to, threadId }) => ({ accountId, to, threadId }))).toEqual([
-          { accountId: "work", to: "-100123", threadId: 7 },
-          { accountId: "work", to: "-100123", threadId: 7 },
-          { accountId: "personal", to: "456", threadId: 9 },
-        ]);
+        await withPluginRuntimeGatewayRequestScope(
+          { ...fixture, isWebchatConnect: () => false },
+          () =>
+            registerSubagentRun({
+              runId,
+              childAgentId: "main",
+              childSessionKey: `agent:main:subagent:${runId}`,
+              sessionEntry: { sessionId: `child-${runId}` },
+              requesterSessionKey,
+              requesterAgentId: "main",
+              requesterDisplayKey: "source",
+              requesterOrigin: origin,
+              completionRequesterSessionId: `parent-${requesterId}`,
+              gatewayContextResolver: fixture.resolveGatewayContext,
+              expectsCompletionMessage: scenario !== "quiet",
+              task: "detached work",
+              cleanup: "keep",
+            }),
+        );
+      }
+      await vi.dynamicImportSettled();
+      if (scenario === "already rebound") {
+        expect(sends.map(({ to }) => to)).toEqual(["456"]);
         await vi.advanceTimersByTimeAsync(1000);
-        expect(sends).toHaveLength(6);
-        if (scenario !== "terminal") {
-          sends.length = 0;
-          const release = createDeferredCore();
-          pendingSend = release.promise;
-          const tick = vi.advanceTimersByTimeAsync(1000);
-          await enteredSend.promise;
-          if (scenario === "revoked") {
-            fixture.revoked.abort();
-          } else {
-            await upsertSessionEntryCore(
-              {
-                agentId: "main",
-                sessionKey: "agent:main:telegram:one",
-                storePath: cfg.session.store,
-              },
-              scenario === "reset"
-                ? { sessionId: "replacement" }
-                : {
-                    delivery: normalizeSessionDeliveryState({
-                      context: {
-                        ...source,
-                        to: "forbidden",
-                        accountId: "forbidden",
-                        threadId: 99,
-                      },
-                    }),
-                  },
-            );
-          }
-          release.resolve();
-          await tick;
-          expect(sends.map(({ to }) => to)).toEqual(
-            scenario === "revoked" ? ["-100123", "-100123", "456"] : ["456"],
-          );
-          return;
-        }
-        for (const [runId, outcome] of [
-          ["one", { status: "ok" }],
-          ["two", { status: "error", error: "failed" }],
-        ] as const) {
-          await mutateSubagentRuns([runId], (rows) => {
-            const row = rows.get(runId)!;
-            return {
-              value: undefined,
-              postimages: new Map([
-                [
-                  runId,
-                  {
-                    ...row,
-                    execution: {
-                      ...row.execution,
-                      status: "terminal",
-                      endedAt: Date.now(),
-                      outcome,
+        expect(sends.map(({ to }) => to)).toEqual(["456", "456"]);
+        return;
+      }
+      if (scenario === "policy" || scenario === "quiet" || scenario === "no typing") {
+        await vi.advanceTimersByTimeAsync(3000);
+        expect(sends).toEqual([]);
+        expect(vi.getTimerCount()).toBe(0);
+        return;
+      }
+      expect(sends.map(({ accountId, to, threadId }) => ({ accountId, to, threadId }))).toEqual([
+        { accountId: "work", to: "-100123", threadId: 7 },
+        { accountId: "work", to: "-100123", threadId: 7 },
+        { accountId: "personal", to: "456", threadId: 9 },
+      ]);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(sends).toHaveLength(6);
+      if (scenario === "other channel") {
+        return;
+      }
+      if (scenario !== "terminal") {
+        sends.length = 0;
+        const release = createDeferredCore();
+        pendingSend = release.promise;
+        const tick = vi.advanceTimersByTimeAsync(1000);
+        await enteredSend.promise;
+        if (scenario === "revoked") {
+          fixture.revoked.abort();
+        } else {
+          await upsertSessionEntryCore(
+            {
+              agentId: "main",
+              sessionKey: "agent:main:telegram:one",
+              storePath: cfg.session.store,
+            },
+            scenario === "reset"
+              ? { sessionId: "replacement" }
+              : {
+                  delivery: normalizeSessionDeliveryState({
+                    context: {
+                      ...source,
+                      to: "forbidden",
+                      accountId: "forbidden",
+                      threadId: 99,
                     },
-                  },
-                ],
-              ]),
-            };
-          });
-          sends.length = 0;
-          await vi.advanceTimersByTimeAsync(1000);
-          expect(sends.map(({ to }) => to)).toEqual(runId === "one" ? ["-100123", "456"] : ["456"]);
+                  }),
+                },
+          );
         }
-        await mutateSubagentRuns(["other"], (rows) => {
-          const row = rows.get("other")!;
+        release.resolve();
+        await tick;
+        expect(sends.map(({ to }) => to)).toEqual(
+          scenario === "revoked" ? ["-100123", "-100123", "456"] : ["456"],
+        );
+        return;
+      }
+      for (const [runId, outcome] of [
+        ["one", { status: "ok" }],
+        ["two", { status: "error", error: "failed" }],
+      ] as const) {
+        await mutateSubagentRuns([runId], (rows) => {
+          const row = rows.get(runId)!;
           return {
             value: undefined,
             postimages: new Map([
-              ["other", { ...row, killIntent: { requestedAt: Date.now(), reason: "killed" } }],
+              [
+                runId,
+                {
+                  ...row,
+                  execution: {
+                    ...row.execution,
+                    status: "terminal",
+                    endedAt: Date.now(),
+                    outcome,
+                  },
+                },
+              ],
             ]),
           };
         });
         sends.length = 0;
-        await vi.advanceTimersByTimeAsync(3000);
-        expect(sends).toEqual([]);
-        expect(vi.getTimerCount()).toBe(0);
-      } finally {
-        fixture.revoked.abort();
-        typing.close();
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(sends.map(({ to }) => to)).toEqual(runId === "one" ? ["-100123", "456"] : ["456"]);
       }
-    });
-  },
-);
+      await mutateSubagentRuns(["other"], (rows) => {
+        const row = rows.get("other")!;
+        return {
+          value: undefined,
+          postimages: new Map([
+            ["other", { ...row, killIntent: { requestedAt: Date.now(), reason: "killed" } }],
+          ]),
+        };
+      });
+      sends.length = 0;
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(sends).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      fixture.revoked.abort();
+      typing.close();
+    }
+  });
+});

@@ -25,7 +25,7 @@ export async function startSubagentTyping(
   const runtime = resolveGatewayContext?.()?.lifecycleRuntime;
   if (
     !source ||
-    origin?.channel !== "telegram" ||
+    !origin?.channel ||
     !origin.to ||
     entry.expectsCompletionMessage !== true ||
     entry.collect ||
@@ -116,7 +116,7 @@ export async function startSubagentTyping(
     assertHostCurrent();
     stopTyping = runtime.startTyping({
       ...origin,
-      channel: "telegram",
+      channel: origin.channel,
       to: origin.to,
       agentId: entry.requesterAgentId,
       runId: entry.runId,
