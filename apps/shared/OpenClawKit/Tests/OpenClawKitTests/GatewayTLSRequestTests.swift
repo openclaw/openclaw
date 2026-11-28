@@ -8,7 +8,7 @@ import Testing
 final class GatewayHTTPFixture: @unchecked Sendable {
     private let queue = DispatchQueue(label: "gateway-http-fixture")
     private let listener: NWListener
-    private let reply: String
+    private let reply: @Sendable (String) -> String
     private let ready = AsyncThrowingStream<Void, Error>.makeStream(bufferingPolicy: .bufferingNewest(1))
     private let received = AsyncThrowingStream<Void, Error>.makeStream(bufferingPolicy: .bufferingNewest(1))
     private var stopped = false
@@ -19,8 +19,12 @@ final class GatewayHTTPFixture: @unchecked Sendable {
         self.queue.sync { self.recordedRequests }
     }
 
-    init(reply: String) throws {
-        self.reply = reply
+    convenience init(reply: String) throws {
+        try self.init(replyForRequest: { _ in reply })
+    }
+
+    init(replyForRequest: @escaping @Sendable (String) -> String) throws {
+        self.reply = replyForRequest
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         self.listener = try NWListener(using: parameters, on: .any)
@@ -108,7 +112,7 @@ final class GatewayHTTPFixture: @unchecked Sendable {
                 self.recordedRequests.append(text)
                 self.received.continuation.yield(())
                 self.received.continuation.finish()
-                connection.send(content: Data(self.reply.utf8), completion: .contentProcessed { _ in })
+                connection.send(content: Data(self.reply(text).utf8), completion: .contentProcessed { _ in })
             } else if !ended, error == nil {
                 self.receive(connection, buffered: accumulated)
             }

@@ -5402,6 +5402,8 @@
     {"path":"apps/macos/Sources/OpenClaw/MenuBar.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.4b8aa5dbbf85ac82","source":"Reload"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayConnectionProblem.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.7914a5cdec78f9e5","source":" The new certificate is trusted by this device; this is commonly caused by certificate rotation."},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayConnectionProblem.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.1a92188647749142","source":" This device could not verify the new certificate."},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayConnectionProblem.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.2f180dc0c3a4c889","source":"Browser sign-in required"},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayConnectionProblem.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.3ab942f926ace323","source":"Cloudflare Access sign-in required"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayConnectionProblem.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.c8b833c5f6041feb","source":"Retry once"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayConnectionProblem.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.3763e29c884dd87a","source":"Update gateway token"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayConnectionProblem.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.9b44f40a0b4af488","source":"Check certificate"},

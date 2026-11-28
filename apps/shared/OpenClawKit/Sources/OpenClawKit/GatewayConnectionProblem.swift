@@ -2,10 +2,27 @@ import Foundation
 
 /// Ingress authorization belongs to the app, independently from Gateway device credentials.
 public struct GatewayExternalAuthorizationError: Error, LocalizedError, Sendable {
-    public init() {}
+    public let isCloudflareAccess: Bool
+
+    public init() {
+        self.isCloudflareAccess = false
+    }
+
+    init?(response: HTTPURLResponse) {
+        guard (300..<400).contains(response.statusCode),
+              let location = response.value(forHTTPHeaderField: "Location"),
+              let destination = URL(string: location, relativeTo: response.url),
+              destination.host?.lowercased().hasSuffix(".cloudflareaccess.com") == true ||
+              destination.path.hasPrefix("/cdn-cgi/access/login/")
+        else { return nil }
+        self.isCloudflareAccess = true
+    }
 
     public var errorDescription: String? {
-        "This gateway requires browser sign-in. Open Gateway settings to continue."
+        if self.isCloudflareAccess {
+            return "This gateway requires Cloudflare Access sign-in."
+        }
+        return "This gateway requires browser sign-in. Open Gateway settings to continue."
     }
 }
 
@@ -213,12 +230,15 @@ public enum GatewayConnectionProblemMapper {
     }
 
     private static func rawMap(_ error: Error) -> GatewayConnectionProblem? {
-        if error is GatewayExternalAuthorizationError {
+        if let authorizationError = error as? GatewayExternalAuthorizationError {
             return GatewayConnectionProblem(
                 kind: .externalAuthorizationRequired,
-                owner: .iphone,
-                title: "Browser sign-in required",
-                message: "Sign in to this gateway in the browser, then continue with OpenClaw pairing.",
+                owner: authorizationError.isCloudflareAccess ? .network : .iphone,
+                title: authorizationError.isCloudflareAccess
+                    ? "Cloudflare Access sign-in required" : "Browser sign-in required",
+                message: authorizationError.isCloudflareAccess
+                    ? authorizationError.localizedDescription
+                    : "Sign in to this gateway in the browser, then continue with OpenClaw pairing.",
                 actionLabel: "Sign in",
                 retryable: true,
                 pauseReconnect: true)

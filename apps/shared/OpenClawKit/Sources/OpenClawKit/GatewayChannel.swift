@@ -1604,6 +1604,12 @@ extension GatewayChannelActor {
             return error
         }
         if error is URLError,
+           let response = self.task?.response as? HTTPURLResponse,
+           let authorizationError = GatewayExternalAuthorizationError(response: response)
+        {
+            return authorizationError
+        }
+        if error is URLError,
            let failure = (self.session as? GatewayTLSFailureProviding)?.consumeLastTLSFailure()
         {
             return GatewayTLSValidationError(failure: failure, context: context)

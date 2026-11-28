@@ -846,13 +846,16 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
 
     public func urlSession(
         _: URLSession,
-        task _: URLSessionTask,
-        willPerformHTTPRedirection _: HTTPURLResponse,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
         newRequest request: URLRequest,
         completionHandler: @escaping @Sendable (URLRequest?) -> Void)
     {
-        // Browser-session headers are origin-bound credentials. Their callers
-        // disable redirects so URLSession cannot forward them to a sign-in or HTTP endpoint.
+        // Preserve the Access response for the channel instead of following its sign-in URL.
+        if task is URLSessionWebSocketTask, GatewayExternalAuthorizationError(response: response) != nil {
+            completionHandler(nil)
+            return
+        }
         completionHandler(self.allowsRedirects ? request : nil)
     }
 
