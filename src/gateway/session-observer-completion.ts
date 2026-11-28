@@ -1,6 +1,7 @@
 import { isFailoverError, readDirectErrorCode } from "../agents/failover/error.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-selection.js";
 import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { emitAgentEvent, emitAgentEventForOwner } from "../infra/agent-events.js";
@@ -9,6 +10,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { createActivitySummaryAuthority } from "./session-activity-summary-authority.js";
 import {
   buildSessionObserverPrompt,
   type defaultCompleteModel,
@@ -87,12 +89,44 @@ export function reportSessionObserverDegradation(
   });
 }
 
+/** The session owner's role refuses observation now; the run stays off without a retry. */
+export class SessionObserverOwnerRefusal extends Error {
+  constructor(readonly reason: "agent-denied" | "role-policy") {
+    super(`session observer refused for the session owner (${reason})`);
+  }
+}
+
 export function createSessionObserverCompletion(params: {
   getConfig: SessionObserverDeps["getConfig"];
   prepareModel: typeof defaultPrepareModel;
   completeModel: typeof defaultCompleteModel;
   isCurrent: (state: SessionObserverState) => boolean;
+  /** The run's authoritative session read, the same one its digest commits through. */
+  readEntry: (state: SessionObserverState) => Promise<SessionEntry | undefined>;
 }) {
+  // The persisted digest is shown to every viewer, so the session owner's role
+  // decides, once when this run's observation starts.
+  const resolveOwnerAuthority = async (state: SessionObserverState) => {
+    const entry = (await params.readEntry(state)) ?? {};
+    const owner = createActivitySummaryAuthority({
+      agentId: state.agentId,
+      getEntry: () => entry,
+      getConfig: params.getConfig,
+      // A one-time decision on a read snapshot; the digest's own currency check guards its use.
+      assertCurrent: () => undefined,
+    });
+    try {
+      const prepared = await owner.prepare();
+      // A deleted owner profile observed before this change; only role decisions stop it.
+      const reason = prepared.refused?.reason;
+      if (reason === "agent-denied" || reason === "role-policy") {
+        throw new SessionObserverOwnerRefusal(reason);
+      }
+      return prepared.operatorAuthority;
+    } finally {
+      owner.release();
+    }
+  };
   const ensurePrepared = async (state: SessionObserverState) => {
     const modelRef = state.utilityModelRef;
     if (!modelRef) {
@@ -126,6 +160,15 @@ export function createSessionObserverCompletion(params: {
     const ownedWork = new AsyncWorkScope();
     try {
       const execute = async () => {
+        const operatorAuthority = await (state.ownerAuthority ??= resolveOwnerAuthority(
+          state,
+        ).catch((error: unknown) => {
+          // Only a refusal holds for the run; a lost race re-reads on the next digest.
+          if (!(error instanceof SessionObserverOwnerRefusal)) {
+            state.ownerAuthority = undefined;
+          }
+          throw error;
+        }));
         const prepared = await ensurePrepared(state);
         clearTimeout(timeout);
         let lastRejectedText = "";
@@ -136,6 +179,7 @@ export function createSessionObserverCompletion(params: {
           let parsed: ReturnType<typeof normalizeSessionObserverModelOutput> = null;
           const result = await params.completeModel({
             ...prepared,
+            ...(operatorAuthority ? { operatorAuthority } : {}),
             purpose: "session-observer",
             config: params.getConfig(),
             systemPrompt: SESSION_OBSERVER_SYSTEM_PROMPT,

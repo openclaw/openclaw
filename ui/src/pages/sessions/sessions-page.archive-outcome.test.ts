@@ -492,15 +492,17 @@ describe("sessions command outcomes", () => {
     expect(item.textContent).toContain("Show in Involving me");
     expect(item.hasAttribute("disabled")).toBe(false);
     await selectMenuValue(menu, "toggle-involving-me");
-    expect(request).toHaveBeenCalledWith(
-      "sessions.setInvolvement",
-      expect.objectContaining({
-        key: row.key,
-        expectedSessionId: row.sessionId,
-        hidden: false,
-      }),
-    );
     await waitForFast(() => expect(page.textContent).toContain("Working"));
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "sessions.setInvolvement",
+        expect.objectContaining({
+          key: row.key,
+          expectedSessionId: row.sessionId,
+          hidden: false,
+        }),
+      ),
+    );
     const projected = await openRowMenu(page, row);
     await openSubmenu(projected, "Advanced");
     expect(projected.querySelector('[value="toggle-involving-me"]')?.textContent).toContain(

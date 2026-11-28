@@ -14,6 +14,7 @@ import {
   type SessionMethodAccessRequest,
 } from "../lib/session-method-access.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
+import { setSessionInvolvement as writeSessionInvolvement } from "../lib/sessions/session-involvement-write.runtime.ts";
 import type {
   SidebarRecentSession,
   SidebarSessionMutationResult,
@@ -291,12 +292,10 @@ export async function setSessionInvolvement(
     return;
   }
   try {
-    const latest = await scope.sessions.setInvolvement({
-      key: session.key,
-      agentId,
-      expectedSessionId: session.sessionId,
-      hidden,
-    });
+    const latest = await scope.sessions.setInvolvement(
+      { key: session.key, agentId, expectedSessionId: session.sessionId, hidden },
+      writeSessionInvolvement,
+    );
     if (latest && deps.sessionData.isSessionMutationScopeCurrent(scope)) {
       await deps.sessionData.refreshSidebarSessions(agentId);
     }

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expect, it, vi } from "vitest";
+import { setSessionInvolvement as writeSessionInvolvement } from "../lib/sessions/session-involvement-write.runtime.ts";
 import { sessionMenuReasons } from "./session-menu-access.ts";
 import { createHarness, sessionRow } from "./session-organizer-batch-mutations.test-support.ts";
 import { setSessionInvolvement } from "./session-organizer-batch-mutations.ts";
@@ -20,12 +21,10 @@ it.each(["operator.sessions.read", "operator.read"])(
     ).toBeUndefined();
     for (const hidden of [true, false]) {
       await setSessionInvolvement(h.host, row, hidden, h.scope);
-      expect(mutate).toHaveBeenLastCalledWith({
-        key: row.key,
-        agentId: "main",
-        expectedSessionId: row.sessionId,
-        hidden,
-      });
+      expect(mutate).toHaveBeenLastCalledWith(
+        { key: row.key, agentId: "main", expectedSessionId: row.sessionId, hidden },
+        writeSessionInvolvement,
+      );
     }
     expect(mutate).toHaveBeenCalledTimes(2);
     expect(h.host.sessionData.refreshSidebarSessions).toHaveBeenCalledTimes(2);

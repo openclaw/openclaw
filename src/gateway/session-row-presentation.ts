@@ -62,7 +62,7 @@ import {
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
 import { prepareProjectedSessionSharing } from "./session-sharing.js";
-import { sessionTitleRequests } from "./session-title-state.js";
+import { isTitlePending } from "./session-title-state.js";
 import { matchesSessionArchiveFilter, resolveSessionChildOwners } from "./session-utils-core.js";
 import {
   applyGatewaySessionRowMode,
@@ -468,11 +468,7 @@ export function prepareProjectedSessionPresentation(
       facts[15] = run?.active;
       facts[16] = run?.status;
       facts[17] = preparedFacts;
-      facts[18] = sessionTitleRequests.isPending({
-        storePath: record.storeTarget.storePath,
-        sessionKey: record.key,
-        sessionId: record.entry.sessionId,
-      });
+      facts[18] = isTitlePending(record);
       facts[19] = resolveActiveSessionAgentStatus(record.entry.agentStatus, now);
       // Active budgeted goals can stamp budgetLimitedAt from enriched usage at this clock.
       facts[20] =

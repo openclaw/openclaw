@@ -15,6 +15,7 @@ import {
   createOpenClawAgentDatabasePathMatcher,
   isPersistentOpenClawAgentDatabasePath,
 } from "../state/openclaw-agent-db.paths.js";
+import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { isTransientSqliteBackupPath } from "./backup-volatile-filter.js";
 import { hasErrnoCode } from "./errno.js";
 import { isPathInside } from "./path-guards.js";
@@ -273,7 +274,17 @@ export function discoverAgentDatabaseMigrationTargets(params: {
       }
       // A partial upgrade shadow may deliberately omit a registered database.
       if (candidate.source === "registry") {
-        warnings.push(`Skipped missing registered agent database ${pathname}.`);
+        // Only explicit deletion removes the registration (#203130); name it for retired agents.
+        const retirable =
+          !isReservedSystemAgentId(candidate.agentId) &&
+          !params.configuredAgentDatabaseTargets.some(
+            (target) => normalizeAgentId(target.agentId) === normalizeAgentId(candidate.agentId),
+          );
+        warnings.push(
+          retirable
+            ? `Skipped missing registered agent database ${pathname}. If agent "${sanitizeForLog(candidate.agentId)}" is retired, run ${formatCliCommand(`openclaw agents delete ${candidate.agentId}`, params.env)} to remove its registration.`
+            : `Skipped missing registered agent database ${pathname}.`,
+        );
       }
       continue;
     }
