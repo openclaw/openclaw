@@ -62,7 +62,6 @@ export function registerShippedGmailWatcher(
   if (!loadModules) {
     return;
   }
-  // The package-owned public API exports the same factory as ordinary Gmail registration.
   const { createGmailWatcherService } = loadValidatedPublicSurfaceModule({
     modulePath: source,
     boundaryRoot: packageRoot,
@@ -70,7 +69,7 @@ export function registerShippedGmailWatcher(
     pluginId: "gmail",
     surfaceLabel: "shipped Gmail watcher",
     capturedSource: true,
-  }) as { createGmailWatcherService: () => OpenClawPluginServiceV2 };
+  }) as { createGmailWatcherService: () => OpenClawPluginServiceV2 }; // SAFETY: The pinned Gmail API shipped in this package exports the V2 factory.
   const service = createGmailWatcherService();
   addPluginServiceRegistration(registry, record, service.id, service);
 }
