@@ -57,7 +57,7 @@ const output = (id: string, text: string) =>
 const user = (content: string) => castAgentMessage({ role: "user", content });
 const sanitize = (
   messages: AgentMessage[],
-  overrides: Partial<Parameters<typeof sanitizeSessionHistory>[0]> = {},
+  overrides: Partial<Parameters<typeof sanitizeSessionHistory>[0]>,
 ) =>
   sanitizeSessionHistory({
     messages,
