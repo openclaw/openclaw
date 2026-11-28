@@ -47,6 +47,11 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
   let dayLifetime = Promise.withResolvers<void>();
   const frameLoads = new Map<number, Promise<string | undefined>>();
   let notify = () => {};
+  let errorOwner: "load" | "actionPending" | "standupLoading" | "askLoading" = "load";
+  function setError(error: string | null, owner: typeof errorOwner = "load") {
+    state.error = error;
+    errorOwner = owner;
+  }
   const projection = projectMutableSource(state, (source) => source);
   notify = projection.publish;
   function resetDay(day: string) {
@@ -81,7 +86,7 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
     const pinnedTimeline = dayPinned && state.status !== null;
     if (!opts?.silent) {
       state.loading = true;
-      state.error = null;
+      setError(null);
       notify();
     }
     try {
@@ -128,10 +133,10 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
       } else {
         state.timeline = timeline;
       }
-      state.error = null;
+      setError(null);
     } catch (error) {
       if (client === current && generation === loadGeneration) {
-        state.error = formatUiError(error);
+        setError(formatUiError(error));
       }
     } finally {
       ready.resolve();
@@ -179,13 +184,17 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
     }
     const isCurrent = () => client === current;
     state[pending] = true;
+    // Retrying this operation retires its failure, not an independent read or action error.
+    if (errorOwner === pending) {
+      setError(null, pending);
+    }
     notify();
     return (async () => {
       try {
         await run(current, isCurrent);
       } catch (error) {
         if (isCurrent()) {
-          state.error = formatUiError(error);
+          setError(formatUiError(error), pending);
         }
       } finally {
         if (isCurrent()) {
@@ -215,7 +224,7 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
       return dayLifetime.promise;
     },
     reportError(error: unknown) {
-      state.error = formatUiError(error);
+      setError(formatUiError(error));
       notify();
     },
     get state() {
@@ -293,7 +302,7 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
             {},
           );
           if (isCurrent() && !result.started && result.reason) {
-            state.error = formatUiExternalText(result.reason);
+            setError(formatUiExternalText(result.reason), "actionPending");
           }
         },
         () => void refreshSilently(true),
