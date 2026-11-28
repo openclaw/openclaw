@@ -1113,7 +1113,8 @@ enum ChatMarkdownBlockSegmenter {
         }
     }
 
-    private struct FenceOpener {
+    /// Shared with metadata preprocessing so both stages agree where a fence ends.
+    struct FenceOpener {
         let character: Character
         let count: Int
 
