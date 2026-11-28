@@ -99,6 +99,8 @@ afterAll(() => parser.close());
 const SETUP_GRADLE_V6 = "gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c";
 const CREATE_GITHUB_APP_TOKEN_V3_3 =
   "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510";
+const CREATE_GITHUB_APP_TOKEN_V3_4 =
+  "actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc";
 const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
 const OPENGREP_FULL_WORKFLOW = ".github/workflows/opengrep-precise-full.yml";
 const CONTROL_UI_LOCALE_REFRESH_WORKFLOW = ".github/workflows/control-ui-locale-refresh.yml";
@@ -4410,7 +4412,7 @@ server.listen(0, "127.0.0.1", () => {
       ["cleanup", cleanupTokenStep],
     ] as const) {
       expect(tokenStep, `${label} token`).toMatchObject({
-        uses: CREATE_GITHUB_APP_TOKEN_V3_3,
+        uses: CREATE_GITHUB_APP_TOKEN_V3_4,
         with: {
           "app-id": "${{ secrets.MANTIS_GITHUB_APP_ID }}",
           "private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
@@ -6886,12 +6888,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(job.steps.slice(3, 5)).toMatchObject([
       {
         id: "app-token",
-        uses: CREATE_GITHUB_APP_TOKEN_V3_3,
+        uses: CREATE_GITHUB_APP_TOKEN_V3_4,
         with: { "app-id": "2729701", "permission-members": "read" },
       },
       {
         id: "app-token-fallback",
-        uses: CREATE_GITHUB_APP_TOKEN_V3_3,
+        uses: CREATE_GITHUB_APP_TOKEN_V3_4,
         with: { "app-id": "2971289", "permission-members": "read" },
       },
     ]);
