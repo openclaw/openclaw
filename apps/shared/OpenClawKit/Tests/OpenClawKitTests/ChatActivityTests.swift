@@ -329,7 +329,7 @@ struct ChatActivityTests {
         #expect(untouched.goal?.id == "g1")
     }
 
-    @Test func `a subagent's order never shows OpenClaw's internal context`() {
+    @Test func `chat message text never shows OpenClaw's internal context`() {
         func user(_ text: String) -> OpenClawChatMessage {
             OpenClawChatMessage(role: "user", content: [.init(type: "text", text: text)], timestamp: 1)
         }
@@ -347,28 +347,23 @@ struct ChatActivityTests {
         Begin.
         <<<END_OPENCLAW_INTERNAL_CONTEXT>>>
         """
-        #expect(ChatActivityChildTranscript(messages: [user(wrapped)]).order == "Draft the packing list.")
-        // A message that is only internal context is not the order; the next one is.
+        #expect(ChatMessageVisibleText.visibleText(in: user(wrapped)) == "Draft the packing list.")
         let onlyContext = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nTask setup\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>"
-        #expect(ChatActivityChildTranscript(messages: [user(onlyContext), user("Check hotel reviews")])
-            .order == "Check hotel reviews")
+        #expect(ChatMessageVisibleText.visibleText(in: user(onlyContext)).isEmpty)
         // Text that only mentions a delimiter mid-line stays as written.
         let quoted = "Why does <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>> show up?"
-        #expect(ChatActivityChildTranscript(messages: [user(quoted)]).order == quoted)
+        #expect(ChatMessageVisibleText.visibleText(in: user(quoted)) == quoted)
     }
 
-    @Test func `truncated internal messages never become the finished child's preview`() {
+    @Test func `truncated internal context stays out of chat message text`() {
         func user(_ text: String) -> OpenClawChatMessage {
             OpenClawChatMessage(role: "user", content: [.init(type: "text", text: text)], timestamp: 1)
         }
         // Literal first line in the iPhone screenshot, intentionally without a closing delimiter.
         let openingLine = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>"
-        let authored = user("Draft the packing list.")
         for fragment in [openingLine, openingLine + "\nPrivate task setup"] {
             let truncated = user(fragment)
             #expect(ChatMessageVisibleText.visibleText(in: truncated).isEmpty)
-            #expect(ChatActivityChildTranscript(messages: [truncated]).order == nil)
-            #expect(ChatActivityChildTranscript(messages: [truncated, authored]).order == "Draft the packing list.")
         }
         // The escaped spelling is not a delimiter: an authored quotation must not erase the rest of a message.
         let literal = "[[OPENCLAW_INTERNAL_CONTEXT_BEGIN]]\nThis is a quoted example."

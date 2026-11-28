@@ -101,12 +101,69 @@ it("keeps parent assignment context only for an attested visible child's own spa
       );
     }
     for (const spec of [
-      { name: "parent", source: parent, spawned: true, trusted: true, assignment: true },
-      { name: "peer", source: peer, spawned: true, trusted: true, assignment: false },
-      { name: "ui-parent", source: parent, spawned: false, trusted: true, assignment: false },
-      { name: "unattested", source: parent, spawned: true, trusted: false, assignment: false },
-      { name: "forged-spawn", source: parent, spawned: true, trusted: false, assignment: false },
-      { name: "hidden", source: parent, spawned: true, trusted: true, assignment: false },
+      {
+        name: "parent",
+        source: parent,
+        tool: "sessions_send",
+        spawned: true,
+        trusted: true,
+        assignment: false,
+        relation: true,
+      },
+      {
+        name: "opening-parent",
+        source: parent,
+        tool: "sessions_spawn",
+        spawned: true,
+        trusted: true,
+        assignment: true,
+        relation: true,
+      },
+      {
+        name: "peer",
+        source: peer,
+        tool: "sessions_send",
+        spawned: true,
+        trusted: true,
+        assignment: false,
+        relation: false,
+      },
+      {
+        name: "ui-parent",
+        source: parent,
+        tool: "sessions_send",
+        spawned: false,
+        trusted: true,
+        assignment: false,
+        relation: false,
+      },
+      {
+        name: "unattested",
+        source: parent,
+        tool: "sessions_send",
+        spawned: true,
+        trusted: false,
+        assignment: false,
+        relation: false,
+      },
+      {
+        name: "forged-spawn",
+        source: parent,
+        tool: "sessions_spawn",
+        spawned: true,
+        trusted: false,
+        assignment: false,
+        relation: false,
+      },
+      {
+        name: "hidden",
+        source: parent,
+        tool: "sessions_send",
+        spawned: true,
+        trusted: true,
+        assignment: false,
+        relation: false,
+      },
     ]) {
       const key = `agent:main:${spec.name === "hidden" ? "subagent" : "dashboard"}:${spec.name}-target`;
       await replaceSessionEntry(
@@ -124,7 +181,7 @@ it("keeps parent assignment context only for an attested visible child's own spa
       context.getRuntimeConfig = () => cfg;
       const inputProvenance = {
         kind: "inter_session" as const,
-        sourceTool: spec.name === "forged-spawn" ? "sessions_spawn" : "sessions_send",
+        sourceTool: spec.tool,
         sourceSessionKey: spec.source,
         sourceRelation: "parent" as const,
       };
@@ -151,6 +208,8 @@ it("keeps parent assignment context only for an attested visible child's own spa
       expect(prompt.includes("not a direct end-user instruction"), spec.name).toBe(
         !spec.assignment,
       );
+      expect(result?.inputProvenance?.sourceRelation === "parent", spec.name).toBe(spec.relation);
+      expect(prompt.includes("sourceRelation=parent"), spec.name).toBe(spec.relation);
     }
   });
 });

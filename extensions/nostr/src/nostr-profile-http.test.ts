@@ -308,17 +308,26 @@ describe("nostr-profile-http", () => {
     }
 
     async function expectPrivatePictureRejected(pictureUrl: string) {
-      const { res, run } = createProfileHttpHarness("PUT", "/api/channels/nostr/default/profile", {
-        body: {
-          name: "hacker",
-          picture: pictureUrl,
+      const { ctx, res, run } = createProfileHttpHarness(
+        "PUT",
+        "/api/channels/nostr/default/profile",
+        {
+          body: {
+            name: "Ada Example",
+            picture: pictureUrl,
+          },
         },
-      });
+      );
 
       await run();
 
-      const data = expectBadRequestResponse(res);
-      expect(data.error).toContain("private");
+      expect(expectBadRequestResponse(res)).toEqual({
+        ok: false,
+        error: "Validation failed",
+        details: ["picture: Enter an HTTPS URL on a public host."],
+      });
+      expect(publishNostrProfile).not.toHaveBeenCalled();
+      expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
     }
 
     it("validates profile and publishes", async () => {

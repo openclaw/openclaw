@@ -111,24 +111,25 @@ async function sendDiscordHeartbeatTyping(params: {
   signal?: AbortSignal;
   assertPlatformSendAuthorized?: () => void;
 }) {
-  const resolvedTo = resolveDiscordAttachedOutboundTarget(params);
-  const target = parseDiscordTarget(resolvedTo, { defaultKind: "channel" });
-  if (!target || target.kind !== "channel") {
-    return;
-  }
-  const { sendTypingDiscord } = await loadDiscordSendModule();
+  const { resolveDiscordTargetChannelId, sendTypingDiscord } = await loadDiscordSendModule();
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
     params.assertPlatformSendAuthorized?.();
   };
+  const opts = {
+    cfg: params.cfg,
+    accountId: params.accountId ?? undefined,
+    signal: params.signal,
+  };
   assertCurrent();
-  await withDiscordRequestAuthority(assertCurrent, () =>
-    sendTypingDiscord(target.id, {
-      cfg: params.cfg,
-      accountId: params.accountId ?? undefined,
-      signal: params.signal,
-    }),
-  );
+  await withDiscordRequestAuthority(assertCurrent, async () => {
+    // DM sessions target `user:<id>`; typing goes to the DM channel, as for every DM send.
+    const { channelId } = await resolveDiscordTargetChannelId(
+      resolveDiscordAttachedOutboundTarget(params),
+      opts,
+    );
+    await sendTypingDiscord(channelId, opts);
+  });
 }
 
 const resolveDiscordAllowlistGroupOverrides = createNestedAllowlistOverrideResolver({

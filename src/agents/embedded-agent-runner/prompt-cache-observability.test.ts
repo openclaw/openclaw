@@ -56,9 +56,9 @@ function observation(name: string, begin = beginOpenAIObservation) {
   };
 }
 
-function seedObservation(params: Parameters<typeof beginOpenAIObservation>[0], cacheRead = 8_000) {
+function seedObservation(params: Parameters<typeof beginOpenAIObservation>[0]) {
   beginOpenAIObservation(params);
-  completePromptCacheObservation({ ...params, usage: { cacheRead } });
+  completePromptCacheObservation({ ...params, usage: { cacheRead: 8_000 } });
 }
 
 describe("prompt cache observability", () => {
