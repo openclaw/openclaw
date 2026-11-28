@@ -77,6 +77,7 @@ type WhatsAppMessageDeliveryOptions = {
   groupMetadata: WhatsAppGroupMetadataCacheOwner;
   onMessage: (msg: WebInboundCallbackMessage) => Promise<void>;
   mediaMaxMb?: number;
+  authDir?: string;
   /** Send read receipts for incoming messages (default true). */
   sendReadReceipts?: boolean;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
@@ -263,6 +264,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       msg,
       sock,
       mediaMaxMb: options.mediaMaxMb,
+      authDir: options.authDir,
     });
     if (!enriched) {
       await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
