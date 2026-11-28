@@ -13,5 +13,5 @@ export function buildGatewayRestartResumeText(
       ? ` for interrupted run ${sourceRunId}`
       : "";
   const shell = unresolvedShell ? " A shell command has no saved terminal result." : "";
-  return `${GATEWAY_RESTART_RESUME_TEXT} Use saved tool results${source} (nested calls, IDs, errors).${shell} Report unknown effects without retrying them. Continue independent work.`;
+  return `${GATEWAY_RESTART_RESUME_TEXT} Use saved results${source} (nested calls, IDs, errors).${shell} Report unknown effects without retrying them. Keep working on the request.`;
 }
