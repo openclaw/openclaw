@@ -163,7 +163,11 @@ export function createPluginsTool(options?: {
           break;
         case "reloadAndResume": {
           const { handoffSessionTool } = await import("./session-tool-handoff.js");
-          const reloadRequest = { plugins: [{ pluginId: required("pluginId") }], ...consent };
+          const reloadRequest = {
+            plugins: [{ pluginId: required("pluginId") }],
+            waitForDrain: true,
+            ...consent,
+          };
           return await handoffSessionTool({
             ...options,
             name: "Plugin reload",
