@@ -98,20 +98,25 @@ export function runBeforeAgentReplyForTurn(params: {
       assertCurrent?.();
       params.onDispatch?.();
       assertCurrent?.();
-      const ownedDiagnosticOwner =
+      const ownedWatchdogAttempt =
         !params.diagnosticOwner && params.watchdog
+          ? params.watchdog.attachAttempt({
+              assertCurrent: () => assertCurrent?.(),
+            })
+          : undefined;
+      const sessionId = context.sessionId?.trim();
+      const ownedDiagnosticOwner =
+        !params.diagnosticOwner && ownedWatchdogAttempt && sessionId
           ? createDiagnosticEmbeddedRunOwner({
               runId: params.runId,
-              sessionId: context.sessionId,
+              sessionId,
               sessionKey: context.sessionKey,
-              watchdogAttempt: params.watchdog.attachAttempt({
-                assertCurrent: () => assertCurrent?.(),
-              }),
+              watchdogAttempt: ownedWatchdogAttempt,
             })
           : undefined;
       const progressOwner = params.diagnosticOwner ?? ownedDiagnosticOwner;
       let dispatchActive = false;
-      if (params.onProgress || progressOwner) {
+      if (params.onProgress || progressOwner || ownedWatchdogAttempt) {
         context.reportProgress = (detail?: string) => {
           if (!dispatchActive) {
             return;
@@ -122,19 +127,21 @@ export function runBeforeAgentReplyForTurn(params: {
             return;
           }
           params.onProgress?.(detail);
-          if (!progressOwner) {
+          const trimmed = detail?.trim();
+          const reason = trimmed ? `before_agent_reply:${trimmed}` : "before_agent_reply:progress";
+          if (progressOwner) {
+            emitCoreSemanticRunProgressDiagnosticEvent(
+              {
+                runId: params.runId,
+                sessionId: progressOwner.sessionId,
+                sessionKey: context.sessionKey,
+                reason,
+              },
+              progressOwner,
+            );
             return;
           }
-          const trimmed = detail?.trim();
-          emitCoreSemanticRunProgressDiagnosticEvent(
-            {
-              runId: params.runId,
-              sessionId: context.sessionId,
-              sessionKey: context.sessionKey,
-              reason: trimmed ? `before_agent_reply:${trimmed}` : "before_agent_reply:progress",
-            },
-            progressOwner,
-          );
+          ownedWatchdogAttempt?.progress("semantic", reason);
         };
       }
       let result: PluginHookBeforeAgentReplyResult | undefined;
@@ -146,6 +153,7 @@ export function runBeforeAgentReplyForTurn(params: {
         if (ownedDiagnosticOwner) {
           closeDiagnosticEmbeddedRunOwner(ownedDiagnosticOwner);
         }
+        ownedWatchdogAttempt?.close();
       }
       assertCurrent?.();
       if (!result?.handled) {

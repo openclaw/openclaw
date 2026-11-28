@@ -25,7 +25,8 @@ describe("runBeforeAgentReplyForTurn semantic progress", () => {
       createMockPluginRegistry([
         {
           hookName: "before_agent_reply",
-          handler,
+          handler: (event: unknown, ctx: unknown) =>
+            handler(event as { cleanedBody: string }, ctx as PluginHookAgentContext),
           eligibleTriggers: ["cron", "heartbeat"],
         },
       ]),
@@ -41,9 +42,9 @@ describe("runBeforeAgentReplyForTurn semantic progress", () => {
       startedAtMs: 0,
       isCurrent: () => stoppedReason === undefined,
       readPhase: () => (stoppedReason === undefined ? "active" : "terminal"),
-      requestStop: (reason) => {
-        stoppedReason = reason;
-        return "requested";
+      requestStop: (effect) => {
+        stoppedReason = effect.reason;
+        return "settled";
       },
       expireCleanup: () => "settled",
     });
@@ -120,9 +121,9 @@ describe("runBeforeAgentReplyForTurn semantic progress", () => {
       startedAtMs: 0,
       isCurrent: () => stoppedReason === undefined,
       readPhase: () => (stoppedReason === undefined ? "active" : "terminal"),
-      requestStop: (reason) => {
-        stoppedReason = reason;
-        return "requested";
+      requestStop: (effect) => {
+        stoppedReason = effect.reason;
+        return "settled";
       },
       expireCleanup: () => "settled",
     });
