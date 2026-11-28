@@ -205,6 +205,34 @@ This is not the separate [sandboxed browser](/gateway/sandboxing#sandboxed-brows
 container used by sandboxed agent sessions. Selecting a Gateway `-browser` image
 does not build or configure that sandbox image.
 
+### Prepare the host directories
+
+Before manual or headless onboarding, create the three directories that Compose
+bind-mounts. On rootful Docker Engine, Docker creates missing directories as
+`root`, but OpenClaw runs as `node` (UID 1000) and cannot write to them.
+
+Run this on the Docker host. If you set custom paths in the Compose `.env` file
+rather than exporting them in your shell, use those paths for the corresponding
+assignments below. The shell does not read Compose's `.env` file.
+
+```bash
+config_dir="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
+workspace_dir="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
+secrets_dir="${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-$HOME/.openclaw-auth-profile-secrets}"
+mkdir -p -- "$config_dir" "$workspace_dir" "$secrets_dir"
+```
+
+On rootful Linux, if your host UID differs from 1000 or Docker already created
+the directories as `root`, make all three writable by UID 1000. For fresh,
+dedicated state directories, change only the directories themselves:
+
+```bash
+sudo chown 1000:1000 -- "$config_dir" "$workspace_dir" "$secrets_dir"
+```
+
+If you bind-mount an existing project as the workspace, grant UID 1000 write
+access to the workspace directory without changing ownership of its project files.
+
 ### Headless bootstrap
 
 For an unattended container host, put provider, Gateway, and channel credentials in the Compose `.env` file so both the one-shot bootstrap container and the long-running Gateway receive the same values:
@@ -215,7 +243,8 @@ OPENCLAW_GATEWAY_TOKEN=<gateway-token>
 TELEGRAM_BOT_TOKEN=<bot-token>
 ```
 
-Run onboarding and channel provisioning without a pseudo-TTY, then start the Gateway:
+[Prepare the host directories](/install/docker#prepare-the-host-directories),
+then run onboarding and channel provisioning without a pseudo-TTY and start the Gateway:
 
 ```bash
 docker compose run -T --rm --no-deps --entrypoint node openclaw-gateway \
@@ -237,6 +266,9 @@ The channel command fails before changing config if a plugin-declared environmen
 See [`openclaw channels`](/cli/channels) for credential-flag alternatives and other channel plugins.
 
 ### Manual flow
+
+[Prepare the host directories](/install/docker#prepare-the-host-directories),
+then build the image and run onboarding:
 
 ```bash
 BUILD_GIT_COMMIT="$(git rev-parse HEAD)"

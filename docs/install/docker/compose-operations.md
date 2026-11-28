@@ -128,11 +128,7 @@ does not reveal the full token.
   </Accordion>
 
   <Accordion title="Permissions and EACCES">
-    The image runs as `node` (uid 1000). If you see permission errors on `/home/node/.openclaw`, make sure your host bind mounts are owned by uid 1000:
-
-    ```bash
-    sudo chown -R 1000:1000 /path/to/openclaw-config /path/to/openclaw-workspace
-    ```
+    The image runs as `node` (UID 1000). For a first-run permission error, [prepare the host directories](/install/docker#prepare-the-host-directories), including the auth-profile secrets directory. If an existing installation still fails, check the owner and permissions of the specific OpenClaw file or directory named in the error. Do not recursively change ownership of a mounted project.
 
     The same mismatch can show up as `blocked plugin candidate: suspicious ownership (... uid=1000, expected uid=0 or root)` followed by `plugin present but blocked` — the process uid and the mounted plugin directory owner disagree. Prefer running as the default uid 1000 and fixing the bind mount ownership. Only chown `/path/to/openclaw-config/npm` to `root:root` if you intentionally run OpenClaw as root long term.
 
