@@ -13,6 +13,7 @@ import type { SystemdServiceAccountMismatch } from "../daemon/service-inspection
 import { execSystemctl } from "../daemon/systemd-exec.js";
 import {
   findRootOwnedRunuser,
+  resolveServiceAccountName,
   serviceAccountArgv,
 } from "../daemon/systemd-service-account-command.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -101,9 +102,14 @@ export async function updateSystemServicePackage(
       `The recorded executable ${JSON.stringify(executable)} is not an absolute Node/Bun runtime. ${nextStep}`,
     );
   }
+  const account = await resolveServiceAccountName(unit.serviceUser).catch((cause: unknown) => {
+    throw new Error(`Service account lookup failed: ${formatErrorMessage(cause)}. ${nextStep}`, {
+      cause,
+    });
+  });
   // Never execute a service-account-owned runtime or its loader environment as root.
   const probe = await runCommandWithTimeout(
-    serviceAccountArgv({ runuser, account: unit.serviceUser, argv: [executable, "--version"] }),
+    serviceAccountArgv({ runuser, account, argv: [executable, "--version"] }),
     {
       baseEnv: {},
       env: { PATH: "/usr/sbin:/usr/bin:/sbin:/bin" },

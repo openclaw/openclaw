@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { execFileUtf8 } from "./exec-file.js";
 
 /** util-linux installs runuser in one of these root-owned locations; PATH is never consulted. */
 const RUNUSER_PATHS = ["/usr/sbin/runuser", "/sbin/runuser"] as const;
@@ -17,6 +18,28 @@ export async function findRootOwnedRunuser(): Promise<string | undefined> {
     }
   }
   return undefined;
+}
+
+/** runuser takes a login name, while systemd's User= also accepts a numeric UID. */
+export async function resolveServiceAccountName(account: string): Promise<string> {
+  if (!/^\d+$/u.test(account)) {
+    return account;
+  }
+  const result = await execFileUtf8("/usr/bin/getent", ["passwd", account], { timeout: 1_000 });
+  const fields = result.stdout.trim().split(":");
+  const name = fields[0];
+  if (
+    result.code !== 0 ||
+    result.termination !== "exit" ||
+    fields.length !== 7 ||
+    fields[2] !== account ||
+    !name
+  ) {
+    throw new Error(
+      `Cannot resolve service UID ${account} to a login name: ${result.stderr.trim() || "invalid NSS passwd entry"}`,
+    );
+  }
+  return name;
 }
 
 /**

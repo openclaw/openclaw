@@ -15,6 +15,7 @@ const native = vi.hoisted(() => ({
   restart: vi.fn(),
   active: vi.fn(),
   install: vi.fn(),
+  lookup: vi.fn(),
   root: "",
   engine: ">=24.0.0",
 }));
@@ -42,6 +43,14 @@ vi.mock("../daemon/systemd-service-account-command.js", async (original) => ({
   ...(await original<typeof import("../daemon/systemd-service-account-command.js")>()),
   findRootOwnedRunuser: async () => "/usr/sbin/runuser",
 }));
+vi.mock("../daemon/exec-file.js", async (original) => {
+  const actual = await original<typeof import("../daemon/exec-file.js")>();
+  return {
+    ...actual,
+    execFileUtf8: (...args: Parameters<typeof actual.execFileUtf8>) =>
+      args[0] === "/usr/bin/getent" ? native.lookup(...args) : actual.execFileUtf8(...args),
+  };
+});
 vi.mock("../process/exec.js", async (original) => {
   const actual = await original<typeof import("../process/exec.js")>();
   return {
@@ -83,11 +92,24 @@ vi.mock("./target.js", async (original) => ({
 let home: TempHomeEnv;
 let callerState: string;
 let serviceState: string;
+const serviceNode = "/usr/bin/node";
 const unit = {
   scope: "system",
   unitName: "openclaw-gateway.service",
   unitPath: "/etc/systemd/system/openclaw-gateway.service",
 };
+
+function serviceAccountMismatch(account = "openclaw") {
+  return new SystemdServiceAccountRefusalError({
+    ...unit,
+    serviceUser: account,
+    programArguments: [serviceNode, path.join(native.root, "dist", "index.js"), "gateway"],
+    workingDirectory: "/",
+    selectors: { HOME: "/var/lib/openclaw", OPENCLAW_STATE_DIR: serviceState },
+    selectorsIncomplete: false,
+  });
+}
+
 beforeEach(async () => {
   vi.clearAllMocks();
   home = await createTempHomeEnv("root-package-only-");
@@ -110,23 +132,14 @@ beforeEach(async () => {
   mockProcessPlatform("linux");
   vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+  native.lookup.mockResolvedValue({
+    code: 0,
+    termination: "exit",
+    stdout: "openclaw:x:1001:1001::/var/lib/openclaw:/bin/sh\n",
+    stderr: "",
+  });
   native.scope.mockResolvedValue(unit);
-  native.command.mockRejectedValue(
-    new SystemdServiceAccountRefusalError({
-      ...unit,
-      serviceUser: "openclaw",
-      programArguments: [
-        process.execPath,
-        path.join(native.root, "dist", "index.js"),
-        "gateway",
-        "--port",
-        "18789",
-      ],
-      workingDirectory: "/",
-      selectors: { HOME: "/var/lib/openclaw", OPENCLAW_STATE_DIR: serviceState },
-      selectorsIncomplete: false,
-    }),
-  );
+  native.command.mockRejectedValue(serviceAccountMismatch());
   native.engine = ">=24.0.0";
   native.probe.mockResolvedValue({ code: 0, stdout: "v24.22.1\n", stderr: "" });
   native.install.mockImplementation(async () => {
@@ -152,9 +165,14 @@ afterEach(async () => {
   await home.restore();
 });
 
-it.each([false, true])(
-  "sudo updates a User= unit without state writes (explicit service state=%s)",
-  async (explicitState) => {
+it.each([
+  [false, "openclaw"],
+  [true, "openclaw"],
+  [false, "1001"],
+] as const)(
+  "sudo updates a User= unit without state writes (explicit service state=%s, account=%s)",
+  async (explicitState, account) => {
+    native.command.mockRejectedValue(serviceAccountMismatch(account));
     if (explicitState) {
       vi.stubEnv("OPENCLAW_STATE_DIR", serviceState);
     }
@@ -164,7 +182,7 @@ it.each([false, true])(
     ).toBe("2026.11.29");
     expect(native.restart).toHaveBeenCalledOnce();
     expect(native.probe).toHaveBeenCalledWith(
-      ["/usr/sbin/runuser", "-u", "openclaw", "--", process.execPath, "--version"],
+      ["/usr/sbin/runuser", "-u", "openclaw", "--", serviceNode, "--version"],
       expect.objectContaining({
         baseEnv: {},
         env: { PATH: "/usr/sbin:/usr/bin:/sbin:/bin" },
@@ -217,8 +235,8 @@ it("keeps the installed package when the service runtime cannot run the target",
 });
 
 it("does not inspect activity until the blocking systemctl restart completes", async () => {
-  const started = createDeferredCore<void>();
-  const completed = createDeferredCore<void>();
+  const started = createDeferredCore();
+  const completed = createDeferredCore();
   native.restart.mockImplementation(async () => {
     started.resolve();
     await completed.promise;
@@ -251,3 +269,18 @@ it.each(["exit", "spawn"])(
     expect(native.restart).not.toHaveBeenCalled();
   },
 );
+
+it("refuses before probing when a numeric UID has no matching NSS login", async () => {
+  native.command.mockRejectedValue(serviceAccountMismatch("1001"));
+  native.lookup.mockResolvedValue({
+    code: 0,
+    termination: "exit",
+    stdout: "other:x:2001:2001::/var/lib/other:/bin/sh\n",
+    stderr: "",
+  });
+  const updating = updateCommand({ yes: true });
+  await expect(updating).rejects.toThrow("Cannot resolve service UID 1001 to a login name");
+  await expect(updating).rejects.toThrow("Select a compatible runtime");
+  expect(native.probe).not.toHaveBeenCalled();
+  expect(native.install).not.toHaveBeenCalled();
+});
