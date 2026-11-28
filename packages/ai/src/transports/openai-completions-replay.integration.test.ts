@@ -10,6 +10,64 @@ import {
   makeCompletionsToolDelta,
 } from "./openai-completions.test-support.js";
 
+it.each([false, true])(
+  "replays a tool result before a dependent call (name: %s)",
+  async (named) => {
+    const requests: Array<{ messages: Array<Record<string, unknown>> }> = [];
+    await withServer(
+      (_request, response, body) => {
+        const request: (typeof requests)[number] = JSON.parse(body);
+        requests.push(request);
+        const result = request.messages.find((message) => message.role === "tool");
+        const delta = result
+          ? makeCompletionsToolDelta("call_fetch", "fetch_value", String(result.content))
+          : makeCompletionsToolDelta("call_lookup", "lookup_record_id", '{"name":"amber"}');
+        startSse(response);
+        writeSse(response, makeCompletionsChunk(delta, "tool_calls"));
+        response.end("data: [DONE]\n\n");
+      },
+      async (baseUrl) => {
+        const model = makeCompletionsModel({
+          provider: "custom-local",
+          baseUrl,
+          compat: { requiresToolResultName: named },
+        });
+        const context: Context = {
+          messages: [{ role: "user", content: "Find amber's value.", timestamp: 1 }],
+          tools: ["lookup_record_id", "fetch_value"].map((name) => ({
+            name,
+            description: "",
+            parameters: { type: "object" },
+          })),
+        };
+        const stream = createOpenAICompletionsTransportStreamFn();
+        const options = { apiKey: "synthetic-key" };
+        const first = await (await stream(model, context, options)).result();
+        expect(first.stopReason).toBe("toolUse");
+        context.messages.push(
+          first,
+          makeTextToolResult("call_lookup", "lookup_record_id", '{"id":"rec-41"}', false, 2),
+        );
+        const second = await (await stream(model, context, options)).result();
+        expect(requests).toHaveLength(2);
+        expect(requests[1]?.messages.at(-1)).toStrictEqual({
+          role: "tool",
+          tool_call_id: "call_lookup",
+          content: '{"id":"rec-41"}',
+          ...(named ? { name: "lookup_record_id" } : {}),
+        });
+        expect(second.stopReason).toBe("toolUse");
+        expect(second.content).toContainEqual({
+          type: "toolCall",
+          id: "call_fetch",
+          name: "fetch_value",
+          arguments: { id: "rec-41" },
+        });
+      },
+    );
+  },
+);
+
 describe.each(["managed", "direct"] as const)("%s", (mode) => {
   it.each([
     { field: "reasoning", required: true, expected: "reasoning_content" },
