@@ -16,7 +16,7 @@ import type {
   resolveManifestCliCommandSurfaceOwner,
   resolveManifestToolOwner,
 } from "../plugins/manifest-command-aliases.runtime.js";
-import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { isRemoteAgentDispatchInvocation, resolveCliArgvInvocation } from "./argv-invocation.js";
 import { isSimpleCommandHelpInvocation, rewriteUpdateFlagArgv } from "./argv.js";
 import {
   resolveCliCommandPathPolicy,
@@ -47,7 +47,7 @@ export async function loadCliStartupDotEnv(
   invocation: ReturnType<typeof resolveCliArgvInvocation>,
   loadGlobalEnv: boolean,
 ): Promise<void> {
-  if (invocation.primary === "agent" && !invocation.argv.includes("--local")) {
+  if (isRemoteAgentDispatchInvocation(invocation)) {
     const { loadGatewayDispatchCliDotEnv } = await import("./gateway-dispatch-dotenv.js");
     await loadGatewayDispatchCliDotEnv();
   } else {
