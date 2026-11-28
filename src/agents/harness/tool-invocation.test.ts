@@ -194,8 +194,8 @@ it.each([false, true])(
 
 function invokeTool(
   result: AgentToolResult<unknown>,
-  args: Record<string, unknown> = {},
-  applyMiddleware: Middleware = async (event) => event.result,
+  args: Record<string, unknown>,
+  applyMiddleware: Middleware,
 ) {
   return runAgentHarnessToolInvocation({
     tool: {

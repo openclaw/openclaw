@@ -52,7 +52,7 @@ describe("embedded run permissions and timeout delivery", () => {
   let runEmbeddedAgent: TestRunEmbeddedAgent;
   let buildEmbeddedRunPayloads: typeof import("./run/payloads.js").buildEmbeddedRunPayloads;
   let createReplyDispatcher: typeof import("../../auto-reply/reply/reply-dispatcher.js").createReplyDispatcher;
-  const run = (overrides: Partial<Parameters<TestRunEmbeddedAgent>[0]> = {}) =>
+  const run = (overrides: Partial<Parameters<TestRunEmbeddedAgent>[0]>) =>
     runEmbeddedAgent({ ...createPluginHarnessRunParams(state), ...overrides });
 
   beforeAll(async () => {
