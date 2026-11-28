@@ -235,6 +235,7 @@ const catalog = {
         pausedByStopReason: "You requested a stop",
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",
+        waitingForTurn: "Waiting for the agent to finish",
         needsReview: "Needs review",
       },
       imageCount: "Image ({count})",
