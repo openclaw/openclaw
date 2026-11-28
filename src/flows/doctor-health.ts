@@ -213,22 +213,21 @@ async function runDoctorHealthFlowWithResult(
     const automaticHeartbeatRepair = await prepareAutomaticHeartbeatRepair(options);
     // Published updater markers opt only custody and backup into maintenance.
     const maintenanceOptions = automaticHeartbeatRepair ? { ...options, repair: true } : options;
-    // Standalone Doctor warms archives before stopping the Gateway; update already owns the stop.
-    if (
-      !repairMode.updateInProgress &&
-      (options.repair === true || options.yes === true || interactiveRepair)
-    ) {
-      preparedArchiveDiscovery = await measure("doctor.archive-preparation", () =>
-        startup.prepareDoctorMaintenanceArchives(
-          databasePreflight,
-          effectiveRuntime,
-          preflightOptions,
-        ),
-      );
-    }
-    if (repairMode.shouldRepair) {
-      const { runDoctorPreStopMaintenance } = await import("./doctor-health-maintenance-steps.js");
-      await runDoctorPreStopMaintenance({ runtime: effectiveRuntime, measure });
+    const { runDoctorBeforeStop } = await import("./doctor-health-maintenance-steps.js");
+    const beforeStop = await runDoctorBeforeStop({
+      runtime: effectiveRuntime,
+      measure,
+      options,
+      interactiveRepair,
+      root,
+      databasePreflight,
+      preflightOptions,
+      automaticHeartbeatRepair: Boolean(automaticHeartbeatRepair),
+      delegated: writeAuthority !== undefined,
+    });
+    preparedArchiveDiscovery = beforeStop.archives?.agentDatabaseMigrationDiscovery;
+    if (beforeStop.handoff) {
+      resources.use(beforeStop.handoff);
     }
     const [{ beginDoctorMaintenance }, { createDoctorOriginalCaptureHook }] = await Promise.all([
       import("../commands/doctor-maintenance.js"),

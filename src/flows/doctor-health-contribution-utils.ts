@@ -1,7 +1,10 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir, tryResolveSoleAgentId } from "../agents/agent-scope.js";
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
-import { traceDoctorMaintenancePending } from "../commands/doctor-maintenance-pending.js";
+import {
+  traceDoctorMaintenancePending,
+  type DoctorMaintenancePendingCheck,
+} from "../commands/doctor-maintenance-pending.js";
 import {
   isLegacyParentWritableUpdateDoctorPass,
   isUpdateDoctorInspectionReportMode,
@@ -58,6 +61,15 @@ export function noteDoctorRepairResult(result: {
   }
 }
 
+/** A contribution's read-only work check against `ctx`; without one it has work. */
+export function resolveDoctorContributionPendingCheck(
+  ctx: DoctorHealthFlowContext,
+  contribution: DoctorHealthContribution,
+): DoctorMaintenancePendingCheck | undefined {
+  const { pending } = contribution;
+  return pending === "diagnostic-only" ? () => "none" : pending ? () => pending(ctx) : undefined;
+}
+
 /** Times one contribution; under Gateway maintenance it first traces whether it has work. */
 export async function measureDoctorContribution(
   ctx: DoctorHealthFlowContext,
@@ -65,10 +77,9 @@ export async function measureDoctorContribution(
   run: () => Promise<void>,
 ): Promise<void> {
   if (ctx.gatewayMaintenanceActive) {
-    const { pending } = contribution;
     await traceDoctorMaintenancePending(
       `contribution.${contribution.id}`,
-      pending === "diagnostic-only" ? () => "none" : pending ? () => pending(ctx) : undefined,
+      resolveDoctorContributionPendingCheck(ctx, contribution),
     );
   }
   await measureGatewayBootstrapStep(`doctor.contribution.${contribution.id}`, run);

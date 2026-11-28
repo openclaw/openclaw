@@ -28,7 +28,11 @@ import {
   checkDoctorDatabaseMigrationsPending,
   prepareDoctorMigrationBackups,
 } from "./doctor-heartbeat-migration-backup.js";
-import { traceDoctorMaintenancePending } from "./doctor-maintenance-pending.js";
+import {
+  handDoctorPendingDecisionsToStop,
+  traceDoctorMaintenancePending,
+  type DoctorPendingDecisions,
+} from "./doctor-maintenance-pending.js";
 import { withMaintenance } from "./doctor-schema-migrations.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -104,6 +108,63 @@ describe("Doctor maintenance pending contract", () => {
     ).resolves.toBe(true);
 
     expect(trace()).toEqual([expect.stringMatching(/pending=undecidable check=owner /u)]);
+  });
+});
+
+describe("decisions taken before the stop", () => {
+  it("records a decision before the stop and traces where it was taken", async () => {
+    const trace = capturePendingTrace();
+    const decisions: DoctorPendingDecisions = new Map();
+
+    await expect(
+      traceDoctorMaintenancePending("state-schema", () => "none", decisions),
+    ).resolves.toBe(false);
+    await expect(
+      traceDoctorMaintenancePending("client-credentials", undefined, decisions),
+    ).resolves.toBe(true);
+
+    expect([...decisions]).toEqual([
+      ["state-schema", "none"],
+      ["client-credentials", "work"],
+    ]);
+    expect(trace()).toEqual([
+      expect.stringMatching(
+        /doctor\.pending\.state-schema .* pending=none check=owner at=before-stop /u,
+      ),
+      expect.stringMatching(
+        /doctor\.pending\.client-credentials .* pending=work check=default at=before-stop /u,
+      ),
+    ]);
+  });
+
+  it("does not decide a handed-in step again inside the stop, and decides the others", async () => {
+    const trace = capturePendingTrace();
+    const decisions: DoctorPendingDecisions = new Map([
+      ["state-schema", "none"],
+      ["database-migrations", "undecidable"],
+    ]);
+    const recheck = vi.fn(() => "work" as const);
+
+    const handoff = handDoctorPendingDecisionsToStop(decisions);
+    try {
+      await expect(traceDoctorMaintenancePending("state-schema", recheck)).resolves.toBe(false);
+      await expect(traceDoctorMaintenancePending("database-migrations", recheck)).resolves.toBe(
+        true,
+      );
+      await expect(traceDoctorMaintenancePending("sqlite-reclamation", () => "none")).resolves.toBe(
+        false,
+      );
+    } finally {
+      handoff[Symbol.dispose]();
+    }
+    expect(recheck).not.toHaveBeenCalled();
+    expect(trace()).toEqual([
+      expect.stringMatching(/doctor\.pending\.sqlite-reclamation .* pending=none check=owner /u),
+    ]);
+
+    // Once the stop ends, the step decides again.
+    await expect(traceDoctorMaintenancePending("state-schema", recheck)).resolves.toBe(true);
+    expect(recheck).toHaveBeenCalledTimes(1);
   });
 });
 

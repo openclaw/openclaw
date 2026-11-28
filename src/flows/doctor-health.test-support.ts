@@ -141,6 +141,7 @@ const mocks = vi.hoisted(() => {
     "./doctor-health-contributions.js": {
       runDoctorHealthContributions: handles.runContributions,
       runDoctorAfterRestartContributions: handles.runAfterRestart,
+      resolveDoctorFixContributions: () => [],
     },
   };
   for (const [module, replacement] of Object.entries(replacements)) {

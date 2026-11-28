@@ -136,12 +136,17 @@ function* listCompletableDoctorMigrationBackups(
 /**
  * Read-only: whether `completeDoctorMigrationBackups` would record a completion for these
  * databases. Callers pass every candidate path; refusals found later only narrow the set.
+ * Completion needs schema-maintenance custody; a caller deciding before Doctor's stop takes
+ * that custody passes `ownsSchemaMaintenance`.
  */
 export function checkDoctorMigrationBackupsPending(
   env: NodeJS.ProcessEnv,
   databasePaths: readonly string[],
+  custody = {
+    ownsSchemaMaintenance: getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance === true,
+  },
 ): DoctorMaintenancePending {
-  if (!getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance) {
+  if (!custody.ownsSchemaMaintenance) {
     return "none";
   }
   return listCompletableDoctorMigrationBackups(env, databasePaths, false).next().done

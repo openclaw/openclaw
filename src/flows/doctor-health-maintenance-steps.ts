@@ -1,5 +1,10 @@
-import { traceDoctorMaintenancePending } from "../commands/doctor-maintenance-pending.js";
-import type { DoctorMaintenancePending } from "../commands/doctor-maintenance-pending.js";
+import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
+import {
+  handDoctorPendingDecisionsToStop,
+  traceDoctorMaintenancePending,
+  type DoctorMaintenancePending,
+  type DoctorPendingDecisions,
+} from "../commands/doctor-maintenance-pending.js";
 import type { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import * as doctorMode from "../commands/doctor-repair-mode.js";
@@ -121,24 +126,73 @@ export async function runDoctorPostCheckMaintenance(params: {
 
 /**
  * Work that needs no Gateway stop. It runs before the stop, beside the serving Gateway, so
- * a failure here is reported and never blocks the repairs that need the stop.
+ * a failure here is reported and never blocks the repairs that need the stop. Standalone
+ * Doctor warms transcript archives; an updater already owns the stop.
+ *
+ * Before Doctor's own `--fix` stop (not an updater's, which has stopped the Gateway already)
+ * it then decides every step's and contribution's pending answer and returns the handoff that
+ * gives those decisions to the stop. The stop still runs every step.
  */
-export async function runDoctorPreStopMaintenance(params: {
+export async function runDoctorBeforeStop(params: {
   runtime: RuntimeEnv;
   measure: DoctorProgressMeasure;
-}): Promise<void> {
+  options: DoctorOptions;
+  interactiveRepair: boolean;
+  root: string | null;
+  databasePreflight: DoctorDatabasePreflight | undefined;
+  preflightOptions: { preserveSourceArtifacts?: true };
+  automaticHeartbeatRepair: boolean;
+  /** An updater delegated its write authority to this Doctor run. */
+  delegated: boolean;
+}): Promise<{ archives?: DoctorDatabasePreflight; handoff?: Disposable }> {
+  const { options, measure } = params;
+  const repairMode = doctorMode.resolveDoctorRepairMode(options);
+  let archives: DoctorDatabasePreflight | undefined;
+  if (
+    !repairMode.updateInProgress &&
+    (options.repair === true || options.yes === true || params.interactiveRepair)
+  ) {
+    const { prepareDoctorMaintenanceArchives } = await import("./doctor-health-startup.js");
+    archives = await measure("doctor.archive-preparation", () =>
+      prepareDoctorMaintenanceArchives(
+        params.databasePreflight,
+        params.runtime,
+        params.preflightOptions,
+      ),
+    );
+  }
+  if (!repairMode.shouldRepair) {
+    return { archives };
+  }
+  const decisions: DoctorPendingDecisions | undefined =
+    repairMode.updateInProgress || params.delegated ? undefined : new Map();
   const { checkRetainedUpdateRuntimesPending, cleanupRetainedUpdateRuntimesBeforeMaintenance } =
     await import("../commands/doctor-retained-runtime.js");
-  await traceDoctorMaintenancePending("retained-runtimes", () =>
-    checkRetainedUpdateRuntimesPending(process.env),
+  await traceDoctorMaintenancePending(
+    "retained-runtimes",
+    () => checkRetainedUpdateRuntimesPending(process.env),
+    decisions,
   );
   try {
-    await params.measure("doctor.retained-runtimes", () =>
+    await measure("doctor.retained-runtimes", () =>
       cleanupRetainedUpdateRuntimesBeforeMaintenance(process.env),
     );
   } catch (error) {
     params.runtime.error(formatErrorMessage(error));
   }
+  if (!decisions) {
+    return { archives };
+  }
+  const { decideDoctorPendingBeforeStop } = await import("./doctor-health-pending-before-stop.js");
+  await decideDoctorPendingBeforeStop({
+    options,
+    runtime: params.runtime,
+    root: params.root,
+    preflight: archives,
+    automaticHeartbeatRepair: params.automaticHeartbeatRepair,
+    decisions,
+  });
+  return { archives, handoff: handDoctorPendingDecisionsToStop(decisions) };
 }
 
 /**
