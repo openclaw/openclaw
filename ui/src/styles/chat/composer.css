@@ -3379,7 +3379,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
     /* Input selection remains a desktop affordance. Mobile gives the two voice
        jobs explicit controls instead: Mic dictates and the trailing action starts
        Talk, so a third disclosure target would only spend scarce row width. */
-    & .chat-talk-input-picker {
+    & .chat-talk-input-picker:not([open]) {
       display: none;
     }
 
