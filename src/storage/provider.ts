@@ -28,8 +28,11 @@ export async function acquireStorageProvider(params: {
     }
     return { provider, registry: params.registry, release: async () => {} };
   }
-  const { applyPluginAutoEnable } = await import("../config/plugin-auto-enable.js");
-  const enabled = applyPluginAutoEnable({ config: params.config, env: params.env ?? process.env });
+  const { applyPluginAutoEnableAsync } = await import("../config/plugin-auto-enable.js");
+  const enabled = await applyPluginAutoEnableAsync({
+    config: params.config,
+    env: params.env ?? process.env,
+  });
   const { resolveManifestContractRuntimePluginResolution } =
     await import("../plugins/manifest-contract-runtime.js");
   const resolution = resolveManifestContractRuntimePluginResolution({
