@@ -213,7 +213,7 @@ main model can read the screenshot directly.
 - In strict SSRF mode, remote CDP endpoint discovery and `/json/version` checks (`cdpUrl`) are checked too.
 - Guarded remote CDP connections are rejected when the selected driver cannot
   keep the approved endpoint bound to the actual socket. Use the regular
-  `openclaw` driver for Browserless, Browserbase, Notte, or other guarded
+  `openclaw` driver for Browserless, Browserbase, Browser Use, Notte, or other guarded
   remote CDP providers. `existing-session`/Chrome MCP profiles with an explicit
   `cdpUrl` or `--browserUrl`/`--wsEndpoint` MCP argument are rejected under the
   default strict Browser policy because Chrome MCP cannot carry OpenClaw's
