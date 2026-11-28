@@ -120,7 +120,7 @@ struct ChatInfoAutomations: View {
             let automations = await self.visit.loadAutomations(in: self.app)
             if !Task.isCancelled { self.automations = self.automations.replaced(by: automations) }
         }
-        .sheet(item: self.$detail) { job in
+        .sheet(item: self.$detail, onDismiss: { self.attempt += 1 }, content: { job in
             if let gatewayID = self.visit.catalogGatewayID, gatewayID == self.app.chatTranscriptCacheGatewayID {
                 NavigationStack {
                     AutomationsScreen(gatewayID: gatewayID, initialJobID: job.id)
@@ -130,7 +130,7 @@ struct ChatInfoAutomations: View {
                 Text("Couldn’t open this automation").font(OpenClawType.body)
                     .foregroundStyle(OpenClawBrand.textSecondary).presentationDetents([.medium])
             }
-        }
+        })
     }
 
     private func row(_ job: ChatInfoAutomation) -> some View {

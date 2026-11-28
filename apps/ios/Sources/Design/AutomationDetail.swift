@@ -39,18 +39,17 @@ struct AutomationDetail: View {
                             }
                         })) { Text("Active").font(OpenClawType.body) }.disabled(self.busy || job.configRevision == nil)
                         Button { self.run(job) } label: {
-                            Label { Text("Run now").font(OpenClawType.body) } icon: { Image(systemName: "play") }
+                            Text("Run now").font(OpenClawType.body)
                         }
                         .disabled(self.busy)
                     }
                     NavigationLink { AutomationRuns(gateway: self.gateway, jobID: job.id) } label: {
-                        Label { Text("Run history").font(OpenClawType.body) } icon: {
-                            Image(systemName: "clock.arrow.circlepath")
-                        }
+                        Text("Run history").font(OpenClawType.body)
                     }
                     Button { self.advanced = true } label: { Text("Open in Dashboard").font(OpenClawType.body) }
+                } footer: {
+                    if let message { Text(verbatim: message).font(OpenClawType.footnote) }
                 }
-                if let message { Text(verbatim: message).font(OpenClawType.footnote) }
                 if self.gateway.canManage {
                     Section {
                         Button(role: .destructive) { self.deletion = job } label: {

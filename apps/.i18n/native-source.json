@@ -1775,7 +1775,6 @@
     {"path":"apps/ios/Sources/Design/AutomationsScreen.swift","kind":"ui-call","surface":"apple","id":"native.apple.63a255d3a6536426","source":"Put a task on a schedule"},
     {"path":"apps/ios/Sources/Design/AutomationsScreen.swift","kind":"ui-call","surface":"apple","id":"native.apple.812df118c67f31ea","source":"Retry"},
     {"path":"apps/ios/Sources/Design/AutomationsScreen.swift","kind":"ui-call","surface":"apple","id":"native.apple.472e88743ad96449","source":"Show more"},
-    {"path":"apps/ios/Sources/Design/AutomationsScreen.swift","kind":"ui-call","surface":"apple","id":"native.apple.85ce0dc5febc143a","source":"Tap + to schedule a task."},
     {"path":"apps/ios/Sources/Design/AutomationsScreen.swift","kind":"ui-modifier","surface":"apple","id":"native.apple.3641188c6519bb27","source":"Automations"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar+ContextMenu.swift","kind":"ui-call","surface":"apple","id":"native.apple.bd88d8fdf34468ef","source":"Assign to…"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar+ContextMenu.swift","kind":"ui-call","surface":"apple","id":"native.apple.380a9edbcbbf2f4f","source":"Copy"},

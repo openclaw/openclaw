@@ -75,12 +75,17 @@ struct AutomationEditor: View {
                         }
                         if let expanded = self.expanded {
                             if expanded == .date, self.draft.frequency == .once {
-                                DatePicker(selection: self.$draft.date, displayedComponents: .date) {
+                                DatePicker(selection: self.$draft.date, in: Date.now..., displayedComponents: .date) {
                                     Text("Date").font(OpenClawType.body)
                                 }
                                 .datePickerStyle(.graphical).labelsHidden()
                             } else if expanded == .time {
-                                DatePicker(selection: self.$draft.date, displayedComponents: .hourAndMinute) {
+                                let minimum: Date = self.draft.frequency == .once ? .now : .distantPast
+                                DatePicker(
+                                    selection: self.$draft.date,
+                                    in: minimum...,
+                                    displayedComponents: .hourAndMinute)
+                                {
                                     Text("Time").font(OpenClawType.body)
                                 }
                                 .datePickerStyle(.wheel).labelsHidden().frame(maxWidth: .infinity)
@@ -96,7 +101,9 @@ struct AutomationEditor: View {
                                .original.date
                         {
                             Text("Choose a future date and time.").font(OpenClawType.footnote)
-                        } else if self.draft.frequency != .existing {
+                        } else if self.draft.frequency != .existing,
+                                  self.draft.zone.identifier != TimeZone.current.identifier
+                        {
                             let zone = self.draft.zone.localizedName(for: .generic, locale: .current) ?? self.draft.zone
                                 .identifier
                             Text(verbatim: String(format: String(localized: "Time zone: %@"), zone))

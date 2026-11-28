@@ -55,7 +55,7 @@ private struct AutomationList: View {
 
     var body: some View {
         List {
-            if !self.introduced, self.gateway.canManage {
+            if !self.introduced, self.gateway.canManage, !self.jobs.isEmpty {
                 Section {
                     VStack(alignment: .leading, spacing: 8) {
                         Image(systemName: "clock.arrow.circlepath").font(.title2).foregroundStyle(.tint)
@@ -80,15 +80,21 @@ private struct AutomationList: View {
                         Image(systemName: "calendar.badge.clock")
                     }
                 } description: {
-                    if self.gateway.canManage, self.introduced {
-                        Text("Tap + to schedule a task.").font(OpenClawType.body)
+                    if self.gateway.canManage {
+                        Text("Choose what your agent should do and when.").font(OpenClawType.body)
+                    }
+                } actions: {
+                    if self.gateway.canManage {
+                        Button { self.showingEditor = true } label: {
+                            Text("New automation").font(OpenClawType.headline)
+                        }
                     }
                 }
             }
             ForEach(self.jobs) { job in
                 Button { self.selected = job } label: {
                     HStack(spacing: 12) {
-                        Image(systemName: job.enabled ? "clock.arrow.circlepath" : "pause.circle")
+                        Image(systemName: "clock.arrow.circlepath")
                             .foregroundStyle(.secondary).accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(verbatim: job.displayName ?? job.name).font(OpenClawType.headline)
@@ -105,8 +111,6 @@ private struct AutomationList: View {
                             }
                         }
                         Spacer()
-                        Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
-                            .accessibilityHidden(true)
                     }.padding(.vertical, 4)
                 }
             }
@@ -117,7 +121,7 @@ private struct AutomationList: View {
         }
         .navigationTitle("Automations").refreshable { await self.load() }.task { await self.load() }
         .toolbar {
-            if self.gateway.canManage {
+            if self.gateway.canManage, !self.jobs.isEmpty {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { self.showingEditor = true } label: { Image(systemName: "plus") }
                         .accessibilityLabel(Text("New automation"))
