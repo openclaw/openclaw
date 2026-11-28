@@ -14,6 +14,7 @@ it("loads Talk settings fallback copy before the cold view renders", async () =>
 
   expect(en.talkPage).toBe(talkPage);
   expect(manager.t("talkPage.voice.title")).toBe("Speaker voice");
+  expect(manager.t("configPage.deviceTalk.talkShiftToStopEnabled")).toBe("Right Option to stop");
   expect(manager.t("talkPage.model.defaultNamed", { model: "Example" })).toBe("Default (Example)");
   expect(manager.t("talkPage.status.unavailable")).toBe("Unavailable");
   expect(manager.t("common.health")).toBe("Gesundheit");

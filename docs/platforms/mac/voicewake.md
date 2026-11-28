@@ -59,7 +59,7 @@ voice settings. Microphone and speech permissions are under
 - The microphone test opens a native panel with a live level meter and uses the wake-word capture pipeline without forwarding speech. Diagnostics yield to Talk Mode and push-to-talk. Choose **Done** to close the panel and release its microphone capture.
 - Trigger words are Gateway settings on the **Talk** page and remain editable in a regular browser. The Mac's wake runtime uses the Primary Gateway's trigger words; opening another Gateway window does not retarget that runtime.
 - If a selected microphone disconnects, the voice runtime temporarily uses the system default and retains the selection for when it returns.
-- Trigger and send chime toggles turn each sound on or off. The page also controls whether wake starts Talk Mode, push-to-talk, Talk phase sounds, Shift-to-stop, and realtime relay.
+- Trigger and send chime toggles turn each sound on or off. The page also controls whether wake starts Talk Mode, push-to-talk, Talk phase sounds, Right Option to stop, and realtime relay.
 
 ## Forwarding behavior
 
