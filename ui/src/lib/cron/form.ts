@@ -12,7 +12,6 @@ import {
   durationMsToSecondsString,
   parseStaggerSchedule,
   resolveCronScheduleAt,
-  readCronHourRange,
 } from "./form-schedule.ts";
 import type { CronFieldErrors, CronFormState } from "./types.ts";
 import { resolveCronWebhookDeliveryError } from "./webhook-url.ts";
@@ -31,8 +30,12 @@ function isCronFormSessionTarget(value: string): value is CronFormState["session
 export function normalizeCronFormState(
   form: CronFormState,
   changed: Partial<CronFormState> = {},
+  source?: CronJob | null,
 ): CronFormState {
   let normalized = form;
+  if (changed.cronTz !== undefined) {
+    normalized = { ...form, ...cronTimezoneFields(changed.cronTz, form.scheduleKind, source) };
+  }
   if (!form.payloadLocked && form.payloadKind === "systemEvent" && form.sessionTarget !== "main") {
     normalized =
       changed.sessionTarget !== undefined
@@ -140,7 +143,7 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       errors.activeHoursEnd = "cron.errors.activeHoursTime";
     }
   }
-  const timezone = form.cronTz.trim();
+  const timezone = cronFormTimezone(form).trim();
   if (
     (form.scheduleKind === "cron" || form.activeHoursEnabled) &&
     timezone &&
@@ -184,6 +187,31 @@ export function isReadOnlyCronPayload(payload: CronPayload | null): boolean {
   return payload?.kind === "command" || payload?.kind === "script";
 }
 
+export function cronTimezoneFields(
+  value: string,
+  kind: CronFormState["scheduleKind"],
+  source?: CronJob | null,
+): Pick<CronFormState, "cronTz" | "activeHoursTimezone"> {
+  // The scheduler accepts "user" only for the run window. A new cron cadence uses the host zone.
+  if (kind !== "cron" && value.trim() === "user") {
+    return { cronTz: "", activeHoursTimezone: "user" };
+  }
+  // Restoring the saved cadence zone in the draft also restores its original window zone.
+  const keepSavedWindow =
+    kind === "cron" &&
+    source?.schedule.kind === "cron" &&
+    value.trim() === (source.schedule.tz ?? "");
+  return {
+    cronTz: value,
+    activeHoursTimezone:
+      keepSavedWindow && source?.activeHours ? (source.activeHours.timezone ?? "user") : undefined,
+  };
+}
+
+export function cronFormTimezone(form: CronFormState): string {
+  return form.scheduleKind === "cron" ? form.cronTz : (form.activeHoursTimezone ?? form.cronTz);
+}
+
 export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   const failureAlert = typeof job.failureAlert === "object" ? job.failureAlert : undefined;
   const payload = job.payload;
@@ -213,7 +241,15 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     eventArguments: "{}",
     originalScheduleAt,
     scheduleAt: originalScheduleAt?.local ?? "",
-    cronTz: job.activeHours ? (job.activeHours.timezone ?? "user") : "",
+    ...cronTimezoneFields(
+      job.schedule.kind === "cron"
+        ? (job.schedule.tz ?? "")
+        : job.activeHours
+          ? (job.activeHours.timezone ?? "user")
+          : "",
+      job.schedule.kind,
+      job,
+    ),
     scheduleExact: false,
     staggerAmount: "",
     staggerUnit: "seconds",
@@ -280,14 +316,7 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   } else if (job.schedule.kind === "every") {
     Object.assign(next, parseEverySchedule(job.schedule.everyMs));
   } else if (job.schedule.kind === "cron") {
-    const range = job.activeHours ? undefined : readCronHourRange(job.schedule.expr);
-    next.cronExpr = range?.expr ?? job.schedule.expr;
-    if (range) {
-      next.activeHoursEnabled = true;
-      next.activeHoursStart = range.start;
-      next.activeHoursEnd = range.end;
-    }
-    next.cronTz = job.schedule.tz ?? "";
+    next.cronExpr = job.schedule.expr;
     Object.assign(next, parseStaggerSchedule(job.schedule.staggerMs));
   }
   // Process-backed schedule kinds are shown read-only in the list and have no

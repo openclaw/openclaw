@@ -223,7 +223,8 @@ const enCron = {
       noNextRun: "No next run scheduled",
       timezoneOptional: "Time zone",
       timezoneGateway: "Gateway time zone",
-      splitTimezone: "Saved hours use {zone}. Changing the time zone applies it to both.",
+      splitTimezone:
+        "The run window uses the {zone} time zone. A different time zone applies to both.",
       timezoneHelp: "Leave blank to use the time zone of the computer running OpenClaw.",
       runsIn: "Runs in",
       mainSession: "Main session",

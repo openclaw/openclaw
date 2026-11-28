@@ -59,7 +59,6 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     fieldErrors: {},
     canSubmit: true,
     editingJob: null,
-    cloningJob: null,
     cloning: false,
     createOpen: false,
     activityOpen: false,

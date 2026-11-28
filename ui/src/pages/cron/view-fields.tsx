@@ -199,7 +199,10 @@ export function CronInput(props: FormProps & CronInputOptions) {
  */
 export function TrayInput(
   props: FormProps &
-    Omit<CronInputOptions, "inline" | "describeError"> & { size?: "narrow" | "wide" },
+    Omit<CronInputOptions, "inline" | "describeError"> & {
+      size?: "narrow" | "wide";
+      value?: string;
+    },
 ) {
   const helpId = () => `${inputIdForField(props.field)}-help`;
   const error = () => (props.errorKey ? props.fieldErrors[props.errorKey] : undefined);
@@ -223,7 +226,7 @@ export function TrayInput(
         aria-label={props.label}
         title={props.help ?? props.label}
         aria-required={props.required ? "true" : undefined}
-        value={props.form[props.field]}
+        value={props.value ?? props.form[props.field]}
         list={props.list}
         disabled={props.disabled ?? false}
         aria-invalid={props.errorKey ? (error() ? "true" : "false") : undefined}

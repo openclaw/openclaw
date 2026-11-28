@@ -1,4 +1,5 @@
 import { createMemo, createSignal, For } from "solid-js";
+import { cronFormTimezone } from "../../lib/cron/form.ts";
 import type { CronFieldKey } from "../../lib/cron/types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { formSentenceFrequency } from "./schedule-sentence.ts";
@@ -102,18 +103,13 @@ export function ScheduleControls(props: CronProps & { phoneLayout: boolean }) {
     return preferredMode === "daily" && read === "weekly" ? "daily" : read;
   });
   const savedHoursZone = createMemo(() => {
-    const job = props.editingJob ?? props.cloningJob;
-    if (
-      !form().activeHoursEnabled ||
-      form().scheduleKind !== "cron" ||
-      job?.schedule.kind !== "cron" ||
-      !job.activeHours ||
-      form().cronTz.trim() !== (job.schedule.tz ?? "")
-    ) {
-      return undefined;
-    }
-    const zone = job.activeHours.timezone ?? "user";
-    return zone === (job.schedule.tz ?? "local") ? undefined : zone;
+    const draft = form();
+    const zone = draft.activeHoursTimezone;
+    return draft.activeHoursEnabled &&
+      draft.scheduleKind === "cron" &&
+      zone !== (draft.cronTz.trim() || "local")
+      ? zone
+      : undefined;
   });
   const canChooseEvent = () =>
     form().scheduleKind === "event" ||
@@ -231,6 +227,7 @@ export function ScheduleControls(props: CronProps & { phoneLayout: boolean }) {
           <TrayInput
             {...props}
             field="cronTz"
+            value={cronFormTimezone(form())}
             label={t("cron.form.timezoneOptional")}
             help={t("cron.form.timezoneHelp")}
             errorKey="cronTz"

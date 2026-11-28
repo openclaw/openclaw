@@ -89,7 +89,8 @@ suite.define(() => {
       expect((await gateway.waitForRequest("cron.update")).params).toMatchObject({
         id: job.id,
         patch: {
-          schedule: { kind: "cron", expr: "0 10-17 * * 5", tz: "America/Toronto", staggerMs: 0 },
+          schedule: { kind: "cron", expr: "0 * * * 5", tz: "America/Toronto", staggerMs: 0 },
+          activeHours: { start: "10:00", end: "18:00", timezone: "America/Toronto" },
         },
       });
     });

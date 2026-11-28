@@ -45,6 +45,7 @@ export type CronFormState = {
   everyUnit: "seconds" | "minutes" | "hours" | "days";
   cronExpr: string;
   cronTz: string;
+  activeHoursTimezone?: string;
   scheduleExact: boolean;
   staggerAmount: string;
   staggerUnit: "seconds" | "minutes";

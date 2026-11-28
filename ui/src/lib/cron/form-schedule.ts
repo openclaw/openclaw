@@ -85,88 +85,9 @@ export function parseStaggerSchedule(
   };
 }
 
-function cronHourIndex(fields: string[]): number {
-  return fields.length === 5 || fields.length === 6 ? fields.length - 4 : -1;
-}
-
-/** Read the range syntax the builder writes, without touching arbitrary cron hour fields. */
-export function readCronHourRange(expr: string) {
-  const fields = expr.trim().split(/\s+/u);
-  const index = cronHourIndex(fields);
-  const field = fields[index] ?? "";
-  const daytime = /^(\d{1,2})-(\d{1,2})$/u.exec(field);
-  const overnight = /^0-(\d{1,2}),(\d{1,2})-23$/u.exec(field);
-  const from = Number(daytime?.[1] ?? overnight?.[2]);
-  const last = Number(daytime?.[2] ?? overnight?.[1]);
-  if (!(from <= 23 && last <= 23 && (daytime ? from <= last : last + 1 < from))) {
-    return undefined;
-  }
-  fields[index] = "*";
-  const clock = (hour: number) => String(hour).padStart(2, "0") + ":00";
-  return { expr: fields.join(" "), start: clock(from), end: clock(last + 1) };
-}
-
-export function resolveScheduleWindow(form: CronFormState, source?: CronJob | null) {
-  const previous = source?.schedule.kind === "cron" ? source.schedule : undefined;
-  const savedHours = source?.activeHours;
-  const timezone = form.cronTz.trim();
-  const tz = timezone === "local" ? undefined : timezone || undefined;
-  const result: { expr: string; tz: string | undefined; activeHours?: CronJob["activeHours"] } = {
-    expr: form.cronExpr.trim(),
-    tz,
-  };
-  if (!form.activeHoursEnabled) {
-    return result;
-  }
-  const start = form.activeHoursStart;
-  const end = form.activeHoursEnd;
-  const native = previous && !savedHours ? readCronHourRange(previous.expr) : undefined;
-  if (
-    form.scheduleKind === "cron" &&
-    previous &&
-    native?.expr === result.expr &&
-    native.start === start &&
-    native.end === end
-  ) {
-    result.expr = previous.expr;
-    return result;
-  }
-  // An elapsed interval has an anchor and does not reset at the hour or at DST.
-  // Existing gates also affect manual runs and must not be silently converted.
-  if (
-    form.scheduleKind === "cron" &&
-    !savedHours &&
-    (native || (!form.staggerAmount.trim() && !form.triggerEnabled && !source?.pacing)) &&
-    start.endsWith(":00") &&
-    end.endsWith(":00") &&
-    start !== end
-  ) {
-    const fields = result.expr.split(/\s+/u);
-    const index = cronHourIndex(fields);
-    if (fields[index] === "*") {
-      const from = Number(start.slice(0, 2));
-      const until = Number(end.slice(0, 2));
-      fields[index] =
-        until > from
-          ? `${from}-${until - 1}`
-          : until === 0
-            ? `${from}-23`
-            : `0-${until - 1},${from}-23`;
-      result.expr = fields.join(" ");
-      return result;
-    }
-  }
-  const preserveZone =
-    savedHours &&
-    (form.scheduleKind === "cron" && previous
-      ? timezone === (previous.tz ?? "")
-      : timezone === (savedHours.timezone ?? "user"));
-  result.activeHours = {
-    start,
-    end,
-    timezone: preserveZone ? savedHours.timezone : timezone || "local",
-  };
-  return result;
+function cronTimezone(form: CronFormState): string | undefined {
+  const zone = form.cronTz.trim();
+  return zone === "local" ? undefined : zone || undefined;
 }
 
 export function hasUnchangedCronSchedule(form: CronFormState, job: CronJob): boolean {
@@ -196,10 +117,9 @@ export function hasUnchangedCronSchedule(form: CronFormState, job: CronJob): boo
   }
   if (schedule.kind === "cron") {
     const stagger = parseStaggerSchedule(schedule.staggerMs);
-    const { expr, tz } = resolveScheduleWindow(form, job);
     return (
-      expr === schedule.expr &&
-      tz === schedule.tz &&
+      form.cronExpr.trim() === schedule.expr &&
+      cronTimezone(form) === schedule.tz &&
       form.scheduleExact === stagger.scheduleExact &&
       form.staggerAmount.trim() === stagger.staggerAmount &&
       form.staggerUnit === stagger.staggerUnit
@@ -208,7 +128,7 @@ export function hasUnchangedCronSchedule(form: CronFormState, job: CronJob): boo
   return true;
 }
 
-export function buildCronSchedule(form: CronFormState, source?: CronJob | null) {
+export function buildCronSchedule(form: CronFormState, previous?: CronJob["schedule"]) {
   if (form.scheduleKind === "event") {
     const args: unknown = JSON.parse(form.eventArguments);
     if (!isRecord(args)) {
@@ -238,7 +158,7 @@ export function buildCronSchedule(form: CronFormState, source?: CronJob | null) 
     }
     return { kind: "every" as const, everyMs };
   }
-  const { expr, tz } = resolveScheduleWindow(form, source);
+  const expr = form.cronExpr.trim();
   if (!expr) {
     throw new Error(t("cron.errors.cronExprRequiredShort"));
   }
@@ -248,7 +168,6 @@ export function buildCronSchedule(form: CronFormState, source?: CronJob | null) 
     staggerMs = 0;
   } else if (!staggerAmount) {
     // Same-expression updates preserve omitted windows; new defaults must stay unspecified.
-    const previous = source?.schedule;
     const clearsSavedWindow =
       previous?.kind === "cron" && previous.expr === expr && previous.staggerMs !== undefined;
     staggerMs = resolveDefaultCronStaggerMs(expr) ?? (clearsSavedWindow ? 0 : undefined);
@@ -258,5 +177,5 @@ export function buildCronSchedule(form: CronFormState, source?: CronJob | null) 
       throw new Error(t("cron.errors.invalidStaggerAmount"));
     }
   }
-  return { kind: "cron" as const, expr, tz, staggerMs };
+  return { kind: "cron" as const, expr, tz: cronTimezone(form), staggerMs };
 }
