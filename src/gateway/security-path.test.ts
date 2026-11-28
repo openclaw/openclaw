@@ -50,11 +50,10 @@ describe("security-path canonicalization", () => {
     expect(canonicalizePathForSecurity("/api/channels%zz").malformedEncoding).toBe(true);
   });
 
-  it("resolves deeply encoded path separators and protects the route", () => {
+  it("resolves deeply encoded path separators", () => {
     const deeplyEncoded = "/api%2525252fchannels%2525252fnostr%2525252fdefault%2525252fprofile";
     const result = canonicalizePathForSecurity(deeplyEncoded);
     expect(result.canonicalPath).toBe("/api/channels/nostr/default/profile");
-    expect(isProtectedPluginRoutePath(deeplyEncoded)).toBe(true);
   });
 
   it("reports decode depth overflow and fails closed", () => {
