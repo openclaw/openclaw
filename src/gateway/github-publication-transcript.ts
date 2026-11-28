@@ -83,18 +83,17 @@ export async function reportGitHubPublicationTranscript(
         };
       })();
   const { target, entry } = selected;
-  // A reset or rotation ended that transcript for good; the receipt stays readable by request id.
+  if (target.canonicalKey !== recipient.sessionKey) {
+    throw new Error("GitHub publication transcript owner changed");
+  }
+  // A reset, rotation or deletion ended that transcript for good; the receipt stays readable by request id.
   if (
-    entry &&
-    target.canonicalKey === recipient.sessionKey &&
-    (entry.sessionId !== recipient.sessionId ||
-      (entry.lifecycleRevision ?? null) !== lifecycleRevision)
+    !entry ||
+    entry.sessionId !== recipient.sessionId ||
+    (entry.lifecycleRevision ?? null) !== lifecycleRevision
   ) {
     await coordinator.markReportedAsync(params.result.requestId);
     return;
-  }
-  if (entry?.sessionId !== recipient.sessionId || target.canonicalKey !== recipient.sessionKey) {
-    throw new Error("GitHub publication transcript owner changed");
   }
   // A receipt that lands inside a live run would sit before that run's later messages on
   // replay. Use the pending background-result row, so the run's next request appends it.
