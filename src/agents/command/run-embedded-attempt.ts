@@ -41,7 +41,6 @@ import {
   resolveThinkingSelection,
 } from "../model-thinking-default.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
-import { PreparedModelRuntimeInitialRunAdmissionError } from "../prepared-model-runtime.errors.js";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   createAgentRunRestartAbortError,
@@ -63,6 +62,10 @@ import { persistAgentSession } from "./attempt-execution.shared.js";
 import { createCommandCompactionAccounting } from "./compaction-accounting.js";
 import { createAgentCommandLifecycle, resolveAgentRunFailureNotice } from "./lifecycle.js";
 import { withCommandThinkingClamp } from "./model-selection.js";
+import {
+  markRunNeverStarted,
+  shouldReportPreStartFailure,
+} from "./run-embedded-attempt-pre-start.js";
 import type { RunEmbeddedAgentAttemptParams } from "./run-embedded-attempt.types.js";
 import { loadAttemptExecutionRuntime, type AgentAttemptResult } from "./runtime-loaders.js";
 import {
@@ -193,7 +196,6 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
   let fallbackExhausted = false;
   let terminal: EmbeddedAgentRunEntryTerminal;
   let liveSwitchRetries = 0;
-  let candidateAttempts = 0;
   let autoFallbackPrimaryProbeInterruptedByLiveSwitch = false;
   const fastModeStartedAtMs = Date.now();
   const assertTrajectoryCurrent = () => {
@@ -353,7 +355,6 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
           fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
         },
         runCandidate: async (providerOverride, modelOverride, runOptions) => {
-          candidateAttempts += 1;
           const candidateAccounting = compactionAccounting.beginCandidate(deferredLifecycle.signal);
           maintenanceAuthProfile = undefined;
           attemptMediaTaskIds = getGeneratedMediaTaskIdsForSessionKey(sessionKey, sessionAgentId);
@@ -565,18 +566,14 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
       break;
     } catch (caught) {
       let err = caught;
-      if (
-        err instanceof PreparedModelRuntimeInitialRunAdmissionError &&
-        candidateAttempts === 1 &&
-        params.opts.deliver === true &&
-        !params.suppressVisibleSessionEffects
-      ) {
+      if (!executionStarted && shouldReportPreStartFailure(params, err)) {
+        const message = err instanceof Error ? err.message : "Agent run failed";
         try {
           assertTrajectoryCurrent();
           deferredLifecycle.signal.throwIfAborted();
           // Keep the execution failed, but give normal finalization custody of its
           // visible failure notice and receipt before the recovery claim is retired.
-          attemptLifecycleState.lifecycleError = err.message;
+          attemptLifecycleState.lifecycleError = message;
           result = {
             payloads: [
               buildTerminalAgentRunFailureReplyPayload({
@@ -594,7 +591,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             result,
             outcome: buildAgentRunTerminalOutcomeFromLifecycleEvent({
               phase: "error",
-              data: { ...result.meta, error: err.message },
+              data: { ...result.meta, error: message },
             }),
             behavior: {
               kind: "command-rpc",
@@ -671,15 +668,8 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
       });
       await fallbackTrajectoryRecorder?.flush();
       await deferredLifecycle.complete();
-      // A turn that never started showed nothing; callers that owe a reply need that fact.
-      // Shutdown aborts every run with one shared reason, which must not carry this run's mark.
-      if (
-        !executionStarted &&
-        !params.opts.abortSignal?.aborted &&
-        err instanceof Error &&
-        Object.isExtensible(err)
-      ) {
-        Object.assign(err, { providerStarted: false });
+      if (!executionStarted) {
+        markRunNeverStarted(err, params.opts.abortSignal);
       }
       throw err;
     }

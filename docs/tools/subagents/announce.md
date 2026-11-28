@@ -80,11 +80,12 @@ continuation never ran ends as an ordinary run; the entry is in its history.
 Stopping the parent's turn does not discard a finished child's entry; a deleted
 requester receives nothing.
 
-A completion that owes the user a reply still reaches the user when its turn
-fails before it starts, or when the model ends without a usable response:
-OpenClaw sends the child's result as text to the requester's channel. A turn
-that started and then failed gets no text resend, because its reply may already
-have been sent.
+A completion turn that fails before it starts still gives the user a visible
+outcome. When the turn delivers to the requester's channel, OpenClaw sends one
+failure notice there. A direct-message completion that owes the user a reply
+sends the child's result as text instead; it does the same when the model ends
+without a usable response. A turn that started and then failed gets neither,
+because its reply may already have been sent.
 
 Completion rows that older builds parked as suspended are settled the same way
 once, on the next registry sweep, without a wake.
