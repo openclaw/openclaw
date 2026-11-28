@@ -1,6 +1,8 @@
+import path from "node:path";
 import { afterAll, assert, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -16,7 +18,7 @@ import {
   ensureAuthProfileStore as loadStore,
   saveAuthProfileStore as saveStore,
 } from "./auth-profiles/store-runtime.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
+import type { AuthProfileStore, ProfileUsageStats } from "./auth-profiles/types.js";
 import {
   isProfileInCooldown,
   markAuthProfileFailure as markFailure,
@@ -236,4 +238,129 @@ it("keeps subscription blocks and inline-key billing on self-managed providers",
     blockedReason: "subscription_limit",
   });
   expect(persisted.usageStats?.[inlineUsageId("local")]?.disabledReason).toBe("billing");
+});
+
+describe("ClawRouter capacity ownership", () => {
+  const clawRouterProfile = "clawrouter:default";
+  const models = [
+    "anthropic/claude-opus-5-5",
+    "anthropic/claude-fable-5-1",
+    "openai/gpt-6.2-sol",
+    "openai/gpt-6-astra",
+  ];
+  // The policy comes from the bundled manifest, not a fixture declaration.
+  const withBundledClawRouter = (run: () => Promise<void>) =>
+    withPluginMetadataSnapshotScope(
+      createPluginMetadataSnapshotFixture(
+        loadPluginManifestRegistryCore({
+          installRecords: {},
+          candidates: [
+            {
+              idHint: "clawrouter",
+              rootDir: path.resolve("extensions", "clawrouter"),
+              source: path.resolve("extensions", "clawrouter", "index.ts"),
+              origin: "bundled" as const,
+            },
+          ],
+        }),
+      ),
+      run,
+      { trustConfigIdentity: true },
+    );
+  const clawRouterFixture = () => {
+    const agentDir = tempDirs.make("openclaw-clawrouter-auth-");
+    saveStore(
+      { version: 1, profiles: { [clawRouterProfile]: apiKey("clawrouter", "synthetic-key") } },
+      agentDir,
+      saveOptions,
+    );
+    return agentDir;
+  };
+  const blockedModels = (store: AuthProfileStore) =>
+    models.filter((model) => isProfileInCooldown(store, clawRouterProfile, Date.now(), model));
+
+  it("keeps OpenAI models admitted after Opus and Fable hit ClawRouter's day-long retry floor", async () => {
+    const agentDir = clawRouterFixture();
+    await withBundledClawRouter(async () => {
+      const store = loadStore(agentDir);
+      // A second model's 429 inside the first window would widen a local
+      // cooldown to the shared profile and refuse every OpenAI model.
+      for (const modelId of models.slice(0, 2)) {
+        await markFailure({
+          store,
+          agentDir,
+          profileId: clawRouterProfile,
+          reason: "rate_limit",
+          modelId,
+          retryAfterMs: 98_971_000,
+        });
+      }
+      clearRuntimeAuthProfileStoreSnapshots();
+      expect(blockedModels(loadStore(agentDir))).toEqual([]);
+    });
+    expect(readPersistedAuthProfileStateRaw(agentDir)).toBeNull();
+  });
+
+  // Raw rows bypass the current writer, exactly as an earlier release left them.
+  const storedClawRouterFixture = (stats: ProfileUsageStats) => {
+    const agentDir = clawRouterFixture();
+    writePersistedAuthProfileStateRaw(
+      { version: 1, usageStats: { [clawRouterProfile]: stats } },
+      agentDir,
+    );
+    clearRuntimeAuthProfileStoreSnapshots();
+    return agentDir;
+  };
+  const failRouterKey = async (agentDir: string) => {
+    const failedAt = Date.now();
+    await markFailure({
+      store: loadStore(agentDir),
+      agentDir,
+      profileId: clawRouterProfile,
+      reason: "auth",
+    });
+    clearRuntimeAuthProfileStoreSnapshots();
+    return { failedAt, stats: loadStore(agentDir).usageStats?.[clawRouterProfile] };
+  };
+
+  it("releases a profile-wide ClawRouter rate-limit window stored before the upgrade", async () => {
+    const agentDir = storedClawRouterFixture({
+      cooldownUntil: Date.now() + 98_971_000,
+      cooldownReason: "rate_limit",
+      lastRateLimitAt: Date.now(),
+    });
+    await withBundledClawRouter(async () => {
+      expect(blockedModels(loadStore(agentDir))).toEqual([]);
+    });
+  });
+
+  // A timeout counted two failures before a capacity failure took over the shared window.
+  it.each([
+    { stored: "active rate-limit", reason: "rate_limit", untilOffsetMs: 98_971_000 },
+    { stored: "active overload", reason: "overloaded", untilOffsetMs: 5 * 60_000 },
+    { stored: "expired rate-limit", reason: "rate_limit", untilOffsetMs: -1_000 },
+  ] as const)(
+    "gives a router-key failure its own first window after a stored $stored window",
+    async ({ reason, untilOffsetMs }) => {
+      const now = Date.now();
+      const agentDir = storedClawRouterFixture({
+        cooldownUntil: now + untilOffsetMs,
+        cooldownReason: reason,
+        errorCount: 2,
+        failureCounts: { timeout: 2 },
+        lastFailureAt: now - 60_000,
+      });
+      await withBundledClawRouter(async () => {
+        const { failedAt, stats } = await failRouterKey(agentDir);
+        // Neither the stored deadline nor the stale count carries into the auth window.
+        expect(stats).toMatchObject({
+          cooldownReason: "auth",
+          errorCount: 1,
+          failureCounts: { auth: 1 },
+        });
+        expect(stats?.cooldownUntil).toBeLessThanOrEqual(Date.now() + 30_000);
+        expect(stats?.cooldownUntil).toBeGreaterThanOrEqual(failedAt + 30_000);
+      });
+    },
+  );
 });

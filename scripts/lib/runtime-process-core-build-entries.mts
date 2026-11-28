@@ -4,6 +4,7 @@ import {
   pluginRuntimeProcessManifest,
   runtimeProcessScriptEntrypoints,
 } from "../../src/infra/runtime-process-manifest.ts";
+import { groupBy } from "./group-by.mts";
 import { managedMemoryEntrypoint } from "./managed-memory-entrypoint.mts";
 import { managedWindowsJobEntrypoint } from "./managed-windows-job-entrypoint.mts";
 
@@ -59,6 +60,7 @@ const privateChunkRuntimeProcessEntrypoints = [
   runtimeProcessEntrypoints.gitOperations,
   runtimeProcessEntrypoints.cronStreamMatcher,
   runtimeProcessEntrypoints.fileToolPlanning,
+  runtimeProcessEntrypoints.spawnBroker,
   {
     ...pluginRuntimeProcessManifest.codexCatalogPage,
     currentModuleUrl: new URL(
@@ -69,7 +71,7 @@ const privateChunkRuntimeProcessEntrypoints = [
 ];
 
 // Keep small helper processes out of the shared runtime bundle.
-export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEntries([
+const individualRuntimeProcessBuildEntries = createRuntimeProcessBuildEntries([
   managedMemoryEntrypoint,
   ...Object.values(runtimeProcessScriptEntrypoints).flatMap((entry) =>
     "runtimeEntrypoint" in entry ? [runtimeProcessEntrypoints[entry.runtimeEntrypoint]] : [],
@@ -77,16 +79,48 @@ export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEnt
   runtimeProcessEntrypoints.pluginGenerationPreparation,
   runtimeProcessEntrypoints.sqliteReadOnly,
   runtimeProcessEntrypoints.sqliteSourceRevision,
-  runtimeProcessEntrypoints.stateRead,
-  runtimeProcessEntrypoints.sessionTranscript,
-  runtimeProcessEntrypoints.sharedWorkerHost,
   ...privateChunkRuntimeProcessEntrypoints,
   runtimeProcessEntrypoints.shellSnapshotEnvironment,
   runtimeProcessEntrypoints.nativeHookRelayClient,
-  runtimeProcessEntrypoints.spawnBroker,
   runtimeProcessEntrypoints.gatewayStateOwnerHeartbeat,
   runtimeProcessEntrypoints.serviceChildRelay,
 ]);
+
+// The shared host imports both workers in one isolate. Building them together avoids
+// shipping a copy of their common modules per worker.
+const sharedWorkerHostBuildEntries = createRuntimeProcessBuildEntries([
+  runtimeProcessEntrypoints.sharedWorkerHost,
+  runtimeProcessEntrypoints.stateRead,
+  runtimeProcessEntrypoints.sessionTranscript,
+]);
+
+// Both resources attach inside the broker isolate. One private graph keeps their
+// module identities intact without loading shared Gateway chunks with the first claim.
+export const brokerNativeResourceBuildEntries = createRuntimeProcessBuildEntries([
+  runtimeProcessEntrypoints.pluginCaptureNativeResource,
+  runtimeProcessEntrypoints.sqliteReadOnlyNativeResource,
+]);
+
+export const standaloneRuntimeProcessBuildEntries = {
+  ...individualRuntimeProcessBuildEntries,
+  ...sharedWorkerHostBuildEntries,
+  ...brokerNativeResourceBuildEntries,
+};
+
+const sharedBuildGroups = [
+  {
+    entries: sharedWorkerHostBuildEntries,
+    chunkFileNames: "infra/shared-worker-host-[name]-[hash].mjs",
+  },
+  {
+    entries: brokerNativeResourceBuildEntries,
+    chunkFileNames: "native-resource-private/[name]-[hash].mjs",
+  },
+];
+
+function sharedBuildGroup(name: string) {
+  return sharedBuildGroups.find(({ entries }) => Object.hasOwn(entries, name));
+}
 
 export function getStandaloneRuntimeProcessOutputOptions(name: string) {
   if (
@@ -112,35 +146,22 @@ export function getStandaloneRuntimeProcessOutputOptions(name: string) {
   if (name === sqliteReadEntry) {
     return { codeSplitting: true, chunkFileNames: "infra/sqlite-readonly-[name]-[hash].mjs" };
   }
-  if (sharedWorkerHostGraph.has(name)) {
-    // Lean hosts these core modules in one isolate; they must load one shared graph.
-    return { codeSplitting: true, chunkFileNames: "infra/shared-worker-host-[name]-[hash].mjs" };
+  const shared = sharedBuildGroup(name);
+  if (shared) {
+    return { codeSplitting: true, chunkFileNames: shared.chunkFileNames };
   }
   return { codeSplitting: false };
 }
 
-// The shared host imports the state reader and transcript worker. One build emits their
-// common modules once instead of a private copy per worker (#202495 added ~540 files).
-const sharedWorkerHostGraph = new Set(
-  [
-    runtimeProcessEntrypoints.sharedWorkerHost,
-    runtimeProcessEntrypoints.stateRead,
-    runtimeProcessEntrypoints.sessionTranscript,
-  ].map((entry) => entry.distWorkerPath.replace(/\.js$/u, "")),
-);
-
-/** Standalone entries, one record per build; the shared host graph builds together. */
+/** One build per isolated entry or group of entries hosted together. */
 export function standaloneRuntimeProcessBuildGroups(entries: Record<string, string>) {
   const standalone = Object.entries(entries).filter(([name]) =>
     Object.hasOwn(standaloneRuntimeProcessBuildEntries, name),
   );
-  const hosted = standalone.filter(([name]) => sharedWorkerHostGraph.has(name));
-  return [
-    ...(hosted.length ? [Object.fromEntries(hosted)] : []),
-    ...standalone
-      .filter(([name]) => !sharedWorkerHostGraph.has(name))
-      .map((entry) => Object.fromEntries([entry])),
-  ];
+  return Array.from(
+    groupBy(standalone, ([name]) => sharedBuildGroup(name) ?? name).values(),
+    (group) => Object.fromEntries(group),
+  );
 }
 
 export function shouldBundleRuntimeSqliteDependency(id: string): boolean {

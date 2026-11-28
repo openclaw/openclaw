@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createTypingCallbacks } from "../../channels/typing.js";
 import {
   resolveSessionTranscriptReadFence,
   runWithSessionTranscriptReadFence,
 } from "../../config/sessions/session-transcript-read-fence.js";
+import { decideTurnGrant } from "../../gateway/operator-admission.js";
+import { OperatorRefusalError } from "../../gateway/operator-refusal.js";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
 import { GatewayOperatorAccessUnavailableError } from "../../infra/operator-authority-error.js";
 import {
@@ -16,8 +19,7 @@ import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 import type { FollowupRun } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import type { QueuedFollowupReplyBatch } from "./queue/types.js";
-import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
-import { createMockTypingController } from "./test-helpers.js";
+import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
 
 const state = vi.hoisted(() => ({
   account: vi.fn(),
@@ -28,6 +30,7 @@ const state = vi.hoisted(() => ({
   execute: vi.fn(),
   recordFailure: vi.fn(),
   resolveDecision: vi.fn(),
+  route: vi.fn(),
 }));
 
 vi.mock("../../agents/embedded-agent-runner/delivery-evidence.js", () => ({
@@ -73,13 +76,16 @@ vi.mock("../../sessions/session-run-error.js", async (importOriginal) => ({
   recordGatewaySessionRunFailure: state.recordFailure,
 }));
 
+vi.mock("./route-reply.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./route-reply.js")>()),
+  routeReply: (...args: unknown[]) => state.route(...args),
+}));
+
 const { createFollowupRunner } = await import("./followup-runner.js");
 let turn: ReturnType<typeof createTurn>;
-let typing: ReturnType<typeof createMockTypingController>;
 
 function createRunner(overrides: Partial<Parameters<typeof createFollowupRunner>[0]> = {}) {
   return createFollowupRunner({
-    typing,
     typingMode: "never",
     defaultModel: "claude",
     ...overrides,
@@ -95,11 +101,6 @@ function attachSource(source: ReturnType<typeof createTurn>) {
   const deliver = vi.fn(async () => {});
   source.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver };
   return deliver;
-}
-
-function expectTypingComplete() {
-  expect(typing.markRunComplete).toHaveBeenCalledOnce();
-  expect(typing.markDispatchIdle).toHaveBeenCalledOnce();
 }
 
 function createTurn(
@@ -164,7 +165,6 @@ function createExecution(
 beforeEach(() => {
   vi.clearAllMocks();
   turn = createTurn();
-  typing = createMockTypingController();
   admitTurn(turn);
   state.completedSourceDelivery = false;
   state.account.mockResolvedValue(undefined);
@@ -203,6 +203,30 @@ describe("createFollowupRunner", () => {
       );
     },
   );
+
+  it("shows typing for the queued turn after the source dispatch stopped its callbacks", async () => {
+    vi.useFakeTimers();
+    try {
+      const start = vi.fn(async () => {});
+      const callbacks = createTypingCallbacks({ start, onStartError: () => {} });
+      // The source dispatch returned on enqueue and stopped the shared channel callbacks.
+      callbacks.onIdle?.();
+      state.execute.mockImplementationOnce(
+        async ({ defaults }: { defaults: FollowupRunnerParams }) => {
+          await defaults.typing.startTypingLoop();
+          return createExecution();
+        },
+      );
+      await createRunner({
+        opts: { onReplyStart: callbacks.onReplyStart, onTypingCleanup: callbacks.onCleanup },
+      })(turn.queued);
+      expect(start).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(start).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("reads the current transcript without borrowing the interrupted turn's admission fence", async () => {
     const admission = {
@@ -447,7 +471,6 @@ describe("createFollowupRunner", () => {
       }
       expect(state.execute).not.toHaveBeenCalled();
       expect(turn.operation.complete).toHaveBeenCalledTimes(kind === "owned skip" ? 1 : 0);
-      expectTypingComplete();
       expect(end).toHaveBeenCalledExactlyOnceWith({
         visibleReplySent: false,
         failed: true,
@@ -479,6 +502,7 @@ describe("createFollowupRunner", () => {
           canonicalIdentity: null,
           profileId: "guest",
           scopes: ["operator.write"],
+          grant: decideTurnGrant(["operator.write"]),
         };
         turn.queued.operatorAuthority = { ...authority, signal: new AbortController().signal };
       }
@@ -522,7 +546,52 @@ describe("createFollowupRunner", () => {
         }),
       );
       expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
-      expectTypingComplete();
+    },
+  );
+
+  it.each([
+    { sendPolicy: "allow", silent: false, send: true },
+    { sendPolicy: "deny", silent: false, send: false },
+    { sendPolicy: "allow", silent: true, send: false },
+  ] as const)(
+    "records a queued refusal and respects channel delivery (policy $sendPolicy, silent $silent)",
+    async ({ sendPolicy, silent, send }) => {
+      if (silent) {
+        turn.queued.run.sessionEventOrigin = { deliver: false };
+      }
+      const refusal = new OperatorRefusalError("role-denies", {
+        action: "run your queued request",
+      });
+      // The send policy that counts is the current one, not the config captured at enqueue.
+      Object.assign(turn.queued, {
+        originatingChannel: "telegram",
+        originatingTo: "telegram:1234",
+        originatingAccountId: "default",
+        readAdmissionConfig: () => ({ session: { sendPolicy: { default: sendPolicy } } }),
+      });
+      state.admit.mockRejectedValueOnce(refusal);
+      state.route.mockResolvedValue({ ok: true, delivered: true });
+      await createRunner({ sessionKey: "main" })(turn.queued);
+      expect(state.execute).not.toHaveBeenCalled();
+      expect(state.recordFailure).toHaveBeenCalledWith(
+        expect.objectContaining({ notice: refusal.message }),
+      );
+      expect(state.route.mock.calls).toEqual(
+        send
+          ? [
+              [
+                expect.objectContaining({
+                  payload: { text: refusal.message, isError: true },
+                  channel: "telegram",
+                  to: "telegram:1234",
+                  accountId: "default",
+                  mirror: false,
+                }),
+              ],
+            ]
+          : [],
+      );
+      expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
     },
   );
 

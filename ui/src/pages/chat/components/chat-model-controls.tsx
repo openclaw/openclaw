@@ -89,8 +89,10 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
         props.modelSwitching,
         props.selectedAgentRuntime,
         props.modelSelectionLocked,
+        props.sessionRowCurrent,
         session?.model,
         session?.modelProvider,
+        session?.modelDisplayName,
         session?.modelOverrideSource,
         session?.runtimeSelectionLocked,
         session?.contextTokens,
@@ -124,8 +126,10 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
       modelSwitching,
       selectedRuntimeOverride,
       modelSelectionLocked,
+      sessionRowCurrent,
       sessionModel,
       sessionProvider,
+      sessionModelDisplayName,
       sessionOverrideSource,
       sessionRuntimeLocked,
       sessionContextTokens,
@@ -174,6 +178,21 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
     // A running turn can report its old model (or fallback) after a new choice is saved.
     const defaultProviderHint = defaultsProvider ?? "";
     const defaultCatalogEntry = catalog.entry(defaultModel);
+    const sessionModelValue = resolvePreferredServerChatModelValue(
+      sessionModel,
+      sessionProvider,
+      modelCatalog,
+    );
+    const selectedValue = currentOverride || defaultModel;
+    const selectedEntry = catalog.entry(selectedValue);
+    // Before the first scoped catalog, a live role-projected row can name the saved
+    // preference. It cannot admit options or name a different optimistic selection.
+    const labelValue =
+      uninitialized && !retired && sessionRowCurrent ? rawCurrentOverride : selectedValue;
+    const rowLabel =
+      !selectedEntry && labelValue && labelValue === sessionModelValue
+        ? sessionModelDisplayName?.trim()
+        : undefined;
     const canonicalDefaultLabel = resolveChatModelPickerLabel(defaultCatalogEntry, defaultLabel);
     const pickerDefaultLabel =
       defaultModel && canonicalDefaultLabel !== defaultLabel
@@ -297,16 +316,14 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
         value: currentOverride,
         label: resolveChatModelPickerLabel(
           currentCatalogEntry,
-          currentCatalogEntry?.name.trim() || currentOverride,
+          currentCatalogEntry?.name.trim() || rowLabel || currentOverride,
         ),
         provider: catalog.provider(currentOverride, currentProviderHint),
       });
     }
     // A persisted pin can match a changed default; equality cannot establish inheritance.
     const selectedAgentRuntime =
-      selectedRuntimeOverride ??
-      sessionRuntimeId ??
-      catalog.entry(currentOverride || defaultModel)?.agentRuntime?.id;
+      selectedRuntimeOverride ?? sessionRuntimeId ?? selectedEntry?.agentRuntime?.id;
     const defaultRuntime = defaultCatalogEntry?.agentRuntime?.id ?? defaultsRuntimeId;
     // A default model can still have a runtime pin; only the configured model/runtime pair inherits Default.
     const pickerValue =
@@ -317,11 +334,7 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
     const activeModelOption = modelOptions.find((option) =>
       isModelPickerOptionSelected(option, pickerValue, selectedAgentRuntime),
     );
-    const activeSessionModel = sessionModel
-      ? catalog.entry(
-          resolvePreferredServerChatModelValue(sessionModel, sessionProvider, modelCatalog),
-        )
-      : undefined;
+    const activeSessionModel = catalog.entry(sessionModelValue);
     const activeOptionModel = activeModelOption
       ? catalog.entry(activeModelOption.value)
       : undefined;
@@ -351,13 +364,13 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
     // A lock prevents model changes; the concrete selection still owns its label.
     // Without a selection, neither the runtime nor the agent default identifies it.
     const committedModelLabel =
-      modelSelectionLocked === true && !currentOverride
+      modelSelectionLocked === true && !currentOverride && !(uninitialized && rowLabel)
         ? translate("chat.selectors.lockedSessionModel")
         : resolveChatModelPickerLabel(
-            catalog.entry(currentOverride || defaultModel),
+            selectedEntry,
             formatPickerModelLabel(
               selectOptions.find((entry) => entry.value === currentOverride)?.label ??
-                (catalog.entry(currentOverride)?.name.trim() || currentOverride || defaultLabel),
+                (currentCatalogEntry?.name.trim() || rowLabel || currentOverride || defaultLabel),
             ),
             currentOverride || defaultModel ? triggerRuntime : null,
           );

@@ -4,7 +4,10 @@ import { projectSidebarArchiveVisibility } from "./app-sidebar-session-archive-v
 import { excludeSessionCatalogRows } from "./app-sidebar-session-catalog-state.ts";
 import { projectSidebarSessionCatalogs } from "./app-sidebar-session-catalogs.ts";
 import type { SidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
-import type { SidebarSessionStatusFilter } from "./app-sidebar-session-types.ts";
+import type {
+  SidebarSavedPinTime,
+  SidebarSessionStatusFilter,
+} from "./app-sidebar-session-types.ts";
 import type { SessionDataOwner } from "./session-data.ts";
 
 type SidebarSnoozeVisibilityHost = {
@@ -12,6 +15,7 @@ type SidebarSnoozeVisibilityHost = {
   readonly sessionDataContext: Pick<ApplicationContext, "sessions"> | undefined;
   readonly sessionsStatusFilter: SidebarSessionStatusFilter;
   readonly sessionsShowSystem: boolean;
+  readonly gatewayTimeForSavedPin: SidebarSavedPinTime;
   readonly hiddenSessionCatalogIds: ReadonlySet<string>;
   expandedAgentId(): string;
 };
@@ -45,6 +49,7 @@ export function projectSidebarSnoozeCatalogs(
     statusFilter: host.sessionsStatusFilter,
     showSystem: host.sessionsShowSystem,
     now: Date.now(),
+    gatewayTimeForSavedPin: host.gatewayTimeForSavedPin,
     deletionState: (key, agentId) => host.sessionDataContext?.sessions.deletionState(key, agentId),
     archiveVisibility: (key) => host.sessionDataContext?.sessions.archiveVisibility(key),
   });

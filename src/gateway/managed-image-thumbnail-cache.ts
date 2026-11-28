@@ -40,21 +40,31 @@ export async function encodeImageThumbnail(
     throw new Error("Managed image thumbnail is unavailable for this image format");
   }
   const maxBytes = CHAT_IMAGE_RENDITION_MAX_BYTES[width];
-  const thumbnail = await createImageProcessor().encode(source, {
-    // macOS sips can decode HEIF to JPEG without an additional WebP codec.
-    // Photon handles portable fixed-quality WebP for the other supported formats.
-    format: stillHeif ? "jpeg" : "webp",
-    resize: { maxSide: width, enlarge: false },
-    maxBytes,
-    // Bound work to three candidates, reducing resolution only to meet the budget.
-    search: { maxSide: [width, width / 2, width / 4] },
-  });
+  const processor = createImageProcessor();
+  const resize = { maxSide: width, enlarge: false };
+  if (!stillHeif) {
+    const webp = await processor.encode(source, { format: "webp", resize });
+    if (webp.bytes <= maxBytes) {
+      return { data: webp.data, extension: ".webp", mimeType: "image/webp" };
+    }
+  }
+  // JPEG can trade quality for detail without an external WebP codec.
+  // Keep alpha when the image cannot be represented as JPEG.
+  const budget = { resize, maxBytes, search: { maxSide: [width, width / 2, width / 4] } };
+  const thumbnail = stillHeif
+    ? await processor.encode(source, { ...budget, format: "jpeg" })
+    : await processor.encode(source, {
+        ...budget,
+        format: "auto",
+        opaque: { format: "jpeg" },
+        transparent: { format: "webp" },
+        transparency: "preserve",
+      });
   // Rastermill returns its smallest candidate even when no candidate fits.
   if (thumbnail.data.byteLength > maxBytes) {
     throw new Error("Managed image thumbnail exceeds the preview byte limit");
   }
-  // Rastermill emits exactly the requested format.
-  return stillHeif
+  return thumbnail.format === "jpeg"
     ? { data: thumbnail.data, extension: ".jpg", mimeType: "image/jpeg" }
     : { data: thumbnail.data, extension: ".webp", mimeType: "image/webp" };
 }

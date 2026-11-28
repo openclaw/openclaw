@@ -37,6 +37,7 @@ import {
 import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { renderCodexRelayRefreshableFallback } from "./thread-policy.js";
 import { buildCodexConversationTurnInstructions } from "./thread-prompt.js";
 import { recordCodexTrajectoryContext } from "./trajectory.js";
 import { buildCodexParentLocalInstructions, buildTurnStartParams } from "./turn-params.js";
@@ -293,12 +294,13 @@ export async function prepareCodexAttemptTurnRequest(
       const inferenceInstructions = joinPresentSections(
         usesSupervisionConnection
           ? undefined
-          : (buildCodexParentLocalInstructions(runtimeParams, {
-              personaInstructions: workspaceBootstrapContext.personaInstructions,
-              skillsInstructions: context.skillsInstructions,
-              memoryInstructions: workspaceBootstrapContext.memoryInstructions,
-              sessionProjectGuidance: workspaceBootstrapContext.sessionProjectGuidance,
-            }) ?? undefined),
+          : renderCodexRelayRefreshableFallback(inferenceThread.liveThreadEphemeralPolicy),
+        usesSupervisionConnection
+          ? undefined
+          : (buildCodexParentLocalInstructions(
+              runtimeParams,
+              workspaceBootstrapContext.personalPersonaInstructions,
+            ) ?? undefined),
         turnState.promptBuild.turnDeveloperInstructions,
         buildCodexConversationTurnInstructions(
           runtimeParams,
@@ -379,7 +381,9 @@ export async function prepareCodexAttemptTurnRequest(
       if (
         !params.skipPreparedUserTurnMessage &&
         !recorder?.isBlocked() &&
-        recorder?.captureModelPromptProjection
+        recorder?.captureModelPromptProjection &&
+        // An earlier fallback candidate may already have frozen this turn's projection.
+        recorder.getPersistedMessage?.()?.["__openclaw"]?.modelPromptProjection === undefined
       ) {
         const { prompt: builtPrompt, promptInputRange } = turnState.promptBuild;
         if (!promptInputRange) {

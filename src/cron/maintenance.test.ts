@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { captureRuntimeConfigAsyncReader, resetConfigRuntimeState } from "../config/config.js";
@@ -14,6 +15,7 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { clearCronJobActive, markCronJobActive, resetCronActiveJobs } from "./active-jobs.js";
 import { startCronMaintenance, stopCronMaintenance } from "./maintenance.js";
 import { saveCronStore } from "./store.js";
@@ -39,9 +41,10 @@ function readHistory() {
   return runOpenClawStateWriteTransaction(({ db }) => readCronRunRecordsInDatabase(db));
 }
 
-it.each([false, true])(
+it.each(["none", "process", ...(process.versions.bun ? [] : ["host"])])(
   "runs Gateway retention after memory pressure clears (pressure=%s)",
-  async (pressure) => {
+  async (cause) => {
+    const pressure = cause !== "none";
     await withOpenClawTestState(
       { layout: "state-only", prefix: "cron-maintenance-disabled-" },
       async (state) => {
@@ -52,9 +55,21 @@ it.each([false, true])(
         const clock = createGatewaySchedulerClock(now);
         const wallClock = vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
         const gatewayScheduler = createTestGatewayScheduler(clock.clock);
-        const lowMemory = vi
-          .spyOn(hostMemory, "isConstrainedProcessLowOnMemory")
-          .mockReturnValue(pressure);
+        // Simulate Linux only for the pressure check so SQLite uses the native namespace.
+        const readMemoryPressure = hostMemory.isMemoryPressureHigh;
+        const memoryPressure = vi
+          .spyOn(hostMemory, "isMemoryPressureHigh")
+          .mockImplementation(() => withMockedPlatform("linux", readMemoryPressure));
+        const limit = vi
+          .spyOn(process, "constrainedMemory")
+          .mockReturnValue(cause === "host" ? 0 : 1024 ** 3);
+        const available = vi
+          .spyOn(process, "availableMemory")
+          .mockReturnValue(pressure ? 128 * 1024 ** 2 : 1024 ** 3);
+        const free = vi
+          .spyOn(os, "freemem")
+          .mockReturnValue(cause === "host" ? 128 * 1024 ** 2 : 1024 ** 3);
+        const total = vi.spyOn(os, "totalmem").mockReturnValue(1024 ** 3);
         const delay = pressure ? 120_000 : 0;
         const admission = vi.spyOn(workAdmission, "runWithGatewayIndependentRootWorkAdmission");
         try {
@@ -101,7 +116,8 @@ it.each([false, true])(
             expect(
               admission.mock.calls.filter(([, label]) => label === "cron:maintenance"),
             ).toHaveLength(0);
-            lowMemory.mockReturnValue(false);
+            available.mockReturnValue(1024 ** 3);
+            free.mockReturnValue(1024 ** 3);
             await clock.advanceBy(60_000);
           }
           await stopCronMaintenance();
@@ -138,7 +154,11 @@ it.each([false, true])(
           resetCronActiveJobs();
           resetGatewayWorkAdmission();
           admission.mockRestore();
-          lowMemory.mockRestore();
+          total.mockRestore();
+          free.mockRestore();
+          available.mockRestore();
+          limit.mockRestore();
+          memoryPressure.mockRestore();
           wallClock.mockRestore();
           resetConfigRuntimeState();
         }
@@ -251,9 +271,7 @@ it("rearms parked retention from a committed worker history write", async () => 
       const now = Date.now();
       const clock = createGatewaySchedulerClock(now);
       const scheduler = createTestGatewayScheduler(clock.clock);
-      const lowMemory = vi
-        .spyOn(hostMemory, "isConstrainedProcessLowOnMemory")
-        .mockReturnValue(false);
+      const lowMemory = vi.spyOn(hostMemory, "isMemoryPressureHigh").mockReturnValue(false);
       try {
         // Keep-warm retains its own deadlines across maintenance lifecycles.
         await state.writeConfig({ agents: { defaults: { promptCacheKeepWarm: false } } });

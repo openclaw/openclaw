@@ -1,4 +1,4 @@
-import { intersectSessionPermissionModes } from "../../agents/session-permission-exec-mode.js";
+import { intersectSessionPermissionModes } from "../../agents/session-permission-mode.js";
 import { intersectSessionToolOverrides } from "../../config/sessions/session-tool-overrides.js";
 import type { SessionEventTarget } from "./session-event-contract.js";
 

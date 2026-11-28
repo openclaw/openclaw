@@ -24,7 +24,8 @@ const PLAYWRIGHT_CDP_MAX_REDIRECTS = 10;
 type CdpSocketLookup = typeof dnsLookupCb;
 
 type CdpResponse = {
-  id: number;
+  id?: number;
+  method?: string;
   result?: unknown;
   error?: { message?: string };
 };
@@ -233,6 +234,9 @@ function createCdpSender(ws: WebSocket, opts?: CdpSocketOptions) {
     try {
       const parsed = JSON.parse(rawDataToString(data)) as CdpResponse;
       if (typeof parsed.id !== "number") {
+        if (typeof parsed.method === "string") {
+          opts?.onEvent?.(parsed.method);
+        }
         return;
       }
       const p = pending.get(parsed.id);
@@ -304,6 +308,7 @@ export function openCdpWebSocket(
 }
 
 type CdpSocketOptions = {
+  onEvent?: (method: string) => void;
   headers?: Record<string, string>;
   handshakeTimeoutMs?: number;
   commandTimeoutMs?: number;

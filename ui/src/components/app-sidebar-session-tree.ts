@@ -202,6 +202,11 @@ export function projectSessionTree(params: {
       childLoadParentKeys: childSessionKeys.length > 0 ? [...childLoadParentKeys] : [],
       children,
       loadingChildren: [...childLoadParentKeys].some((key) => loadingChildKeys.has(key)),
+      hasRunningDescendant: descendants.some(
+        (child) =>
+          child.hasRunningDescendant ||
+          (child.status !== "queued" && childShowsParentWorking(child)),
+      ),
       containsActiveDescendant: children.some(
         (child) => child.active || child.visuallyActive || child.containsActiveDescendant,
       ),

@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -7,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isDisposableEntrypoint } from "../daemon/durable-service-entrypoint.js";
 import { VERSION } from "../version.js";
 import { t } from "../wizard/i18n/index.js";
+import { setEntrypoint } from "./onboard-entrypoint.test-support.js";
 import { runQuickstartForegroundGateway } from "./onboard-quickstart-host.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -36,22 +35,6 @@ vi.mock("./onboard-browser-handoff.js", async (importOriginal) => ({
 }));
 
 const testTempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-async function setEntrypoint(kind: "npx" | "durable"): Promise<string> {
-  const root = testTempDirs.make("openclaw-onboard-entrypoint-");
-  const entrypoint =
-    kind === "npx"
-      ? path.join(root, ".npm", "_npx", "testhash", "node_modules", "openclaw", "openclaw.mjs")
-      : path.join(root, "node_modules", "openclaw", "openclaw.mjs");
-  await fs.mkdir(path.dirname(entrypoint), { recursive: true });
-  await fs.writeFile(entrypoint, "");
-  const originalArgv = [...process.argv];
-  process.argv = [process.execPath, await fs.realpath(entrypoint)];
-  onTestFinished(() => {
-    process.argv = originalArgv;
-  });
-  return process.argv[1]!;
-}
 
 function createHostHarness(
   config: OpenClawConfig = { gateway: { auth: { mode: "none" } } },
@@ -84,7 +67,10 @@ async function captureSummary(params: {
   dashboardCommand: string;
   ready?: boolean;
 }) {
-  const entrypoint = await setEntrypoint(params.kind);
+  const entrypoint = await setEntrypoint(
+    testTempDirs.make("openclaw-onboard-entrypoint-"),
+    params.kind,
+  );
   if (params.kind === "npx") {
     expect(await isDisposableEntrypoint(entrypoint)).toBe(true);
   }

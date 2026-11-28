@@ -23,10 +23,12 @@ import {
   retireSessionControllerInput,
 } from "../sessions/session-controller.mailbox.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as attemptRuntime from "./agent-harness-attempt-runtime.js";
 import {
   abortAgentHarnessRun as abortRun,
   abortAndDrainAgentHarnessRun as drainRun,
   AgentHarnessPreflightError,
+  AgentHarnessRuntimeUpdateRequiredError,
   agentHarnessStructuredInput,
   buildAgentHarnessUserInputAnswers as buildAnswers,
   classifyAgentHarnessTerminalOutcome as classifyOutcome,
@@ -191,6 +193,11 @@ it.each([
 });
 
 describe("agent harness runtime SDK facade", () => {
+  it("keeps the published attempt runtime update error identical to the host error", () => {
+    const error = new attemptRuntime.AgentHarnessRuntimeUpdateRequiredError("Update required");
+    expect(error.constructor).toBe(AgentHarnessRuntimeUpdateRequiredError);
+  });
+
   it("preserves the published failure-retention opt-in on attempt operations", () => {
     expectTypeOf<
       NonNullable<Attempt["replyOperation"]>["retainFailureUntilComplete"]

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cliCommandCatalog } from "../command-catalog.js";
 import { isReservedNonPluginCommandRoot } from "../command-registration-policy.js";
 import { collectShellCompletionCommandTree } from "../completion-command-tree.js";
-import { registerCoreCliByName } from "./command-registry-core.js";
+import { registerCoreCliByName, registerCoreCliCommands } from "./command-registry-core.js";
 import { createProgramContext } from "./context.js";
 import {
   getCoreCliCommandDescriptors,
@@ -65,7 +65,12 @@ describe("root command descriptions", () => {
         [command.name(), ...command.aliases()].map((name) => [name, command] as const),
       ),
     );
-    expect(commands.has("tasks")).toBe(false);
+    expect([...commands.keys()]).toEqual(
+      expect.arrayContaining(["setup", "crestodian", "mcp", "agent", "agents", "templates"]),
+    );
+    for (const retired of ["tasks", "claws"]) {
+      expect(commands.has(retired), retired).toBe(false);
+    }
     for (const descriptor of [...getCoreCliCommandDescriptors(), ...getSubCliEntriesCore()]) {
       const command = commands.get(descriptor.name);
       expect(command, descriptor.name).toBeDefined();
@@ -73,6 +78,31 @@ describe("root command descriptions", () => {
         expect(command.description(), descriptor.name).toBe(descriptor.description);
       }
     }
+  });
+
+  it.each(["agent", "agents", "tasks"])(
+    "registers only the requested core entry %s",
+    async (name) => {
+      const program = new Command();
+      expect(await registerCoreCliByName(program, createProgramContext(), name)).toBe(
+        name !== "tasks",
+      );
+      expect(program.commands.map((command) => command.name())).toEqual(
+        name === "tasks" ? [] : [name],
+      );
+    },
+  );
+
+  it.each([
+    ["doctor", "dashboard", ["doctor", "triage", "dashboard", "reset", "uninstall"]],
+    ["status", "health", ["status", "health", "sessions"]],
+  ] as const)("replaces the %s placeholder when loading %s", async (primary, secondary, names) => {
+    const program = new Command();
+    const ctx = createProgramContext();
+    registerCoreCliCommands(program, ctx, ["node", "openclaw", primary]);
+    expect(program.commands.map((command) => command.name())).toEqual([primary]);
+    expect(await registerCoreCliByName(program, ctx, secondary)).toBe(true);
+    expect(program.commands.map((command) => command.name())).toEqual(names);
   });
 
   it("keeps startup policy catalog paths registered or explicitly reserved", async () => {

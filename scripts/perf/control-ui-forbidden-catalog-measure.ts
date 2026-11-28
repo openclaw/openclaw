@@ -19,6 +19,7 @@ import {
   createApplicationGateway,
   createApplicationGatewaySnapshot,
 } from "../../ui/src/test-helpers/application-context-fixtures.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -95,12 +96,7 @@ try {
   requests = 0;
   groups = 0;
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const before = process.threadCpuUsage();
   const started = performance.now();

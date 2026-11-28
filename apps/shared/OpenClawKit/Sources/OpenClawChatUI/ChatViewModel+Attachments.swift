@@ -10,6 +10,7 @@ private enum ChatAttachmentReadError: Error {
 }
 
 extension OpenClawChatViewModel {
+    static let maxAttachmentBytes = 5_000_000
     /// Bound memory for resize input independently of the encoded upload budget.
     private static let maxImageSourceBytes = 64 * 1024 * 1024
 
@@ -355,17 +356,17 @@ extension OpenClawChatViewModel {
             return
         }
 
-        var thumbnailData: Data?
-        if mimeType.hasPrefix("video/") {
-            thumbnailData = await Self.videoThumbnailData(data: data, fileExtension: url.pathExtension)
-        }
+        let video = mimeType.hasPrefix("video/") ? await Self.videoPreview(url: url) : nil
         guard self.ownsAttachmentSession(expectedSession) else { return }
-        guard self.stageAttachment(OpenClawPendingAttachment(
+        var attachment = OpenClawPendingAttachment(
             url: nil,
             data: data,
             fileName: fileName,
             mimeType: mimeType,
-            preview: thumbnailData.flatMap(OpenClawPlatformImage.init(data:))), limits: limits)
+            preview: video.flatMap { OpenClawPlatformImage(data: $0.poster) },
+            durationSeconds: video?.duration)
+        attachment.videoPixelSize = video?.size
+        guard self.stageAttachment(attachment, limits: limits)
         else { throw ChatAttachmentReadError.tooLarge }
     }
 
@@ -394,18 +395,12 @@ extension OpenClawChatViewModel {
         }.value
     }
 
-    private nonisolated static func videoThumbnailData(
-        data: Data,
-        fileExtension: String) async -> Data?
-    {
+    private nonisolated static func videoPreview(url: URL) async -> (poster: Data, size: CGSize, duration: Double?)? {
         await Task.detached(priority: .userInitiated) {
-            let fileURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("openclaw-upload-preview-\(UUID().uuidString)")
-                .appendingPathExtension(fileExtension)
-            defer { try? FileManager.default.removeItem(at: fileURL) }
             do {
-                try data.write(to: fileURL, options: [.atomic])
-                let generator = AVAssetImageGenerator(asset: AVURLAsset(url: fileURL))
+                let asset = AVURLAsset(url: url)
+                let duration = try? await asset.load(.duration).seconds
+                let generator = AVAssetImageGenerator(asset: asset)
                 generator.appliesPreferredTrackTransform = true
                 generator.maximumSize = CGSize(width: 640, height: 640)
                 let image = try await generator.image(at: .zero).image
@@ -421,7 +416,10 @@ extension OpenClawChatViewModel {
                     image,
                     [kCGImageDestinationLossyCompressionQuality: 0.82] as CFDictionary)
                 guard CGImageDestinationFinalize(destination) else { return nil }
-                return encoded as Data
+                guard let track = try await asset.loadTracks(withMediaType: .video).first else { return nil }
+                let (size, transform) = try await track.load(.naturalSize, .preferredTransform)
+                let displaySize = CGRect(origin: .zero, size: size).applying(transform).size
+                return (encoded as Data, displaySize, duration.flatMap { $0.isFinite && $0 > 0 ? $0 : nil })
             } catch {
                 return nil
             }

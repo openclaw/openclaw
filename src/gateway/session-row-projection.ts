@@ -141,7 +141,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   });
   const archive = createSessionRowProjectionArchive({
     rows,
+    indexes,
     dirty,
+    publishFacts: revisions.publishFacts,
     put,
     config: () => cfg,
     context: () => metadata.current,
@@ -158,8 +160,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       recents.track(row);
     },
   });
-  const markRelated = (row: records.Row, includeChildren = true) =>
-    archive.markRelated(row, indexes, includeChildren);
   function remove(id: string) {
     archive.forget(id);
     transcriptUpdates.remove(id);
@@ -170,7 +170,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       rowFacts.track(row, undefined);
       revisions.invalidate(true);
       invalidateRowMembership(row);
-      markRelated(row);
+      archive.markRelated(row);
       creators.update(row);
       rowIdentities.indexSessionRow(row, indexes, true);
       restoredRuns.update(row.storedEntry);
@@ -178,7 +178,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       revisions.publishFacts(row);
       revisions.publishSelection(row, true);
       // Cold dependents reselect only after the removed parent is absent from the inventory.
-      markRelated(row);
+      archive.markRelated(row);
       if (row.entry && !byKey.has(`id:${row.entry.sessionId}`)) {
         placementFacts.forget(row.entry.sessionId);
       }
@@ -217,7 +217,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       referenced,
       remove,
       put,
-      markRelated,
+      markRelated: archive.markRelated,
       archive,
     });
   }
@@ -243,7 +243,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     runAsOwner: inOwnerContext,
     registryFactsReady: () => Boolean(inOwnerContext(subagents.snapshotIdentity)),
     acquireEntry,
-    markRelated,
     placement: placementFacts,
     invalidateFacts: (row, domain) => {
       const categoryOnly = rowFacts.invalidate(row, domain);
@@ -273,7 +272,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     put,
     acquire(row, entry) {
       enqueue(acquireEntry(row, entry));
-      markRelated(row);
     },
     setConfig(next) {
       cfg = next;
@@ -454,7 +452,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       stores,
       disposed,
       topologyDirty: topologyDirty || !profiles.isUserProfileCatalogReady(profileCatalogPath),
-      registryPrepared: Boolean(inOwnerContext(subagents.snapshotIdentity)),
+      registryPrepared: !disposed && Boolean(inOwnerContext(subagents.snapshotIdentity)),
     }),
     runAsOwner: inOwnerContext,
     lookup,
@@ -501,7 +499,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   const generationMutations = createSessionRowGenerationMutations({
     stores: () => stores,
     matching,
-    markRelated,
+    markRelated: archive.markRelated,
     put,
     remove,
     dirty,

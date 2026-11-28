@@ -96,7 +96,6 @@ export const readBestEffortConfig = vi.fn(async () => ({}));
 export const resolveGatewayProbeAuthSafeWithSecretInputs = vi.fn<
   (_opts: unknown) => Promise<{ auth: { token?: string; password?: string } }>
 >(async () => ({ auth: {} }));
-export const hasActiveStartupMigrationLease = vi.fn<(_params?: unknown) => boolean>(() => false);
 export const readActiveGatewayLockIdentity = vi.fn();
 export const readGatewayOwnerLease =
   vi.fn<typeof import("../../infra/gateway-owner-lease.js").readGatewayOwnerLease>();
@@ -134,7 +133,6 @@ vi.mock("../../gateway/probe-auth.js", () => ({
 
 // mock-isolation: Readiness waits must not open a real state database for lease reads.
 vi.mock("../../infra/startup-migration-checkpoint.js", () => ({
-  hasActiveStartupMigrationLease: (params: unknown) => hasActiveStartupMigrationLease(params),
   STARTUP_MIGRATION_LEASE_TTL_MS: 5 * 60_000,
 }));
 
@@ -320,7 +318,6 @@ export function resetRestartHealthMocks() {
   });
   classifyPortListener.mockReset().mockReturnValue("gateway");
   callGateway.mockReset().mockRejectedValue(new Error("connect ECONNREFUSED"));
-  hasActiveStartupMigrationLease.mockReset().mockReturnValue(false);
   readActiveGatewayLockIdentity.mockReset().mockResolvedValue(undefined);
   readGatewayOwnerLease.mockReset().mockReturnValue(undefined);
   resolveGatewayServiceProbeHosts.mockReset().mockResolvedValue(["127.0.0.1"]);

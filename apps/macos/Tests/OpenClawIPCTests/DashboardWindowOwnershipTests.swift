@@ -124,6 +124,34 @@ struct DashboardWindowOwnershipTests {
         canPromote: false,
         health: .ok)
 
+    @Test func `generic failure shows progress for the pending reload and resets on timeout`() async throws {
+        let gate = DashboardWindowOwnershipPresentationGate()
+        let manager = DashboardManager._testMake(primaryEndpointProvider: { _ in
+            await gate.waitForRelease()
+            throw URLError(.timedOut)
+        })
+        defer { manager.close() }
+        manager.showFailure(URLError(.timedOut))
+        let controller = try #require(manager._testController())
+        let reload = "document.querySelector('button.primary')"
+        try await TestWait.state("failure page has a reload button") {
+            try await controller.webView.evaluateJavaScript("!!\(reload)") as? Bool == true
+        }
+
+        let retry = try #require(manager.switchTarget(.primary, in: controller, forceReload: true))
+        defer { Task { await gate.release() } }
+        await gate.waitUntilRequested()
+        #expect(try await controller.webView.evaluateJavaScript(
+            "\(reload).getAttribute('aria-busy')") as? String == "true")
+        #expect(manager.switchTarget(.primary, in: controller, forceReload: true) == nil)
+        await gate.release()
+        await retry.value
+
+        #expect(controller.isShowingFailurePage)
+        #expect(try await controller.webView.evaluateJavaScript(
+            "\(reload).getAttribute('aria-disabled')") as? String == "false")
+    }
+
     @Test func `disconnect and auth recovery preserve one native window`() async throws {
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }

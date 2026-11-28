@@ -240,8 +240,15 @@ Plain text, assistant output, and mentions removed by approval do not grant acce
 Other participants cannot invite new members. Draft and incognito restrictions
 remain in force, and mentions never change the session's visibility.
 
-Remove a person from session members to revoke invitation access. An old message
-retry cannot restore it, even after a restart. A new selected mention from the
+Remove a person from session members to revoke invitation access. Work that person
+started in the session stops at once: a running reply keeps its partial text, and its
+child agents and commands end. Lowering their access (for example from send to read)
+stops it the same way, and lowering a person's role with `users.setRole` stops their
+work in every session. The session shows "Stopped 1 run started by Carol: their access
+to this session changed." Their
+next message is checked against the new access. Configuration reloads and role
+definition edits apply to the next message only. An old message retry cannot restore
+access, even after a restart. A new selected mention from the
 creator or an administrator can invite them again. Access is committed with the message. If the later Inbox notification fails,
 the sender receives a notice that the message was posted but notifications failed.
 Membership does not grant broader operator scopes. See
@@ -310,7 +317,7 @@ The normal admission limit is 32 identities per logical session. Existing identi
 
 The schema-18 migration, which first ships in v2026.8.1, preserves historical membership and recorded contribution aggregates. Earlier writers could merge profile and channel timestamps, so ambiguous first and last input times become unknown. A later accepted input establishes a new recorded last time, but cannot recover a first-ever input time. No transcript, display-name, or UUID-based backfill runs. See [Database schemas](/reference/database-schemas#participant-identity-migration).
 
-New transcript messages keep qualified sender identity separate from display names. Only qualified profile senders get profile portraits, person Activity links, or recognition as the signed-in person, and only their messages clear that profile's typing indicator. A matching channel sender ID is not enough. Write hooks can redact sender identity, but cannot replace it with another trusted identity. Suggestion attribution identifies the suggestion's author rather than the operator who accepts it.
+New transcript messages keep qualified sender identity separate from display names. Only qualified profile senders get profile portraits, person Activity links, or recognition as the signed-in person, and only their messages clear that profile's typing indicator. A matching channel sender ID is not enough. Write hooks can redact sender identity, but cannot replace it with another trusted identity. An accepted suggestion is the accepting operator's turn: it runs with their access, shows their name and portrait, and reaches the agent as their message. The suggestion's author is credited only by a "Suggested by" label under the message.
 
 Older or otherwise unqualified messages retain their saved text and sender labels, with initials instead of inferred profile portraits and no person Activity link. When neither a sender nor a source label was recorded, chat and reply previews use the label “Message,” with no avatar rather than the current viewer’s name or portrait. Markdown exports likewise never assume an unattributed input was written by the viewer. This applies to existing history without changing its stored messages. OpenClaw does not rewrite those messages or reconstruct their authors from UUIDs, profile lookups, or participant history. This can remove profile presentation from an older message that really was profile-authored, because it did not record enough evidence to establish that fact. Transcript attribution, participant aggregates, and creator-based access decisions remain separate contracts. Attribution and participation never grant session access.
 

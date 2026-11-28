@@ -3,11 +3,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
+import * as nodeService from "../daemon/node-service.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
-import { createDoctorRuntimeProjection } from "../flows/doctor-health-contributions.test-support.js";
+import * as gatewayService from "../daemon/service.js";
+import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
+import { readGatewayLockProcessStartTime } from "../infra/gateway-lock-process.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
-import * as processCensus from "../infra/openclaw-process-census.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   getUpdateRunAsync,
@@ -30,18 +32,43 @@ import {
 import { VERSION } from "../version.js";
 import { runReleaseUpdateCli } from "./cli.js";
 import * as serviceConversion from "./convert-service.js";
-import { settleRunFromTrial } from "./gateway-trial.js";
+import { announceReady } from "./gateway-trial.js";
 import { preflight } from "./preflight.js";
 import { registerAlreadyCurrentUpdateTests } from "./prepare-current.test-support.js";
 import { prepareGit } from "./prepare-git.js";
+import {
+  irohBinary,
+  irohCrate,
+  irohRepository,
+  registerIrohPreparationTests,
+} from "./prepare-iroh.test-support.js";
 import { preparePackage } from "./prepare-package.js";
 import { bin, executable, node, repository, root } from "./prepare.test-support.js";
 import { prepareUpdate } from "./run.js";
-import { readTrial, resolvePrefix, switchLink } from "./store.js";
+import { readTrial, resolvePrefix, switchLink, writeTrial } from "./store.js";
 import * as targets from "./target.js";
 import { resolveTarget } from "./target.js";
 
 const exec = promisify(execFile);
+
+describe("Git prepared release iroh binding", () => {
+  it.each(["checkout", "running", "both"] as const)(
+    "copies compatible native bytes from %s without compiling",
+    async (artifact) => {
+      const target = await irohRepository({ artifact });
+      expect(await prepareGit(target)).toMatchObject({ ok: true });
+      expect(await fs.readFile(path.join(target.release, irohCrate, irohBinary), "utf8")).toBe(
+        artifact === "checkout" ? "checkout bytes" : "running bytes",
+      );
+      expect(await fs.readFile(path.join(target.release, "steps.txt"), "utf8")).not.toContain(
+        "build:iroh",
+      );
+    },
+  );
+
+  registerIrohPreparationTests();
+});
+
 describe("release preparation", () => {
   it("keeps the repository HEAD recognizable as release-aware", async () => {
     const checkout = await fs.realpath(new URL("../../", import.meta.url));
@@ -90,7 +117,23 @@ fs.copyFileSync(${JSON.stringify(pnpm)}, path.join(args[args.indexOf('--install-
     ).stdout
       .trim()
       .split(/\r?\n/u);
-    await fs.symlink(git, path.join(bin, "git"));
+    const gitPath = (process.env.PATH ?? "")
+      .split(path.delimiter)
+      .filter((entry) => entry !== bin)
+      .join(path.delimiter);
+    // Git wrappers need their own tools without exposing host pnpm to the updater.
+    await executable(
+      "git",
+      `
+const { spawnSync } = require('node:child_process');
+const result = spawnSync(${JSON.stringify(git)}, process.argv.slice(2), {
+  env: { ...process.env, PATH: ${JSON.stringify(gitPath)} },
+  stdio: 'inherit',
+});
+if (result.error) throw result.error;
+process.exit(result.status ?? 1);
+`,
+    );
     vi.stubEnv("PATH", bin);
     const staging = path.join(root, "staging");
     const result = await prepareGit({ ...target, staging, node, timeoutMs: 30_000 });
@@ -100,7 +143,7 @@ fs.copyFileSync(${JSON.stringify(pnpm)}, path.join(args[args.indexOf('--install-
     );
   });
 
-  it("removes failed staging and Git registration while preserving the stderr tail", async () => {
+  it("preserves the bounded build failure diagnostics", async () => {
     const target = await repository(true);
     const staging = path.join(root, "staging");
     const result = await prepareGit({ ...target, staging, node, timeoutMs: 30_000 });
@@ -111,20 +154,15 @@ fs.copyFileSync(${JSON.stringify(pnpm)}, path.join(args[args.indexOf('--install-
     expect(result.reason).toBe("build-failed");
     expect(result.stderrTail).toContain("fixture build failed");
     expect(result.stderrTail.length).toBeLessThanOrEqual(8192);
-    await expect(fs.access(staging)).rejects.toMatchObject({ code: "ENOENT" });
-    expect((await exec("git", ["-C", target.checkout, "worktree", "list"])).stdout).not.toContain(
-      staging,
-    );
   });
 
   it("stores and reports the actual build error after ANSI-colored warnings", async () => {
     const { checkout } = await repository(true, ">=1", true);
+    const beforeWorktrees = (await exec("git", ["-C", checkout, "worktree", "list", "--porcelain"]))
+      .stdout;
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
     vi.stubEnv("GIT_COMMIT", "");
-    // An earlier updater's leftover is reclaimed before the update; the outcome stays the build's.
-    const abandoned = createDoctorRuntimeProjection(path.join(root, "tmp"), checkout, "Gone01");
-    vi.spyOn(processCensus, "inspectOtherOpenClawProcesses").mockReturnValue({ pids: [] });
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
     try {
       openOpenClawStateDatabase({ env: process.env });
@@ -147,8 +185,10 @@ fs.copyFileSync(${JSON.stringify(pnpm)}, path.join(args[args.indexOf('--install-
       expect(detail?.length).toBeLessThanOrEqual(1024);
       expect(error).toHaveBeenCalledWith(expect.stringContaining("fixture build failed"));
       expect(process.exitCode).toBe(1);
-      await expect(fs.access(abandoned)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(log).toHaveBeenCalledWith(`Removed abandoned updater runtime: ${abandoned}`);
+      expect(await fs.readdir(path.join(resolvePrefix(), "releases"))).toEqual([]);
+      expect((await exec("git", ["-C", checkout, "worktree", "list", "--porcelain"])).stdout).toBe(
+        beforeWorktrees,
+      );
     } finally {
       process.exitCode = undefined;
       await closeOpenClawStateDatabaseAsync();
@@ -236,10 +276,15 @@ fs.copyFileSync(${JSON.stringify(pnpm)}, path.join(args[args.indexOf('--install-
         pid: process.pid,
         createdAt: new Date().toISOString(),
         configPath: path.join(root, "openclaw.json"),
+        port: 18789,
+        startTime:
+          readGatewayLockProcessStartTime(process.pid, process.platform, 1000) ?? undefined,
         processNamespace: readGatewayLockProcessNamespace(),
         role: "gateway",
       },
     });
+    const argv = process.argv;
+    process.argv = [node, path.join(checkout, "openclaw.mjs"), "gateway"];
     try {
       await owner.run(async () => {
         const run = await createUpdateRunAsync({
@@ -267,6 +312,7 @@ fs.copyFileSync(${JSON.stringify(pnpm)}, path.join(args[args.indexOf('--install-
         owner.assertCurrent();
       });
     } finally {
+      process.argv = argv;
       database.db.exec(`
         PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
         UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION} WHERE meta_key = 'primary';
@@ -365,7 +411,6 @@ if (args[0] === 'pack') {
         await expect(fs.stat(path.join(root, "dependencies-installed"))).rejects.toMatchObject({
           code: "ENOENT",
         });
-        await expect(fs.stat(staging)).rejects.toMatchObject({ code: "ENOENT" });
         return;
       }
       expect(result.ok).toBe(true);
@@ -415,6 +460,16 @@ describe("package release conversion", () => {
       expect(outcome.status).toBe(releaseAware ? "pending" : "failed");
       if (releaseAware) {
         expect(await readTrial()).toMatchObject({ phase: "pending", runId: run.runId });
+        if (outcome.status !== "pending") {
+          throw new Error("Expected a published release");
+        }
+        const worktrees = (
+          await exec("git", ["-C", target.checkout, "worktree", "list", "--porcelain", "-z"])
+        ).stdout
+          .split("\0")
+          .filter((field) => field.startsWith("worktree "))
+          .map((field) => path.resolve(field.slice("worktree ".length)));
+        expect(worktrees).toContain(await fs.realpath(outcome.releaseRoot));
       } else {
         expect(outcome).toMatchObject({
           reason: "release-updates-unsupported",
@@ -522,15 +577,15 @@ describe("package release conversion", () => {
     { releaseAware: true, runtime: "node", adopt: false, readOnly: false },
     { releaseAware: false, runtime: "node", adopt: false, readOnly: false },
     { releaseAware: true, runtime: "bun", adopt: false, readOnly: false },
-    { releaseAware: true, runtime: "node", adopt: true, readOnly: false },
+    { releaseAware: true, runtime: "node", adopt: true, readOnly: false, nodeOnly: true },
     { releaseAware: true, runtime: "node", adopt: true, readOnly: true },
     { releaseAware: false, runtime: "node", adopt: true, readOnly: false },
     // An explicit artifact rebuilt at the installed version is still a new release.
     { releaseAware: true, runtime: "node", build: "rebuilt" },
     { releaseAware: true, runtime: "node", build: "installed" },
   ])(
-    "prepares a $runtime package with release support $releaseAware (npm adoption=$adopt, readOnly=$readOnly, build=$build)",
-    async ({ releaseAware, runtime, adopt = false, readOnly = false, build }) => {
+    "prepares a $runtime package with release support $releaseAware (npm adoption=$adopt, readOnly=$readOnly, build=$build, deferred node-only=$nodeOnly)",
+    async ({ releaseAware, runtime, adopt = false, readOnly = false, build, nodeOnly }) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
       const runningVersion = adopt ? "2026.11.20" : "2026.11.21";
       const runningRoot = adopt
@@ -604,9 +659,15 @@ if (!(await forwardToReleaseLauncher(new URL('${relative}', import.meta.url)))) 
         `import fs from 'node:fs';
 fs.appendFileSync(${JSON.stringify(path.join(root, "release-commands"))}, process.argv[3] + ':' + (process.env.FIXTURE_RUNTIME ?? 'node') + '\\n');
 console.log(JSON.stringify(process.argv[3] === 'check-release'
-  ? {ok:true,surfaces:[]}
+  ? {ok:true,surfaces:[],warnings:[{code:'configured-plugin-path-unavailable',message:'Fixture plugin path is unavailable'}]}
   : {status:'ok',changed:false,warnings:[],sync:{warnings:[],errors:[]},npm:{outcomes:[]}}));`,
       );
+      if (build === "installed") {
+        await fs.copyFile(
+          path.join(packedRoot, "openclaw.mjs"),
+          path.join(runningRoot, "openclaw.mjs"),
+        );
+      }
       const archive = path.join(root, "candidate.tgz");
       await exec("tar", ["-czf", archive, "-C", path.dirname(packedRoot), "package"]);
       await executable(
@@ -659,6 +720,15 @@ if (process.argv[2] !== 'install') {
           code: "ENOENT",
         });
       });
+      // A converted deferred update keeps its owner even after only the node service remains.
+      if (nodeOnly) {
+        vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(
+          createMockGatewayService({ hasInstalledDefinition: async () => false }),
+        );
+        vi.spyOn(nodeService, "resolveNodeService").mockReturnValue(
+          createMockGatewayService({ hasInstalledDefinition: async () => true }),
+        );
+      }
       if (readOnly) {
         const writeFile = fs.writeFile.bind(fs);
         vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
@@ -691,6 +761,7 @@ if (process.argv[2] !== 'install') {
           });
         }
         if (!releaseAware) {
+          expect(preparedRun?.origin.releaseAdmission).toBeUndefined();
           expect(outcome).toMatchObject({
             status: "failed",
             reason: "release-updates-unsupported",
@@ -725,6 +796,20 @@ if (process.argv[2] !== 'install') {
           return;
         }
         expect(outcome).toMatchObject({ status: "pending", target: { version: "2026.11.21" } });
+        expect(preparedRun?.steps).toContainEqual(
+          expect.objectContaining({ step: "candidate-release-check", status: "completed" }),
+        );
+        expect(preparedRun?.origin.releaseAdmission).toEqual({
+          owner: "candidate",
+          candidateVersion: "2026.11.21",
+          verdict: "admit",
+          warnings: [
+            {
+              code: "configured-plugin-path-unavailable",
+              message: "Fixture plugin path is unavailable",
+            },
+          ],
+        });
         if (adopt) {
           expect(serviceConversion.stageReleaseService).not.toHaveBeenCalled();
           if (readOnly) {
@@ -756,13 +841,16 @@ if (process.argv[2] !== 'install') {
           expect(result.stdout.trim()).toBe("running");
         }
         expect((await readTrial(prefix))?.phase).toBe("pending");
-        await settleRunFromTrial({
+        vi.stubEnv("OPENCLAW_LAUNCHER_IPC", "");
+        await writeTrial({
           ...(await readTrial(prefix))!,
           phase: "rolled-back",
           outcome: { status: "rolled-back", reason: "new build failed to start", at: Date.now() },
         });
+        await announceReady(null);
         const rolledBack = await getUpdateRunAsync(run.runId);
         expect(rolledBack?.status).toBe("failed");
+        expect(rolledBack?.origin.releaseAdmission).toEqual(preparedRun?.origin.releaseAdmission);
         for (const name of ["pack", "install"]) {
           expect(rolledBack?.steps.find(({ step }) => step === `prepare:${name}`)).toMatchObject({
             status: "completed",
@@ -779,57 +867,6 @@ if (process.argv[2] !== 'install') {
 });
 
 registerAlreadyCurrentUpdateTests();
-
-describe("retained updater runtimes", () => {
-  // Updaters before owner records projected the package they replaced into the temp dir.
-  const project = (checkout: string, name: string) =>
-    createDoctorRuntimeProjection(path.join(root, "tmp"), checkout, name);
-
-  it("reclaims an earlier updater's runtime and keeps uncertain ones without failing", async () => {
-    const { checkout, sha } = await repository();
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
-    vi.stubEnv("GIT_COMMIT", sha);
-    const abandoned = project(checkout, "Gone01");
-    const held = project(checkout, "Held01");
-    const unseen = project(checkout, "Blind1");
-    // One runtime is still used by another process; for another, processes cannot be listed.
-    vi.spyOn(processCensus, "inspectOtherOpenClawProcesses").mockImplementation(((
-      directory: string,
-    ) =>
-      directory === held
-        ? { pids: [4242] }
-        : directory === unseen
-          ? { error: "Could not inspect OpenClaw processes: census unavailable" }
-          : { pids: [] }) as typeof processCensus.inspectOtherOpenClawProcesses);
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    try {
-      openOpenClawStateDatabase({ env: process.env });
-      await runReleaseUpdateCli({
-        json: false,
-        restart: false,
-        runningRoot: checkout,
-        storedChannel: "dev",
-      });
-      expect(process.exitCode).toBe(0);
-      expect((await getUpdateRunStatusAsync()).lastRun).toMatchObject({
-        status: "skipped",
-        reason: "already-current",
-      });
-      await expect(fs.access(abandoned)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.access(held)).resolves.toBeUndefined();
-      await expect(fs.access(unseen)).resolves.toBeUndefined();
-      // Kept runtimes are reported by the cleanup owner's log; the command prints removals.
-      expect(log.mock.calls.map(([line]) => String(line))).toEqual([
-        `Removed abandoned updater runtime: ${abandoned}`,
-        "Already up to date.",
-      ]);
-    } finally {
-      process.exitCode = undefined;
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-    }
-  });
-});
 
 describe("update preflight", () => {
   it("refuses an incompatible engine before preparation", async () => {

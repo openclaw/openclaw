@@ -299,9 +299,12 @@ it.each([
 ] as const)(
   "explains incompatible Codex auth for %s route (explicit order=%s)",
   (_name, explicitOrder, authored) => {
-    const prefix = explicitOrder
-      ? "Explicit auth order for openai has no usable profiles."
-      : "No route-compatible authentication source is configured for openai.";
+    const message = `${
+      explicitOrder
+        ? "Explicit auth order for openai has no usable profiles."
+        : "No route-compatible authentication source is configured for openai."
+    } Selected model route requires api-key authentication (openai-responses); configured profiles support subscription authentication. Select a model route compatible with the configured account, or select a compatible account.`;
+    // Chat replies show userMessage; without it the text classifies as a failed sign-in.
     expectAuthError({
       ...codexHarness,
       harnessAuthBootstrap: "harness",
@@ -318,11 +321,7 @@ it.each([
         : {
             observedRoutes: [{}, { api: "openai-responses", baseUrl: "https://api.openai.com/v1" }],
           }),
-    }).toThrow(
-      new Error(
-        `${prefix} Selected model route requires api-key authentication (openai-responses); configured profiles support subscription authentication. Select a model route compatible with the configured account, or select a compatible account.`,
-      ),
-    );
+    }).toThrow(expect.objectContaining({ message, reason: "auth", userMessage: message }));
   },
 );
 
@@ -538,6 +537,12 @@ it.each(["profile", "secret-ref"] as const)(
       vi.stubEnv("OPENAI_API_KEY", "");
       vi.stubEnv("OPENAI_PLATFORM_KEY", "secret-ref-platform-key");
     }
+    const readAmbientKey = vi.fn(() => undefined);
+    const env = Object.defineProperty(
+      { OPENAI_PLATFORM_KEY: "secret-ref-platform-key" },
+      "OPENAI_API_KEY",
+      { get: readAmbientKey },
+    );
     const config = openAIConfig({
       apiKey: profile
         ? "configured-platform-key"
@@ -551,13 +556,14 @@ it.each(["profile", "secret-ref"] as const)(
       ...subscription,
       config,
       authProfileStore: store,
-      env: profile ? {} : process.env,
+      env,
     });
     expect(plan).toMatchObject({
       selectedAuthMode: profile ? "api_key" : "api-key",
       modelRoute: apiRoute,
     });
     if (profile) {
+      expect(readAmbientKey).toHaveBeenCalled();
       expect(plan).toMatchObject({
         forwardedAuthProfileId: id,
         forwardedAuthProfileCandidateIds: [id],
@@ -585,6 +591,7 @@ it.each(["profile", "secret-ref"] as const)(
         { kind: "direct", evidence: "provider-config", authorization: "declared" },
       ]);
     } else {
+      expect(readAmbientKey).not.toHaveBeenCalled();
       expect(attempts).toEqual([
         {
           kind: "direct",

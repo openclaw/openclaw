@@ -78,6 +78,11 @@ export type MemoryEmbeddingProviderCreateResult = Omit<EmbeddingProviderCreateRe
 export type MemoryEmbeddingProviderAdapter = Omit<EmbeddingProviderAdapter, "create"> & {
   autoSelectPriority?: number;
   allowExplicitWhenConfiguredAuto?: boolean;
+  /**
+   * @deprecated Use `mediaModalities`. A true answer still means image and audio, for
+   * published ClawHub embedding plugins that predate it. Remove once they declare
+   * `mediaModalities`.
+   */
   supportsMultimodalEmbeddings?: (params: { model: string }) => boolean;
   create: (
     options: MemoryEmbeddingProviderCreateOptions,

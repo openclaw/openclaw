@@ -1,8 +1,8 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayRequestRejected
-import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceTimeBy
@@ -15,7 +15,7 @@ import org.junit.Test
 class ChatTranscriptHistoryRefreshTest {
   private fun refusal() =
     GatewayRequestRejected(
-      GatewaySession.ErrorShape("UNAVAILABLE", "busy", GatewayErrorDetails(null, false, null, retryable = true)),
+      ErrorShape("UNAVAILABLE", "busy", GatewayErrorDetails(null, false, null, retryable = true)),
     )
 
   @Test

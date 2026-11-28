@@ -190,6 +190,8 @@ const RUNTIME_ONLY_TOOL_FACTS = new Map<string, CoreToolFacts>([
   ...["search", "find", "grep", "glob", "tool_search", "tool_describe"].map(
     (name): [string, CoreToolFacts] => [name, { replay: "both" }],
   ),
+  ["github_read", { replay: "both" }],
+  ["github_search", { replay: "both" }],
   ["structured_output", { factoryFamily: "openclaw" }],
 ]);
 

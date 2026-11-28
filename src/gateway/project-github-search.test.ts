@@ -290,7 +290,9 @@ describe("project GitHub search", () => {
         return new Response(null, { status: 304 });
       }
       const data =
-        url.pathname === "/user/repos" ? [repository("acme/shared-project")] : { items: [] };
+        url.pathname === "/user/repos"
+          ? [repository("acme/shared-project", "ΕΛΕΓΧΟΣ")]
+          : { items: [] };
       return new Response(JSON.stringify(data), { headers: { etag: '"page-v1"' } });
     });
     const options = {
@@ -302,6 +304,10 @@ describe("project GitHub search", () => {
       ["shared", "project"].map((query) => searchRemoteProjects(query, options)),
     );
     expect(results.map(projectNames)).toEqual([["acme/shared-project"], ["acme/shared-project"]]);
+    for (const query of ["Σ", "σ", "ς"]) {
+      const { projects } = await searchRemoteProjects(query, options);
+      expect(projects).toMatchObject([{ fullName: "acme/shared-project", description: "ΕΛΕΓΧΟΣ" }]);
+    }
     const affiliatedCalls = () => fetchImpl.mock.calls.filter(affiliatedRequest);
     expect(affiliatedCalls()).toHaveLength(1);
     setTime(61_001);

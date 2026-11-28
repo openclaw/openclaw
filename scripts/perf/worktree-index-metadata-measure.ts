@@ -19,6 +19,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { CloneFileMetadata } from "../../src/infra/fs-safe-copy-worker-contract.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -142,12 +143,7 @@ try {
   }
   state.counts = counts();
   if (values.allocation) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 16384,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 16384);
   }
   const loadBefore = loadavg();
   const cpuStart = process.cpuUsage();

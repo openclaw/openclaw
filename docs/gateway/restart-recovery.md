@@ -234,7 +234,8 @@ regain current authority before they can execute.
 
 Crash recovery uses the nonterminal run marker committed with accepted plain
 chat input, before dispatch hooks or runtime start. The same commit records its
-writer identity; terminal settlement clears the run marker. Recovery is bounded
+writer identity; terminal settlement clears the run marker. Queued input records
+the run marker and its writer identity when its run starts. Recovery is bounded
 by the recorded crash intervals. Command persistence
 records activity only; commands gain recovery markers when their runs start.
 Commands that become runs, such as `/goal` or skill rewrites, remain unprotected
@@ -636,10 +637,9 @@ An installation stopped for longer than six hours before upgrading loses this
 one-time resume; send a new message to continue. Old execution and authority
 snapshots are not restored.
 
-Startup consumes the shutdown marker and orphaned run identity together and admits
-one new input through the normal session-event path:
-
-> The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.
+Startup consumes the shutdown marker and orphaned run identity together and sends
+one resume input. It does not replay the request or tool call. The input stays
+in history; external effects are not guaranteed exactly once.
 
 Background commands that were waiting to wake the conversation are reported
 separately, with a notice for each command, after any restart, including a crash.
@@ -648,11 +648,6 @@ Accepted edge case: an interrupted root with a notifying background command rece
 both inputs and may reply twice. This rare, visible, recoverable case is intentionally
 retained to keep restart recovery independent of process reporting. See
 [lost background commands](/gateway/background-process#lost-background-commands).
-
-This is a new input, not a replay of the original user prompt or unfinished tool
-call. Later model requests can contain the text as conversation history. The
-agent checks the transcript and current state before continuing; effects are not
-guaranteed exactly once.
 
 For a captured interrupted turn, the input revalidates the original requester's
 authentication source and current session access, bounded by that source's original
@@ -681,12 +676,11 @@ revalidation, never a saved grant.
 Sessions with no human principal use ordinary system-event authority; if it lacks
 a needed capability, the agent must ask for an authorized input.
 
-WebChat uses the same session and transcript. An unanswered accepted user prompt
-stays in history as its original entry, separate from the restart input. Channel
-sessions use their current delivery route so normal replies return to the
-conversation. The resume input does not replay an old browser connection or
-unfinished tool approval. Captured source facts are a revalidation basis, not a
-portable grant; markers without those facts use the legacy principal policy above.
+WebChat keeps the original prompt and restart input as separate transcript entries.
+Channel replies use the current route, except that an unresolved shell command’s
+reply uses its recorded route and reply anchor or stays local. Recovery does not
+replay a browser connection or pending approval. Captured sources are revalidated,
+not portable grants; older markers use the principal policy above.
 On a Gateway without roles, recovery still requires the current, revalidated
 authority of the recorded device. A resumed Control UI task
 can update pinned dashboard widgets under that admitted authority without a
@@ -761,8 +755,9 @@ When the requester's access has ended (its saved grant or access record is gone,
 or its profile was deleted), startup settles that child's delivery once instead of
 retrying it at every restart. The run record keeps
 the result with the delivery marked discarded. The requesting chat, and no other,
-gets one notice: "A background task's result couldn't be delivered because the
-access it ran under has ended." Results whose latest recorded time (result capture,
+gets one notice: "I did not deliver a background task's result. The access of the
+person who started it has ended. Ask them or a Gateway admin to restore that access,
+then start the task again." Results whose latest recorded time (result capture,
 end, or delivery attempt; creation time only when nothing later exists) is more
 than 7 days old settle without a notice; the Gateway logs one count per recovery
 pass. Any other failure, including other refusals, an unavailable access policy or

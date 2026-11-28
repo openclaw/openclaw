@@ -288,7 +288,7 @@ suite.define(() => {
           const selected = page.getByRole("radio", { name: scenario.selected, exact: true });
           const unselected = page.getByRole("radio", { name: scenario.unselected, exact: true });
           await selected.waitFor();
-          expect(await selected.isChecked()).toBe(true);
+          await expect.poll(() => selected.isChecked()).toBe(true);
           expect(await unselected.isChecked()).toBe(false);
           const selectedLabel = selected.locator("..");
           const unselectedLabel = unselected.locator("..");

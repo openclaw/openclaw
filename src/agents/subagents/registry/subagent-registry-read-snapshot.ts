@@ -27,6 +27,7 @@ import {
 } from "./subagent-registry-read-cache.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { isSubagentRunPayloadEvicted } from "./subagent-run-payload-facts.js";
 import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
 
@@ -80,13 +81,14 @@ export function mergeSubagentRunReadScope(
     const durable = getSessionListLookup(compactCache, compact);
     let liveKeys: string[];
     let persistedKeys: string[];
+    let childKeys: Set<string> | undefined;
     if ("runIds" in readScope) {
       liveKeys = live.selectRunIds(readScope.runIds);
       persistedKeys = durable.selectRunIds(readScope.runIds, liveKeys);
       const yielded = readScope.yieldedChildren
         ? [...new Set([...persistedKeys, ...liveKeys])].flatMap((key) => {
             const entry = inMemoryRuns.get(key) ?? compact.get(key);
-            return entry?.pauseReason === "sessions_yield" ? [entry.childSessionKey] : [];
+            return isSubagentPausedByYield(entry) ? [entry.childSessionKey] : [];
           })
         : [];
       if (yielded.length > 0) {
@@ -101,9 +103,9 @@ export function mergeSubagentRunReadScope(
         ];
       }
     } else if ("childSessionKeys" in readScope) {
-      const keys = new Set(readScope.childSessionKeys.map((key) => key.trim()).filter(Boolean));
-      liveKeys = live.selectChildren(keys);
-      persistedKeys = durable.selectChildren(keys);
+      childKeys = new Set(readScope.childSessionKeys.map((key) => key.trim()).filter(Boolean));
+      liveKeys = live.selectChildren(childKeys);
+      persistedKeys = durable.selectChildren(childKeys);
     } else {
       liveKeys = live.selectReadScope(readScope.sessionKeys, durable, readScope.descendants);
       persistedKeys = durable.selectReadScope(
@@ -117,7 +119,8 @@ export function mergeSubagentRunReadScope(
     for (const key of new Set([...persistedKeys, ...liveKeys])) {
       const liveEntry = inMemoryRuns.get(key);
       const entry = liveEntry ? immutableSubagentRunSessionList(liveEntry) : compact.get(key);
-      if (entry) {
+      // A current live row can have moved out of its retained child bucket.
+      if (entry && (!childKeys || childKeys.has(entry.childSessionKey.trim()))) {
         snapshot.set(key, entry);
       }
     }
@@ -269,15 +272,13 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
   };
 }
 
-export type PreparedSubagentSessionsRead = PreparedSubagentRunsRead;
-
 /** The worker selects durable descendants; current liveness remains parent-owned. */
 export async function prepareSubagentSessionRunReadSnapshot(params: {
   inMemoryRuns: Map<string, SubagentRunRecord>;
   fullCache: SubagentRunsCache<SubagentRunRecord>;
   sessionKeys: readonly string[];
   context?: OpenClawStateWorkerContext;
-}): Promise<PreparedSubagentSessionsRead> {
+}): Promise<PreparedSubagentRunsRead> {
   const { inMemoryRuns, fullCache } = params;
   const context = params.context ?? captureOpenClawStateWorkerContext();
   const signal = getAsyncWorkSignal();

@@ -44,6 +44,38 @@ unchanged registry state; final writers retain trust, approval, content, and rea
 checks. Pre-fanout budgeting cannot prevent later job/attempt growth exceeding final
 artifact limits: fail sealing, never truncate evidence.
 
+## Stable-qualified beta to final
+
+A regular prerelease such as `2026.11.24-beta.2` can supply product evidence for
+`2026.11.24` without first publishing an unsuffixed version to the beta selector:
+
+1. Complete a successful `stable` FRV on the beta candidate, with
+   `rerun_group=all`, soak enabled, and blocking performance. A `beta` profile
+   never qualifies stable, even if its selected jobs passed. The beta may have
+   used `reuse_evidence=false` to force fresh qualification.
+2. Prepare a descendant for the corresponding unsuffixed final version. The only
+   allowed changes are version alignment in root/plugin/SDK package manifests,
+   generated plugin catalog/reference versions, and that final release's canonical
+   changelog entry, index, and contribution record. Dependencies, product code,
+   qualification tooling, and unrelated release notes must remain unchanged.
+3. Admit and run FRV for the final candidate with evidence reuse enabled and the
+   same stable profile with `npm-stable-v1` final coverage, lane inputs, baselines, and package publication roster. The strict
+   verifier authenticates both admissions and the complete immutable Git delta
+   under `stable-qualified-beta-final-v1`. An incomplete comparison falls back to
+   fresh qualification. Beta-version waivers cannot excuse final-version jobs;
+   discovery declines such evidence before skipping fresh product checks.
+   Source admission may add the final-only Linux/Android outputs; these retain
+   their own publication gates and do not broaden reused product qualification.
+4. Retain the successful final parent and its original beta evidence root. Product
+   children retain their original run/attempt identities. Final npm, plugin npm,
+   and Docker artifacts are prepared and qualified afresh; beta publication
+   artifacts are not adopted or renamed. Publish using the final parent's evidence.
+
+This is qualification reuse, not an npm dist-tag rename or a waiver. It requires
+promotion-aware qualification/publisher tooling; it cannot relabel historical
+beta-profile evidence. Changes beyond the version-only cut require fresh product
+qualification. Platform signing and publication keep their own gates.
+
 ## Bounded publication recovery
 
 A nonempty plugin subset may consume authenticated all-publishable admission, retaining
@@ -195,6 +227,12 @@ the latest terminal parent attempt. Missing evidence, changed attempts, or lost 
 fail closed: recovery never dispatches qualification jobs as a fallback. Keep the private
 request: reconciliation never redispatches an uncertain request. Recovery preserves the
 original publication selection. Fresh qualification is a separate, explicit operation.
+
+If reconciliation reports `recovery-prepared`, it saw no recorded dispatch attempt or
+matching run. The original command may still be checking admission. Wait for it to
+exit and reconcile the same file again. If it is still prepared with no matching run,
+resolve the original error and use a new private request file for a fresh recovery.
+An `attempted` request may already have reached GitHub. Continue reconciling that file.
 
 ### Recover with a later waiver ledger
 

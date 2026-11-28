@@ -35,6 +35,7 @@ import {
 import { resolveCliStartupPolicy as resolveCliStartupPolicyForArgv } from "./command-startup-policy.js";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
 import { tryRunGatewayServiceUpdateCapabilityProbe } from "./daemon-cli/update-capability.js";
+import { withCliFailureContext } from "./failure-context.js";
 import { shouldStartLocalOnboarding } from "./fresh-install-config.js";
 import { tryRunWindowsGatewayTaskSupervisor } from "./gateway-cli/task-supervisor.js";
 import {
@@ -55,6 +56,7 @@ import { getCoreCliCommandDescriptors } from "./program/core-command-descriptors
 import { getSubCliEntriesCore } from "./program/subcli-descriptors.js";
 import {
   findSubcommand,
+  isOfflineSetupExplanation,
   normalizeRootNoColorArgvForProgram,
   resolveRootOptionRole,
 } from "./run-main-options.js";
@@ -62,7 +64,7 @@ import { withCliPluginInvocation } from "./run-main-plugin-cache.js";
 import {
   isAgentExecInvocation,
   isGatewayRunFastPathArgv,
-  isRemoteAgentDispatchInvocation,
+  loadCliStartupDotEnv,
   resolveBareRootLaunchPolicy,
   resolveMissingPluginCommandMessage,
   shouldHandleBareRoot,
@@ -682,10 +684,11 @@ export async function runCli(
       },
     );
   const invocation = resolveCliArgvInvocation(rewriteUpdateFlagArgv(originalArgv));
-  return !invocation.hasHelpOrVersion &&
-    ["update", "doctor", "proxy"].includes(invocation.primary ?? "")
-    ? await withDeferredDebugProxyCapture(invoke)
-    : await invoke();
+  return withCliFailureContext(() =>
+    !invocation.hasHelpOrVersion && ["update", "doctor", "proxy"].includes(invocation.primary ?? "")
+      ? withDeferredDebugProxyCapture(invoke)
+      : invoke(),
+  );
 }
 
 async function withSnapshotReuseForMaintenance<T>(
@@ -784,6 +787,7 @@ async function runCliWithPreparedOutputMode(
   const isHelpOrVersionInvocation = normalizedInvocation.hasHelpOrVersion;
   const isGatewayRunInvocation = isGatewayRunInvocationArgv(normalizedArgv);
   const isDatabaseInvocation = normalizedInvocation.commandPath[0] === "database";
+  const offlineSetup = await isOfflineSetupExplanation(normalizedInvocation);
   // Gateway pre-bootstrap owns state/config dotenv selection. This phase only
   // needs the workspace file, so avoid importing the loader when it is absent.
   const loadGlobalEnv = !isGatewayRunInvocation;
@@ -824,32 +828,29 @@ async function runCliWithPreparedOutputMode(
   if (
     !isHelpOrVersionInvocation &&
     !isDatabaseInvocation &&
+    !offlineSetup &&
     !isAgentExecInvocation(normalizedInvocation.commandPath) &&
     shouldLoadCliDotEnv(loadGlobalEnv)
   ) {
-    await startupTrace.measure("dotenv", async () => {
-      if (isRemoteAgentDispatchInvocation(normalizedArgv, normalizedInvocation.primary)) {
-        const { loadGatewayDispatchCliDotEnv } = await import("./gateway-dispatch-dotenv.js");
-        await loadGatewayDispatchCliDotEnv();
-      } else {
-        const { loadCliDotEnv } = await import("./dotenv.js");
-        loadCliDotEnv({ loadGlobalEnv });
-      }
-    });
-  }
-  if (!isHelpOrVersionInvocation) {
-    const { inspectCliGatewayServiceInstallation } =
-      await import("./run-main-service-installation.js");
-    options.serviceInstallation.installation = await inspectCliGatewayServiceInstallation(
-      process.env,
+    await startupTrace.measure("dotenv", () =>
+      loadCliStartupDotEnv(normalizedInvocation, loadGlobalEnv),
     );
   }
-  const { prepareCliDatabaseEngine } = await import("./database-engine-selection.js");
-  const selectionHandled = await startupTrace.measure("database-engine-selection", () =>
-    prepareCliDatabaseEngine(normalizedArgv),
-  );
-  if (selectionHandled) {
-    return;
+  if (!offlineSetup) {
+    if (!isHelpOrVersionInvocation) {
+      const service = await import("./run-main-service-installation.js");
+      options.serviceInstallation.installation = await service.inspectCliGatewayServiceInstallation(
+        process.env,
+      );
+    }
+    const db = await import("./database-engine-selection.js");
+    if (
+      await startupTrace.measure("database-engine-selection", () =>
+        db.prepareCliDatabaseEngine(normalizedArgv),
+      )
+    ) {
+      return;
+    }
   }
   let doctorDatabasePreflight: DoctorDatabasePreflight | undefined;
   if (!isHelpOrVersionInvocation && normalizedInvocation.primary === "doctor") {
@@ -900,17 +901,17 @@ async function runCliWithPreparedOutputMode(
     ).createPluginCliLoadSession(getPluginCache());
     return pluginCliSession;
   };
-  const isolateProxyConfigEnv = isGatewayRunInvocation;
-  const bestEffortConfigStartupPolicy = resolveCliStartupPolicyForArgv({
+  const { primary: cliRoot } = normalizedInvocation;
+  const commandPrimary = !isHelpOrVersionInvocation && !bareSessionInvocation && cliRoot;
+  const builtInCommand = commandPrimary && findBuiltInCommandDescriptor(commandPrimary);
+  const proxyStartupPolicy = resolveCliStartupPolicyForArgv({
     argv: normalizedArgv,
     commandPath: normalizedInvocation.commandPath,
     jsonOutputMode: options.builtInMachineOutput || hasJsonOutputFlag(normalizedArgv),
     env: process.env,
   });
   const useSourceOnlyBestEffortConfig =
-    !(await isCurrentRuntimeSupported()) ||
-    normalizedInvocation.primary === "update" ||
-    normalizedInvocation.primary === "doctor";
+    !(await isCurrentRuntimeSupported()) || cliRoot === "update" || cliRoot === "doctor";
   const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {
     if (!bestEffortConfigPromise) {
       bestEffortConfigPromise = import("../config/io.js").then(async (configIo) => {
@@ -920,8 +921,9 @@ async function runCliWithPreparedOutputMode(
         const readOptions: Parameters<typeof configIo.readBestEffortConfig>[0] = {
           // Routing must not create state before Doctor decides whether migrations are needed.
           observe: false,
-          ...(isolateProxyConfigEnv ? { isolateEnv: true } : {}),
-          ...(bestEffortConfigStartupPolicy.validateConfigOnly || isGatewayRunInvocation
+          ...(isGatewayRunInvocation ? { isolateEnv: true } : {}),
+          // Built-in proxy routing needs core config. Command admission owns plugin validation.
+          ...(builtInCommand || proxyStartupPolicy.validateConfigOnly || isGatewayRunInvocation
             ? { pluginValidation: "core-only" }
             : { skipPluginValidation: true }),
         };
@@ -1002,18 +1004,13 @@ async function runCliWithPreparedOutputMode(
   }
 
   try {
-    if (!isDatabaseInvocation) {
+    if (!isDatabaseInvocation && !offlineSetup) {
       await configureCliStartupDiagnostics(
         [startupTrace, options.additionalStartupTrace],
         isGatewayRunInvocation ? readBestEffortCliConfig : undefined,
       );
     }
-    if (
-      !isHelpOrVersionInvocation &&
-      !bareSessionInvocation &&
-      normalizedInvocation.primary &&
-      !findBuiltInCommandDescriptor(normalizedInvocation.primary)
-    ) {
+    if (commandPrimary && !builtInCommand) {
       const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
       if (
         await withConsoleLogsRoutedToStderr(() =>
@@ -1024,7 +1021,9 @@ async function runCliWithPreparedOutputMode(
         routeLogsToStderr();
       }
     }
-    if (!isHelpOrVersionInvocation && shouldStartProxyForCli(normalizedArgv)) {
+    const shouldUseCliEnvProxy =
+      !offlineSetup && !isHelpOrVersionInvocation && shouldStartProxyForCli(normalizedArgv);
+    if (shouldUseCliEnvProxy) {
       const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
       if (!bareSessionInvocation) {
         await assertCliPrimaryOwned({
@@ -1152,8 +1151,6 @@ async function runCliWithPreparedOutputMode(
       return;
     }
 
-    const shouldUseCliEnvProxy =
-      !isHelpOrVersionInvocation && shouldStartProxyForCli(normalizedArgv);
     const bootstrapProxyBeforeFastPath =
       shouldUseCliEnvProxy && shouldBootstrapCliProxyBeforeFastPath();
     // Gateway execution can return before full CLI bootstrap, so install the
@@ -1200,18 +1197,15 @@ async function runCliWithPreparedOutputMode(
     }
 
     let parseArgv = normalizeGeneratedHelpCommandArgv(normalizedArgv);
-    const suppressStartupProgress = options.builtInMachineOutput || hasJsonOutputFlag(parseArgv);
-    const { createCliProgress } = await import("./progress.js");
-    const startupProgress = createCliProgress({
-      label: "Loading OpenClaw CLI…",
-      indeterminate: true,
-      delayMs: 0,
-      ...(suppressStartupProgress ? { enabled: false } : {}),
-    });
+    const machineOutput = options.builtInMachineOutput || hasJsonOutputFlag(parseArgv);
+    const startupProgress =
+      process.stderr.isTTY && !machineOutput
+        ? (await import("./progress.js")).createCliProgress({ label: "Loading OpenClaw CLI…" })
+        : undefined;
     try {
       const [
         { buildProgram },
-        { handleCliUncaughtException },
+        { installCliUncaughtExceptionHandler },
         { installUnhandledRejectionHandler },
       ] = await startupTrace.measure("core-imports", () =>
         Promise.all([
@@ -1229,9 +1223,7 @@ async function runCliWithPreparedOutputMode(
         installUnhandledRejectionHandler();
       }
 
-      process.on("uncaughtException", (error) => {
-        handleCliUncaughtException(error, normalizedArgv);
-      });
+      installCliUncaughtExceptionHandler(normalizedArgv);
 
       const invocation = resolveCliArgvInvocation(parseArgv);
       // Register the primary command (builtin or subcli) so help and command parsing
@@ -1263,7 +1255,7 @@ async function runCliWithPreparedOutputMode(
           const startupPolicy = resolveCliStartupPolicyForArgv({
             argv: parseArgv,
             commandPath: invocation.commandPath,
-            jsonOutputMode: suppressStartupProgress,
+            jsonOutputMode: machineOutput,
           });
           return await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
             mode: "lazy",
@@ -1287,7 +1279,7 @@ async function runCliWithPreparedOutputMode(
             resolveRootOptionRole(program, remainingArgs, logLevelIndex) !== "root",
         },
       );
-      startupProgress.done();
+      startupProgress?.done();
 
       let completedHelpOrVersion = false;
       try {
@@ -1319,7 +1311,7 @@ async function runCliWithPreparedOutputMode(
         requestExitAfterOneShotOutput();
       }
     } finally {
-      startupProgress.done();
+      startupProgress?.done();
     }
   } finally {
     pluginCliSession?.close();

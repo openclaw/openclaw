@@ -49,6 +49,9 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     42: ["agent_tool_usage"],
     // Pending input columns and legacy retirement facts change together.
     43: ["session_pending_inputs"],
+    44: ["session_members"],
+    // Only the node definition changes; existing nodes are not rewritten.
+    45: ["session_nodes"],
   },
   state: {
     [CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION]: [
@@ -108,5 +111,6 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     39: ["worker_environments"],
     40: ["worker_environments"],
     41: ["operator_approvals"],
+    42: ["worker_session_placements"],
   },
 };

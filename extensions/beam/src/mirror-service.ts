@@ -6,7 +6,7 @@ import { MIRROR_CONFIG_PATH, MIRROR_TOKEN_PATH, parseBeamMirrorConfig } from "./
 import type { BeamMirrorEnrollment, MirrorPublicationStoreValue } from "./mirror-publication.js";
 import { createBeamMirrorRunner } from "./mirror.js";
 
-export function createBeamMirrorService(params: {
+function createBeamMirrorService(params: {
   runtime: PluginRuntime;
   resolveExecutable: () => Promise<string>;
   onRunner?: (runner: ReturnType<typeof createBeamMirrorRunner> | undefined) => void;
@@ -39,6 +39,11 @@ export function createBeamMirrorService(params: {
         getPublicationStore: (authority) =>
           params.runtime.state.openKeyedStoreV2<MirrorPublicationStoreValue>(
             { namespace: "mirror-publications", retention: "retained" },
+            authority,
+          ),
+        getScheduleStore: (authority) =>
+          params.runtime.state.openKeyedStoreV2<string>(
+            { namespace: "mirror-schedule", maxEntries: 1024 },
             authority,
           ),
         runtime: params.runtime,

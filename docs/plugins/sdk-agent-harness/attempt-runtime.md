@@ -107,6 +107,11 @@ interface is for async tool-result transforms that must run before the selected
 harness feeds tool output back into the model. Supported runtime ids are
 `agentsapi`, `codex`, and `openclaw`.
 
+The Gateway and standalone agent runtimes register enabled middleware when
+they prepare a plugin generation. Tool results use the registrations from
+their run's generation. A successful plugin reload or install publishes
+updated registrations for subsequent runs.
+
 Middleware options may combine `runtimes` with a `matcher` tool-name list.
 Each registration keeps that pair intact, so registering the same handler for
 different runtimes does not broaden either matcher. Matchers use non-empty

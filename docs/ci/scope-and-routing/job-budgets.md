@@ -92,8 +92,7 @@ transport. Job placement, test selection, timing identities and resource
 settings are unchanged. The output cap protects
 [GitHub's per-job output limit](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idoutputs),
 not a workflow input or matrix-row limit. The smaller
-fast/check lanes remain capped at 12; Windows is capped at two
-and Android at four for upstream Blacksmith push and PR first attempts, including forks; the GitHub override, retries, manual dispatches, schedules, and other repositories retain two. Compact whole-config batches run
+fast/check lanes remain capped at 12. Compact whole-config batches run
 with a 120-minute batch timeout, while include-pattern groups share the same
 bounded job budget.
 
@@ -112,9 +111,13 @@ Programs, including when it inherits CI environment variables. Published Git
 updaters call this full pipeline with a fixed 20-minute command deadline; the
 explicit stripe caller must not add compiler startups to that preflight.
 
+## Android matrix
+
+The matrix admits up to four selected jobs concurrently regardless of runner backend, trigger, or attempt.
+
 Regular Android PR/main CI and PR `release_gate` dispatches use four rows: Play and Wear-shared unit tests; third-party unit tests; Wear unit tests/lint plus third-party app lint; and Kotlin lint for all four modules plus Play app and Wear-shared lint. Each phone flavor has its own source set and `SensitiveFeatureConfig`; `apps/android/app/src/thirdParty/AndroidManifest.xml` declares additional permissions and components. The Kotlin-lint row also compiles the benchmark when benchmark or Android build/dependency inputs change; missing or unusable changed-path data keeps that build. Every native invocation remains sequential within its row, and all selected Gradle tasks run exactly once.
 
-Ordinary full-scope manual validation retains six Android rows: the three test rows, `build-play`, `build-wear`, and Kotlin lint. The build rows own lint without repeating it in test rows. `build-play` assembles both phone flavors and the Wear shared module and compiles the benchmark; `build-wear` assembles Wear. `build-play-compat` retains Play-only packaging for older frozen targets. GitHub-hosted `build-play` gets a 35-minute job budget for its three memory-bounded Gradle invocations. All other Android tasks use 20 minutes, including the now unit-only phone rows. The budget follows the current attempt's runner route even when a retry reuses the original preflight matrix. Each current Gradle task has one protected sticky disk; PR jobs use disposable clones, while protected runs refresh content-addressed Gradle entries in place. Existing Android opt-in and npm qualification deferral are unchanged.
+Current main-tier manual validation uses the same test/lint rows. `build-play-compat` retains Play-only packaging for older frozen targets. GitHub-hosted `build-play` gets a 35-minute job budget for its three memory-bounded Gradle invocations. All other Android tasks use 20 minutes, including the now unit-only phone rows. The budget follows the current attempt's runner route even when a retry reuses the original preflight matrix. Each current Gradle task has one protected sticky disk; PR jobs use disposable clones, while protected runs refresh content-addressed Gradle entries in place. Existing Android opt-in and npm qualification deferral are unchanged.
 
 Robolectric resolves Android SDK artifacts outside Gradle's dependency cache, so every Android `test-*` task receives a workflow-owned Gradle init script that points test JVMs at a dedicated Maven-local repository. Actions cache restores are task-, platform-, and Android-contract-scoped; a prefix restore can seed a changed contract, but only a successful trusted run may publish the completed exact cache after a miss. Cold runs may download missing SDK artifacts, while warm runs reuse the exact archive. Build and lint tasks do not receive the Robolectric init script.
 

@@ -24,6 +24,7 @@ export type ActivityOperationGroup = Omit<ToolCallGroup<ToolCard>, "children"> &
 
 export type ActivityOperationContext = {
   messageKey: string;
+  sourceOrder?: number;
   runId?: string;
   disclosureId: string;
   onOpenWorkspaceFile?: ToolRenderOptions["onOpenWorkspaceFile"];

@@ -29,7 +29,7 @@ it("replays the executable prepared button with its original receipt identity, w
   const repository = "openclaw/openclaw";
   const ref = `release-publish/${toolingSha.slice(0, 12)}-123`;
   const tooling = { ref, fullRef: `refs/tags/${ref}`, sha: toolingSha };
-  const approval = JSON.stringify({
+  const exception = JSON.stringify({
     request: { expiresAt: "2020-01-01T00:00:00Z" },
     digest: "original",
   });
@@ -59,7 +59,7 @@ it("replays the executable prepared button with its original receipt identity, w
       preflight_run_id: "200",
       full_release_validation_run_id: "200",
       full_release_validation_run_attempt: "1",
-      fast_track_approval: approval,
+      fast_track_request: exception,
     }),
     plugins: { npm, clawhub: descriptor("clawhub") },
   };
@@ -176,11 +176,11 @@ it("replays the executable prepared button with its original receipt identity, w
     requestPath,
     JSON.stringify({
       ...request,
-      inputs: { ...request.inputs, fast_track_approval: '{"digest":"substituted"}' },
+      inputs: { ...request.inputs, fast_track_request: '{"digest":"substituted"}' },
     }),
   );
   expect(run(["validate-request", "--request", requestPath]).stderr).toContain(
-    "retain the approval",
+    "retain the exception request",
   );
   const artifactPath = join(root, "artifact.json");
   writeFileSync(artifactPath, JSON.stringify(preparedArtifact));

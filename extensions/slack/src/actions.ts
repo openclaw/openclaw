@@ -46,6 +46,7 @@ import { formatSlackTarget } from "./target-parsing.js";
 import { resolveSlackBotToken } from "./token.js";
 import { countSlackTextUtf8Bytes, truncateSlackTextByUtf8Bytes } from "./truncate.js";
 import type { SlackAttachment } from "./types.js";
+import { addSlackUserProfiles, type SlackMessageUserProfile } from "./user-profiles.js";
 
 export type { SlackActionClientOpts } from "./action-context.js";
 
@@ -53,6 +54,7 @@ export type SlackMessageSummary = {
   ts?: string;
   text?: string;
   user?: string;
+  user_profile?: SlackMessageUserProfile;
   thread_ts?: string;
   blocks?: unknown[];
   attachments?: SlackAttachment[];
@@ -208,16 +210,20 @@ function normalizeSlackReadTimestamp(
   return formatEpochSeconds(parsed);
 }
 
-async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write" = "read") {
-  if (opts.client && !opts.assertDirectAdapterHandoff) {
-    return opts.client;
-  }
-  const accountId = opts.cfg
+function resolveActionAccountId(opts: SlackActionClientOpts): string {
+  return opts.cfg
     ? resolveSlackAccount({
         cfg: requireRuntimeConfig(opts.cfg, "Slack actions"),
         accountId: opts.accountId,
       }).accountId
     : normalizeAccountId(opts.accountId);
+}
+
+async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write" = "read") {
+  if (opts.client && !opts.assertDirectAdapterHandoff) {
+    return opts.client;
+  }
+  const accountId = resolveActionAccountId(opts);
   assertSlackDetachedTargetAllowed(accountId, opts.teamId);
   const token = resolveToken(opts.token, opts.accountId, opts.cfg);
   const clientTeamId = opts.omitTeamId ? undefined : opts.teamId;
@@ -524,8 +530,17 @@ export async function readSlackMessages(
     after?: string;
     threadId?: string;
     messageId?: string;
+    /**
+     * Adds each author's Slack profile names as `user_profile` and answers mentioned users' names as
+     * `userProfiles`, one `users.info` per distinct uncached user.
+     */
+    includeUserProfiles?: boolean;
   } = {},
-): Promise<{ messages: SlackMessageSummary[]; hasMore: boolean }> {
+): Promise<{
+  messages: SlackMessageSummary[];
+  hasMore: boolean;
+  userProfiles?: Record<string, SlackMessageUserProfile>;
+}> {
   const exactMessageId = opts.messageId?.trim();
   const readLimit = exactMessageId ? 1 : opts.limit;
   const exactBounds = exactMessageId
@@ -564,10 +579,19 @@ export async function readSlackMessages(
         : !opts.threadId || message.ts !== opts.threadId,
     )
     .map(renderSlackReadMessageText);
-  return {
+  const hasMore = exactMessageId ? false : Boolean(result.has_more);
+  if (!opts.includeUserProfiles) {
+    return { messages, hasMore };
+  }
+  const named = await addSlackUserProfiles({
+    accountId: resolveActionAccountId(opts),
+    teamId: opts.teamId,
+    token: opts.client ? opts.token : resolveToken(opts.token, opts.accountId, opts.cfg),
+    client,
     messages,
-    hasMore: exactMessageId ? false : Boolean(result.has_more),
-  };
+  });
+  const mentioned = Object.keys(named.mentioned).length ? { userProfiles: named.mentioned } : {};
+  return { messages: named.messages, hasMore, ...mentioned };
 }
 
 export async function listSlackConversations(

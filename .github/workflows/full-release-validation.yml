@@ -77,6 +77,7 @@ on:
         type: choice
         options:
           - all
+          - build-only
           - ci
           - plugin-prerelease
           - install-smoke
@@ -181,6 +182,7 @@ env:
   FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"
   FULL_RELEASE_EXECUTION_PLAN_RESTORE_CONTRACT: "1"
   FULL_RELEASE_LANE_INPUTS_CONTRACT: "1"
+  FULL_RELEASE_PREFLIGHT_FIRST_CONTRACT: "1"
   FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "2"
   CHILD_EVIDENCE_REUSE: ${{ inputs.reuse_evidence && inputs.rerun_group == 'all' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-ci/')) }}
 
@@ -215,6 +217,7 @@ jobs:
       candidate_request_json: ${{ steps.candidate_request.outputs.request_json }}
       candidate_request_sha256: ${{ steps.candidate_request.outputs.request_sha256 }}
       source_admission_json: ${{ steps.publication_admission.outputs.json }}
+      preflight_first: ${{ steps.publication_dispatch.outputs.preflight_first }}
       validation_purpose: ${{ steps.publication_request.outputs.validation_purpose }}
       publication_selection_json: ${{ steps.publication_request.outputs.publication_selection_json }}
       plugin_npm_preflight_required: ${{ steps.plugin_npm_preflight.outputs.required }}
@@ -461,7 +464,9 @@ jobs:
           plugin_required=false
           [[ "$RERUN_GROUP" =~ ^(all|plugin-prerelease)$ ]] && plugin_required=true
           release_artifact_required=false
-          if [[ "$RERUN_GROUP" =~ ^(all|cross-os|windows-node)$ &&
+          if [[ "$RERUN_GROUP" == "build-only" ]]; then
+            release_artifact_required=true
+          elif [[ "$RERUN_GROUP" =~ ^(all|cross-os|windows-node)$ &&
                 -z "${RELEASE_PACKAGE_SPEC// }" ]]; then
             release_artifact_required=true
           elif [[ "$RERUN_GROUP" =~ ^(all|package|qualified-package)$ &&
@@ -911,7 +916,7 @@ jobs:
             echo "- Release soak lanes: \`${RUN_RELEASE_SOAK}\`"
             echo "- CI release scope: \`${CI_RELEASE_SCOPE}\`"
             if [[ "$COVERAGE_POLICY" == "npm-beta-v1" ]]; then
-              echo "- Native apps, product performance, and Telegram confidence: not run; deferred to postpublish confidence (\`${COVERAGE_POLICY}\`)"
+              echo "- Candidate app builds, product performance, and Telegram confidence: not run; deferred to postpublish confidence (\`${COVERAGE_POLICY}\`)"
             fi
             echo "- Fail fast: \`${FAIL_FAST}\`"
             echo "- Package Acceptance Telegram E2E deferred: \`${SKIP_PACKAGE_TELEGRAM_E2E}\`"
@@ -982,6 +987,7 @@ jobs:
 
   plugin_compatibility_readiness:
     name: Check release source readiness
+    if: inputs.rerun_group != 'build-only'
     needs: [resolve_target]
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 10
@@ -1289,8 +1295,8 @@ jobs:
 
   normal_ci:
     name: Run normal full CI
-    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","ci"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse, npm_preflight_first]
+    if: ${{ always() && (needs.resolve_target.outputs.preflight_first != 'true' || (!cancelled() && needs.npm_preflight_first.result == 'success')) && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","ci"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 15
     outputs:
@@ -1705,6 +1711,12 @@ jobs:
               args+=(-f dispatch_id="$dispatch_id")
               dispatch_child npm-telegram-beta-e2e.yml "$dispatch_run_name" "${args[@]}"
               ;;
+            stable-client)
+              dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-stable-client"
+              dispatch_run_name="Stable Release Source Compatibility ${dispatch_id}"
+              args=(-f target_sha="$TARGET_SHA" -f dispatch_id="$dispatch_id")
+              dispatch_child stable-release-source-compatibility.yml "$dispatch_run_name" "${args[@]}"
+              ;;
             performance)
               fail_on_regression=true
               if [[ "$RELEASE_PROFILE" == "beta" ]]; then
@@ -1744,8 +1756,8 @@ jobs:
 
   plugin_prerelease_independent:
     name: Run plugin prerelease independent validation
-    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse, npm_preflight_first]
+    if: ${{ always() && (needs.resolve_target.outputs.preflight_first != 'true' || (!cancelled() && needs.npm_preflight_first.result == 'success')) && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 15
     outputs:
@@ -1779,7 +1791,7 @@ jobs:
   plugin_prerelease_candidate:
     name: Run plugin prerelease candidate validation
     needs: [resolve_target, evidence_reuse, candidate_acquisition]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.plugin_candidate_required == 'true' && needs.candidate_acquisition.result == 'success' && needs.candidate_acquisition.outputs.state == 'ready' && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    if: ${{ always() && (needs.resolve_target.outputs.preflight_first != 'true' || !cancelled()) && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.plugin_candidate_required == 'true' && needs.candidate_acquisition.result == 'success' && needs.candidate_acquisition.outputs.state == 'ready' && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 15
     outputs:
@@ -1812,8 +1824,8 @@ jobs:
 
   release_checks_independent:
     name: Run release checks independent validation
-    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","install-smoke","live-e2e","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse, npm_preflight_first]
+    if: ${{ always() && (needs.resolve_target.outputs.preflight_first != 'true' || (!cancelled() && needs.npm_preflight_first.result == 'success')) && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","install-smoke","live-e2e","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 15
     outputs:
@@ -1857,8 +1869,15 @@ jobs:
 
   release_checks_candidate:
     name: Run release checks candidate validation
-    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse, candidate_acquisition]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (needs.resolve_target.outputs.release_candidate_artifact_required != 'true' || (needs.candidate_acquisition.result == 'success' && needs.candidate_acquisition.outputs.state == 'ready')) && (contains(fromJSON('["all","cross-os","windows-node","package","qualified-package"]'), inputs.rerun_group) || (inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    needs:
+      [
+        resolve_target,
+        plugin_compatibility_readiness,
+        evidence_reuse,
+        candidate_acquisition,
+        npm_preflight_first,
+      ]
+    if: ${{ always() && (needs.resolve_target.outputs.preflight_first != 'true' || (!cancelled() && needs.npm_preflight_first.result == 'success')) && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (needs.resolve_target.outputs.release_candidate_artifact_required != 'true' || (needs.candidate_acquisition.result == 'success' && needs.candidate_acquisition.outputs.state == 'ready')) && (contains(fromJSON('["all","cross-os","windows-node","package","qualified-package"]'), inputs.rerun_group) || (inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 15
     outputs:
@@ -1902,8 +1921,8 @@ jobs:
 
   npm_telegram:
     name: Run package Telegram E2E
-    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.coverage_policy != 'npm-beta-v1' && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group) && (inputs.npm_telegram_package_spec != '' || inputs.release_package_spec != '') && needs.evidence_reuse.outputs.reuse != 'true' }}
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse, npm_preflight_first]
+    if: ${{ always() && (needs.resolve_target.outputs.preflight_first != 'true' || (!cancelled() && needs.npm_preflight_first.result == 'success')) && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.coverage_policy != 'npm-beta-v1' && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group) && (inputs.npm_telegram_package_spec != '' || inputs.release_package_spec != '') && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 15
     outputs:
@@ -1929,10 +1948,35 @@ jobs:
           SCENARIO: ${{ inputs.npm_telegram_scenario }}
         run: *full_release_child_dispatch
 
+  stable_client_compatibility:
+    name: Run stable client compatibility
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse, npm_preflight_first]
+    if: ${{ always() && (needs.resolve_target.outputs.preflight_first != 'true' || (!cancelled() && needs.npm_preflight_first.result == 'success')) && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","ci"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    runs-on: *linux_runner_ubuntu
+    timeout-minutes: 15
+    outputs:
+      run_id: ${{ steps.dispatch.outputs.run_id }}
+      run_attempt: ${{ steps.dispatch.outputs.run_attempt }}
+      url: ${{ steps.dispatch.outputs.url }}
+      child_reuse: ${{ steps.dispatch.outputs.child_reuse }}
+    steps:
+      - *child_reuse_checkout
+      - *qualification_evidence_verifier_checkout
+      - *child_reuse_runtime
+      - name: Dispatch stable client compatibility
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHILD_WORKFLOW_KIND: stable-client
+          TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+          CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+          PARENT_WORKFLOW_SHA: ${{ github.sha }}
+        run: *full_release_child_dispatch
+
   performance:
     name: Run product performance evidence
-    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.coverage_policy != 'npm-beta-v1' && needs.resolve_target.outputs.performance_exempt != 'true' && contains(fromJSON('["all","performance"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse, npm_preflight_first]
+    if: ${{ always() && (needs.resolve_target.outputs.preflight_first != 'true' || (!cancelled() && needs.npm_preflight_first.result == 'success')) && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.coverage_policy != 'npm-beta-v1' && needs.resolve_target.outputs.performance_exempt != 'true' && contains(fromJSON('["all","performance"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 15
     outputs:
@@ -1959,10 +2003,10 @@ jobs:
   prepare_npm_package:
     name: Prepare release npm artifacts
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
-    if: ${{ always() && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (inputs.rerun_group == 'all' || needs.resolve_target.outputs.candidate_required == 'true') }}
+    if: ${{ always() && needs.resolve_target.outputs.preflight_first != 'true' && needs.resolve_target.result == 'success' && (needs.plugin_compatibility_readiness.result == 'success' || (inputs.rerun_group == 'build-only' && needs.plugin_compatibility_readiness.result == 'skipped')) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (contains(fromJSON('["all","build-only"]'), inputs.rerun_group) || needs.resolve_target.outputs.candidate_required == 'true') }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 360
-    outputs:
+    outputs: &npm_preparation_outputs
       run_id: ${{ steps.reused.outputs.run_id || steps.producer.outputs.run_id }}
       run_attempt: ${{ steps.reused.outputs.run_attempt || steps.producer.outputs.run_attempt }}
       dispatch_id: ${{ steps.producer.outputs.dispatch_id }}
@@ -1975,13 +2019,14 @@ jobs:
       ARTIFACT_DISPATCH_ID: full-release-validation-${{ github.run_id }}-1-artifacts-npm
       TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
       RELEASE_TAG: ${{ needs.resolve_target.outputs.release_tag }}
-      NPM_DIST_TAG: ${{ needs.resolve_target.outputs.npm_dist_tag }}
+      # Build-only seals the exact publication channel; full validation qualifies stable on beta.
+      NPM_DIST_TAG: ${{ inputs.rerun_group == 'build-only' && fromJSON(needs.resolve_target.outputs.publication_selection_json).npmDistTag || needs.resolve_target.outputs.npm_dist_tag }}
       RELEASE_CANDIDATE_BRANCH: ${{ needs.resolve_target.outputs.release_candidate_branch }}
       NPM_PREFLIGHT_USE_GITHUB_HOSTED_RUNNERS: ${{ inputs.npm_preflight_use_github_hosted_runners }}
-      PREFLIGHT_PHASE: ${{ inputs.rerun_group == 'all' && 'all' || 'prepare' }}
+      PREFLIGHT_PHASE: ${{ inputs.rerun_group == 'build-only' && 'build-only' || (inputs.rerun_group == 'all' && 'all' || 'prepare') }}
       CHILD_WORKFLOW_REF: ${{ github.ref_name }}
       PARENT_WORKFLOW_SHA: ${{ github.sha }}
-    steps:
+    steps: &npm_preparation_steps
       - name: Retain original npm package descriptor
         id: reused
         if: env.PUBLICATION_ARTIFACTS_REUSED == 'true'
@@ -1993,23 +2038,29 @@ jobs:
           printf '%s\n' "prepared_bundle_json=$PREPARED_BUNDLE_JSON" "run_id=$PRODUCER_RUN_ID" "run_attempt=$PRODUCER_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
       - name: Dispatch immutable npm artifact producer
         id: dispatch
+        env:
+          CHILD_WORKFLOW_KIND: artifact-npm
         if: github.run_attempt == 1 && env.PUBLICATION_ARTIFACTS_REUSED != 'true'
         run: *full_release_child_dispatch
       - &artifact_tooling_checkout
         name: Checkout artifact receipt tooling
-        if: env.PUBLICATION_ARTIFACTS_REUSED != 'true'
+        if: env.PUBLICATION_ARTIFACTS_REUSED != 'true' || (github.run_attempt != 1 && github.job == 'npm_preflight_first')
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           sparse-checkout: scripts
           persist-credentials: false
       - name: Setup supported Node runtime
-        if: env.PUBLICATION_ARTIFACTS_REUSED != 'true'
+        if: env.PUBLICATION_ARTIFACTS_REUSED != 'true' || (github.run_attempt != 1 && github.job == 'npm_preflight_first')
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
 
+      # A retry may recover existing children only if attempt one released them.
+      - name: Verify initial npm preflight on retry
+        if: github.run_attempt != 1 && github.job == 'npm_preflight_first'
+        run: node scripts/full-release-artifacts.mjs verify-initial-npm
       - &artifact_producer_resolution
         name: Recover original artifact producer
         if: env.PUBLICATION_ARTIFACTS_REUSED != 'true'
@@ -2018,20 +2069,46 @@ jobs:
           ARTIFACT_RUN_ID: ${{ steps.dispatch.outputs.run_id }}
           ARTIFACT_RUN_ATTEMPT: ${{ steps.dispatch.outputs.run_attempt }}
         run: node scripts/full-release-artifacts.mjs resolve
-      # Raw bytes unblock package consumers while source/SDK/dependency proof continues.
+      # In parallel mode, raw bytes unblock package consumers while source proof continues.
       - name: Wait for publishable npm package
         id: bundle
         if: env.PUBLICATION_ARTIFACTS_REUSED != 'true'
         env:
           ARTIFACT_RUN_ID: ${{ steps.producer.outputs.run_id }}
           ARTIFACT_RUN_ATTEMPT: ${{ steps.producer.outputs.run_attempt }}
-          ARTIFACT_OUTPUT: raw
+          ARTIFACT_OUTPUT: ${{ github.run_attempt == 1 && needs.resolve_target.outputs.preflight_first == 'true' && 'source-and-package' || 'raw' }}
         run: node scripts/full-release-artifacts.mjs wait
+
+  npm_preflight_first:
+    # The scheduler holds fanout only when this slot owns the normal npm producer.
+    # The original slot keeps its frozen label and kind for older tooling.
+    name: Prepare initial release npm artifacts
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
+    if: ${{ !cancelled() && needs.resolve_target.result == 'success' && needs.resolve_target.outputs.preflight_first == 'true' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) }}
+    runs-on: *linux_runner_ubuntu
+    timeout-minutes: 360
+    outputs: *npm_preparation_outputs
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PUBLICATION_ARTIFACTS_REUSED: ${{ needs.evidence_reuse.outputs.publication_artifacts_reused }}
+      PREFLIGHT_FIRST_CHILD_WORKFLOW_KIND: artifact-npm
+      ARTIFACT_STAGE: npm
+      ARTIFACT_DISPATCH_ID: full-release-validation-${{ github.run_id }}-1-artifacts-npm
+      TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+      RELEASE_TAG: ${{ needs.resolve_target.outputs.release_tag }}
+      # Build-only seals the exact publication channel; full validation qualifies stable on beta.
+      NPM_DIST_TAG: ${{ inputs.rerun_group == 'build-only' && fromJSON(needs.resolve_target.outputs.publication_selection_json).npmDistTag || needs.resolve_target.outputs.npm_dist_tag }}
+      RELEASE_CANDIDATE_BRANCH: ${{ needs.resolve_target.outputs.release_candidate_branch }}
+      NPM_PREFLIGHT_USE_GITHUB_HOSTED_RUNNERS: ${{ inputs.npm_preflight_use_github_hosted_runners }}
+      PREFLIGHT_PHASE: ${{ inputs.rerun_group == 'build-only' && 'build-only' || (inputs.rerun_group == 'all' && 'all' || 'prepare') }}
+      CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+      PARENT_WORKFLOW_SHA: ${{ github.sha }}
+    steps: *npm_preparation_steps
 
   qualify_npm_package:
     name: Qualify release npm artifacts
-    needs: [resolve_target, evidence_reuse, prepare_npm_package]
-    if: ${{ always() && needs.resolve_target.result == 'success' && inputs.rerun_group == 'all' && needs.prepare_npm_package.result == 'success' }}
+    needs: [resolve_target, evidence_reuse, prepare_npm_package, npm_preflight_first]
+    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","build-only"]'), inputs.rerun_group) && (needs.prepare_npm_package.result == 'success' || needs.npm_preflight_first.result == 'success') }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 360
     outputs:
@@ -2040,13 +2117,13 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       PUBLICATION_ARTIFACTS_REUSED: ${{ needs.evidence_reuse.outputs.publication_artifacts_reused }}
       ARTIFACT_STAGE: npm
-      ARTIFACT_DISPATCH_ID: ${{ needs.prepare_npm_package.outputs.dispatch_id }}
-      ARTIFACT_RUN_ID: ${{ needs.prepare_npm_package.outputs.run_id }}
-      ARTIFACT_RUN_ATTEMPT: ${{ needs.prepare_npm_package.outputs.run_attempt }}
+      ARTIFACT_DISPATCH_ID: ${{ needs.prepare_npm_package.outputs.dispatch_id || needs.npm_preflight_first.outputs.dispatch_id }}
+      ARTIFACT_RUN_ID: ${{ needs.prepare_npm_package.outputs.run_id || needs.npm_preflight_first.outputs.run_id }}
+      ARTIFACT_RUN_ATTEMPT: ${{ needs.prepare_npm_package.outputs.run_attempt || needs.npm_preflight_first.outputs.run_attempt }}
       ARTIFACT_OUTPUT: receipt
       TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
       RELEASE_TAG: ${{ needs.resolve_target.outputs.release_tag }}
-      PREFLIGHT_PHASE: all
+      PREFLIGHT_PHASE: ${{ inputs.rerun_group == 'build-only' && 'build-only' || 'all' }}
       CHILD_WORKFLOW_REF: ${{ github.ref_name }}
       PARENT_WORKFLOW_SHA: ${{ github.sha }}
     steps:
@@ -2071,8 +2148,8 @@ jobs:
 
   prepare_plugin_npm:
     name: Prepare exact plugin npm artifacts
-    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
-    if: ${{ always() && inputs.rerun_group == 'all' && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.plugin_npm_preflight_required == 'true' }}
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse, npm_preflight_first]
+    if: ${{ always() && (needs.resolve_target.outputs.preflight_first != 'true' || (!cancelled() && needs.npm_preflight_first.result == 'success')) && contains(fromJSON('["all","build-only"]'), inputs.rerun_group) && needs.resolve_target.result == 'success' && (needs.plugin_compatibility_readiness.result == 'success' || (inputs.rerun_group == 'build-only' && needs.plugin_compatibility_readiness.result == 'skipped')) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.plugin_npm_preflight_required == 'true' }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 150
     outputs:
@@ -2230,8 +2307,8 @@ jobs:
 
   prepare_docker_release:
     name: Prepare release Docker artifacts
-    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
-    if: ${{ always() && inputs.rerun_group == 'all' && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) }}
+    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse, npm_preflight_first]
+    if: ${{ always() && (needs.resolve_target.outputs.preflight_first != 'true' || (!cancelled() && needs.npm_preflight_first.result == 'success')) && contains(fromJSON('["all","build-only"]'), inputs.rerun_group) && needs.resolve_target.result == 'success' && (needs.plugin_compatibility_readiness.result == 'success' || (inputs.rerun_group == 'build-only' && needs.plugin_compatibility_readiness.result == 'skipped')) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 360
     outputs:
@@ -2247,7 +2324,7 @@ jobs:
       ARTIFACT_DISPATCH_ID: full-release-validation-${{ github.run_id }}-1-artifacts-docker
       TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
       RELEASE_TAG: ${{ needs.resolve_target.outputs.release_tag }}
-      PREFLIGHT_PHASE: all
+      PREFLIGHT_PHASE: ${{ inputs.rerun_group == 'build-only' && 'build-only' || 'all' }}
       CHILD_WORKFLOW_REF: ${{ github.ref_name }}
       PARENT_WORKFLOW_SHA: ${{ github.sha }}
     steps:
@@ -2285,8 +2362,8 @@ jobs:
 
   candidate_acquisition:
     name: Acquire full release candidate
-    needs: [resolve_target, evidence_reuse, prepare_npm_package]
-    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.prepare_npm_package.result == 'success' && needs.evidence_reuse.outputs.reuse != 'true' && needs.resolve_target.outputs.candidate_required == 'true' }}
+    needs: [resolve_target, evidence_reuse, prepare_npm_package, npm_preflight_first]
+    if: ${{ always() && (needs.resolve_target.outputs.preflight_first != 'true' || (!cancelled() && needs.npm_preflight_first.result == 'success')) && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (needs.prepare_npm_package.result == 'success' || needs.npm_preflight_first.result == 'success') && needs.evidence_reuse.outputs.reuse != 'true' && needs.resolve_target.outputs.candidate_required == 'true' }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 360
     outputs:
@@ -2301,11 +2378,11 @@ jobs:
       ARTIFACT_DISPATCH_ID: full-release-validation-${{ github.run_id }}-1-artifacts-candidate
       TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
       RELEASE_TAG: ${{ needs.resolve_target.outputs.release_tag }}
-      PREFLIGHT_PHASE: all
+      PREFLIGHT_PHASE: ${{ inputs.rerun_group == 'build-only' && 'build-only' || 'all' }}
       CHILD_WORKFLOW_REF: ${{ github.ref_name }}
       PARENT_WORKFLOW_SHA: ${{ github.sha }}
       CANDIDATE_REQUEST_JSON: ${{ needs.resolve_target.outputs.candidate_request_json }}
-      PREPARED_NPM_BUNDLE_JSON: ${{ needs.prepare_npm_package.outputs.prepared_bundle_json }}
+      PREPARED_NPM_BUNDLE_JSON: ${{ needs.prepare_npm_package.outputs.prepared_bundle_json || needs.npm_preflight_first.outputs.prepared_bundle_json }}
     steps:
       - *artifact_tooling_checkout
       - name: Setup supported Node runtime
@@ -2339,6 +2416,7 @@ jobs:
         resolve_target,
         evidence_reuse,
         prepare_npm_package,
+        npm_preflight_first,
         qualify_npm_package,
         prepare_plugin_npm,
         prepare_docker_release,
@@ -2349,6 +2427,7 @@ jobs:
         release_checks_independent,
         release_checks_candidate,
         npm_telegram,
+        stable_client_compatibility,
         performance,
       ]
     if: always()
@@ -2485,6 +2564,11 @@ jobs:
           NPM_TELEGRAM_RUN_ATTEMPT: ${{ needs.npm_telegram.outputs.run_attempt }}
           NPM_TELEGRAM_URL: ${{ needs.npm_telegram.outputs.url }}
           NPM_TELEGRAM_REUSE: ${{ needs.npm_telegram.outputs.child_reuse || 'null' }}
+          STABLE_CLIENT_RESULT: ${{ needs.stable_client_compatibility.result }}
+          STABLE_CLIENT_RUN_ID: ${{ needs.stable_client_compatibility.outputs.run_id }}
+          STABLE_CLIENT_RUN_ATTEMPT: ${{ needs.stable_client_compatibility.outputs.run_attempt }}
+          STABLE_CLIENT_URL: ${{ needs.stable_client_compatibility.outputs.url }}
+          STABLE_CLIENT_REUSE: ${{ needs.stable_client_compatibility.outputs.child_reuse || 'null' }}
           PERFORMANCE_RESULT: ${{ needs.performance.result }}
           PERFORMANCE_RUN_ID: ${{ needs.performance.outputs.run_id }}
           PERFORMANCE_RUN_ATTEMPT: ${{ needs.performance.outputs.run_attempt }}
@@ -2496,7 +2580,7 @@ jobs:
           PUBLICATION_ARTIFACT_SOURCE_JSON: ${{ needs.evidence_reuse.outputs.publication_artifact_source || 'null' }}
           CANDIDATE_EVIDENCE_JSON: ${{ needs.candidate_acquisition.outputs.binding_json }}
           CANDIDATE_REQUEST_JSON: ${{ needs.resolve_target.outputs.candidate_request_json }}
-          NPM_PREPARATION_RESULT: ${{ needs.prepare_npm_package.result }}
+          NPM_PREPARATION_RESULT: &npm_preparation_result ${{ needs.resolve_target.outputs.preflight_first == 'true' && needs.npm_preflight_first.result || needs.prepare_npm_package.result }}
           NPM_QUALIFICATION_RESULT: ${{ needs.qualify_npm_package.result }}
           PLUGIN_NPM_REQUIRED: ${{ needs.resolve_target.outputs.plugin_npm_preflight_required }}
           PLUGIN_NPM_PREPARATION_RESULT: ${{ needs.prepare_plugin_npm.result }}
@@ -2566,6 +2650,10 @@ jobs:
               --arg npmTelegramRunId "$NPM_TELEGRAM_RUN_ID" \
               --arg npmTelegramRunAttempt "$NPM_TELEGRAM_RUN_ATTEMPT" \
               --arg npmTelegramUrl "$NPM_TELEGRAM_URL" \
+              --arg stableClientResult "$STABLE_CLIENT_RESULT" \
+              --arg stableClientRunId "$STABLE_CLIENT_RUN_ID" \
+              --arg stableClientRunAttempt "$STABLE_CLIENT_RUN_ATTEMPT" \
+              --arg stableClientUrl "$STABLE_CLIENT_URL" \
               --arg performanceResult "$PERFORMANCE_RESULT" \
               --arg performanceRunId "$PERFORMANCE_RUN_ID" \
               --arg performanceRunAttempt "$PERFORMANCE_RUN_ATTEMPT" \
@@ -2576,6 +2664,7 @@ jobs:
               --argjson releaseChecksIndependentReuse "$RELEASE_CHECKS_INDEPENDENT_REUSE" \
               --argjson releaseChecksCandidateReuse "$RELEASE_CHECKS_CANDIDATE_REUSE" \
               --argjson npmTelegramReuse "$NPM_TELEGRAM_REUSE" \
+              --argjson stableClientReuse "$STABLE_CLIENT_REUSE" \
               --argjson productPerformanceReuse "$PERFORMANCE_REUSE" \
               '{
                 parentRunId: $parentRunId,
@@ -2616,11 +2705,12 @@ jobs:
                   releaseChecksIndependent: {result: $releaseChecksIndependentResult, runId: $releaseChecksIndependentRunId, runAttempt: $releaseChecksIndependentRunAttempt, url: $releaseChecksIndependentUrl},
                   releaseChecksCandidate: {result: $releaseChecksCandidateResult, runId: $releaseChecksCandidateRunId, runAttempt: $releaseChecksCandidateRunAttempt, url: $releaseChecksCandidateUrl},
                   npmTelegram: {result: $npmTelegramResult, runId: $npmTelegramRunId, runAttempt: $npmTelegramRunAttempt, url: $npmTelegramUrl},
+                  stableClientCompatibility: {result: $stableClientResult, runId: $stableClientRunId, runAttempt: $stableClientRunAttempt, url: $stableClientUrl},
                   productPerformance: {result: $performanceResult, runId: $performanceRunId, runAttempt: $performanceRunAttempt, url: $performanceUrl}
                 }
               } + (if $publicationArtifactSource == null then {} else {publicationArtifactSource: $publicationArtifactSource} end)
               + (if $coveragePolicy == "" then {} else {coveragePolicy: $coveragePolicy} end)
-              + ({normalCi: $normalCiReuse, pluginPrereleaseIndependent: $pluginPrereleaseIndependentReuse, pluginPrereleaseCandidate: $pluginPrereleaseCandidateReuse, releaseChecksIndependent: $releaseChecksIndependentReuse, releaseChecksCandidate: $releaseChecksCandidateReuse, npmTelegram: $npmTelegramReuse, productPerformance: $productPerformanceReuse} | with_entries(select(.value != null)) | if length == 0 then {} else {childReuse: .} end)'
+              + ({normalCi: $normalCiReuse, pluginPrereleaseIndependent: $pluginPrereleaseIndependentReuse, pluginPrereleaseCandidate: $pluginPrereleaseCandidateReuse, releaseChecksIndependent: $releaseChecksIndependentReuse, releaseChecksCandidate: $releaseChecksCandidateReuse, npmTelegram: $npmTelegramReuse, stableClientCompatibility: $stableClientReuse, productPerformance: $productPerformanceReuse} | with_entries(select(.value != null)) | if length == 0 then {} else {childReuse: .} end)'
             )"
           fi
           umask 077
@@ -2707,6 +2797,7 @@ jobs:
       [
         resolve_target,
         prepare_npm_package,
+        npm_preflight_first,
         qualify_npm_package,
         prepare_plugin_npm,
         prepare_docker_release,
@@ -2722,7 +2813,7 @@ jobs:
       rerun_group: ${{ inputs.rerun_group }}
       target_sha: ${{ needs.resolve_target.outputs.sha }}
       qualification_workflow_sha: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && fromJSON(needs.resolve_target.outputs.source_admission_json).qualificationAdmission.workflowSha || '' }}
-      npm_preparation_result: ${{ needs.prepare_npm_package.result }}
+      npm_preparation_result: *npm_preparation_result
       npm_qualification_result: ${{ needs.qualify_npm_package.result }}
       plugin_npm_preparation_result: ${{ needs.prepare_plugin_npm.result }}
       docker_preparation_result: ${{ needs.prepare_docker_release.result }}
@@ -2733,6 +2824,7 @@ jobs:
       [
         resolve_target,
         prepare_npm_package,
+        npm_preflight_first,
         qualify_npm_package,
         prepare_plugin_npm,
         prepare_docker_release,
@@ -2748,7 +2840,7 @@ jobs:
       rerun_group: ${{ inputs.rerun_group }}
       target_sha: ${{ needs.resolve_target.outputs.sha }}
       qualification_workflow_sha: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && fromJSON(needs.resolve_target.outputs.source_admission_json).qualificationAdmission.workflowSha || '' }}
-      npm_preparation_result: ${{ needs.prepare_npm_package.result }}
+      npm_preparation_result: *npm_preparation_result
       npm_qualification_result: ${{ needs.qualify_npm_package.result }}
       plugin_npm_preparation_result: ${{ needs.prepare_plugin_npm.result }}
       docker_preparation_result: ${{ needs.prepare_docker_release.result }}
@@ -2761,6 +2853,7 @@ jobs:
         plugin_compatibility_readiness,
         evidence_reuse,
         prepare_npm_package,
+        npm_preflight_first,
         qualify_npm_package,
         prepare_plugin_npm,
         prepare_docker_release,
@@ -2782,7 +2875,7 @@ jobs:
     env:
       RELEASE_STATE_SCRIPT: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/full-release-validation-state.mjs', github.workspace) || format('{0}/scripts/full-release-validation-state.mjs', github.workspace) }}
       OPENCLAW_RELEASE_WAIVERS_PATH: ${{ github.workspace }}/scripts/lib/release-validation-waivers.json
-      NPM_PREPARATION_RESULT: ${{ needs.prepare_npm_package.result }}
+      NPM_PREPARATION_RESULT: *npm_preparation_result
       NPM_QUALIFICATION_RESULT: ${{ needs.qualify_npm_package.result }}
       PLUGIN_NPM_PREPARATION_RESULT: ${{ needs.prepare_plugin_npm.result }}
       DOCKER_PREPARATION_RESULT: ${{ needs.prepare_docker_release.result }}
@@ -2790,17 +2883,18 @@ jobs:
       - name: Require successful source readiness
         env:
           SOURCE_READINESS_RESULT: ${{ needs.plugin_compatibility_readiness.result }}
+          RERUN_GROUP: ${{ inputs.rerun_group }}
         run: |
           set -euo pipefail
-          [[ "$SOURCE_READINESS_RESULT" == "success" ]] || {
+          [[ "$SOURCE_READINESS_RESULT" == "success" || ( "$RERUN_GROUP" == "build-only" && "$SOURCE_READINESS_RESULT" == "skipped" ) ]] || {
             echo "Release source readiness must succeed, including when reusing evidence." >&2
             exit 1
           }
 
       - name: Require qualified publication artifacts
-        if: inputs.rerun_group == 'all'
+        if: contains(fromJSON('["all","build-only"]'), inputs.rerun_group)
         env:
-          NPM_PREPARE_RESULT: ${{ needs.prepare_npm_package.result }}
+          NPM_PREPARE_RESULT: *npm_preparation_result
           NPM_QUALIFY_RESULT: ${{ needs.qualify_npm_package.result }}
           PLUGIN_NPM_REQUIRED: ${{ needs.resolve_target.outputs.plugin_npm_preflight_required }}
           PLUGIN_NPM_PREPARE_RESULT: ${{ needs.prepare_plugin_npm.result }}
@@ -2927,6 +3021,9 @@ jobs:
 
       - name: Validate release validation manifest
         env:
+          GH_TOKEN: ${{ github.token }}
+          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
+          OPENCLAW_RELEASE_WAIVERS_PATH: ${{ github.workspace }}/scripts/lib/release-validation-waivers.json
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}

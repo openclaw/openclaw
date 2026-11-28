@@ -4,8 +4,8 @@ import {
   getControllerEmbeddedAttachment,
 } from "../agents/embedded-agent-runner/run-state.js";
 import { resolveActiveEmbeddedRunOwnerByRunId } from "../agents/embedded-agent-runner/runs.js";
+import { abortControlledSubagents } from "../agents/subagents/cancel-descendants.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { abortControlledSubagents } from "../gateway/server-methods/chat-abort-descendants.js";
 import { getDiagnosticSessionActivitySnapshot } from "../logging/diagnostic-run-activity.js";
 import { resolveActiveReplyRunOwnerForSignal } from "../sessions/session-controller.barriers.js";
 import type {

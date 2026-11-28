@@ -19,13 +19,18 @@ import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { registerSignalExitGate } from "./signal-exit-barrier.js";
 
-const localOwnerAssertion = new AsyncLocalStorage<() => void>();
+const localOwnerScope = new AsyncLocalStorage<{
+  assertCurrent: () => void;
+  holdsOfflineTarget?: (databasePath: string, configPath: string) => boolean;
+}>();
 
 type LocalMutationScope = {
   env: NodeJS.ProcessEnv;
   config: OpenClawConfig;
   signal: AbortSignal;
   assertCurrent: () => void;
+  /** This invocation or its enclosing command still holds offline custody for this target. */
+  localGatewayAbsent?: true;
 };
 
 /**
@@ -81,7 +86,8 @@ export async function runWithLocalStateOwner<T>(params: {
   assertTargetCurrent?: () => void;
   runLocal: (scope: LocalMutationScope) => Promise<T>;
 }): Promise<T> {
-  localOwnerAssertion.getStore()?.();
+  const parent = localOwnerScope.getStore();
+  parent?.assertCurrent();
   const databasePortRecovery = params.databasePortRecovery
     ? { ...params.databasePortRecovery }
     : undefined;
@@ -151,7 +157,7 @@ export async function runWithLocalStateOwner<T>(params: {
       return refuse(error);
     }
   };
-  const runLocal = async (assertOwnerCurrent: () => void): Promise<T> => {
+  const runLocal = async (assertOwnerCurrent: () => void, acquiredOffline?: true): Promise<T> => {
     const assertCurrent = () => {
       assertTargetCurrent();
       assertOwnerCurrent();
@@ -160,20 +166,43 @@ export async function runWithLocalStateOwner<T>(params: {
     const { loadConfig } = await import("../config/config.js");
     assertCurrent();
     let config: OpenClawConfig | undefined;
-    return await localOwnerAssertion.run(assertCurrent, () =>
-      params.runLocal({
-        env,
-        // Loading config can write state. Config-free owners must reach their own admission first.
-        get config() {
+    // A process may host other owners. Only the command holding this lock can vouch for
+    // its implicit Gateway target, and detached work must lose that proof when it returns.
+    let active = true;
+    const holdsOfflineTarget = acquiredOffline
+      ? (selectedDatabasePath: string, selectedConfigPath: string) => {
+          if (
+            !active ||
+            selectedDatabasePath !== databasePath ||
+            selectedConfigPath !== paths.configPath
+          ) {
+            return false;
+          }
           assertCurrent();
-          config ??= loadConfig();
-          assertCurrent();
-          return config;
-        },
-        signal: controller.signal,
-        assertCurrent,
-      }),
-    );
+          return true;
+        }
+      : parent?.holdsOfflineTarget?.(databasePath, paths.configPath)
+        ? parent.holdsOfflineTarget
+        : undefined;
+    try {
+      return await localOwnerScope.run({ assertCurrent, holdsOfflineTarget }, () =>
+        params.runLocal({
+          env,
+          // Loading config can write state. Config-free owners must reach their own admission first.
+          get config() {
+            assertCurrent();
+            config ??= loadConfig();
+            assertCurrent();
+            return config;
+          },
+          signal: controller.signal,
+          assertCurrent,
+          ...(holdsOfflineTarget ? { localGatewayAbsent: true } : {}),
+        }),
+      );
+    } finally {
+      active = false;
+    }
   };
   const route = async (
     owner: Omit<GatewayLockIdentity, "port"> & { port?: number },
@@ -399,7 +428,9 @@ export async function runWithLocalStateOwner<T>(params: {
       const cleanup = createAgentCleanupScope();
       let uncertainCleanup = false;
       try {
-        return await (resources ?? lock).run(() => cleanup.run(() => runLocal(lock.assertCurrent)));
+        return await (resources ?? lock).run(() =>
+          cleanup.run(() => runLocal(lock.assertCurrent, true)),
+        );
       } catch (error) {
         uncertainCleanup = hasCommandProcessCleanupError(error);
         throw error;

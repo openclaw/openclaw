@@ -245,39 +245,68 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
     );
   });
 
-  it("refuses restricted ACP takeover before invoking reply hooks", async () => {
-    const sessionKey = "agent:test:restricted-acp";
-    const entry = {
-      sessionId: "restricted-acp-session",
-      updatedAt: Date.now(),
-      acp: { backend: "acpx" },
-    };
-    sessionStoreMocks.entriesBySessionKey.set(sessionKey, entry);
-    sessionStoreMocks.loadSessionStoreEntry.mockReturnValue(entry);
-    sessionStoreMocks.loadSessionEntry.mockReturnValue(entry);
-    hookMocks.runner.hasHooks.mockReturnValue(true);
-    hookMocks.runner.runReplyDispatch.mockResolvedValue(handledReply);
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn<InternalGetReplyFromConfig>();
-    const guarded = { permissionMode: "guarded" as const, toolOverrides: { webSearch: false } };
+  it.each([false, true])(
+    "refuses restricted ACP takeover before invoking reply hooks (participation=%s)",
+    async (participation) => {
+      const sessionKey = "agent:test:restricted-acp";
+      const entry = {
+        sessionId: "restricted-acp-session",
+        updatedAt: Date.now(),
+        acp: { backend: "acpx" },
+      };
+      sessionStoreMocks.entriesBySessionKey.set(sessionKey, entry);
+      sessionStoreMocks.loadSessionStoreEntry.mockReturnValue(entry);
+      sessionStoreMocks.loadSessionEntry.mockReturnValue(entry);
+      hookMocks.runner.hasHooks.mockReturnValue(true);
+      hookMocks.runner.runReplyDispatch.mockResolvedValue(handledReply);
+      const dispatcher = createDispatcher();
+      const replyResolver = vi.fn<InternalGetReplyFromConfig>();
+      const guarded = { permissionMode: "guarded" as const, toolOverrides: { webSearch: false } };
 
-    const result = await dispatch({
-      ctx: discordCtx(sessionKey),
-      dispatcher,
-      replyResolver,
-      replyOptions: { admittedSessionSettings: guarded },
-    });
+      const result = await dispatch({
+        ctx: discordCtx(sessionKey),
+        dispatcher,
+        replyResolver,
+        replyOptions: participation
+          ? {
+              operatorAuthority: createTestOperatorAuthority({
+                canonicalIdentity: null,
+                profileId: "participant",
+                scopes: [],
+                participationCeiling: {
+                  kind: "send",
+                  profileId: "participant",
+                  sessionKey,
+                  tools: ["read"],
+                  permission: "workspace",
+                  source: {
+                    agentId: "main",
+                    sessionId: "test",
+                    lifecycleRevision: null,
+                    creatorProfileId: "creator",
+                    root: "/synthetic",
+                  },
+                },
+              }),
+            }
+          : { admittedSessionSettings: guarded },
+      });
 
-    expect(hookMocks.runner.runReplyDispatch).not.toHaveBeenCalled();
-    expect(replyResolver).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        isError: true,
-        text: expect.stringContaining("cannot enforce its permission or tool policy"),
-      }),
-    );
-    expect(result.queuedFinal).toBe(true);
-  });
+      expect(hookMocks.runner.runReplyDispatch).not.toHaveBeenCalled();
+      expect(replyResolver).not.toHaveBeenCalled();
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          isError: true,
+          text: expect.stringContaining(
+            participation
+              ? "Participating inputs require the OpenClaw runtime"
+              : "cannot enforce its permission or tool policy",
+          ),
+        }),
+      );
+      expect(result.queuedFinal).toBe(true);
+    },
+  );
 });
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 let runAfterReplyOperationClear: typeof import("../../sessions/session-controller.js").runAfterReplyOperationClear;

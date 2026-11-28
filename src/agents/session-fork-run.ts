@@ -69,7 +69,7 @@ type SessionForkRunParams = {
   /** The completed transcript entry the fork reads through. */
   source: TranscriptEntryAnchor;
   prompt: string;
-  /** Tools the fork may execute; empty for a tool-free fork. */
+  /** Tools the fork may execute, as admitted by `prepareSessionFork`; empty for a tool-free fork. */
   tools: readonly string[];
   /** Caller-chosen id, so the caller can find what the fork's tools recorded even when it fails. */
   runId: string;
@@ -197,9 +197,14 @@ export async function prepareSessionFork(params: {
   tools: readonly string[];
   model: { provider: string; model: string };
   workspaceDir: string;
+  /** The anchored turn's conversation facts, with the fork caller's owner flag. */
   requester?: SessionForkRequester;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
 }): Promise<{ workspaceDir: string } | undefined> {
+  // exec is not on the owner-only list: a fork runs it only for a caller with owner authority.
+  if (params.tools.includes("exec") && params.requester?.senderIsOwner !== true) {
+    return undefined;
+  }
   const { prepareConversationCapabilityProfile } =
     await import("./conversation-capability-profile.js");
   const { isToolAllowedByPolicies } = await import("./tool-policy-match.js");
@@ -643,10 +648,7 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
       // A prewarm is one request; it never compacts the copy it reads.
       ...(params.cachePrewarm ? { disableCompactionRecovery: true } : {}),
       // Every session tool stays listed for the provider's cached prefix; the run gates execution.
-      // exec is not on the owner-only list, so a fork runs it only on the owner's own turn.
-      toolExecutionAllow: params.tools.filter(
-        (tool) => tool !== "exec" || params.requester?.senderIsOwner === true,
-      ),
+      toolExecutionAllow: [...params.tools],
       sessionForkRequest: {
         ...(live?.preparedRequest ? { preparedRequest: live.preparedRequest } : {}),
         ...(pin ? { pin } : {}),

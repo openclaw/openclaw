@@ -29,18 +29,19 @@ install command. Targets supporting older database schemas are refused by the
 existing schema compatibility check before release preparation.
 
 A resident launcher selects the pending release when the Gateway next starts.
-The Gateway migrates private state copies at boot and confirms that it is ready.
-For PostgreSQL, preparation estimates copying time from the combined physical
-size of the namespaces to copy, using a measured rate of 90 seconds/GiB. Estimates
-of at most 600 seconds use private server-side copies; their original schemas and
-rows remain unchanged. If the new Gateway cannot start, the launcher restores
-the previous release, SQLite migration originals, and protected PostgreSQL anchors.
-Writes made only during a failed protected trial are discarded. Larger stores
-still update, using the existing in-place migration path without automatic
-PostgreSQL data rollback; update output and the saved update report warn you to
-back up first.
+Under the existing exclusive database custody, boot runs each store's canonical
+schema steps in place, then confirms readiness. It does not migrate a private
+state tree, run a Doctor chain, rebuild databases generically, or swap database
+files to publish the upgrade.
+
+A compatible schema step that preserves the derived minimum reader version
+needs no recovery image. Before a step raises that floor, boot records an
+independent preimage for the affected database. If the trial fails, the launcher
+restores the previous release and only the recorded raised-floor images;
+compatible databases stay in place. Writes made only to a raised-floor database
+during the failed trial are discarded when its image is restored.
 See [PostgreSQL update recovery](/gateway/postgresql#updates-and-schema-migrations)
-for storage, permissions, and namespace changes.
+for server-backed storage requirements.
 
 `--no-restart` prepares the release but leaves the running Gateway alone; its next
 start still receives the same automatic trial and rollback protection.
@@ -68,9 +69,9 @@ Managed start/restart keeps the selected release. Use
 `openclaw update --tag <version>` for an explicit downgrade. An explicit
 `--tag` or `--channel` remains your target selection instead of the npm package.
 
-Plugin maintenance failures are warnings, not failed core updates. Retry them
-with `openclaw plugins update --all`. An already-current installation still maintains
-plugins and restarts only when needed and restart was requested.
+Plugin maintenance failures are warnings, not failed core updates. The final
+summary names the failed step and its recovery command. An already-current
+installation still maintains plugins and restarts only when needed and requested.
 
 Older installed updaters still perform their first hop with their shipped update
 flow. The compatibility and recovery details below also cover those older
@@ -83,6 +84,12 @@ before starting the unit. Processes belonging to another supervisor are preserve
 An inconclusive readiness check is reported separately from current serving health.
 This recovery repair is supplied by the candidate CLI; older updaters using
 `gateway restart --preserve-definition` can use it without an updater upgrade.
+
+For a Linux system service, run maintenance as the account in its `User=` setting
+with the service's existing `HOME`, `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`,
+`OPENCLAW_CONFIG_PATH`, and profile selectors. When that account differs from
+the one running `openclaw update`, the update is refused before anything changes;
+see [Linux system service run by another account](#linux-system-service-run-by-another-account).
 
 App-owned packages declare their update owner in `openclaw-install-owner.json`
 at the package root. For `owner: "macos-app"`, update OpenClaw.app through its
@@ -122,6 +129,65 @@ Before a significant update, [create a verified backup](#before-updating-create-
 Automatic config copies and migration recovery originals are not a full-state
 backup.
 
+## Linux system service run by another account
+
+A common Linux layout has an administrator-managed global npm package owned by
+root and a systemd system unit whose `User=` is a service account, with the
+service's state in that account's `HOME` or in the unit's `OPENCLAW_STATE_DIR`.
+`openclaw update` cannot back up and check that state for the service account:
+a plain `sudo openclaw update` would check root's own state, and
+`sudo env OPENCLAW_STATE_DIR=<service state> openclaw update` would write the
+service's state as root. So when the selected system unit runs the installation
+being updated as another account, the update is refused before the package is
+replaced. The package, the service state and the running Gateway are unchanged,
+and the refusal prints the commands below with the unit's name, account and
+selectors filled in. Single-account installs and system units that run as the
+updating account are not affected.
+
+If the refused run pointed `OPENCLAW_STATE_DIR` at the service's state, the
+installed updater still wrote its log and report there as root, and the service
+account's backup refuses directories it cannot read. Give those files back to the
+service account first; the refusal prints this command with the real path:
+
+```bash
+sudo find /var/lib/openclaw/.openclaw -xdev -user 0 -exec chown openclaw {} +
+```
+
+Update such an install by hand:
+
+1. Create a verified backup of the service state as the service account, with
+   the unit's `HOME`, `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`,
+   `OPENCLAW_CONFIG_PATH`, and profile selectors. Keep it until the updated
+   service is healthy.
+
+   ```bash
+   sudo -u openclaw env HOME=/var/lib/openclaw OPENCLAW_STATE_DIR=/var/lib/openclaw/.openclaw \
+     openclaw backup create --verify --output /var/lib/openclaw
+   ```
+
+2. Replace the package. On npm 11.15 and earlier, omit `--allow-scripts=openclaw`.
+
+   ```bash
+   sudo npm install -g openclaw@latest --allow-scripts=openclaw
+   ```
+
+3. Restart the existing unit, using its installed name, and leave its service
+   configuration and file ownership unchanged:
+
+   ```bash
+   sudo systemctl restart openclaw-gateway.service
+   ```
+
+4. Check the service as its account:
+   `sudo -u openclaw env HOME=/var/lib/openclaw OPENCLAW_STATE_DIR=/var/lib/openclaw/.openclaw openclaw gateway status --deep`.
+
+Gateway startup migrates configuration and database schemas in the selected state
+directory, so no separate state copy, Doctor run, or account adoption is needed.
+Do not run `openclaw doctor` or `openclaw update repair` as root against the
+service's state. Reinstalling the previous package alone does not undo a schema
+migration made by the new Gateway; to go back, restore the verified backup with
+it (see [Rollback and recovery](/install/updating/rollback-and-recovery)).
+
 ## Local packaged-code overrides
 
 Prepared-release updates currently refuse `--reapply-local-overrides` instead of
@@ -132,6 +198,12 @@ until you have verified the updated Gateway; automatic rollback restores the
 previous release, not manual edits made to the new one.
 
 ## Update implementation contract
+
+Candidate Doctor reads both legacy shared-auth rows under maintenance custody.
+If both rows are absent, Doctor records the ownership and migration receipts
+without reopening the agent database for cleanup. The complete repair plan still
+migrates queued outbound deliveries and imports session data. The installed
+updater needs no change.
 
 ### Release updates
 
@@ -146,58 +218,193 @@ The Gateway's `update.run` and `openclaw update` both use one path:
 4. The release is published, and the Gateway restarts one time.
 5. The resident launcher starts the new release as a trial. It commits when the
    Gateway reports ready. After two failed starts, a configuration refusal
-   (exit 78), or when the trial budget ends, it restores the previous release,
-   SQLite migration originals, and PostgreSQL anchors.
-6. The Gateway that serves after the switch records the outcome. Only a Gateway
-   that runs the target build records success. Restored files alone do not prove
-   that the previous Gateway is serving.
-7. After success is recorded, the serving release runs advisory Doctor inspections
+   (exit 78), or when the trial budget ends, it restores the previous release
+   and recorded raised-floor database preimages.
+6. Preparation records refusals, already-current results, and failures before
+   activation. It checks for an active trial while holding its preparation lock.
+   After activation of a modern launcher trial, only the Gateway that is ready settles the run
+   from the launcher trial and preparation lock. A published trial takes precedence
+   over an expired lock for the same run. Only a Gateway that runs the target build
+   records success. It settles once at core readiness, before background plugin
+   work, and sends the result notice. Restored files alone do not prove that the
+   previous Gateway is serving. Startup does not infer a failed update from PID
+   reuse or uptime.
+7. After the result is recorded, the serving release runs advisory Doctor inspections
    in the background. The same update details receive their results without a page
    reload. Only warning and error findings add advice; inspections do not delay
    completion, fail the update, or trigger rollback.
-8. The serving release updates installed plugins in the background, then reloads
-   changed plugins through the existing runtime lifecycle. Plugin failures appear
-   in the same update details and warning count; they never fail the core update
-   or trigger rollback.
+8. Every Gateway boot updates installed plugins in the background after core
+   readiness, then reloads changed plugins through the existing runtime lifecycle.
+   A pending trial defers this work. The first plugin result and next command appear
+   in matching update details while that plugin step is unsettled; later boots do
+   not rewrite the recorded result. Failures otherwise use the Gateway warning log.
+   Plugin work does not delay or rewrite the core result, send another notice, or
+   trigger rollback. Successful reload warnings stay advisory in plugin details
+   without marking activation failed or requesting a retry.
 
-Startup prepares state and agent migration inputs privately, including mixed
-SQLite/PostgreSQL installations, when the PostgreSQL copy estimate is at most
-600 seconds. Preparation reads the total physical size of the namespaces that
-would be cloned while the previous Gateway is serving, counting table storage,
-indexes, and TOAST once, and estimates 90 seconds/GiB. The candidate migrates and
-validates protected copies before writing the durable file-swap plan or publishing
-their anchors. Original protected PostgreSQL schema and rows remain unchanged.
-Source access grants and schema-specific default privileges are copied and
-verified in the same transaction, so existing reporting and backup roles keep
-their permissions in the new namespace.
+Saved update history does not grant or refuse a new release update. After taking
+its preparation lock and checking the installation, the serving release marks
+other unfinished runs `failed` with reason `interrupted`, then continues. It
+preserves its own run and the run handed over by its serving launcher trial.
+Historical plugin-cohort records remain unchanged; the new update does not
+adopt or replay their rollback.
 
-An estimate above 600 seconds selects the existing in-place PostgreSQL migration
-path, not a size refusal. Copy-only `CREATE` and grant-copy prerequisites do not
-apply to this selection. Existing SQLite-state private-copy protection is retained
-when agent stores use PostgreSQL. Update output and the saved update report show:
+Recovery admission still refuses a live in-place update lease and an
+`.openclaw-restore-*` directory that may contain the only original state files.
+Current preparation locks, active trials, and ordinary preflight checks still
+apply. Owned release leftovers are collected by path after the Gateway is ready,
+never by matching version strings. Doctor retains its separate cleanup for old
+in-place updater runtimes; that process census is not on the update critical path.
 
-> This PostgreSQL store (X GiB) is too large to copy within the update window. It is migrated in place, without automatic data rollback. Back it up first: <https://docs.openclaw.ai/install/updating#rollback>
+Packaged bundled plugins belong to the selected core release, not a second
+plugin installation. Channel synchronization retires obsolete compiled-bundle
+install records before it plans package updates; switching to a packaged bundle
+does not create another path install record. Plugin configuration, explicit local
+links, and source-checkout selections stay intact. Registered plugin host links
+are reconciled by the existing post-core plugin owner before activation reload.
 
-For stores selected for protection, a preparation failure uses the existing
-configuration refusal (exit 78), with the obstruction in its diagnostics. There is
-no portable-export fallback; missing copy privileges must be repaired.
-`--no-restart` delays copying and migration until the next actual Gateway start;
-a same-schema release does not need a PostgreSQL copy.
+Once the resident launcher owns an installation, `gateway install` keeps that
+state directory's selected launcher as its service entry, including before the
+first pending trial replaces an unmodified npm fallback. Checked durable CLI
+reuse follows the same selection as a new install. Explicit retained-CLI
+recovery still uses the requested recovery entry. Dry runs keep the existing
+read-only preview. Immutable activation and switches that need the in-place
+installer refuse with a next step; they never replace a launcher-owned
+installation through that other path.
+Explicit package versions, dist-tags, npm specs, and `--no-restart` keep their
+prepared-release behavior.
 
-Each protected PostgreSQL schema-changing update changes the affected store's
-namespace name and lengthens the restart. Plan for the original and private server
-copies, indexes, WAL, temporary work, and retained recovery generations. Keep namespace
-and anchor generations together. Pruning may drop only update-created or
-verified-owned namespaces; a failed drop retains the recovery pair and reports
-a warning without failing a serving release. These recovery copies are not an
-off-server backup.
+Before conversion, a node-only package installation with an installed node service, no
+Gateway service definition, and no live local Gateway stays with its package installer.
+`openclaw update` uses the existing package update flow for that installation;
+it does not create a Gateway launcher, forwarding entry, or pending Gateway trial.
+Its package result names the updated installation's `node install --force` and
+`node restart` commands. Wait for node work to become idle before using them;
+the package update does not claim to have replaced or restarted a retained node
+runtime.
 
-Before a startup migration replaces a SQLite database, the swap owner drains its
-readers and retires the retained admission descriptors for both the live database
-and its prepared replacement. Closing SQLite alone does not release those identity
-descriptors, and Windows refuses the rename while either file is still open.
-The candidate must contain this fix; the launcher needs no change. The swap still
-preserves the previous files for rollback and admits the replacement as a new file.
+A previously converted installation keeps its resident release owner even if its
+Gateway service was removed; `--no-restart` can still prepare its next release.
+
+Before first conversion, a live foreground Gateway can lose its installation
+path from OS process inspection. With operator access, let that Gateway handle
+the update through Control UI or `openclaw update`. If it cannot accept the
+requested update over RPC, local preparation refuses visibly rather than
+claiming an unidentified installation. Stop the Gateway through its existing
+owner, then rerun the update. A stopped Gateway remains updatable.
+
+`discoverDatabases` is the state transaction inventory. Boot uses that inventory
+to plan pending canonical schema steps and their derived minimum reader floors
+before mutating live databases. A schema-version increase alone does not require
+a preimage: compatible steps run in place without one.
+
+Shipped copy-based releases can leave a durable `.upgrade-*/plan.json` after an
+interrupted publication. Boot first settles that existing intent under exclusive
+physical ownership, before config guards or database inspection. Only this
+historical replay can finish planned replacements; new upgrades never write plans
+or create copied trees.
+
+Before any floor-raising step, boot publishes the complete recovery manifest at
+`<prefix>/releases/<target-release-id>/.restore`, keeping the existing
+`{v:1,runId,files:[{live,preimage}]}` format. Paths are absolute; a null preimage
+means remove that file on rollback. Only databases whose derived minimum reader
+floor rises receive database preimages. SQLite images are independent clones or
+byte copies, never hard links to a database that will be mutated in place. Their
+`.pre-<build-generation>` names remain discoverable by existing launchers.
+A raised-floor database can roll back only through its recorded image.
+When legacy config repair changes the config file, its original receives the same
+launcher-compatible image and manifest entry before the repair is committed.
+On a filesystem without clones, this rare step takes as long as one byte copy of
+that database. There is no pre-stop clone probe or copy-time budget. If the required
+image cannot be made, boot refuses with exit 78 before the schema step and the
+resident launcher restores the previous release.
+
+Launcher format 4 reads the selected target release's `.restore` record. It
+removes the recorded null-preimage files before renaming the recorded images,
+then switches back. It does not scan the state tree or read build-global applied
+receipts on this path. A malformed manifest fails visibly rather than falling
+back to a different recovery plan. Interrupted image renames replay from the
+same record.
+
+Targets without `.restore`, including shipped 2026.11.10 releases, retain the
+legacy `.pre-<generation>` and receipt interpreter. The new reader restricts
+those legacy artifacts to the current trial's existing freshness window. Keep
+this compatibility path until the supported rollback floor passes the last
+published release without a restore manifest.
+
+A resident launched before the upgrade keeps its existing recovery code until
+its service next starts. Admission therefore still retains the old scan's
+coverage bounds for floor-raising migrations: external, symlinked or separately
+mounted stores, paths more than four directories deep, and stores below
+`git-install`, `npm`, `node_modules`, `tmp` or `logs` refuse with a move/retry
+instruction. Compatible steps take no image and do not refuse an external
+database merely because it is external.
+
+The same canonical in-place migration owners run on ordinary starts and release
+trials, under existing custody. New upgrades use no private tree, Doctor subprocess
+chain, generic rebuild, or forward file swap or rename. A trial started by an older
+preparer repeats admission before migration. A refused trial exits 78 and the
+launcher restores the previous release. Ordinary non-trial starts, including
+manual package upgrades, keep their existing migration-on-open behavior: a
+store's size alone never prevents that Gateway from starting.
+Older releases can still keep sessions and other state in legacy files. Boot
+runs the existing shared-schema and backed-up credential owners, Doctor's
+legacy-file import owner in place, and the remaining schema steps. The ordinary
+config writer retires legacy heartbeat state through its existing Doctor owner
+before removing that config. These imports are not a copied-state Doctor process.
+Direct upgrades from 2026.7.x
+retain their session history.
+
+The selected target owns its prepared release directory and `.restore` record,
+so a retry from an older preparer cannot reuse another release's receipt.
+Images and the initial complete manifest are durable before live mutation.
+Retries reuse original images rather than re-imaging changed state. A trial
+with no floor-raising step records an empty database restore plan.
+
+Legacy imports initially declare prospective new stores with null preimages.
+After successful import and native close, before normal runtime starts, boot
+narrows the same v1 record to families it actually created. A later runtime
+creation at an unused prospective path, including its WAL, is not a rollback
+deletion. Null companions of imaged databases remain recorded even when absent,
+so a later WAL cannot be replayed over a restored image. A retry may refresh
+still-absent prospective families before mutation, but never replaces an
+original image. An interrupted import retains the conservative broad record;
+that rare case remains accepted.
+
+The existing `.upgraded-<build-generation>.json` add receipt mirrors the removal
+set for installed legacy readers. It contains no copied paths or replacement
+operations. Manifest-capable recovery does not consume it.
+
+The `.restore` record stays with its prepared release. Independent
+`.pre-<build-generation>` images remain under the existing `pruneGenerations`
+retention, owned by the restore module. Committing a trial adds no cleanup hook.
+
+### Uncovered database paths
+
+An uncovered raised-floor path refusal leaves the old Gateway serving. Before
+moving a SQLite database, create and verify a full backup, stop the Gateway, then
+move its complete database family into the named recovery layout and update its
+registration and agent-directory configuration. Do not move an open database or
+separate its WAL from its main file. Restart the old Gateway and verify readiness
+before retrying the update.
+
+The release switch requires exclusive access to the state stores. The old Gateway
+records its shutdown, closes shared-state consumers and identity descriptors, then
+releases its ownership lock. Process cleanup and a final canonical state closure
+finish before a standalone successor spawns. Its successor observer uses only HTTP
+and captured configuration. Update and restart commands release their local readers
+before activation and observe the outcome through RPC or the launcher's trial file.
+
+For package adoption, a committed trial completes `gateway restart` even when
+this CLI cannot make operator-scoped health requests. A connection without
+`operator.read` is reported separately, with the credentials and status command
+needed to inspect detailed health. Startup observations have a deadline.
+
+Boot migrations require the existing exclusive database custody. Updaters release
+their readers before the successor starts and retire admissions again after
+restart settles, including on failure, so later ledger writes reopen canonical
+state. Closing SQLite and releasing retained identity descriptors remain part of
+that handoff; forward migration does not replace the database file.
 On Windows, the task supervisor starts without the Gateway's config or state
 bootstrap. Only its child opens the state databases; the waiting supervisor must
 not retain a connection or admission descriptor across a release switch.
@@ -230,6 +437,41 @@ update runs, recorded with these rules. A missing run is written as "unproven"
 and blocks a stable release. The rules come from the 2026-11-23 audit, which
 found that earlier receipts did not prove what they claimed.
 
+The `release-update-survivor` CI lane covers the Linux npm/container cell on
+PRs that touch update, state, update CLI, or launcher owners. It installs the
+PR-head build, builds a distinct successor from the same source with a
+disposable schema migration, then runs `openclaw update`. Separate healthy and
+crash-after-migration cases check the serving version, trial outcome, schema,
+and seeded row counts and contents. The fixture changes scratch source only;
+it does not change the shipped schema or replace the other platform cells.
+
+For schema-version or migration changes, CI additionally prepares the tested
+merge build through the PR fork-point release's public updater, then boots its
+real resident launcher. It kills the candidate before Gateway listen and
+records committed schemas and reader floors from inspection copies. The
+resident retries and rolls back using its own restore implementation; the
+test harness never restores config or databases. T must serve its seeded cron,
+sessions, and message history. Raised-floor stores must return to T's schema
+and floor; unraised stores must retain T+1's schema and floor. Lazy stores that
+did not advance are reported as untouched, not claimed migrated. This gate is
+required: reader failures, invalid targets, integrity errors, and incomplete
+rollback fail the lane. A fork point whose updater cannot prepare the candidate
+must be rebased.
+
+The selected lane also runs the agent SQLite migration chain from the fork-point
+schema through the real maintenance owner. Its test-side native observer rejects
+bulk-data access: statements that read or write transcript, cold-archive,
+embedding, or FTS rows, including `WHERE 0`, and index builds over those rows.
+Constant-time metadata DDL is allowed, but touching a bulk table while raising
+that store's reader floor fails. Failures name the store and version range.
+Real owner integrity checks still run unchanged; only their dynamic test-side
+boundary is excluded from migration-access classification; migration-supplied
+callbacks remain observed. Unsupported observation APIs fail coverage instead of
+silently passing. The sanitized `migration-bulk-access.json` receipt is retained
+even when observation fails, with the attempted version range. Failed observations
+retain statement identity, method, SQL source, and integrity/coverage facts, not
+database objects, catalog snapshots, or queried row values.
+
 - **Platforms:** a Linux systemd user service, a Linux container without a user
   bus, a macOS LaunchAgent and a Windows Scheduled Task. (#203497 merged with
   macOS-only package proof; #203735 and #203769 fixed Linux container failures
@@ -244,10 +486,10 @@ found that earlier receipts did not prove what they claimed.
   (`systemctl --user show -p ExecStart,NeedDaemonReload`, `launchctl print`, or
   the task definition and script). A hand-written service definition is not
   proof. The container lane runs with no service on purpose.
-- **Next build:** `T+1` has its own build ID and a higher state schema, and the
-  crash candidate crashes after its migration. A pass shows the state files equal
-  to the `.pre-` originals after a rollback. A re-stamped copy of `T` proves only
-  the switch.
+- **Next build:** `T+1` has its own build ID and a pending schema step, and the
+  crash candidate crashes after migration. Proof distinguishes compatible steps
+  with no image from raised-floor steps restored through their recorded `.pre-`
+  preimages. A re-stamped copy of `T` proves only the release switch.
 - **Freshness:** each receipt names the tested commit and `npm view openclaw
   dist-tags`. It is stale when an update-path file changes or `latest` moves.
 - **Installed code:** a change to `src/update/launcher.ts`, `run.ts`,
@@ -261,22 +503,69 @@ found that earlier receipts did not prove what they claimed.
 Add a note here when a change alters a contract. A note about the in-place update
 flow names the shipped-updater contract or unmoved route that it serves.
 
-Prepared-release plugin maintenance normally runs after the candidate has migrated
-state and reported ready. Downgrades retain pre-trial maintenance because older
-releases do not have the post-ready job and do not migrate the schema forward.
-The previous Gateway no longer owns the shared state during post-ready maintenance,
-and plugin downloads and installs do not extend the restart outage. Core success
-is recorded first; final plugin results arrive later in the open details. The
-existing trial record carries explicit `--accept-capabilities` consent; an absent
-field does not approve new capabilities. Maintenance has a ten-minute command
-budget. A Gateway stop during that work can leave no plugin result for that
-update. Published compatible plugin versions load at the next Gateway start;
-`openclaw plugins update --all` finishes the rest. The next core update also retries.
+The release CLI uses one client deadline for Gateway requests, status polling,
+restart requests, and a capability-consent retry through a replacement Gateway.
+It retains the latest Gateway-acknowledged `runId` through unavailable status and
+CLI errors, and prints the ID at acknowledgement in human output. An ID alone does
+not confirm completion. See [status and history](/cli/update/status-and-history) for
+JSON output shapes.
+Expiry stops client work and joins connection cleanup; it does not cancel an
+accepted server update or invalidate a published trial. Run `openclaw update status`
+before retrying an unconfirmed request. Preparation and installed-package delegation
+retain their own lifecycle budgets. The installed CLI must contain this repair.
+
+The serving Gateway settles its resident activation run from core readiness, not
+from a detached maintenance tick. It waits for the resident launcher's committed
+trial acknowledgment; if their IPC channel disconnects, it reads the trial once
+from disk instead. A slow acknowledgment cannot spend a one-shot settlement before
+the launcher commits. Required plugin work stays on the Gateway's existing update
+watcher. The candidate must contain this repair; older installed CLIs need no change.
+
+Gateway post-ready maintenance and `openclaw update repair` refresh the known
+legacy Git launcher from development build `d44f263`, which incorrectly counted
+`gateway status` as a start. The candidate must contain this repair. It applies
+only to that launcher's exact bytes in the selected, account-owned installation;
+custom launchers, other installations, read-only mode, and resident launchers
+are left unchanged. The repair preserves the legacy trial and genuine-start
+rollback behavior; it does not settle the trial or rewrite update history. This
+is recovery for an observed development install, not a stable-release migration.
+The normal next release update replaces the legacy launcher with the resident
+launcher.
+
+Git installs that tracked main before the resident launcher can retain a format-1
+trial. Before listening, the Gateway captures the matching publication. When the
+selected running build reaches core readiness, it rechecks the selection and removes the
+trial so a later restart can't roll back that healthy release. Channel health and
+update history writes don't gate trial removal.
+
+If the older updater calls the candidate's native install or restart command,
+the candidate tries to link that publication to the original run before carrying
+out the service action. The Gateway separately recovers the matching run after
+the older updater exits, even if that updater removed the trial after its own
+healthy response but failed to write history. It retries while it serves if the driver is still
+running or the history write fails. A Gateway restart before recovery can leave
+the original history entry unchanged with the healthy release still selected.
+
+The Gateway preserves existing repair acknowledgments, unrelated failures, and
+recovery records. It needs one matching publication receipt before it can record
+success and run advisory Doctor inspections. If the older
+updater exits because it can't read the migrated schema, its exit status still
+reflects that refusal.
+
+Plugin maintenance runs after every Gateway boot reports ready, including manual
+Git pulls, global package replacements, image swaps, and standalone binaries.
+Downgrades retain pre-trial maintenance because older releases do not have the
+post-ready job and do not migrate the schema forward. Plugin downloads and installs
+do not extend the restart outage. Core success is recorded first; plugin results
+arrive later in matching update details. Boot maintenance does not inherit
+`--accept-capabilities` consent from an update trial: widened capabilities are
+declined with the existing recovery command. Maintenance has a ten-minute command
+budget. A Gateway stop can leave no plugin result for that boot; the next boot
+tries again. `openclaw plugins update --all` also runs maintenance explicitly.
 Core rollback does not wait for plugin maintenance, and a candidate that fails
-before readiness does not update plugins on an upgrade. The candidate must contain
-the post-ready maintenance call; the installed updater must contain the version-aware
-pre-restart decision. A Git target with the same version string but an older revision
-does not receive plugin maintenance; run `openclaw plugins update --all` in that case.
+before readiness does not update plugins. The candidate must contain the post-ready
+maintenance call; the installed updater must contain the version-aware pre-restart
+decision.
 The internal maintenance-command result carries exact install-record hashes into
 the existing batch reload check. A record changed again before reload is refused.
 Removed records do not hot-unload a running plugin; the existing metadata-only
@@ -351,6 +640,12 @@ existing CLI paths keep working without retaining a separate release selection.
 This also applies with `--no-restart`; the launcher selects the pending candidate
 on its next start. The installed updater must contain this repair.
 
+Git preparation carries forward an existing host OpenClaw ID binding when its
+native crate still matches the target. If the binding needs rebuilding, that
+build must succeed in the prepared release before it can replace the serving
+Gateway. Checkouts without a host binding still skip the opt-in build. The
+installed updater must contain this change.
+
 Local npm frontends can offer their installed package to a managed package
 release. The resident release runs the update, with an explicit local package
 source, and publishes forwarding with the validated pending trial. Managed
@@ -374,8 +669,16 @@ never runs automatically or settles the deferred migration: after explicit
 recovery, rerun `openclaw update repair` or `openclaw doctor --fix`, then restart
 the Gateway. Older installed CLIs do not gain this route from a newer plugin alone.
 
-When a package baseline's final rescan detects stat drift, the update still
-refuses package replacement. Local failure output and `openclaw update status --json`
+When a package baseline's final rescan detects stat drift that only moved the
+change time or link count (attribute, ACL or extended-attribute changes, a
+same-mode `chmod`, or a hard link added or removed by a backup, sync, indexing
+or security tool), the scan re-reads only those entries: a file's bytes, a
+symbolic link's target or a directory's entry names. When they match what the
+scan recorded, the update continues and reports a warning naming the first
+entries and their changed fields. Any other drift, or drifted entries whose
+contents changed, still refuses package replacement. A change after the scan
+is caught when a rollback verifies the retained package before restoring it.
+Local failure output and `openclaw update status --json`
 diagnostics identify the first entry relative to the package root (`.` for the
 root), changed stat fields, and their before/after values. Public failure reports
 retain only the changed field names. An unavailable original inode still refuses
@@ -409,17 +712,11 @@ state directory and configuration parent without changing sealed capture bytes
 or following the final configuration entry. A different selected state directory
 or configuration entry remains rejected.
 
-On Gateway startup, an older supported SQLite schema is upgraded by copy and
-swap: Doctor runs on a private copy, then a durable plan publishes the changed
-files. Chain failure retains the generic rebuild and pins the previous files;
-invalid upgraded config still refuses publication. No live file is replaced or
-removed unless the upgrade copied it. If Doctor creates a template over an
-uncopied workspace file, startup leaves the original alone and reports a warning.
-
-During copy-and-swap upgrades, Doctor records carried-over scheduled jobs against
-credential databases at their eventual live paths. Reads and repairs remain on
-the private copy. The updater passes this destination directly to Doctor; no
-additional environment variable or operator configuration is needed.
+On Gateway startup, older supported database schemas advance through their
+canonical migration owners on the live databases under exclusive custody. Boot
+does not copy configuration into a private tree, run a Doctor chain, or publish
+replacement database files. Existing configuration reading and normalization
+stay with their canonical owners; advisory Doctor inspections run after readiness.
 
 If an earlier upgrade already broke a scheduled job, run `openclaw doctor --fix`.
 While the applied upgrade receipt remains, Doctor can verify the saved account at
@@ -429,35 +726,16 @@ receipt remains, Doctor names the affected job and shows how to choose its
 account. It leaves the job unchanged. To explicitly choose an account, use
 `openclaw automations edit <id> --model <provider/model>@<profileId>`.
 
-The copy excludes managed worktrees, configured agent workspaces, nested mounts
-and btrfs subvolumes, Knowledge stores, browser profiles, backups, and caches.
-Completed agent deletions whose journal retains files are excluded from startup
-upgrade discovery and copying; their retained files remain unchanged. Pending
-deletions keep their existing deletion-owner behavior.
-Media payloads are excluded; legacy `media/outgoing/records` JSON remains a
-migration input. Legacy session JSON/JSONL, identity, devices, credentials, push,
-exec approvals, audit logs, config, and installed extensions remain available.
-SQLite files above 64 MiB are copied only when their schema needs upgrading or
-they are the shared state database; smaller ancillary stores remain available for
-legacy imports. SQLite and retained WAL/journal content use byte copies, with
-NOCOW directories on btrfs, so the new database does not share extents with its
-preserved original. Committed WAL is recovered in the private copy.
-
-Before copying, startup checks free space against the selected file bytes plus
-an equal-sized scratch margin (at least 256 MiB). Ordinary files are included in
-that budget because a filesystem can decline reflinking. Insufficient space
-reports the exact required, available, and missing bytes. Copies of at least
-256 MiB log their byte count, file count, elapsed time, and throughput.
-
-Replaced files remain as `<file>.pre-<buildId>`, named after the build that replaced
-them, so two builds of one version each keep their own predecessor. Builds without a
-build ID, and earlier releases, wrote `<file>.pre-<version>`. Startup prunes older unpinned
-generations only for files it owns. It leaves retired startup-migration backups,
-SQLite `.bak` files, and media-persistence recovery images in place, reporting
-file counts and bytes within the inspected copy scope. These are operator or
-Doctor retention decisions: deleting large shared clones during startup can
-stall a copy-on-write filesystem. Skipped bulk trees are never walked to count
-or prune their contents.
+Floor-raising SQLite migrations retain independent preimages as
+`<file>.pre-<build-generation>`, named after the target build generation, so two
+builds of one version can retain separate recovery images. Builds without a
+build ID, and earlier releases, used `<file>.pre-<version>`. The per-target
+`releases/<target>/.restore` manifest keeps the existing v1 format and records
+the images before live mutation. Compatible steps create no database image.
+Existing release and recovery-image retention owns their eventual retirement;
+there is no new post-commit cleanup hook. Retired startup-migration backups,
+SQLite `.bak` files, and media-persistence recovery images remain subject to
+their existing operator or Doctor retention decisions.
 
 Offline Doctor prepares no extra inspection image when its existing maintenance
 owner proves custody and the database has no WAL frames or rollback journal.
@@ -1367,9 +1645,11 @@ transaction-local verification.
 SQLite upgrades default to a whole-database `quick_check`, a full
 `integrity_check` of the tables the migration rewrites or re-indexes, and the
 existing foreign-key checks. This avoids checking every unrelated index against
-its table during a routine upgrade. Structural corruption anywhere in the
-database and corruption in the migration's affected tables still refuse the
-migration; quarantine and rollback behavior are unchanged.
+its table during a routine upgrade. An agent database version step checks only the
+schema catalog and the tables it declares, so upgrade downtime does not grow with
+unrelated agent history; the next Gateway start checks the whole database in the
+background. Other structural corruption and corruption in the migration's affected
+tables still refuse the migration; quarantine and rollback behavior are unchanged.
 Historical upgrades use the same default even when recovery requires a full-file
 backup. Automatic original-state captures and disposable update rehearsals also
 honor the requested check, including same-version Doctor repairs. Automatic rollback
@@ -1471,6 +1751,12 @@ See [container image updates](/install/docker#upgrading-container-images),
 [downgrade limitation](/install/updating/rollback-and-recovery#downgrade) before
 changing images or restoring an older OpenClaw version.
 
+## Upgrading after a legacy Linux Gateway crash
+
+Candidate Doctor can recover namespace-less Gateway locks from 2026.9.7 and later after the lock's recorded creation time is more than five minutes old and its matching SQLite Gateway owner lease is missing or expired. Doctor waits for that shipped lease window; a live Gateway in another container continues renewing its lease and still blocks maintenance. Expired legacy SQLite leases also stop blocking the subsequent maintenance check. The candidate supplies this repair; the published updater needs no change.
+
+Older records and unreadable lease state retain their refusal, with [explicit recovery guidance](/gateway/gateway-lock#recovering-an-older-legacy-record). Lock-file mtime and local PID observations do not authorize this recovery.
+
 ## Upgrading very old versions
 
 Current Doctor can migrate pre-July cron jobs, Voice Wake settings, conversation
@@ -1561,15 +1847,15 @@ openclaw update
 Before preparing a release, the updater checks that Node satisfies the target's
 requirements, required tools are available (Git and pnpm for source builds, npm
 for packages), and the install and state filesystems have room for the release
-and state migration copies. Refusals name what to install or free.
+and any required raised-floor preimages. Refusals name what to install or free.
 
 On macOS, if the updater selects `/usr/bin/git` and there is no active
 developer directory, run `xcode-select --install` to install the Command Line
 Tools or select an installed Xcode, then retry `openclaw update`.
 
 The old Gateway keeps serving during preparation. State migration happens when
-the new Gateway starts, through the boot-time copy-and-swap owner, not through a
-private rehearsal or an in-place package swap.
+the new Gateway starts, through the canonical in-place schema owners, not through
+a private rehearsal or an in-place package swap.
 
 Updates stop Gateways, not node services. The update Doctor needs exclusive
 access to `state/openclaw.sqlite`, and a running node host service using the
@@ -1867,10 +2153,10 @@ and the package transaction restores the previous launchers. A launcher format
 the updater cannot read only produces a warning with repair guidance. A pnpm
 package update also restarts the Gateway on the new version even though pnpm
 moved the package to a new versioned store directory. The updater that is already
-installed runs these steps, so updates driven by 2026.11.4, 2026.11.5 or
-2026.11.6 do not get them.
+installed runs these steps, so updates driven by 2026.11.4 through 2026.11.9
+do not get them.
 
-When 2026.11.4, 2026.11.5 or 2026.11.6 updates a pnpm install with a managed
+When 2026.11.4 through 2026.11.9 updates a pnpm install with a managed
 Gateway service to a release with this fix, it still publishes a launcher that points into its removed stage. The
 new package's Doctor, which runs during that update, repairs the launcher, so the
 `openclaw` command keeps working. These updaters hand the later update steps,
@@ -2213,10 +2499,10 @@ milliseconds and without a copy, even while the serving Gateway writes. The shar
 state database keeps its consistent online-backup read.
 
 Release-managed Gateway startup applies supported SQLite and PostgreSQL state
-and agent migrations to private copies before publication. PostgreSQL uses the
-protected server-copy and anchor rollback path described above. Outside that
-release trial, stop the Gateway and embedded writers and run the target release's
-`openclaw doctor --fix` before a PostgreSQL schema upgrade.
+and agent migrations in place through the existing canonical owners. A step
+that preserves the derived minimum reader floor needs no image; one that raises
+it requires its recorded preimage before mutation. These same custody and
+migration owners apply outside a release trial.
 See [PostgreSQL updates and schema migrations](/gateway/postgresql#updates-and-schema-migrations).
 
 A Git checkout that runs from releases keeps each release at
@@ -2232,26 +2518,72 @@ web search provider is configured, their Gateway fails at startup.
 The updater in a checkout built from `main` between 2026-11-17 and 2026-11-19 (it builds
 releases under `git-install/releases/<release>/build`) never rebuilds the checkout, so after a
 database migration neither it nor the checkout's `openclaw` command can open the migrated data.
-When the new release would migrate state, its check stops that update before the release is
-switched, leaves the Gateway untouched, and prints a one-time rebuild to run from the checkout:
+That updater runs first and cannot be patched. When the new release would migrate state, its own
+check stops that updater before the release is switched and finishes the update itself, on
+Linux with a systemd user Gateway service and on macOS with a launchd Gateway LaunchAgent:
+
+1. The check keeps the release the updater just built (it moves to `git-install/recovery`) and
+   starts a recovery job that outlives the updater and the Gateway restarts: a transient systemd
+   user service (`openclaw-update-recovery`) or a separate launchd job in your login session
+   (`ai.openclaw.update-recovery`). The updater then reports this one update as failed; its
+   output says the new release is finishing the update and how to follow it.
+2. The recovery waits for the updater to exit, fast-forwards the checkout's branch to the
+   release's commit, and restarts the Gateway on the release the updater built, which migrates
+   state at startup.
+3. It rebuilds the checkout (`pnpm install --frozen-lockfile` and `pnpm build`) while that
+   release serves, then restarts the Gateway on the rebuilt checkout.
+4. It removes the older updater's link `git-install/lib/node_modules/openclaw`, its releases
+   and the kept release, and records the outcome for `openclaw update status`.
+
+The Gateway is down only for the two restarts: the first lasts as long as the boot migration, the
+second a few seconds. Until the rebuild finishes, the checkout's `openclaw` command may fail or
+refuse the migrated data. Follow the job with `systemctl --user status openclaw-update-recovery`
+and `journalctl --user -u openclaw-update-recovery` on Linux, or in
+`<state dir>/logs/update-recovery.log` on macOS. The definition of the Gateway service from
+before the recovery stays beside it with the suffix `.before-update-recovery`.
+
+If the release fails to start before it migrated anything, the recovery puts the previous build
+back and it serves. If something fails after the migration (for example `pnpm build` in the
+checkout), the Gateway keeps serving the release, and the recorded outcome and the job's log name
+the one command that finishes the update, run from the checkout:
 
 ```sh
-git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force || { openclaw gateway start; false; }
+pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force
 ```
 
-The rebuild moves the service back to the checkout, which ends the startup failure above. The
-reinstalled service starts the rebuilt Gateway, which migrates state at boot. If an earlier step
-fails, the command starts the previous service again and exits non-zero; a failed `pnpm build`
-can leave the checkout's build incomplete, so fix the reported error and run the line again.
-For this historical rebuild, PostgreSQL-backed stores still require the stopped-writer
-Doctor procedure in [PostgreSQL updates and schema migrations](/gateway/postgresql#updates-and-schema-migrations).
-Later `openclaw update` runs use the rebuilt checkout's updater; their first trial falls back to
-the rebuilt checkout. The older layout's `git-install/lib/node_modules/openclaw` link and the
-release it names stay on disk (about 4.6 GiB) and are no longer used. To free that space, remove
-the release directory the link names, then the link, then run `git worktree prune` in the
-checkout. Updates that change no schema still go through the older updater; when its Gateway
-fails at startup (the web search case above), run them from a terminal with the checkout's
-`openclaw`, not from the Control UI.
+Nothing in the checkout is reset, stashed or forced. The check prints the reason and the
+by-hand rebuild below instead, and changes nothing, when the recovery cannot run: another
+platform, no systemd user manager or no launchd login session, a Gateway service that is stopped
+or runs another installation, a dirty checkout or one that cannot fast-forward to the release,
+an `openclaw` command on `PATH` from another installation, less than 4 GiB free, no `pnpm`, or
+unreadable schema versions. Running `openclaw update` again stops at the same point with the same
+message until the checkout is rebuilt. Run the printed line once from the checkout. With the
+default state directory it reads:
+
+```sh
+oc_link= && git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && oc_link=$(readlink "$HOME/.openclaw/git-install/lib/node_modules/openclaw" || true) && rm -f "$HOME/.openclaw/git-install/lib/node_modules/openclaw" && openclaw gateway install --force || { [ -z "$oc_link" ] || [ -L "$HOME/.openclaw/git-install/lib/node_modules/openclaw" ] || ln -s "$oc_link" "$HOME/.openclaw/git-install/lib/node_modules/openclaw"; openclaw gateway start; false; }
+```
+
+The printed line names your state directory relative to `$HOME`. For a state directory outside
+it, the line starts by requiring `OPENCLAW_STATE_DIR` in the shell and changes nothing without it.
+On Windows the update prints the same steps to run one at a time.
+
+With the printed line, the Gateway is down while the checkout builds. The older updater's release link
+(`git-install/lib/node_modules/openclaw`) is removed after the build, because while it exists
+`openclaw gateway install` binds the service to that updater's launcher, which keeps serving the
+old release. The reinstalled service then starts the rebuilt Gateway, which migrates state at
+boot. If a step fails, the command puts the link back if it had removed it, starts the previous
+service again and exits non-zero; a failed `pnpm build` can leave the checkout's build incomplete, so fix the reported
+error and run the line again. For this rebuild, PostgreSQL-backed stores still require the
+stopped-writer Doctor procedure in
+[PostgreSQL updates and schema migrations](/gateway/postgresql#updates-and-schema-migrations).
+Later `openclaw update` runs use the rebuilt checkout's updater. The release the removed link
+named stays on disk (about 4.4 GiB under `git-install/releases`) and is no longer used. To free
+that space, remove that release directory, then run `git worktree prune` in the checkout. Updates that change no schema still
+go through the older updater; when its Gateway fails at startup (the web search case above), run
+them from a terminal with the checkout's `openclaw`, not from the Control UI. The check and the
+automatic recovery stay until there is evidence that no installed updater from that range still
+needs them; a published release does not replace the updater these checkouts run.
 
 The inspection reports data at risk only on evidence: a schema that moved, or a store it
 cannot read after a new-version Doctor or boot check may have written it. When no
@@ -2265,20 +2597,23 @@ releases without this change (main builds since the release layout landed) fail
 every Git update that changes a schema in their own process, before the new release runs;
 rebuild the checkout once to get an updater with the fix.
 
-When the new release's Gateway starts, a SQLite state upgrade can replace
-`state/openclaw.sqlite` and keep the previous file as `openclaw.sqlite.pre-<buildId>`.
-The updater closes its own shared-state handles before it restarts the Gateway and
-reopens the database by path once the new Gateway is verified serving, so plugin
-convergence, the post-plugin Doctor, owed steps and the final run record use the
-current file. Run history written before the restart is carried into the new file.
-Installed updaters that have the inspection fix above but not this change report
-`post-update-failed` ("SQLite database pathname changed while its worker owner is
-active") after such an upgrade even though the new release is serving and nothing needs
-restoring. When the update output says the Gateway is serving the target version, the
-next plain `openclaw update` reports `already-current` and converges plugins. Updaters
-without the inspection fix fail before the new release starts, as described above.
+The updater releases its shared-state readers before restarting the Gateway so
+the successor can migrate `state/openclaw.sqlite` in place under exclusive
+custody. It retires admissions after restart settles, including on failure, and
+reopens by path for plugin convergence, owed steps, and the final run record.
+History written before restart remains in that canonical database.
 
-Database rehearsal also avoids a second full backup of each private snapshot.
+Earlier copy-and-swap targets could instead replace `state/openclaw.sqlite`,
+retaining `openclaw.sqlite.pre-<buildId>`. Installed updaters with the inspection
+fix above but without reader handoff reported `post-update-failed` ("SQLite
+database pathname changed while its worker owner is active") after such an
+upgrade even though the target was serving. If that historical first hop says
+the target is serving, the next plain `openclaw update` reports `already-current`
+and converges plugins. Updaters without the inspection fix still fail before the
+new release starts, as described above.
+
+For shipped updaters that still rehearse databases, rehearsal avoids a second
+full backup of each private snapshot.
 Candidate inventory reads database registrations and the installed plugin index
 in one read-only transaction instead of copying the whole shared database just
 for metadata. Sources requiring private recovery keep the snapshot path. The

@@ -7,7 +7,7 @@ import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import { createCrustaceanSlug } from "../agents/session-slug.js";
-import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
+import { resolveUtilityModelSelectionForAgent } from "../agents/utility-model.js";
 import { withWorktreeSourceWait } from "../agents/worktrees/allocation.js";
 import type { WorktreeSourceStage, WorktreeWaitBudget } from "../agents/worktrees/types.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -319,12 +319,16 @@ async function generateDashboardSessionTitle(params: {
   const regularModelRef = `${regularModel.provider}/${regularModel.model}${
     preferredProfile ? `@${preferredProfile}` : ""
   }`;
-  const utilityModelRef = resolveUtilityModelRefForAgent({
+  // A role that refuses every utility model skips the utility pass without an attempt;
+  // the regular pass below is the session's own permitted model.
+  const utility = resolveUtilityModelSelectionForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
     primaryProvider: regularModel.provider,
     primaryModelRef: regularModelRef,
+    modelPolicy: params.operatorAuthority?.modelPolicy,
   });
+  const utilityModelRef = "modelRef" in utility ? utility.modelRef : undefined;
   const generateLabel = async (): Promise<string | null> => {
     try {
       const { generateConversationLabelWithFallback } =
@@ -489,18 +493,6 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
     memory?.binding?.actor.assertReadable();
     memory?.authority.assertCurrent();
   };
-  const entry = await readSessionEntryReadOnlyInWorker(scope, assertMemoryCurrent);
-  if (entry?.sessionId !== params.sessionId || hasExplicitSessionName(entry)) {
-    return false;
-  }
-  const skillParams = {
-    cfg: params.cfg,
-    agentId: params.agentId,
-    entry,
-    sessionKey,
-    assertCurrent: assertMemoryCurrent,
-  };
-
   const requestTarget = {
     ...scope,
     sessionId: params.sessionId,
@@ -551,10 +543,23 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
       : await persist();
   };
 
-  const run = async () => {
+  const run = async (markStarted: () => void) => {
+    // Own this session's eligibility read too. Otherwise a read of the unnamed
+    // row could return after the winning title is committed and its request evicted.
+    const entry = await readSessionEntryReadOnlyInWorker(scope, assertMemoryCurrent);
+    if (entry?.sessionId !== params.sessionId || hasExplicitSessionName(entry)) {
+      return false;
+    }
+    markStarted();
     // Select the first usable task, not an earlier control-only turn. Carry the
     // same prepared command metadata through history selection and generation.
-    const skillCommands = await prepareTitleSkillCommands(skillParams);
+    const skillCommands = await prepareTitleSkillCommands({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      entry,
+      sessionKey,
+      assertCurrent: assertMemoryCurrent,
+    });
     const transcriptScope = {
       agentId: params.agentId,
       sessionEntry: entry,

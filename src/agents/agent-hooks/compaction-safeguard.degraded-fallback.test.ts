@@ -134,6 +134,8 @@ it("takes its first summary from the warm request and keeps corrective retries b
   // The warm request already holds the previous summary and the history.
   expect(instructions).not.toContain("Earlier summary.");
   expect(instructions).not.toContain("<conversation>");
+  expect(instructions).toContain("preserve literal values exactly as seen");
+  expect(instructions).not.toContain("Additional focus:");
   expect(summarize).toHaveBeenCalledOnce();
   expect(expectCompactionResult(result).summary).toContain("Keep blue.");
 });

@@ -47,6 +47,8 @@ update → Gideon Adegbesan"), and any split boundary or real transcription gap.
 - Summary, Key Decisions, Action Items and Notable Quotes are required. Check the
   transcript before writing "none"; a bare `None` is not a reason. Short
   logistics meetings still get every section.
+- A "no decisions" line means no decision is supported by a complete, coherent
+  source; it never claims that none occurred when evidence is incomplete.
 - An action item with an unresolved owner names the speaker label instead
   ("Unidentified remote speaker: …"). Don't explain why it's unresolved.
 - Cite transcript passages through the meeting's own observed path with verified

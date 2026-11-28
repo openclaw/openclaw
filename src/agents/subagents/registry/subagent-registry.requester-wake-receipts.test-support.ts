@@ -373,6 +373,11 @@ export function registerRequesterWakeReceiptBoundaryTests({
         loadSubagentRegistryFromSqlite().get(beta.runId)?.requesterSettleWake,
       ).not.toHaveProperty("requesterRunId");
     }
+    if (!rejectRequesterWake) {
+      // Beta’s held delivery must outlive the five-minute grace period before the
+      // yielded batch can dispatch. Move wall time without running unrelated retries.
+      vi.setSystemTime(Date.now() + 5 * 60_000);
+    }
     await settleTurn(requesterTurnRunId, [alpha, beta]);
     if (stableReceipt) {
       // Replace the writer after handoff failure but before its lifecycle effect.
@@ -606,7 +611,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
       assert(member, "Quiet delete wake did not retain its member");
       const { entry, wake } = member;
       expect(entry.runId).toBe(runId);
-      expect(wake?.retireAfterSettle).toBe(true);
+      expect(entry.retireAfterSettle).toBe(true);
       expect(loadSubagentRegistryFromSqlite().has(runId)).toBe(false);
       expect(isSameSubagentRunOwner(registry.getSubagentRunByRunId(runId), entry)).toBe(true);
       expect(registry.getSubagentRunByRunId(runId)?.requesterSettleWake).toEqual(wake);
