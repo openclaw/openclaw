@@ -37,7 +37,11 @@ import { chatSessionPresentationKey, watchPresentation } from "./chat-pane-sessi
 import { initializeChatPaneSettings } from "./chat-pane-startup-subscriptions.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
-import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
+import {
+  adoptTalkConsultRun,
+  attachChatRealtimeActions,
+  createInitialChatRealtimeState,
+} from "./chat-realtime.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import {
   moveQueuedChatMessage,
@@ -326,6 +330,7 @@ export function createPageState(
       return resolveSpeechTextLimit(config);
     },
   );
+  state.adoptTalkConsultRun = (run) => adoptTalkConsultRun(state, run);
   state.accessPreferences = DraftPreferenceState.forChat(context);
   state.loadAssistantIdentity = () => {
     if (!state.connected) {

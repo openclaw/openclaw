@@ -270,6 +270,28 @@ describe("renderChatComposer controls", () => {
     expect(query(container, ".chat-mobile-talk-action .chat-send-btn")?.disabled).toBe(true);
   });
 
+  it("keeps Talk available beside Stop so a detached run can be rejoined", async () => {
+    const request = vi.fn().mockResolvedValue({
+      realtime: { ready: true },
+      transcription: { ready: true },
+    });
+    const onToggleRealtimeTalk = vi.fn();
+    const { container } = renderComposer(
+      activeRun({ gatewayClient: createTestGatewayClient(request), onToggleRealtimeTalk }),
+    );
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("talk.catalog", { sessionKey: "main" }),
+    );
+
+    expect(query(container, ".chat-send-btn--stop")).not.toBeNull();
+    const talk = query(container, ".chat-mobile-talk-action .chat-send-btn");
+    expect(talk?.disabled).toBe(false);
+    await vi.waitFor(() => {
+      talk?.click();
+      expect(onToggleRealtimeTalk).toHaveBeenCalledOnce();
+    });
+  });
+
   it.each([true, false])(
     "holds Talk during initial history while preserving draft input (hold-to-record=%s)",
     async (composerHoldToRecord) => {

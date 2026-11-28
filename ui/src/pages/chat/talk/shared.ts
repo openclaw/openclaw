@@ -45,6 +45,8 @@ export type RealtimeTalkTranscriptItem =
 
 export type RealtimeTalkCallbacks = {
   onStatus?: (status: RealtimeTalkStatus, detail?: string) => void;
+  /** The Gateway accepted a consult run; the chat owns it from here, even after the call ends. */
+  onConsultRun?: (run: { runId: string; sessionKey: string }) => void;
   onInputNotice?: (detail: string) => void;
   onVideoCapability?: (capable: boolean) => void;
   onInputLevel?: (level: number) => void;
@@ -418,6 +420,8 @@ export async function submitRealtimeTalkConsult(params: {
       args,
       ...(params.relaySessionId ? { relaySessionId: params.relaySessionId } : {}),
     });
+    // Report the run before any abort or detach check: the chat must be able to Stop it.
+    ctx.callbacks.onConsultRun?.({ runId: run.runId, sessionKey: ctx.sessionKey });
     if (params.signal?.aborted) {
       abortRun();
       await submitAbortResult();

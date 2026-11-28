@@ -84,6 +84,39 @@ function writeStreamedOpenAiText(
   );
 }
 
+const toolOnlyMarker = "TOOL_ONLY_CONSULT_206321";
+
+function writeToolCallOnly(response: ServerResponse) {
+  const item = {
+    type: "function_call",
+    id: "fc_tool_only",
+    call_id: "call_tool_only",
+    name: "session_status",
+    arguments: "{}",
+    status: "completed",
+  };
+  const events = [
+    {
+      type: "response.output_item.added",
+      output_index: 0,
+      item: { ...item, status: "in_progress", arguments: "" },
+    },
+    { type: "response.output_item.done", output_index: 0, item },
+    {
+      type: "response.completed",
+      response: {
+        id: "talk_resp_tool_only",
+        status: "completed",
+        output: [item],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      },
+    },
+  ];
+  response.end(
+    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
+  );
+}
+
 /** Only the model and voice provider endpoints are scripted; Gateway, Talk relay, chat persistence, and Control UI are real. */
 async function startTalkFixtureServer() {
   const turns: ModelTurn[] = [];
@@ -103,14 +136,25 @@ async function startTalkFixtureServer() {
             response.writeHead(404).end();
             return;
           }
-          request.resume();
+          const chunks: Buffer[] = [];
+          request.on("data", (chunk: Buffer) => chunks.push(chunk));
           await once(request, "end");
+          const requestBody = Buffer.concat(chunks).toString("utf8");
           response.writeHead(200, {
             "content-type": "text/event-stream",
             "cache-control": "no-store",
             connection: "keep-alive",
           });
           response.flushHeaders();
+          // A tool-only first step streams no text, like a run that is still working
+          // with tools when the call ends. Only the follow-up request becomes a held turn.
+          if (
+            requestBody.includes(toolOnlyMarker) &&
+            !requestBody.includes("function_call_output")
+          ) {
+            writeToolCallOnly(response);
+            return;
+          }
 
           const index = ++turnIndex;
           const releaseDeferred = createDeferred<string>();
@@ -411,6 +455,91 @@ suite.define(() => {
               expect(await bubbleCount(cancelledAnswer)).toBe(0);
               expect(await persistedOccurrences(detachedAnswer)).toBe(1);
               expect(await persistedOccurrences(cancelledAnswer)).toBe(0);
+            },
+          ),
+      }),
+    180_000,
+  );
+
+  it(
+    "shows Stop response beside End Talk while a Talk run is in progress at phone and desktop widths",
+    (test) =>
+      suite.runScenario(test, {
+        retainedState: () => instance.stateDir,
+        run: (signal) =>
+          suite.withPage(
+            createControlUiE2eContextOptions({ permissions: ["microphone"] }),
+            async ({ page }) => {
+              const widthKey = "agent:main:talk-stop-widths";
+              await callGateway(instance, "sessions.create", {
+                key: widthKey,
+                agentId: "main",
+                label: "Talk stop widths",
+              });
+              await pairFixture(page, instance);
+              await installTalkBrowserFixtures(page);
+              const shotDir = process.env.TALK_STOP_SHOT_DIR;
+              const widths = [
+                { width: 390, height: 844 },
+                { width: 1440, height: 900 },
+              ];
+              let connectionIndex = 2;
+              for (const [index, size] of widths.entries()) {
+                await page.setViewportSize(size);
+                await page.goto(controlUiSessionUrl(suite.server.baseUrl, widthKey));
+                await waitForControlUiGatewayReady(page);
+                const { pane, composer, stop } = chatControls(page);
+                await composer.waitFor();
+                const startVoice = pane.getByRole("button", {
+                  name: /^(?:Start voice input|Tap to talk)$/,
+                });
+                const stopVoice = pane.getByRole("button", { name: "Stop voice input" });
+                await startVoice.click();
+                const relay = await fixture.waitForConnection(connectionIndex, signal);
+                await withinTest(relay.ready, signal);
+                relay.emitConsult(
+                  `call_widths_${index}`,
+                  `Run something I can stop. ${toolOnlyMarker}`,
+                );
+                const turn = await fixture.waitForTurn(2 + index, signal);
+                await expect.poll(() => stopVoice.isVisible()).toBe(true);
+                await expect.poll(() => stop.isVisible()).toBe(true);
+                if (shotDir) {
+                  await page.screenshot({
+                    path: `${shotDir}/composer-talk-run-${size.width}.png`,
+                  });
+                }
+
+                // End Talk drops the call only; Stop response and a way back into Talk remain.
+                await stopVoice.click();
+                await withinTest(relay.closed, signal);
+                await expect.poll(() => stopVoice.count()).toBe(0);
+                expect(turn.isAborted()).toBe(false);
+                await expect.poll(() => stop.isVisible()).toBe(true);
+                await expect.poll(() => startVoice.first().isEnabled()).toBe(true);
+                if (shotDir) {
+                  await page.screenshot({
+                    path: `${shotDir}/composer-after-end-talk-${size.width}.png`,
+                  });
+                }
+
+                // Rejoining Talk keeps the same run going in the same chat.
+                await startVoice.first().click();
+                const rejoined = await fixture.waitForConnection(connectionIndex + 1, signal);
+                await withinTest(rejoined.ready, signal);
+                await expect.poll(() => stopVoice.isVisible()).toBe(true);
+                expect(turn.isAborted()).toBe(false);
+                await expect.poll(() => stop.isVisible()).toBe(true);
+                await stopVoice.click();
+                await withinTest(rejoined.closed, signal);
+                connectionIndex += 2;
+
+                await stop.click();
+                await withinTest(turn.aborted, signal);
+                expect(turn.isAborted()).toBe(true);
+                turn.release(cancelledAnswer);
+                await stop.waitFor({ state: "hidden" });
+              }
             },
           ),
       }),

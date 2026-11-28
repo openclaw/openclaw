@@ -199,6 +199,39 @@ describe("RealtimeTalkSession consult handoff", () => {
     },
   );
 
+  it("reports the accepted consult run so the chat can adopt it, even when the ack arrives after detach", async () => {
+    const pendingAcknowledgement = createDeferred<ReturnType<typeof consultRunResult>>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.client.toolCall") {
+        return await pendingAcknowledgement.promise;
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const onConsultRun = vi.fn();
+    const detachController = new AbortController();
+    const consult = submitRealtimeTalkConsult({
+      ctx: consultContext(
+        { request },
+        { sessionKey: "agent:main:main", callbacks: { onConsultRun } },
+      ),
+      callId: "call-1",
+      args: { question: "Keep working" },
+      submit: vi.fn(),
+      detachSignal: detachController.signal,
+    });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    expect(onConsultRun).not.toHaveBeenCalled();
+
+    detachController.abort();
+    pendingAcknowledgement.resolve(consultRun);
+    await consult;
+
+    expect(onConsultRun).toHaveBeenCalledExactlyOnceWith({
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+    });
+  });
+
   it("detaches a direct consult on transport teardown without calling chat.abort even on late ack", async () => {
     const pendingAcknowledgement = createDeferred<{
       runId: string;
