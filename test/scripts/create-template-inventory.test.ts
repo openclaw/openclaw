@@ -25,6 +25,8 @@ it("uses agent-scoped skills, resolved install records, and the single request d
       {
         id: "demo",
         workspace,
+        identityName: "Research assistant",
+        identityEmoji: "🧭",
         identityAvatarUrl: "data:image/png;base64," + portrait.toString("base64"),
       },
     ],
@@ -78,7 +80,18 @@ it("uses agent-scoped skills, resolved install records, and the single request d
       'import {appendFileSync, readFileSync} from "node:fs";',
       "const args = process.argv.slice(2);",
       'appendFileSync("calls", JSON.stringify(args) + String.fromCharCode(10));',
-      'console.log(JSON.stringify(JSON.parse(readFileSync("fixture.json", "utf8"))[args.slice(0, 2).join(" ")]));',
+      'const command = args.slice(0, 2).join(" ");',
+      'const result = JSON.parse(readFileSync("fixture.json", "utf8"))[command];',
+      "const bytes = Buffer.from(JSON.stringify(result));",
+      'if (command === "agents list") {',
+      // Write separate pipe chunks with the boundary inside the identity emoji.
+      "  const split = bytes.indexOf(Buffer.from(result[1].identityEmoji)) + 1;",
+      "  process.stdout.write(bytes.subarray(0, split));",
+      "  await new Promise((resolve) => setTimeout(resolve, 100));",
+      "  process.stdout.write(bytes.subarray(split));",
+      "} else {",
+      "  process.stdout.write(bytes);",
+      "}",
     ].join("\n"),
   );
   const run = (...extra: string[]) =>
@@ -93,6 +106,7 @@ it("uses agent-scoped skills, resolved install records, and the single request d
   expect(ordinary).toMatchObject({
     draftId,
     draftPath: path,
+    agent: { id: "demo", name: "Research assistant", emoji: "🧭" },
     skills: {
       workspace: [{ name: "local", path: "skills/actual-dir" }],
       clawhub: [{ name: "managed", ref: "@vendor/brief", version: "1.0.2" }],
