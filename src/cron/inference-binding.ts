@@ -1,6 +1,45 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ProviderModelRouteAuthRequirement } from "../plugin-sdk/provider-model-types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { CronStoredJob } from "./types.js";
+
+/** Unbound agent turns and chat-following reminders use the account selected for the run. */
+export function usesLiveCronInferenceAccount(job: CronStoredJob | undefined): boolean {
+  if (!job || job.inferenceBinding || job.runtimeAuthority || job.ownerTransferPending) {
+    return false;
+  }
+  return (
+    job.payload.kind === "agentTurn" ||
+    (job.payload.kind === "systemEvent" &&
+      job.sessionTarget === "main" &&
+      job.systemEventAccount === "session" &&
+      !job.runtimeAuthorityRecoveryRequired)
+  );
+}
+
+/** Older reminders can adopt the chat account during upgrade. Agent turns select live. */
+export function needsLegacyReminderAccount(job: {
+  payload?: unknown;
+  systemEventAccount?: unknown;
+  inferenceBinding?: unknown;
+}): boolean {
+  return (
+    job.inferenceBinding === undefined &&
+    job.systemEventAccount !== "session" &&
+    isRecord(job.payload) &&
+    job.payload.kind === "systemEvent"
+  );
+}
+
+export function cronInferenceMigrationPayload(
+  job: Pick<CronStoredJob, "payload" | "sessionTarget" | "systemEventAccount">,
+) {
+  const payload = job.payload;
+  return (payload.kind === "systemEvent" && job.systemEventAccount !== "session") ||
+    (payload.kind === "agentTurn" && job.sessionTarget !== "main")
+    ? payload
+    : undefined;
+}
 
 /** Code on the refusal for an automation whose recorded account was removed, signed out or replaced. */
 export const CRON_INFERENCE_ACCOUNT_RETIRED_CODE = "CRON_INFERENCE_ACCOUNT_RETIRED";

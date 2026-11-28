@@ -87,6 +87,7 @@ import {
   resolveRuntimeChannelPromptContext,
   resolveSessionPromptRoute,
 } from "../runtime-capabilities.js";
+import { createUnrecordedScheduledAccountRefusal } from "../scheduled-unrecorded-account.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { resolveStableCliSkillAuthoring } from "../stable-skill-authoring.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
@@ -378,7 +379,9 @@ async function prepareCliRunContextWithinReadFence(
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
   const requestedAuthProfileId = params.authProfileId?.trim() || undefined;
   let effectiveAuthProfileId =
-    requestedAuthProfileId ?? backendResolved.defaultAuthProfileId?.trim() ?? undefined;
+    params.nativeAuthOnly === true
+      ? undefined
+      : (requestedAuthProfileId ?? backendResolved.defaultAuthProfileId?.trim() ?? undefined);
   let authStore: AuthProfileStore | undefined;
   let resolvedProfileAuth: ResolvedProviderAuth | undefined;
   const loadScopedAuthStore = (options: { profileId?: string } = {}) => {
@@ -396,6 +399,7 @@ async function prepareCliRunContextWithinReadFence(
   if (effectiveAuthProfileId) {
     authStore = await loadScopedAuthStore({ profileId: effectiveAuthProfileId });
   } else if (
+    params.nativeAuthOnly !== true &&
     backendResolved.autoSelectAuthProfile !== false &&
     (backendResolved.authEpochMode === "profile-only" || backendResolved.prepareExecution)
   ) {
@@ -428,14 +432,18 @@ async function prepareCliRunContextWithinReadFence(
   // preflight, refresh, or forward OpenClaw's snapshot; the installed Claude
   // process validates and refreshes its own current login.
   const usesNativeAuthProfile =
-    backendAuthPolicy?.nativeAuthProfileIds !== undefined &&
     effectiveAuthProfileId !== undefined &&
-    backendAuthPolicy.nativeAuthProfileIds.includes(effectiveAuthProfileId);
-  // A native-only scheduled run forwarded no stored account, so the backend's default or
-  // automatic profile does not replace the CLI's own login.
-  if (usesNativeAuthProfile || params.nativeAuthOnly) {
+    backendAuthPolicy?.nativeAuthProfileIds?.includes(effectiveAuthProfileId);
+  if (usesNativeAuthProfile) {
     effectiveAuthProfileId = undefined;
     authCredential = undefined;
+  } else if (params.nativeAuthOnly === "require-unbound" && effectiveAuthProfileId) {
+    throw createUnrecordedScheduledAccountRefusal({
+      jobId: params.jobId,
+      runtime: backendResolved.id,
+      modelRef: `${params.modelProvider ?? params.provider}/${params.model ?? "default"}`,
+      profileId: effectiveAuthProfileId,
+    });
   } else if (
     effectiveAuthProfileId &&
     backendAuthPolicy &&

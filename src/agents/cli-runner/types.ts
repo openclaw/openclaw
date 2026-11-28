@@ -139,8 +139,8 @@ export type RunCliAgentParams = Pick<
   onBeforeForkedCliSessionRetry?: (params: CliSessionRetryParams) => boolean | Promise<boolean>;
   /** Private seam: report the credential/runtime owner only after a successful real turn. */
   onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
-  /** An unpinned scheduled run that selected no stored account runs on the CLI's native login. */
-  nativeAuthOnly?: true;
+  /** Use the CLI login. A legacy reminder must also refuse an unadopted stored account. */
+  nativeAuthOnly?: true | "require-unbound";
   onBeforeFreshCliSessionRetry?: (params: CliSessionRetryParams) => boolean | Promise<boolean>;
   /** Effective turn-local exec policy resolved before entering the CLI runtime. */
   execOverrides?: ExecPolicyOverrides;

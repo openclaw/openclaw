@@ -14,6 +14,8 @@ import {
   backupDoctorMigrationDatabases,
   captureFreshDoctorMigrationTables,
 } from "../commands/doctor-migration-backup.js";
+import { maybeRepairCronInferenceBindings } from "../commands/doctor/cron/inference-binding-migration.js";
+import { inspectCronJobsForDoctor } from "../commands/doctor/cron/store-repair.js";
 import {
   planLegacyConfigForUpdateChannel,
   repairLegacyConfigForUpdateChannel,
@@ -25,6 +27,7 @@ import {
 import { createConfigIO, readConfigSnapshotBeforeEngineSelection } from "../config/io.factory.js";
 import { resolveConfigIncludeWriteBoundary } from "../config/mutate.js";
 import { resolveStateDir } from "../config/paths.js";
+import { needsLegacyReminderAccount } from "../cron/inference-binding.js";
 import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
 import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -56,6 +59,8 @@ import {
   openOpenClawStateDatabaseForDoctor,
   prepareOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { admitOpenClawMaintenanceLiveAuthorityReads } from "./openclaw-state-maintenance-context.js";
 import {
   discoverDatabases,
   expectedVersion,
@@ -393,7 +398,28 @@ export async function upgradeStateDirectory(params: {
       }
     },
   );
-  return result;
+  if (result.status === "refused") {
+    return result;
+  }
+  return withDatabaseEngineSelection(selection, async () => {
+    try {
+      admitOpenClawMaintenanceLiveAuthorityReads(resolveOpenClawStateSqlitePath(env));
+      const inventory = await inspectCronJobsForDoctor({ env });
+      if (
+        inventory.jobs.some(
+          ({ definition }) => definition && needsLegacyReminderAccount(definition),
+        )
+      ) {
+        logStateMigrationResult(
+          await maybeRepairCronInferenceBindings({ cfg: config, env, shouldRepair: true }),
+          log,
+        );
+      }
+      return result;
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+    }
+  });
 }
 
 /** Pins written by released generic rebuilds remain an operator recovery contract. */

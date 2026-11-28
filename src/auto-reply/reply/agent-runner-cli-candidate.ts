@@ -23,8 +23,10 @@ import {
 import { resolveCyberAccessProgramForProvider } from "../../agents/model-catalog-access-programs.js";
 import { findModelByNativeAlias, findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { assertParticipationRuntime } from "../../agents/participation-ceiling.js";
+import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { usesLiveCronInferenceAccount } from "../../cron/inference-binding.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
@@ -295,6 +297,18 @@ export async function runCliFallbackCandidate(
                   : undefined,
             )
           : await resolveLiveProfile();
+        const needsRecordedAccount =
+          turn.followupRun.run.scheduledAutomation &&
+          !scheduledInference &&
+          !usesLiveCronInferenceAccount(turn.followupRun.run.scheduledAutomation.job);
+        if (needsRecordedAccount && authProfileId) {
+          throw createUnrecordedScheduledAccountRefusal({
+            jobId: turn.followupRun.run.scheduledAutomation?.job.id,
+            runtime: params.cliExecutionProvider,
+            modelRef: `${params.provider}/${params.model}`,
+            profileId: authProfileId,
+          });
+        }
         const diagnosticOwner = params.deferredLifecycle.handoffToCli();
         // A forked child carries the parent's binding with a one-shot fork marker;
         // honor it here or the child resumes inside the parent's native thread.
@@ -528,11 +542,11 @@ export async function runCliFallbackCandidate(
                   scheduledInference.assertCurrent(params.provider);
                 }
               : undefined,
-            // An unpinned run that selects no stored account keeps the CLI's native login.
-            nativeAuthOnly:
-              turn.followupRun.run.scheduledAutomation &&
-              !params.scheduledInference &&
-              !authProfileId
+            nativeAuthOnly: needsRecordedAccount
+              ? "require-unbound"
+              : turn.followupRun.run.scheduledAutomation?.job.payload.kind === "agentTurn" &&
+                  !scheduledInference &&
+                  !authProfileId
                 ? true
                 : undefined,
             mediaImageLayout: params.currentTurnImages.mediaImageLayout,

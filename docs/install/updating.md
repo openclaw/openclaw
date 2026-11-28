@@ -1059,10 +1059,11 @@ must contain this diagnostic change. Snapshot checks and retry limits are unchan
 the reason identifies the failed check, not the writer or underlying cause.
 
 Candidate Doctor preserves same-conversation automation continuations when it
-restores a recorded inference account after a state upgrade. It carries forward the
-original authenticated source only when its old executable revision still matches,
-then binds that source and existing standing-grant references to the restored
-definition. Native-owned and model-locked sessions remain unchanged. Stale captures
+restores a recorded inference account or adopts one for a legacy main-session reminder. It carries forward the original authenticated source
+only when its old executable revision still matches, then binds that source and
+existing standing-grant references to the restricted definition. It also records
+a determinable host-managed account and its explicitly selected Codex runtime;
+native-owned and model-locked sessions remain unchanged. Stale captures
 stay stale; runtime authorization, conversation identity and revocation checks
 remain required. The candidate must contain this repair.
 

@@ -1,5 +1,6 @@
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveCronJobConfigRevision } from "./config-revision.js";
+import { usesLiveCronInferenceAccount } from "./inference-binding.js";
 import { toPublicCronJob } from "./public-job.js";
 import { cronJobNeedsCreatorReauthorization } from "./tools-allow.js";
 import type { CronDeliveryPreview, CronJob, CronStoredJob } from "./types.js";
@@ -40,17 +41,18 @@ export function cronAddResultReadView(params: {
 /** Project saved settings for readers without exposing the scheduler's authorization records. */
 export function cronJobReadView(job: CronStoredJob) {
   const publicJob = toPublicCronJob(job);
+  const modelPayload = job.payload.kind === "agentTurn" || job.payload.kind === "systemEvent";
+  let billingProfileId: string | null | undefined;
+  if (modelPayload && !job.pluginCommand && !job.runtimeAuthority && !job.ownerTransferPending) {
+    billingProfileId = job.inferenceBinding?.profileId;
+    if (usesLiveCronInferenceAccount(job)) {
+      const model = job.payload.kind === "agentTurn" ? job.payload.model : undefined;
+      billingProfileId = splitTrailingAuthProfile(model ?? "").profile ?? null;
+    }
+  }
   return {
     ...publicJob,
-    billingProfileId:
-      job.payload.kind === "agentTurn" &&
-      !job.pluginCommand &&
-      !job.runtimeAuthority &&
-      !job.ownerTransferPending
-        ? (job.inferenceBinding?.profileId ??
-          splitTrailingAuthProfile(job.payload.model ?? "").profile ??
-          null)
-        : undefined,
+    billingProfileId,
     configRevision: resolveCronJobConfigRevision(job),
     reauthorizationRequired: cronJobNeedsCreatorReauthorization({ job }),
     nextRunAtMs: job.state.nextRunAtMs,

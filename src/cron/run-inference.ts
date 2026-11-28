@@ -18,7 +18,7 @@ type CronPinnedRunParams = Pick<
 >;
 
 /** Another provider selects live: the job's selected profile names the recorded account only. */
-type CronLiveRunParams = {
+type CronLiveRunParams = Pick<RunEmbeddedAgentInternalParams, "scheduledLiveProviderAuth"> & {
   authProfileId: undefined;
   authProfileIdSource: undefined;
 };
@@ -132,6 +132,7 @@ export async function prepareCronRunInference(params: {
     authProfileIdSource: binding.source,
   };
   const live: CronLiveRunParams = {
+    scheduledLiveProviderAuth: true,
     authProfileId: undefined,
     authProfileIdSource: undefined,
   };

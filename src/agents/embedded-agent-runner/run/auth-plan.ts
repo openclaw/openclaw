@@ -24,6 +24,7 @@ import type {
   PreparedAgentRuntimeAuth,
   PreparedAgentRuntimeAuthAttempt,
 } from "../../runtime-plan/types.js";
+import { createUnrecordedScheduledAccountRefusal } from "../../scheduled-unrecorded-account.js";
 import { resolveModelAsync } from "../model.js";
 import type { PreparedNativeSessionRuntime } from "./model-setup.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -213,6 +214,29 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       throw new Error(
         "Connection recovery requires configured direct auth or a local no-auth transport.",
       );
+    }
+    // Legacy jobs have no trustworthy account history. Their env or provider-config key is
+    // the only one they can use, so it keeps running; an eligible stored account needs adoption.
+    const unrecorded =
+      runParams.trigger === "cron" &&
+      !runParams.authProfileBinding &&
+      !runParams.scheduledLiveProviderAuth &&
+      !runParams.scheduledRuntimeAuthority
+        ? prepared.attempts.find(({ plan }) => {
+            const source = plan.credentialSource;
+            return (
+              source?.kind === "profile" ||
+              (source?.kind === "direct" && !isConfiguredKeyAuthSource(source))
+            );
+          })
+        : undefined;
+    if (unrecorded) {
+      throw createUnrecordedScheduledAccountRefusal({
+        jobId: runParams.inputProvenance?.jobId,
+        runtime: harness.id,
+        modelRef: `${params.provider}/${params.modelId}`,
+        profileId: unrecorded.kind === "profile" ? unrecorded.profileId : undefined,
+      });
     }
     return prepared;
   };

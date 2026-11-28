@@ -368,6 +368,7 @@ describe("ordinary session event execution", () => {
     using acquire = vi.spyOn(cronInference, "prepareCronRunInference");
     acquire.mockResolvedValue({
       runParams: () => ({
+        scheduledLiveProviderAuth: true,
         authProfileId: undefined,
         authProfileIdSource: undefined,
       }),

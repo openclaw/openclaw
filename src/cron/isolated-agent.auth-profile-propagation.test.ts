@@ -45,7 +45,7 @@ const { resolveAgentDir } = await import("./isolated-agent/run.runtime.js");
 const { captureCronInferenceBinding } = await import("./inference-binding.runtime.js");
 const { prepareCronRunInference } = await import("./run-inference.js");
 const { captureCronUpdatedInferenceBinding } =
-  await import("../gateway/server-methods/cron-input-validation.js");
+  await import("../gateway/server-methods/cron-inference-account.js");
 const platformId = "openai:platform";
 const subscriptionId = "openai:subscription";
 const claudeProfile = "anthropic:default";
@@ -352,6 +352,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
         expect(result.status, result.error).toBe("ok");
         expect(h.runEmbeddedAgentMock).toHaveBeenCalledOnce();
         const params = h.runEmbeddedAgentMock.mock.lastCall?.[0];
+        expect(params?.scheduledLiveProviderAuth).toBe(true);
         expect(params?.authProfileBinding).toBeUndefined();
         expect(params?.authProfileId).not.toBe("openai:work");
         return;

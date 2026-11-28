@@ -106,23 +106,23 @@ const bedrockModel: FixtureModel = {
   baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 };
 
-// An unpinned scheduled run uses the AWS SDK chain like an interactive turn (#192524, #202699).
-it("selects ambient AWS SDK credentials for an unpinned scheduled run", async () => {
+// Stored-profile refusal is exercised through provider HTTP in auth-continuity.integration.
+it("refuses legacy adoption from ambient AWS SDK credentials at the auth boundary", async () => {
   await withAuthState(async (state) => {
-    const prepared = await prepareAuth(
-      state,
-      mockModel(bedrockModel),
-      { config: configFor(bedrockModel, { auth: "aws-sdk" }) },
-      bedrockModel,
-    );
-    expect(prepared.preparedAuthAttempts).toMatchObject([
-      { kind: "direct", plan: { credentialSource: { kind: "direct" } } },
-    ]);
-    expect(prepared.lockedProfileId).toBeUndefined();
+    const materialize = vi.spyOn(modelRuntime, "resolveModelAsync");
+    const stores = modelRuntime.createEmptyAgentDiscoveryStores();
+    await expect(
+      prepareAuth(
+        state,
+        stores,
+        { config: configFor(bedrockModel, { auth: "aws-sdk" }) },
+        bedrockModel,
+      ),
+    ).rejects.toThrow("Automation has no recorded inference account");
+    expect(materialize).not.toHaveBeenCalled();
   });
 });
 
-// A selected AWS SDK profile has no stored secret; creation keeps the job unbound (#202699).
 it("creates an unbound job for a selected AWS SDK profile", async () => {
   await withAuthState(async () => {
     const cfg = {

@@ -27,7 +27,7 @@ import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { acpAgentModelCheck } from "./doctor-acp-agent-model-check.js";
 import { finalConfigValidationCheck } from "./doctor-config-validation-check.js";
 import { bootstrapSizeCheck } from "./doctor-core-bootstrap-size-check.js";
-import { legacyCronStoreCheck } from "./doctor-cron-checks.js";
+import { cronInferenceCheck, legacyCronStoreCheck } from "./doctor-cron-checks.js";
 import { detectGatewayAuthHealth } from "./doctor-gateway-auth.js";
 import { gatewayServicesExtraCheck } from "./doctor-gateway-services-check.js";
 import type { DoctorHealthCheckContext } from "./doctor-health-contribution-types.js";
@@ -628,6 +628,7 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
     sessionArchiveCacheCheck,
     legacyWhatsAppCrontabCheck,
     legacyCronStoreCheck,
+    cronInferenceCheck,
     staleRuntimeBuildCheck,
     codexSessionRoutesCheck,
     telegramGeneralTopicConversationsCheck,

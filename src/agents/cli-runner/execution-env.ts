@@ -9,7 +9,7 @@ import {
   NODE_CLAUDE_FORWARD_ENV_KEYS,
   parseCliBackendPreserveEnv,
 } from "./execute-logging.js";
-import type { PreparedCliRunContext } from "./types.js";
+import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 type ChildEnvBackend = Pick<
   PreparedCliRunContext["preparedBackend"],
@@ -55,7 +55,7 @@ export function stripCliNativeAuthEnv(
 export function resolveCliChildEnv(
   preparedBackend: ChildEnvBackend,
   params: Pick<ProviderEnvVarLookupParams, "config" | "workspaceDir"> & {
-    nativeAuthOnly?: true;
+    nativeAuthOnly?: RunCliAgentParams["nativeAuthOnly"];
   } = {},
   overrides?: Record<string, string>,
   defaults?: Record<string, string>,

@@ -257,9 +257,13 @@ while the response is pending.
 
 ### Inference account continuity
 
-For an automation that runs a model, open its details in the Control UI or run
-`openclaw automations show <jobId>` to see its billing account. If it has no saved
-account, OpenClaw selects one when it runs.
+Main-session system events use the main session’s model, not the scheduled subagent model. New reminders follow the chat’s current inference account on each run. Creating the reminder does not pin an account, and running Doctor later does not change that. For reminders saved by older releases, repairing Doctor adopts an eligible stored account so the original job can continue. An environment SecretRef needs no stored account. If Doctor imports a literal provider key into a stored account, it also adopts that account for the saved event. To record an account explicitly, run `openclaw automations edit <jobId> --model <current-session-model>@<profileId>`. This binds the account without pinning the model or changing the event text, schedule, or ID. Without a configured model, the event cannot complete.
+
+Open a saved automation in the Control UI or run `openclaw automations show <jobId>`
+to see its billing account. An agent turn with no saved account uses the account
+an interactive turn would select for the same agent or conversation. A switch in
+that conversation applies to the next run. Each fallback provider selects its
+own credentials.
 
 New isolated agent-turn jobs retain their selected stored inference account
 and compatible authentication route. OAuth and API keys can remain enabled together:
@@ -300,26 +304,47 @@ on the same provider. A remaining stored account still requires an explicit
 `model@profile` selection. Valid bindings, unrelated edits, and
 `--clear-model` keep the recorded account.
 
-A job with no recorded account selects its credentials at run time the way an
-interactive turn on the same agent or session does: an explicit session account
-choice, then the normal account order. If the primary model fails, the configured
-fallback chain selects its credentials the same way. A `session:<key>` job uses
-that session's current account choice, including an explicit switch made in that
-session. Keys in the environment or provider config, AWS SDK credential chains and
-credentialless models also work, and job creation does not require a stored account.
+For legacy main-session reminders without a recorded inference account, `openclaw doctor --fix` records
+the account the job's next unbound run would use: an explicit selection, or else the
+first account in the run's normal account order, ignoring temporary rate-limit
+cooldowns. With `auth.order` set, that is the account every earlier run used; without
+it, runs rotated between accounts of the same type by last use, and Doctor records one
+of them. When several accounts are eligible, Doctor names the others and the command
+to change the choice.
+Doctor can also adopt host-managed accounts on an explicitly selected Codex runtime; it records that runtime with the account. Native-owned or model-locked sessions remain unchanged.
+Doctor uses normal automation model selection, preserves inherited defaults and
+fallback lists, leaves existing bindings unchanged, and backs up cron state before
+committing. Missing accounts, and personal accounts needing their owner's
+authorization, are left unchanged with job-specific adoption instructions.
+Run `openclaw doctor --lint` to preview missing bindings. Add `--all` to inspect
+unavailable profiles referenced by saved account order. An empty per-agent credential store
+can be valid when credentials are inherited from the shared store; Doctor checks
+effective credentials before reporting a missing profile. It does not remove a
+missing profile from account order or recreate its credentials automatically.
 
-After a state upgrade, `openclaw doctor --fix` can restore a previously recorded
-account when an upgrade receipt identifies the same authorization.
+Gateway boot and `openclaw doctor --fix` use the same account-adoption owner for
+legacy reminders, including after a container image replacement.
+Startup checks potentially unmigrated reminders in the background without
+delaying cron readiness or operations. The scan has a five-second aggregate budget;
+if it expires, one warning reports how many jobs were not checked and points to
+`openclaw doctor --lint` for a complete check. Startup does not capture credentials
+or rewrite jobs.
 
-For a CLI-runtime automation with no recorded account, the CLI account selector decides
-as it does interactively. When it selects a stored profile, the run forwards that
-profile. Otherwise the run uses the CLI's native login, and OpenClaw does not forward a
-stored inference profile on that native-only path, even one the backend would choose
-by default. To explicitly choose Claude CLI's native login, use
-`openclaw automations edit <jobId> --model anthropic/<model>@anthropic:claude-cli`;
-this also sets the primary model. Jobs with a saved inference binding keep using that
-account.
-On the native-only path, known provider-auth environment variables and the backend's credential exclusions
+Agent turns can also use keys in the environment or provider config, AWS SDK
+credential chains, and credentialless models. Creating a job on one of these
+routes does not require a stored account. A job with a recorded account keeps it
+when the model alias changes or another account becomes the default.
+
+For an unbound agent turn on a CLI runtime, the CLI account selector can choose a
+stored profile or native login. To explicitly select Claude CLI's own login, use
+`openclaw automations edit <jobId> --model anthropic/<model>@anthropic:claude-cli`.
+On the native-login path, OpenClaw leaves credentials with the CLI.
+For a legacy system event whose CLI selects a stored profile, select a model with
+an eligible host-managed account in its main session and run `openclaw doctor --fix`.
+Other turns in that session also use the selected model. Doctor does not adopt
+CLI accounts automatically.
+
+Known provider-auth environment variables and the backend's credential exclusions
 are removed after environment overrides, even when the live-test preserve-env
 option is set. Runtime settings, such as the context window, are retained.
 For paired-node runs, the Gateway withholds host credentials on every node. Nodes

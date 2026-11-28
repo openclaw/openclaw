@@ -663,6 +663,8 @@ export function createCronPromptExecutor(
           authProfileIdSource: runOptions.authProfileId
             ? "user"
             : params.liveSelection.authProfileIdSource,
+          // Isolated prompts are agent turns. A recorded provider still owns its account.
+          scheduledLiveProviderAuth: !binding || undefined,
           ...inference?.runParams(providerOverride),
           // Cron keeps overload failures local while sharing real credential failures.
           authProfileFailurePolicy: runOptions.authProfileFailurePolicy ?? "local_transient",

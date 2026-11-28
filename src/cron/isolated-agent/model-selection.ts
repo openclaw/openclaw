@@ -6,6 +6,7 @@ import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config
 import { resolveConfiguredModelPolicyAllow } from "../../agents/model-selection-shared.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import type { PreparedReplyDispatchRuntime } from "../../agents/prepared-model-runtime.types.js";
+import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { normalizeThinkingCatalogProviders } from "../../agents/thinking-runtime.js";
 import { normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
@@ -43,6 +44,7 @@ type CronModelSelectionOwner = Pick<
 >;
 
 type ResolveCronModelSelectionParams = {
+  payloadKind?: "agentTurn" | "systemEvent";
   cfg: OpenClawConfig;
   owner?: CronModelSelectionOwner;
   agentConfigOverride?: Pick<AgentConfig, "model" | "subagents" | "runtime">;
@@ -290,6 +292,10 @@ export async function resolveCronModelSelection(
       : undefined;
   };
 
+  if (params.payloadKind === "systemEvent") {
+    const ref = resolveSessionModelRef(owner.config, params.sessionEntry, ownerAgentId);
+    return ref ? selection(ref, "session") : { ok: false, error: NO_MODEL_CONFIGURED_MESSAGE };
+  }
   const payloadSelection = override(
     typeof params.payloadModel === "string" ? params.payloadModel.trim() : undefined,
     "payload",

@@ -209,6 +209,8 @@ export type CronFailureNotificationDetail =
       source: "payload" | "trigger";
       code: CronTriggerFailureCode;
     }
+  /** A deterministic setup refusal: the operator must record the intended account. */
+  | { kind: "inference-account-unrecorded" }
   /** The recorded account was removed, signed out or replaced: the job pauses until the operator acts. */
   | { kind: "inference-account-retired" }
   /** A stuck-session recovery aborted the run for a known semantic cause (e.g. `blocked_tool_call`). */
@@ -481,6 +483,8 @@ export type CronStoredJob = Omit<CronJob, "streamExecutionHost" | "payloadSource
   ownerTransferPending?: true;
   /** Captured inference owner; private and independent of scheduled tool authority. */
   inferenceBinding?: import("./inference-binding.js").CronInferenceBinding;
+  /** New main-session events follow the chat; an absent source leaves legacy account repair in charge. */
+  systemEventAccount?: "session";
   /** Creation-bound destination for isolated results when no external route exists. */
   sourceConversation?: {
     sessionKey: string;
