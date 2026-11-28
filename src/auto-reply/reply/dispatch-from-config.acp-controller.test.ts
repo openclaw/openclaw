@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -252,7 +252,8 @@ describe("dispatchReplyFromConfig ACP controller turns", () => {
       });
       acpMocks.requireAcpRuntimeBackend.mockReturnValue({ id: "acpx", runtime });
       const answerSettled = vi.fn();
-      const send = async (
+      const dispatches: Promise<unknown>[] = [];
+      const send = (
         body: string,
         recorder?: ReturnType<typeof createUserTurnTranscriptRecorder>,
         channel = "C1",
@@ -272,7 +273,7 @@ describe("dispatchReplyFromConfig ACP controller turns", () => {
           BodyForAgent: body,
           MessageSid: `m-${body}`,
         });
-        return dispatchInboundMessageWithRoutedChannelDispatcher({
+        const dispatch = dispatchInboundMessageWithRoutedChannelDispatcher({
           ctx,
           cfg,
           replyOptions: { userTurnTranscriptRecorder: recorder },
@@ -285,6 +286,8 @@ describe("dispatchReplyFromConfig ACP controller turns", () => {
             onSettled: body === "1" ? answerSettled : undefined,
           },
         });
+        dispatches.push(dispatch);
+        return dispatch;
       };
       const previousBroker = getEmbeddedQuestionBroker();
       const wasEmbedded = isEmbeddedMode();
@@ -292,56 +295,53 @@ describe("dispatchReplyFromConfig ACP controller turns", () => {
       setEmbeddedMode(true);
       setEmbeddedQuestionBroker(broker);
       const first = send("ask");
-      let answer: Promise<unknown> | undefined;
-      let otherChannel: Promise<unknown> | undefined;
-      try {
-        await withinTest(promptDelivered.promise, signal);
-        if (outcome === "persistence-failed") {
-          const recorder = createUserTurnTranscriptRecorder({
-            input: { text: "1" },
-            target: () => undefined,
-          });
-          const persist = vi
-            .spyOn(recorder, "persistApproved")
-            .mockRejectedValue(new Error("fixture persistence failed"));
-          answer = send("1", recorder);
-          await expect(withinTest(answer, signal)).rejects.toThrow(/^fixture persistence failed$/);
-          expect(persist).toHaveBeenCalledOnce();
-          cancel.abort();
-          release.resolve();
-          await withinTest(first, signal);
-          await withinTest(send("1"), signal);
-          await withinTest(send("next"), signal);
-          expect(started).toEqual(["ask", "next"]);
-          return;
-        }
-        // Both conversations route to acpKey. The other conversation's valid option
-        // must take the ordinary ACP route, not answer this question.
-        otherChannel = send("2", undefined, "C2");
-        await vi.waitFor(() => expect(replyDispatchEntries).toEqual([acpKey, acpKey]));
-        answer = send("1");
-        expect(await withinTest(response.promise, signal)).toEqual({
-          action: "accept",
-          content: { question_0: "Red" },
-        });
-        await withinTest(answer, signal);
-        expect(answerSettled).toHaveBeenCalledOnce();
-        release.resolve();
-        await withinTest(Promise.all([first, otherChannel]), signal);
-        // A later ordinary turn crosses the same FIFO after any queued duplicate.
-        await withinTest(send("next"), signal);
-        expect(started).toEqual(["ask", "2", "next"]);
-      } finally {
+      // Vitest runs these hooks in reverse order, each under its own cleanup deadline.
+      onTestFinished(() => {
+        broker.stop();
+        setEmbeddedQuestionBroker(previousBroker);
+        setEmbeddedMode(wasEmbedded);
+      });
+      onTestFinished(async () => {
         cancel.abort();
         release.resolve();
-        try {
-          await withinTest(Promise.allSettled([first, answer, otherChannel]), signal);
-        } finally {
-          broker.stop();
-          setEmbeddedQuestionBroker(previousBroker);
-          setEmbeddedMode(wasEmbedded);
-        }
+        await Promise.allSettled(dispatches);
+      });
+      await withinTest(promptDelivered.promise, signal);
+      if (outcome === "persistence-failed") {
+        const recorder = createUserTurnTranscriptRecorder({
+          input: { text: "1" },
+          target: () => undefined,
+        });
+        const persist = vi
+          .spyOn(recorder, "persistApproved")
+          .mockRejectedValue(new Error("fixture persistence failed"));
+        const answer = send("1", recorder);
+        await expect(withinTest(answer, signal)).rejects.toThrow(/^fixture persistence failed$/);
+        expect(persist).toHaveBeenCalledOnce();
+        cancel.abort();
+        release.resolve();
+        await withinTest(first, signal);
+        await withinTest(send("1"), signal);
+        await withinTest(send("next"), signal);
+        expect(started).toEqual(["ask", "next"]);
+        return;
       }
+      // Both conversations route to acpKey. The other conversation's valid option
+      // must take the ordinary ACP route, not answer this question.
+      const otherChannel = send("2", undefined, "C2");
+      await vi.waitFor(() => expect(replyDispatchEntries).toEqual([acpKey, acpKey]));
+      const answer = send("1");
+      expect(await withinTest(response.promise, signal)).toEqual({
+        action: "accept",
+        content: { question_0: "Red" },
+      });
+      await withinTest(answer, signal);
+      expect(answerSettled).toHaveBeenCalledOnce();
+      release.resolve();
+      await withinTest(Promise.all([first, otherChannel]), signal);
+      // A later ordinary turn crosses the same FIFO after any queued duplicate.
+      await withinTest(send("next"), signal);
+      expect(started).toEqual(["ask", "2", "next"]);
     },
   );
 
