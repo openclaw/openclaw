@@ -41,6 +41,11 @@ export const sqliteTestSingletonPublications: ReadonlyMap<string, readonly symbo
     source("src/state/openclaw-agent-db-borrower.ts"),
     [Symbol.for("openclaw.agentDatabaseBorrowers")],
   ],
+  // Entry points install a once-per-process role; a later file must not inherit it.
+  [
+    source("src/infra/database-engine/admission-scope.ts"),
+    [Symbol.for("openclaw.databaseProcessRole")],
+  ],
   [source("src/infra/agent-database-readers.ts"), [Symbol.for("openclaw.agentDatabaseReaders")]],
   [
     source("src/infra/sqlite-wal-checkpoint.ts"),

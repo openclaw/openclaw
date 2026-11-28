@@ -2,7 +2,6 @@
 import { Compile } from "typebox/compile";
 import { expect, it } from "vitest";
 import { ConnectParamsSchema } from "../../../packages/gateway-protocol/src/schema.js";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -57,7 +56,7 @@ suite.define(() => {
           { id: "custom-api-key", label: "Local endpoint", kind: "custom", featured: true },
         ],
       });
-      const gateway = await installMockGateway(page, {
+      const gateway = await installSetupGateway(page, {
         featureMethods: [
           rpc.detect,
           rpc.auth,
@@ -76,6 +75,7 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
+      await page.locator("[data-models-login-discover]").click();
       await page.locator('[data-auth-choice="custom-api-key"] button').click();
       await page.getByLabel("API Base URL").waitFor();
       await gateway.setMethodResponse(rpc.detect, {
@@ -88,7 +88,7 @@ suite.define(() => {
       const dialog = page.locator("openclaw-modal-dialog");
       await dialog.getByRole("alert").waitFor();
       await button(dialog, "Close").click();
-      await page.getByText("saved-model", { exact: true }).waitFor();
+      await page.locator(".model-setup__recovery").waitFor();
       expect(await gateway.getRequests(rpc.verify)).toHaveLength(0);
       await button(page, "Verify & use selected model").click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
@@ -106,7 +106,7 @@ suite.define(() => {
           status: "unavailable",
           error: "Gateway settings are saved but not active yet. Retry after the restart.",
         };
-        const gateway = await installMockGateway(page, {
+        const gateway = await installSetupGateway(page, {
           featureMethods: [
             "chat.metadata",
             "chat.startup",
@@ -132,13 +132,14 @@ suite.define(() => {
         );
         const firstConnect = connectParams((await gateway.waitForRequest("connect")).params);
         expect(firstConnect.auth).toMatchObject({ bootstrapToken: "e2e-first-grant" });
+        await page.locator("[data-models-login-discover]").click();
         await page.locator(".model-setup-provider-select__trigger").click();
         await page.locator('[data-manual-provider="openai"]').click();
         const apiKey = page.locator('.model-setup__manual input[type="password"]');
         await apiKey.fill("invalid-test-key");
         await page.getByRole("button", { name: "Connect & verify" }).click();
         await page.getByText("401: invalid test API key").waitFor();
-        expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
+        expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
         expect(await gateway.getRequests(rpc.verify)).toHaveLength(0);
 
         await button(page.locator("openclaw-modal-dialog"), "Close").click();
@@ -159,7 +160,7 @@ suite.define(() => {
         if (restart === "reopen") {
           await page.close();
           destination = await context.newPage();
-          reconnectedGateway = await installMockGateway(destination, {
+          reconnectedGateway = await installSetupGateway(destination, {
             featureMethods: [rpc.detect, rpc.verify, "openclaw.chat", "openclaw.chat.history"],
             methodResponses: {
               "openclaw.chat.history": { turns: [] },
@@ -183,7 +184,7 @@ suite.define(() => {
         }
         await reconnectedGateway.waitForRequest(rpc.verify);
         await destination.getByText(pendingVerification.error, { exact: false }).waitFor();
-        expect(new URL(destination.url()).pathname).toBe("/settings/model-setup");
+        expect(new URL(destination.url()).pathname).toBe("/settings/model-providers");
         expect(await reconnectedGateway.getRequests("openclaw.chat")).toHaveLength(0);
 
         await reconnectedGateway.setMethodResponse(rpc.verify, {
@@ -216,7 +217,7 @@ suite.define(() => {
     async (entry) => {
       await suite.withPage(setupContext(), async ({ page }) => {
         const modelRef = "openai/gpt-5.6-luna";
-        const gateway = await installMockGateway(page, {
+        const gateway = await installSetupGateway(page, {
           featureMethods: [
             rpc.detect,
             rpc.activate,
@@ -258,7 +259,10 @@ suite.define(() => {
           },
         });
         await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
-        await page.locator(".model-setup__intro").waitFor();
+        await page.locator("[data-models-catalog]").waitFor();
+        if (entry !== "clicked candidate") {
+          await page.locator("[data-models-login-discover]").click();
+        }
         // Preparation refreshes once before its separate activation. Hold the
         // activation response so only that mutation's refresh is interrupted.
         let refreshes = (await gateway.getRequests("config.get")).length;
@@ -311,17 +315,18 @@ suite.define(() => {
 
       const response = await openModelSetup(page, suite.server.baseUrl);
       expect(response?.status()).toBe(200);
-      await page.getByText("original-model", { exact: true }).waitFor();
+      const candidates = page.locator("[data-candidate-kind]");
+      await candidates.filter({ hasText: "provider/original-model" }).waitFor();
       const initialDetections = (await gateway.getRequests(rpc.detect)).length;
       const initialConnections = (await gateway.getRequests("connect")).length;
       await gateway.setMethodResponse(rpc.detect, discoveredModel("reconnected-model"));
       await gateway.deferNext("connect");
       await gateway.closeLatest(1012, "model setup reconnect proof");
-      await expectCount(page.getByText("original-model", { exact: true }), 0);
+      await expectCount(candidates.filter({ hasText: "provider/original-model" }), 0);
       await pollRequestCount(gateway, "connect").toBeGreaterThan(initialConnections);
       await gateway.resolveDeferred("connect");
       await pollRequestCount(gateway, rpc.detect).toBe(initialDetections + 1);
-      await page.getByText("reconnected-model", { exact: true }).waitFor();
+      await candidates.filter({ hasText: "provider/reconnected-model" }).waitFor();
       expect(pageErrors).toEqual([]);
     });
   });

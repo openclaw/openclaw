@@ -128,7 +128,6 @@ const enUsage = {
       channelGroup: "{channel} group",
       channelTopic: "{channel} group · topic {topic}",
       system: "System",
-      empty: "No usage for these dates and filters.",
       more: "Show {count} more identities",
     },
     empty: {
@@ -147,13 +146,6 @@ const enUsage = {
       tokensTitle: "Daily token usage",
       costTitle: "Daily cost",
       compressedScaleHint: "Square-root scale keeps low-usage days visible.",
-    },
-    costWindows: {
-      title: "Cost windows",
-      subtitle: "Calendar windows ending {date}",
-      selectedRange: "Selected range",
-      lastDays: "Last {count} days",
-      perDay: "/ day",
     },
     overview: {
       messageCounts: "{user} user · {assistant} assistant",
@@ -205,7 +197,6 @@ const enUsage = {
       details: "Session details",
       showTop: "Show top {count}",
       total: "{count} total",
-      avg: "avg",
       all: "All",
       recentShort: "Recent",
       sort: "Sort",

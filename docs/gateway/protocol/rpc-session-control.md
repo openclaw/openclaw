@@ -280,7 +280,8 @@ unconsumed input in the current physical session and audience was queued in
 the same storage snapshot as the persisted run state. It covers all pages,
 not just the returned items. Live run activity takes precedence over persisted
 terminal state. If the terminal run and queue snapshots disagree, the Gateway
-returns `UNAVAILABLE`; retry the history read.
+reads the selected session again. If they still disagree, the Gateway returns
+retryable `UNAVAILABLE`.
 Older Gateways and clients without the capability omit the field; absence does
 not mean the queue is empty. `queuedCount` still describes live queue custody.
 A `started` acknowledgment is not consumption. Keep uncertain input and its

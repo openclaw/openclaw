@@ -1,8 +1,6 @@
 import type { SessionPendingInputRow } from "./session-pending-input.types.js";
 import type { InternalSessionEntry, PersistedSessionRunStatus } from "./types.js";
 
-export type PendingInputHistoryRunState = Pick<InternalSessionEntry, "lastRunId" | "status">;
-
 export type PendingInputHistoryTerminalCheck = (
   runId: string,
   status: PersistedSessionRunStatus,
@@ -25,7 +23,7 @@ export type PendingInputHistorySnapshot = {
   rows: SessionPendingInputRow[];
   total: number | undefined;
   hasQueuedInput?: boolean;
-  runState?: PendingInputHistoryRunState;
+  runState?: Pick<InternalSessionEntry, "lastRunId" | "status">;
   nextBefore?: number;
   currentSessionId?: string;
 };

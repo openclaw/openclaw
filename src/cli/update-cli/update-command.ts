@@ -54,13 +54,13 @@ export async function updateCommand(
   inputOpts: UpdateCommandOptions,
   executorOptions?: UpdateCommandExecutorOptions,
 ): Promise<void> {
-  if (!executorOptions && (await tryRunSystemServicePackageUpdate(inputOpts))) {
-    return;
-  }
   return await withSystemPackageOwnershipRun(() =>
     withDeferredDebugProxyCapture(async () => {
       const { tryRunImmutableUpdateCommand } = await import("./update-command-immutable.js");
       if (await tryRunImmutableUpdateCommand(inputOpts)) {
+        return;
+      }
+      if (!executorOptions && (await tryRunSystemServicePackageUpdate(inputOpts))) {
         return;
       }
       const { preparePostgresPoolForUpdate } = await import("../../infra/postgres-sync/pool.js");

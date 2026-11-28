@@ -10,7 +10,7 @@ import { resetSubagentRegistryForTests } from "./subagent-registry.test-helpers.
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const SUBAGENT_RESTART_INTERRUPTED_ERROR =
-  "The Gateway stopped before this subagent finished. Its run did not survive the restart; inspect its saved work before retrying.";
+  "The Gateway restarted without confirming this subagent's result. Remote work may still be running or may have finished. Check the original worker and its saved work before retrying.";
 const PROCESS_STARTED_AT = 1_800_000_000_000;
 const NOW = PROCESS_STARTED_AT + 60_000;
 
@@ -55,7 +55,7 @@ afterEach(async () => {
 it("fails a running child restored from an earlier Gateway so its requester wakes", async () => {
   using warning = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
   const entry = restoredRunningRow();
-  // Startup has admitted fresh completion custody; child execution still did not survive.
+  // Startup has admitted fresh completion custody; the child's outcome is unknown.
 
   const { complete, settled } = settle(entry);
 

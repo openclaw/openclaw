@@ -5,8 +5,8 @@ import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-suppor
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import type { UsageAggregates, UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
-import { totals, dailyEntry } from "./usage-chart.test-support.ts";
-import { CostWindowComparison, renderFilterChips, UsageInsights } from "./view-overview.tsx";
+import { totals } from "./usage-chart.test-support.ts";
+import { renderFilterChips, UsageInsights } from "./view-overview.tsx";
 import { mountView, text, texts, usageState } from "./view-render.test-support.ts";
 import { SessionsCard } from "./view-sessions-card.tsx";
 import {
@@ -191,37 +191,6 @@ it("preserves filter-chip order, session-only title, labels, and clear callbacks
   expect(onClearSessions).toHaveBeenCalledOnce();
 });
 
-it("cost windows preserve sub-cent totals and day columns across refreshes", () => {
-  const day = dailyEntry("2026-07-01", 300, 0.003);
-  const [daily, setDaily] = createSignal([day]);
-  const { container } = mountView(() =>
-    CostWindowComparison({
-      get daily() {
-        return daily();
-      },
-      rangeStartDate: "2026-06-02",
-      rangeEndDate: "2026-07-01",
-      timeZone: "local",
-    }),
-  );
-
-  const range = container.querySelector(".cost-window--range");
-  expect(text(range, ".cost-window__value")?.trim()).toBe("$0.0030");
-  expect(text(range, ".cost-window__meta")).toContain("$0.0001 / day");
-  const column = range!.querySelector(".usage-bars__bar--current")!;
-  column.dispatchEvent(new MouseEvent("pointerenter"));
-  flush();
-  expect(text(range, ".usage-bars__tip")).toBe("Jul 1 · $0.0030");
-
-  setDaily([dailyEntry("2026-07-01", 600, 0.006)]);
-  flush();
-  expect(container.querySelector(".cost-window--range")).toBe(range);
-  expect(range!.querySelector(".usage-bars__bar--current")).toBe(column);
-  expect(text(range, ".cost-window__value")?.trim()).toBe("$0.0060");
-  expect(text(range, ".cost-window__meta")).toContain("$0.0002 / day");
-  expect(text(range, ".usage-bars__tip")).toBe("Jul 1 · $0.0060");
-});
-
 describe("SessionsCard", () => {
   const session = (key: string, tokens = 100): UsageSessionEntry => ({
     key,
@@ -323,7 +292,6 @@ describe("SessionsCard", () => {
       );
       const row = container.querySelector(".session-bar-row");
       const value = () => text(row, ".session-bar-value");
-      const average = () => text(container, ".sessions-card-stats > span");
       expect(text(row, ".session-bar-meta")).toContain("1m");
       const englishValue = value();
       await i18n.setLocale("de");
@@ -357,13 +325,12 @@ describe("SessionsCard", () => {
           maximumFractionDigits: 2,
         }).format(0),
       );
-      expect(average()).toBe("$0.00 avg");
     } finally {
       await restoreI18n();
     }
   });
 
-  it("renders a server page without changing its full-roster average", () => {
+  it("renders a server page in its server order", () => {
     const overview = createUsageOverview({
       total: 2,
       tableSessionCount: 100,
@@ -380,7 +347,6 @@ describe("SessionsCard", () => {
       }),
     );
     expect(texts(container, ".session-bar-title", false)).toEqual(["B", "A"]);
-    expect(text(container, ".sessions-card-stats")).toContain("500 avg");
   });
 
   it("leads with the top ten sessions and expands to the full page on request", () => {

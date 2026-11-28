@@ -5,7 +5,7 @@ import type { Model } from "../../../llm/types.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
 
-function fixture(supportsImages = false, assertModelInput?: (model: Pick<Model, "input">) => void) {
+function fixture(supportsImages: boolean, assertModelInput: (model: Pick<Model, "input">) => void) {
   const model = makeProviderModelFixture({
     id: "prepared-model",
     name: "Prepared model",

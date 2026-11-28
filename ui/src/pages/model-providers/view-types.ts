@@ -26,6 +26,10 @@ export type ModelProvidersViewProps = SharedModelProvidersProps & {
   providerDetailsReady?: boolean;
   installedAgents: JSX.Element | typeof undefined;
   accountRecovery?: JSX.Element | typeof undefined;
+  /** First-run recovery and detected models, above the catalog. */
+  firstRunSetup?: JSX.Element | typeof undefined;
+  /** A first-run activation may still commit; catalog sign-in waits for its recovery. */
+  firstRunUnresolved?: boolean;
   providerQuery?: string;
   /** The page owner supplies the catalog and its entry points. */
   catalogProviders: LoginProvider[];

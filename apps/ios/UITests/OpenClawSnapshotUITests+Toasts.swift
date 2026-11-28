@@ -80,14 +80,39 @@ extension OpenClawSnapshotUITests {
         XCTAssertEqual(text.label, "“Summarize today’s calendar”")
         XCTAssertTrue(sheetRow.exists, "The sheet is still open under the toast")
         self.attachScreenshot(named: "toast-over-sheet")
-        // The capsule lies over the sheet's first row. A touch on it must land on the toast, not
-        // open that row: the sheet stays on its root page.
-        let gatewayRow = app.staticTexts["OpenClaw Gateway"].firstMatch
-        XCTAssertTrue(gatewayRow.exists)
-        XCTAssertTrue(text.frame.intersects(gatewayRow.frame) || text.frame.maxY > gatewayRow.frame.minY - 20)
-        text.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        // The capsule lies over the sheet's first row, Appearance, whose menu opens from the value at
+        // its trailing end. A touch on the capsule there must land on the toast, not open that menu.
+        let appearanceRow = app.descendants(matching: .any)["SettingsHub.Appearance"]
+        XCTAssertTrue(appearanceRow.exists)
+        let capsule = text.frame
+        XCTAssertTrue(capsule.intersects(appearanceRow.frame))
+        let overValue = CGVector(dx: capsule.maxX - 12, dy: (appearanceRow.frame.minY + capsule.maxY) / 2)
+        let onCapsule = CGVector(
+            dx: (overValue.dx - capsule.minX) / capsule.width,
+            dy: (overValue.dy - capsule.minY) / capsule.height)
+        // The fixture hears the command every 4 s and the toast stays 2 s, so poll closely (the waits
+        // below check about once a second) and touch a fresh toast once its entrance ends. A tap
+        // relative to the capsule finds it first, so the toast is up when the touch lands.
+        func poll(_ timeout: TimeInterval, until condition: () -> Bool) -> Bool {
+            let end = Date().addingTimeInterval(timeout)
+            repeat {
+                if condition() { return true }
+            } while Date() < end
+            return false
+        }
+        XCTAssertTrue(poll(6) { !text.exists })
+        XCTAssertTrue(poll(6) { text.exists })
+        Thread.sleep(forTimeInterval: 0.3)
+        text.coordinate(withNormalizedOffset: onCapsule).tap()
         Thread.sleep(forTimeInterval: 1)
-        XCTAssertTrue(sheetRow.exists, "The touch stayed on the toast")
+        XCTAssertFalse(app.buttons["System"].exists, "The touch stayed on the toast")
+        XCTAssertTrue(sheetRow.exists, "The sheet is still on its root page")
+        // Control: once that toast leaves, and before the next one, a touch at the same place opens the menu.
+        XCTAssertTrue(poll(6) { !text.exists })
+        app.coordinate(withNormalizedOffset: .zero).withOffset(overValue).tap()
+        XCTAssertTrue(app.buttons["System"].waitForExistence(timeout: 3), "Without a toast the row gets the touch")
+        app.buttons["Dark"].tap()
+        XCTAssertTrue(app.buttons["System"].waitForNonExistence(timeout: 3))
         XCTAssertTrue(text.waitForNonExistence(timeout: 6))
 
         app.swipeDown(velocity: .fast)
