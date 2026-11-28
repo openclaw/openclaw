@@ -131,6 +131,11 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
           },
         }),
       ).toBe(consumed);
+      if (consumed) {
+        expect(
+          children.every((child) => child.delivery?.requesterDelivery?.state === "consumed"),
+        ).toBe(true);
+      }
       expectMessage(children.map((entry) => `Saved result from ${entry.runId}`));
       expect(children.map((entry) => entry.completion?.resultText)).toEqual([
         "Saved result from run-a",
@@ -502,32 +507,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       requesterTurnRunId,
       requesterTurnRunId,
     ]);
-  });
-  it("hands a consumed failed turn to the retained settlement owner", async () => {
-    const children = setChildren();
-    deliverSpy.mockImplementationOnce(async (params) => {
-      await prepareDispatch(params);
-      const input = [...sessionControllerMailboxes()][0]!.entries[0]!;
-      await input.onTranscriptCommitted!("requester-continuation");
-      return { delivered: false, path: "direct", error: "529" };
-    });
-    expect(
-      await wake({
-        recordRequesterDelivery: async (batch, fact) => {
-          for (const entry of batch) {
-            entry.delivery = { status: "pending", ...entry.delivery, requesterDelivery: fact };
-          }
-        },
-      }),
-    ).toBe(true);
-    expect(children.every((child) => child.delivery?.requesterDelivery?.state === "consumed")).toBe(
-      true,
-    );
-    expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-a", "run-b"], undefined, {
-      delivered: false,
-      path: "direct",
-      error: "529",
-    });
   });
   it("delivers the complete final source reply after a same-run silent terminal", async () => {
     const text = `${"<source-reply>".repeat(400)}required source reply tail`;

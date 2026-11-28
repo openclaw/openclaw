@@ -897,8 +897,7 @@ it("ignores stale scheduled refresh results after auth profile rotation", async 
       Date.now() + 30_000,
     ),
   );
-  await Promise.resolve();
-  await Promise.resolve();
+  await refreshInFlight;
 
   expect(harness.runtimeAuthState?.profileId).toBe("backup");
   expect(harness.models.runtime.baseUrl).toBe("https://backup-runtime.example.com/v1");

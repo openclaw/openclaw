@@ -9,7 +9,7 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
-import { resolveSessionDisplayName } from "../../lib/session-display.ts";
+import { isSessionTitlePending, resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { generateUUID } from "../../lib/uuid.ts";
@@ -151,7 +151,10 @@ function PendingSessionCreateContent(
         title:
           displayName ??
           (row ? resolveSessionDisplayName(props.sessionKey, row) : t("newSession.title")),
-        titlePending: submitting && !displayName && !row && !background,
+        titlePending:
+          submitting &&
+          !displayName &&
+          (row ? isSessionTitlePending(props.sessionKey, row) : !background),
         session: undefined,
         incognito: isIncognitoSessionKey(props.sessionKey),
         catalog: false,

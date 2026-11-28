@@ -88,7 +88,7 @@ async function createTranscriptOwners(stateDir: string) {
     runs,
     published,
     unsubscribe,
-    runMaintenance(maintain: Maintain, overrides: Partial<ContextEngineMaintenanceParams> = {}) {
+    runMaintenance(maintain: Maintain, overrides: Partial<ContextEngineMaintenanceParams>) {
       const run = runContextEngineMaintenance({
         ...target,
         sessionTarget: target,

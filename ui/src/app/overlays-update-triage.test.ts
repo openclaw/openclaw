@@ -34,6 +34,11 @@ function triageTest(request: RequestFn) {
   return { ...runTest(request, { onUpdateFailure }), onUpdateFailure };
 }
 
+async function expectDiagnosableFailure(overlays: ReturnType<typeof triageTest>["overlays"]) {
+  await vi.dynamicImportSettled();
+  expect(overlays.snapshot.diagnosableUpdateFailureId).toBe(FAILURE.runId);
+}
+
 async function remountAndDiagnose({ remount, onUpdateFailure }: ReturnType<typeof triageTest>) {
   const overlays = remount();
   await waitForFast(() => expect(overlays.snapshot.updateRun).toEqual(FAILURE));
@@ -67,9 +72,8 @@ it("keeps a failure passive across events, refreshes, access changes, and reload
   expect(onUpdateFailure).not.toHaveBeenCalled();
   run = FAILURE;
   harness.emitEvent("update.run.changed", run);
-  await waitForFast(() => expect(overlays.snapshot.diagnosableUpdateFailureId).toBe(FAILURE.runId));
+  await expectDiagnosableFailure(overlays);
   expect(onUpdateFailure).not.toHaveBeenCalled();
-  expect(overlays.snapshot.diagnosableUpdateFailureId).toBe(FAILURE.runId);
   overlays.diagnoseUpdateFailure("stale-attempt");
   expect(onUpdateFailure).not.toHaveBeenCalled();
   overlays.diagnoseUpdateFailure(FAILURE.runId);
@@ -126,9 +130,7 @@ it.each(["Gateway", "profile", "client", "reconnect"] as const)(
             : undefined,
       });
     };
-    await waitForFast(() =>
-      expect(overlays.snapshot.diagnosableUpdateFailureId).toBe(FAILURE.runId),
-    );
+    await expectDiagnosableFailure(overlays);
     expect(onUpdateFailure).not.toHaveBeenCalled();
     overlays.diagnoseUpdateFailure(FAILURE.runId);
     const admission = onUpdateFailure.mock.calls[0]![1];
@@ -146,7 +148,7 @@ it("retires a queued failure admission when a newer campaign starts", async () =
   let run = FAILURE;
   const request = vi.fn<RequestFn>(async () => ({ activeRun: run }));
   const { harness, overlays, onUpdateFailure, expectState } = triageTest(request);
-  await waitForFast(() => expect(overlays.snapshot.diagnosableUpdateFailureId).toBe(FAILURE.runId));
+  await expectDiagnosableFailure(overlays);
   overlays.diagnoseUpdateFailure(FAILURE.runId);
   const admission = onUpdateFailure.mock.calls[0]![1];
   run = updateRunFixture({
@@ -218,7 +220,7 @@ it("preserves the sent rejection Invalid update request parameters over historic
 
 it("admits each explicit click once when session storage is available", async () => {
   const { overlays, onUpdateFailure } = triageTest(async () => ({ lastRun: FAILURE }));
-  await waitForFast(() => expect(overlays.snapshot.diagnosableUpdateFailureId).toBe(FAILURE.runId));
+  await expectDiagnosableFailure(overlays);
   expect(onUpdateFailure).not.toHaveBeenCalled();
   overlays.diagnoseUpdateFailure(FAILURE.runId);
   const first = onUpdateFailure.mock.calls[0]![1];

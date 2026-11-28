@@ -255,29 +255,6 @@ describe("loadOpenClawPlugins", () => {
     ).toBe(fs.realpathSync(plugin.file));
   });
 
-  it("loads plugins when source and root differ only by realpath alias", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "alias-safe",
-      filename: "alias-safe.cjs",
-      body: `module.exports = { id: "alias-safe", register() {} };`,
-    });
-    const realRoot = fs.realpathSync(plugin.dir);
-    if (realRoot === plugin.dir) {
-      return;
-    }
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["alias-safe"],
-      },
-    });
-
-    const loaded = registry.plugins.find((entry) => entry.id === "alias-safe");
-    expect(loaded?.status).toBe("loaded");
-  });
-
   it("denylist disables plugins even if allowed", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

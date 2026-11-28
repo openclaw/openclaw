@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { getResourceProfile } from "../infra/gateway-resource-profile.js";
 import { retireQuestionChannelGateway } from "../infra/question-channel-runtime.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { bindLegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
@@ -12,6 +13,7 @@ import { shouldUseGatewayOwnerProfile } from "./gateway-owner-profile.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
+import { registerGatewayLifecycleRuntime } from "./server-lifecycle-runtime-context.js";
 import { attachInitialGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
 import { readPreparedServerMethodModelCatalogs } from "./server-methods/optional-model-catalog.js";
 import type { GatewayHostLifecycle } from "./server-public.js";
@@ -25,6 +27,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   log: GatewayLogger;
   logHealth: GatewayLogger;
   hostLifecycle?: GatewayHostLifecycle;
+  waitForPostReadyWork?: () => Promise<void>;
 }) {
   const { coreRuntime: runtime, log, logHealth } = params;
   const {
@@ -142,10 +145,17 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       const controlUiEnabled =
         runtime.opts.controlUiEnabled ?? getRuntimeConfig().gateway?.controlUi?.enabled ?? true;
       if (controlUiEnabled) {
-        // Facts are ready, but display rows remain lazy. Warm the recent page while sidecars start.
+        // Facts are required; display rows are advisory. Lean warmup waits outside root
+        // admission so it cannot keep the post-ready idle gate busy itself.
         void runtime.connectionWork
-          .track(() =>
-            runWithGatewayIndependentRootWorkAdmission(
+          .track(async () => {
+            if (getResourceProfile() === "lean" && params.waitForPostReadyWork) {
+              await params.waitForPostReadyWork();
+            }
+            if (runtime.lifecycle.closePreludeStarted || runtime.connectionWork.signal.aborted) {
+              return;
+            }
+            return runWithGatewayIndependentRootWorkAdmission(
               async () => {
                 const { listProjectedSessions } = await import("./session-utils-list.js");
                 runtime.connectionWork.signal.throwIfAborted();
@@ -159,8 +169,8 @@ export async function prepareGatewayKernelRequestRuntime(params: {
               },
               "startup:session-row-prewarm",
               runtime.connectionWork.signal,
-            ),
-          )
+            );
+          })
           .catch((error: unknown) => {
             if (!runtime.connectionWork.signal.aborted) {
               log.warn(`Session first-page preparation failed: ${formatErrorMessage(error)}`);
@@ -200,7 +210,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     "gateway.instance-runtime-import",
     () => import("./server-instance-runtime.js"),
   );
-  const gatewayInstanceRuntime = createGatewayInstanceRuntime({
+  const instanceRuntime = createGatewayInstanceRuntime({
     getContext: () => gatewayRequestContext,
     getMethodRegistry: () => getAttachedGatewayMethodRegistry(),
     // Request entry fences new calls during the prelude. Retained principals
@@ -208,6 +218,16 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     isDispatchAvailable: () => startupState.dispatchReady,
     logError: (message) => log.error(message),
   });
+  // The listening Gateway is the process-global lifecycle owner; embedded hosts build the
+  // same runtime for their own context without claiming it.
+  const releaseLifecycleRuntime = registerGatewayLifecycleRuntime(instanceRuntime.lifecycle);
+  const gatewayInstanceRuntime = {
+    ...instanceRuntime,
+    close: () => {
+      instanceRuntime.close();
+      releaseLifecycleRuntime();
+    },
+  };
   gatewayInstanceRuntimeRef.current = gatewayInstanceRuntime;
   gatewayRequestContext.resolveGatewayContext = () =>
     gatewayInstanceRuntime.isAvailable() ? gatewayRequestContext : undefined;

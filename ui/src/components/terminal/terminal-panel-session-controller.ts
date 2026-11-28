@@ -487,6 +487,11 @@ export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
       // Read after binding: the queue reloads its persisted record for the first
       // panel in a document, so an earlier read would miss a carried-over intent.
       updateState({ booting: ownedIntentQueue.hasActions });
+      if (state.booting) {
+        // A panel mounted to carry out a request (the agent's terminal_show, a dock
+        // handoff) shows that terminal; the session list is the empty panel's landing.
+        host.resetTerminalSessionPicker();
+      }
     },
     /** A retained standalone dock can become the destination without remounting. */
     activateHost(): void {

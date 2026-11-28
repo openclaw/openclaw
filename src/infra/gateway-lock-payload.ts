@@ -6,12 +6,13 @@ import { isContainerEnvironment } from "./container-environment.js";
 import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import { isTruthyEnvValue } from "./env.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
+import { managedHandoffBootSchema } from "./update-managed-service-handoff-boot-schema.js";
 import { createManagedHandoffBootIdentityReader } from "./update-managed-service-handoff-boot.js";
-import { managedHandoffBootSchema } from "./update-managed-service-handoff-schema.js";
 
 // Sidecar mtime is the cross-namespace heartbeat; payload bytes and ownership stay immutable.
 export const GATEWAY_OWNER_HEARTBEAT_MS = 15_000;
 export const GATEWAY_OWNER_HEARTBEAT_STALE_MS = 90_000;
+export const LEGACY_GATEWAY_OWNER_LEASE_TTL_MS = 5 * 60_000;
 
 const [uuidBoot, windowsBoot, freebsdBoot] = managedHandoffBootSchema.options;
 const host = z.string().min(1);
@@ -62,9 +63,31 @@ export function readGatewayLockProcessNamespace(): ProcessNamespace | null {
 type GatewayLockHolder = Partial<Pick<LockPayload, "pid" | "processNamespace">> & {
   host?: string;
   heartbeatAt?: number;
+  ownerId?: unknown;
+  role?: unknown;
+  createdAt?: unknown;
+  expiresAt?: number | null;
 };
 
-function readLockHeartbeat(lockPath: string): number | undefined {
+export function isLegacyGatewayLeaseLock(holder: {
+  processNamespace?: unknown;
+  role?: unknown;
+  ownerId?: unknown;
+  createdAt?: unknown;
+}): holder is { role: "gateway"; ownerId: string; createdAt: string } {
+  // 9.7 introduced explicit Gateway-role process owners; 9.6 projections omit the role.
+  return (
+    process.platform === "linux" &&
+    !isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_REQUIRE_NAMESPACE_PROOF) &&
+    holder.processNamespace === undefined &&
+    holder.role === "gateway" &&
+    typeof holder.ownerId === "string" &&
+    holder.ownerId.length > 0 &&
+    typeof holder.createdAt === "string"
+  );
+}
+
+export function readLockHeartbeat(lockPath: string): number | undefined {
   try {
     return fs.statSync(lockPath).mtimeMs;
   } catch {
@@ -104,12 +127,25 @@ export function describeGatewayLockHolder(
 
 export class GatewayLockNamespaceError extends Error {
   readonly heartbeatAgeMs?: number;
+  readonly legacyLock: boolean;
+  readonly legacyLease: boolean;
 
   constructor(holder: GatewayLockHolder, lockPath?: string) {
+    const legacyLock = process.platform === "linux" && holder.processNamespace === undefined;
     super(
-      `cannot verify Gateway ownership from this process${lockPath ? ` at ${lockPath}` : ""}. ${describeGatewayLockHolder(holder, lockPath)}`,
+      `cannot verify Gateway ownership from this process${lockPath ? ` at ${lockPath}` : ""}. ${
+        legacyLock
+          ? `Legacy holder ${holder.pid ?? "unknown"} has no PID namespace evidence. It may already have stopped. Independently verify that no Gateway using this state is running on this host or in any sharing container. With a current OpenClaw CLI using the same state and profile, run \`openclaw gateway recover-lock --json\`, then \`openclaw gateway recover-lock --confirm <confirmation> --json\` with the returned confirmation. Retry Doctor afterward.`
+          : describeGatewayLockHolder(holder, lockPath)
+      }`,
     );
     this.name = "GatewayLockNamespaceError";
+    this.legacyLock = legacyLock;
+    this.legacyLease =
+      isLegacyGatewayLeaseLock(holder) ||
+      (legacyLock &&
+        !isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_REQUIRE_NAMESPACE_PROOF) &&
+        typeof holder.expiresAt === "number");
     const owner = GatewayProcessNamespaceSchema.safeParse(holder.processNamespace).data;
     if (isForeignLinuxNamespace(owner, readGatewayLockProcessNamespace())) {
       const heartbeatAt = lockPath ? readLockHeartbeat(lockPath) : holder.heartbeatAt;
@@ -118,43 +154,6 @@ export class GatewayLockNamespaceError extends Error {
       }
     }
   }
-}
-
-/**
- * File-lock recovery also covers pre-namespace (before 2026.10.1) records from supported
- * upgrades on hosts whose PIDs are kernel-global. Linux PID namespaces keep them unknown.
- */
-export function classifyGatewayLockProcessNamespace(
-  holder:
-    | { processNamespace?: unknown; machineIdentity?: unknown; pid?: unknown; startTime?: unknown }
-    | null
-    | undefined,
-  lockPath?: string,
-): "same" | "dead" | "unknown" {
-  if (
-    (process.platform === "win32" || process.platform === "darwin") &&
-    holder &&
-    holder.processNamespace === undefined &&
-    lockPath
-  ) {
-    try {
-      // A missing namespace never grants local authority. Only an expired heartbeat
-      // plus native proof of process death can retire this legacy file owner.
-      if (
-        Date.now() - fs.statSync(lockPath).mtimeMs > GATEWAY_OWNER_HEARTBEAT_STALE_MS &&
-        isLockOwnerDefinitelyStale({ payload: { pid: holder.pid, starttime: holder.startTime } })
-      ) {
-        return "dead";
-      }
-    } catch {
-      // Unavailable heartbeat or process observations preserve the owner.
-    }
-    return "unknown";
-  }
-  return classifyGatewayOwnerProcessNamespace(holder?.processNamespace, {
-    machineIdentity: holder?.machineIdentity,
-    readGatewayHeartbeat: lockPath ? () => readLockHeartbeat(lockPath) : undefined,
-  });
 }
 
 /** File locks and SQLite leases require comparable evidence of process death. */
@@ -268,6 +267,29 @@ export const LockPayloadSchema = z.object({
 });
 
 export type LockPayload = z.infer<typeof LockPayloadSchema>;
+export type GatewayLockIdentity = {
+  pid: number;
+  ownerId?: string;
+  cronOwnerProjection?: "dynamic-default-v1";
+  createdAt: string;
+  port: number;
+  startTime?: number;
+};
+
+export function isSameGatewayLockIdentity(
+  previous: GatewayLockIdentity,
+  current: GatewayLockIdentity,
+): boolean {
+  if (previous.ownerId && current.ownerId) {
+    return previous.ownerId === current.ownerId;
+  }
+  return (
+    previous.pid === current.pid &&
+    previous.createdAt === current.createdAt &&
+    previous.startTime === current.startTime
+  );
+}
+
 export type GatewayLockRole = NonNullable<LockPayload["role"]>;
 
 /** Parent loss cancels maintenance; peers still wait for its native process to exit. */

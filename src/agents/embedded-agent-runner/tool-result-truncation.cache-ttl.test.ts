@@ -249,7 +249,7 @@ describe("cache-TTL tool-result projection", () => {
       sent = truncate(history, 128_000, maxChars, 8_000, state).messages;
     }
     expect(sent.filter((message) => message.role === "toolResult")).toHaveLength(3);
-    expect(toolText(sent, "batch-0")).toContain("truncated");
+    expect(toolText(sent, "batch-0")).toContain("chars omitted");
     expect(
       [0, 1, 2].reduce((sum, batch) => sum + toolText(sent, `batch-${batch}`).length, 0),
     ).toBeGreaterThan(8_000);

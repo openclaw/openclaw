@@ -64,6 +64,7 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   }
   const evidenceUpload = params.action === "upload_evidence" ? params : undefined;
   const requestReview = params.action === "request_review";
+  const assignment = params.action === "add_assignee" ? params : undefined;
   const ownPublicationAction = Boolean(edit || requestReview || evidenceUpload);
   const editsMetadata = edit && (edit.title !== undefined || edit.body !== undefined);
   if (
@@ -226,9 +227,9 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   };
   const present = (
     state: ReturnType<typeof pullRequestState>,
-    extra?: Pick<SessionGitHubActionResult, "reviewRequest" | "evidence">,
+    extra?: Pick<SessionGitHubActionResult, "reviewRequest" | "evidence" | "assignment">,
   ): void => {
-    const { nodeId: _, title, body, ...facts } = state;
+    const { nodeId: _, title, body, assignees: _assignees, ...facts } = state;
     const result: SessionGitHubActionResult = {
       ...(publication ? { publication } : { pullRequest }),
       publishingSessionKey: session.sessionKey,
@@ -355,6 +356,20 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   if (requestReview && (before.state === "merged" || before.state === "closed")) {
     throw new Error("The published PR is closed; no re-review request was posted.");
   }
+  const assignedLogin = (state: ReturnType<typeof pullRequestState>) =>
+    state.assignees?.find((login) => login.toLowerCase() === assignment?.assignee.toLowerCase());
+  if (assignment) {
+    if (before.state === "merged" || before.state === "closed") {
+      throw new Error("The PR is closed; no assignee was added.");
+    }
+    if (!before.assignees) {
+      throw new Error("GitHub did not return the current PR assignees; no assignee was added.");
+    }
+    const login = assignedLogin(before);
+    if (login) {
+      return present(before, { assignment: { status: "already_assigned", login } });
+    }
+  }
   if (
     before.state === "merged" ||
     (params.action === "ready" && before.state === "open") ||
@@ -401,7 +416,14 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     }
   }
   if (!edit) {
-    await prepareImportedEffect();
+    const current = await prepareImportedEffect();
+    if (assignment && current) {
+      assertHead(current);
+      const login = assignedLogin(current);
+      if (login) {
+        return present(current, { assignment: { status: "already_assigned", login } });
+      }
+    }
   }
   const assertEffect = () => {
     assertCurrent();
@@ -418,14 +440,14 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   try {
     const result = await runPublicationCommand(
       githubPublicationApiArgs(
-        requestReview
-          ? `repos/${pullRequest.repository}/issues/${number}/comments`
+        assignment || requestReview
+          ? `repos/${pullRequest.repository}/issues/${number}/${assignment ? "assignees" : "comments"}`
           : params.action === "ready"
             ? "graphql"
             : params.action === "close" || edit
               ? endpoint
               : `${endpoint}/merge`,
-        requestReview || params.action === "ready"
+        assignment || requestReview || params.action === "ready"
           ? "POST"
           : params.action === "close" || edit
             ? "PATCH"
@@ -436,31 +458,33 @@ export async function performSessionGitHubAction(options: Options): Promise<void
         env: identity.env,
         beforeRun: assertEffect,
         input: JSON.stringify(
-          requestReview
-            ? { body: reviewCommand }
-            : params.action === "ready"
-              ? {
-                  query:
-                    "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { id } } }",
-                  variables: { id: before.nodeId },
-                }
-              : edit
+          assignment
+            ? { assignees: [assignment.assignee] }
+            : requestReview
+              ? { body: reviewCommand }
+              : params.action === "ready"
                 ? {
-                    ...(edit.title !== undefined ? { title: edit.title } : {}),
-                    ...(edit.body !== undefined ? { body: edit.body } : {}),
+                    query:
+                      "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { id } } }",
+                    variables: { id: before.nodeId },
                   }
-                : params.action === "close"
-                  ? { state: "closed" }
-                  : {
-                      sha: params.expectedHeadCommit,
-                      merge_method: params.action === "merge" ? params.mergeMethod : undefined,
-                      ...(params.action === "merge" && params.mergeMethod === "squash"
-                        ? { commit_title: before.title }
-                        : {}),
-                      ...(attribution?.attribution?.trailers.length
-                        ? { commit_message: attribution.attribution.trailers.join("\n") }
-                        : {}),
-                    },
+                : edit
+                  ? {
+                      ...(edit.title !== undefined ? { title: edit.title } : {}),
+                      ...(edit.body !== undefined ? { body: edit.body } : {}),
+                    }
+                  : params.action === "close"
+                    ? { state: "closed" }
+                    : {
+                        sha: params.expectedHeadCommit,
+                        merge_method: params.action === "merge" ? params.mergeMethod : undefined,
+                        ...(params.action === "merge" && params.mergeMethod === "squash"
+                          ? { commit_title: before.title }
+                          : {}),
+                        ...(attribution?.attribution?.trailers.length
+                          ? { commit_message: attribution.attribution.trailers.join("\n") }
+                          : {}),
+                      },
         ),
       },
     );
@@ -517,6 +541,15 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     }
     throw error;
   });
+  if (assignment) {
+    const login = assignedLogin(after);
+    if (login) {
+      return present(after, { assignment: { status: "assigned", login } });
+    }
+    throw new Error(
+      `GitHub did not confirm that ${assignment.assignee} was assigned. Check the PR assignees and repository permissions before retrying.${failureDetail}`,
+    );
+  }
   assertHead(after, failureDetail);
   if (edit) {
     if (metadataMatches(after)) {

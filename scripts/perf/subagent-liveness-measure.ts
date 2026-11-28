@@ -59,9 +59,7 @@ for (let i = 0; i < 10_000; i++) {
   }
 }
 const index = buildSubagentSessionListReadIndex(now, undefined, subagentRuns);
-const rows = Array.from(subagentRuns.values(), (row) =>
-  index.getDisplaySubagentRun(row.childSessionKey),
-);
+const rows = Array.from(index.inputs.inMemoryRuns);
 const iterations = 2_000;
 const inspector = new Session();
 const sumBytes = (node: HeapProfiler.SamplingHeapProfileNode): number =>

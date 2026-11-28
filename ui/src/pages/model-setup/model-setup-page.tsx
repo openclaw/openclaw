@@ -1,6 +1,5 @@
 import { createMemo } from "solid-js";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { ModelProviderLoginView } from "../model-providers/login-view.tsx";
 import { createModelSetup, type ModelSetupPageProps } from "./model-setup-owner.ts";
 import { ModelSetupView } from "./view.tsx";
 
@@ -8,12 +7,7 @@ export function ModelSetupPageBody(props: ModelSetupPageProps & { host: HTMLElem
   const setup = createModelSetup(props, useApplication());
   const current = createMemo(setup.view);
   return (
-    <ModelSetupView
-      {...current()}
-      wizardBusy={setup.wizardSaving()}
-      revision={setup.revision}
-      login={<ModelProviderLoginView controller={setup.login} />}
-    />
+    <ModelSetupView {...current()} wizardBusy={setup.wizardSaving()} revision={setup.revision} />
   );
 }
 
@@ -24,4 +18,9 @@ export function ModelSetupPage(props: ModelSetupPageProps) {
       <ModelSetupPageBody {...props} host={host} />
     </openclaw-model-setup-page>
   );
+}
+
+/** First-run additions on the Models page: recovery, detected models and local discovery. */
+export function FirstRunModelSetup(props: Omit<ModelSetupPageProps, "routeData">) {
+  return <ModelSetupPage {...props} routeData={{ firstRun: true }} />;
 }

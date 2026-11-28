@@ -1,12 +1,15 @@
+import { t } from "./i18n/index.js";
 /** Scribe dialogs: the start dialog with each scribe's options and prompt, and the turn-off confirmation. */
 import { button, choice, el } from "./page-dom.js";
 import { slackFields } from "./scribe-slack-fields.js";
+import { ScribeActionError } from "./scribes-actions.js";
 import {
   CONVERSATIONS_SCHEDULE,
   defaultOptions,
   GRANOLA_SCHEDULE,
   REVIEW_NIGHTLY_SCHEDULE,
   REVIEW_WEEKLY_SCHEDULE,
+  runPrompt,
   scribeLabel,
   scribeSetup,
   setupPrompt,
@@ -21,6 +24,7 @@ import {
   type ScribeMode,
   type ScribeOptions,
   type ScribePlugin,
+  type ScribeSetup,
 } from "./scribes-catalog.js";
 import { neededPluginState, type PluginReadiness, type ScribeDetection } from "./scribes-state.js";
 import { icon } from "./ui-icons.js";
@@ -31,10 +35,15 @@ export type StartDialogInput = {
   agentName: string;
   detection: ScribeDetection;
   canWrite: boolean;
+  /** An ongoing scribe is an automation, which only an administrator writes. */
+  canAdmin: boolean;
   /** The Control UI's base path, for links to the Plugins page. */
   basePath: string;
-  /** Starts the scribe with the prompt shown; a rejection keeps the dialog open with the error. */
-  start: (prompt: string) => Promise<void>;
+  /**
+   * Starts the scribe with its choices and the text shown: a once run's prompt, or an ongoing
+   * scribe's run message. A rejection keeps the dialog open with the error.
+   */
+  start: (setup: ScribeSetup, text: string) => Promise<void>;
 };
 
 /** Scribe tile: the catalog icon on its tone's wash. */
@@ -46,21 +55,21 @@ export function scribeTile(scribe: ScribeDefinition, size = 36) {
 }
 
 // What a needed plugin's readiness means, in the page's words.
-const PLUGIN_STATE: Record<PluginReadiness, (name: string) => string> = {
-  missing: (name) => `Needs the ${name} plugin, which is not installed`,
-  disabled: (name) => `Needs the ${name} plugin, which is turned off`,
-  "needs-sign-in": (name) => `${name} plugin installed, not connected to your ${name} account`,
-  ready: (name) => `${name} connected`,
+const PLUGIN_STATE: Record<PluginReadiness, string> = {
+  missing: "knowledge.scribeDialog.plugin.missing",
+  disabled: "knowledge.scribeDialog.plugin.disabled",
+  "needs-sign-in": "knowledge.scribeDialog.plugin.needsSignIn",
+  ready: "knowledge.scribeDialog.plugin.ready",
 };
 /** One line for a needed plugin's readiness. */
 export const pluginStateText = (plugin: ScribePlugin, readiness: PluginReadiness) =>
-  PLUGIN_STATE[readiness](plugin.name);
+  t(PLUGIN_STATE[readiness], { plugin: plugin.name });
 
 // The control that fixes a needed plugin, by readiness; a ready plugin needs none.
-const PLUGIN_ACTION: Record<Exclude<PluginReadiness, "ready">, (name: string) => string> = {
-  missing: (name) => `Install ${name}…`,
-  disabled: (name) => `Turn on ${name}…`,
-  "needs-sign-in": (name) => `Connect ${name}…`,
+const PLUGIN_ACTION: Record<Exclude<PluginReadiness, "ready">, string> = {
+  missing: "knowledge.scribeDialog.plugin.install",
+  disabled: "knowledge.scribeDialog.plugin.turnOn",
+  "needs-sign-in": "knowledge.scribeDialog.plugin.connect",
 };
 
 /**
@@ -79,14 +88,11 @@ export function pluginButton(
       ? `${basePath}/${plugin.channel.accountPath}`
       : `${basePath}/plugins/${plugin.catalogPath}`;
   return button(
-    PLUGIN_ACTION[readiness](plugin.name),
+    t(PLUGIN_ACTION[readiness], { plugin: plugin.name }),
     () => window.location.assign(href),
     className,
   );
 }
-
-const count = (n: number, one: string, many = `${one}s`) =>
-  `${n.toLocaleString()} ${n === 1 ? one : many}`;
 
 /** Modal frame shared by the scribe dialogs: head with close, body, feedback line and actions. */
 export function dialogFrame(title: string, lead?: HTMLElement) {
@@ -103,7 +109,7 @@ export function dialogFrame(title: string, lead?: HTMLElement) {
   }
   titleLine.append(heading);
   const closeButton = button("", () => close(), "knowledge-icon-button");
-  closeButton.setAttribute("aria-label", "Close");
+  closeButton.setAttribute("aria-label", t("knowledge.common.close"));
   closeButton.append(icon("x", 14));
   head.append(titleLine, closeButton);
   const body = el("div", undefined, "knowledge-store-dialog-body"),
@@ -132,21 +138,26 @@ export function show(dialog: HTMLDialogElement) {
 
 const SINCE: readonly ConversationSince[] = ["30d", "90d", "all", "today"];
 
-// "How often", "Which conversations" and "Starting from" for the conversations scribe.
-function conversationFields(detection: ScribeDetection, changed: () => void) {
+// "How often", "Which conversations" and "Starting from" for the conversations scribe, from
+// `initial` options when given.
+export function conversationFields(
+  detection: ScribeDetection,
+  changed: () => void,
+  initial = defaultOptions("conversations"),
+) {
   const state: { mode: ScribeMode; scope: ConversationScope; since: ConversationSince } = {
     mode: "ongoing",
-    scope: "active",
-    since: "30d",
+    scope: initial.scope,
+    since: initial.since,
   };
   const often = el("fieldset", undefined, "knowledge-choices");
-  often.append(el("legend", "How often"));
+  often.append(el("legend", t("knowledge.scribeDialog.howOften")));
   often.append(
     choice(
       "radio",
       "scribe-often-ongoing",
-      "Keep learning",
-      "Checks for newly finished conversations every day at 4:00 AM.",
+      t("knowledge.scribeDialog.keepLearning"),
+      t("knowledge.scribeDialog.conversations.ongoingHint"),
       false,
       () => {
         state.mode = "ongoing";
@@ -158,8 +169,8 @@ function conversationFields(detection: ScribeDetection, changed: () => void) {
     choice(
       "radio",
       "scribe-often-once",
-      "Once",
-      "Works through the conversations below, then stops.",
+      t("knowledge.scribeDialog.once"),
+      t("knowledge.scribeDialog.conversations.onceHint"),
       false,
       () => {
         state.mode = "once";
@@ -171,47 +182,53 @@ function conversationFields(detection: ScribeDetection, changed: () => void) {
   );
   const { activeConversations: active, archivedConversations: archived } = detection;
   const which = el("fieldset", undefined, "knowledge-choices");
-  which.append(el("legend", "Which conversations"));
+  which.append(el("legend", t("knowledge.scribeDialog.conversations.which")));
   which.append(
     choice(
       "radio",
       "scribe-which-active",
-      "Active conversations",
+      t("knowledge.scribeDialog.conversations.active"),
       active === undefined
-        ? "Conversations in your sidebar."
-        : `${count(active, "conversation")} in your sidebar.`,
+        ? t("knowledge.scribeDialog.conversations.activeHint")
+        : t(
+            active === 1
+              ? "knowledge.scribeDialog.conversations.activeCountOne"
+              : "knowledge.scribeDialog.conversations.activeCount",
+            { count: active.toLocaleString() },
+          ),
       false,
       () => {
         state.scope = "active";
         changed();
       },
-      true,
+      state.scope === "active",
       "scribe-which",
     ),
     choice(
       "radio",
       "scribe-which-all",
-      "Active and archived",
-      `${active === undefined || archived === undefined ? "Includes archived conversations." : count(active + archived, "conversation") + "."} The first pass takes longer and uses more tokens.`,
+      t("knowledge.scribeDialog.conversations.all"),
+      active === undefined || archived === undefined
+        ? t("knowledge.scribeDialog.conversations.allHint")
+        : t(
+            active + archived === 1
+              ? "knowledge.scribeDialog.conversations.allCountOne"
+              : "knowledge.scribeDialog.conversations.allCount",
+            { count: (active + archived).toLocaleString() },
+          ),
       false,
       () => {
         state.scope = "all";
         changed();
       },
-      false,
+      state.scope === "all",
       "scribe-which",
     ),
   );
   const since = el("label", undefined, "knowledge-field");
   const select = el("select", undefined, "scribe-select");
-  const labels: Record<ConversationSince, string> = {
-    "30d": "The last 30 days",
-    "90d": "The last 90 days",
-    all: "The beginning",
-    today: "Today (new conversations only)",
-  };
   for (const value of SINCE) {
-    const text = labels[value];
+    const text = t(`knowledge.scribeDialog.conversations.since.${value}`);
     const option = el("option", text);
     option.value = value;
     select.append(option);
@@ -221,25 +238,31 @@ function conversationFields(detection: ScribeDetection, changed: () => void) {
     changed();
   });
   since.append(
-    el("span", "Starting from"),
+    el("span", t("knowledge.scribeDialog.startingFrom")),
     select,
-    el("small", "Conversations already learned from are skipped."),
+    el("small", t("knowledge.scribeDialog.conversations.skipped")),
   );
   return {
     nodes: [often, which, since],
+    which,
     mode: () => state.mode,
-    options: () => ({ scope: state.scope, since: state.since, schedule: CONVERSATIONS_SCHEDULE }),
+    options: () => ({
+      scope: state.scope,
+      since: state.since,
+      schedule: initial.schedule ?? CONVERSATIONS_SCHEDULE,
+    }),
   };
 }
 
 const GRANOLA_SINCE: readonly GranolaSince[] = ["7d", "30d", "today"];
 
-// "How often", "Which meetings" and "Starting from" for the Granola scribe.
-function granolaFields(changed: () => void) {
+// "How often", "Which meetings" and "Starting from" for the Granola scribe, from `initial`
+// options when given.
+export function granolaFields(changed: () => void, initial = defaultOptions("granola")) {
   const state: { mode: ScribeMode; meetings: GranolaMeetings; since: GranolaSince } = {
     mode: "ongoing",
-    meetings: "mine",
-    since: "7d",
+    meetings: initial.meetings,
+    since: initial.since,
   };
   const set = (patch: Partial<typeof state>) => () => {
     Object.assign(state, patch);
@@ -247,12 +270,12 @@ function granolaFields(changed: () => void) {
   };
   const often = el("fieldset", undefined, "knowledge-choices");
   often.append(
-    el("legend", "How often"),
+    el("legend", t("knowledge.scribeDialog.howOften")),
     choice(
       "radio",
       "scribe-granola-ongoing",
-      "Keep learning",
-      "Checks for finished meetings on weekdays at 10 AM, 2 PM and 6 PM.",
+      t("knowledge.scribeDialog.keepLearning"),
+      t("knowledge.scribeDialog.granola.ongoingHint"),
       false,
       set({ mode: "ongoing" }),
       true,
@@ -261,8 +284,8 @@ function granolaFields(changed: () => void) {
     choice(
       "radio",
       "scribe-granola-once",
-      "Once",
-      "Works through the meetings below, then stops.",
+      t("knowledge.scribeDialog.once"),
+      t("knowledge.scribeDialog.granola.onceHint"),
       false,
       set({ mode: "once" }),
       false,
@@ -271,37 +294,32 @@ function granolaFields(changed: () => void) {
   );
   const which = el("fieldset", undefined, "knowledge-choices");
   which.append(
-    el("legend", "Which meetings"),
+    el("legend", t("knowledge.scribeDialog.granola.which")),
     choice(
       "radio",
       "scribe-granola-mine",
-      "Your meetings",
-      "Meetings you recorded or were invited to.",
+      t("knowledge.scribeDialog.granola.mine"),
+      t("knowledge.scribeDialog.granola.mineHint"),
       false,
       set({ meetings: "mine" }),
-      true,
+      state.meetings === "mine",
       "scribe-granola-which",
     ),
     choice(
       "radio",
       "scribe-granola-all",
-      "Every meeting you can read",
-      "Also notes others shared with you and Team Space meetings.",
+      t("knowledge.scribeDialog.granola.all"),
+      t("knowledge.scribeDialog.granola.allHint"),
       false,
       set({ meetings: "all" }),
-      false,
+      state.meetings === "all",
       "scribe-granola-which",
     ),
   );
   const since = el("label", undefined, "knowledge-field");
   const select = el("select", undefined, "scribe-select");
-  const labels: Record<GranolaSince, string> = {
-    "7d": "The last 7 days",
-    "30d": "The last 30 days",
-    today: "Today (new meetings only)",
-  };
   for (const value of GRANOLA_SINCE) {
-    const option = el("option", labels[value]);
+    const option = el("option", t(`knowledge.scribeDialog.granola.since.${value}`));
     option.value = value;
     select.append(option);
   }
@@ -310,14 +328,19 @@ function granolaFields(changed: () => void) {
     changed();
   });
   since.append(
-    el("span", "Starting from"),
+    el("span", t("knowledge.scribeDialog.startingFrom")),
     select,
-    el("small", "Meetings already in Knowledge are skipped. Each meeting takes a few minutes."),
+    el("small", t("knowledge.scribeDialog.granola.skipped")),
   );
   return {
     nodes: [often, which, since],
+    which,
     mode: () => state.mode,
-    options: () => ({ meetings: state.meetings, since: state.since, schedule: GRANOLA_SCHEDULE }),
+    options: () => ({
+      meetings: state.meetings,
+      since: state.since,
+      schedule: initial.schedule ?? GRANOLA_SCHEDULE,
+    }),
   };
 }
 
@@ -337,8 +360,8 @@ function pluginNotice(input: StartDialogInput) {
     el(
       "p",
       readiness === "ready"
-        ? `${state}. This scribe reads through the ${scribe.plugin.name} plugin.`
-        : `${state}. Connect it before starting this scribe.`,
+        ? t("knowledge.scribeDialog.plugin.readyNotice", { state, plugin: scribe.plugin.name })
+        : t("knowledge.scribeDialog.plugin.blockedNotice", { state }),
     ),
   );
   if (readiness !== "ready") {
@@ -355,13 +378,13 @@ function reviewFields(changed: () => void) {
     changed();
   };
   const often = el("fieldset", undefined, "knowledge-choices");
-  often.append(el("legend", "How often"));
+  often.append(el("legend", t("knowledge.scribeDialog.howOften")));
   often.append(
     choice(
       "radio",
       "scribe-review-weekly",
-      "Weekly",
-      "Sundays at 3:45 AM.",
+      t("knowledge.scribeDialog.review.weekly"),
+      t("knowledge.scribeDialog.review.weeklyHint"),
       false,
       pick(REVIEW_WEEKLY_SCHEDULE),
       true,
@@ -370,8 +393,8 @@ function reviewFields(changed: () => void) {
     choice(
       "radio",
       "scribe-review-nightly",
-      "Nightly",
-      "Every day at 3:45 AM, after maintenance links what it can. Each run is an agent turn over every unlinked claim, so it uses more tokens.",
+      t("knowledge.scribeDialog.review.nightly"),
+      t("knowledge.scribeDialog.review.nightlyHint"),
       false,
       pick(REVIEW_NIGHTLY_SCHEDULE),
       false,
@@ -395,12 +418,15 @@ function memoryFields(detection: ScribeDetection, agentName: string, changed: ()
   const file = detection.memoryFile;
   const memoryNote =
     file === null
-      ? `Not found in ${agentName}’s workspace.`
+      ? t("knowledge.scribeDialog.memory.notFound", { agent: agentName })
       : file?.size !== undefined
-        ? `${Math.max(1, Math.round(file.size / 1024)).toLocaleString()} KB in ${agentName}’s workspace.`
-        : "Long-term memory in the workspace.";
+        ? t("knowledge.scribeDialog.memory.size", {
+            size: Math.max(1, Math.round(file.size / 1024)).toLocaleString(),
+            agent: agentName,
+          })
+        : t("knowledge.scribeDialog.memory.hint");
   const picks = el("fieldset", undefined, "knowledge-choices");
-  picks.append(el("legend", "What to bring in"));
+  picks.append(el("legend", t("knowledge.scribeDialog.memory.what")));
   picks.append(
     choice(
       "checkbox",
@@ -414,8 +440,8 @@ function memoryFields(detection: ScribeDetection, agentName: string, changed: ()
     choice(
       "checkbox",
       "scribe-memory-daily",
-      "Daily notes",
-      "Files in memory/.",
+      t("knowledge.scribeDialog.memory.daily"),
+      t("knowledge.scribeDialog.memory.dailyHint"),
       false,
       toggle("daily-notes"),
       true,
@@ -423,8 +449,8 @@ function memoryFields(detection: ScribeDetection, agentName: string, changed: ()
     choice(
       "checkbox",
       "scribe-memory-dreams",
-      "Dreaming diary",
-      "DREAMS.md. Mostly summaries of the above.",
+      t("knowledge.scribeDialog.memory.dreams"),
+      t("knowledge.scribeDialog.memory.dreamsHint"),
       false,
       toggle("dreams"),
     ),
@@ -443,21 +469,21 @@ function effectText(input: StartDialogInput, mode: ScribeMode) {
   const { scribe } = input;
   const effect = el("div", undefined, "knowledge-effect");
   const lead = el("p");
-  lead.append(
-    "Knowledge will send the prompt above to the ",
-    el("strong", scribeLabel(scribe)),
-    " conversation, creating it if needed. ",
+  const [before = "", after = ""] = t(
     mode === "once"
-      ? `It works through ${scribe.id === "memory" ? "Memory" : "them"} once and reports back here. Nothing is scheduled.`
-      : scribe.id === "claim-consolidation"
-        ? "It sets up its own schedule and does one test run first."
-        : "If you keep it learning, it sets up its own schedule and does one test run first.",
-  );
+      ? "knowledge.scribeDialog.effect.once"
+      : "knowledge.scribeDialog.effect.ongoing",
+  ).split("{session}");
+  lead.append(before, el("strong", scribeLabel(scribe)), after);
   effect.append(
     lead,
     el(
       "p",
-      `This request uses the conversation’s model settings. Follow its progress there${mode === "once" ? "." : ", and manage its automation from Scribes."}`,
+      t(
+        mode === "once"
+          ? "knowledge.scribeDialog.effect.model"
+          : "knowledge.scribeDialog.effect.modelOngoing",
+      ),
       "knowledge-muted",
     ),
   );
@@ -465,15 +491,16 @@ function effectText(input: StartDialogInput, mode: ScribeMode) {
 }
 
 /**
- * The editable "Prompt" area: the full message Start sends. It follows the choices until the
- * operator types in it; then it keeps their text until they ask for the generated one again.
+ * The editable "Prompt" area: the full message a once run sends, or the run message each run of
+ * an ongoing scribe receives. It follows the choices until the operator types in it; then it
+ * keeps their text until they ask for the generated one again or switch between once and ongoing.
  */
 function promptField(generate: () => string, changed: () => void) {
   const details = el("details", undefined, "scribe-prompt");
   const text = el("textarea", undefined, "scribe-prompt-text");
   text.rows = 14;
   text.spellcheck = false;
-  text.setAttribute("aria-label", "Prompt");
+  text.setAttribute("aria-label", t("knowledge.scribeDialog.prompt"));
   const note = el("small");
   let edited = false;
   const sync = () => {
@@ -481,12 +508,12 @@ function promptField(generate: () => string, changed: () => void) {
       text.value = generate();
     }
     note.textContent = edited
-      ? "Edited by hand. Changing a choice above no longer updates it."
-      : "Generated from your choices. Edit it to change what the scribe is told.";
+      ? t("knowledge.scribeDialog.promptEdited")
+      : t("knowledge.scribeDialog.promptGenerated");
     reset.hidden = !edited;
   };
   const reset = button(
-    "Use generated prompt",
+    t("knowledge.scribeDialog.useGenerated"),
     () => {
       edited = false;
       sync();
@@ -503,36 +530,70 @@ function promptField(generate: () => string, changed: () => void) {
   });
   const foot = el("span", undefined, "scribe-prompt-foot");
   foot.append(note, reset);
-  details.append(el("summary", "Prompt"), text, foot);
-  return { node: details, sync, value: () => text.value, edited: () => edited };
+  details.append(el("summary", t("knowledge.scribeDialog.prompt")), text, foot);
+  const discard = () => {
+    edited = false;
+    sync();
+  };
+  return { node: details, sync, discard, value: () => text.value, edited: () => edited };
 }
 
 /** Open the start dialog for one scribe. Starting is disabled without write access. */
 export function openStartDialog(input: StartDialogInput) {
   const { scribe } = input;
-  const frame = dialogFrame(scribe.dialogTitle, scribeTile(scribe));
+  const frame = dialogFrame(
+    t(`knowledge.scribes.catalog.${scribe.id}.dialogTitle`),
+    scribeTile(scribe),
+  );
   const effectSlot = el("div");
+  const permission = el("p", "", "knowledge-muted");
   let mode: () => ScribeMode = () => scribe.modes[0]!;
   let options: () => ScribeOptions[ScribeId] = () => defaultOptions(scribe.id);
   let valid = () => true;
   let pluginReady = true;
   let starting = false;
-  const submit = button(scribe.submitLabel, () => void run(), "knowledge-button knowledge-primary");
+  const submit = button(
+    t(`knowledge.scribes.catalog.${scribe.id}.submit`),
+    () => void run(),
+    "knowledge-button knowledge-primary",
+  );
   // A needed plugin must be ready. A hand-edited prompt then only needs text; a generated one
   // needs valid choices.
   const ready = () => pluginReady && (prompt.edited() ? Boolean(prompt.value().trim()) : valid());
+  const allowed = () => input.canWrite && (input.canAdmin || mode() === "once");
   const refresh = () => {
-    submit.disabled = starting || !input.canWrite || !ready();
-    submit.textContent = starting ? "Starting…" : scribe.submitLabel;
+    submit.disabled = starting || !allowed() || !ready();
+    submit.textContent = t(
+      starting
+        ? "knowledge.scribeDialog.starting"
+        : `knowledge.scribes.catalog.${scribe.id}.submit`,
+    );
     effectSlot.replaceChildren(effectText(input, mode()));
+    permission.textContent = !input.canWrite
+      ? t("knowledge.scribes.needsWrite")
+      : allowed()
+        ? ""
+        : t("knowledge.scribes.needsAdmin");
   };
-  const prompt = promptField(() => setupPrompt(scribeSetup(scribe.id, mode(), options())), refresh);
-  // A changed choice regenerates the prompt unless it was edited by hand.
+  const setup = () => scribeSetup(scribe.id, mode(), options());
+  const prompt = promptField(
+    () => (mode() === "once" ? setupPrompt(setup()) : runPrompt(setup())),
+    refresh,
+  );
+  // A changed choice regenerates the prompt unless it was edited by hand; switching between
+  // once and ongoing changes what the text is, so it discards a hand edit.
+  let shownMode = mode();
   const changed = () => {
+    if (mode() !== shownMode) {
+      shownMode = mode();
+      prompt.discard();
+    }
     prompt.sync();
     refresh();
   };
-  frame.body.append(el("p", scribe.blurb, "scribe-dialog-blurb"));
+  frame.body.append(
+    el("p", t(`knowledge.scribes.catalog.${scribe.id}.blurb`), "scribe-dialog-blurb"),
+  );
   // A needed plugin that is known not to be ready blocks starting; an unknown state does not.
   const notice = pluginNotice(input);
   if (notice) {
@@ -565,12 +626,9 @@ export function openStartDialog(input: StartDialogInput) {
     valid = fields.valid;
     options = fields.options;
   }
+  shownMode = mode();
   prompt.sync();
-  frame.body.append(prompt.node, effectSlot);
-  if (!input.canWrite) {
-    frame.feedback.textContent = "Starting a scribe needs write access to this Gateway.";
-    frame.feedback.classList.add("knowledge-muted");
-  }
+  frame.body.append(prompt.node, effectSlot, permission);
   // Start once with the prompt shown; keep the dialog and its text when the Gateway rejects it.
   async function run() {
     if (starting || submit.disabled) {
@@ -581,10 +639,13 @@ export function openStartDialog(input: StartDialogInput) {
     frame.feedback.textContent = "";
     frame.feedback.className = "knowledge-dialog-feedback";
     try {
-      await input.start(prompt.value());
+      await input.start(setup(), prompt.value());
       frame.close();
     } catch (error) {
-      frame.feedback.textContent = `The scribe was not started. ${error instanceof Error ? error.message : String(error)}`;
+      frame.feedback.textContent =
+        error instanceof ScribeActionError
+          ? error.message
+          : t("knowledge.scribeDialog.startFailed");
       frame.feedback.classList.add("knowledge-error");
     } finally {
       starting = false;
@@ -594,7 +655,7 @@ export function openStartDialog(input: StartDialogInput) {
     }
   }
   frame.footer.append(
-    button("Cancel", () => frame.close(), "knowledge-quiet"),
+    button(t("knowledge.common.cancel"), () => frame.close(), "knowledge-quiet"),
     submit,
   );
   show(frame.dialog);
@@ -622,9 +683,9 @@ export function openConfirmDialog(
       frame.feedback.className = "knowledge-dialog-feedback";
       confirm().then(
         () => frame.close(),
-        (error: unknown) => {
+        () => {
           submit.disabled = false;
-          frame.feedback.textContent = error instanceof Error ? error.message : String(error);
+          frame.feedback.textContent = t("knowledge.scribes.actionFailed");
           frame.feedback.classList.add("knowledge-error");
         },
       );
@@ -632,7 +693,7 @@ export function openConfirmDialog(
     "knowledge-button knowledge-primary",
   );
   frame.footer.append(
-    button("Cancel", () => frame.close(), "knowledge-quiet"),
+    button(t("knowledge.common.cancel"), () => frame.close(), "knowledge-quiet"),
     submit,
   );
   show(frame.dialog);

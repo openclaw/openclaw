@@ -12,7 +12,7 @@ import {
 } from "./model-catalog.js";
 import type { AgentHarness } from "./types.js";
 
-function row(id: string, fields: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
+function row(id: string, fields: Partial<ModelCatalogEntry>): ModelCatalogEntry {
   return { provider: "fixture", id, name: id, ...fields };
 }
 const catalog = (entries: ModelCatalogEntry[]): ModelCatalogSnapshot => ({

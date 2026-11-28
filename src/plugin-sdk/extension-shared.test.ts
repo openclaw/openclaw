@@ -7,9 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const createAmbientNodeProxyAgentMock = vi.hoisted(() => vi.fn(() => ({ proxy: true })));
 const hasAmbientNodeProxyConfiguredMock = vi.hoisted(() => vi.fn(() => true));
 
-vi.mock("@openclaw/proxyline", () => ({
-  createAmbientNodeProxyAgent: createAmbientNodeProxyAgentMock,
-  hasAmbientNodeProxyConfigured: hasAmbientNodeProxyConfiguredMock,
+vi.mock("../infra/net/proxyline-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/net/proxyline-runtime.js")>()),
+  loadProxyline: () => ({
+    createAmbientNodeProxyAgent: createAmbientNodeProxyAgentMock,
+    hasAmbientNodeProxyConfigured: hasAmbientNodeProxyConfiguredMock,
+  }),
 }));
 
 import { resolveAmbientNodeProxyAgent } from "./extension-shared.js";
@@ -48,6 +51,39 @@ describe("resolveAmbientNodeProxyAgent", () => {
     writeFileSync(caFile, contents, "utf8");
     return caFile;
   }
+
+  it("leaves agent creation and callbacks untouched without an ambient proxy", async () => {
+    hasAmbientNodeProxyConfiguredMock.mockReturnValue(false);
+    const onUsingProxy = vi.fn();
+    const onError = vi.fn();
+
+    await expect(resolveAmbientNodeProxyAgent({ onUsingProxy, onError })).resolves.toBeUndefined();
+    expect(createAmbientNodeProxyAgentMock).not.toHaveBeenCalled();
+    expect(onUsingProxy).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("keeps selector failures outside the agent creation error handler", async () => {
+    const failure = new Error("fixture selector failure");
+    hasAmbientNodeProxyConfiguredMock.mockImplementationOnce(() => {
+      throw failure;
+    });
+    const onError = vi.fn();
+
+    await expect(resolveAmbientNodeProxyAgent({ onError })).rejects.toBe(failure);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("reports construction failures and returns no agent", async () => {
+    const failure = new Error("fixture construction failure");
+    createAmbientNodeProxyAgentMock.mockImplementationOnce(() => {
+      throw failure;
+    });
+    const onError = vi.fn();
+
+    await expect(resolveAmbientNodeProxyAgent({ onError })).resolves.toBeUndefined();
+    expect(onError).toHaveBeenCalledWith(failure);
+  });
 
   it("adds managed proxy CA trust to ambient Node proxy agents", async () => {
     const caFile = writeTempCa("extension-shared-managed-proxy-ca");

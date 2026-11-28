@@ -23,6 +23,7 @@ export async function readLegacyGatewayLockIdentity(env: NodeJS.ProcessEnv) {
   }
   const state = await resolveGatewayOwnerStatus(payload.pid, payload, process.platform, {
     lockPath: configLockPath,
+    databasePath: path.join(resolveGatewayLockPaths(env).stateDir, "state", "openclaw.sqlite"),
   });
   return state === "dead" ? undefined : { pid: payload.pid, state, path: configLockPath };
 }

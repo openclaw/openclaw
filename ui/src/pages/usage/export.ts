@@ -1,3 +1,5 @@
+/// <reference lib="es2024.object" />
+
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionLatencyStats } from "../../../../src/infra/session-cost-usage.types.js";
 import {
@@ -58,11 +60,7 @@ function groupByIdentity<T>(rows: readonly T[] | undefined, identity: (row: T) =
   if (!rows) {
     return undefined;
   }
-  const groups: Record<string, T[]> = Object.create(null);
-  for (const row of rows) {
-    (groups[identity(row)] ??= []).push(row);
-  }
-  return groups;
+  return Object.groupBy(rows, identity);
 }
 
 // The overview takes the largest quarter p95. Detail ranks the combined samples.

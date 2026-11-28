@@ -32,8 +32,6 @@ import { enqueueFollowupRun } from "./queue/enqueue.js";
 import { isFollowupRunAborted, type FollowupRun, type QueueSettings } from "./queue/types.js";
 import { buildTranscriptFollowupRun } from "./transcript-followup-run.js";
 
-export type { GoalContinuation } from "./goal-continuation.types.js";
-
 /** Selects supported Codex placement facts; execution still acquires a fresh turn claim. */
 async function resolveCodexGoalPlacement(params: {
   agentId?: string;

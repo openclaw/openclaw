@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { prepareRetainedUpdateRuntimeCleanup } from "../commands/doctor-retained-runtime.js";
+import {
+  checkRetainedUpdateRuntimesPending,
+  prepareRetainedUpdateRuntimeCleanup,
+} from "../commands/doctor-retained-runtime.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
 import * as containerEnvironment from "../infra/container-environment.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
@@ -88,14 +91,23 @@ function shippedRuntime(suffix: string): string {
   return directory;
 }
 
+const doctorEnv = () => ({
+  HOME: parent,
+  OPENCLAW_HOME: parent,
+  OPENCLAW_STATE_DIR: path.join(parent, "state"),
+  OPENCLAW_UPDATE_IN_PROGRESS: "1",
+  TMPDIR: path.join(parent, "shell-tmp"),
+});
+
+/** Doctor's pending decision; it must not remove or report anything itself. */
+async function decidePending() {
+  const pending = await checkRetainedUpdateRuntimesPending(doctorEnv());
+  expect(mocks.census).not.toHaveBeenCalled();
+  return pending;
+}
+
 async function runDoctor(repair: boolean, maintenance = true): Promise<string> {
-  const env = {
-    HOME: parent,
-    OPENCLAW_HOME: parent,
-    OPENCLAW_STATE_DIR: path.join(parent, "state"),
-    OPENCLAW_UPDATE_IN_PROGRESS: "1",
-    TMPDIR: path.join(parent, "shell-tmp"),
-  };
+  const env = doctorEnv();
   const run = async () => (await prepareRetainedUpdateRuntimeCleanup(env))(repair);
   if (maintenance) {
     const lock = await acquireGatewayLock({
@@ -150,12 +162,14 @@ it.each(["checkout", "command TMPDIR", "managed TEMP", "service unavailable", "m
     fs.mkdirSync(path.dirname(retainedManifest), { recursive: true });
     fs.writeFileSync(manifest, JSON.stringify({ id: "discord" }));
     fs.linkSync(manifest, retainedManifest);
+    await expect(decidePending()).resolves.toBe("work");
     const preview = await runDoctor(false);
     expect(fs.existsSync(abandoned)).toBe(true);
     expect(fs.statSync(manifest).nlink).toBe(2);
     mocks.note.mockClear();
     const output = await runDoctor(true);
     expect(fs.existsSync(abandoned)).toBe(false);
+    await expect(checkRetainedUpdateRuntimesPending(doctorEnv())).resolves.toBe("none");
     expect(fs.statSync(manifest).nlink).toBe(1);
     expect(fs.readFileSync(manifest, "utf8")).toBe('{"id":"discord"}');
     expect(preview).toContain("openclaw doctor --fix");
@@ -343,6 +357,7 @@ it("Doctor preserves unmarked directories and symbolic-link targets", async () =
   fs.writeFileSync(path.join(foreign, "operator-data"), "preserve");
   const link = path.join(parent, "openclaw-update-runtime-Link01");
   fs.symlinkSync(packageRoot, link, process.platform === "win32" ? "junction" : "dir");
+  await expect(decidePending()).resolves.toBe("none");
   const output = await runDoctor(true);
   expect(fs.readFileSync(path.join(foreign, "operator-data"), "utf8")).toBe("preserve");
   expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
@@ -398,6 +413,9 @@ it.each([
       projectedPath(directory, path.join(shippedRetainedRoot(), "package.json")),
       "utf8",
     );
+  await expect(decidePending()).resolves.toBe(
+    condition === "the installation moved" ? "work" : "none",
+  );
   const preview = await runDoctor(false);
   expect(retained()).toContain("openclaw");
   mocks.note.mockClear();

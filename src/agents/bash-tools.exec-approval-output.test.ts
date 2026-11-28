@@ -1,4 +1,8 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import {
   buildExecApprovalContinuationPrompt as buildPrompt,
@@ -7,6 +11,8 @@ import {
 } from "./bash-tools.exec-approval-output.js";
 import { appendExecTimeoutRetryGuidance } from "./bash-tools.exec-output.js";
 import { runExecProcess } from "./bash-tools.exec-runtime.js";
+import { buildExecForegroundResult } from "./bash-tools.exec-support.js";
+import { createCoreCodingTools } from "./core-coding-tools.js";
 
 const MARKER =
   "[... truncated to fit the continuation budget; more output may have been dropped when it was captured ...]";
@@ -94,8 +100,11 @@ describe("approved exec continuation producer", () => {
   it.runIf(process.platform !== "win32")(
     "preserves real multiline output beyond the legacy 16k boundary",
     async () => {
+      const spillOwner = { agentId: "main", sessionKey: randomUUID() };
       const handle = await runExecProcess({
-        command: "/usr/bin/printf 'first line\\n\\tindented\\n\\n'; /usr/bin/printf '%017000d' 0",
+        command:
+          "/usr/bin/printf '%0200000d\\n' 0; /usr/bin/printf 'first line\\n\\tindented\\n\\n'; /usr/bin/printf '%017000d' 0",
+        spillOwner,
         workdir: process.cwd(),
         env: {
           HOME: process.env.HOME ?? "/tmp",
@@ -115,6 +124,30 @@ describe("approved exec continuation producer", () => {
       expect(source).toContain("first line\n\tindented\n\n");
       expect(source.length).toBeGreaterThan(16_000);
       expect(source).toBe(outcome.aggregated);
+      const result = buildExecForegroundResult({ outcome, session: handle.session });
+      const file =
+        result.details && "spill" in result.details ? result.details.spill?.path : undefined;
+      if (!file) {
+        throw new Error("Expected exec spill path");
+      }
+      onTestFinished(() => rm(file, { force: true }));
+      const root = await mkdtemp(path.join(tmpdir(), "exec-spill-workspace-"));
+      onTestFinished(() => rm(root, { recursive: true, force: true }));
+      const read = createCoreCodingTools({
+        codingRoot: root,
+        containmentRoot: root,
+        includeBaseCodingTools: true,
+        shellTools: "disabled",
+        workspaceOnly: true,
+        readOnly: true,
+        applyPatchEnabled: false,
+        applyPatchWorkspaceOnly: true,
+        execDefaults: {},
+        processDefaults: {},
+        spillOwner,
+      }).find((tool) => tool.name === "read")!;
+      const page = await read.execute("read-exec-spill", { path: file, offset: 2, limit: 2 });
+      expect(JSON.stringify(page.content)).toContain("indented");
     },
   );
 });

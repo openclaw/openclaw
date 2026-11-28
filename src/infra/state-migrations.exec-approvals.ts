@@ -344,7 +344,12 @@ async function decideAndRecordMigration(params: {
   sourcePath: string;
   snapshot: LegacySourceSnapshot;
   emptyStub?: ArchivedEmptyLegacy;
-}): Promise<{ message: string; removeSource: boolean; sourceKey: string }> {
+}): Promise<{
+  message: string;
+  removeSource: boolean;
+  sourceKey: string;
+  decision: MigrationDecision;
+}> {
   const source = await openOpenClawStateDatabaseForDoctor({ env: params.env });
   const capturedLegacyFile =
     params.emptyStub?.file ?? (params.snapshot.legacy.ok ? params.snapshot.legacy.value : null);
@@ -428,7 +433,7 @@ async function decideAndRecordMigration(params: {
           : legacy.ok
             ? "Conflicting legacy exec approvals remain"
             : `Invalid legacy exec approvals (${legacy.error})`;
-        return { message, removeSource, sourceKey };
+        return { message, removeSource, sourceKey, decision };
       },
       { env: params.env },
       { operationLabel: "state-migration.exec-approvals" },
@@ -460,6 +465,7 @@ async function migrateWithExclusiveStateOwnership(params: {
   stateRoot: Root;
   stateDir: string;
   env: NodeJS.ProcessEnv;
+  allowRetainedConflict?: boolean;
 }): Promise<MigrationMessages> {
   const sourcePath = params.detected.sourcePath;
   const source = new LegacyMigrationSourceClaim<LegacySourceSnapshot>({
@@ -557,6 +563,10 @@ async function migrateWithExclusiveStateOwnership(params: {
       warnings: [
         `${result.message}${restoreError ? ` Claim restore failed: ${restoreError}` : ""}`,
       ],
+      // Startup can serve canonical policy once the conflicting source is safely retained.
+      ...(params.allowRetainedConflict && !restoreError && result.decision === "canonical-preserved"
+        ? { warningDisposition: "recoverable" as const }
+        : {}),
     };
   }
 
@@ -597,6 +607,7 @@ async function migrateWithExclusiveStateOwnership(params: {
 /** Import or retire the old file under exclusive state ownership. */
 export async function migrateLegacyExecApprovals(params: {
   detected?: LegacyExecApprovalsDetection;
+  allowRetainedConflict?: boolean;
   stateDir: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<MigrationMessages> {

@@ -7,7 +7,10 @@ import UIKit
 struct OpenClawTypographyTests {
     @Test func `group header controls use branded typography`() throws {
         let source = try String(contentsOf: Self.sourceURL("Design/CommandSessionGroupHeader.swift"), encoding: .utf8)
-        #expect(source.contains(".font(OpenClawType.caption2Bold)"))
+        // The fold control is the shared section header, the same one as Needs you, Working, Pinned and Recent.
+        let header = try String(contentsOf: Self.sourceURL("Design/SessionSectionHeader.swift"), encoding: .utf8)
+        #expect(source.contains("SessionSectionHeader("))
+        #expect(header.contains(".font(OpenClawType.captionMedium)"))
         #expect(source.contains(".font(OpenClawType.subhead)"))
         #expect(source.contains(".font(OpenClawType.body)"))
         #expect(!source.contains(".font(."))
@@ -93,6 +96,24 @@ struct OpenClawTypographyTests {
         let font = try #require(searchField.font)
         #expect(font.familyName == "Inter")
         #expect(font.pointSize == 22)
+    }
+
+    @Test func `Settings roles resolve to branded fonts`() throws {
+        // `SettingsType` is the only font alias the scanner trusts by name, so audit its producer:
+        // every role must return an `OpenClawType` font and nothing else.
+        let source = try String(
+            contentsOf: Self.iosRootURL().appendingPathComponent("Sources/Design/SettingsProTabSupport.swift"),
+            encoding: .utf8)
+        let body = try Self.extract(source, from: "enum SettingsType {", to: "\n}\n")
+        let roles = body.components(separatedBy: "static var ").dropFirst()
+        #expect(roles.count == 5)
+        for role in roles {
+            let returned = role
+                .components(separatedBy: "{").dropFirst().first?
+                .components(separatedBy: "}").first?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            #expect(returned.hasPrefix("OpenClawType."), Comment(rawValue: "SettingsType role returns \(returned)"))
+        }
     }
 
     @Test func `iOS app text and control calls keep branded font boundaries`() throws {
@@ -223,6 +244,8 @@ struct OpenClawTypographyTests {
             "OpenClawActivityType",
             "OpenClawChatTypography",
             "WatchClawType",
+            // Settings roles; `Settings roles resolve to branded fonts` audits their producer.
+            "SettingsType.",
             "typography.",
         ]
         let sourceBytes = Array(source.utf8)

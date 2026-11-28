@@ -1,4 +1,4 @@
-import type { Locator, Page } from "playwright";
+import type { Locator, Page, Request } from "playwright";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
@@ -95,11 +95,13 @@ suite.define(() => {
           `DOM text UTF-16 range: [0, ${passage.length})`,
         ].join("\n"),
       ].join("\n\n");
-      let reads = 0;
+      const initialReads: Request[] = [];
       let tickets = 0;
+      let renewalStarted = false;
       const reread = createDeferred();
       await page.route("**/__openclaw__/assistant-media?**", async (route) => {
-        if (new URL(route.request().url()).searchParams.has("meta")) {
+        const params = new URL(route.request().url()).searchParams;
+        if (params.has("meta")) {
           const now = await page.evaluate(() => Date.now());
           await route.fulfill({
             json: {
@@ -109,8 +111,13 @@ suite.define(() => {
           });
           return;
         }
-        reads += 1;
-        if (reads > 1) {
+        // Mounting the history window can cancel and restart the initial reader.
+        const ticket = params.get("mediaTicket");
+        if (ticket === "annotation-1") {
+          initialReads.push(route.request());
+        } else {
+          expect(ticket).toBe("annotation-2");
+          renewalStarted = true;
           await reread.promise;
         }
         await route.fulfill({ contentType: "text/plain", body: legacyFile });
@@ -144,6 +151,7 @@ suite.define(() => {
       await quote.waitFor();
       await waitForChatScrollIdle(page);
       expect(await inline.textContent()).toContain(comment);
+      const readsBeforeRemount = initialReads.length;
       const before = await inline.boundingBox();
       expect(before).not.toBeNull();
       const thread = page.locator(".chat-thread");
@@ -160,8 +168,9 @@ suite.define(() => {
       try {
         for (const renewed of [false, true]) {
           if (renewed) {
+            expect(renewalStarted).toBe(false);
             await page.clock.fastForward(31_000);
-            await expect.poll(() => reads).toBeGreaterThan(1);
+            await expect.poll(() => renewalStarted).toBe(true);
           }
           await thread.evaluate((element) => {
             element.scrollTop = 0;
@@ -175,7 +184,8 @@ suite.define(() => {
           expect((await inline.boundingBox())?.height).toBe(before!.height);
           expect(await observation.evaluate((state) => state.sawLoading())).toBe(false);
           if (!renewed) {
-            expect(reads).toBe(1);
+            expect(initialReads).toHaveLength(readsBeforeRemount);
+            expect(initialReads.filter((request) => !request.failure())).toHaveLength(1);
           }
         }
       } finally {

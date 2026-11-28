@@ -115,7 +115,8 @@ struct ChatInputHistory: Equatable, Sendable {
     }
 
     mutating func draftChanged(to draft: String) {
-        guard let cursor, self.entries.indices.contains(cursor), self.entries[cursor] != draft else { return }
+        guard let cursor, self.entries.indices.contains(cursor),
+              !self.entries[cursor].utf8.elementsEqual(draft.utf8) else { return }
         self.resetNavigation()
     }
 
@@ -294,7 +295,10 @@ extension OpenClawChatViewModel {
                 return nil
             }
             let text = ChatMessageVisibleText.visibleText(in: message)
-            return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !Self.isLegacyAttachmentOnlyText(text, in: message)
+            else { return nil }
+            return text
         }
         let key = self.visibleComposerKey
         self.inputHistoriesBySession[key, default: ChatInputHistory()].seed(transcriptInputs: transcriptInputs)

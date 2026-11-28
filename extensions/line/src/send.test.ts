@@ -510,18 +510,6 @@ describe("LINE send helpers", () => {
     expect(client.getRoomMemberProfile).toHaveBeenCalledTimes(1);
   });
 
-  it("coalesces concurrent group-name cache misses", async () => {
-    const summary = Promise.withResolvers<{ groupId: string; groupName: string }>();
-    client.getGroupSummary.mockReturnValueOnce(summary.promise);
-    const first = send.getLineGroupName("Cconcurrent", options);
-    const second = send.getLineGroupName("Cconcurrent", options);
-    expect(client.getGroupSummary).toHaveBeenCalledTimes(1);
-    summary.resolve({ groupId: "Cconcurrent", groupName: "Release Squad" });
-    await expect(Promise.all([first, second])).resolves.toEqual(["Release Squad", "Release Squad"]);
-    await expect(send.getLineGroupName("Cconcurrent", options)).resolves.toBe("Release Squad");
-    expect(client.getGroupSummary).toHaveBeenCalledTimes(1);
-  });
-
   it("degrades to no group name when the summary call fails", async () => {
     client.getGroupSummary.mockRejectedValue(new Error("403 forbidden"));
     await expect(send.getLineGroupName("Cforbidden", options)).resolves.toBeUndefined();

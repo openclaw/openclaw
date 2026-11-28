@@ -343,17 +343,17 @@ export async function runDoctorRepairSequence(params: {
   const packageSwapInProgress = isUpdatePackageSwapInProgress(env);
   const pluginInstallRepairConverged =
     !packageSwapInProgress && failedPluginIds.length === 0 && !hasUnscopedInstallRepairWarnings;
-  if (!packageSwapInProgress && !hasUnscopedInstallRepairWarnings) {
-    applyMutation(
-      runWithCurrentPluginMetadata(() =>
-        maybeRepairStalePluginConfig(state.candidate, env, {
-          preservePluginIds: [...failedPluginIds, ...installedPluginRecovery.preservePluginIds],
-          // A host-version-bound runtime can be absent between core swap and package
-          // convergence. Preserve its allow, deny, and explicit enable/disable policy.
-          surfacePreservePluginIds: VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE,
-        }),
-      ),
+  const repairStalePluginConfig = (candidate: OpenClawConfig) =>
+    runWithCurrentPluginMetadata(() =>
+      maybeRepairStalePluginConfig(candidate, env, {
+        preservePluginIds: [...failedPluginIds, ...installedPluginRecovery.preservePluginIds],
+        // A host-version-bound runtime can be absent between core swap and package
+        // convergence. Preserve its allow, deny, and explicit enable/disable policy.
+        surfacePreservePluginIds: VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE,
+      }),
     );
+  if (!packageSwapInProgress && !hasUnscopedInstallRepairWarnings) {
+    applyMutation(repairStalePluginConfig(state.candidate));
   }
   await applyRepairStages([
     maybeRepairInvalidPluginConfig,
@@ -435,7 +435,21 @@ export async function runDoctorRepairSequence(params: {
     if (modelRepair.warnings.length > 0) {
       modelRetirementBlockers.push("model-retirement.model-repair-warnings");
     }
-  } else if (packageSwapInProgress) {
+  } else if (
+    packageSwapInProgress &&
+    (await hasRepairsAwaitingPluginConvergence({
+      candidate: state.candidate,
+      blocked:
+        failedPluginIds.length > 0 ||
+        hasUnscopedInstallRepairWarnings ||
+        Boolean(params.modelReplacements?.length),
+      installRepair: missingConfiguredPluginInstallRepair,
+      repairStalePluginConfig,
+      env,
+      pluginMetadataSnapshot: pluginMetadataSnapshotState.current,
+    }))
+  ) {
+    // A recorded deferral makes the updater run a second Doctor after plugin convergence.
     recordUpdateModelRetirement("deferred", env);
     warningNotes.push(DEFERRED_UPDATE_MODEL_RETIREMENT_WARNING);
   }
@@ -471,4 +485,58 @@ export async function runDoctorRepairSequence(params: {
       ? { pluginMetadataSnapshot: pluginMetadataSnapshotState.current }
       : {}),
   };
+}
+
+/**
+ * During a package swap, model retirement and stale plugin config repair wait for plugin
+ * convergence because a plugin can still be missing or about to change. With no plugin install
+ * record and no install repair pending, convergence has nothing to change, and the post-convergence
+ * Doctor would start from this candidate with the same plugin inventory. If those repairs would
+ * then change and warn nothing, there is nothing to wait for. Any other result keeps the wait.
+ */
+async function hasRepairsAwaitingPluginConvergence(params: {
+  candidate: OpenClawConfig;
+  blocked: boolean;
+  installRepair: Pick<
+    Awaited<ReturnType<typeof repairMissingConfiguredPluginInstalls>>,
+    "changes" | "warnings" | "notices" | "records"
+  >;
+  repairStalePluginConfig: (candidate: OpenClawConfig) => {
+    config: OpenClawConfig;
+    changes: string[];
+    warnings?: string[];
+  };
+  env: NodeJS.ProcessEnv;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+}): Promise<boolean> {
+  const { installRepair } = params;
+  if (
+    params.blocked ||
+    installRepair.changes.length > 0 ||
+    installRepair.warnings.length > 0 ||
+    (installRepair.notices?.length ?? 0) > 0 ||
+    Object.keys(installRepair.records ?? {}).length > 0
+  ) {
+    return true;
+  }
+  // The same repairs, in the order the post-convergence pass runs them, on a private copy.
+  const steps = [
+    (cfg: OpenClawConfig) => params.repairStalePluginConfig(cfg),
+    (cfg: OpenClawConfig) => preserveImplicitOpenAIPrimary(cfg, { env: params.env }),
+    (cfg: OpenClawConfig) =>
+      repairStaleAgentModelRefs(cfg, {
+        env: params.env,
+        pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+      }),
+  ];
+  let candidate = structuredClone(params.candidate);
+  for (const step of steps) {
+    const result: { config: OpenClawConfig; changes: string[]; warnings?: string[] } =
+      await step(candidate);
+    if (result.changes.length > 0 || (result.warnings?.length ?? 0) > 0) {
+      return true;
+    }
+    candidate = result.config;
+  }
+  return false;
 }

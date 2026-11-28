@@ -4,7 +4,6 @@ import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.typ
 import type { AttachmentInputKind, ChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 import { appendChatAttachmentFiles } from "./chat-attachments.ts";
 import type { OpenClawChatCameraCapture } from "./chat-camera-capture.tsx";
-import "./chat-camera-capture.css";
 
 export function ChatAttachmentInputs(
   props: ChatAttachmentControlsProps & { inputHandle: ChatAttachmentInputHandle },

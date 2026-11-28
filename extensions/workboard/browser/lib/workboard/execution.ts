@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
   truncateUtf16Safe,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { t } from "../../i18n/index.ts";
 import { replaceCard, workboardCardRunId, workboardCardSessionKey } from "./card-state.ts";
 import { runWorkboardCardMutation } from "./mutations.ts";
 import { normalizeCardPayload } from "./normalization.ts";
@@ -35,7 +36,7 @@ function assertCurrentCard(state: WorkboardUiState, card: WorkboardCard): void {
   const current = state.cards.find((candidate) => candidate.id === card.id);
   // Page hiding closes admission; an existing action still owns this revision.
   if (!current || current.updatedAt !== card.updatedAt) {
-    throw new Error("This card changed. Refresh its details before starting or stopping it.");
+    throw new Error(t("workboard.cardChanged"));
   }
 }
 
@@ -85,7 +86,7 @@ export async function startWorkboardCard(
       ? scheduledAt > Date.now()
       : params.card.status === "scheduled")
   ) {
-    initialState.error = "Scheduled cards cannot start before their scheduled time.";
+    initialState.error = t("workboard.scheduledStartBlocked");
     notifyWorkboard(params.host);
     return null;
   }
@@ -94,9 +95,7 @@ export async function startWorkboardCard(
     async (state, client) => {
       assertCurrentCard(state, params.card);
       if (!canStartWorkboardCard(params.card)) {
-        throw new Error(
-          "This card already has an execution. Refresh its details or use Edit to clear its session link before starting another.",
-        );
+        throw new Error(t("workboard.alreadyStarted"));
       }
       if (mode === "autonomous") {
         const separator = model?.indexOf("/") ?? -1;
@@ -122,7 +121,7 @@ export async function startWorkboardCard(
       });
       const sessionKey = normalizeOptionalString(result?.key);
       if (!sessionKey) {
-        throw new Error("sessions.create returned no key");
+        throw new Error(t("workboard.sessionCreateFailed"));
       }
       assertCurrentCard(state, params.card);
       const now = Date.now();
@@ -192,9 +191,7 @@ export async function stopWorkboardCard(
       assertCurrent();
       if (!sessionAborted) {
         if (!session) {
-          throw new Error(
-            "Refresh this card's session details before stopping it, or use Edit to choose its session.",
-          );
+          throw new Error(t("workboard.stopSessionUnresolved"));
         }
         return;
       }

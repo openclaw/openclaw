@@ -2,7 +2,7 @@ import { captureUpdateCommandExecutorAuthority } from "../cli/update-cli/update-
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
-import { inspectUpdateRepairDriverAdmission } from "../infra/update-run-activity.js";
+import { inspectUpdateRepairDriverAdmission } from "../infra/update-repair-driver-admission.js";
 import { recordUpdateRunRepairContinuation } from "../infra/update-run-ledger.js";
 import { createUpdateRunAdmissionReader } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";

@@ -143,6 +143,7 @@ function TerminalComposer(props: { state: TerminalPanelViewState }) {
           autocapitalize="off"
           spellcheck="false"
           onInput={(event) => props.state.onDraft(event.currentTarget.value)}
+          onPaste={(event) => props.state.upload.handlePaste(event)}
         />
         <Show when={!props.state.mobile && props.state.upload.uploadsEnabled()}>
           <PanelIconButton

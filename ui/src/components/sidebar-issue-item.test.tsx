@@ -421,7 +421,7 @@ describe("renderSidebarUpdateSurface", () => {
     );
     expect(card.querySelector(".sidebar-update-card__hold")?.textContent?.trim()).toBe("Hold 1 h");
     expect(card.querySelector(".sidebar-update-card__title")?.textContent).toBe(
-      "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1); 1 warning needs attention.",
+      "✅ OpenClaw updated to 2026.9.2.",
     );
   });
 });

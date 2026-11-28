@@ -15,11 +15,11 @@ export function describeGitHubPublishTool(options: {
     "- readiness: observe publication state and an existing requestId; never resubmit it.",
     "- inspect_pr: read a PR by pullRequestUrl.",
     "- create_issue: title and optional body.",
-    "- create_comment: post approved Markdown (issueNumber, body).",
+    "- create_comment: issueNumber/body; approval unless session PR.",
   ];
   if (options.publicationAvailable) {
     lines.push(
-      `- publish (default): open a PR from accepted workspace changes (draft: true for a draft)${options.workspacePreparationAvailable ? "; for a committed local checkout pass workspacePath" : ""}.`,
+      `- publish (default): PR from accepted work; draft: true for draft. Missing title/body use first branch commit${options.workspacePreparationAvailable ? "; local checkout: workspacePath" : ""}.`,
       "- edit: omit title/body to read; send its headCommit as expectedHeadCommit with a change.",
       "- ready, request_review: mark a draft ready; post the fixed re-review request when asked.",
     );
@@ -38,7 +38,7 @@ export function describeGitHubPublishTool(options: {
     );
   }
   lines.push(
-    "- inspect, merge, close: full operator write access; merge only on an explicit landing request after review and required checks.",
+    "- inspect, add_assignee, merge, close: full operator write. Merge only on request after review and checks.",
   );
   return lines.join("\n");
 }
@@ -64,7 +64,7 @@ export const githubActionGuidance = {
   upload_evidence:
     "Associate the uploaded URL in the PR body with edit, then verify reviewer access; uploaded does not prove public access. Never repeat an unconfirmed upload blindly.",
   inspect:
-    "Land only on an explicit request from a person with full operator write access, after review and required checks pass: ready, then merge with this expectedHeadCommit, any publication requestId and mergeMethod. Actions never enable auto-merge. Inspect again after an uncertain response before retrying.",
+    "Add one GitHub login with add_assignee, assignee, this expectedHeadCommit and the same PR selector. Land only on an explicit request from a person with full operator write access, after review and required checks pass: ready, then merge with this expectedHeadCommit, any publication requestId and mergeMethod. Actions never enable auto-merge. Inspect again after an uncertain response before retrying.",
   merge: "Inspect again after an uncertain response before retrying.",
   close:
     "Closing keeps saved work and does not merge. Inspect again after an uncertain response before retrying.",

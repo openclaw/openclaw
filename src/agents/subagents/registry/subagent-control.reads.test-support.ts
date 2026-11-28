@@ -8,7 +8,7 @@ export function registerControlledSubagentReadTests(
   addRun: (overrides: SubagentRunRecordOverrides) => Promise<SubagentRunRecord>,
 ) {
   const root = "agent:main:main";
-  const add = (id: string, owner = root, overrides: Partial<SubagentRunRecordOverrides> = {}) => {
+  const add = (id: string, owner: string, overrides: Partial<SubagentRunRecordOverrides>) => {
     const now = Date.now();
     return addRun({
       runId: `run-${id}`,

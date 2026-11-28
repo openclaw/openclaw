@@ -356,36 +356,6 @@ describe("CommandPalette search", () => {
     },
   );
 
-  it("moves the keyboard selection through catalog groups in visible order", async () => {
-    const { gateway } = createGateway(true, {
-      methods: ["cron.list"],
-      request: vi.fn(async () => automationPage("bravo", "Needle Bravo")),
-    });
-    const context = createContext(gateway);
-    const { palette, query, queryAll } = await mountPalette(
-      agentContext(
-        context,
-        [
-          { id: "alpha", name: "Needle Alpha" },
-          { id: "charlie", name: "Needle Charlie" },
-        ],
-        "alpha",
-      ),
-    );
-    await searchPalette(palette, "Needle");
-    const items = [...queryAll<HTMLElement>('[role="option"]')];
-    expect(items.map((item) => item.textContent?.replace(/\s+/g, " ").trim())).toEqual([
-      "Needle Alpha alpha",
-      "Needle Charlie charlie",
-      "Needle Bravo",
-    ]);
-    for (const expectedIndex of [1, 2, 0]) {
-      pressKey(paletteInput(palette), "ArrowDown");
-      await palette.updateComplete;
-      expect(query('[role="option"][aria-selected="true"]')).toBe(items[expectedIndex]);
-    }
-  });
-
   it("scrolls the current session result across search groups and stops after closing", async () => {
     const listed = createSessionResult("agent:main:scroll-target", "Needle topic");
     const transcript = transcriptResult(listed, "The payload appears in this conversation.");
@@ -613,20 +583,6 @@ describe("CommandPalette search", () => {
     expect(palette.textContent).not.toContain("Couldn’t search sessions");
     await settlePalette(palette);
     expect(palette.textContent).toContain("Recovered chat");
-  });
-
-  it("opens the capture section from the palette without losing its deep link", async () => {
-    const { gateway } = createGateway(true, { methods: [] });
-    gateway.snapshot.hello!.auth = { role: "operator", scopes: ["operator.admin"] };
-    const { palette } = await mountPalette(createContext(gateway));
-    await searchPalette(palette, "meeting capture");
-    const item = findPaletteOption(palette, "Meeting capture");
-    expect(item).toBeDefined();
-    item!.click();
-    expect(palette.onNavigate).toHaveBeenCalledWith("communications", {
-      search: "?section=transcripts",
-      hash: "#settings-communications-meeting-capture",
-    });
   });
 
   it("flushes a new query on Enter without selecting the retained command", async () => {

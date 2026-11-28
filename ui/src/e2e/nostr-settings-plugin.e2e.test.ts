@@ -76,14 +76,14 @@ suite.define(() => {
         await open();
         const detail = page.locator(".channels-detail");
         await expect(detail.getByRole("heading", { name: "Nostr", exact: true })).toBeVisible();
-        await detail.getByRole("button", { name: "Edit Profile", exact: true }).waitFor();
+        await detail.getByRole("button", { name: "Edit profile", exact: true }).waitFor();
         expect(assets.some((asset) => asset.url.endsWith(".js"))).toBe(true);
         expect(assets.every((asset) => asset.status === 200)).toBe(true);
         await expect(detail.locator(".settings-row").first()).toHaveCSS("display", "flex");
-        await detail.getByRole("button", { name: "Edit Profile", exact: true }).click();
+        await detail.getByRole("button", { name: "Edit profile", exact: true }).click();
         await detail.locator("#nostr-profile-name").fill("Alice Updated");
         const notice = detail.getByText("You have unsaved changes", { exact: true });
-        const saveProfile = detail.getByRole("button", { name: "Save & Publish", exact: true });
+        const saveProfile = detail.getByRole("button", { name: "Save and publish", exact: true });
         await expect(notice).toBeVisible();
         const noticeBottom = await notice.evaluate((element) => {
           const text = document.createRange();

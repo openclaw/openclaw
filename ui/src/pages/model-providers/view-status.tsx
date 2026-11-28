@@ -178,21 +178,3 @@ export function renderMutationMessage(message: ModelProviderRowMessage | undefin
     </>
   );
 }
-
-export function ModelProviderConnectAction(props: {
-  onConnect: () => void;
-  connectDisabled: boolean;
-  primary?: boolean;
-  compact?: boolean;
-}) {
-  return (
-    <button
-      class={["btn", { primary: props.primary, "btn--sm": props.compact }]}
-      data-models-connect
-      disabled={props.connectDisabled}
-      onClick={() => props.onConnect()}
-    >
-      {t("modelProviders.login.action")}
-    </button>
-  );
-}

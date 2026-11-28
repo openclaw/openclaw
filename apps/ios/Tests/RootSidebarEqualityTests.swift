@@ -24,8 +24,7 @@ struct RootSidebarEqualityTests {
             selected: Bool = false,
             main: String = "main",
             categories: [String] = [],
-            connected: Bool = true,
-            minute: Int = 1) throws -> RootSidebarSessionButton
+            connected: Bool = true) throws -> RootSidebarSessionButton
         {
             try RootSidebarSessionButton(
                 node: node(for: entry),
@@ -33,7 +32,6 @@ struct RootSidebarEqualityTests {
                 mainSessionKey: main,
                 categories: categories,
                 isConnected: connected,
-                minute: minute,
                 open: { _ in },
                 performMutation: { _, _ in },
                 fork: { _ in })
@@ -44,7 +42,6 @@ struct RootSidebarEqualityTests {
         #expect(try base != button(main: "other"))
         #expect(try base != button(categories: ["Work"]))
         #expect(try base != button(connected: false))
-        #expect(try base != button(minute: 2))
         var changed = session
         changed.status = "running"
         #expect(try node(for: changed).badges.runningCount == 1)

@@ -51,13 +51,11 @@ function createApi(allowPromptModification = true, config: OpenClawConfig = {}) 
 }
 
 function createQueue(
-  before?: (text: string, options?: EmbeddedAgentQueueMessageOptions) => Promise<void>,
+  before: (text: string, options?: EmbeddedAgentQueueMessageOptions) => Promise<void>,
 ) {
   const modelInput: string[] = [];
   const queueMessage = vi.fn(async (text: string, options?: EmbeddedAgentQueueMessageOptions) => {
-    if (before) {
-      await before(text, options);
-    }
+    await before(text, options);
     modelInput.push(text);
   });
   return { modelInput, queueMessage };

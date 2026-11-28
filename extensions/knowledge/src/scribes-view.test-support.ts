@@ -1,7 +1,6 @@
 /** Shared fixture for the Scribes tab tests: a fake page host whose Gateway answers from a world. */
 import { vi } from "vitest";
 import type { Page } from "./page-context.js";
-import { scribeSetup } from "./scribes-catalog.js";
 import { scribes } from "./scribes-view.js";
 
 type Call = [string, Record<string, unknown> | undefined];
@@ -27,6 +26,7 @@ export function fixture(world: {
   history?: Record<string, unknown[]>;
   runs?: unknown[];
   canWrite?: boolean;
+  canAdmin?: boolean;
   /** plugins.inspect answer for the Granola plugin; absent reads as not installed. */
   granola?: { installed: boolean; enabled: boolean; authorized?: boolean };
 }) {
@@ -79,6 +79,11 @@ export function fixture(world: {
         return { files: [{ name: "MEMORY.md", missing: false, size: 8192 }] };
       case "cron.run":
         return { ok: true, enqueued: true, runId: "run-1" };
+      // A declarative add answers `{ created, job }`; an update answers the job.
+      case "cron.add":
+        return { created: true, job: { id: "job-new", enabled: true, ...params, state: {} } };
+      case "cron.update":
+        return { id: params?.id, enabled: true, ...(params?.patch as object), state: {} };
       case "plugins.inspect": {
         const plugin = world.granola ?? { installed: false, enabled: false };
         return {
@@ -101,16 +106,15 @@ export function fixture(world: {
   });
   const create = vi.fn(async () => "agent:main:dock:new");
   const open = vi.fn();
-  const connection = { connected: true, canRead: true, canWrite: world.canWrite ?? true };
-  // Gateway events the page listens to, by name.
-  const events = new Map<string, () => void>();
-  const onEvent = vi.fn((name: string, listener: () => void) => {
-    events.set(name, listener);
-    return () => events.delete(name);
-  });
-  // Update state is kept per Gateway, by base path: each fixture is its own Gateway.
+  const connection = {
+    connected: true,
+    canRead: true,
+    canWrite: world.canWrite ?? true,
+    canAdmin: world.canAdmin ?? world.canWrite ?? true,
+  };
+  // Tried updates are kept per Gateway, by base path: each fixture is its own Gateway.
   const basePath = `/gateway-${++gateways}`;
-  const host = { request, connection, sessions: { create, open }, basePath, onEvent };
+  const host = { request, connection, sessions: { create, open }, basePath };
   const load = vi.fn(async () => true);
   const scribesTab = document.createElement("button");
   const ui = {
@@ -132,14 +136,8 @@ export function fixture(world: {
     page.replaceChildren(target);
     return target;
   };
-  return { ui, calls, request, create, open, load, render, page, scribesTab, events };
+  return { ui, calls, request, create, open, load, render, page, scribesTab };
 }
-export const reviewSetup = scribeSetup(
-  "claim-consolidation",
-  "ongoing",
-  { schedule: "45 3 * * 0" },
-  "America/Los_Angeles",
-);
 export const reviewSession = {
   "Scribe · Knowledge Consolidation": {
     key: "s-review",

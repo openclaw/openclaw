@@ -1,3 +1,5 @@
+import { isTestOnlyPath } from "./changed-path-facts.mjs";
+
 const MAIN_DOCKER_SEED_LANES = ["published-upgrade-survivor"] as const;
 const OWNER_DOCKER_SEED_LANES = [
   "mcp-channels",
@@ -56,8 +58,10 @@ export function resolveChangedDockerSeedLanes(changedPaths: string[]) {
   for (const changedPath of changedPaths) {
     const normalizedPath = changedPath.replaceAll("\\", "/");
     if (
+      // Update unit fixtures do not feed the Docker package or survivor scenarios.
+      // Keep other owners broad: state test fixtures also feed migration proof.
+      (normalizedPath.startsWith("src/update/") && !isTestOnlyPath(normalizedPath)) ||
       [
-        "src/update/",
         "src/state/",
         "src/cli/update-cli/",
         "src/daemon/",

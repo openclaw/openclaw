@@ -556,7 +556,6 @@ export async function scanActualWorkspaceManifest(
       if (!paths) {
         continue;
       }
-      paths.sort((left, right) => left.localeCompare(right));
       await runScans(0, paths.length, async (index) => {
         const relative = paths[index]!;
         const state = await addIncludedPath(relative, includedParents, derivedOnlyDirectories);

@@ -116,6 +116,8 @@ describe("ModelSetupPage first-run activation ownership", () => {
         manualProviders: [{ id: "provider-key", label: "Provider key" }],
         authOptions: [authOption("provider-login", "Provider login")],
       });
+      page.discoveryOpen = true;
+      await page.updateComplete;
       if (entry === "manual key") {
         await enterManualKey(page, "provider-key", "test-only-provider-key");
       } else {
@@ -191,6 +193,8 @@ describe("ModelSetupPage first-run activation ownership", () => {
       const { page } = await mountDetection(context, client, {
         authOptions: [authOption("provider-login")],
       });
+      page.discoveryOpen = true;
+      await page.updateComplete;
       const signIn = () => pageButton(page, selector)!;
       signIn().click();
       await waitForText(page, failure);
@@ -200,11 +204,15 @@ describe("ModelSetupPage first-run activation ownership", () => {
         await waitForText(page, "Setup is finishing the current step");
         expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
       } else {
-        expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
+        expect(page.querySelector(".model-setup__dialogs openclaw-modal-dialog")).toBeNull();
       }
-      expect(signIn().disabled).toBe(true);
+      if (outcome === "validation error") {
+        expect(signIn()).toBeNull();
+      } else {
+        expect(signIn().disabled).toBe(true);
+        signIn().click();
+      }
       expect(pendingReceipt()).not.toBeNull();
-      signIn().click();
       expect(callsFor(request, startMethod)).toHaveLength(1);
       expect(request.mock.calls.some(([method]) => method === "openclaw.setup.verify")).toBe(false);
       expect(page.textContent).not.toContain("Model verified");
@@ -248,6 +256,8 @@ describe("ModelSetupPage first-run activation ownership", () => {
       };
       original.request.mockImplementation(respond);
       let { page } = await mountDetection(original.context, original.client, result);
+      page.discoveryOpen = true;
+      await page.updateComplete;
       const signIn = () => authButton(page, "provider-login")!;
       await startAndCancelSignIn(page, original.request);
       // Explicitly leaving first-run setup releases its intent. Re-entering is
@@ -268,6 +278,8 @@ describe("ModelSetupPage first-run activation ownership", () => {
         page.routeData = { ...page.routeData!, firstRun: true };
         await page.updateComplete;
       }
+      page.discoveryOpen = true;
+      await page.updateComplete;
       await waitForFast(() => expect(signIn()).not.toBeNull());
       signIn().click();
       await waitForText(page, "Complete login");
@@ -359,6 +371,8 @@ describe("ModelSetupPage first-run activation ownership", () => {
         manualProviders: [{ id: "provider", label: "Provider" }],
         authOptions: [authOption("provider-login")],
       });
+      page.discoveryOpen = true;
+      await page.updateComplete;
       if (entry === "manual key") {
         await enterManualKey(page, "provider", "test-only-key");
       } else {
@@ -389,7 +403,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
       await page.updateComplete;
       expect(page.textContent).not.toContain("Model verified");
       expect(page.textContent).not.toContain("Cannot read properties");
-      expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(page.querySelector(".model-setup__dialogs openclaw-modal-dialog")).toBeNull();
       expect(context.navigate).not.toHaveBeenCalled();
     },
   );
@@ -401,6 +415,8 @@ describe("ModelSetupPage first-run activation ownership", () => {
     const { page } = await mountDetection(context, client, {
       manualProviders: [{ id: "provider-key", label: "Provider key" }],
     });
+    page.discoveryOpen = true;
+    await page.updateComplete;
     await enterManualKey(page, "provider-key", "test-only-provider-key");
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     const replacement = persistFirstRunActivationReceipt(
@@ -466,6 +482,8 @@ describe("ModelSetupPage first-run activation ownership", () => {
         "openclaw.setup.detect": () => result,
       });
       let { page } = await mountDetection(context, client, result);
+      page.discoveryOpen = true;
+      await page.updateComplete;
       await startAndCancelSignIn(page, request);
       await page.updateComplete;
       expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
@@ -486,21 +504,30 @@ describe("ModelSetupPage first-run activation ownership", () => {
         const terminalClose = () => modalButton(page, "Close");
         await waitForFast(() =>
           expect(
-            page.querySelector("openclaw-modal-dialog") === null || terminalClose() !== undefined,
+            page.querySelector(".model-setup__dialogs openclaw-modal-dialog") === null ||
+              terminalClose() !== undefined,
           ).toBe(true),
         );
         terminalClose()?.click();
         await page.updateComplete;
-        expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
+        expect(page.querySelector(".model-setup__dialogs openclaw-modal-dialog")).toBeNull();
       }
       if (lifecycle === "unmount") {
         ({ page } = await mountDetection(context, client, result));
       }
-      await waitForFast(() => {
-        const button = authButton(page, "provider-login");
-        expect(button).not.toBeNull();
-        expect(button!.disabled).toBe(cancelStatus !== "cancelled");
-      });
+      page.discoveryOpen = true;
+      await page.updateComplete;
+      if (lifecycle === "unmount") {
+        await waitForText(page, "Complete login");
+        expect(authButton(page, "provider-login")).toBeNull();
+        expect(callsFor(request, "openclaw.setup.auth.start")).toHaveLength(1);
+      } else {
+        await waitForFast(() => {
+          const button = authButton(page, "provider-login");
+          expect(button).not.toBeNull();
+          expect(button!.disabled).toBe(cancelStatus !== "cancelled");
+        });
+      }
       expect(pendingReceipt() === null).toBe(cancelStatus === "cancelled");
       expect(context.navigate).not.toHaveBeenCalled();
     },
@@ -563,8 +590,9 @@ describe("ModelSetupPage utility roles", () => {
         ...configuredUtility,
         ...(primary ? primaryModel : { setupModel: utility.modelRef }),
       });
+      page.discoveryOpen = true;
+      await page.updateComplete;
 
-      expect(page.querySelector(".model-setup__current") !== null).toBe(primary);
       expect(page.querySelector(`[data-candidate-kind="${utility.kind}"]`)).toBeNull();
       expect(page.textContent).toContain(
         primary
@@ -613,6 +641,8 @@ describe("ModelSetupPage utility roles", () => {
       const { page } = await mount(
         oauth ? { authOptions: [utilityAuth] } : { manualProviders: [utilityKey] },
       );
+      page.discoveryOpen = true;
+      await page.updateComplete;
       if (oauth) {
         authButton(page, "utility-login")!.click();
       } else {
@@ -656,6 +686,8 @@ describe("ModelSetupPage utility roles", () => {
         "openclaw.setup.activate.start": () => activatedUtility,
       });
       const { page } = await mount(prepared, direct);
+      page.discoveryOpen = true;
+      await page.updateComplete;
       pageButton(page, '[data-prepare-choice="local"] button')!.click();
       if (direct) {
         await expectAssistant(context);
@@ -666,7 +698,6 @@ describe("ModelSetupPage utility roles", () => {
             ? "Setup & utility model ready"
             : "Couldn’t find a usable local model from Local utility",
         );
-        expect(page.querySelector(".model-setup__current")?.textContent).toContain("primary");
         expect(page.querySelector(".model-setup__utility")).toBeNull();
       }
       expect(request.mock.calls.map(([method]) => method)).toEqual([

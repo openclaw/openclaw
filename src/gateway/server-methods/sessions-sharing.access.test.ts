@@ -4,6 +4,8 @@ import { SessionMembersListEvidenceResultSchema } from "../../../packages/gatewa
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { setDisplayName, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
@@ -210,4 +212,26 @@ it("manages bounded invitation levels without granting send members session mana
       ]),
     );
     expect(events.at(-1)?.action).toBe("member-removed");
+    for (const method of ["session.members.add", "session.members.setAccess"] as const) {
+      if (method === "session.members.add") {
+        await call("session.members.remove", { identityId: guest.id });
+      } else {
+        await call("session.members.setAccess", { identityId: guest.id, access: "read" });
+      }
+      cfg.gateway!.roles!.definitions.guest!.sessions.maxInvitedAccess = "send";
+      let changed = false;
+      const probe = sqliteWorkerOwnerProbe.admission(admission, (request, grant, admit) => {
+        if (request.stage === "commit") {
+          changed = true;
+          cfg.gateway!.roles!.definitions.guest!.sessions.maxInvitedAccess = "suggest";
+        }
+        admit(request, grant);
+      });
+      try {
+        expect((await call(method, { identityId: guest.id, access: "send" }))[0]?.[0]).toBe(true);
+        expect(changed).toBe(true);
+      } finally {
+        probe.mockRestore();
+      }
+    }
   }));

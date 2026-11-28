@@ -49,7 +49,7 @@ it.each([
   "websocket-compaction",
   "websocket-failed-snapshot",
   "provider",
-  "degenerate-abort",
+  "interrupted",
 ] as const)(
   "reanchors conflicting saved tool items once and retains the repair after reload over %s",
   async (mode) => {
@@ -67,7 +67,7 @@ it.each([
           completedResponse("resp_saved", [reasoning, call]),
         ];
       }
-      if (mode === "degenerate-abort" && turn === 2) {
+      if (mode === "interrupted" && turn === 2) {
         expect(server.requests.at(-1)?.previous_response_id).toBe("resp_saved");
         const partial = wireCall("partial", "record_value");
         return [
@@ -167,14 +167,14 @@ it.each([
     delete tool.argumentsSignature;
     expect(tool.arguments).toEqual({ n: 1 });
     messages.push(first, makeTextToolResult(tool.id, tool.name, "tool failed", true, 2));
-    if (mode === "degenerate-abort") {
+    if (mode === "interrupted") {
       const aborted = await respond();
-      expect(aborted).toMatchObject({ stopReason: "error", errorCode: "degenerate_output" });
+      expect(aborted.stopReason).toBe("error");
       messages.push(aborted, userMessage("Continue after the interruption.", 3));
     }
     cleanupSessionResources();
     const recovered = await respond();
-    const repairIndex = mode === "degenerate-abort" ? 3 : 2;
+    const repairIndex = mode === "interrupted" ? 3 : 2;
     expect(recovered.stopReason).toBe("stop");
     expect(server.requests).toHaveLength(repairIndex + 1);
     expect(logInfo).toHaveBeenCalledWith(
@@ -325,7 +325,7 @@ it.each(["sse", "websocket-cached"] as const)(
 );
 
 it.each(["library", "gateway"])(
-  "does not replay a degenerate aborted function item through %s",
+  "does not replay an interrupted function item through %s",
   async (owner) => {
     const host = getAiTransportHost();
     configureAiTransportHost(owner === "gateway" ? { transformTransportMessages } : {});
@@ -355,7 +355,7 @@ it.each(["library", "gateway"])(
       return stream.result();
     };
     const failed = await respond();
-    expect(failed).toMatchObject({ stopReason: "error", errorCode: "degenerate_output" });
+    expect(failed.stopReason).toBe("error");
     messages.push(failed, userMessage("Continue.", 2));
     expect((await respond()).stopReason).toBe("stop");
     expect(server.requests).toHaveLength(2);

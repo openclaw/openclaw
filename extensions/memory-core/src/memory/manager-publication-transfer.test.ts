@@ -19,6 +19,7 @@ import { readMemoryDatabaseRevision } from "./manager-db-kernel.js";
 import {
   memoryEmbeddingCacheBatches,
   memoryPublicationBatches,
+  memoryPublicationGroup,
   memoryPublicationInline,
 } from "./manager-publication-transfer.js";
 import {
@@ -428,6 +429,29 @@ describe("bounded memory publication transfer", () => {
     ]);
   });
 
+  it("can still publish the last fitting group after final file validation", () => {
+    const sibling = replacement("sibling");
+    sibling.entry.path = "memory/sibling.md";
+    const group = (length: number) => [sibling, replacement("a".repeat(length))];
+    let accepted = 0;
+    let rejected = 256 * 1024;
+    while (rejected - accepted > 1) {
+      const length = Math.floor((accepted + rejected) / 2);
+      if (memoryPublicationGroup(group(length))) {
+        accepted = length;
+      } else {
+        rejected = length;
+      }
+    }
+    expect(memoryPublicationGroup(group(rejected))).toBeUndefined();
+    const sources = group(accepted);
+    expect(memoryPublicationGroup(sources)).toBeDefined();
+    for (const source of sources) {
+      source.verifiedFile = { mtimeMs: 1750000000000.125, size: 262_144 };
+    }
+    expect(memoryPublicationGroup(sources)).toBeDefined();
+  });
+
   it("roundtrips an oversized Unicode record and its metadata through the native publication owner", async () => {
     const owner = await createOwner();
     // Non-BMP text spans many fragment boundaries, including pairs whose halves
@@ -443,7 +467,13 @@ describe("bounded memory publication transfer", () => {
     for (const batch of batches) {
       expect(serialize(batch).byteLength).toBeLessThanOrEqual(512 * 1024);
     }
-    await publish(owner, input);
+    const verifiedFile = { mtimeMs: 120.75, size: input.entry.size };
+    input.entry.size = 1;
+    await owner.replaceSource(input, assertCurrent, async () => {
+      // The fragments are already staged when the accepted file is inspected.
+      input.verifiedFile = verifiedFile;
+      return true;
+    });
     expectValues(
       owner.db,
       "SELECT path, source, start_line, end_line, hash, model, text, embedding, updated_at FROM memory_index_chunks",
@@ -462,7 +492,7 @@ describe("bounded memory publication transfer", () => {
       ],
     );
     expectValues(owner.db, "SELECT path, source, hash, mtime, size FROM memory_index_sources", [
-      [input.entry.path, "memory", "source-hash", 100.25, Buffer.byteLength(text)],
+      [input.entry.path, "memory", "source-hash", verifiedFile.mtimeMs, verifiedFile.size],
     ]);
     expectValues(
       owner.db,
@@ -472,7 +502,7 @@ describe("bounded memory publication transfer", () => {
     expectValues(
       owner.db,
       "SELECT origin_class, session_kind, observed_at, supersedes_key FROM memory_index_chunk_provenance",
-      [["owner", "interactive", 90, "old/🔑"]],
+      [["owner", "interactive", 120, "old/🔑"]],
     );
     expectRows(
       owner.db,

@@ -1,8 +1,8 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayRequestRejected
-import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.ui.chat.ChatTimelineItem
 import ai.openclaw.app.ui.chat.buildTimeline
 import ai.openclaw.app.ui.chat.prepareChatHistory
@@ -184,7 +184,7 @@ class ChatControllerStreamReplayTest {
         assertTrue(send("run"))
         for (event in listOf("chat", "agent")) {
           text("run")
-          assertEquals("Original output", controller.streamingAssistantText.value)
+          assertEquals("Original output", controller.streamingAssistant.value?.text)
           val payload =
             if (event == "chat") {
               chatDeltaPayload(owner.sessionKey, "run", 2, "", "")
@@ -192,7 +192,7 @@ class ChatControllerStreamReplayTest {
               """{"sessionKey":"${owner.sessionKey}","runId":"run","stream":"assistant","data":{"text":""}}"""
             }
           controller.handleGatewayEvent(event, payload)
-          assertEquals(event, "", controller.streamingAssistantText.value)
+          assertEquals(event, "", controller.streamingAssistant.value?.text)
           assertEquals(1, controller.pendingRunCount.value)
         }
       }
@@ -220,7 +220,7 @@ class ChatControllerStreamReplayTest {
           runCurrent()
           assertTrue(entered.isCompleted)
           assertEquals(2, controller.pendingRunCount.value)
-          assertEquals("Original output", controller.streamingAssistantText.value)
+          assertEquals("Original output", controller.streamingAssistant.value?.text)
           assertEquals(originalTools, controller.pendingToolCalls.value)
           release.complete(Unit)
           assertTrue(followup.await())
@@ -238,7 +238,7 @@ class ChatControllerStreamReplayTest {
                   .jsonPrimitive.content
               }.toSet(),
           )
-          assertEquals("Original output", controller.streamingAssistantText.value)
+          assertEquals("Original output", controller.streamingAssistant.value?.text)
           assertEquals(originalTools, controller.pendingToolCalls.value)
         } finally {
           release.complete(Unit)
@@ -271,7 +271,7 @@ class ChatControllerStreamReplayTest {
             release.complete(Unit)
             assertTrue(followup.await())
             assertEquals(status, 1, controller.pendingRunCount.value)
-            assertEquals(status, "Original output", controller.streamingAssistantText.value)
+            assertEquals(status, "Original output", controller.streamingAssistant.value?.text)
             assertEquals(status, originalTools, controller.pendingToolCalls.value)
             if (status != "ok") assertEquals("OpenClaw request failed.", controller.errorText.value)
           } finally {
@@ -294,11 +294,11 @@ class ChatControllerStreamReplayTest {
           tool("z-original", "tool-original", "input_delta")
           val originalTools = controller.pendingToolCalls.value
           tool("a-followup", "tool-followup")
-          assertEquals("Original output", controller.streamingAssistantText.value)
+          assertEquals("Original output", controller.streamingAssistant.value?.text)
           assertEquals(2, controller.pendingToolCalls.value.size)
           terminal("a-followup", kind)
           assertEquals(kind, 1, controller.pendingRunCount.value)
-          assertEquals(kind, "Original output", controller.streamingAssistantText.value)
+          assertEquals(kind, "Original output", controller.streamingAssistant.value?.text)
           assertEquals(kind, originalTools, controller.pendingToolCalls.value)
         }
       }
@@ -318,7 +318,7 @@ class ChatControllerStreamReplayTest {
           tool("z-original", "tool-original")
           terminal("z-original", kind)
           assertEquals(kind, 1, controller.pendingRunCount.value)
-          assertNull(kind, controller.streamingAssistantText.value)
+          assertNull(kind, controller.streamingAssistant.value?.text)
           assertEquals(kind, remainingTools, controller.pendingToolCalls.value)
         }
       }
@@ -337,7 +337,7 @@ class ChatControllerStreamReplayTest {
         assertEquals(2, controller.pendingToolCalls.value.size)
         val followupTools = controller.pendingToolCalls.value.filter { it.runId == "a-followup" }
         tool("z-original", "shared-call", "result")
-        assertEquals("Original output", controller.streamingAssistantText.value)
+        assertEquals("Original output", controller.streamingAssistant.value?.text)
         assertEquals(followupTools, controller.pendingToolCalls.value)
         tool("a-followup", "shared-call", "result")
         assertTrue(controller.pendingToolCalls.value.isEmpty())
@@ -378,11 +378,21 @@ class ChatControllerStreamReplayTest {
           assertEquals(2, controller.toolActivities.value.size)
           assertEquals(expected, toolGroups())
           val originalPrompt = controller.messages.value.single { it.idempotencyKey == "a-followup:user" }
+          text("a-followup")
+          val readerKey = requireNotNull(controller.streamingAssistant.value?.readerKey)
           release.complete(Unit)
           assertTrue(followup.await())
           val rekeyed = controller.messages.value.single { it.idempotencyKey == originalPrompt.idempotencyKey }
           assertEquals(originalPrompt.id, rekeyed.id)
           assertEquals("canonical-followup", rekeyed.runId)
+          assertEquals(
+            "canonical-followup",
+            controller.streamingAssistant.value
+              ?.owner
+              ?.runId,
+          )
+          assertEquals(readerKey, controller.streamingAssistant.value?.readerKey)
+          assertEquals("Original output", controller.streamingAssistant.value?.text)
           assertEquals(expected, toolGroups())
 
           val response =
@@ -444,11 +454,11 @@ class ChatControllerStreamReplayTest {
           val originalTools = controller.pendingToolCalls.value
           release.complete(Unit)
           assertTrue(original.await())
-          assertEquals("Original output", controller.streamingAssistantText.value)
+          assertEquals("Original output", controller.streamingAssistant.value?.text)
           assertEquals(originalTools.map { it.copy(runId = "canonical-original") }, controller.pendingToolCalls.value)
           terminal("canonical-original", "lifecycle-end")
           assertEquals(1, controller.pendingRunCount.value)
-          assertNull(controller.streamingAssistantText.value)
+          assertNull(controller.streamingAssistant.value?.text)
           assertTrue(controller.pendingToolCalls.value.isEmpty())
         } finally {
           release.complete(Unit)
@@ -490,7 +500,7 @@ class ChatControllerStreamReplayTest {
                 put("data", buildJsonObject { put("text", JsonPrimitive("Current session output")) })
               }.toString(),
             )
-            assertEquals("Current session output", controller.streamingAssistantText.value)
+            assertEquals("Current session output", controller.streamingAssistant.value?.text)
             if (completion == "ack") {
               release.complete(Unit)
               assertTrue(pending.await())
@@ -498,7 +508,7 @@ class ChatControllerStreamReplayTest {
               terminal("z-original", "chat-final")
             }
             runCurrent()
-            assertEquals(completion, "Current session output", controller.streamingAssistantText.value)
+            assertEquals(completion, "Current session output", controller.streamingAssistant.value?.text)
           } finally {
             release.complete(Unit)
           }
@@ -542,13 +552,13 @@ class ChatControllerStreamReplayTest {
             // A terminal can retire the projection while its asynchronous send settlement waits.
             terminal("z-original", "chat-error")
             runCurrent()
-            assertEquals("Current session output", controller.streamingAssistantText.value)
+            assertEquals("Current session output", controller.streamingAssistant.value?.text)
             assertEquals(currentTools, controller.pendingToolCalls.value)
 
             release.complete(Unit)
             assertTrue(pending.await())
             runCurrent()
-            assertEquals(status, "Current session output", controller.streamingAssistantText.value)
+            assertEquals(status, "Current session output", controller.streamingAssistant.value?.text)
             assertEquals(status, currentTools, controller.pendingToolCalls.value)
             assertEquals(currentSession, controller.sessionKey.value)
           } finally {
@@ -576,12 +586,12 @@ class ChatControllerStreamReplayTest {
 
       // V3 deltas carry the accumulated message without v4's deltaText field.
       controller.handleGatewayEvent("chat", chatDeltaPayload("main", runId, 1, null, "Str"))
-      assertEquals("Str", controller.streamingAssistantText.value)
+      assertEquals("Str", controller.streamingAssistant.value?.text)
       controller.handleGatewayEvent(
         "chat",
         chatDeltaPayload("main", runId, 2, "eamed reply.", "Streamed reply."),
       )
-      assertEquals("Streamed reply.", controller.streamingAssistantText.value)
+      assertEquals("Streamed reply.", controller.streamingAssistant.value?.text)
 
       gateway.respondWith(
         "chat.history",
@@ -612,7 +622,7 @@ class ChatControllerStreamReplayTest {
           .id,
       )
       assertEquals(0, controller.pendingRunCount.value)
-      assertNull(controller.streamingAssistantText.value)
+      assertNull(controller.streamingAssistant.value?.text)
       assertNull(controller.errorText.value)
       assertEquals("session-1", controller.sessionId.value)
     }
@@ -631,7 +641,7 @@ class ChatControllerStreamReplayTest {
       val delta = chatDeltaPayload("main", runId, 1, "Only once.", "Only once.")
       controller.handleGatewayEvent("chat", delta)
       controller.handleGatewayEvent("chat", delta)
-      assertEquals("Only once.", controller.streamingAssistantText.value)
+      assertEquals("Only once.", controller.streamingAssistant.value?.text)
 
       gateway.respondWith(
         "chat.history",
@@ -887,11 +897,11 @@ class ChatControllerStreamReplayTest {
         "agent",
         """{"sessionKey":"main","runId":"$runId","seq":2,"ts":10,"stream":"tool","data":{"phase":"start","name":"exec","toolCallId":"tool-1"}}""",
       )
-      assertEquals("partial ans", controller.streamingAssistantText.value)
+      assertEquals("partial ans", controller.streamingAssistant.value?.text)
       assertEquals(1, controller.pendingToolCalls.value.size)
 
       controller.onDisconnected("connection lost")
-      assertNull(controller.streamingAssistantText.value)
+      assertNull(controller.streamingAssistant.value?.text)
       assertEquals(0, controller.pendingRunCount.value)
       assertTrue(controller.pendingToolCalls.value.isEmpty())
       assertNull(controller.sessionId.value)
@@ -1306,7 +1316,7 @@ class ChatControllerStreamReplayTest {
         reads += 1
         if (reads <= 2) {
           throw GatewayRequestRejected(
-            GatewaySession.ErrorShape(
+            ErrorShape(
               "UNAVAILABLE",
               "session history is busy; retry shortly",
               GatewayErrorDetails(null, false, null, retryable = true),
@@ -1340,7 +1350,7 @@ class ChatControllerStreamReplayTest {
       gateway.respond("chat.history") {
         refusedReads += 1
         throw GatewayRequestRejected(
-          GatewaySession.ErrorShape("UNAVAILABLE", "busy", GatewayErrorDetails(null, false, null, retryable = true)),
+          ErrorShape("UNAVAILABLE", "busy", GatewayErrorDetails(null, false, null, retryable = true)),
         )
       }
       controller.handleGatewayEvent("sessions.changed", """{"sessionKey":"main","agentId":"main","phase":"message"}""")
@@ -1408,7 +1418,7 @@ class ChatControllerStreamReplayTest {
             .last()
             .id,
         )
-        assertEquals("working", controller.streamingAssistantText.value)
+        assertEquals("working", controller.streamingAssistant.value?.text)
         assertEquals(pendingTools, controller.pendingToolCalls.value)
         assertEquals(1, controller.pendingRunCount.value)
         assertEquals("global", controller.sessionKey.value)
@@ -1445,10 +1455,10 @@ class ChatControllerStreamReplayTest {
           "chat",
           chatDeltaPayload("main", runId, index + 1, chunk, accumulated),
         )
-        assertEquals(accumulated, controller.streamingAssistantText.value)
+        assertEquals(accumulated, controller.streamingAssistant.value?.text)
       }
 
-      val streamed = requireNotNull(controller.streamingAssistantText.value)
+      val streamed = requireNotNull(controller.streamingAssistant.value?.text)
       assertArrayEquals(fixtureBytes, streamed.toByteArray(Charsets.UTF_8))
 
       gateway.respondWith(
@@ -1475,7 +1485,7 @@ class ChatControllerStreamReplayTest {
           .single { it.type == "text" }
           .text
       assertArrayEquals(fixtureBytes, requireNotNull(confirmed).toByteArray(Charsets.UTF_8))
-      assertNull(controller.streamingAssistantText.value)
+      assertNull(controller.streamingAssistant.value?.text)
       assertEquals(0, controller.pendingRunCount.value)
     }
 }

@@ -231,7 +231,7 @@ it("clears the previous account while switching and publishes only the accepted 
   expect(container.textContent).not.toContain("@maintainer");
 });
 
-it("keeps serial admission, redacted failures, and the draft through a held retry", async () => {
+it("keeps serial admission, a plain failure, and the draft through a held retry", async () => {
   const { container, request } = await mount();
   const input = container.querySelector<HTMLInputElement>('input[name="username"]')!;
   const form = container.querySelector("form")!;
@@ -249,10 +249,23 @@ it("keeps serial admission, redacted failures, and the draft through a held retr
   failed.reject(new Error("Rejected synthetic-private-token"));
   await vi.waitFor(() => {
     flush();
-    expect(container.querySelector('[role="alert"]')?.textContent).toBe("Rejected [REDACTED]");
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+      "Couldn’t confirm that OpenClaw added the X account. Select Refresh to check.",
+    );
   });
   expect(container.textContent).not.toContain("synthetic-private-token");
+  expect(container.textContent).not.toContain("[REDACTED]");
   expect(input.value).toBe("new_user");
+
+  container.querySelector<HTMLButtonElement>("header button")!.click();
+  expect(request).toHaveBeenLastCalledWith("x.allowlist.list", { accountId: "example" });
+  await vi.waitFor(() => {
+    flush();
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(input.disabled).toBe(false);
+  });
+  expect(input.value).toBe("new_user");
+
   const retry = Promise.withResolvers<XAllowlistSnapshot>();
   request.mockReturnValueOnce(retry.promise);
   form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
@@ -295,7 +308,7 @@ it("retires hidden and disposed reads while restoring only fresh administrator d
   f.notify();
   flush();
   await vi.waitFor(() =>
-    expect(f.container.textContent).toContain("Administrator access is required"),
+    expect(f.container.textContent).toContain("You need admin access to manage X replies."),
   );
   expect(f.container.textContent).not.toContain("@maintainer");
   const disposed = Promise.withResolvers<XAllowlistSnapshot>();

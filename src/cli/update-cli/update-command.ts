@@ -12,6 +12,7 @@ import { withSystemPackageOwnershipRun } from "../../infra/update-system-package
 import { resolveDebugProxySettings } from "../../proxy-capture/env.js";
 import { withDeferredDebugProxyCapture } from "../../proxy-capture/runtime-deferral.js";
 import { defaultRuntime } from "../../runtime.js";
+import { tryRunSystemServicePackageUpdate } from "../../update/cli.js";
 import { VERSION } from "../../version.js";
 import type { createUpdateProgress } from "./progress.js";
 import { confirmUpdateDowngrade, type UpdateCommandOptions } from "./shared.js";
@@ -59,6 +60,9 @@ export async function updateCommand(
       if (await tryRunImmutableUpdateCommand(inputOpts)) {
         return;
       }
+      if (!executorOptions && (await tryRunSystemServicePackageUpdate(inputOpts))) {
+        return;
+      }
       const { preparePostgresPoolForUpdate } = await import("../../infra/postgres-sync/pool.js");
       await preparePostgresPoolForUpdate("openclaw update repair");
       const { withRetainedUpdateRuntime } = await import("../../infra/update-retained-runtime.js");
@@ -97,7 +101,6 @@ async function updateCommandWithRuntime(
       ),
     );
   }
-  const reportHints: NonNullable<Parameters<typeof withUpdateAdmissionReporting>[3]> = {};
   return await withUpdateAdmissionReporting(
     inputOpts,
     async () => {
@@ -115,8 +118,6 @@ async function updateCommandWithRuntime(
       return await withUpdateDatabaseEngine(
         env,
         async (configReadable, malformedConfig) => {
-          // Late admission refusals retain the captured malformed-source report decision.
-          reportHints.writeArtifacts = !malformedConfig;
           if (await tryRunReleaseUpdateCommand(inputOpts, prepared, env)) {
             return;
           }
@@ -181,7 +182,6 @@ async function updateCommandWithRuntime(
       );
     },
     "unknown",
-    reportHints,
   );
 }
 

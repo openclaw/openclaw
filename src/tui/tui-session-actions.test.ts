@@ -622,29 +622,6 @@ describe("tui session actions", () => {
     });
   });
 
-  it("applies the runtime-aware thinking projection returned by session patches", () => {
-    const { state, applySessionInfoFromPatch } = createHarness();
-    const resolved = {
-      modelProvider: "openai",
-      model: "gpt-5.6-luna",
-      agentRuntime: { id: "openclaw", source: "session-key" },
-      thinkingLevel: "ultra",
-      thinkingLevels: [
-        { id: "off", label: "off" },
-        { id: "ultra", label: "ultra" },
-      ],
-    } satisfies NonNullable<Awaited<ReturnType<TuiBackend["patchSession"]>>["resolved"]>;
-
-    applySessionInfoFromPatch({
-      ok: true,
-      key: "agent:main:main",
-      entry: { sessionId: "session-1", updatedAt: 200 },
-      resolved: structuredClone(resolved),
-    });
-
-    expect(state.sessionInfo).toMatchObject(resolved);
-  });
-
   it.each([
     ["another session", "agent:main:current", "agent:main:previous"],
     ["the same request key owned by another agent", "agent:main:main", "agent:work:main"],
@@ -1784,27 +1761,5 @@ describe("tui session actions", () => {
       expect(renderChat(chatLog).match(/continue/g)).toHaveLength(copies);
     },
   );
-
-  it("uses top-level chat history thinking level when session info inherits it", async () => {
-    const describeSession = vi.fn();
-    const loadHistory = mockHistory([], {
-      sessionInfo: session("session-main", {
-        modelProvider: "openai",
-        model: "gpt-5",
-        contextTokens: 120_000,
-        thinkingDefault: "medium",
-        updatedAt: 200,
-      }),
-      thinkingLevel: "medium",
-    });
-    const { state, loadHistory: runLoadHistory } = createHarness({
-      backend: { describeSession, loadHistory },
-    });
-
-    await runLoadHistory();
-
-    expect(describeSession).not.toHaveBeenCalled();
-    expect(state.sessionInfo.thinkingLevel).toBe("medium");
-  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

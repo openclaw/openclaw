@@ -297,6 +297,11 @@ export function isModelsAuthOrderSetParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").ModelsAuthOrderSetParamsSchema
 >;
+export function isModelsAuthProfileRenameParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema/model-auth-profile.js").ModelsAuthProfileRenameParamsSchema
+>;
 export function isModelsAuthRefreshParams(
   value: unknown,
 ): value is import("typebox").Static<

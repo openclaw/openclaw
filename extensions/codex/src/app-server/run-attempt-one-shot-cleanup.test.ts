@@ -413,7 +413,9 @@ process.stdin.on("end", () => ${
           expect(warning).toHaveBeenCalledWith(
             "Codex app-server required forced shutdown; process cleanup confirmed",
           );
-          expect(warning).not.toHaveBeenCalledWith(expect.stringMatching(/agent cleanup failed:/));
+          expect(warning).not.toHaveBeenCalledWith(
+            expect.stringMatching(/agent cleanup (?:failed|timed out):/),
+          );
         } else {
           expectReleaseWarning(warning);
         }

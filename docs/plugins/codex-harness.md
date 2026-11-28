@@ -449,6 +449,18 @@ repaired by `openclaw doctor --fix`.
 
 ### Parent-local inference connection recovery
 
+When a managed turn exceeds the local inference relay's 32 MiB request limit,
+OpenClaw preserves the failed turn and retires only its native thread binding.
+Your next message starts a new native thread using bounded history from the
+same OpenClaw conversation; the original transcript and native thread remain
+available. OpenClaw does not automatically replay the failed turn or its tools.
+Native-owned and supervised sessions retain their original binding instead.
+A current message or attachment that exceeds the limit on its own still needs
+to be made smaller.
+Restored historical images also consume their encoded byte size when selecting
+the bounded seed. A context engine's selected attachments must fit its rendered
+allowance before they can be injected into a native thread.
+
 When an ordinary managed turn ends with the exact `Codex parent-local inference
 transport failed` error, OpenClaw settles its recorded output before retiring
 that connection from future acquisitions. Retirement is skipped while sibling
@@ -731,6 +743,14 @@ and connection. Native-parent thread rotation can preserve those assignments;
 resetting the requester or changing the connection does not adopt them. Missing
 assignment metadata is not reconstructed from retired Tasks history.
 
+In Codex V1, `resume_agent` can find a worker even when `send_input` reports
+“Cannot verify this worker belongs to the current parent.” Changing the
+app-server address or credentials can give the same chat a new native parent
+thread. Check the parent's history and confirm what the worker finished,
+including any file changes or remote writes. If the outcome is unclear, don't
+resend the task. If the earlier work is settled, start the next task with
+`sessions_spawn` and pass only the confirmed results it needs.
+
 For Codex V1 follow-ups, the parent binding keeps a successful submission receipt until OpenClaw
 records the matching turn as an assignment. This allows recovery after a yield or restart.
 When a warm thread closes, observation stops but unmatched receipts remain available.
@@ -751,12 +771,15 @@ is still being recovered or repeated identical results make a receipt ambiguous,
 OpenClaw preserves the later pending delivery instead of risking a lost result;
 this can cause an additional continuation.
 
-Codex owns native subagent execution and controls. Follow up through the parent
-session, which can use Codex's native collaboration tools. For an admitted native
+Codex owns native subagent execution and controls. Threads that OpenClaw starts
+or resumes have native multi-agent turned off, so new delegation uses
+`sessions_spawn`. Native children that exist already (from a thread Codex started
+itself, or from before this change) are still observed. For an admitted native
 assignment, OpenClaw's harness observes the child and routes results after the
 parent yields. The native foreground parent already receives completion messages, so OpenClaw does not
-send another continuation for a result it has consumed. Explicit OpenClaw or ACP
-delegation continues to use `sessions_spawn`. Stored submission and result
+send another continuation for a result it has consumed. After a cold resume, an
+OpenClaw parent cannot send more input to an earlier native child; start the
+next task with `sessions_spawn`. Stored submission and result
 receipts are recovery evidence, not permission to adopt a child or deliver to a
 replacement parent.
 

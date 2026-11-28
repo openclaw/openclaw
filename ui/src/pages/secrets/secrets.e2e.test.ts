@@ -3,7 +3,10 @@ import { expect, it } from "vitest";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { evaluateControlUiContext } from "../../test-helpers/control-ui-e2e-context.ts";
-import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  installMockGateway,
+} from "../../test-helpers/control-ui-e2e.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI team secrets mocked Gateway E2E",
@@ -162,6 +165,63 @@ suite.define(() => {
       }
     });
   });
+
+  it.each([390, 820, 1180, 1440])(
+    "keeps an environment value readable beside its updater at %i px",
+    async (width) => {
+      await suite.withPage(
+        {
+          viewport: {
+            width,
+            height: width === 390 ? 844 : width === 820 ? 1180 : width === 1180 ? 820 : 900,
+          },
+          hasTouch: true,
+        },
+        async ({ page }) => {
+          await page.addInitScript(
+            (key) => localStorage.setItem(key, JSON.stringify({ textScale: 140 })),
+            controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+          );
+          const region = {
+            ...entry("ATLAS_WORKSPACE_AUTOMATION_REGION", "eu-central-1"),
+            updatedBy: "atlas.workspace.automation.service.account@example.invalid",
+          };
+          await openStore(page, { list: { entries: [region] } }, ["secrets.store.set"]);
+          const row = page.getByRole("listitem", { name: region.name });
+          const value = row.locator(".secrets-store__value");
+          await value.waitFor({ state: "attached" });
+          await page.evaluate(() => document.fonts.ready);
+          const fits = await value.evaluate(
+            (el) => el.clientWidth > 0 && el.scrollWidth <= el.clientWidth + 1,
+          );
+          expect(fits, "the full short environment value is painted").toBe(true);
+          const name = row.locator(".secrets-store__env-name");
+          expect(await name.textContent()).toBe(region.name);
+          expect(await name.locator("span").last().textContent()).toBe("_REGION");
+          const attribution = row.locator(".secrets-store__attribution");
+          expect(
+            await attribution.locator("time").evaluate((el) => {
+              const range = document.createRange();
+              range.selectNodeContents(el);
+              return new Set(Array.from(range.getClientRects(), (rect) => Math.round(rect.top)))
+                .size;
+            }),
+          ).toBe(1);
+          await attribution.locator("summary").press("Enter");
+          // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText proves the rendered visible text.
+          expect(await attribution.locator(":scope > span").innerText()).toContain(
+            region.updatedBy,
+          );
+          await attribution.locator("summary").press("Enter");
+          await button(row, "Actions: " + region.name).tap();
+          await row.locator('.oc-menu-item[data-value="edit"]').click();
+          expect(await field(modal(page, "Edit secret"), "Value").inputValue()).toBe(
+            "eu-central-1",
+          );
+        },
+      );
+    },
+  );
 
   it("validates and saves protected, environment, and mixed bulk entries", async () => {
     await suite.withPage({ colorScheme: "dark" }, async ({ page }) => {
