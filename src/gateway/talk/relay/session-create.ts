@@ -81,7 +81,7 @@ export function createTalkRealtimeRelaySession(
     params.connId,
     "realtime relay",
   );
-  const { publicModel, publicError, voice, ...voiceSelection } =
+  const { publicModel, publicError, reconnectBlockedMessage, voice, ...voiceSelection } =
     resolveTalkRealtimeRelayPresentation(params);
   const relaySessionId = randomUUID();
   const expiresAtMs = Date.now() + RELAY_SESSION_TTL_MS;
@@ -344,6 +344,13 @@ export function createTalkRealtimeRelaySession(
             type: "clear",
             talkEvent,
           });
+        }
+        return;
+      }
+      if (event.direction === "client" && event.type === "session.reconnect.blocked") {
+        if (!failureEmitted) {
+          failureEmitted = true;
+          emitError(realtimeRelayIssue(reconnectBlockedMessage(event.detail), "stream"));
         }
         return;
       }

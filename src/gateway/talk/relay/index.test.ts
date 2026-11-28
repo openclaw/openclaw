@@ -1,9 +1,13 @@
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
+import { WebSocketServer } from "ws";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   detachActiveEmbeddedRun,
@@ -16,6 +20,7 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { createCatalogContextFixture } from "../../../plugins/capability-catalog.test-support.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import { requestRpcSourceCancellation } from "../../../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../../../sessions/session-lifecycle-admission.test-support.js";
@@ -31,8 +36,10 @@ import {
   type RealtimeVoiceBridge,
   type RealtimeVoiceProviderCapabilities,
 } from "../../../talk/provider-types.js";
+import { loadBundledPluginFacade } from "../../../test-utils/bundled-plugin-public-surface.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { expectObjectFields as expectRecordFields } from "../../../test-utils/mock-call-assertions.js";
+import { acquireTestPortBlock } from "../../../test-utils/port-claims.js";
 import { createChatRunState } from "../../server-chat-state.js";
 import { createRpcSourceForTest, claimRpcSourceForTest } from "../../test-helpers.rpc-source.js";
 import { cleanupTalkConnection, prepareTalkConnectionClose } from "../session-registry.js";
@@ -409,6 +416,94 @@ describe("talk realtime gateway relay", () => {
     async () => {
       for (const finish of relayRunSettlements.splice(0)) {
         await finish();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "explains a ready socket drop before closing (opaque: %s)",
+    async (opaque) => {
+      const { default: plugin } = await loadBundledPluginFacade<{
+        default: { register: (api: OpenClawPluginApi) => void };
+      }>({ pluginId: "xai", artifactBasename: "index.js" });
+      const register = vi.fn<OpenClawPluginApi["registerRealtimeVoiceProvider"]>();
+      plugin.register(createTestPluginApi({ registerRealtimeVoiceProvider: register }));
+      const factory = register.mock.calls[0]?.[0];
+      if (typeof factory !== "function") {
+        throw new Error("Expected xAI voice provider factory");
+      }
+      const provider = factory(
+        createCatalogContextFixture(() => {
+          throw new Error("Unexpected host operation");
+        }),
+      );
+      if (opaque) {
+        Object.defineProperty(
+          provider,
+          Symbol.for("openclaw.internal.realtime-voice-provider.v1"),
+          {
+            value: {
+              isBrowserSessionConfigured: () => true,
+              projectPublicProjection: () => ({ config: {} }),
+            },
+          },
+        );
+      }
+      const claim = await acquireTestPortBlock({ offsets: [0] });
+      const server = new WebSocketServer({ host: "127.0.0.1", port: claim.port });
+      await once(server, "listening");
+      server.on("connection", (socket) => {
+        socket.once("message", () => socket.send(JSON.stringify({ type: "session.updated" })));
+      });
+      const { events, context, closed } = createRelayEventRecorder();
+      const cfg = { agents: { entries: { main: {} } } };
+      try {
+        const session = createRelayRaw({
+          context,
+          cfg,
+          connId: "disconnect-client",
+          provider,
+          providerConfig: {
+            apiKey: "fixture-value",
+            baseUrl: `http://127.0.0.1:${claim.port}/v1`,
+            model: "test-voice-model",
+          },
+          instructions: "brief",
+          tools: [],
+          controlSource: "transcript",
+          sessionTarget: await prepareTalkSessionTarget(cfg, "agent:main:main"),
+        });
+        activeRelaySessions.set(session.relaySessionId, "disconnect-client");
+        const payloads = () => events.map(({ payload }) => payload as Record<string, unknown>);
+        await expect.poll(() => payloads().some((p) => p.type === "ready")).toBe(true);
+        // Simulate a provider socket loss after readiness, without an error frame.
+        for (const socket of server.clients) {
+          socket.terminate();
+        }
+        await closed;
+        const terminal = payloads().filter((p) => p.type === "error" || p.type === "close");
+        expect(terminal.map((p) => p.type)).toEqual(["error", "close"]);
+        expect(terminal[0]).toMatchObject({
+          code: "realtime_unavailable",
+          phase: "stream",
+          message: opaque
+            ? "Realtime provider error."
+            : "Realtime provider connection closed. Session resumption is disabled. Enable sessionResumption only if provider-side conversation retention is acceptable, or start a new Talk session.",
+        });
+        expect(terminal[1]).toMatchObject({ reason: "error" });
+        expect(JSON.stringify(terminal)).not.toContain("fixture-value");
+        expect(JSON.stringify(terminal)).not.toContain("websocket-close");
+        if (opaque) {
+          expect(JSON.stringify(terminal)).not.toContain("test-voice-model");
+        }
+      } finally {
+        for (const socket of server.clients) {
+          socket.terminate();
+        }
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+        await claim.release();
       }
     },
   );

@@ -40,6 +40,15 @@ export function resolveTalkRealtimeRelayPresentation(
     launch: { provider: params.provider.id, model: providerModel ?? model },
     publicError: (error: unknown) =>
       new Error(projectTalkRealtimeRelayProviderError(params.provider.id, opaqueRoute, error)),
+    reconnectBlockedMessage: (detail?: string) => {
+      if (opaqueRoute) {
+        return "Realtime provider error.";
+      }
+      // Project only known local reason codes, never raw provider diagnostics.
+      return detail?.split(/\s+/u).includes("sessionResumption=false")
+        ? "Realtime provider connection closed. Session resumption is disabled. Enable sessionResumption only if provider-side conversation retention is acceptable, or start a new Talk session."
+        : "Realtime provider connection closed and could not be resumed. Start a new Talk session.";
+    },
   };
 }
 
