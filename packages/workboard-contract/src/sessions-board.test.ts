@@ -30,9 +30,26 @@ describe("Sessions board match normalization", () => {
     {},
     { includeAutomation: true, includeHome: true },
     { includeAutomation: false, includeHome: false },
+    { includeSubagents: false },
+    { includeSubagents: true, hiddenSessionKeys: ["agent:main:dashboard:one"] },
   ])("preserves optional scope opt-ins: %j", (scope) => {
     expect(normalizeWorkboardSessionsBoardSpec({ ...specWithMatch({}), scope }).scope).toEqual(
       scope,
+    );
+  });
+
+  it("keeps hidden session keys unique and drops an empty list", () => {
+    const scope = (hiddenSessionKeys: unknown) =>
+      normalizeWorkboardSessionsBoardSpec({ ...specWithMatch({}), scope: { hiddenSessionKeys } })
+        .scope;
+    expect(scope([" agent:main:a ", "agent:main:a", "agent:main:b"])).toEqual({
+      hiddenSessionKeys: ["agent:main:a", "agent:main:b"],
+    });
+    expect(scope([])).toEqual({});
+    expect(() => scope("agent:main:a")).toThrow("scope.hiddenSessionKeys must be an array.");
+    expect(() => scope([""])).toThrow("hidden session key");
+    expect(() => scope(Array.from({ length: 501 }, (_, index) => `agent:main:${index}`))).toThrow(
+      "at most 500 sessions",
     );
   });
 

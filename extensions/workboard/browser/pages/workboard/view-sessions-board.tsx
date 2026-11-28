@@ -2,7 +2,7 @@
 import type { WorkboardBoardSummary, WorkboardSessionFacts } from "@openclaw/workboard-contract";
 import { dynamic, type JSX } from "@solidjs/web";
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
-import { createMemo, For } from "solid-js";
+import { createMemo, createSignal, createUniqueId, For, Show } from "solid-js";
 import { AgentAvatar, SelectPicker } from "../../components/host-components.tsx";
 import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
@@ -12,6 +12,7 @@ import { workboardBoardName } from "../../lib/workboard/board-presentation.ts";
 import { agentDisplayName } from "./agent-filter.ts";
 import type { SessionsBoardController } from "./sessions-board-controller.ts";
 import { RelativeTime } from "./view-card-time.tsx";
+import { closeWorkboardPopoverOnAction, workboardPopoverRef } from "./view-popover.ts";
 import { boardScrollEdgesRef } from "./view-scroll-fade.ts";
 import { SessionStatusBadge, type SessionStatusPresentation } from "./view-session-status.tsx";
 
@@ -42,6 +43,59 @@ function PullRequestBadge(props: { request: WorkboardSessionFacts["pullRequests"
       {props.request.state === "merged" ? icons.gitMerge : icons.gitPullRequest}#
       {props.request.number} · {t(`workboard.sessionsBoard.pullRequest.${props.request.state}`)}
     </Badge>
+  );
+}
+
+function HiddenSessionsControl(props: {
+  sessions: { key: string; title: string }[];
+  writable: boolean;
+  onShow: (sessionKey: string) => void;
+}) {
+  const id = `workboard-hidden-sessions-${createUniqueId()}`;
+  const popover = workboardPopoverRef("end");
+  return (
+    <>
+      <button
+        class="btn workboard-sessions__hidden-trigger"
+        type="button"
+        aria-haspopup="dialog"
+        aria-expanded="false"
+        popovertarget={id}
+      >
+        {icons.eyeOff}
+        {t("workboard.sessionsBoard.hiddenCount", { count: String(props.sessions.length) })}
+      </button>
+      <div
+        id={id}
+        popover="auto"
+        role="dialog"
+        aria-label={t("workboard.sessionsBoard.hiddenTitle")}
+        class="workboard-card__action-menu-panel workboard-sessions__hidden-panel"
+        ref={popover}
+        onClick={closeWorkboardPopoverOnAction}
+      >
+        <span class="workboard-sessions__hidden-heading">
+          {t("workboard.sessionsBoard.hiddenTitle")}
+        </span>
+        <div class="workboard-card__menu-group">
+          <For each={props.sessions} keyed={(session) => session.key}>
+            {(session) => (
+              <button
+                class="btn"
+                type="button"
+                title={t("workboard.sessionsBoard.showSession", { title: session().title })}
+                aria-label={t("workboard.sessionsBoard.showSession", { title: session().title })}
+                disabled={!props.writable}
+                onClick={() => props.onShow(session().key)}
+              >
+                {icons.eye}
+                <span>{session().title}</span>
+              </button>
+            )}
+          </For>
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -115,6 +169,7 @@ export function SessionsBoard(props: SessionsBoardProps) {
       }));
     return {
       canWrite: host.connection.canWrite,
+      hiddenSessions: controller.hiddenSessions,
       boardOptions: [
         { value: "__all__", label: t("workboard.allBoards") },
         ...props.boards.map((board) => ({ value: board.id, label: workboardBoardName(board) })),
@@ -144,6 +199,22 @@ export function SessionsBoard(props: SessionsBoardProps) {
       })),
     };
   });
+
+  // One shared action menu serves every tile, like the Cards board.
+  const menuId = `workboard-session-menu-${createUniqueId()}`;
+  const [menuKey, setMenuKey] = createSignal<string>();
+  let menuPanel!: HTMLDivElement;
+  let menuTrigger: HTMLButtonElement | undefined;
+  const menuPopover = workboardPopoverRef("end", false, () => menuTrigger);
+  const prepareMenu = (sessionKey: string, trigger: HTMLButtonElement) => {
+    if (menuTrigger === trigger) {
+      return;
+    }
+    menuPanel.hidePopover();
+    menuTrigger?.setAttribute("aria-expanded", "false");
+    menuTrigger = trigger;
+    setMenuKey(sessionKey);
+  };
 
   const startDrag = (event: DragEvent, sessionKey: string) => {
     if (!state().writable) {
@@ -199,15 +270,24 @@ export function SessionsBoard(props: SessionsBoardProps) {
             onSelect={(value) => props.onBoardChange(value)}
           />
           <div class="workboard-agent-filter">{props.scopeControl}</div>
-          <SelectPicker
-            class="workboard-people-filter"
-            value={state().peopleFilter}
-            options={state().peopleOptions}
-            accessibleLabel={t("workboard.sessionsBoard.peopleFilter")}
-            searchable
-            disabled={state().peopleDisabled}
-            onSelect={(value) => props.controller.selectPeople(value)}
-          />
+          <div class="workboard-sessions__toolbar-end">
+            <Show when={state().hiddenSessions.length > 0}>
+              <HiddenSessionsControl
+                sessions={state().hiddenSessions}
+                writable={state().writable}
+                onShow={(sessionKey) => void props.controller.setHidden(sessionKey, false)}
+              />
+            </Show>
+            <SelectPicker
+              class="workboard-people-filter"
+              value={state().peopleFilter}
+              options={state().peopleOptions}
+              accessibleLabel={t("workboard.sessionsBoard.peopleFilter")}
+              searchable
+              disabled={state().peopleDisabled}
+              onSelect={(value) => props.controller.selectPeople(value)}
+            />
+          </div>
         </div>
         {state().visibleError ? (
           <div class="workboard-sessions__warning" role="alert">
@@ -295,9 +375,28 @@ export function SessionsBoard(props: SessionsBoardProps) {
                           onDragStart={(event: DragEvent) => startDrag(event, session().key)}
                           onDragEnd={() => props.controller.drag()}
                         >
-                          <button class="workboard-session-tile__title" type="button">
-                            {session().title}
-                          </button>
+                          <span class="workboard-session-tile__header">
+                            <button class="workboard-session-tile__title" type="button">
+                              {session().title}
+                            </button>
+                            {state().canWrite ? (
+                              <button
+                                type="button"
+                                class="workboard-card__menu-trigger workboard-session-tile__menu-trigger"
+                                aria-label={t("workboard.sessionsBoard.sessionActions")}
+                                aria-haspopup="dialog"
+                                aria-expanded="false"
+                                popovertarget={menuId}
+                                draggable="false"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  prepareMenu(session().key, event.currentTarget);
+                                }}
+                              >
+                                {icons.moreHorizontal}
+                              </button>
+                            ) : null}
+                          </span>
                           {session().headline ? (
                             <span class="workboard-session-tile__headline">
                               {session().headline}
@@ -367,6 +466,38 @@ export function SessionsBoard(props: SessionsBoardProps) {
             </button>
           </div>
         ) : null}
+        <div
+          id={menuId}
+          popover="auto"
+          role="dialog"
+          aria-label={t("workboard.sessionsBoard.sessionActions")}
+          class="workboard-card__action-menu-panel"
+          ref={[
+            menuPopover,
+            (element) => {
+              menuPanel = element;
+            },
+          ]}
+          onClick={closeWorkboardPopoverOnAction}
+        >
+          <div class="workboard-card__menu-group">
+            <button
+              class="btn"
+              type="button"
+              autofocus
+              disabled={!state().writable}
+              onClick={() => {
+                const sessionKey = menuKey();
+                if (sessionKey) {
+                  void props.controller.setHidden(sessionKey, true);
+                }
+              }}
+            >
+              {icons.eyeOff}
+              <span>{t("workboard.sessionsBoard.hide")}</span>
+            </button>
+          </div>
+        </div>
       </div>
     </section>
   );

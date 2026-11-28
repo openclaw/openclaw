@@ -78,7 +78,16 @@ const sessionsBoardUpdateSchema = strictObject({
   scope: Type.Optional(
     strictObject({
       agentIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-      includeArchived: Type.Optional(Type.Boolean()),
+      hiddenSessionKeys: Type.Optional(
+        Type.Array(Type.String({ minLength: 1 }), {
+          maxItems: 500,
+          description:
+            "Exact session keys from the board read to hide from this board. Send the complete list; an empty list clears all hidden-session exclusions.",
+        }),
+      ),
+      includeArchived: Type.Optional(
+        Type.Boolean({ description: "Include archived sessions. Defaults to false." }),
+      ),
       includeAutomation: Type.Optional(
         Type.Boolean({
           description: "Include automation (cron) and system sessions. Defaults to false.",
@@ -87,6 +96,12 @@ const sessionsBoardUpdateSchema = strictObject({
       includeHome: Type.Optional(
         Type.Boolean({
           description: "Include each agent's Home session. Defaults to false.",
+        }),
+      ),
+      includeSubagents: Type.Optional(
+        Type.Boolean({
+          description:
+            "Include subagent sessions. Defaults to true; set false to hide them from this board.",
         }),
       ),
       maxAgeHours: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
@@ -262,7 +277,7 @@ export default definePluginEntry({
               name: "workboard_sessions_board_update",
               label: "Sessions Board Update",
               description:
-                "Edit a Sessions board's columns, match rules, or scope. columns replaces the full ordered list; preserve ids when renaming labels. All fields in each rule must match; a match array accepts any rule, and the first matching column wins. Exactly one fallback is required. Card tools do not apply to Sessions boards.",
+                "Edit a Sessions board's columns, match rules, or scope. columns replaces the full ordered list; preserve ids when renaming labels. scope also replaces its previous value; read the board first and keep the fields you are not changing, including hiddenSessionKeys. All fields in each rule must match; a match array accepts any rule, and the first matching column wins. Exactly one fallback is required. Card tools do not apply to Sessions boards.",
               parameters: sessionsBoardUpdateSchema,
               execute: async (_toolCallId, rawParams) => {
                 const record = asNonArrayRecord(rawParams);

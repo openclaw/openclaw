@@ -59,17 +59,22 @@ describe("Sessions board storage", () => {
         "kind cannot be changed",
       );
     }
-    await store.updateSessionsBoard("sessions", { scope: { maxAgeHours: 24 } });
+    const scope = {
+      maxAgeHours: 24,
+      includeSubagents: false,
+      hiddenSessionKeys: ["agent:main:example"],
+    };
+    await store.updateSessionsBoard("sessions", { scope });
     expect(await store.upsertBoard({ id: "sessions", name: "Renamed" })).toMatchObject({
       kind: "sessions",
       name: "Renamed",
-      sessions: { scope: { maxAgeHours: 24 } },
+      sessions: { scope },
     });
     expect(
       (await store.listBoards()).boards.find((entry) => entry.id === "sessions"),
     ).toMatchObject({
       kind: "sessions",
-      sessions: { scope: { maxAgeHours: 24 } },
+      sessions: { scope },
       total: 0,
     });
     expect(

@@ -235,12 +235,17 @@ function normalizeColumn(value: unknown) {
   };
 }
 
+/** Hidden keys outlive their sessions, so the list is capped rather than left to grow. */
+const MAX_HIDDEN_SESSIONS = 500;
+
 function normalizeScope(value: unknown) {
   const input = record(value, "scope", [
     "agentIds",
+    "hiddenSessionKeys",
     "includeArchived",
     "includeAutomation",
     "includeHome",
+    "includeSubagents",
     "maxAgeHours",
   ]);
   let agentIds: string[] | undefined;
@@ -249,6 +254,20 @@ function normalizeScope(value: unknown) {
       throw new Error("scope.agentIds must be an array.");
     }
     agentIds = [...new Set(input.agentIds.map((id: unknown) => text(id, "agent id", 1)))];
+  }
+  let hiddenSessionKeys: string[] | undefined;
+  if (input.hiddenSessionKeys !== undefined) {
+    if (!Array.isArray(input.hiddenSessionKeys)) {
+      throw new Error("scope.hiddenSessionKeys must be an array.");
+    }
+    hiddenSessionKeys = [
+      ...new Set(input.hiddenSessionKeys.map((key: unknown) => text(key, "hidden session key", 1))),
+    ];
+    if (hiddenSessionKeys.length > MAX_HIDDEN_SESSIONS) {
+      throw new Error(
+        `scope.hiddenSessionKeys must contain at most ${MAX_HIDDEN_SESSIONS} sessions.`,
+      );
+    }
   }
   const maxAgeHours = input.maxAgeHours;
   if (
@@ -259,6 +278,7 @@ function normalizeScope(value: unknown) {
   }
   return {
     ...(agentIds !== undefined ? { agentIds } : {}),
+    ...(hiddenSessionKeys?.length ? { hiddenSessionKeys } : {}),
     ...(input.includeArchived !== undefined
       ? { includeArchived: boolean(input.includeArchived, "scope.includeArchived") }
       : {}),
@@ -267,6 +287,9 @@ function normalizeScope(value: unknown) {
       : {}),
     ...(input.includeHome !== undefined
       ? { includeHome: boolean(input.includeHome, "scope.includeHome") }
+      : {}),
+    ...(input.includeSubagents !== undefined
+      ? { includeSubagents: boolean(input.includeSubagents, "scope.includeSubagents") }
       : {}),
     ...(maxAgeHours !== undefined ? { maxAgeHours } : {}),
   };

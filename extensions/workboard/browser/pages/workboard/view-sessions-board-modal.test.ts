@@ -22,6 +22,9 @@ async function mountSessionsEditor(sessions = createDefaultWorkboardSessionsBoar
     if (method === "workboard.sessionsBoard.read") {
       return { board, columns: board.sessions.columns, sessions: [], people: [] };
     }
+    if (method === "workboard.boards.upsert") {
+      return { board };
+    }
     if (method === "workboard.sessionsBoard.update") {
       if (!params || typeof params !== "object" || !("patch" in params)) {
         throw new Error("Missing Sessions board patch");
@@ -36,6 +39,29 @@ async function mountSessionsEditor(sessions = createDefaultWorkboardSessionsBoar
   const form = await openBoardEditor(page);
   return { board, form, page, sessions };
 }
+
+it("saves the subagent choice without undoing sessions hidden while the editor was open", async () => {
+  const { board, form, page } = await mountSessionsEditor();
+  const option = expectDefined(
+    form.querySelector<HTMLInputElement>(".workboard-sessions-scope input"),
+    "subagent choice",
+  );
+  expect(option.checked).toBe(true);
+  option.click();
+  board.sessions.scope = { maxAgeHours: 24, hiddenSessionKeys: ["agent:main:planning"] };
+  form.requestSubmit();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.request).toHaveBeenCalledWith("workboard.sessionsBoard.update", {
+    boardId: board.id,
+    patch: {
+      scope: {
+        maxAgeHours: 24,
+        hiddenSessionKeys: ["agent:main:planning"],
+        includeSubagents: false,
+      },
+    },
+  });
+});
 
 it("accepts padded board and column text up to each trimmed limit", async () => {
   const { board, form, page, sessions } = await mountSessionsEditor();

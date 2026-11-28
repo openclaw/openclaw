@@ -111,6 +111,8 @@ function sessionSelection(board: WorkboardSessionsBoard, view?: WorkboardSession
     includeUnknown: false,
     excludeDock: true,
     ...(board.sessions.scope?.includeAutomation ? {} : { excludeCron: true, excludeSystem: true }),
+    // Subagents stay on existing boards unless the scope opts out.
+    ...(board.sessions.scope?.includeSubagents === false ? { excludeSubagents: true } : {}),
     archived: board.sessions.scope?.includeArchived ? ("all" as const) : false,
     sortBy: "activity" as const,
     activeMinutes: Math.max(1, Math.ceil((board.sessions.scope?.maxAgeHours ?? 72) * 60)),
@@ -234,8 +236,10 @@ function createOwner(
     const unavailable = new Set<string>();
     const reasons = new Set<string>();
     const resolved = new Map<string, CachedFacts>();
+    const hidden = new Set(board.sessions.scope?.hiddenSessionKeys);
     for (const row of source.sessions) {
       if (
+        hidden.has(row.key) ||
         row.key === board.sessions.agentSessionKey ||
         (row.isMain && !board.sessions.scope?.includeHome)
       ) {

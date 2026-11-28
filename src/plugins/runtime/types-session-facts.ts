@@ -42,6 +42,7 @@ export type RuntimeSessionFactsSelection = Pick<
   | "includeGlobal"
   | "includeUnknown"
   | "excludeDock"
+  | "excludeSubagents"
   | "excludeCron"
   | "excludeSystem"
   | "archived"

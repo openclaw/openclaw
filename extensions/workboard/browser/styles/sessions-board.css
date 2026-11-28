@@ -20,6 +20,80 @@
   opacity: 0.45;
 }
 
+.workboard-session-tile__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.workboard-session-tile__menu-trigger {
+  flex-shrink: 0;
+  margin-block: -4px;
+}
+
+.workboard-session-tile:is(:hover, :focus-within) .workboard-session-tile__menu-trigger {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.workboard-sessions__toolbar-end {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  max-inline-size: 100%;
+}
+
+@media (min-width: 901px) {
+  .workboard-sessions .workboard-toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    justify-items: start;
+  }
+
+  .workboard-sessions__toolbar-end {
+    justify-self: end;
+  }
+}
+
+@media (max-width: 900px) {
+  .workboard-sessions .workboard-toolbar {
+    align-items: flex-start;
+  }
+
+  .workboard-sessions__toolbar-end {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .workboard-sessions__hidden-trigger {
+    order: 1;
+    align-self: flex-end;
+  }
+}
+
+.workboard-sessions__hidden-trigger svg {
+  width: 16px;
+  height: 16px;
+}
+
+.workboard-sessions__hidden-panel {
+  width: min(300px, calc(100vw - 24px));
+}
+
+.workboard-sessions__hidden-heading {
+  padding: 5px 8px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.workboard-sessions__hidden-panel .btn > span {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .workboard-session-tile__title {
   padding: 0;
   border: 0;
@@ -156,6 +230,22 @@ a.workboard-session-pr:hover {
   > input {
     margin: 0;
   }
+}
+
+.workboard-sessions-scope {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 var(--space-2);
+}
+
+.workboard-sessions-scope .workboard-sessions-scope__option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 36px;
+}
+
+.workboard-sessions-scope__option input {
+  margin: 0;
 }
 
 .workboard-sessions-editor .settings-input {
