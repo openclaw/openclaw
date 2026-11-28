@@ -218,7 +218,7 @@ test("a waiting poll cannot adopt a same-id successor after removal", async () =
   await tick();
   const original = await pending;
   check(original, { status: "failed" });
-  expect(text(original)).toContain(`Process ${session.id} is no longer tracked`);
+  expect(text(original)).toContain(`Process ${session.id} is not a tracked session ID`);
   expect(remove).not.toHaveBeenCalled();
   const result = await poll();
   expect(result.details).toMatchObject({ status: "completed", aggregated: "successor output\n" });
@@ -386,11 +386,11 @@ test("removes a retained completed session and its logs", async () => {
   expect((await call("remove")).details).toMatchObject({ status: "completed" });
   expect((await call("log")).details).toMatchObject({
     status: "failed",
-    error: expect.stringContaining(`Process ${session.id} is no longer tracked`),
+    error: expect.stringContaining(`Process ${session.id} is not a tracked session ID`),
   });
   expect((await call("kill")).details).toMatchObject({
     status: "failed",
-    error: expect.stringContaining(`Process ${session.id} is no longer tracked`),
+    error: expect.stringContaining(`Process ${session.id} is not a tracked session ID`),
   });
 });
 
