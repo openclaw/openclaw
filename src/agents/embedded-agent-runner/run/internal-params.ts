@@ -52,6 +52,8 @@ export type CompactionAccountingFact = Readonly<
 >;
 
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
+  /** Host-only reservation for a primary model recovery probe. */
+  releaseUnstartedProbe?: () => void;
   /** The reply owner checkpoints the source before recovery rewrites its context. */
   beforeRecoveryCompaction?: (context: {
     sessionId: string;

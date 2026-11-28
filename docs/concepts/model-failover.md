@@ -596,7 +596,7 @@ When every auth profile for a provider is already in cooldown, OpenClaw does not
   <Accordion title="Per-candidate decisions">
     - Persistent auth failures skip the whole provider immediately.
     - Billing disables usually skip, but the primary candidate can still be checked on a throttle so recovery is possible without restarting.
-    - The primary candidate may be checked near cooldown expiry, with a per-provider throttle.
+    - The primary candidate may be checked near cooldown expiry, at most once every 30 seconds per provider and agent directory. If local admission stops the check before dispatch, the next turn can check immediately. Once the request may have reached the provider, the 30-second interval applies.
     - Same-provider fallback siblings can be attempted despite cooldown when the failure looks transient (`rate_limit`, `overloaded`, or unknown). This is especially relevant when a rate limit is model-scoped and a sibling model may still recover immediately.
     - Transient cooldown checks are limited to one per provider per fallback run so a single provider does not stall cross-provider fallback.
 

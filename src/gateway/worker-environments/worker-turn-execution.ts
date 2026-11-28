@@ -27,6 +27,7 @@ import {
   assertWorkerTurnInputAdmitted,
   getWorkerTurnToolSurface,
 } from "./placement-turn-claim-events.js";
+import { WorkerRunnerCapacityError } from "./tunnel-contract.js";
 import { prepareWorkerDesktopLaunchPlan } from "./worker-desktop-launch-plan.js";
 import { prepareWorkerExecApproval } from "./worker-exec-approval.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
@@ -219,9 +220,9 @@ export async function executeWorkerTurn(
     assertContextCurrent();
     await recoverWorkspaceBeforeTurn({ ...params, turn, tunnel, signal: turn.abortSignal });
     assertContextCurrent();
+    const nodeSupervisor = Boolean(environment.nodeDeviceId) && environment.sshEndpoint === null;
     const portalAvailable =
-      Boolean(environment.nodeDeviceId) &&
-      environment.sshEndpoint === null &&
+      nodeSupervisor &&
       (await params.environments.supportsNodePortal?.(
         placement.environmentId,
         placement.activeOwnerEpoch,
@@ -636,31 +637,6 @@ export async function executeWorkerTurn(
       const handoffAbort = new AbortController();
       let handoffPending: Promise<void> | undefined;
       let dispatchReady = false;
-      const onDispatchReady = () => {
-        if (dispatchReady) {
-          return;
-        }
-        dispatchReady = true;
-        params.onHandoff(
-          environment.nodeDeviceId && environment.sshEndpoint === null
-            ? { requiresTerminalReceipt: true }
-            : undefined,
-        );
-        turn.onExecutionPhase?.({ phase: "process_spawned", backend });
-        handoffPending = (async () => {
-          try {
-            if (!(await params.environments.acknowledgeCredentialDelivery(credential))) {
-              handoffAbort.abort(
-                new Error("Cloud worker credential owner changed during process handoff"),
-              );
-            }
-          } catch (error) {
-            handoffAbort.abort(
-              new Error("Cloud worker credential handoff failed", { cause: error }),
-            );
-          }
-        })();
-      };
       let processResult: Awaited<ReturnType<NonNullable<typeof tunnel.launchTurn>>>;
       try {
         processResult = await tunnel.launchTurn({
@@ -670,15 +646,39 @@ export async function executeWorkerTurn(
           timeoutMs: turn.timeoutMs,
           credentialExpiresAtMs: credential.expiresAtMs,
           signal: AbortSignal.any([githubGrant?.signal ?? signal, handoffAbort.signal]),
-          onDispatchReady,
+          onDispatchReady: () => {
+            if (dispatchReady) {
+              return;
+            }
+            dispatchReady = true;
+            params.onHandoff(nodeSupervisor ? { requiresTerminalReceipt: true } : undefined);
+            turn.onExecutionPhase?.({ phase: "process_spawned", backend });
+            handoffPending = (async () => {
+              try {
+                if (!(await params.environments.acknowledgeCredentialDelivery(credential))) {
+                  handoffAbort.abort(
+                    new Error("Cloud worker credential owner changed during process handoff"),
+                  );
+                }
+              } catch (cause) {
+                handoffAbort.abort(new Error("Cloud worker credential handoff failed", { cause }));
+              }
+            })();
+          },
         });
+      } catch (error) {
+        // The supervisor can reject capacity after receiving the launch RPC but before starting work.
+        if (error instanceof WorkerRunnerCapacityError) {
+          turn.releaseUnstartedProbe?.();
+        }
+        throw error;
       } finally {
         mcpQuestions.dispose();
         await handoffPending;
       }
       // Node launches return only after the exact launch journal receipt is terminal,
       // including any admission re-arms. Transport failures never reach this fact.
-      if (environment.nodeDeviceId && environment.sshEndpoint === null) {
+      if (nodeSupervisor) {
         params.onTerminal();
       }
       handoffAbort.signal.throwIfAborted();

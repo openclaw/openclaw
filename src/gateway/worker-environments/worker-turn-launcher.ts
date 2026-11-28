@@ -94,7 +94,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         assertCurrent,
       });
     },
-    async executeTurn(claim, inputTurn, runLocal, onAdmitted, assertRunCurrent) {
+    async executeTurn(claim, inputTurn, executeLocal, onAdmitted, assertRunCurrent) {
       const sessionlessModelRun = inputTurn.modelRun === true && !claim.sessionKey?.trim();
       if (!inputTurn.replyOperation && !sessionlessModelRun) {
         return await admitWorkerTurn(
@@ -102,7 +102,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             placements: options.placements,
             claim,
             turn: inputTurn,
-            runLocal,
+            runLocal: executeLocal,
             onAdmitted,
             assertCurrent: assertRunCurrent,
           },
@@ -113,6 +113,11 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       const reply = await workerTurnOwner.prepareWorkerTurnReplyDelivery(previous, inputTurn);
       // The reply can arrive before workspace and context-engine settlement finish.
       const releaseExecution = inputTurn.replyOperation?.retainExecution();
+      let releaseUnstartedProbe = inputTurn.releaseUnstartedProbe;
+      const runLocal = () => {
+        releaseUnstartedProbe = undefined;
+        return executeLocal();
+      };
       const execution = withRequiredSessionPlacement(
         claim,
         {
@@ -453,6 +458,10 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 environments: options.environments,
                 onHandoff: (custody?: { requiresTerminalReceipt: true }) => {
                   handedOff = true;
+                  // Remote-exec hands off the workspace before it starts local inference.
+                  if (!remoteExec) {
+                    releaseUnstartedProbe = undefined;
+                  }
                   terminalReceiptRequired = custody?.requiresTerminalReceipt === true;
                   activeWorkerTurn?.beginExecution();
                   if (!admissionReported) {
@@ -688,7 +697,13 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             }
           }
         },
-      ).finally(() => releaseExecution?.());
+      )
+        .catch((error: unknown) => {
+          // A disconnected worker can also fail after handoff, when it may have called the provider.
+          releaseUnstartedProbe?.();
+          throw error;
+        })
+        .finally(() => releaseExecution?.());
       return await reply.wait(execution);
     },
   };

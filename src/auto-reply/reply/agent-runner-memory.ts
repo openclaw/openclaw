@@ -767,7 +767,7 @@ export async function runMemoryFlushIfNeeded(
           model,
           runId: flushRunId,
           promptCacheKey: params.opts?.promptCacheKey,
-          allowTransientCooldownProbe: runOptions.allowTransientCooldownProbe,
+          cooldownProbe: runOptions,
         });
         const runtime = await embeddedAgentRuntimeLoader.load();
         const result = await runtime.runEmbeddedAgent({

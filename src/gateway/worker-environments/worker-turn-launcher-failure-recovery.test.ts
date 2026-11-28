@@ -7,6 +7,8 @@ import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway
 import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
+import { updateAuthProfileStoreWithLock } from "../../agents/auth-profiles/store-runtime.js";
+import { runWithModelFallback } from "../../agents/model-fallback-runner.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import * as rootLogger from "../../logger.js";
 import type { SpawnResult } from "../../process/exec.js";
@@ -30,6 +32,7 @@ import {
 import { success } from "./tunnel.test-support.js";
 import { failHandedOffTurn } from "./worker-turn-failure.js";
 import {
+  completeTurn,
   createLauncher,
   environmentForTunnel,
   executeTurn,
@@ -513,6 +516,66 @@ describe("worker turn launcher failure recovery", () => {
     expectUncalled(launchTurn, environments.acknowledgeCredentialDelivery, environments.destroy);
   });
 
+  it.each(["before", "after"] as const)(
+    "retries a cooled-down primary only if the worker disconnects before dispatch (disconnect: %s)",
+    async (disconnect) => {
+      await fx.seedActivePlacement();
+      const agentDir = path.join(fx.root, "agents", "main", "agent");
+      await updateAuthProfileStoreWithLock({
+        agentDir,
+        updater: (store) => {
+          store.profiles.primary = { type: "api_key", provider: "openai", key: "fixture-key" };
+          store.usageStats = {
+            primary: { cooldownUntil: Date.now() + 120_000, cooldownReason: "overloaded" },
+          };
+          return true;
+        },
+      });
+      const dispatched: string[] = [];
+      const launcher = createLauncher({
+        environments: workerEnvironment({
+          reconcileWorkspace: fx.reconcileUnchangedLocalWorkspace,
+          launchTurn: async (request) => {
+            const runId = request.turnClaim.runId;
+            if (runId === "probe-offline" && disconnect === "before") {
+              throw new WorkerRunnerUnavailableError();
+            }
+            request.onDispatchReady?.();
+            dispatched.push(runId);
+            if (runId === "probe-offline") {
+              throw new WorkerRunnerUnavailableError();
+            }
+            return await completeTurn(request, "Recovered", Date.now());
+          },
+        }),
+      });
+      const run = (runId: string) => {
+        const turn = fx.turn(runId);
+        return runWithModelFallback({
+          cfg: turn.config,
+          provider: turn.provider,
+          model: turn.model,
+          agentDir,
+          fallbacksOverride: [],
+          manifestPlugins: [],
+          run: (_provider, _model, options) =>
+            launcher.executeTurn(runIdentity(runId), { ...turn, ...options }, localResult),
+        });
+      };
+      // Keep the retry inside the probe interval even during cold worker startup.
+      using clock = vi.spyOn(Date, "now");
+      clock.mockReturnValue(Date.now());
+      await expect(run("probe-offline")).rejects.toThrow();
+      if (disconnect === "before") {
+        await expect(run("probe-retry")).resolves.toMatchObject({ outcome: "completed" });
+        expect(dispatched).toEqual(["probe-retry"]);
+      } else {
+        await expect(run("probe-retry")).rejects.toMatchObject({ code: "MODEL_FALLBACK_SKIPPED" });
+        expect(dispatched).toEqual(["probe-offline"]);
+      }
+    },
+  );
+
   it.each([
     [false, new WorkerRunnerUnavailableError(), "The device runner is offline"],
     [true, new WorkerRunnerCapacityError(), "device worker capacity remained full"],
@@ -534,7 +597,15 @@ describe("worker turn launcher failure recovery", () => {
       const provider = createLauncher({ environments });
       const runLocal = vi.fn(localResult);
 
-      await expect(executeTurn(provider, "run-failed", runLocal)).rejects.toThrow(expectedMessage);
+      const releaseUnstartedProbe = vi.fn();
+      await expect(
+        provider.executeTurn(
+          runIdentity("run-failed"),
+          { ...fx.turn("run-failed"), releaseUnstartedProbe },
+          runLocal,
+        ),
+      ).rejects.toThrow(expectedMessage);
+      expect(releaseUnstartedProbe).toHaveBeenCalledOnce();
       expect(runLocal).not.toHaveBeenCalled();
       expectPlacement({ state: "active", turnClaim: null });
       expect(acknowledgeCredentialDelivery).toHaveBeenCalledTimes(dispatched ? 1 : 0);

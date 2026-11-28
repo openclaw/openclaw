@@ -5,6 +5,7 @@ import { isCronTerminalAbortReasonText } from "../cron/service/execution-errors.
 import { renewAgentRunDeadline } from "../infra/agent-run-deadline.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
+import type { AdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { readAgentTerminalSnapshot, withAgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
@@ -75,11 +76,32 @@ export function isFallbackSummaryError(err: unknown): err is FallbackSummaryErro
   );
 }
 
-export type ModelFallbackRunOptions = {
+export type ModelFallbackProbeOptions = {
   allowTransientCooldownProbe?: boolean;
+  /** Release this reservation only when execution stopped before provider dispatch. */
+  releaseUnstartedProbe?: () => void;
+};
+
+export type ModelFallbackRunOptions = ModelFallbackProbeOptions & {
   isFinalFallbackAttempt?: boolean;
   modelRoutingProvenance: ModelFallbackAttemptProvenance;
 };
+
+export function canDispatchFallbackCandidate(
+  authority: AdmittedRunOperatorAuthority | undefined,
+  candidate: ModelCandidate,
+  probe?: ModelFallbackProbeOptions,
+): boolean {
+  let allowed = false;
+  try {
+    allowed = authority?.modelPolicy?.allows(candidate) !== false;
+    return allowed;
+  } finally {
+    if (!allowed) {
+      probe?.releaseUnstartedProbe?.();
+    }
+  }
+}
 
 export function resolveFallbackAuthScope(params: {
   userLockedAuthProfileId?: string;
@@ -245,7 +267,10 @@ export async function runFallbackAttempt<T>(
 > {
   // Only the initial attempt may own a result after caller cancellation.
   if (params.attempt > 1) {
-    params.abortSignal?.throwIfAborted();
+    if (params.abortSignal?.aborted) {
+      params.options?.releaseUnstartedProbe?.();
+      params.abortSignal.throwIfAborted();
+    }
     // Give the next candidate its own budget without replacing parent cancellation.
     renewAgentRunDeadline(params.attribution?.runId);
   }

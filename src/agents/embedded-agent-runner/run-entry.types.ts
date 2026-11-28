@@ -7,6 +7,7 @@ import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
 import type { AssistantErrorTranscript } from "../assistant-error-transcript.js";
 import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-outbox.js";
+import type { ModelFallbackProbeOptions } from "../model-fallback-attempt.js";
 import type { ModelFallbackStepFields } from "../model-fallback-observation.js";
 import type {
   FallbackAttempt,
@@ -37,7 +38,7 @@ export type ResolvedRunEntryModelSelection = {
   modelId: string;
 } & Pick<PluginHookBeforeModelResolveResult, "fallbacksOverride">;
 
-export type RunEntryCandidateOptions = {
+export type RunEntryCandidateOptions = ModelFallbackProbeOptions & {
   resolvedModelSelection?: ResolvedRunEntryModelSelection;
   modelFallbacksOverride?: string[];
   agentHarnessRuntimeOverride: string | undefined;
@@ -47,7 +48,6 @@ export type RunEntryCandidateOptions = {
   cyberAccessProgram?: "daybreak_blue";
   authProfileId?: string;
   classifyResult: (result: EmbeddedAgentRunResult) => ModelFallbackResultClassification;
-  allowTransientCooldownProbe?: boolean;
   isFinalFallbackAttempt?: boolean;
   isFallbackRetry: boolean;
   modelRoutingProvenance: ModelFallbackAttemptProvenance;

@@ -700,6 +700,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     agentDir: params.agentDir,
     allowGatewaySubagentBinding: params.opts.allowGatewaySubagentBinding,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
+    releaseUnstartedProbe: params.releaseUnstartedProbe,
     modelRun: params.opts.modelRun,
     promptMode: params.opts.promptMode,
     onAgentEvent: params.onAgentEvent,

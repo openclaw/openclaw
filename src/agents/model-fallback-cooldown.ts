@@ -6,7 +6,7 @@ import type { FailoverReason } from "./failover/signal.js";
 import type { ModelFallbackAuthRuntime } from "./model-fallback-attempt.js";
 import type { ModelCandidate } from "./model-fallback.types.js";
 
-const lastProbeAttempt = new Map<string, number>();
+const lastProbeAttempt = new Map<string, { startedAt: number }>();
 const MIN_PROBE_INTERVAL_MS = 30_000;
 const PROBE_MARGIN_MS = 2 * 60 * 1000;
 const PROBE_SCOPE_DELIMITER = "::";
@@ -18,14 +18,20 @@ export function resolveProbeThrottleKey(provider: string, agentDir?: string): st
 }
 
 function isProbeThrottleOpen(now: number, throttleKey: string): boolean {
-  const lastProbe = lastProbeAttempt.get(throttleKey) ?? 0;
+  const lastProbe = lastProbeAttempt.get(throttleKey)?.startedAt ?? 0;
   return now - lastProbe >= MIN_PROBE_INTERVAL_MS;
 }
 
-export function markProbeAttempt(now: number, throttleKey: string): void {
+export function reserveProbeAttempt(now: number, throttleKey: string): () => void {
+  const reservation = { startedAt: now };
   lastProbeAttempt.delete(throttleKey);
-  lastProbeAttempt.set(throttleKey, now);
+  lastProbeAttempt.set(throttleKey, reservation);
   pruneMapToMaxSize(lastProbeAttempt, MAX_PROBE_KEYS);
+  return () => {
+    if (lastProbeAttempt.get(throttleKey) === reservation) {
+      lastProbeAttempt.delete(throttleKey);
+    }
+  };
 }
 
 type CooldownDecision =

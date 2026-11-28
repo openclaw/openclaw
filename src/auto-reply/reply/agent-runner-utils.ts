@@ -9,6 +9,7 @@ import {
   prepareModelRunCapabilities,
   type PreparedModelThinkingCapability,
 } from "../../agents/model-catalog-lookup.js";
+import type { ModelFallbackProbeOptions } from "../../agents/model-fallback-attempt.js";
 import {
   normalizeThinkingCatalogProviders,
   resolveCandidateThinkingLevel,
@@ -436,7 +437,7 @@ export async function buildEmbeddedRunExecutionParams(params: {
   agentRuntime?: string;
   runId: string;
   promptCacheKey?: string;
-  allowTransientCooldownProbe?: boolean;
+  cooldownProbe?: ModelFallbackProbeOptions;
 }) {
   const authProfile = resolveRunAuthProfile(params.run, params.provider);
   const embeddedContext = buildEmbeddedRunContext(params);
@@ -529,6 +530,7 @@ export async function buildEmbeddedRunExecutionParams(params: {
     runTimeoutOverrideMs: params.run.runTimeoutOverrideMs,
     runId: params.runId,
     promptCacheKey: params.promptCacheKey,
-    allowTransientCooldownProbe: params.allowTransientCooldownProbe,
+    allowTransientCooldownProbe: params.cooldownProbe?.allowTransientCooldownProbe,
+    releaseUnstartedProbe: params.cooldownProbe?.releaseUnstartedProbe,
   };
 }

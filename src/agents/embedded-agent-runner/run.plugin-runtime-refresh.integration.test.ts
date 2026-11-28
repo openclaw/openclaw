@@ -154,9 +154,11 @@ it.each([false, true])(
     }
     acquire.mockRejectedValueOnce(refusal);
     const onAttemptStart = vi.fn();
-    await expect(run({ onAttemptStart })).rejects.toBe(refusal);
+    const releaseUnstartedProbe = vi.fn();
+    await expect(run({ onAttemptStart, releaseUnstartedProbe })).rejects.toBe(refusal);
     expect(acquire).toHaveBeenCalledTimes(committed ? 2 : 1);
     expectCalls(committed ? 1 : 0, onAttemptStart, attempt);
+    expect(releaseUnstartedProbe).toHaveBeenCalledTimes(committed ? 0 : 1);
   },
 );
 

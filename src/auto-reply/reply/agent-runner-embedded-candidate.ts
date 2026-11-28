@@ -91,7 +91,7 @@ export async function runEmbeddedFallbackCandidate(
     provider: params.provider,
     runId: params.runId,
     promptCacheKey: turn.opts?.promptCacheKey,
-    allowTransientCooldownProbe: params.allowTransientCooldownProbe,
+    cooldownProbe: params,
     model: params.model,
     agentRuntime: params.candidateAgentRuntime,
   });
