@@ -379,6 +379,39 @@ export function ImportedInsightsContent(props: {
   );
 }
 
+export function WikiKnowledgeSearchForm(props: { onOpen: (query?: string) => void }) {
+  return (
+    <form
+      class="row wrap items-center gap-2"
+      role="search"
+      aria-label={t("dreaming.wiki.searchKnowledge")}
+      onSubmit={(event) => {
+        event.preventDefault();
+        const query = new FormData(event.currentTarget).get("query");
+        if (typeof query === "string" && query.trim()) {
+          props.onOpen(query.trim());
+        }
+      }}
+    >
+      <input
+        class="settings-input"
+        type="search"
+        name="query"
+        required
+        maxlength={200}
+        aria-label={t("dreaming.wiki.searchKnowledge")}
+        placeholder={t("dreaming.wiki.searchKnowledge")}
+      />
+      <button class="btn btn--sm" type="submit">
+        {t("common.search")}
+      </button>
+      <button class="btn btn--subtle btn--sm" type="button" onClick={() => props.onOpen()}>
+        {t("dreaming.wiki.browseKnowledge")}
+      </button>
+    </form>
+  );
+}
+
 export function WikiOverviewContent(props: { owner: DreamingProps; data: WikiOverview | null }) {
   const clusters = () => props.data?.clusters ?? [];
   const returnedItems = createMemo(() =>

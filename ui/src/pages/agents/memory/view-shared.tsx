@@ -2,6 +2,7 @@ import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-
 import type { JSX } from "@solidjs/web";
 import { Errored, Loading, Show } from "solid-js";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import type { DreamingProps } from "./view-types.ts";
 
 export function DreamingRead(props: {
@@ -9,12 +10,35 @@ export function DreamingRead(props: {
   on?: unknown;
   fallback?: JSX.Element;
   errorClass?: string;
+  onRetry?: () => void;
   children?: JSX.Element;
 }) {
   return (
     <Errored
       fallback={(error) =>
-        props.errorClass ? <div class={props.errorClass}>{formatUiError(error())}</div> : undefined
+        props.errorClass ? (
+          <Show
+            when={props.onRetry}
+            fallback={<div class={props.errorClass}>{formatUiError(error())}</div>}
+          >
+            {(retry) => (
+              <div
+                class="dreams-diary__error-state"
+                style={{
+                  display: "flex",
+                  "flex-direction": "column",
+                  "align-items": "center",
+                  "padding-bottom": "var(--space-4)",
+                }}
+              >
+                <div class={props.errorClass}>{formatUiError(error())}</div>
+                <button type="button" class="btn btn--sm" onClick={() => retry()()}>
+                  {t("common.retry")}
+                </button>
+              </div>
+            )}
+          </Show>
+        ) : undefined
       }
     >
       <Loading on={props.on} fallback={props.fallback}>

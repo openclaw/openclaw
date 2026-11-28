@@ -1,8 +1,5 @@
-import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createDeferred } from "@solidjs/signals";
 import { action, createMemo, createOptimistic, createStore, onSettled } from "solid-js";
-import { pluginTabLocation } from "../../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../../app/context.ts";
 import { hasOperatorReadAccess } from "../../../app/operator-access.ts";
 import {
@@ -27,6 +24,8 @@ import {
   createDreamingViewState,
   DREAM_PHRASE_KEYS,
   loadDreamingResource,
+  normalizeWikiPagePreview,
+  openKnowledgePluginView,
   resolveConfiguredDreaming,
   runDreamDiaryAction,
   updateDreamingEnabled,
@@ -433,27 +432,9 @@ export function createAgentMemory(
       lineCount: 5000,
       agentId,
     });
-    if (!isTaskScopeCurrent(scope) || scope.state.selectedAgentId !== agentId) {
-      return null;
-    }
-    const payload = asOptionalObjectRecord(response);
-    const content =
-      typeof payload?.content === "string" && payload.content.length > 0
-        ? payload.content
-        : t("dreaming.wiki.noContent");
-    const updatedAt = normalizeOptionalString(payload?.updatedAt);
-    const totalLines =
-      typeof payload?.totalLines === "number" && Number.isFinite(payload.totalLines)
-        ? Math.max(0, Math.floor(payload.totalLines))
-        : undefined;
-    return {
-      title: normalizeOptionalString(payload?.title) ?? lookup,
-      path: normalizeOptionalString(payload?.path) ?? lookup,
-      content,
-      ...(totalLines === undefined ? {} : { totalLines }),
-      ...(payload?.truncated === true ? { truncated: true } : {}),
-      ...(updatedAt ? { updatedAt } : {}),
-    };
+    return isTaskScopeCurrent(scope) && scope.state.selectedAgentId === agentId
+      ? normalizeWikiPagePreview(lookup, response)
+      : null;
   }
 
   function read() {
@@ -509,22 +490,7 @@ export function createAgentMemory(
         ),
         onOpenKnowledge:
           configuredDreaming.pluginId === "knowledge" && agentId
-            ? (query?: string) => {
-                const tab = pluginTabLocation(
-                  { pluginId: "knowledge", id: "overview" },
-                  context.basePath,
-                );
-                const search = new URLSearchParams(tab.search);
-                search.set("p.agent", agentId);
-                search.set("p.view", query ? "search" : "browse");
-                if (query) {
-                  search.set("p.q", query);
-                }
-                context.navigate("plugin", {
-                  pathname: tab.pathname,
-                  search: "?" + search.toString(),
-                });
-              }
+            ? (query?: string) => openKnowledgePluginView(context, agentId, query)
             : undefined,
         wikiImportInsightsLoading: dreaming.resourceReads.wikiImportInsights?.pending ?? false,
         wikiImportInsights: dreaming.wikiImportInsights,
