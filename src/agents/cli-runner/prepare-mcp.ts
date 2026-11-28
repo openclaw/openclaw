@@ -77,10 +77,12 @@ export async function prepareCliMcpToolProjection(
     >;
     /** The memory audience a loopback grant on a session carries. */
     forGrant: (sessionKey: string) => Promise<Pick<McpScope, "memoryAudience">>;
-    resolvePolicyTools: ResolveMcpTools;
-    resolveScopedTools: ResolveMcpTools;
   },
 ) {
+  // CLI preparation is shared with informational commands and tool-free runs.
+  // Load tool construction only for an actual projection, before admission.
+  const { resolveMcpLoopbackPolicyTools, resolveMcpLoopbackScopedTools } =
+    await import("../../gateway/mcp-http.runtime.js");
   const requestedToolsAllow =
     options.runtimeToolsAllowPolicy ?? params.cliToolAvailability?.openClaw;
   const context =
@@ -89,8 +91,8 @@ export async function prepareCliMcpToolProjection(
       : options.context;
   const resolveTools =
     options.runtimeToolsAllowPolicy !== undefined
-      ? options.resolvePolicyTools
-      : options.resolveScopedTools;
+      ? resolveMcpLoopbackPolicyTools
+      : resolveMcpLoopbackScopedTools;
   const admittedParams = await admitCliRunParams(params, options.agentId);
   // The projected names become the grant's allowlist, so audience-gated tools are
   // built with the audience the grant will carry; the grant mints with this same value.
