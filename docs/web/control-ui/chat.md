@@ -959,6 +959,9 @@ group-targeted New session remains immediate.
 
 Panes share outbox recovery for the same conversation. Activity in another
 conversation does not restart that recovery; reconnecting checks every saved outbox.
+In **Inbox → System**, an outbox item shows the conversation title when
+available or **Conversation** otherwise. Select **Review** to open that
+conversation without sending or discarding the message.
 Messages refused while an agent prepares after a Gateway restart stay queued and
 retry automatically, including after the five-minute request deadline. Retries
 keep the original conversation and message identity. Remove the queued message

@@ -138,7 +138,7 @@ suite.define(() => {
       const proofDir = proofRoot
         ? createControlUiE2eArtifactDir("adopted-session-menu", proofRoot)
         : undefined;
-      const adopted = session("adopted-thread", "Adopted native session", {
+      const adopted = session("adopted-thread", "Stale provider title", {
         status: "stored",
         sessionKey: adoptedKey,
         canOpenTerminal: true,
@@ -150,7 +150,12 @@ suite.define(() => {
           terminalEnabled: true,
           sessions: [
             { key: "agent:main:main", kind: "direct", label: "Main session", updatedAt: 2 },
-            { key: adoptedKey, kind: "direct", label: "Adopted native session", updatedAt: 1 },
+            {
+              key: adoptedKey,
+              kind: "direct",
+              derivedTitle: "Adopted native session",
+              updatedAt: 1,
+            },
           ],
           featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
         });
@@ -158,6 +163,9 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         const row = page.locator(`[data-session-key="${adoptedKey}"]`);
         await row.waitFor({ state: "visible" });
+        expect(await row.locator(".sidebar-recent-session__name").textContent()).toBe(
+          "Adopted native session",
+        );
         const menuTrigger = row.locator(".sidebar-recent-session__link");
         const nativeMenu = () => page.locator("openclaw-session-menu");
         const menuValues = async () =>
@@ -192,6 +200,9 @@ suite.define(() => {
 
         const touchMenu = row.locator("[data-sidebar-session-menu]");
         if (hasTouch) {
+          expect(await touchMenu.getAttribute("aria-label")).toBe(
+            "Open session menu: Adopted native session",
+          );
           await touchMenu.tap();
           await assertNativeMenu("touch");
         } else {
