@@ -168,6 +168,10 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private static let dataChannelLabel = "oai-events"
     private static let toolCallTimeoutSeconds = 12
     private static let toolResultTimeoutSeconds = 45
+    static let userStoppedConsultToolResult = [
+        "status": "cancelled_by_user",
+        "message": "The user stopped this task. Do not retry unless the user asks again.",
+    ]
     private static let agentWaitSliceSeconds = 3
     private static let agentWaitRequestGraceSeconds = 15
     private static let historyFallbackTimeoutSeconds = 5
@@ -679,6 +683,10 @@ final class TalkRealtimeWebRTCSession: NSObject {
                 await Self.abortChatRun(gateway: self.gateway, run: run).value
             }
             if Task.isCancelled || self.stopped {
+                return
+            }
+            if (error as NSError).code == 15 {
+                self.submitToolResult(callId: callId, result: Self.userStoppedConsultToolResult)
                 return
             }
             let confirmationInstruction = Self.voiceConfirmationInstruction(from: error)

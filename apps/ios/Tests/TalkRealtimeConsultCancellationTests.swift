@@ -6,6 +6,13 @@ import XCTest
 
 @MainActor
 final class TalkRealtimeConsultCancellationTests: XCTestCase {
+    func testAbortedConsultUsesExplicitUserStopResult() {
+        XCTAssertEqual(TalkRealtimeWebRTCSession.userStoppedConsultToolResult, [
+            "status": "cancelled_by_user",
+            "message": "The user stopped this task. Do not retry unless the user asks again.",
+        ])
+    }
+
     func testHistoryFallbackWaitsForTheAcknowledgedRunInsteadOfANewerForeignReply() async throws {
         let completed = XCTestExpectation(description: "consult returned to listening")
         let requests = ConsultRequestCapture()
