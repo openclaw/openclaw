@@ -55,6 +55,17 @@ command or opening a confirmation card. If a card omits the type and Feishu cann
 resolve it, OpenClaw sends a refusal to the same chat. Click again after lookup
 recovers; unresolved chats do not use DM policy.
 
+### Group history context
+
+`channels.feishu.historyLimit` bounds the automatic group-history context included
+with a reply. Set `channels.feishu.accounts.<accountId>.historyLimit` to override
+it for one account. If neither is set, OpenClaw uses
+`messages.groupChat.historyLimit`, then a default of 50 messages.
+
+The automatic window is capped at 200 messages. The JSON integer maximum
+(`9007199254740991`) selects the 50-message default. Set `0` to disable this extra
+context; it does not erase the session transcript.
+
 ### Mentions in bot-started threads
 
 Set `requireMentionInBotThreads: false` to accept messages without an @mention in
