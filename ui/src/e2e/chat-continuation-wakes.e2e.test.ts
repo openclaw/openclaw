@@ -162,6 +162,63 @@ function history() {
 }
 
 suite.define(() => {
+  it("uses the shared chat mark for a visible child and the bot for a subagent", async () => {
+    const chat = "agent:main:dashboard:release-notes";
+    const worker = "agent:main:subagent:link-check";
+    await suite.withPage(
+      { viewport: { width: 1100, height: 750 }, colorScheme: "dark" },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          sessionKey,
+          historyMessages: [
+            { role: "user", content: "Check the links in the release notes.", timestamp: now },
+            {
+              role: "assistant",
+              content: "The conversation is [Release notes](/chat/main/dashboard/release-notes).",
+              timestamp: now + 1000,
+            },
+            {
+              role: "assistant",
+              phase: "commentary",
+              display: true,
+              timestamp: now + 2000,
+              content: [{ type: "subagent_completion" }],
+              subagentCompletions: [
+                { sessionKey: chat, runId: "notes", label: "Release notes" },
+                { sessionKey: worker, runId: "links", label: "Link check" },
+              ],
+            },
+          ],
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const thread = page.locator(".chat-thread");
+        const row = thread.locator(".chat-tool-msg-collapse--completion");
+        const child = row.getByRole("button", { name: "Release notes", exact: true });
+        const subagent = row.getByRole("button", { name: "Link check", exact: true });
+        await child.waitFor();
+        const link = thread.locator("a.markdown-session-link");
+        const sharedMark = await link.evaluate((el) => getComputedStyle(el, "::before").maskImage);
+        if (process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR) {
+          await thread.screenshot({
+            path: path.join(suite.artifactDir, "child-session-icons.png"),
+          });
+        }
+        expect(sharedMark).not.toBe("none");
+        expect(await subagent.locator(".chat-subagent-avatar svg").count()).toBe(1);
+        expect(await child.locator(".chat-subagent-avatar").count()).toBe(0);
+        expect(
+          await child
+            .locator(".chat-session-link-mark")
+            .evaluate((el) => getComputedStyle(el).maskImage),
+        ).toBe(sharedMark);
+        await child.click();
+        await expect
+          .poll(() => new URL(page.url()).pathname)
+          .toBe("/chat/main/dashboard/release-notes");
+      },
+    );
+  });
+
   it("keeps self-woken work in the block of the prompt that started it", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 1400 } }, async ({ page }) => {
       await page.clock.setFixedTime(now + 20 * minute);
