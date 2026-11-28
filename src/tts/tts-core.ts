@@ -195,6 +195,7 @@ export async function summarizeText(
     const { selection } = resolveSummaryModelSelection(cfg, config);
     const prepared = await deps.prepareSimpleCompletionModel({
       cfg,
+      ...(agentId ? { agentId } : {}),
       provider: selection.provider,
       modelId: selection.modelId,
     });
