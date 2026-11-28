@@ -8,6 +8,7 @@ import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import { assignProviderModelOrder } from "./model-catalog-order.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import { loadManifestModelCatalog } from "./model-catalog.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
@@ -23,6 +24,7 @@ type ConfiguredRuntimeFactsInput = {
   workspaceFacts: {
     pluginMetadataSnapshot: PluginMetadataSnapshot;
   };
+  capabilityModels?: readonly ModelCatalogEntry[];
   templateModelRegistry: ModelRegistry;
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
 };
@@ -134,6 +136,7 @@ function prepareRuntimeFacts(
       // Typed-only rows have no conversational registry Model. Carry their canonical
       // manifest facts into the same prepared generation instead of inventing chat defaults.
       ...manifestCatalog.filter((entry) => entry.inference?.chat === false),
+      ...(params.capabilityModels ?? []),
       ...capturedEntries,
     ],
     keyOf,

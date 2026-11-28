@@ -63,9 +63,12 @@ export const DecisionRouteCapabilitiesSchema = DecisionAnswerCapabilitiesSchema.
       questionTypes: questionTypes.optional(),
     })
     .optional(),
+  /** Observed output usage contract; never synthesizes missing usage or a tariff. */
+  outputTokensPerQuestion: positiveInteger.optional(),
   limits: z
     .object({
       maxQuestions: positiveInteger.optional(),
+      maxTotalOptions: positiveInteger.optional(),
       maxRequestTokens: positiveInteger.optional(),
       maxStateAndQuestionTokens: positiveInteger.optional(),
       maxInputTokens: positiveInteger.optional(),

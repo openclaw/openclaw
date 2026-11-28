@@ -7,6 +7,7 @@ import { resolveEmbeddedRuntimeModelPolicy } from "./embedded-agent-runner/run/s
 import { modelDefinition } from "./model-auth.fixtures.test-support.js";
 import { providerConfig } from "./model-catalog-fixtures.test-support.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { createPreparedModelCatalogProjection } from "./prepared-model-runtime.catalog-projection.js";
 import { prepareModelCatalogPublication } from "./prepared-model-runtime.catalog-publication.js";
 import { prepareCapturedRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
 import {
@@ -159,6 +160,93 @@ describe("configured catalog authority", () => {
       }
     },
   );
+  it("withdraws captured account decisions on empty discovery while keeping manifest declarations", () => {
+    const inference = {
+      chat: false,
+      decision: { protocol: "fixture", input: ["text" as const] },
+    };
+    const metadata = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "fixture",
+          providers: ["fixture"],
+          modelCatalog: {
+            providers: {
+              fixture: {
+                baseUrl: "https://catalog.fixture.invalid/v1",
+                models: [{ id: "declared", name: "Declared", inference }],
+              },
+            },
+          },
+        },
+      ],
+    });
+    const config: OpenClawConfig = {};
+    const authStorage = AuthStorage.inMemory({});
+    const registry = ModelRegistry.create(authStorage, "captured:typed-refresh", {
+      config,
+      includePluginCatalogs: false,
+      pluginMetadataSnapshot: metadata,
+    });
+    const observed: ModelCatalogEntry = {
+      provider: "fixture",
+      id: "account-decision",
+      name: "Account decision",
+      inference,
+      baseUrl: "https://catalog.fixture.invalid/v1",
+    };
+    const facts = prepareCapturedRuntimeFacts({
+      agentFacts: { input: { config }, configuredModelRefs: [] },
+      workspaceFacts: { pluginMetadataSnapshot: metadata },
+      templateModelRegistry: registry,
+      configuredRuntimeModels: [],
+      capabilityModels: [observed],
+    });
+    const project = createPreparedModelCatalogProjection({
+      agentFacts: {
+        input: { config, agentId: "default", agentDir: "captured:typed-refresh" },
+        env: {},
+        authStore: { version: 1, profiles: {} },
+        templateAuthStorage: authStorage,
+        credentials: {},
+        providerIds: ["fixture"],
+        configuredModelRefs: [],
+        configuredRuntimeModels: [],
+        runtimeCapabilityModels: [],
+        configuredGeneratedCatalogPluginIds: [],
+      },
+      catalogFacts: facts,
+      normalizeProvider: (provider) => provider,
+      pluginGeneration: {
+        remoteCatalog: null,
+        pluginMetadataSnapshot: metadata,
+        inlineProviderModels: [],
+        configuredCatalogEntries: [],
+      },
+    });
+    const empty = {
+      entries: [],
+      routeVariants: [],
+      providerOutcomes: [{ provider: "fixture", status: "ready" as const }],
+    };
+    const pending = project({ catalog: empty, providers: new Map() });
+    expect(pending.entries.map(({ id }) => id).toSorted()).toEqual([
+      "account-decision",
+      "declared",
+    ]);
+    const current = project({
+      catalog: empty,
+      providers: new Map([
+        ["fixture", { source: "fixture-source", credentials: "fixture-account" }],
+      ]),
+    });
+    for (const rows of [current.entries, current.routeVariants]) {
+      expect(rows.map(({ id }) => id)).toEqual(["declared"]);
+      expect(rows[0]?.inference).toEqual(inference);
+    }
+    expect(facts.modelCatalog.entries).toContainEqual(observed);
+    expect(registry.getAll().some(({ id }) => id === observed.id)).toBe(false);
+  });
   const fallback = {
     provider: "fixture",
     id: "new-model",

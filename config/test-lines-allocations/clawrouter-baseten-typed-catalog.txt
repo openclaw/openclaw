@@ -1,0 +1,2 @@
+# Credential-scoped Decision publication, rotation invalidation, static/live handoff and registered native/manifest denials.
+288

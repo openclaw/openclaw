@@ -40,6 +40,8 @@ export type BuildPreparedModelCatalogParams = {
   providerIds?: readonly string[];
   metadataSnapshot: PluginMetadataSnapshot;
   providerOutcomes?: ModelCatalogSnapshot["providerOutcomes"];
+  /** Typed rows from the existing credential-bound plugin catalog publication. */
+  capabilityModels?: readonly ModelCatalogEntry[];
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 };
@@ -362,6 +364,43 @@ export async function buildPreparedModelCatalogSnapshot(
       baseUrl,
     });
     models.push(model);
+  }
+  // Typed account observations belong to this acquisition, not the Chat registry.
+  // Include their identities before augmentation applies its account visibility fence.
+  const capabilityModels =
+    cfg.models?.mode === "replace"
+      ? []
+      : [
+          ...(params.capabilityModels ?? []),
+          ...(params.providerOutcomes ?? []).flatMap((outcome) =>
+            outcome.status === "ready"
+              ? (outcome.capabilityModels ?? []).filter(
+                  (entry) =>
+                    normalizeProvider(entry.provider) === normalizeProvider(outcome.provider),
+                )
+              : [],
+          ),
+        ];
+  for (const entry of capabilityModels) {
+    const provider = normalizeProvider(entry.provider);
+    const owners = manifestMetadataSnapshot.owners;
+    const pluginIds = owners.modelCatalogProviders.get(provider) ?? owners.providers.get(provider);
+    const plugin =
+      pluginIds?.length === 1 ? manifestMetadataSnapshot.byPluginId.get(pluginIds[0]!) : undefined;
+    if (
+      !plugin ||
+      entry.inference?.chat !== false ||
+      !entry.inference.decision ||
+      !isProviderCatalogSourceAllowed({
+        provider,
+        config: cfg,
+        plugin,
+        sourceBaseUrl: entry.baseUrl,
+      })
+    ) {
+      continue;
+    }
+    mergeCatalogEntries(models, [{ ...entry, provider, id: normalizeModelId(provider, entry.id) }]);
   }
   // Gateway startup may publish registry rows without runtime augmentation.
   // Rank them here so both static startup and later live enrichment preserve

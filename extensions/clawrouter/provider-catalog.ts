@@ -3,6 +3,7 @@ import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   getCachedLiveProviderModelRows,
   loadBundledModelIdentityFactsResolver,
+  type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   MISTRAL_MODEL_TRANSPORT_PATCH,
@@ -579,6 +580,7 @@ export async function buildClawRouterProviderConfig(params: {
   baseUrl?: string;
   requestedModelId?: string;
   requestedModelApi?: ProviderRuntimeModel["api"];
+  fetchGuard?: LiveModelCatalogFetchGuard;
 }): Promise<ModelProviderConfig & { api: "openai-responses"; baseUrl: string }> {
   const rootUrl = normalizeClawRouterRootUrl(params.baseUrl);
   const rows = await getCachedLiveProviderModelRows({
@@ -587,6 +589,7 @@ export async function buildClawRouterProviderConfig(params: {
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
     readRows: (body) => readCatalogRows(body, `${rootUrl}/v1`),
+    fetchGuard: params.fetchGuard,
     ttlMs: CATALOG_CACHE_TTL_MS,
     auditContext: "clawrouter-model-discovery",
   });

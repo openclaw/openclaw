@@ -20,6 +20,7 @@ import {
   prepareImplicitProviderStaticCatalog,
   resolveImplicitProviders,
 } from "./models-config.providers.implicit.js";
+import { readPersistedPluginCapabilityModels } from "./plugin-model-catalog-capabilities.js";
 
 const { discoverProviders } = vi.hoisted(() => ({ discoverProviders: vi.fn() }));
 vi.mock("../plugins/provider-discovery.js", async (importOriginal) => ({
@@ -29,6 +30,7 @@ vi.mock("../plugins/provider-discovery.js", async (importOriginal) => ({
 
 import { planOpenClawModelsJsonSourceWithInput as planSource } from "./models-config.core.js";
 import { ensureOpenClawModelsJson as ensureModels } from "./models-config.js";
+import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
 import {
   loadPersistedPluginModelCatalogsReadOnly,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
@@ -352,4 +354,71 @@ it("keeps a recovered CLI backend catalog with its plugin when discovery skips i
   const generated = planned.pluginCatalogs.find(({ pluginId }) => pluginId === "catalog-owner");
   assert(generated, "The plan must keep the plugin catalog");
   expect(Object.keys(JSON.parse(generated.contents).providers)).toContain("fixture-cli");
+});
+
+it("publishes credential-bound typed discovery and clears empty or failed observations", async () => {
+  const typed = {
+    provider: "fixture",
+    id: "decision",
+    name: "Decision",
+    baseUrl: native.baseUrl,
+    inference: {
+      chat: false as const,
+      decision: { protocol: "baseten-systemone" as const, input: ["text" as const] },
+    },
+  };
+  let status: "ready" | "unavailable" | "auth-rejected" = "ready";
+  let models = [typed];
+  const config = {
+    models: { providers: { fixture: { ...native, apiKey: "synthetic-selected" } } },
+  };
+  const catalogPlugin: ProviderPlugin = {
+    id: "fixture",
+    pluginId: "catalog-owner",
+    label: "Fixture",
+    auth: [],
+    catalog: {
+      order: "simple",
+      run: async (ctx) => {
+        ctx.resolveProviderAuth();
+        return {
+          provider: native,
+          outcomes: [{ provider: "fixture", status, capabilityModels: models }],
+        };
+      },
+    },
+  };
+  discoverProviders.mockResolvedValue([catalogPlugin]);
+  const read = () =>
+    readPersistedPluginCapabilityModels({
+      catalogs: loadPersistedPluginModelCatalogsReadOnly(agentDir),
+      config,
+      pluginMetadataSnapshot: metadata,
+      resolveProviderAuth: createProviderAuthResolver(
+        state.env,
+        { version: 1, profiles: {} },
+        config,
+      ),
+    });
+  const refresh = () =>
+    ensureModels(config, agentDir, { ...context(), onProviderCatalogOutcome: () => {} });
+  await refresh();
+  expect(read()).toEqual([typed]);
+  for (const failure of ["unavailable", "auth-rejected", "empty"] as const) {
+    status = "ready";
+    models = [typed];
+    await refresh();
+    expect(read()).toEqual([typed]);
+    status = failure === "empty" ? "ready" : failure;
+    models = failure === "empty" ? [] : [typed];
+    await refresh();
+    expect(read()).toEqual([]);
+    const persisted = loadPersistedPluginModelCatalogsReadOnly(agentDir);
+    expect(persisted).toHaveLength(1);
+    expect(
+      JSON.parse(persisted[0]!.contents).providers.fixture.models.map(
+        ({ id }: { id: string }) => id,
+      ),
+    ).toEqual(["native-model"]);
+  }
 });

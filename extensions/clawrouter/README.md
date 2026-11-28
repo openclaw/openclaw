@@ -194,3 +194,11 @@ provider, model, origin, session and authentication-profile boundary. Grok CLI
 OAuth identity headers are not applied to the router endpoint. Worker-side
 upstream credential affinity and end-to-end replay remain separate requirements;
 the client does not advertise an unlanded Responses route.
+
+## Baseten typed decisions
+
+Live credential-scoped catalog discovery publishes validated Baseten DecisionV2
+identities separately from conversational models. Undeclared Chat APIs, prices,
+context windows and output limits remain unknown. Static model support does not
+grant access; each decision refreshes the selected key's eligible offer before
+sending the native or manifest request.

@@ -1,5 +1,7 @@
 import path from "node:path";
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   withCanonicalAuthProfileCredentialObserver,
@@ -128,4 +130,21 @@ export async function capturePluginModelCatalogAuth(
     });
   }
   return snapshot;
+}
+
+/** Private discovery binding; no raw credential enters generated catalog metadata. */
+export function fingerprintPluginCatalogCredential(auth: {
+  discoveryApiKey?: string;
+  mode?: string;
+  profileId?: string;
+}): string | undefined {
+  return auth.discoveryApiKey
+    ? sha256Base64Url(
+        stableStringify({
+          credential: auth.discoveryApiKey,
+          mode: auth.mode,
+          profileId: auth.profileId,
+        }),
+      )
+    : undefined;
 }

@@ -1705,6 +1705,10 @@
       "types": "./dist/plugin-sdk/decisions-http-runtime.d.ts",
       "default": "./dist/plugin-sdk/decisions-http-runtime.js"
     },
+    "./plugin-sdk/decisions-unary-runtime": {
+      "types": "./dist/plugin-sdk/decisions-unary-runtime.d.ts",
+      "default": "./dist/plugin-sdk/decisions-unary-runtime.js"
+    },
     "./plugin-sdk/secret-ref-readonly": {
       "types": "./dist/plugin-sdk/secret-ref-readonly.d.ts",
       "default": "./dist/plugin-sdk/secret-ref-readonly.js"

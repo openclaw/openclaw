@@ -39,13 +39,22 @@ export function createPreparedModelCatalogProjection(params: {
     let sourceCatalog = catalog;
     if (acquiredProviders) {
       // Retained siblings cannot hide captured rows before this provider is acquired.
-      // Successful empty discovery still owns its chat inventory. Typed-only rows come
-      // from the manifest, never from chat discovery, so acquisition cannot replace them.
+      // Acquisition owns account observations, including typed-only rows. Only actual
+      // manifest declarations survive independently of a successful empty discovery.
+      const keyOf = createModelCatalogIdentityKeyResolver();
+      const declaredKeys = new Set(
+        loadManifestModelCatalog({
+          config: params.agentFacts.input.config,
+          metadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
+        })
+          .filter((entry) => entry.inference?.chat === false)
+          .map(keyOf),
+      );
       const unacquired = (entries: typeof catalog.entries) =>
         entries.filter(
           (entry) =>
             !entry.nativeRuntime &&
-            (entry.inference?.chat === false ||
+            ((entry.inference?.chat === false && declaredKeys.has(keyOf(entry))) ||
               !acquiredProviders.has(params.normalizeProvider(entry.provider))),
         );
       sourceCatalog = {

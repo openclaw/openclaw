@@ -178,10 +178,28 @@ export function readClawRouterCapabilityOffers(
   return result;
 }
 
+export type ClawRouterCatalogObservation = {
+  url: string;
+  requestHeaders: Headers;
+  response: Response;
+};
+
+function variesByClawRouterClient(response: Response): boolean {
+  const fields =
+    response.headers
+      .get("vary")
+      ?.toLowerCase()
+      .split(",")
+      .map((name) => name.trim()) ?? [];
+  return fields.includes("*") || fields.includes("x-clawrouter-client");
+}
+
 export async function fetchClawRouterCapabilityOffers(params: {
   context: ReturnType<typeof resolveClawRouterCapabilityHttpContext>;
   timeoutMs: () => number;
   signal?: AbortSignal;
+  beforeRequest?: () => void;
+  onDirectCatalog?: (observation: ClawRouterCatalogObservation) => void;
   ssrfPolicy?: SsrFPolicy;
   /** Require a recent proxy-key observation for consumers without model-scoped grants. */
   requireFreshProxyCatalog?: boolean;
@@ -209,18 +227,38 @@ export async function fetchClawRouterCapabilityOffers(params: {
       ),
       dispatcherPolicy: context.dispatcherPolicy,
       auditContext: "clawrouter.capability-catalog",
+      beforeRequest: params.beforeRequest,
     },
   );
+  let ordinaryPage: Response | undefined;
   try {
     if (!response.ok) {
       throw new Error(
         `ClawRouter capability catalog failed (HTTP ${response.status}). Check the ClawRouter key, grants and budget.`,
       );
     }
+    if (
+      params.onDirectCatalog &&
+      finalUrl === catalogUrl &&
+      !context.dispatcherPolicy &&
+      !variesByClawRouterClient(response)
+    ) {
+      ordinaryPage = response.clone();
+    }
     const body = await readProviderJsonResponse(response, "clawrouter.capability-catalog", {
       maxBytes: 1024 * 1024,
       timeoutMs: remaining,
     });
+    if (ordinaryPage && params.onDirectCatalog) {
+      remaining();
+      params.signal?.throwIfAborted();
+      params.onDirectCatalog({
+        url: finalUrl,
+        requestHeaders: context.headers,
+        response: ordinaryPage,
+      });
+      ordinaryPage = undefined;
+    }
     if (params.requireFreshProxyCatalog) {
       if (finalUrl !== catalogUrl) {
         throw new Error(
@@ -247,6 +285,7 @@ export async function fetchClawRouterCapabilityOffers(params: {
     params.signal?.throwIfAborted();
     return readClawRouterCapabilityOffers(body, context.baseUrl);
   } finally {
+    void ordinaryPage?.body?.cancel().catch(() => undefined);
     void response.body?.cancel().catch(() => undefined);
     await release();
   }

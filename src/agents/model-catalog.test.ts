@@ -998,3 +998,65 @@ describe("catalog declaration planning", () => {
     });
   });
 });
+
+it("publishes typed account observations before augmentation without Chat defaults or new grants", async () => {
+  const inference: NonNullable<ModelCatalogEntry["inference"]> = {
+    chat: false,
+    decision: { protocol: "baseten-systemone", input: ["text"] },
+  };
+  const typed = row("custom", "decision", { baseUrl: "https://catalog.example/v1", inference });
+  const metadata = createManifestSnapshot("custom", {
+    providers: { custom: { baseUrl: typed.baseUrl, models: [] } },
+    discovery: { custom: "runtime" },
+    configuredEndpointDiscovery: ["custom"],
+  });
+  const config = providerConfig("custom", { baseUrl: typed.baseUrl!, models: [] });
+  mocks.augmentModelCatalogWithProviderPlugins.mockImplementationOnce(async ({ context }) => {
+    expect(context.entries).toContainEqual(typed);
+    return [
+      { ...typed, family: "decision-family" },
+      { ...typed, id: "undiscovered" },
+    ];
+  });
+  const snapshot = await build({
+    config,
+    metadataSnapshot: metadata,
+    readOnly: false,
+    entries: [
+      row("custom", "chat", {
+        api: "openai-completions",
+        baseUrl: typed.baseUrl,
+        contextWindow: 8192,
+      }),
+    ],
+    providerOutcomes: [
+      { provider: "custom", profileId: "selected", status: "ready", capabilityModels: [typed] },
+    ],
+  });
+  expect(snapshot.entries.map(({ id }) => id).toSorted()).toEqual(["chat", "decision"]);
+  const decision = snapshot.entries.find(({ id }) => id === "decision");
+  expect(decision).toMatchObject({ ...typed, family: "decision-family" });
+  expect(decision?.api).toBeUndefined();
+  expect(decision?.contextWindow).toBeUndefined();
+  expect(decision).not.toHaveProperty("cost");
+  expect(snapshot.entries.find(({ id }) => id === "chat")).toMatchObject({
+    api: "openai-completions",
+    contextWindow: 8192,
+  });
+  for (const [status, capabilityModels] of [
+    ["unavailable", [typed]],
+    ["auth-rejected", [typed]],
+    ["ready", []],
+    ["ready", [{ ...typed, provider: "foreign" }]],
+    ["ready", [{ ...typed, baseUrl: "https://foreign.example/v1" }]],
+    ["ready", [{ ...typed, inference: { chat: true } }]],
+  ] as const) {
+    const rejected = await build({
+      config,
+      metadataSnapshot: metadata,
+      providerOutcomes: [{ provider: "custom", status, capabilityModels }],
+    });
+    expect(rejected.entries).toEqual([]);
+    expect(rejected.routeVariants).toEqual([]);
+  }
+});

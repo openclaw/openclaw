@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import { buildCatalogModel as makeModel } from "../plugin-sdk/provider-catalog.test-support.js";
 import type { ProviderCatalogOutcome } from "./provider-catalog.types.js";
@@ -176,6 +177,56 @@ describe("runProviderCatalog", () => {
       expect(outcomes).toEqual(expected);
     },
   );
+});
+
+it("carries only ready typed rows in their provider/profile scope without sharing inference", async () => {
+  const inference = {
+    chat: false,
+    decision: { protocol: "baseten-systemone", input: ["text"] },
+  } satisfies NonNullable<ModelCatalogEntry["inference"]>;
+  const typed = {
+    provider: "openai",
+    id: "decision",
+    name: "Decision",
+    baseUrl: "https://catalog.example/v1",
+    inference,
+  };
+  const outcomes: ProviderCatalogOutcome[] = [];
+  await runCatalog(
+    catalogProvider(async () => ({
+      providers: {},
+      outcomes: [
+        {
+          provider: "openai",
+          profileId: "selected",
+          status: "ready",
+          capabilityModels: [
+            typed,
+            { ...typed, provider: "foreign" },
+            { ...typed, id: "chat", inference: { chat: true } },
+          ],
+        },
+        {
+          provider: "openai",
+          profileId: "failed",
+          status: "unavailable",
+          capabilityModels: [typed],
+        },
+        {
+          provider: "foreign",
+          status: "ready",
+          capabilityModels: [{ ...typed, provider: "foreign" }],
+        },
+      ],
+    })),
+    { providerIds: ["openai"], reportCatalogOutcome: (outcome) => outcomes.push(outcome) },
+  );
+  expect(outcomes).toEqual([
+    { provider: "openai", profileId: "selected", status: "ready", capabilityModels: [typed] },
+    { provider: "openai", profileId: "failed", status: "unavailable" },
+  ]);
+  expect(outcomes[0]?.capabilityModels?.[0]?.inference).not.toBe(inference);
+  expect(outcomes[0]?.capabilityModels?.[0]?.inference?.decision).not.toBe(inference.decision);
 });
 
 describe("normalizePluginDiscoveryResult", () => {

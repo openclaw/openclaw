@@ -3,10 +3,14 @@
  * this module to merge implicit provider discovery, explicit config, and
  * preserved secrets before touching models.json.
  */
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  normalizeProviderId,
+  findNormalizedProviderValue,
+} from "@openclaw/model-catalog-core/provider-id";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
@@ -19,6 +23,7 @@ import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { isRecord } from "../utils.js";
 import { ensureAuthProfileStoreAsync } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import {
   buildSourceModelFields,
   findUnwritableProviderReason,
@@ -211,7 +216,10 @@ export type PreparedModelsConfigContext = Readonly<{
   providerDiscoveryProviderIds?: readonly string[];
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
-  onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
+  onProviderCatalogOutcome?: (
+    outcome: ProviderCatalogOutcome,
+    credentialFingerprint?: string,
+  ) => void;
 }>;
 
 /**
@@ -330,8 +338,39 @@ export async function planOpenClawModelsJson(params: {
   const { context } = params;
   const { cfg, agentDir, env } = context;
   const discoveredProviderPluginIds = new Map<string, string>();
+  const capabilityModels = new Map<
+    string,
+    {
+      provider: string;
+      profileId?: string;
+      credentialFingerprint: string;
+      configuredBaseUrl?: string;
+      models: readonly ModelCatalogEntry[];
+    }
+  >();
   const providers = await resolveProvidersForModelsJson({
-    context,
+    context: {
+      ...context,
+      onProviderCatalogOutcome: (outcome, credentialFingerprint) => {
+        const provider = normalizeProviderId(outcome.provider);
+        capabilityModels.delete(provider);
+        if (
+          outcome.status === "ready" &&
+          credentialFingerprint &&
+          outcome.capabilityModels?.length
+        ) {
+          capabilityModels.set(provider, {
+            provider,
+            ...(outcome.profileId ? { profileId: outcome.profileId } : {}),
+            credentialFingerprint,
+            configuredBaseUrl: findNormalizedProviderValue(cfg.models?.providers, provider)
+              ?.baseUrl,
+            models: outcome.capabilityModels,
+          });
+        }
+        context.onProviderCatalogOutcome?.(outcome, credentialFingerprint);
+      },
+    },
     ...(params.authStore ? { authStore: params.authStore } : {}),
     discoveredProviderPluginIds,
   });
@@ -451,10 +490,32 @@ export async function planOpenClawModelsJson(params: {
     pluginCatalog[providerId] = provider;
   }
   const pluginCatalogWrites = Object.fromEntries(
-    Object.entries(pluginProviders).map(([pluginId, catalogProviders]) => [
-      encodePluginModelCatalogRelativePath(pluginId),
-      `${JSON.stringify({ generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY, providers: catalogProviders }, null, 2)}\n`,
-    ]),
+    Object.entries(pluginProviders).map(([pluginId, catalogProviders]) => {
+      const typed = Object.keys(catalogProviders).flatMap((provider) =>
+        capabilityModels.has(provider) ? [capabilityModels.get(provider)!] : [],
+      );
+      return [
+        encodePluginModelCatalogRelativePath(pluginId),
+        `${JSON.stringify(
+          {
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: catalogProviders,
+            ...(typed.length > 0 && context.pluginMetadataSnapshot
+              ? {
+                  capabilityModelObservations: {
+                    sourceFingerprint: resolveInstalledManifestRegistryIndexFingerprint(
+                      context.pluginMetadataSnapshot.index,
+                    ),
+                    accounts: typed,
+                  },
+                }
+              : {}),
+          },
+          null,
+          2,
+        )}\n`,
+      ];
+    }),
   );
   // Root models.json is author-owned even when a plugin also owns that provider id.
   const rootProviders = resolveProvidersForMode({
