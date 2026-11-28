@@ -1,0 +1,5 @@
+# M11 schema, finality, protected edits, revocation races, real-composer review and browser journey.
+# Separate boundaries; conformance/provider/browser fixtures are explicitly scoped, no live claims.
+# ClawSweeper P2 adds actual five-second relay regression and realtime/file real-Gateway journeys.
+# Rendered deadline proof also covers pointer access and full-width empty mobile review.
+2488

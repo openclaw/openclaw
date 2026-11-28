@@ -30,7 +30,12 @@ afterEach(() => {
 });
 // A 58x20 host fits fifteen 2px bars on a 4px pitch.
 const BARS = 15;
-function mount(status: "listening" | "thinking" = "listening", level = 0, noContext = false) {
+async function mount(
+  status: "listening" | "thinking" = "listening",
+  level = 0,
+  noContext = false,
+  beforePaint?: (meter: ReturnType<typeof createMicrophoneMeter>) => void,
+) {
   let now = 0;
   vi.spyOn(performance, "now").mockImplementation(() => now);
   const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
@@ -78,6 +83,8 @@ function mount(status: "listening" | "thinking" = "listening", level = 0, noCont
     },
   });
   meter.setLevel(level);
+  beforePaint?.(meter);
+  await vi.dynamicImportSettled();
   observation.resize?.();
   return {
     clock,
@@ -118,8 +125,8 @@ function mount(status: "listening" | "thinking" = "listening", level = 0, noCont
 // Dots are as tall as the bars are wide; speech fills the 20px host minus 2px.
 const barHeight = (level: number) => 2 + 16 * level ** 1.8;
 
-it("leaves the CSS dots untouched when the canvas context is unavailable", () => {
-  const view = mount("thinking", 0.8, true);
+it("leaves the CSS dots untouched when the canvas context is unavailable", async () => {
+  const view = await mount("thinking", 0.8, true);
   try {
     view.meter.setLevel(0.2);
     view.advance(100);
@@ -132,8 +139,8 @@ it("leaves the CSS dots untouched when the canvas context is unavailable", () =>
   }
 });
 
-it("slides speech in from the right and settles back to still dots", () => {
-  const view = mount("listening", 0.6);
+it("slides speech in from the right and settles back to still dots", async () => {
+  const view = await mount("listening", 0.6);
   try {
     view.advance(0);
     expect(view.canvas.hasAttribute("data-ready")).toBe(true);
@@ -155,8 +162,8 @@ it("slides speech in from the right and settles back to still dots", () => {
   }
 });
 
-it("fills the width it is given and keeps the newest speech when that width changes", () => {
-  const view = mount("listening", 0.6);
+it("fills the width it is given and keeps the newest speech when that width changes", async () => {
+  const view = await mount("listening", 0.6);
   try {
     view.advance(0);
     view.advance(60);
@@ -173,8 +180,8 @@ it("fills the width it is given and keeps the newest speech when that width chan
   }
 });
 
-it("slides speech in from the right after a pause instead of filling the strip", () => {
-  const view = mount("listening", 0);
+it("slides speech in from the right after a pause instead of filling the strip", async () => {
+  const view = await mount("listening", 0);
   try {
     view.advance(0);
     expect(view.clock.frames.size).toBe(0);
@@ -191,24 +198,29 @@ it("slides speech in from the right after a pause instead of filling the strip",
   }
 });
 
-it("keeps a short syllable that falls between timeline steps", () => {
-  const view = mount("listening", 0);
+it("keeps a short syllable that ends before the renderer loads", async () => {
+  const view = await mount("listening", 0, false, (meter) => {
+    meter.setLevel(0.9);
+    meter.setLevel(0);
+  });
   try {
     view.advance(0);
-    view.meter.setLevel(0.9);
-    view.meter.setLevel(0);
-    // The first frame restarts the step clock; the syllable then slides in from the right.
     view.advance(60);
     view.advance(120);
-    view.advance(180);
     expect(view.painted().get(56)).toBeCloseTo(barHeight(0.9));
   } finally {
     view.meter.dispose();
   }
 });
 
-it("caps active paints at 30Hz and cancels frames while hidden, motion-reduced, or disposed", () => {
-  const view = mount("thinking");
+it("does not attach a renderer to a meter retired during loading", async () => {
+  const view = await mount("thinking", 0, false, (meter) => meter.dispose());
+  expect(view.context.setTransform).not.toHaveBeenCalled();
+  expect(view.clock.frames.size).toBe(0);
+});
+
+it("caps active paints at 30Hz and cancels frames while hidden, motion-reduced, or disposed", async () => {
+  const view = await mount("thinking");
   view.advance(0);
   expect(view.roundRect).toHaveBeenCalledTimes(BARS);
   view.advance(16);
@@ -258,7 +270,7 @@ it("refreshes a settled meter for palette and display-density changes without a 
   vi.stubGlobal("matchMedia", matchMedia);
   vi.stubGlobal("devicePixelRatio", 1);
   const previousTheme = document.documentElement.getAttribute("data-theme");
-  const view = mount();
+  const view = await mount();
   try {
     view.advance(0);
     expect(view.clock.frames.size).toBe(0);

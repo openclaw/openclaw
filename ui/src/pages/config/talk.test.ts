@@ -21,6 +21,7 @@ import {
   nativeVoice,
   readVoiceOptions,
   realtimeModelPicker,
+  realtimeVoiceSelect,
   setTalkRealtimeConfig,
   type TalkMutationHarnessOptions,
 } from "./talk.test-support.tsx";
@@ -115,7 +116,7 @@ async function readyTalk(options: TalkMutationHarnessOptions = {}) {
 it("locks every curated picker while config is saving", async () => {
   const { page } = await readyTalk({ configSaving: true, speakerVoice: "marin" });
   expect(page.querySelector(".settings-segmented__input")?.hasAttribute("disabled")).toBe(true);
-  expect([...page.querySelectorAll("select")]).toMatchObject([{ disabled: true }]);
+  expect(realtimeVoiceSelect(page)?.disabled).toBe(true);
   expect(modelPicker(page)?.querySelector("button")?.disabled).toBe(true);
 });
 
@@ -160,9 +161,6 @@ it.each([
           : { id: "other", voices, activeVoices: ["active-only"], modelFamilySettings: undefined },
     });
     expect(readVoiceOptions(page)).toEqual(["", ...voices]);
-    expect(
-      [...page.querySelectorAll<HTMLOptionElement>("select option")].map((option) => option.value),
-    ).toEqual(["", ...voices]);
     if (kind === "provider") {
       expect(page.textContent).not.toContain(t("talkPage.gptLive.hint"));
     }

@@ -96,14 +96,18 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
       : undefined,
   };
   // Dictation admission invalidates edits and dismisses errors before the next input event.
-  onSettled(() =>
-    voice.dictation.subscribe(() => {
-      if (voice.dictation.locksComposer) {
+  onSettled(() => {
+    let locked = voice.dictation.locksComposer;
+    return voice.dictation.subscribe(() => {
+      const nextLocked = voice.dictation.locksComposer;
+      // Captions and review updates are not new editing intents.
+      if (nextLocked && !locked) {
         state.editRevision += 1;
         currentProps.onDismissRealtimeTalkError?.();
       }
-    }),
-  );
+      locked = nextLocked;
+    });
+  });
   const dictation = projectOwner(voice.dictation, (owner) => owner);
   const microphone = projectOwner(voice.picker, (owner) => owner);
   const readPredictionSource = () => {
@@ -158,8 +162,12 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
     );
   });
   createEffect(
-    () => ({ context: context(), predictions: readPredictionSource() }),
-    ({ context: current, predictions }, previous) => {
+    () => ({
+      context: context(),
+      predictions: readPredictionSource(),
+      draftSource: props.draftSource,
+    }),
+    ({ context: current, predictions, draftSource }, previous) => {
       state.mentionMenu.syncDirectory(current.mentionDirectory);
       if (current.clearSlashMenu) {
         state.slashMenu.reset();
@@ -183,6 +191,9 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
         // Submission reads live composer state; run it after this commit.
         queueMicrotask(current.flushQueuedSubmit);
       }
+      // Ordered owner mutations retire edit-then-undo results before a render can
+      // collapse the two changes back into the original draft value.
+      return draftSource?.subscribe(() => voice.dictation.invalidateRefinement());
     },
   );
   onSettled(() => {

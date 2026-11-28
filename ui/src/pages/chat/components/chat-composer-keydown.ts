@@ -63,6 +63,22 @@ export function createComposerKeyDownHandler({
     if (state.composerComposing || isComposingKeyboardEvent(event)) {
       return;
     }
+    if (state.dictation?.requiresReview && state.dictation.locksComposer) {
+      // Provisional captions belong to dictation, before menus, history, or deferred Send.
+      if (event.key === "Enter") {
+        event.preventDefault();
+      }
+      return;
+    }
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      (sendShortcut === "enter" || event.metaKey || event.ctrlKey) &&
+      state.dictation?.pendingReview
+    ) {
+      event.preventDefault();
+      return;
+    }
 
     if (state.emojiMenu.handleKeydown(event, props.paneId)) {
       return;
@@ -229,6 +245,7 @@ export function stopRunFromEscape({
     state.mentionMenu.open ||
     props.replyTarget ||
     state.dictation?.active ||
+    state.dictation?.pendingReview ||
     !showAbortableUi ||
     !props.onAbort
   ) {

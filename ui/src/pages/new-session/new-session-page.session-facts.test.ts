@@ -1,11 +1,15 @@
 /* @vitest-environment jsdom */
 import { createRouter } from "@openclaw/uirouter";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { createWebPushCapability } from "../../app/web-push.ts";
 import type { LobsterPetProps } from "../../components/lobster-pet-contract.ts";
+import { t } from "../../i18n/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -14,12 +18,26 @@ import {
   createGatewayBrowserClientFixture,
   createSessionContext,
 } from "../chat/chat-application-context.test-support.ts";
+import { ComposerDictationSession } from "../chat/composer-dictation-session.ts";
+import {
+  createClient,
+  dictationIo,
+  emit,
+  sessionResult,
+  setupDictationFixtures,
+  transcript,
+} from "../chat/composer-dictation.test-support.ts";
+import { ComposerDictationOwner } from "../chat/composer-dictation.ts";
+import { DirectDictationControl } from "../chat/composer-direct-dictation.ts";
 import "./new-session-page-entry.ts";
 import { createNewSessionRouteData as routeData } from "./location.test-support.ts";
 import { NewSessionPageOwner, type PageHost } from "./new-session-page-owner.ts";
 import * as targetControls from "./target-controls-view.tsx";
 
-async function mountSessionDraft(agents = [{ id: "main", name: "Assistant" }]) {
+async function mountSessionDraft(
+  agents = [{ id: "main", name: "Assistant" }],
+  dictationClient?: GatewayBrowserClient,
+) {
   vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) => {
     queueMicrotask(() => callback({ didTimeout: false, timeRemaining: () => 50 }));
     return 1;
@@ -51,7 +69,16 @@ async function mountSessionDraft(agents = [{ id: "main", name: "Assistant" }]) {
   const defaults = createDeferred<{ defaults: Array<{ name: string }> }>();
   let described: GatewaySessionRow = { ...pin, rowMode: undefined, thinkingLevel: "high" };
   const client = createGatewayBrowserClientFixture({
-    request: (method) => {
+    ...(dictationClient
+      ? { addEventListener: dictationClient.addEventListener.bind(dictationClient) }
+      : {}),
+    request: (method, params, options) => {
+      if (
+        dictationClient &&
+        (method.startsWith("talk.") || method === "sessions.create" || method === "chat.send")
+      ) {
+        return dictationClient.request(method, params, options);
+      }
       if (method === "sessions.list") {
         return result;
       }
@@ -72,7 +99,16 @@ async function mountSessionDraft(agents = [{ id: "main", name: "Assistant" }]) {
           defaultId: "main",
           mainKey: "main",
           scope: "per-sender",
-          agents,
+          // Dictation tests submit, so they need a placement policy and a model to send with.
+          ...(dictationClient
+            ? {
+                agents: agents.map((agent) => ({
+                  ...agent,
+                  model: { primary: "openai/initial-model" },
+                })),
+                sessionPlacement: {},
+              }
+            : { agents }),
         };
       }
       if (method === "models.list") {
@@ -91,7 +127,11 @@ async function mountSessionDraft(agents = [{ id: "main", name: "Assistant" }]) {
   });
   const context = createSessionContext(client);
   const lifetime = new AbortController();
+  // A clicked Send may offer notifications, which reads the web push capability.
+  const webPush = createWebPushCapability(context.gateway);
+  onTestFinished(() => webPush.dispose());
   Object.assign(context, {
+    webPush,
     lifecycleAbortSignal: lifetime.signal,
     router: createRouter<RouteId, ApplicationContext>({
       routes: [{ id: "new-session", path: "/new", component: () => ({}) }],
@@ -109,6 +149,7 @@ async function mountSessionDraft(agents = [{ id: "main", name: "Assistant" }]) {
       "sessions.create",
       "sessions.groups.list",
       "sessions.groups.defaults",
+      ...(dictationClient ? ["talk.catalog", "talk.session.create", "chat.send"] : []),
     ]),
   });
   await context.agents.ensureList();
@@ -131,7 +172,7 @@ async function mountSessionDraft(agents = [{ id: "main", name: "Assistant" }]) {
   );
   const pet = () => page.querySelector<HTMLElement & LobsterPetProps>("openclaw-lobster-pet");
   await waitForSolid(() => expect(pet()).not.toBeNull());
-  const describe = async (next: GatewaySessionRow) => {
+  const describeRow = async (next: GatewaySessionRow) => {
     described = next;
     const observation = context.sessions.observeRow({ key: next.key, agentId: "main" }, () => {});
     try {
@@ -144,7 +185,7 @@ async function mountSessionDraft(agents = [{ id: "main", name: "Assistant" }]) {
       observation.dispose();
     }
   };
-  return { context, page, recent, pin, describe, defaults, pet };
+  return { context, page, recent, pin, describeRow, defaults, pet };
 }
 
 it("retains the welcome agent selector across draft publications and removes it for catalog targets", async () => {
@@ -177,14 +218,14 @@ it("retains the welcome agent selector across draft publications and removes it 
 });
 
 it("keeps pin detail enrichment out of composer preparation while live recents update", async () => {
-  const { context, page, recent, pin, describe } = await mountSessionDraft();
+  const { context, page, recent, pin, describeRow } = await mountSessionDraft();
   const input = page.querySelector<HTMLTextAreaElement>("textarea")!;
   input.value = "Keep this unsent draft";
   input.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true }));
   await page.updateComplete;
   const prepare = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
   // This is the production pin path: full-row read, captured reconciliation, and global publication.
-  await describe({ ...pin, rowMode: undefined, thinkingLevel: "high" });
+  await describeRow({ ...pin, rowMode: undefined, thinkingLevel: "high" });
   expect(
     context.sessions.state.result?.sessions.find((row) => row.key === pin.key)?.thinkingLevel,
   ).toBe("high");
@@ -205,11 +246,11 @@ it("keeps pin detail enrichment out of composer preparation while live recents u
 });
 
 it("keeps default models, group loading, and run presentation live", async () => {
-  const { context, page, recent, pin, describe, defaults, pet } = await mountSessionDraft();
+  const { context, page, recent, pin, describeRow, defaults, pet } = await mountSessionDraft();
   const currentDefaults = context.sessions.state.result!.defaults;
   currentDefaults.model = "changed-model";
   // Preserve the defaults object's identity while a new row receipt publishes the owner.
-  await describe({ ...pin, rowMode: undefined, thinkingLevel: "low" });
+  await describeRow({ ...pin, rowMode: undefined, thinkingLevel: "low" });
   await waitForSolid(() =>
     expect(page.querySelector("[data-chat-model-select]")?.textContent).toContain("Changed model"),
   );
@@ -240,4 +281,132 @@ it("keeps default models, group loading, and run presentation live", async () =>
   defaults.resolve({ defaults: [{ name: "Research" }] });
   await loading;
   await waitForSolid(() => expect(retry()?.disabled).toBe(false));
+});
+
+describe("new session pending dictation review", () => {
+  setupDictationFixtures();
+
+  it.each(["insert", "dismiss", "off"])(
+    "requires a separate Send after %s without submitting through pending review",
+    async (resolution) => {
+      const writes: string[] = [];
+      const pendingWrite = createDeferred();
+      dictationIo.request.mockImplementation(async (method) => {
+        if (method === "talk.session.create") {
+          return sessionResult();
+        }
+        if (method === "talk.catalog") {
+          return { transcription: { ready: true }, realtime: { ready: true } };
+        }
+        if (method === "sessions.create" || method === "chat.send") {
+          writes.push(method);
+          // Observe admission only; this fixture does not invent a created session.
+          return pendingWrite.promise;
+        }
+        return {};
+      });
+      // The mounted page reads preferences for its own gateway, not the page default.
+      const gatewayUrl = "ws://example.test";
+      const previous = loadSettings(gatewayUrl).dictationRefinement;
+      patchSettings(
+        {
+          gatewayUrl,
+          dictationRefinement:
+            resolution === "off"
+              ? undefined
+              : { version: 1, mode: "automatic", locale: "en-US", explicitEnabled: false },
+        },
+        { selectGateway: false },
+      );
+      const options = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
+      const prepare = vi.spyOn(DirectDictationControl.prototype, "prepare");
+      const start = vi.spyOn(ComposerDictationSession.prototype, "start");
+      const finish = vi.spyOn(ComposerDictationOwner.prototype, "finishActive");
+      try {
+        const { page } = await mountSessionDraft(undefined, createClient());
+        const owner = options.mock.contexts.at(-1);
+        assert.instanceOf(owner, NewSessionPageOwner);
+        const input = page.querySelector<HTMLTextAreaElement>("textarea")!;
+        input.value = "Existing draft";
+        input.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true }));
+        await waitForSolid(() => expect(owner.composerOptions().canSubmit).toBe(true));
+        expect(owner.submission.message).toBe("Existing draft");
+        await waitForSolid(() =>
+          expect(prepare.mock.results.at(-1)?.value.voice.microphonePicker.dictationStatus).toBe(
+            "ready",
+          ),
+        );
+        input.setSelectionRange(input.value.length, input.value.length);
+        page.querySelector<HTMLButtonElement>(".chat-send-btn--voice")!.click();
+        await vi.dynamicImportSettled();
+        expect(start).toHaveBeenCalledOnce();
+        await start.mock.results[0]!.value;
+        await waitForSolid(() => expect(input.readOnly).toBe(true));
+        expect(owner.dictation.dictation?.requiresReview).toBe(resolution !== "off");
+        page.querySelector<HTMLButtonElement>(".chat-send-btn--dictating")!.click();
+        expect(finish).toHaveBeenCalledOnce();
+        const send = () => page.querySelector<HTMLButtonElement>(".new-session-page__start-submit");
+        const expectSubmissionBlocked = async () => {
+          await waitForSolid(() => expect(send()?.disabled).toBe(true));
+          for (const ctrlKey of [false, true]) {
+            input.dispatchEvent(
+              new KeyboardEvent("keydown", {
+                key: "Enter",
+                ctrlKey,
+                bubbles: true,
+                cancelable: true,
+              }),
+            );
+          }
+          send()!.click();
+          void owner.submit();
+          void owner.submit(true);
+          await vi.dynamicImportSettled();
+          expect(writes).toEqual([]);
+        };
+        if (resolution !== "off") {
+          await expectSubmissionBlocked();
+        }
+        transcript("dictated words");
+        emit({ type: "close", reason: "completed" });
+        await finish.mock.results[0]!.value;
+        await waitForSolid(() => expect(input.readOnly).toBe(false));
+        if (resolution !== "off") {
+          expect(owner.dictation.dictation?.review?.canInsert).toBe(true);
+          await expectSubmissionBlocked();
+          await waitForSolid(() =>
+            expect(
+              page.querySelector<HTMLTextAreaElement>(
+                ".agent-chat__composer-lede .dictation-review textarea",
+              )?.value,
+            ).toBe("dictated words"),
+          );
+          const label = t(
+            resolution === "insert"
+              ? "chat.dictation.punctuation.insert"
+              : "chat.dictation.punctuation.dismiss",
+          );
+          const button = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+            (candidate) => candidate.textContent?.trim() === label,
+          );
+          assert.isDefined(button);
+          button.click();
+        }
+        const expected =
+          resolution === "dismiss"
+            ? "Existing draft"
+            : resolution === "off"
+              ? "Existing draft dictated words"
+              : "Existing draft dictated words.";
+        await waitForSolid(() => expect(send()?.disabled).toBe(false));
+        expect(input.value).toBe(expected);
+        expect(owner.submission.message).toBe(expected);
+        expect(writes).toEqual([]);
+        send()!.click();
+        await waitForSolid(() => expect(writes).toEqual(["sessions.create"]));
+      } finally {
+        patchSettings({ gatewayUrl, dictationRefinement: previous }, { selectGateway: false });
+      }
+    },
+  );
 });

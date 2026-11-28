@@ -11,7 +11,7 @@ import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import type { GatewaySpeechPlayback } from "../../../lib/speech-playback.ts";
-import { RealtimeTalkInputOwner } from "./input.ts";
+import { RealtimeTalkInputOwner } from "./media-capture.ts";
 import type {
   RealtimeTalkCallbacks,
   RealtimeTalkSessionResult,

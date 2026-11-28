@@ -1,9 +1,12 @@
 import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { patchSettings } from "../../app/settings.ts";
+import { resolveDictationRefinementPreference } from "../../app/settings-contract.ts";
+import { loadLiveUiPreferences, patchSettings } from "../../app/settings.ts";
+import type { ComposerDraftTransaction } from "../../lib/composer-draft-transaction.ts";
 import { focusComposerInput, selectComposerInput } from "../../lib/composer-input.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { adjustTextareaHeight } from "./components/chat-composer-dom.ts";
+import type { ComposerReviewedCommit } from "./composer-dictation-refinement.ts";
 import { ComposerDictationOwner } from "./composer-dictation.ts";
 import { ComposerMicrophoneOwner } from "./composer-microphone-picker.ts";
 
@@ -13,17 +16,70 @@ type PlaceTranscript = ComposerDictationOwner["placeTranscript"];
 /** Caret mutations stay synchronous so partial and late transcripts target one draft snapshot. */
 export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | null) {
   let capturedSelection: { start: number; end: number; value: string } | null = null;
+  let capturedTarget: HTMLTextAreaElement | null = null;
+  let revision = 0;
+  let previewValue: string | undefined;
+  let removeInputListener: (() => void) | undefined;
+  const draftValue = (target: HTMLTextAreaElement) =>
+    capturedSelection && target === capturedTarget && target.value === previewValue
+      ? capturedSelection.value
+      : target.value;
+  const insertReviewed = (reviewed: ComposerReviewedCommit, canWrite?: () => boolean) => {
+    const receipt = reviewed(read, canWrite);
+    if (receipt?.committed) {
+      capturedSelection = null;
+      previewValue = undefined;
+      revision += 1;
+    }
+    return receipt;
+  };
   return {
+    insertReviewed,
     /** Keep the pre-preview draft so partial dictation does not compound insertions. */
     captureSelection() {
       const textarea = read();
+      removeInputListener?.();
+      removeInputListener = undefined;
+      revision += 1;
+      capturedTarget = textarea;
+      previewValue = undefined;
       capturedSelection = textarea
         ? { start: textarea.selectionStart, end: textarea.selectionEnd, value: textarea.value }
         : null;
+      if (textarea) {
+        removeInputListener = listen(textarea, "input", () => {
+          revision += 1;
+          previewValue = undefined;
+        });
+      }
+    },
+    readTarget() {
+      const target = read();
+      const value = target ? draftValue(target) : undefined;
+      const selectionCurrent =
+        !capturedSelection || (target === capturedTarget && capturedSelection.value === value);
+      return target && value !== undefined
+        ? {
+            target,
+            revision,
+            value,
+            selectionCurrent,
+            start: capturedSelection?.start ?? target.selectionStart,
+            end: capturedSelection?.end ?? target.selectionEnd,
+          }
+        : undefined;
+    },
+    dispose() {
+      removeInputListener?.();
+      removeInputListener = undefined;
+      capturedSelection = null;
+      capturedTarget = null;
+      previewValue = undefined;
+      revision += 1;
     },
     previewTranscript(place: PlaceTranscript, transcript: string): string | undefined {
       const textarea = read();
-      return textarea
+      previewValue = textarea
         ? place(transcript, capturedSelection, {
             start: textarea.selectionStart,
             end: textarea.selectionEnd,
@@ -31,6 +87,7 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
             maxLength: textarea.maxLength,
           })?.value
         : undefined;
+      return previewValue;
     },
     /** Commit live keystrokes before the owning draft rerenders. */
     insertTranscript(
@@ -38,7 +95,11 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
       transcript: string,
       late?: true,
       preservePreview?: true,
-    ): string | null {
+      reviewed?: ComposerReviewedCommit,
+    ): string | ComposerDraftTransaction | null {
+      if (reviewed) {
+        return insertReviewed(reviewed);
+      }
       const target = read();
       // Delayed finals must not replace edits made after Stop unlocked this draft.
       const insertion =
@@ -63,6 +124,8 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
         return null;
       }
       target.value = insertion.value;
+      previewValue = undefined;
+      revision += 1;
       adjustTextareaHeight(target);
       queueMicrotask(() => {
         if (target.isConnected) {
@@ -79,7 +142,8 @@ type DirectDictationOptions = {
   textarea: Pick<
     DirectDictationTextarea,
     "captureSelection" | "insertTranscript" | "previewTranscript"
-  >;
+  > &
+    Partial<Pick<DirectDictationTextarea, "readTarget" | "insertReviewed" | "dispose">>;
   getClient: () => GatewayBrowserClient | null;
   prepareSession?: () => Promise<string | undefined>;
   getSessionKey?: () => string | undefined;
@@ -116,6 +180,7 @@ export class DirectDictationControl extends EventTarget {
     this.owner = null;
     this.session?.dispose();
     this.session = null;
+    this.options.textarea.dispose?.();
     this.devicePicker.dispose();
   }
 
@@ -124,7 +189,7 @@ export class DirectDictationControl extends EventTarget {
   }
 
   previewDraft(): string | undefined {
-    return this.session?.active
+    return this.session?.active && !this.session.requiresReview
       ? this.options.textarea.previewTranscript(this.place, this.session.transcript)
       : undefined;
   }
@@ -145,6 +210,13 @@ export class DirectDictationControl extends EventTarget {
     const connected = this.options.isConnected() && client !== null;
     this.devicePicker.syncCatalog(client, connected, this.options.getSessionKey?.());
     const enabled = this.options.canCommit();
+    const textarea = this.options.textarea;
+    const refinement =
+      textarea.readTarget && textarea.insertReviewed
+        ? resolveDictationRefinementPreference({
+            saved: loadLiveUiPreferences().dictationRefinement,
+          })
+        : undefined;
     const dictationOptions = {
       client,
       connected,
@@ -160,21 +232,36 @@ export class DirectDictationControl extends EventTarget {
           : undefined,
       dictationAvailable: this.devicePicker.dictationStatus === "ready",
       realtimeTalkActive: false,
-      onCommit: (transcript: string, late?: true, preservePreview?: true) => {
+      ...(refinement ? { refinement: { policy: refinement } } : {}),
+      readRefinementTarget: textarea.readTarget,
+      getDraftRevision: () => textarea.readTarget?.()?.revision ?? 0,
+      getDraftText: () => textarea.readTarget?.()?.value,
+      draftKey: ownerKey,
+      onCommit: (
+        transcript: string,
+        late?: true,
+        preservePreview?: true,
+        reviewed?: ComposerReviewedCommit,
+      ) => {
         // Owner changes replace draft ownership. Object identity keeps even an
         // A -> B -> A transition from accepting the prior owner's snapshot.
         if (!ownsDraft() || !this.options.canCommit()) {
-          return;
+          return false;
         }
-        const next = this.options.textarea.insertTranscript(
-          this.place,
-          transcript,
-          late,
-          preservePreview,
-        );
+        const next = reviewed
+          ? (textarea.insertReviewed?.(reviewed, () => ownsDraft() && this.options.canCommit()) ??
+            null)
+          : textarea.insertTranscript(this.place, transcript, late, preservePreview);
         if (next !== null) {
-          this.options.onMessage(next);
+          if (typeof next === "string") {
+            this.options.onMessage(next);
+            return true;
+          }
+          // A reviewed transaction publishes native input. Do not write its plain-text value
+          // to the owner a second time, dropping mention metadata or recording another edit.
+          return next;
         }
+        return false;
       },
       onError: (message: string) => {
         if (ownsDraft()) {
@@ -216,7 +303,7 @@ export class DirectDictationControl extends EventTarget {
         onDirectDictationStart: () => this.options.textarea.captureSelection(),
       },
       onSubmit: () => {
-        if (ownsDraft() && this.options.canCommit()) {
+        if (ownsDraft() && this.options.canCommit() && !dictation.pendingReview) {
           this.options.onSubmit();
         }
       },

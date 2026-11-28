@@ -10,6 +10,14 @@ sidebarTitle: "Settings"
 
 Everything under Settings, plus the settings-owned pages the sidebar links to.
 
+**Talk → Dictation punctuation** controls optional local punctuation review for
+the browser's dictation composer. It defaults to **Off**. Choose Verbatim,
+Automatic, or separately enabled Explicit commands, then select the punctuation
+language. The current rules support English (United States). Changes apply to
+the next recording, and every enabled policy offers a review before insertion.
+See [dictation punctuation](/nodes/talk#optional-control-ui-dictation-punctuation)
+for the command grammar, protected text, recovery, and rollback behavior.
+
 Browser-settings upgrades support shapes written by releases shipped on or after July 1, 2026. Older top-level session selections are ignored; select a session again in the sidebar. Saved conversations remain on the Gateway.
 
 **Back to app**, beside the **Settings** title, returns to the workspace page you were using before opening Settings, including its selected session and URL filters. On macOS, Settings leaves navigation to the title bar when its **Back** button is available. Escape does the same when an editor or dialog is not using that key. Moving between Settings pages does not change the return destination.

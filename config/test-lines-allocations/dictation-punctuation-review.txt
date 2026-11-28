@@ -1,0 +1,11 @@
+# M01 AC01-AC10: independent lexical/source-map adversaries, capture/target
+# retirement and one-write/undo receipts, actual review controls, settings
+# migration/privacy, and the required browser keyboard journey. The existing
+# owner fixture is extracted once; its removed lines are included in the net delta.
+# Follow-up regressions exercise actual pane capture admission, Side chat and
+# queued/history keyboard paths, and rich/native mention identity plus Undo.
+# Pending-review coverage holds repeated and delayed sends at all three owners,
+# retires empty captures, preserves Escape ownership, and requires a separate Send.
+# Main integration retains both regression sets and adds whole-candidate
+# capacity rejection, exact-fit, and unbounded insertion cases.
+1630

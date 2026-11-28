@@ -39,6 +39,7 @@ import {
   normalizeDashboardsDisplay,
   normalizeSessionFilesDisplay,
   normalizeTextScale,
+  parseDictationRefinementPreference,
   UI_APPEARANCE_DEFAULTS,
   type UiPreferences,
   type UiSettings,
@@ -84,6 +85,7 @@ type PersistedUiSettings = Omit<
   | "navCollapsed"
   | "sidebarEntries"
   | "background"
+  | "dictationRefinementIssue"
 > &
   Partial<ProfileNavigation> & {
     token?: never;
@@ -329,7 +331,12 @@ export function persistSessionToken(gatewayUrl: string, token: string) {
 // are replayed over recovery reads, so saving one profile cannot revert a sibling's edits.
 let settingsFallback: SettingsStorageFallback | null = null;
 
-type LivePreferenceOwner = { gatewayUrl: () => string; refresh: () => void };
+type LivePreferenceOwner = {
+  gatewayUrl: () => string;
+  refresh: () => void;
+  /** The mounted runtime's current preferences, kept in step with every local write. */
+  read?: () => UiPreferences;
+};
 let livePreferenceOwner: LivePreferenceOwner | null = null;
 
 /** Bind local writes to the mounted runtime, never its credentials. */
@@ -352,6 +359,14 @@ export function bindUiPreferences(owner: LivePreferenceOwner): () => void {
 export function loadSettings(gatewayUrl = livePreferenceOwner?.gatewayUrl()): UiSettings {
   const preferences = loadUiPreferences(gatewayUrl);
   return { ...preferences, token: loadSessionToken(preferences.gatewayUrl) };
+}
+
+/**
+ * Same preference scope as loadSettings, without touching session-scoped credentials.
+ * A mounted runtime answers from memory, so render paths never read storage.
+ */
+export function loadLiveUiPreferences(): UiPreferences {
+  return livePreferenceOwner?.read?.() ?? loadUiPreferences(livePreferenceOwner?.gatewayUrl());
 }
 
 export function loadUiPreferences(
@@ -420,6 +435,7 @@ export function loadUiPreferences(
       const value = parsed[key];
       return typeof value === "boolean" ? value : defaults[key];
     };
+    const dictation = parseDictationRefinementPreference(parsed.dictationRefinement);
     const settings: UiPreferences = {
       gatewayUrl,
       sessionKey: scopedSessionSelection.sessionKey,
@@ -449,6 +465,8 @@ export function loadUiPreferences(
       realtimeTalkInputDeviceId: normalizeOptionalString(parsed.realtimeTalkInputDeviceId),
       realtimeTalkVideoDeviceId: normalizeOptionalString(parsed.realtimeTalkVideoDeviceId),
       composerHoldToRecord: booleanSetting("composerHoldToRecord"),
+      dictationRefinement: dictation.preference,
+      dictationRefinementIssue: dictation.issue,
       talkCameraAutoEnable:
         typeof parsed.talkCameraAutoEnable === "boolean" ? parsed.talkCameraAutoEnable : undefined,
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
@@ -610,6 +628,7 @@ export function saveSettings(
     realtimeTalkInputDeviceId: normalizeOptionalString(next.realtimeTalkInputDeviceId),
     realtimeTalkVideoDeviceId: normalizeOptionalString(next.realtimeTalkVideoDeviceId),
     composerHoldToRecord: next.composerHoldToRecord === false ? false : undefined,
+    dictationRefinement: parseDictationRefinementPreference(next.dictationRefinement).preference,
     talkCameraAutoEnable: next.talkCameraAutoEnable,
     chatSplitLayout: next.chatSplitLayout || undefined,
     // Right dock is the default; only the opt-in bottom dock persists.

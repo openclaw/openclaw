@@ -1,0 +1,7 @@
+# M01 and M11 share one 400-line allowance when submitted as a stack. The two
+# standalone allocations do not cover that overlap or the cross-feature cases:
+# retained recognizer marks with exact UTF-16 edits, once-only rich/native
+# insertion and Undo, and pending review at the three actual Send controls.
+# 5,056 net test lines against the upstream draft base, less 400 ordinary and
+# 4,118 already allocated. No credit for unrelated growth on an older fork.
+538

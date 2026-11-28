@@ -1,5 +1,8 @@
+import { resolveDictationRefinementPreference } from "../../../app/settings-contract.ts";
+import { loadLiveUiPreferences } from "../../../app/settings.ts";
 import { t } from "../../../i18n/index.ts";
 import { focusComposerInput, selectComposerInput } from "../../../lib/composer-input.ts";
+import type { ComposerReviewedCommit } from "../composer-dictation-refinement.ts";
 import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
 import { commitComposerDraft, composerDraftKey } from "./chat-composer-state.ts";
@@ -12,15 +15,57 @@ export function createComposerDictationOptions(
   setError: (error: string | null) => void,
   onTap?: () => void,
 ) {
+  const getDraft = props.getDraft;
+  const draftSource = props.draftSource;
+  const draft = props.draft;
+  const getDraftText = () =>
+    getDraft?.() ?? draftSource?.read().draft ?? state.composerTextarea?.value ?? draft;
+  const refinement = resolveDictationRefinementPreference({
+    saved: loadLiveUiPreferences().dictationRefinement,
+  });
   return {
     client: props.gatewayClient ?? null,
     sessionKey: props.sessionKey,
     draftKey: composerDraftKey(props),
+    accountId: props.userId ?? undefined,
+    getDraftRevision: () => state.editRevision,
+    getDraftText,
+    refinementAvailable: true,
     connected: props.connected,
     enabled: props.composerHoldToRecord !== false,
     dictationAvailable: devicePicker.dictationStatus === "ready",
     realtimeTalkActive: props.realtimeTalkActive === true,
-    onCommit: (transcript: string, late?: true, preservePreview?: true) => {
+    ...(refinement ? { refinement: { policy: refinement } } : {}),
+    readRefinementTarget: () => {
+      const target = state.composerTextarea;
+      const value = getDraft?.() ?? draftSource?.read().draft ?? props.draft;
+      if (!target) {
+        return undefined;
+      }
+      // Captions stay outside a reviewed draft. Pin its original selection even after Stop.
+      return {
+        target,
+        revision: state.editRevision,
+        value,
+        selectionCurrent: !state.dictationSelection || state.dictationSelection.value === value,
+        start: state.dictationSelection?.start ?? target.selectionStart,
+        end: state.dictationSelection?.end ?? target.selectionEnd,
+      };
+    },
+    onCommit: (
+      transcript: string,
+      late?: true,
+      preservePreview?: true,
+      reviewed?: ComposerReviewedCommit,
+    ) => {
+      if (reviewed) {
+        const receipt = reviewed(() => state.composerTextarea);
+        if (receipt?.committed) {
+          // The transaction already dispatched native input with the exact mention metadata.
+          state.dictationSelection = null;
+        }
+        return receipt ?? false;
+      }
       const target = state.composerTextarea;
       const captured = state.dictationSelection;
       // A newer recording may be painting a partial over its captured draft.
@@ -39,7 +84,7 @@ export function createComposerDictationOptions(
         preservePreview,
       );
       if (!insertion) {
-        return;
+        return false;
       }
       if (target) {
         target.value = insertion.value;
@@ -55,6 +100,7 @@ export function createComposerDictationOptions(
         focusComposerInput(textarea, { preventScroll: true });
         selectComposerInput(textarea, insertion.caret, insertion.caret);
       });
+      return insertion.changed;
     },
     onError: (
       message: string,

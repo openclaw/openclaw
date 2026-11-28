@@ -108,7 +108,9 @@ export function commitComposerDraft(
   if (currentDraft === value && mentions === undefined && selected === currentMentions) {
     return;
   }
-  getChatComposerState(props.paneId).editRevision += 1;
+  const state = getChatComposerState(props.paneId);
+  state.editRevision += 1;
+  state.dictation?.invalidateRefinement();
   props.onDraftChange(value, selected);
 }
 
@@ -121,6 +123,7 @@ export function queueComposerSubmit(state: ChatComposerState, draft: string | nu
 
 export function markComposerInputIntent(state: ChatComposerState, key: string): void {
   state.editRevision += 1;
+  state.dictation?.invalidateRefinement();
   state.composerInputIntentKey = key;
 }
 

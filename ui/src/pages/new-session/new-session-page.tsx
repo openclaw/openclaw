@@ -44,7 +44,10 @@ import { focusChatComposerFromKeydown } from "../chat/chat-pane-shared.ts";
 import { chatStartupStatusLabel } from "../chat/chat-run-startup.ts";
 import { ChatPermissionPicker } from "../chat/components/chat-permission-picker.tsx";
 import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
-import { ComposerDictationStatus } from "../chat/components/chat-voice-activity.tsx";
+import {
+  ComposerDictationReview,
+  ComposerDictationStatus,
+} from "../chat/components/chat-voice-activity.tsx";
 import { DirectDictationView } from "../chat/components/direct-dictation-view.tsx";
 import { CatalogBar } from "./catalog-target-view.tsx";
 import * as catalog from "./catalog-target.ts";
@@ -197,6 +200,9 @@ function DraftBlock(props: {
   const dictationStatus = (
     <ComposerDictationStatus readDictation={() => props.page().dictation.dictation} />
   );
+  const dictationReview = (
+    <ComposerDictationReview readDictation={() => props.page().dictation.dictation} />
+  );
   const voiceControl = (
     <DirectDictationView
       control={props.page().dictation}
@@ -291,6 +297,7 @@ function DraftBlock(props: {
         surroundings={surroundings}
         options={Object.assign(props.options(), {
           permissionControl,
+          dictationReview,
           dictationStatus,
           voiceControl,
         })}

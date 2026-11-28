@@ -35,6 +35,8 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  // The documented selected-model arm imports the private runtime adapter.
+  "scripts/perf/dictation-refinement-measure.mts!",
   "scripts/perf/ui-e2e-worker-affinity-measure.mts",
   "scripts/perf/isolated-completion-registry-measure.ts!",
   "scripts/perf/audit-retention-fixture.mjs!",
@@ -84,6 +86,7 @@ const repositoryScriptEntries = [
   "scripts/bench-ios-release-note-overlap.mjs!",
   "scripts/bench-mobile-release-dependencies.mjs!",
   "scripts/bench-duplicate-paragraphs.mts!",
+  "scripts/bench-dictation-refinement.mts!",
   "scripts/bench-plugin-catalog.ts!",
   "scripts/bench-template-detail.mts!",
   "scripts/bench-session-source-notifications.mjs!",

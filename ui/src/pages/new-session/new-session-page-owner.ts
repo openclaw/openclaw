@@ -63,6 +63,9 @@ export class NewSessionPageOwner {
     this.listeners.publish();
   };
   submit(background = false) {
+    if (this.dictation.dictation?.pendingReview) {
+      return Promise.resolve();
+    }
     const lifetime = this.submissionLifetime;
     const textarea = this.submission.composerTextarea.getTextarea();
     const restoreFocus = background && this.host.ownerDocument.activeElement === textarea;
@@ -422,7 +425,7 @@ export class NewSessionPageOwner {
 
   composerOptions(): Omit<
     NewSessionComposerOptions,
-    "dictationStatus" | "voiceControl" | "permissionControl"
+    "dictationReview" | "dictationStatus" | "voiceControl" | "permissionControl"
   > {
     const { context, gateway, place, submission, dictation } = this;
     const draftOwnerKey = this.routeOwnerKey();
@@ -435,7 +438,11 @@ export class NewSessionPageOwner {
       agentId: place.agentId,
       attachmentDraft: submission.attachmentDraft,
       draftSource: submission.composerDraft,
-      canSubmit: !submission.submitting && !dictationLocked && submission.canSubmit(),
+      canSubmit:
+        !submission.submitting &&
+        !dictationLocked &&
+        !dictation.dictation?.pendingReview &&
+        submission.canSubmit(),
       submitDisabledReason: submission.submitDisabledReason(),
       onBlockedSubmit: () => submission.noteBlockedSubmitAttempt(),
       get dictationActive() {

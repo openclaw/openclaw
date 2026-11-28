@@ -10,13 +10,43 @@ export type ComposerEditorBridge = {
   requestSync: () => void;
   focus: (options?: FocusOptions) => void;
   select: (start: number, end: number, direction?: "forward" | "backward" | "none") => void;
-  replace: (text: string, start: number, end: number) => void;
+  replace: (
+    text: string,
+    start: number,
+    end: number,
+    options?: { isolateHistory?: boolean },
+  ) => void;
   /** Replace the whole draft as one isolated history step. */
   replaceAll: (text: string) => void;
   /** Step the editor's own history back, restoring mention identities with the text. */
   undo: () => void;
 };
 const editors = new WeakMap<HTMLTextAreaElement, ComposerEditorBridge>();
+type ComposerNativeEditMetadata = (edit: {
+  before: string;
+  after: string;
+  start: number;
+  end: number;
+}) => { write: (run: () => void) => void; undo: (run: () => void) => void };
+const nativeEditMetadata = new WeakMap<HTMLTextAreaElement, ComposerNativeEditMetadata>();
+
+/** Feature bindings keep their own metadata beside synchronous native edits. */
+export function registerComposerNativeEditMetadata(
+  input: HTMLTextAreaElement,
+  capture: ComposerNativeEditMetadata,
+) {
+  nativeEditMetadata.set(input, capture);
+  return () => {
+    if (nativeEditMetadata.get(input) === capture) {
+      nativeEditMetadata.delete(input);
+    }
+  };
+}
+
+export function readComposerNativeEditMetadata(input: HTMLTextAreaElement) {
+  return nativeEditMetadata.get(input);
+}
+
 export function registerComposerEditor(input: HTMLTextAreaElement, editor: ComposerEditorBridge) {
   editors.set(input, editor);
   return () => editors.delete(input);

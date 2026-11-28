@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
@@ -25,6 +26,16 @@ import { ComposerDictationSendAction } from "./components/chat-composer-controls
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
+import { ComposerDictationSession } from "./composer-dictation-session.ts";
+import {
+  createClient,
+  dictationIo,
+  emit,
+  pointer,
+  sessionResult,
+  setupDictationFixtures,
+  transcript,
+} from "./composer-dictation.test-support.ts";
 import { ComposerDictationOwner } from "./composer-dictation.ts";
 import { persistChatComposerState } from "./composer-draft-storage.ts";
 import { admitStoredChatComposerQueueItemResult } from "./composer-queue-persistence.ts";
@@ -632,6 +643,185 @@ it("keeps a pending dictation send bound to the action that started it", async (
   await Promise.resolve();
   expect(firstSend).toHaveBeenCalledOnce();
   expect(laterSend).not.toHaveBeenCalled();
+});
+
+it.each([
+  { requiresReview: false, finished: false, sends: 1 },
+  { requiresReview: true, finished: false, sends: 0 },
+  { requiresReview: true, finished: true, sends: 0 },
+])("preserves the capture's review decision after finish: %j", async (scenario) => {
+  const controller = new ComposerDictationOwner({
+    client: null,
+    connected: false,
+    enabled: false,
+    realtimeTalkActive: false,
+    onCommit: () => {},
+    onError: () => {},
+  });
+  vi.spyOn(controller, "active", "get").mockReturnValue(true);
+  const review = vi.spyOn(controller, "requiresReview", "get");
+  review.mockReturnValue(scenario.requiresReview);
+  const finish = createDeferred<boolean>();
+  vi.spyOn(controller, "finishActive").mockReturnValue(finish.promise);
+  const onSend = vi.fn();
+  const view = mountComponent(ComposerDictationSendAction, {
+    readDictation: () => controller,
+    onSend,
+  });
+  onTestFinished(() => controller.dispose());
+  view.container.querySelector<HTMLButtonElement>("button")!.click();
+  // The completed capture can disappear before its asynchronous finish resolves.
+  review.mockReturnValue(false);
+  finish.resolve(scenario.finished);
+  await Promise.resolve();
+  expect(onSend).toHaveBeenCalledTimes(scenario.sends);
+});
+
+describe("dictation preview admission", () => {
+  setupDictationFixtures();
+
+  it.each([
+    { mode: "off", key: "Enter" },
+    { mode: "automatic", key: "Enter" },
+    { mode: "automatic", key: "ArrowUp" },
+  ])("keeps $mode preview ownership on $key while history loads", async ({ mode, key }) => {
+    dictationIo.request.mockImplementation(async (method) =>
+      method === "talk.session.create"
+        ? sessionResult()
+        : method === "talk.catalog"
+          ? { transcription: { ready: true }, realtime: { ready: true } }
+          : {},
+    );
+    const onSend = vi.fn();
+    const paneId = "dictation-pending-history";
+    const before = mode === "off" ? "" : "Earlier draft";
+    const { state, view } = mountOwnedComposer({
+      paneId,
+      gatewayClient: createClient(),
+      draft: before,
+      submitPending: true,
+      submitDisabledReason: "Loading earlier messages",
+      onToggleRealtimeTalk: vi.fn(),
+      onSend,
+    });
+    const previous = loadSettings().dictationRefinement;
+    patchSettings({
+      dictationRefinement:
+        mode === "off"
+          ? undefined
+          : { version: 1, mode: "automatic", locale: "en-US", explicitEnabled: false },
+    });
+    state.chatLoading = true;
+    view.update({ onHistoryKeydown: state.handleChatInputHistoryKey });
+    const composer = getChatComposerState(paneId);
+    const start = vi.spyOn(ComposerDictationSession.prototype, "start");
+    try {
+      expect(loadSettings().dictationRefinement?.mode).toBe(mode === "off" ? undefined : mode);
+      await waitForSolid(() => expect(composer.microphonePicker?.dictationStatus).toBe("ready"));
+      view.textarea().setSelectionRange(before.length, before.length);
+      view.query<HTMLButtonElement>(".chat-send-btn--voice")!.dispatchEvent(pointer("pointerdown"));
+      await vi.advanceTimersByTimeAsync(500);
+      await vi.dynamicImportSettled();
+      expect(start).toHaveBeenCalledOnce();
+      await start.mock.results[0]!.value;
+      expect(composer.dictation?.requiresReview).toBe(mode !== "off");
+      emit({ type: "partial", text: "unfinished dictated words" });
+      await waitForSolid(() =>
+        expect(view.textarea().value).toBe(mode === "off" ? "unfinished dictated words" : before),
+      );
+      if (mode !== "off") {
+        // The coordinator exposes the received partial outside the editable draft.
+        expect(composer.dictation?.provisionalTranscript).toBe("unfinished dictated words");
+      }
+      expect(view.textarea().readOnly).toBe(true);
+      view
+        .textarea()
+        .dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+      flush();
+      const admitted = {
+        draft: state.chatMessage,
+        queued: composer.presentation.queuedSubmit,
+      };
+      if (mode === "off") {
+        // Discard capture without another insertion; the legacy queued action remains admitted.
+        composer.dictation!.cancel();
+      } else {
+        const finished = composer.dictation!.finishActive();
+        await waitForSolid(() => expect(view.textarea().readOnly).toBe(false));
+        view
+          .textarea()
+          .dispatchEvent(
+            new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+          );
+        flush();
+        expect(composer.presentation.queuedSubmit).toBeNull();
+        expect(state.chatMessage).toBe(before);
+        expect(onSend).not.toHaveBeenCalled();
+        transcript("unfinished dictated words");
+        emit({ type: "close", reason: "completed" });
+        await finished;
+      }
+      state.chatLoading = false;
+      view.update({ submitPending: false, submitDisabledReason: undefined });
+      await vi.dynamicImportSettled();
+      await waitForSolid(() => expect(view.textarea().readOnly).toBe(false));
+      expect({ ...admitted, sends: onSend.mock.calls.length }).toEqual(
+        mode === "off"
+          ? { draft: "unfinished dictated words", queued: "unfinished dictated words", sends: 1 }
+          : { draft: before, queued: null, sends: 0 },
+      );
+      if (mode !== "off") {
+        expect(composer.dictation?.review).toMatchObject({
+          rawText: "unfinished dictated words",
+          canInsert: true,
+          delivery: "not-attempted",
+        });
+        await waitForSolid(() =>
+          expect(view.query<HTMLTextAreaElement>(".dictation-review textarea")?.value).toBe(
+            "unfinished dictated words",
+          ),
+        );
+        const send = () => view.query<HTMLButtonElement>(".chat-send-btn--send");
+        await waitForSolid(() => expect(send()?.disabled).toBe(true));
+        const newline = new KeyboardEvent("keydown", {
+          key: "Enter",
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        });
+        view.textarea().dispatchEvent(newline);
+        expect(newline.defaultPrevented).toBe(false);
+        view
+          .textarea()
+          .dispatchEvent(
+            new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+          );
+        send()!.click();
+        expect(onSend).not.toHaveBeenCalled();
+        expect(composer.presentation.queuedSubmit).toBeNull();
+
+        const onAbort = vi.fn();
+        view.update({ canAbort: true, onAbort });
+        await waitForSolid(() =>
+          expect(view.query<HTMLButtonElement>(".chat-send-btn--stop")?.disabled).toBe(false),
+        );
+        view
+          .textarea()
+          .dispatchEvent(
+            new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+          );
+        await waitForSolid(() => expect(send()?.disabled).toBe(false));
+        expect(composer.dictation?.review).toBeNull();
+        expect(onAbort).not.toHaveBeenCalled();
+        expect(onSend).not.toHaveBeenCalled();
+        send()!.click();
+        expect(onSend).toHaveBeenCalledOnce();
+      }
+    } finally {
+      disposeComposer(view.container);
+      patchSettings({ dictationRefinement: previous });
+    }
+  });
 });
 
 it("preserves keyboard input-history traversal with hydrated member evidence", () => {

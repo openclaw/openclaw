@@ -37,7 +37,7 @@ import { EmojiMenu } from "./chat-composer-emoji.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import { ChatModelControls } from "./chat-model-controls.tsx";
 import type { ChatModelControlsProps } from "./chat-model-controls.types.ts";
-import { ComposerDictationStatus } from "./chat-voice-activity.tsx";
+import { ComposerDictationReview, ComposerDictationStatus } from "./chat-voice-activity.tsx";
 import { DirectDictationView } from "./direct-dictation-view.tsx";
 
 registerEnglishCatalog(registerChatSessionOptionalEnglish);
@@ -92,7 +92,7 @@ export function SessionRailComposer(props: {
     canCommit: () => props.connected,
     onMessage: (message) => props.onDraftChange?.(message),
     onError: (message) => showToast({ severity: "error", message }),
-    onSubmit: () => props.submit(),
+    onSubmit: () => send(),
   });
   const dictation = projectOwner(dictationControl, (owner) => owner);
   onSettled(() => {
@@ -139,20 +139,27 @@ export function SessionRailComposer(props: {
     return dictationControl.previewDraft() ?? props.companion.draft;
   });
   const draftRef = liveValue<HTMLTextAreaElement>(visibleDraft, scheduleTextareaHeightAdjustment);
+  const send = () => {
+    if (!dictationControl.dictation?.pendingReview) {
+      props.submit();
+    }
+  };
   // The dictated preview reaches the draft only on commit, so submission finishes it first.
   const submit = () => {
     const active = dictationControl.dictation;
     if (!active?.active) {
-      props.submit();
+      send();
       return;
     }
     if (active.finalizing) {
       return;
     }
+    // Finishing may retire the capture; its review decision still belongs to this submission.
+    const requiresReview = active.requiresReview;
     const sessionKey = props.sessionKey;
     void active.finishActive().then(() => {
-      if (props.sessionKey === sessionKey) {
-        props.submit();
+      if (!requiresReview && props.sessionKey === sessionKey) {
+        send();
       }
     });
   };
@@ -194,6 +201,7 @@ export function SessionRailComposer(props: {
         pendingReads={props.attachmentProps.attachmentReads?.pendingReads ?? 0}
       />
       <div class="agent-chat__composer-lede">
+        <ComposerDictationReview readDictation={() => dictation.read().dictation} />
         <Show when={props.companion.commentsSaving}>
           <div class="muted chat-session-rail__save-status" role="status">
             {t("common.saving")}
@@ -330,6 +338,7 @@ export function SessionRailComposer(props: {
                     disabled={
                       !props.connected ||
                       props.pending ||
+                      dictation.read().dictation?.pendingReview === true ||
                       Boolean(props.attachmentProps.attachmentReads?.pendingReads) ||
                       !sessionRailQuestion(props.companion)
                     }

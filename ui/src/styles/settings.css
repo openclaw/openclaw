@@ -532,6 +532,10 @@ openclaw-appearance-background .settings-background-preview .session-background_
   justify-content: flex-end;
 }
 
+.dictation-refinement-settings {
+  padding: 16px;
+}
+
 .settings-section__heading {
   margin: 0;
   font-size: var(--control-ui-text-xs);
