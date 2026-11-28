@@ -21,7 +21,7 @@ function setupFeedback(pressMs = 0) {
     if (envelope.path === "/screenshot") {
       return screenshot();
     }
-    if (envelope.body?.kind === "press") {
+    if (envelope.path === "/operator/input") {
       await new Promise((resolve) => {
         setTimeout(resolve, pressMs);
       });
