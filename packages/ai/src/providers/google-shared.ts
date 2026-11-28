@@ -131,7 +131,18 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
     ...(context.systemPrompt && {
       systemInstruction: sanitizeSurrogates(stripSystemPromptCacheBoundary(context.systemPrompt)),
     }),
-    ...(context.tools && context.tools.length > 0 && { tools: convertGoogleTools(context.tools) }),
+    ...(context.tools &&
+      context.tools.length > 0 && {
+        tools: convertGoogleTools(context.tools, {
+          preserveOrder:
+            model.api === "google-vertex" ||
+            model.provider === "google-vertex" ||
+            (typeof model.baseUrl === "string" &&
+              /(?:^|-|\.)aiplatform(?:\.(?:eu|us)\.rep)?\.googleapis\.com$/i.test(
+                URL.parse(model.baseUrl)?.hostname ?? "",
+              )),
+        }),
+      }),
   };
 
   if (context.tools && context.tools.length > 0 && options.toolChoice) {

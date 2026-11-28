@@ -694,6 +694,26 @@ describe("google prompt cache", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("skips AI Studio cachedContents for legacy google-generative-ai Vertex routes", async () => {
+    const fetchMock = vi.fn();
+    vi.spyOn(providerFetch, "buildGuardedModelFetch").mockReturnValue(fetchMock);
+    const vUrl = "https://us-central1-aiplatform.googleapis.com/v1beta1";
+    const base = {
+      apiKey: "gemini-api-key",
+      extraParams: { cacheRetention: "long" },
+      modelId: "gemini-3.1-pro-preview",
+      streamFn: vi.fn(() => "stream" as never),
+    };
+    for (const r of [
+      { provider: "google-vertex", model: { ...makeGoogleModel(), provider: "google-vertex" } },
+      { provider: "google", model: { ...makeGoogleModel(), baseUrl: vUrl } },
+    ]) {
+      const req = { ...base, ...r, sessionManager: makeSessionManager() };
+      expect(await prepareGooglePromptCacheStreamFn(req)).toBeUndefined();
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("bounds an oversized cache-refresh response body instead of buffering it", async () => {
     const now = 4_500_000;
     const expireSoon = new Date(now + 60_000).toISOString();

@@ -3,6 +3,7 @@
  */
 import { isOpenAIResponsesApi, resolveOpenAIPromptCacheKeySupport } from "@openclaw/ai/transports";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { usesGoogleVertexTransportRoute } from "../../infra/google-api-base-url.js";
 import { resolveAnthropicCacheRetentionFamily } from "../../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
 import type { OpenAICompletionsCompat } from "../../llm/types.js";
 
@@ -25,8 +26,19 @@ export function parseCacheRetention(value: unknown): CacheRetention | undefined 
 export function isGooglePromptCacheEligible(params: {
   modelApi?: string;
   modelId?: string;
+  provider?: string;
+  baseUrl?: string;
 }): boolean {
   if (params.modelApi !== "google-generative-ai") {
+    return false;
+  }
+  if (
+    usesGoogleVertexTransportRoute({
+      api: params.modelApi,
+      provider: params.provider,
+      baseUrl: params.baseUrl,
+    })
+  ) {
     return false;
   }
   const normalizedModelId = normalizeLowercaseStringOrEmpty(params.modelId);
@@ -53,7 +65,7 @@ export function resolveCacheRetention(
   const openAIEligible =
     (isOpenAIResponsesApi(modelApi) || modelApi === "openai-completions") &&
     resolveOpenAIPromptCacheKeySupport({ provider, api: modelApi, baseUrl, compat });
-  const googleEligible = isGooglePromptCacheEligible({ modelApi, modelId });
+  const googleEligible = isGooglePromptCacheEligible({ modelApi, modelId, provider, baseUrl });
   // Marker-based caches accept retention without accepting OpenAI cache-key fields.
   // Keep these capabilities independent so explicit "none" can suppress markers.
   const compatEligible =

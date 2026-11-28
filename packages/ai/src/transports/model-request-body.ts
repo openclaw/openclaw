@@ -165,11 +165,17 @@ export function encodedModelRequestBodyStream(body: unknown): boolean | undefine
   return typeof body === "object" && body !== null ? encodedBodyStreams.get(body) : undefined;
 }
 
-/** Defer an opted-in host policy until after a JSON transport's private media projection.
- * Without a final policy, keep the transport's existing serialization path unchanged.
+/**
+ * Defer host request encoding and prompt-prefix telemetry until after a JSON transport's
+ * private media projection. Without a host encoder or policy, keep the transport's existing
+ * serialization path unchanged.
  */
 export function prepareFinalModelRequestJson(options: object | undefined) {
-  if (!options || !modelRequestBodyState(options).hasFinalPolicy) {
+  if (!options) {
+    return undefined;
+  }
+  const state = modelRequestBodyState(options);
+  if (!state.hasFinalPolicy && !state.encode) {
     return undefined;
   }
   const encode = prepareModelRequestBody(options);

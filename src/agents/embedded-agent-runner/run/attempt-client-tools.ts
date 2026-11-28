@@ -200,7 +200,14 @@ export function prepareEmbeddedAttemptClientTools(params: {
           clientToolDefs.map((tool) => tool.name),
         )
       : undefined;
-    const sessionToolAllowlist = toSessionToolAllowlist(collectRegisteredToolNames(allCustomTools));
+    const sessionToolAllowlist = params.pinTools
+      ? [
+          ...new Set([
+            ...collectRegisteredToolNames(customTools),
+            ...toSessionToolAllowlist(collectRegisteredToolNames(clientToolDefs)),
+          ]),
+        ]
+      : toSessionToolAllowlist(collectRegisteredToolNames(allCustomTools));
     return {
       allCustomTools,
       builtinToolNames,

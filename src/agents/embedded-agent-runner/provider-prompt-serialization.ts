@@ -16,7 +16,7 @@ export type ProviderPromptCachePrefix = {
   tools: string;
   messageDigests: string;
   messageFields: Record<string, string>[];
-  messageField?: "input" | "messages";
+  messageField?: "input" | "messages" | "contents";
   messageCount: number;
   tail?: string;
   parameters: ProviderPromptItemFingerprint;
@@ -30,6 +30,7 @@ const WIRE_PREFIX_BYTES = 4096;
 const MESSAGE_FIELDS = new Set([
   "role",
   "content",
+  "parts",
   "type",
   "id",
   "reasoning",
@@ -48,9 +49,13 @@ const PARAMETER_FIELDS = new Set([
   "model",
   "input",
   "messages",
+  "contents",
   "prompt_cache_key",
   "prompt_cache_retention",
   "prompt_cache_options",
+  "cachedContent",
+  "generationConfig",
+  "toolConfig",
   "store",
   "include",
   "previous_response_id",
@@ -73,9 +78,37 @@ const PARAMETER_FIELDS = new Set([
   "user",
 ]);
 
+function fingerprintGenerationConfig(
+  field: ModelRequestJson,
+  fields: Record<string, string>,
+): void {
+  if (field.json[0] !== "{") {
+    fields.generationConfig = sha256Hex(field.json);
+    return;
+  }
+  let withoutOutputCap: ReturnType<typeof createHash> | undefined;
+  let separator = "";
+  for (const [subKey, subField] of field.members()) {
+    if (subKey === "maxOutputTokens") {
+      fields["generationConfig.maxOutputTokens"] = sha256Hex(subField.json);
+      continue;
+    }
+    withoutOutputCap ??= createHash("sha256").update("{");
+    withoutOutputCap
+      .update(separator)
+      .update(`${JSON.stringify(subKey)}:`)
+      .update(subField.json);
+    separator = ",";
+  }
+  if (withoutOutputCap) {
+    fields.generationConfig = withoutOutputCap.update("}").digest("hex");
+  }
+}
+
 function fingerprintFields(
   members: Iterable<[string, ModelRequestJson]>,
   allowedFields: Set<string>,
+  splitGenerationConfig = false,
 ): ProviderPromptItemFingerprint {
   const digest = createHash("sha256").update("{");
   let other: ReturnType<typeof createHash> | undefined;
@@ -85,7 +118,9 @@ function fingerprintFields(
     const name = `${JSON.stringify(key)}:`;
     digest.update(separator).update(name).update(field.json);
     separator = ",";
-    if (allowedFields.has(key)) {
+    if (splitGenerationConfig && key === "generationConfig") {
+      fingerprintGenerationConfig(field, fields);
+    } else if (allowedFields.has(key)) {
       fields[key] = sha256Hex(field.json);
     } else {
       (other ??= createHash("sha256")).update(name).update(field.json).update(",");
@@ -106,7 +141,7 @@ function fingerprintSerializedPrompt(
   const parameters = new Map(payload.members());
   const system = createHash("sha256").update("{");
   let separator = "";
-  for (const key of ["instructions", "system"]) {
+  for (const key of ["instructions", "system", "systemInstruction"]) {
     const field = parameters.get(key);
     parameters.delete(key);
     if (field) {
@@ -119,11 +154,13 @@ function fingerprintSerializedPrompt(
   }
   const tools = parameters.get("tools");
   parameters.delete("tools");
-  let messageField: "input" | "messages" | undefined;
+  let messageField: "input" | "messages" | "contents" | undefined;
   if (parameters.get("input")?.json[0] === "[") {
     messageField = "input";
   } else if (parameters.get("messages")?.json[0] === "[") {
     messageField = "messages";
+  } else if (parameters.get("contents")?.json[0] === "[") {
+    messageField = "contents";
   }
   const messages = messageField ? parameters.get(messageField) : undefined;
   if (messageField) {
@@ -164,7 +201,7 @@ function fingerprintSerializedPrompt(
     messageField,
     messageCount,
     ...(tail ? { tail: tail.update("]").digest("hex") } : {}),
-    parameters: fingerprintFields(parameters, PARAMETER_FIELDS),
+    parameters: fingerprintFields(parameters, PARAMETER_FIELDS, true),
     continuation: previousResponse?.[0] === '"' && previousResponse !== '""',
   };
 }

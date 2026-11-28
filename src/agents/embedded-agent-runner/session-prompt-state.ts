@@ -28,6 +28,7 @@ import { promptDelta } from "./session-prompt-delta.js";
 import { resolvePromptHistoryId } from "./session-prompt-history-id.js";
 import { SYSTEM_PROMPT_UPDATE_HEADER } from "./session-prompt-update.js";
 import {
+  mergePinnedToolDefinitions,
   readToolSurfaceCheckpoint,
   type ToolDefinition,
   type ToolSurface,
@@ -363,11 +364,10 @@ export function prepareSessionToolSurface(
       : [];
   let pinned = known?.tools;
   if (!pinned || admitted.length > 0) {
-    const definitions = new Map([
-      ...previous,
-      ...admitted.map((tool) => [tool.name, describeSessionToolDefinition(tool)] as const),
-    ]);
-    pinned = [...definitions.values()].toSorted((a, b) => a.name.localeCompare(b.name));
+    pinned = mergePinnedToolDefinitions(
+      previous,
+      admitted.map((tool) => describeSessionToolDefinition(tool)),
+    );
     params.state.pendingToolSurface = {
       routeKey: params.routeKey,
       historyId,

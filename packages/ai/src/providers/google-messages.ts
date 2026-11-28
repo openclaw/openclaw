@@ -273,17 +273,21 @@ export function projectGoogleMessages(params: {
 
 /**
  * Convert tools to Gemini function declarations format.
+ * Set `preserveOrder: true` on Vertex routes so promoted on-demand tools stay
+ * append-only instead of re-sorting earlier declarations mid-array.
  * @internal Directly tested provider implementation detail.
  */
 export function convertGoogleTools(
   tools: Tool[],
+  options?: { preserveOrder?: boolean },
 ): { functionDeclarations: Record<string, unknown>[] }[] | undefined {
   if (tools.length === 0) {
     return undefined;
   }
+  const orderedTools = options?.preserveOrder ? tools : sortPromptCacheToolsByName(tools);
   return [
     {
-      functionDeclarations: sortPromptCacheToolsByName(tools).map((tool) => ({
+      functionDeclarations: orderedTools.map((tool) => ({
         name: tool.name,
         description: tool.description,
         parametersJsonSchema: googleToolParameters(tool.parameters),

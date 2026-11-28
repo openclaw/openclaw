@@ -53,7 +53,10 @@ import { parseGeminiAuth } from "./gemini-auth.js";
 import { stripGoogleProviderPrefix } from "./model-id.js";
 import { isGoogleGeminiTextModelId } from "./provider-models.js";
 import { isOfficialGoogleAiStudioBaseUrl, normalizeGoogleApiBaseUrl } from "./provider-policy.js";
-import { resolveGoogleVertexBaseUrlLocation } from "./src/google-api-base-url.js";
+import {
+  isGoogleVertexTransportRoute,
+  resolveGoogleVertexBaseUrlLocation,
+} from "./src/google-api-base-url.js";
 import {
   isGoogleGemini3FlashModel,
   isGoogleGemini3ProModel,
@@ -328,7 +331,9 @@ export function buildGoogleGenerativeAiParams(
     };
   }
   if (!cachedContent && context.tools?.length) {
-    params.tools = convertGoogleTools(context.tools);
+    params.tools = convertGoogleTools(context.tools, {
+      preserveOrder: isGoogleVertexTransportRoute(routeModel),
+    });
     const toolChoice = mapToolChoice(options?.toolChoice);
     if (toolChoice) {
       params.toolConfig = {

@@ -18,7 +18,10 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { omitNullRequestHeaders } from "../../../packages/llm-core/src/utils/request-headers.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
-import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
+import {
+  normalizeGoogleApiBaseUrl,
+  usesGoogleVertexTransportRoute,
+} from "../../infra/google-api-base-url.js";
 import { cancelUnreadResponseBody } from "../../infra/http-body.js";
 import { streamWithPayloadPatch } from "../../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type { Model } from "../../llm/types.js";
@@ -207,7 +210,22 @@ export async function prepareGooglePromptCacheStreamFn(
   if (
     !params.streamFn ||
     resolveExplicitCachedContent(params.extraParams) ||
-    !isGooglePromptCacheEligible({ modelApi: params.model.api, modelId: params.modelId })
+    usesGoogleVertexTransportRoute({
+      api: params.model.api,
+      provider: params.provider,
+      baseUrl: params.model.baseUrl,
+    }) ||
+    usesGoogleVertexTransportRoute({
+      api: params.model.api,
+      provider: params.model.provider,
+      baseUrl: params.model.baseUrl,
+    }) ||
+    !isGooglePromptCacheEligible({
+      modelApi: params.model.api,
+      modelId: params.modelId,
+      provider: params.model.provider || params.provider,
+      baseUrl: params.model.baseUrl,
+    })
   ) {
     return undefined;
   }
@@ -216,6 +234,8 @@ export async function prepareGooglePromptCacheStreamFn(
     params.provider,
     params.model.api,
     params.modelId,
+    undefined,
+    params.model.baseUrl,
   );
   if (resolvedRetention !== "short" && resolvedRetention !== "long") {
     return undefined;

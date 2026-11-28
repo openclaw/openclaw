@@ -1,6 +1,6 @@
 // Coverage for prompt-cache retention resolution by provider and model API.
 import { describe, expect, it } from "vitest";
-import { resolveCacheRetention } from "./prompt-cache-retention.js";
+import { isGooglePromptCacheEligible, resolveCacheRetention } from "./prompt-cache-retention.js";
 
 describe("prompt cache retention", () => {
   it("forwards native ChatGPT retention", () => {
@@ -53,6 +53,24 @@ describe("prompt cache retention", () => {
     expect(
       resolveCacheRetention(undefined, "google", "google-generative-ai", "gemini-3.1-pro-preview"),
     ).toBeUndefined();
+  });
+
+  it("excludes Vertex and legacy Vertex google-generative-ai from AI Studio caching", () => {
+    const g = "google-generative-ai";
+    const m = "gemini-3.1-pro-preview";
+    const ok = (provider: string, baseUrl?: string, modelId = m) =>
+      isGooglePromptCacheEligible({ modelApi: g, modelId, provider, baseUrl });
+    const ret = (extra: Record<string, unknown>, p: string, api: string, baseUrl?: string) =>
+      resolveCacheRetention(extra, p, api, m, undefined, baseUrl);
+    expect(ok("google-vertex")).toBe(false);
+    expect(
+      ok("google", "https://us-central1-aiplatform.googleapis.com/v1", "gemini-2.5-flash"),
+    ).toBe(false);
+    expect(ret({ cacheRetention: "long" }, "google-vertex", g)).toBeUndefined();
+    expect(
+      ret({ cacheRetention: "long" }, "google", g, "https://aiplatform.googleapis.com/v1"),
+    ).toBeUndefined();
+    expect(ret({ cacheControlTtl: "1h" }, "google-vertex", "google-vertex")).toBeUndefined();
   });
 
   it("passes explicit cacheRetention through for openai-completions providers when supportsPromptCacheKey (issue #81281)", () => {

@@ -62,6 +62,23 @@ export function selectToolSurfaceCheckpoint<T extends { type: string }>(
   return undefined;
 }
 
+export function mergePinnedToolDefinitions(
+  previous: ReadonlyMap<string, ToolDefinition>,
+  admitted: readonly ToolDefinition[],
+): ToolDefinition[] {
+  const definitions = new Map(previous);
+  const additions: ToolDefinition[] = [];
+  for (const definition of admitted) {
+    if (definitions.has(definition.name)) {
+      definitions.set(definition.name, definition);
+    } else {
+      additions.push(definition);
+    }
+  }
+  additions.sort((a, b) => a.name.localeCompare(b.name));
+  return [...definitions.values(), ...additions];
+}
+
 /** Configuration and admitted participation scope a pin depends on. */
 export function resolveSessionToolPolicyDigest(
   config: OpenClawConfig | undefined,

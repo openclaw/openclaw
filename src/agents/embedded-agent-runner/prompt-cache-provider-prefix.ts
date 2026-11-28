@@ -3,7 +3,12 @@ import type { ProviderPromptState } from "./provider-prompt-state.js";
 
 // Output caps bound the completion, not the prompt that provider prefix caches key on.
 // Completions routes re-clamp the cap from the remaining context budget on most requests.
-const OUTPUT_CAP_PARAMETERS = new Set(["max_tokens", "max_completion_tokens", "max_output_tokens"]);
+const OUTPUT_CAP_PARAMETERS = new Set([
+  "max_tokens",
+  "max_completion_tokens",
+  "max_output_tokens",
+  "generationConfig.maxOutputTokens",
+]);
 
 function describeProviderFields(
   beforeFields: Record<string, string>,

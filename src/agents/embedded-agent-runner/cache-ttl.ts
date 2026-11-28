@@ -3,6 +3,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { usesGoogleVertexTransportRoute } from "../../infra/google-api-base-url.js";
 import { isAnthropicFamilyCacheTtlEligible } from "../../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
 import { resolveProviderCacheTtlEligibility } from "../../plugins/provider-runtime.js";
 import type { ProviderCacheTtlEligibilityContext } from "../../plugins/provider-transport.types.js";
@@ -42,6 +43,15 @@ export function isCacheTtlEligibleProvider(
   if (pluginEligibility !== undefined) {
     return pluginEligibility;
   }
+  if (
+    usesGoogleVertexTransportRoute({
+      api: modelApi,
+      provider: normalizedProvider,
+      baseUrl: route?.baseUrl,
+    })
+  ) {
+    return false;
+  }
   return (
     // Config-only OpenAI-compatible providers have no hook; require an explicit opt-in.
     (route?.supportsPromptCacheKey === true &&
@@ -54,7 +64,12 @@ export function isCacheTtlEligibleProvider(
       modelApi,
     }) ||
     (normalizedProvider === "kilocode" && normalizedModelId.startsWith("anthropic/")) ||
-    isGooglePromptCacheEligible({ modelApi, modelId: normalizedModelId })
+    isGooglePromptCacheEligible({
+      modelApi,
+      modelId: normalizedModelId,
+      provider: normalizedProvider,
+      baseUrl: route?.baseUrl,
+    })
   );
 }
 

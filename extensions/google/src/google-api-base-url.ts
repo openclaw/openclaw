@@ -66,6 +66,19 @@ export function isGoogleVertexBaseUrl(baseUrl?: string | null): boolean {
   return url !== null && isGoogleVertexHostname(url.hostname);
 }
 
+/** Match the actual Vertex transport route, including legacy `google-generative-ai` configs. */
+export function isGoogleVertexTransportRoute(model: {
+  api?: string | null;
+  provider?: string | null;
+  baseUrl?: string | null;
+}): boolean {
+  return (
+    model.api === "google-vertex" ||
+    (model.api === "google-generative-ai" &&
+      (model.provider === "google-vertex" || isGoogleVertexBaseUrl(model.baseUrl)))
+  );
+}
+
 export function normalizeGoogleApiBaseUrl(baseUrl?: string): string {
   const raw = trimTrailingSlashes(normalizeOptionalString(baseUrl) || DEFAULT_GOOGLE_API_BASE_URL);
   const url = URL.parse(raw);
