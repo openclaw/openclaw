@@ -329,6 +329,130 @@ guest pull requests come from the fork, where GitHub withholds secrets from
 - Open the Control UI as two different people: both should see the session, its owner avatar, and each other's presence.
 - Run `openclaw security audit` on the host and resolve anything it flags about inbound access or exposure.
 
+### Test roles locally
+
+Roles apply only to people with their own sign-in. A shared token or password
+signs everyone in as the one owner profile, which cannot hold a role. To try
+roles on one machine before you set up an identity provider, put a small
+password-protected reverse proxy in front of the Gateway on the same host. This
+setup is for testing with test accounts only. Read the warning at the end of
+this section first.
+
+1. Configure the Gateway for a same-host proxy, with one identity scope grant
+   and one role per test account:
+
+   ```json5
+   {
+     gateway: {
+       bind: "loopback",
+       trustedProxies: ["127.0.0.1"],
+       controlUi: { allowedOrigins: ["http://127.0.0.1:8080"] },
+       auth: {
+         mode: "trusted-proxy",
+         trustedProxy: {
+           userHeader: "x-forwarded-user",
+           allowUsers: ["alice@example.test", "bob@example.test"],
+           allowLoopback: true,
+         },
+         identityScopes: {
+           "alice@example.test": ["operator.admin"],
+           "bob@example.test": ["operator.read", "operator.write"],
+         },
+       },
+       roles: {
+         default: "viewer",
+         definitions: {
+           administrator: {
+             sessions: { others: "write" },
+             agents: "*",
+             scopes: ["operator.admin"],
+           },
+           member: {
+             sessions: { others: "write" },
+             agents: "*",
+             scopes: ["operator.read", "operator.write"],
+           },
+           viewer: {
+             sessions: { others: "view" },
+             agents: "*",
+             scopes: ["operator.sessions.read"],
+           },
+         },
+       },
+     },
+   }
+   ```
+
+   Also set `OPENCLAW_GATEWAY_PASSWORD` for the Gateway and for your local
+   maintenance shell. Trusted-proxy mode does not accept a shared token, and
+   local commands such as `openclaw users list` use this password.
+
+2. Run a proxy that signs people in and passes their name to the Gateway. This
+   example uses [Caddy](https://caddyserver.com/). Create each password hash
+   with `caddy hash-password`:
+
+   ```caddy
+   {
+     admin off
+     auto_https off
+   }
+   http://127.0.0.1:8080 {
+     bind 127.0.0.1
+     basic_auth {
+       alice@example.test <alice-password-hash>
+       bob@example.test <bob-password-hash>
+     }
+     reverse_proxy 127.0.0.1:18789 {
+       header_up X-Forwarded-User {http.auth.user.id}
+       header_up X-Forwarded-For 192.0.2.10
+     }
+   }
+   ```
+
+   Caddy replaces any `X-Forwarded-User` header the browser sends. The Gateway
+   rejects proxied requests whose client address is a loopback address, so the
+   proxy sends a fixed documentation address (`192.0.2.10`) as the client
+   address instead.
+
+3. Sign in once as each test account through `http://127.0.0.1:8080`. A profile
+   exists only after its first sign-in, and it starts with the default role.
+   Then assign roles from the maintenance shell. `users.setRole` takes the
+   profile ID from `openclaw users list`, not an email address:
+
+   ```bash
+   openclaw users list --json
+   openclaw gateway call users.setRole \
+     --params '{"profileId":"<alice-profile-id>","role":"administrator"}' --json
+   openclaw gateway call users.setRole \
+     --params '{"profileId":"<bob-profile-id>","role":"member"}' --json
+   ```
+
+4. Reconnect as each account. A role sets a ceiling and does not grant scopes
+   by itself. In this example Alice gets `operator.admin`, and Bob gets
+   `operator.read` and `operator.write` but cannot use administrator methods. In
+   a browser, the Control UI also pairs a device on first connect; see
+   [Control UI pairing behavior](/gateway/trusted-proxy-auth#control-ui-pairing-behavior).
+
+<Warning>
+With `allowLoopback`, the Gateway trusts every process on the host as much as
+the proxy. A local program that connects straight to the Gateway port, skipping
+the proxy, can send its own `X-Forwarded-User` and `X-Forwarded-For` headers and
+act as any allowed account, including the administrator. The proxy password does
+not protect that path, and `requiredHeaders` does not help: the Gateway checks
+only that those headers are present, not their values. Keep the test narrow:
+
+- Bind the Gateway and the proxy to loopback only.
+- List only the proxy's own address in `trustedProxies`, and only test accounts
+  in `allowUsers` and `identityScopes`.
+- Use a separate state directory with no real sessions, channels, or
+  credentials.
+- Do not run it on a shared host or next to programs you do not trust, and stop
+  it when you are done.
+
+For a real team, use an identity-aware proxy on a separate address with
+`allowLoopback` off. See [Trusted proxy auth](/gateway/trusted-proxy-auth).
+</Warning>
+
 ## Production deployment
 
 This section connects the pieces of a production multiplayer deployment: a persistent
