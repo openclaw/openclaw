@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it } from "vitest";
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
@@ -62,6 +65,34 @@ describe("whatsapp inbound context visibility", () => {
       body: "<media:sticker>",
       media: { contentType: "image/webp", kind: "sticker" },
     });
+  });
+
+  it("resolves quoted LID sender to mapped phone label via authDir", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reply-lid-test-"));
+    try {
+      fs.writeFileSync(path.join(tempDir, "lid-mapping-111_reverse.json"), JSON.stringify("111"));
+      const reply = resolveVisibleWhatsAppReplyContext({
+        msg: createTestWebInboundMessage({
+          admission: { conversation: { kind: "group", id: "123@g.us" } },
+          quote: {
+            context: {
+              id: "quoted-lid",
+              body: "hello from lid",
+              sender: { lid: "111@lid", label: "111@lid" },
+            },
+          },
+        }),
+        ...visibility,
+        authDir: tempDir,
+      });
+      expect(reply?.sender).toMatchObject({
+        lid: "111@lid",
+        e164: "+111",
+        label: "+111",
+      });
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });
 

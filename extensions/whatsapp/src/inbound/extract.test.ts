@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { generateWAMessageFromContent, type proto } from "baileys";
 import { expect, it } from "vitest";
 import {
@@ -48,6 +51,42 @@ it("preserves unavailable reply references without inventing a sender", () => {
 });
 it("does not invent replies from unrelated context metadata", () => {
   expect(describeReplyContext(extended({ participant: SENDER }))).toBeNull();
+});
+it("resolves quoted LID sender to phone number via authDir mapping", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-wa-lid-test-"));
+  try {
+    fs.writeFileSync(
+      path.join(tempDir, "lid-mapping-1234567890_reverse.json"),
+      JSON.stringify("15555550123"),
+    );
+    const reply = describeReplyContext(
+      extended({
+        stanzaId: "q1",
+        participant: "1234567890@lid",
+        quotedMessage: { conversation: "hello" },
+      }),
+      { authDir: tempDir },
+    );
+    expect(reply?.sender).toMatchObject({
+      lid: "1234567890@lid",
+      e164: "+15555550123",
+      label: "+15555550123",
+    });
+    const deviceScoped = describeReplyContext(
+      extended({
+        stanzaId: "q2",
+        participant: "15555550123:2@s.whatsapp.net",
+        quotedMessage: { conversation: "hello device" },
+      }),
+    );
+    expect(deviceScoped?.sender).toMatchObject({
+      jid: "15555550123@s.whatsapp.net",
+      e164: "+15555550123",
+      label: "+15555550123",
+    });
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 it("reads quoted polls encoded by Baileys", () => {
   const generated = generateWAMessageFromContent(GROUP, extended({}, "Choose pizza"), {
