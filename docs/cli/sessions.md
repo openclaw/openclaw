@@ -290,6 +290,7 @@ Example mixed-result JSON:
 ```bash
 openclaw sessions tail
 openclaw sessions tail --follow
+openclaw sessions tail --session-key main
 openclaw sessions tail --session-key "agent:main:telegram:direct:123" --tail 25
 openclaw sessions --agent work tail --follow
 openclaw sessions --all-agents tail --follow
@@ -308,9 +309,12 @@ print before follow mode; default `80`, and `0` starts at the current end.
 fixed-width terminal columns, with long keys truncated at whole grapheme boundaries
 so CJK characters, combining accents, and joined emoji keep progress lines aligned.
 
-A fully qualified `--session-key` selects its agent only when `--agent`, `--store`,
-and `--all-agents` are absent. An explicitly empty or whitespace-only `--agent`
-is rejected instead of selecting an inferred agent.
+Without `--agent`, `--store`, or `--all-agents`, a fully qualified `--session-key`
+selects its agent and a shorthand key such as `main` uses the configured default
+agent. Qualified keys accept differences in the casing of their structural
+parts and preserve case-sensitive provider identifiers. A qualified key selects
+its stored session when both that session and a global alias exist. An explicitly
+empty or whitespace-only `--agent` is rejected instead of selecting an inferred agent.
 
 An explicit `--session-key` that matches no stored session exits non-zero with
 guidance for listing valid keys, and an empty or whitespace-only `--session-key`
