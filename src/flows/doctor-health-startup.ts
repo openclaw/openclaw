@@ -259,18 +259,19 @@ export function showDoctorRepairRefusal(
   };
 }
 
+/** Warms transcript archives; returns the preflight it read them from, if it could. */
 export async function prepareDoctorMaintenanceArchives(
   databasePreflight: DoctorDatabasePreflight | undefined,
   runtime: RuntimeEnv,
   preflightOptions: { preserveSourceArtifacts?: true } = {},
-): Promise<DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"]> {
+): Promise<DoctorDatabasePreflight | undefined> {
   const signal = resolveCommandProcessSignal(getAsyncWorkSignal());
-  let discovery: DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"];
+  let preflight: DoctorDatabasePreflight | undefined;
   try {
     const { prepareDoctorDatabasePreflight } =
       await import("../commands/doctor-database-preflight.js");
-    discovery = (databasePreflight ?? (await prepareDoctorDatabasePreflight(preflightOptions)))
-      .agentDatabaseMigrationDiscovery;
+    preflight = databasePreflight ?? (await prepareDoctorDatabasePreflight(preflightOptions));
+    const discovery = preflight.agentDatabaseMigrationDiscovery;
     if (discovery) {
       const { prepareCanonicalTranscriptArchiveMigrations } =
         await import("../infra/state-migrations.transcript-directives-archives.js");
@@ -282,7 +283,7 @@ export async function prepareDoctorMaintenanceArchives(
   }
   // Exit cleanup waits for this command to unwind; never join it from inside the command.
   signal?.throwIfAborted();
-  return discovery;
+  return preflight;
 }
 
 /** Reads only the prepared preflight; the preflight refuses an unreadable state database. */

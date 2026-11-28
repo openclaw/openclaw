@@ -337,6 +337,19 @@ export function createSqliteReadOnlyWorkerPool(
   };
   return {
     run,
+    /**
+     * Retires every idle reader now instead of after its idle timeout, so a caller about to
+     * hand the stores to exclusive work leaves no reader holding them open. Busy, leased and
+     * quarantined slots are left alone; a later read starts a new reader.
+     */
+    async retireIdle(): Promise<void> {
+      const outcomes = await Promise.allSettled(
+        scopedReadWorkers
+          .filter((slot) => slot.session && slot.queued === 0 && !slot.leased && !slot.quarantined)
+          .map(retireIdleSlot),
+      );
+      throwSettledAggregate(outcomes, "SQLite read-only worker cleanup failed");
+    },
     async closeBroker(broker: SpawnBrokerHost): Promise<void> {
       closingBrokers.add(broker);
       // In-flight reads retire on settlement; broker shutdown may cancel them first.

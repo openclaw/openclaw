@@ -497,6 +497,18 @@ export async function runDoctorAfterRestartContributions(
   }
 }
 
+/**
+ * The contributions Doctor's own `--fix` runs, in the order it reaches them: the stop's,
+ * then the diagnostics it runs after restoring the Gateway.
+ */
+export function resolveDoctorFixContributions(): DoctorHealthContribution[] {
+  const contributions = resolveDoctorHealthContributions();
+  return [
+    ...contributions.filter((contribution) => !contribution.placement),
+    ...contributions.filter((contribution) => contribution.placement === "after-restart"),
+  ];
+}
+
 export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext): Promise<void> {
   const contributions = resolveDoctorHealthContributions();
   if (ctx.retirementOnly) {

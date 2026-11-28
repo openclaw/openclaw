@@ -14,12 +14,21 @@ import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js"
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as storeFiles from "../test-utils/store-snapshot.test-support.js";
-import type { DoctorMaintenancePendingCheck } from "./doctor-maintenance-pending.js";
+import type {
+  DoctorMaintenancePendingCheck,
+  DoctorPendingDecisions,
+} from "./doctor-maintenance-pending.js";
 
 const { mocks } = await import("../flows/doctor-health.test-support.js");
 const pending = vi.hoisted(() => ({
   root: undefined as string | undefined,
-  decisions: [] as { step: string; sidecarsBefore: string[]; changed: string[] }[],
+  decisions: [] as {
+    step: string;
+    beforeStop: boolean;
+    checked: number;
+    sidecarsBefore: string[];
+    changed: string[];
+  }[],
 }));
 // Each step's pending check must only read. When a test sets `pending.root`, every check
 // meets its stores as a stopped Gateway leaves them: all connections closed, and the empty
@@ -28,19 +37,37 @@ vi.mock("./doctor-maintenance-pending.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./doctor-maintenance-pending.js")>();
   return {
     ...actual,
-    traceDoctorMaintenancePending: async (step: string, check?: DoctorMaintenancePendingCheck) => {
+    traceDoctorMaintenancePending: async (
+      step: string,
+      check?: DoctorMaintenancePendingCheck,
+      into?: DoctorPendingDecisions,
+    ) => {
       const root = pending.root;
       if (!check || !root) {
-        return actual.traceDoctorMaintenancePending(step, check);
+        return actual.traceDoctorMaintenancePending(step, check, into);
       }
       await closeOpenClawAgentDatabasesAsync();
       await closeOpenClawStateDatabaseAsync();
       storeFiles.removeEmptySqliteSidecars(root);
       const sidecarsBefore = storeFiles.listSqliteSidecars(root);
       const before = storeFiles.snapshotStoreFiles(root);
-      const work = await actual.traceDoctorMaintenancePending(step, check);
+      let checked = 0;
+      const work = await actual.traceDoctorMaintenancePending(
+        step,
+        () => {
+          checked += 1;
+          return check();
+        },
+        into,
+      );
       const changed = storeFiles.changedStoreFiles(before, storeFiles.snapshotStoreFiles(root));
-      pending.decisions.push({ step, sidecarsBefore, changed });
+      pending.decisions.push({
+        step,
+        beforeStop: into !== undefined,
+        checked,
+        sidecarsBefore,
+        changed,
+      });
       return work;
     },
   };
@@ -238,7 +265,11 @@ it("decides every step's pending check without creating or changing a file", asy
     try {
       await runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
       expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
-      expect(pending.decisions.map(({ step }) => step)).toEqual(
+      // Each step decides once, before the stop; inside it the stop reuses that decision.
+      const decided = pending.decisions.filter((decision) => decision.checked > 0);
+      expect(decided.filter((decision) => !decision.beforeStop)).toEqual([]);
+      expect(decided.filter((decision) => decision.checked !== 1)).toEqual([]);
+      expect(decided.map(({ step }) => step)).toEqual(
         expect.arrayContaining([
           "state-database-repair",
           "database-migrations",
@@ -255,6 +286,25 @@ it("decides every step's pending check without creating or changing a file", asy
         [],
       );
       expect(pending.decisions.filter((decision) => decision.changed.length > 0)).toEqual([]);
+    } finally {
+      mocks.servicePlatform = undefined;
+    }
+  });
+});
+
+it("leaves an update-driven Doctor to decide inside the stop the updater owns", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await prepareInactiveSystemdGateway(state, "current-policy");
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+    pending.root = state.stateDir;
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    try {
+      await runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
+      const decided = pending.decisions.filter((decision) => decision.checked > 0);
+      expect(decided.map(({ step }) => step)).toEqual(
+        expect.arrayContaining(["state-schema", "config-flow", "boot-lifecycle"]),
+      );
+      expect(decided.filter((decision) => decision.beforeStop)).toEqual([]);
     } finally {
       mocks.servicePlatform = undefined;
     }
