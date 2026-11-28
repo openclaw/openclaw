@@ -30,12 +30,32 @@ Advantages:
 
   </Step>
   <Step title="Run a SearXNG instance">
+    Start a local instance with a persistent settings directory.
+
     ```bash
-    docker run -d -p 8888:8080 searxng/searxng
+    mkdir -p searxng
+    docker run -d --name searxng -p 127.0.0.1:8888:8080 \
+      -v "$PWD/searxng:/etc/searxng" searxng/searxng
     ```
 
-    Or use any existing SearXNG deployment you have access to. See the
-    [SearXNG documentation](https://docs.searxng.org/) for production setup.
+    After the container creates `searxng/settings.yml`, add `json` to the
+    `search.formats` list. Keep `html` if you also use the web interface.
+
+    ```yaml
+    search:
+      formats: [html, json]
+    ```
+
+    Run `docker restart searxng` to load the settings. Then verify the JSON endpoint.
+
+    ```bash
+    curl --fail 'http://localhost:8888/search?q=openclaw&format=json'
+    ```
+
+    An HTTP 403 on a default instance means the JSON format is disabled.
+    For an existing instance, enable JSON in its current settings and run the
+    same check against its URL. See the [SearXNG documentation](https://docs.searxng.org/)
+    for production setup.
 
   </Step>
   <Step title="Configure">
@@ -124,7 +144,7 @@ and `language` as per-call overrides.
 - **JSON API** -- uses SearXNG's native `format=json` endpoint, not HTML scraping
 - **Image result URLs** -- image-category results include `img_src` when SearXNG
   returns a direct image URL
-- **No API key** -- works with any SearXNG instance out of the box
+- **No API key** -- requires a SearXNG instance with JSON search enabled
 - **Base URL validation** -- `baseUrl` must be a valid `http://` or `https://`
   URL
 - **Network guard** -- `http://` base URLs must target a trusted private or
@@ -147,11 +167,6 @@ and `language` as per-call overrides.
 - **Result caching** -- identical queries (same query, count, categories,
   language, and base URL) are cached in-process for a short TTL
 - **Version requirement** -- the plugin declares `minHostVersion: >=2026.6.9`
-
-<Tip>
-  For SearXNG JSON API to work, make sure your SearXNG instance has the `json`
-  format enabled in its `settings.yml` under `search.formats`.
-</Tip>
 
 ## Related
 
