@@ -635,9 +635,6 @@ function createPublicationBackend(
       }
       loadExtension(command.input.state.extensionPath);
       if (command.type === "index.normalizeVectors") {
-        if (!readMemoryDatabaseFacts(db).hasVectorTable) {
-          return { ok: true, value: false };
-        }
         return withFacts(
           write(() => {
             normalizeMemoryVectorsInPlace(db);
