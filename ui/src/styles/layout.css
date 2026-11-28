@@ -2318,10 +2318,6 @@ div.shell.shell--onboarding {
   color: var(--muted-strong);
 }
 
-.sidebar-customize__plugin-icon--fallback {
-  box-shadow: inset 0 0 0 1px var(--border-strong);
-}
-
 .sidebar-customize__plugin-icon img {
   width: 100%;
   height: 100%;

@@ -83,16 +83,6 @@
 }
 
 .oc-app-surface {
-  --oc-component-surface: var(--oc-surface-card);
-  --oc-component-surface-hover: var(--oc-surface-interactive);
-  --oc-component-border: var(--oc-border-subtle);
-  --oc-component-border-hover: color-mix(
-    in srgb,
-    var(--oc-text-primary) 28%,
-    var(--oc-border-subtle)
-  );
-  --oc-component-shadow: var(--oc-shadow-sm);
-  --oc-component-shadow-hover: var(--oc-shadow-md);
   min-width: 0;
   min-height: 100%;
   background: var(--oc-bg-page);
@@ -105,38 +95,9 @@
   color: var(--oc-text-primary);
 }
 
-.oc-card {
-  border: 1px solid var(--oc-component-border);
-  border-radius: var(--oc-radius-surface);
-  background: var(--oc-component-surface);
-  color: var(--oc-text-primary);
-  box-shadow: var(--oc-component-shadow);
-}
-
-.oc-card-interactive {
-  transition:
-    background var(--oc-duration-ui) var(--oc-ease-out),
-    border-color var(--oc-duration-ui) var(--oc-ease-out),
-    box-shadow var(--oc-duration-ui) var(--oc-ease-out),
-    transform var(--oc-duration-ui) var(--oc-ease-out);
-}
-
-.oc-card-interactive:hover,
-.oc-card-interactive:focus-visible {
-  border-color: var(--oc-component-border-hover);
-  background: var(--oc-component-surface-hover);
-  box-shadow: var(--oc-component-shadow-hover);
-  transform: translateY(-1px);
-}
-
-.oc-card-interactive:focus-visible,
 .oc-action:focus-visible {
   outline: 2px solid var(--oc-focus-ring);
   outline-offset: 3px;
-}
-
-.oc-card-interactive:active {
-  transform: translateY(0) scale(0.995);
 }
 
 .oc-action {
@@ -417,12 +378,6 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .oc-card-interactive {
-    transition: none;
-  }
 }
 
 /* Carapace's settings primitives assume a two-child grid row. Control UI's

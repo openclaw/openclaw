@@ -54,12 +54,12 @@ it.each([false, true])("keeps unknown linkage configured (running=%s)", (running
 });
 
 it.each([
-  ["linked", true],
-  ["not-linked", false],
-  ["unknown", undefined],
-  [undefined, true],
-] as const)("maps link state %s", (state, expected) => {
-  expect(resolveChannelAccountLinked(state, true)).toBe(expected);
+  ["linked", true, false],
+  ["not-linked", false, true],
+  ["unknown", undefined, true],
+  [undefined, true, true],
+] as const)("maps link state %s", (state, expected, fallback) => {
+  expect(resolveChannelAccountLinked(state, fallback)).toBe(expected);
 });
 it("replaces owner fields while preserving unrelated snapshot data", () => {
   const state = resolveChannelAccountState({ ...baseInput, linked: undefined, runtime: {} });
