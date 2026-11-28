@@ -6,6 +6,7 @@ import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as outputFiles from "./output-files.js";
 import { observeOutputWriteSettlement } from "./output-files.test-support.js";
+import { downloadReadStream } from "./pw-download-test-doubles.js";
 import * as harness from "./pw-tools-core.test-harness.js";
 
 const expectedUrl = "http://127.0.0.1/inline.png";
@@ -51,7 +52,7 @@ function makeDownload(url = expectedUrl, beforeTrigger = () => {}) {
   const download = {
     url: () => url,
     suggestedFilename: () => "inline.png",
-    saveAs: vi.fn(async (destination: string) => fs.writeFile(destination, "exact asset bytes")),
+    createReadStream: downloadReadStream("exact asset bytes"),
     cancel: vi.fn(async () => {}),
   };
   evaluate.mockImplementationOnce(async () => {
@@ -96,7 +97,7 @@ it.each(["before", "during", "redirect"] as const)("rejects %s capture", async (
     stage === "redirect" ? "unsupported protocol" : "The tab changed",
   );
   expect(evaluate).toHaveBeenCalledTimes(stage === "before" ? 0 : 1);
-  expect(download.saveAs).not.toHaveBeenCalled();
+  expect(download.createReadStream).not.toHaveBeenCalled();
   if (stage === "redirect") {
     expect(download.cancel).toHaveBeenCalledOnce();
   }
@@ -107,18 +108,19 @@ it.for(["caller", "navigation", "close"] as const)("cancels %s save", async (rea
   context.onTestFinished(() => write.mockRestore());
   const controller = new AbortController();
   const download = makeDownload();
-  download.saveAs.mockImplementationOnce(async (destination) => {
-    await fs.writeFile(destination, "partial bytes");
-    const cancel = {
-      caller: () => controller.abort(new Error("caller cancelled")),
-      // A reload changes the document even when its URL is unchanged.
-      navigation: () => events.emit("framenavigated", mainFrame),
-      close: () => {
-        closed = true;
-        events.emit("close");
-      },
-    };
-    cancel[reason]();
+  download.createReadStream = downloadReadStream("partial bytes", {
+    afterYield: async () => {
+      const cancel = {
+        caller: () => controller.abort(new Error("caller cancelled")),
+        // A reload changes the document even when its URL is unchanged.
+        navigation: () => events.emit("framenavigated", mainFrame),
+        close: () => {
+          closed = true;
+          events.emit("close");
+        },
+      };
+      cancel[reason]();
+    },
   });
   await expect(start({ signal: controller.signal })).rejects.toThrow(
     reason === "caller" ? "caller cancelled" : "The tab changed",
