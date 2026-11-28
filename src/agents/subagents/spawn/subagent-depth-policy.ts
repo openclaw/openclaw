@@ -4,7 +4,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { getSubagentDepth } from "../../../sessions/session-key-utils.js";
 
-type PersistedSessionDepthEntry = Pick<SessionEntry, "sessionId" | "spawnDepth" | "spawnedBy">;
+type PersistedSessionDepthEntry = Pick<
+  SessionEntry,
+  "sessionId" | "spawnDepth" | "spawnMode" | "spawnedBy"
+>;
 export type SessionDepthEntry = { [Key in keyof PersistedSessionDepthEntry]?: unknown };
 
 function normalizeSpawnDepth(value: unknown): number | undefined {

@@ -38,6 +38,7 @@ function decodeSessionEntryCurrentFacts(
         : undefined,
       spawnedBy: value.spawnedBy,
       spawnDepth: value.spawnDepth,
+      spawnMode: value.spawnMode,
       completionOwnerSessionKey: value.completionOwnerSessionKey,
       subagentRole: value.subagentRole,
       subagentControlScope: value.subagentControlScope,

@@ -127,6 +127,7 @@ export function preserveSessionLineage(
     | "forkSource"
     | "forkedFromParent"
     | "spawnDepth"
+    | "spawnMode"
     | "subagentRole"
     | "subagentControlScope"
     | "blindPrompt"
@@ -144,6 +145,7 @@ export function preserveSessionLineage(
     forkSource: entry?.forkSource,
     forkedFromParent: sessionEntryForkedFromParent(entry) ? true : undefined,
     spawnDepth: entry?.spawnDepth,
+    spawnMode: entry?.spawnMode,
     subagentRole: entry?.subagentRole,
     subagentControlScope: entry?.subagentControlScope,
     blindPrompt: entry?.blindPrompt,

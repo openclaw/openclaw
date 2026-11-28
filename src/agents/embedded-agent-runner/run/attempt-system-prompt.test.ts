@@ -289,7 +289,7 @@ describe("buildAttemptSystemPrompt", () => {
     });
   });
 
-  it.each(["conversation", "ephemeral", "persistent", "leaf"] as const)(
+  it.each(["conversation", "ephemeral", "persistent", "persistent-swept", "leaf"] as const)(
     "preserves the provider prefix and standing policy across %s follow-ups",
     async (kind) =>
       withOpenClawTestState({ label: `suffix-${kind}` }, async () => {
@@ -297,7 +297,7 @@ describe("buildAttemptSystemPrompt", () => {
         setRuntimeConfigSnapshot(config);
         const childSessionKey = `agent:main:subagent:prefix-${kind}`;
         const childDepth = kind === "leaf" ? 2 : 1;
-        const spawnMode = kind === "persistent" ? "session" : "run";
+        const spawnMode = kind.startsWith("persistent") ? "session" : "run";
         if (kind !== "conversation") {
           await upsertSessionEntryCore(
             { sessionKey: childSessionKey },
@@ -305,13 +305,15 @@ describe("buildAttemptSystemPrompt", () => {
               sessionId: "prefix-fixture",
               updatedAt: 1,
               spawnDepth: childDepth,
+              // A swept child keeps only its entry fact; no run record follows.
+              ...(kind === "persistent-swept" ? { spawnMode } : {}),
             },
           );
         }
         const requests: Record<string, unknown>[] = [];
         const messages: Parameters<typeof convertToLlm>[0] = [];
         const child = buildSubagentSpawnEnvelope({
-          completionMode: kind === "persistent" ? "thread-direct" : "collector",
+          completionMode: spawnMode === "session" ? "thread-direct" : "collector",
           spawnMode,
           childDepth,
           maxSpawnDepth: 2,
@@ -319,7 +321,7 @@ describe("buildAttemptSystemPrompt", () => {
           childSessionKey,
         });
         for (const turn of ["operator", "completion"]) {
-          if (kind !== "conversation" && turn === "completion") {
+          if (kind !== "conversation" && kind !== "persistent-swept" && turn === "completion") {
             const { addSubagentRunForTests } =
               await import("../../subagents/registry/subagent-registry.test-helpers.js");
             onTestFinished(async () => {
