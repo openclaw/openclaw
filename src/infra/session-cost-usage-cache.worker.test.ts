@@ -596,29 +596,30 @@ it("serves fresh and partial usage while refresh waits for its host writer", asy
   });
 }, 30_000);
 
-it("prunes a cached transcript after its queued selection disappears", async () => {
+it("refreshes surviving queued transcripts and prunes a disappeared transcript", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const agentId = "usage-missing-transcript";
     const sessionFile = state.path("disappearing.jsonl");
-    const sessions = [{ sessionFile }];
+    const sessionsDir = state.sessionsDir(agentId);
+    const survivingFile = path.join(sessionsDir, "surviving.jsonl");
+    const sessions = [{ sessionFile }, { sessionFile: survivingFile }];
+    await fs.mkdir(sessionsDir, { recursive: true });
     await fs.writeFile(sessionFile, usageLine("selected"));
     await refresh(agentId, [sessionFile]);
     expectFresh(await readSession(agentId, sessionFile), 10);
     await fs.rm(sessionFile);
+    await fs.writeFile(survivingFile, usageLine("surviving"));
     const work = new AsyncWorkScope();
     const published = vi.fn();
     sessionCostUsageNotifications.onUpdated = published;
     try {
       expect(
         await work.track(() => loadSessionCostSummariesFromCache({ config, agentId, sessions })),
-      ).toMatchObject({ summaries: [null], cacheStatus: { status: "refreshing" } });
+      ).toMatchObject({ summaries: [null, null], cacheStatus: { status: "refreshing" } });
       await work.runWhenIdle(() => undefined);
-      expect(published).toHaveBeenNthCalledWith(1, {
-        agentId,
-        usageUpdatedAt: expect.any(Number),
-        usageRefreshFailed: true,
-      });
+      expect(published).toHaveBeenNthCalledWith(1, { agentId, usageUpdatedAt: expect.any(Number) });
       expect(published).toHaveBeenNthCalledWith(2, { agentId, usageUpdatedAt: expect.any(Number) });
+      expectFresh(await readSession(agentId, survivingFile), 10);
       expect(readSessionCostUsageRollupRows(agentId).some((row) => row.key === sessionFile)).toBe(
         false,
       );

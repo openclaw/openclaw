@@ -1,5 +1,4 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { WorkerTaskError } from "@openclaw/worker-runtime";
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import { isSessionArchiveDecodeError } from "../config/sessions/archive-compression.js";
 import {
@@ -325,9 +324,6 @@ export async function executeUsageCostWorker(
     : [];
 
   const requestedFiles = selectedFiles.filter((file) => file !== undefined);
-  if (requestedFiles.length !== (operation.sessionFiles?.length ?? 0)) {
-    throw new WorkerTaskError("Chat history for the requested usage is unavailable", "unavailable");
-  }
   const sources = operation.sessionFiles
     ? []
     : await listUsageCountedTranscriptSources(location.agentId, {
@@ -663,6 +659,13 @@ export async function executeUsageCostWorker(
   }
   await pruner.flush();
   await settleReadPacing();
+  const refreshResult = {
+    kind: "refresh" as const,
+    changed,
+    ...(requestedFiles.length !== (operation.sessionFiles?.length ?? 0)
+      ? { missingTranscripts: true as const }
+      : {}),
+  };
   const unreadableFiles = unreadable.size
     ? {
         unreadableFiles: [...unreadable].map(([sessionFile, error]) => ({
@@ -672,13 +675,12 @@ export async function executeUsageCostWorker(
       }
     : {};
   if (stale.length === completedFiles && deferredSources.length === 0) {
-    return { kind: "refresh", changed, ...unreadableFiles };
+    return { ...refreshResult, ...unreadableFiles };
   }
   const remaining = stale.slice(completedFiles).map(({ file }) => file);
   const remainingPaths = new Set(remaining.map((file) => file.filePath));
   return {
-    kind: "refresh",
-    changed,
+    ...refreshResult,
     ...unreadableFiles,
     // Keep every requested alias pending even when scanning deduplicated physical keys.
     remainingFiles: [
