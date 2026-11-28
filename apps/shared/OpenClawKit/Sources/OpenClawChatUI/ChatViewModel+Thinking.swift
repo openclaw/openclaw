@@ -261,7 +261,8 @@ extension OpenClawChatViewModel {
         return Self.normalizedThinkingLevel(
             storedLevel,
             options: options,
-            fallback: session?.thinkingLevel) ?? storedLevel
+            fallback: session?.thinkingLevel,
+            defaultLevel: profile?.defaultLevel) ?? storedLevel
     }
 
     func syncThinkingLevelOptions() {
@@ -281,7 +282,8 @@ extension OpenClawChatViewModel {
             Self.normalizedThinkingLevel(
                 preferredLevel,
                 options: options,
-                fallback: currentSession?.thinkingLevel)
+                fallback: currentSession?.thinkingLevel,
+                defaultLevel: profile?.defaultLevel)
         } else {
             self.thinkingLevelWithoutGatewayMetadata(
                 preferredLevel,
@@ -402,16 +404,22 @@ extension OpenClawChatViewModel {
     static func normalizedThinkingLevel(
         _ level: String?,
         options: [OpenClawChatThinkingLevelOption],
-        fallback: String? = nil) -> String?
+        fallback: String? = nil,
+        defaultLevel: String? = nil) -> String?
     {
         guard let normalized = normalizedThinkingLevel(level) else { return nil }
-        guard normalized == "ultra" else { return normalized }
+        guard normalized == "off" || normalized == "ultra" else { return normalized }
         let advertised = options.compactMap { self.normalizedThinkingLevel($0.id) }
-        if advertised.contains("ultra") {
-            return "ultra"
-        }
+        if advertised.contains(normalized) { return normalized }
         if let fallback = normalizedThinkingLevel(fallback), advertised.contains(fallback) {
             return fallback
+        }
+        // A fresh chat stores Off before it receives the Gateway's mandatory levels.
+        if normalized == "off" {
+            if let defaultLevel = normalizedThinkingLevel(defaultLevel), advertised.contains(defaultLevel) {
+                return defaultLevel
+            }
+            return advertised.first ?? normalized
         }
         return advertised
             .filter { $0 != "off" }

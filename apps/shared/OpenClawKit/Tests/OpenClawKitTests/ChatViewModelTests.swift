@@ -12546,11 +12546,11 @@ struct ChatViewModelTests {
         let (transport, vm) = await makeViewModel(
             historyResponses: [history],
             sessionsResponses: [sessions],
-            modelResponses: [models],
-            initialThinkingLevel: "medium")
+            modelResponses: [models])
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
         #expect(await MainActor.run { vm.showsThinkingPicker })
+        #expect(await MainActor.run { vm.thinkingLevel } == "medium")
 
         let send = await sendUserMessage(vm, text: "hello")
         await send?.value
