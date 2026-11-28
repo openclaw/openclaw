@@ -48,6 +48,7 @@
   --chat-send-hover-bg: color-mix(in srgb, var(--primary) 86%, var(--text-strong));
   --chat-send-active-bg: var(--primary-active);
   --chat-composer-surface: var(--popover);
+  --chat-composer-placeholder: var(--muted);
   /* Composer controls take their ink from the composer's own surface rather
      than the canvas. Built-in dark themes lift that surface well above the
      canvas, which pulled canvas-calibrated inks down to (or below) the
@@ -661,6 +662,12 @@
 /* Light theme tokens apply to every light-mode family. */
 /* Defaults must lose to named palettes even when their link precedes the app CSS. */
 :root:where([data-theme-mode="light"]) {
+  /* Empty hints are quieter than reading text, but still AA on the composer surface. */
+  --chat-composer-placeholder: color-mix(
+    in srgb,
+    var(--text-strong) 64%,
+    var(--chat-composer-surface)
+  );
   --media-control-bg: rgba(12, 16, 24, 0.64);
   --media-control-bg-hover: rgba(12, 16, 24, 0.78);
   /* Imported light palettes retain the warm defaults; built-ins own their canvas below. */

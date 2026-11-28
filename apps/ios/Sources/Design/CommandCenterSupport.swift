@@ -91,6 +91,7 @@ struct CommandSessionActionsModifier: ViewModifier {
     let preview: (() -> AnyView)?
 
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(\.openClawToastPresenter) private var toastPresenter
     @State private var editor: Editor?
     @State private var draftText = ""
     @State private var confirmsDelete = false
@@ -131,8 +132,11 @@ struct CommandSessionActionsModifier: ViewModifier {
                 titleVisibility: .visible)
             {
                 Button(role: .destructive) {
-                    self.performMutation(self.session.key) { transport in
-                        try await transport.deleteSession(key: self.session.key)
+                    self.run(
+                        self.failureText(String(localized: "Couldn’t delete “%@”.")),
+                        resetActiveSessionKey: self.session.key)
+                    {
+                        try await $0.deleteSession(key: self.session.key)
                     }
                 } label: {
                     Text("Delete Session")
@@ -156,12 +160,28 @@ struct CommandSessionActionsModifier: ViewModifier {
         archived: Bool? = nil,
         unread: Bool? = nil)
     {
-        self.performMutation(archived == true ? self.session.key : nil) { transport in
+        let failure = switch (archived, pinned, label) {
+        case (true?, _, _): self.failureText(String(localized: "Couldn’t archive “%@”."))
+        case (false?, _, _): self.failureText(String(localized: "Couldn’t unarchive “%@”."))
+        case (_, true?, _): self.failureText(String(localized: "Couldn’t pin “%@”."))
+        case (_, false?, _): self.failureText(String(localized: "Couldn’t unpin “%@”."))
+        case (_, _, .some): self.failureText(String(localized: "Couldn’t rename “%@”."))
+        default: self.failureText(String(localized: "Couldn’t update “%@”."))
+        }
+        // The row leaves the list, so archiving says so and offers Undo. Unarchive in Sessions › Archived
+        // is the other way back.
+        let success = archived == true
+            ? OpenClawToast(
+                String(localized: "Archived"),
+                systemImage: "archivebox",
+                action: .undo { self.patch(archived: false) })
+            : nil
+        self.run(failure, resetActiveSessionKey: archived == true ? self.session.key : nil, success: success) {
             if let pinned {
                 try await self.appModel.setPersonalSidebarPin(self.session.key, pinned: pinned)
                 return
             }
-            try await transport.patchSession(
+            try await $0.patchSession(
                 key: self.session.key,
                 expectedSessionID: archived == nil ? nil : self.session.sessionId,
                 label: label,
@@ -174,12 +194,57 @@ struct CommandSessionActionsModifier: ViewModifier {
     }
 
     private func patchSnooze(_ snoozedUntil: OpenClawChatSnoozePatch) {
-        self.performMutation(nil) { transport in
-            try await transport.patchSession(
+        let failure: String
+        var success: OpenClawToast?
+        switch snoozedUntil {
+        case let .until(wakeAt):
+            failure = self.failureText(String(localized: "Couldn’t snooze “%@”."))
+            // The row leaves the list until then; Wake session in its menu is the other way back.
+            success = OpenClawToast(
+                String(
+                    format: String(localized: "Snoozed until %@"),
+                    OpenClawChatSessionSnooze.wakeDescription(wakeAt)),
+                systemImage: "clock",
+                action: .undo { self.patchSnooze(.wake) })
+        case .wake:
+            failure = self.failureText(String(localized: "Couldn’t wake “%@”."))
+        }
+        self.run(failure, resetActiveSessionKey: nil, success: success) {
+            try await $0.patchSession(
                 key: self.session.key,
                 expectedSessionID: self.session.sessionId,
                 snoozedUntil: snoozedUntil)
         }
+    }
+
+    private func failureText(_ format: String) -> String {
+        String(format: format, SessionPresentation.title(self.session))
+    }
+
+    /// Runs a row action through the screen that owns the list. A failure is a toast with Try again,
+    /// which repeats the same action; `success` shows once the action lands.
+    private func run(
+        _ failure: String,
+        resetActiveSessionKey: String?,
+        success: OpenClawToast? = nil,
+        _ operation: @escaping Mutation)
+    {
+        let toasts = self.toastPresenter
+        let perform = self.performMutation
+        func attempt() {
+            perform(resetActiveSessionKey) { transport in
+                do {
+                    try await operation(transport)
+                } catch {
+                    if !(error is CancellationError) {
+                        await toasts?.post(.failure(failure, retry: attempt))
+                    }
+                    throw error
+                }
+                if let success { await toasts?.post(success) }
+            }
+        }
+        attempt()
     }
 
     private var canSnooze: Bool {

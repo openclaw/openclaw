@@ -19,9 +19,11 @@ the shared workflows with its native installer:
 python3 scripts/install-skills autoreview crabbox
 ```
 
-Install `update-team-server` for Team updates or
-`openclaw-secret-scanning-maintainer` for secret-scanning maintenance from
-`openclaw/maintainers` using its [installation guide](https://github.com/openclaw/maintainers/blob/main/.agents/skills/AGENTS.md#install-before-use).
+Install the required private workflow from `openclaw/maintainers` using its
+[installation guide](https://github.com/openclaw/maintainers/blob/main/.agents/skills/AGENTS.md#install-before-use):
+`update-team-server` for Team updates, `openclaw-secret-scanning-maintainer` for
+secret-scanning maintenance, or `openclaw-ghsa-maintainer` for repository security
+advisories.
 Use the agent's configured skill directory and a durable source checkout.
 Preserve existing installations and report conflicts or missing access.
 Installation grants no authority to deploy, publish, change credentials, or

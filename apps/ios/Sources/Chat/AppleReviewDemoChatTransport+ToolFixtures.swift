@@ -2,6 +2,251 @@ import Foundation
 import OpenClawChatUI
 import OpenClawKit
 
+extension LocalFixtureChatStore {
+    static var commandStretchModel: String? {
+        let args = ProcessInfo.processInfo.arguments
+        return args.firstIndex(of: "--openclaw-command-stretch").flatMap { args.dropFirst($0 + 1).first }
+    }
+
+    func commandStretchHistory(sessionKey: String) throws
+    -> (messages: [AnyCodable], snapshot: OpenClawChatInFlightRun?)? {
+        guard let model = Self.commandStretchModel,
+              let shape = CommandStretchFixture(rawValue: model) else { return nil }
+        let messages = try shape.history(finished: self.activeRunID == nil)
+        guard let run = self.activeRunID else { return (messages, nil) }
+        if !self.toolRunReplayStarted {
+            self.toolRunReplayStarted = true
+            Task {
+                let args = ProcessInfo.processInfo.arguments
+                let seconds = args.firstIndex(of: "--openclaw-command-stretch-seconds").flatMap {
+                    args.dropFirst($0 + 1).first.flatMap(Int.init)
+                } ?? 30
+                try? await Task.sleep(for: .seconds(seconds))
+                self.activeRunID = nil
+                self.publish(.chat(.init(
+                    runId: run,
+                    sessionKey: sessionKey,
+                    state: "final",
+                    message: nil,
+                    errorMessage: nil)))
+            }
+        }
+        return try (messages, .init(runId: run, text: "", events: [shape.liveEvent()]))
+    }
+}
+
+/// The live snapshot and chat.history carry the same physical call IDs. No personal transcript is used.
+enum CommandStretchFixture: String, CaseIterable {
+    case claude = "claude-cli", openAI = "openai-single", resumed = "openai"
+
+    func liveEvent() throws -> OpenClawAgentEventPayload {
+        let id: String
+        var data: [String: Any] = [
+            "phase": "start",
+            "name": "exec",
+            "args": ["command": "git diff --stat"],
+        ]
+        switch self {
+        case .claude: id = "toolu_sample_7"
+        case .openAI, .resumed:
+            let batch = self == .openAI ? 2 : 3
+            id = self.childID(batch, self == .openAI ? 2 : 1)
+            data["parentToolCallId"] = self.outerID(batch)
+        }
+        data["toolCallId"] = id
+        let wire: [String: Any] = [
+            "runId": LocalFixtureChatStore.toolRunID,
+            "seq": 1,
+            "stream": "tool",
+            "ts": 1_795_640_020_000,
+            "data": data,
+        ]
+        return try JSONDecoder().decode(
+            OpenClawAgentEventPayload.self,
+            from: JSONSerialization.data(withJSONObject: wire))
+    }
+
+    private func outerID(_ batch: Int) -> String {
+        "call_sample_\(batch)|fc_\(batch)"
+    }
+
+    private func childID(_ batch: Int, _ child: Int) -> String {
+        "tool_call:sample-\(batch):\(self == .openAI && batch == 0 && child == 1 ? "skills_read" : "exec"):\(child)"
+    }
+
+    private func imported(_ id: String) -> [String: String] {
+        ["id": id, "externalId": id, "importedFrom": "claude-cli", "cliSessionId": "sample-library"]
+    }
+
+    private func importedCalls(clock: Int, finished: Bool) -> [[String: Any]] {
+        var rows: [[String: Any]] = []
+        let commands = [
+            "ls Sources",
+            "git status --short",
+            "git branch --show-current",
+            "ls Tests",
+            "pwd",
+            "cat sample.conf",
+            "git diff --check",
+            "git diff --stat",
+        ]
+        let titles = [
+            "List the source files",
+            "Check working changes",
+            "Check the branch",
+            "List the tests",
+            "Locate the project",
+            "Check the config",
+            "Check whitespace",
+            "Summarize changes",
+        ]
+        for (index, command) in commands.enumerated() {
+            let id = "toolu_sample_\(index)", name = "mcp__openclaw__exec"
+            var content: [[String: Any]] = [[
+                "type": "toolcall",
+                "id": id,
+                "name": name,
+                "arguments": ["command": command, "title": titles[index]],
+            ]]
+            if index != commands.count - 1 || finished {
+                content.append([
+                    "type": "tool_result",
+                    "tool_use_id": id,
+                    "name": name,
+                    "is_error": index == 5,
+                    "content": index == 5 ? "Exit code 1" : "Done",
+                ])
+            }
+            rows.append([
+                "role": "assistant",
+                "model": "claude-sonnet",
+                "provider": "claude-cli",
+                "api": "anthropic-messages",
+                "stopReason": "toolUse",
+                "timestamp": clock + 1000 * (index + 1),
+                "__openclaw": self.imported("sample-message-\(index)"),
+                "content": content,
+            ])
+        }
+        return rows
+    }
+
+    func history(finished: Bool) throws -> [AnyCodable] {
+        let run = LocalFixtureChatStore.toolRunID
+        let clock = 1_795_640_000_000
+        let inputRun = self == .resumed ? "sample-0" : run
+        // The Gateway keeps the canonical local prompt when it merges imported CLI history.
+        var rows: [[String: Any]] = [[
+            "role": "user",
+            "timestamp": clock,
+            "content": "Check the sample project.",
+            "__openclaw": ["id": "sample-input", "runId": inputRun],
+        ]]
+        if self == .claude {
+            rows += self.importedCalls(clock: clock, finished: finished)
+        } else {
+            let commands = self == .openAI ? [
+                ["sample", "ls Sources"],
+                ["git branch --show-current"],
+                ["cat sample.conf", "git diff --stat"],
+            ] : [["ls Sources"], ["git branch --show-current"], ["cat sample.conf"], ["git diff --stat"]]
+            let titles = self == .openAI ? ["List the files", "Check the branch", "Check the config and changes"] : [
+                "List the files",
+                "Check the branch",
+                "Check the config",
+                "Check for changes",
+            ]
+            for (batch, children) in commands.enumerated() {
+                let lastBatch = batch == commands.count - 1
+                let owner = self == .resumed && !lastBatch ? "sample-\(batch)" : run
+                let outer = self.outerID(batch), time = clock + 4000 * (batch + 1)
+                var meta: [String: Any] = ["id": "sample-outer-\(batch)", "runId": owner]
+                if self == .resumed && batch > 0 { meta["turnBoundary"] = true
+                    meta["continuation"] = ["source": "exec"]
+                }
+                let code = children
+                    .map { $0 == "sample" ? "await skills.read('sample')" : "await exec({command: '\($0)'})" }
+                    .joined(separator: "; ")
+                rows.append([
+                    "role": "assistant",
+                    "provider": "openai",
+                    "model": "gpt-4o",
+                    "stopReason": "toolUse",
+                    "timestamp": time,
+                    "__openclaw": meta,
+                    "content": [[
+                        "type": "toolCall",
+                        "id": outer,
+                        "name": "exec",
+                        "arguments": ["title": titles[batch], "code": code],
+                    ]],
+                ])
+                for (index, command) in children.enumerated() {
+                    if !finished && lastBatch && index == children.count - 1 { break }
+                    let id = self.childID(batch, index + 1), name = command == "sample" ? "skills_read" : "exec"
+                    let args = name == "exec" ? ["command": command] : ["name": command]
+                    let failed = command == "cat sample.conf"
+                    rows.append([
+                        "role": "custom",
+                        "customType": "openclaw.nested-tool.v1",
+                        "display": true,
+                        "excludeFromContext": true,
+                        "timestamp": time + 500 * (index + 1),
+                        "__openclaw": ["id": "sample-child-\(batch)-\(index)", "runId": owner],
+                        "content": [
+                            [
+                                "type": "toolCall",
+                                "id": id,
+                                "runId": owner,
+                                "name": name,
+                                "arguments": args,
+                                "parentToolCallId": outer,
+                            ],
+                            [
+                                "type": "toolResult",
+                                "toolCallId": id,
+                                "runId": owner,
+                                "toolName": name,
+                                "parentToolCallId": outer,
+                                "isError": failed,
+                                "content": [["type": "text", "text": failed ? "Exit code 1" : "Done"]],
+                            ],
+                        ],
+                    ])
+                }
+                if !lastBatch || finished {
+                    rows.append([
+                        "role": "toolResult",
+                        "toolName": "exec",
+                        "toolCallId": outer,
+                        "timestamp": time + 2000,
+                        "isError": false,
+                        "__openclaw": ["id": "sample-outer-result-\(batch)", "runId": owner],
+                        "content": [["type": "text", "text": "Command returned"]],
+                    ])
+                }
+            }
+        }
+        if finished {
+            var answer: [String: Any] = [
+                "role": "assistant",
+                "stopReason": "stop",
+                "timestamp": clock + 22000,
+                "content": "The sample config is missing.",
+                "__openclaw": self == .claude ? self.imported("sample-answer") : [
+                    "id": "sample-answer",
+                    "runId": run,
+                ],
+            ]
+            answer["provider"] = self == .claude ? "claude-cli" : "openai"
+            answer["model"] = self == .claude ? "claude-sonnet" : "gpt-4o"
+            if self != .claude { answer["phase"] = "final_answer" }
+            rows.append(answer)
+        }
+        return try JSONDecoder().decode([AnyCodable].self, from: JSONSerialization.data(withJSONObject: rows))
+    }
+}
+
 /// Fixture turns of tool activity for the screenshot transport, recorded the way the Gateway records them.
 enum ToolActivityFixtures {
     static func stepLabels() throws -> [OpenClawChatHistoryActivity] {

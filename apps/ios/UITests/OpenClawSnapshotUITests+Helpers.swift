@@ -17,10 +17,9 @@ extension OpenClawSnapshotUITests {
         if app.buttons["Not Now"].waitForExistence(timeout: 8) {
             app.buttons["Not Now"].tap()
         }
-        let approvalDialog = app.descendants(matching: .any)["exec-approval-review-scroll"]
-        XCTAssertTrue(approvalDialog.waitForExistence(timeout: 8))
-        XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 8))
-        app.buttons["Cancel"].tap()
+        XCTAssertFalse(
+            app.descendants(matching: .any).matching(identifier: "chat-session-approval").firstMatch.exists,
+            "A request without session provenance belongs in Settings")
 
         try self.selectSidebarDestination("Settings")
         let approvals = app.buttons.containing(.staticText, identifier: "Approvals").firstMatch
@@ -50,9 +49,7 @@ extension OpenClawSnapshotUITests {
             dashboard.waitForExistence(timeout: 8),
             "Notification settings must render in the embedded Dashboard")
         XCTAssertTrue(dashboard.staticTexts["Notifications"].waitForExistence(timeout: 8))
-        XCTAssertFalse(
-            approvalDialog.exists,
-            "The approval being reviewed must not cover Dashboard notification settings")
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "chat-session-approval").firstMatch.exists)
         let close = app.buttons["DashboardPage.Close"]
         XCTAssertTrue(close.exists)
         close.tap()
@@ -466,10 +463,11 @@ extension OpenClawSnapshotUITests {
         XCTAssertEqual(input.value as? String, text)
         send.tap()
 
+        let working = app.descendants(matching: .any)["chat-working-status"]
         let failureContext = { (checkpoint: String) in
             "IOS_RELEASE_CHAT_FAILURE \(stage) \(checkpoint) draft=\(input.value as? String == text) " +
                 "keyboard=\(app.keyboards.firstMatch.exists) reply=\(app.staticTexts[replyMarker].exists) " +
-                "writing=\(app.staticTexts["Writing"].exists) jump=\(app.buttons["Jump to latest reply"].exists) " +
+                "working=\(working.exists) jump=\(app.buttons["Jump to latest reply"].exists) " +
                 "foreground=\(app.state == .runningForeground) input=\(input.exists) " +
                 "transcript=\(app.scrollViews["chat-transcript"].exists) send=\(send.exists)"
         }
@@ -478,7 +476,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(
             app.staticTexts[replyMarker].waitForExistence(timeout: 60),
             failureContext("reply"))
-        XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(working.waitForNonExistence(timeout: 5))
     }
 
     func dismissChatKeyboardThroughTranscript(in app: XCUIApplication) throws {
@@ -801,22 +799,27 @@ extension OpenClawSnapshotUITests {
         let inlinePermissions = app.buttons["chat-composer-inline-permissions"]
         let inlineEffort = app.buttons["chat-composer-inline-effort"]
         let contextUsage = app.buttons["chat-context-usage"]
-        let attachmentButton = app.buttons["chat-attachment-picker"]
+        // The side margin stays outside the menus and the transcript's interactive content.
+        let outsideMenu = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.4))
         inlinePermissions.tap()
-        XCTAssertTrue(app.buttons["Default (inherited)"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Read-only"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Guarded"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Workspace"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Full"].waitForExistence(timeout: 3))
+        for mode in ["default", "read-only", "guarded", "workspace", "full"] {
+            XCTAssertTrue(app.buttons["chat-composer-permission-\(mode)"].waitForExistence(timeout: 3))
+        }
+        XCTAssertTrue(app.switches["chat-composer-web-search"].exists)
         self.attachScreenshot(named: "chat-composer-permissions")
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        app.buttons["chat-composer-permissions-close"].tap()
+        self.chatMessageInput(in: app).tap()
 
         inlineEffort.tap()
-        XCTAssertTrue(app.buttons["Thinking"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Fast"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.descendants(matching: .any)["chat-effort-bar-slider"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Fast"].exists)
+        XCTAssertFalse(app.buttons["Default (inherited)"].exists, "The effort bar shows only levels")
         self.attachScreenshot(named: "chat-composer-effort")
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        outsideMenu.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["chat-effort-bar"].waitForNonExistence(timeout: 3))
 
+        app.buttons["Chat actions"].tap()
+        XCTAssertTrue(contextUsage.waitForExistence(timeout: 3))
         contextUsage.tap()
         XCTAssertTrue(
             app.descendants(matching: .any)["24.0k of 128.0k tokens used"]
@@ -824,52 +827,13 @@ extension OpenClawSnapshotUITests {
         let compactThread = app.buttons["Compact Thread"]
         XCTAssertTrue(compactThread.waitForExistence(timeout: 3))
         XCTAssertTrue(compactThread.isEnabled)
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        outsideMenu.tap()
+        if app.buttons["Export chat"].exists {
+            outsideMenu.tap()
+        }
+        self.chatMessageInput(in: app).tap()
 
-        attachmentButton.tap()
-        let photoLibrary = app.buttons["Photo Library"]
-        XCTAssertTrue(photoLibrary.waitForExistence(timeout: 3))
-        XCTAssertTrue(photoLibrary.isEnabled)
-        XCTAssertTrue(app.buttons["Camera"].waitForExistence(timeout: 3))
-        let mediaFile = app.buttons["File"]
-        XCTAssertTrue(mediaFile.waitForExistence(timeout: 3))
-        XCTAssertTrue(mediaFile.isEnabled)
-        XCTAssertTrue(app.buttons["Verbosity"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Web Search"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Skills"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Connectors"].waitForExistence(timeout: 3))
-        XCTAssertFalse(app.buttons["Permissions"].exists)
-        XCTAssertEqual(
-            app.buttons.matching(NSPredicate(format: "label == %@", "Model")).count,
-            1)
-        XCTAssertFalse(app.buttons["Thinking"].exists)
-        XCTAssertFalse(app.buttons["Fast"].exists)
-        XCTAssertFalse(self.app?.buttons["Voice Memo"].exists == true)
-        self.attachScreenshot(named: "chat-composer-capabilities")
-        self.app?.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
-
-        attachmentButton.tap()
-        app.buttons["Skills"].tap()
-        XCTAssertTrue(app.buttons["Auto Review"].waitForExistence(timeout: 3))
-        let disabledSkill = app.buttons["Disabled Skill — Disabled in the Gateway configuration."]
-        XCTAssertTrue(disabledSkill.waitForExistence(timeout: 3))
-        XCTAssertFalse(disabledSkill.isEnabled)
-        self.attachScreenshot(named: "chat-composer-skills")
-        self.app?.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
-
-        attachmentButton.tap()
-        app.buttons["Connectors"].tap()
-        XCTAssertTrue(app.buttons["GitHub"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Linear"].waitForExistence(timeout: 3))
-        self.attachScreenshot(named: "chat-composer-connectors")
-        app.buttons["GitHub"].tap()
-        XCTAssertTrue(app.buttons["Enabled for this session"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Tool Access"].waitForExistence(timeout: 3))
-        app.buttons["Tool Access"].tap()
-        XCTAssertTrue(app.buttons["Search code"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Create issue"].waitForExistence(timeout: 3))
-        self.attachScreenshot(named: "chat-composer-tool-access")
-        self.app?.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        self.verifyComposerAddSheet(in: app)
         self.attachScreenshot(named: "chat-composer-compact")
     }
 
