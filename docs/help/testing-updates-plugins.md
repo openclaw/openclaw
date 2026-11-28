@@ -128,6 +128,26 @@ Collect the proof before stopping the remote lease. This scenario proves Linux
 behavior; it does not establish Windows or macOS activation coverage. See
 [Node auto-updates](/cli/node#automatic-updates) for the operator contract.
 
+## Saved system-event account upgrade proof
+
+On a disposable Linux test host, install the old release into a fresh npm prefix.
+The test **updates that prefix in place**. Supply the absolute path to the candidate
+tarball built from this checkout and reserve loopback ports 19780, 19880, and 19980:
+
+```bash
+work=$(mktemp -d)
+version=2026.10.34
+npm install --global --prefix "$work/prefix" "openclaw@$version"
+pnpm test:e2e:system-event-account "$work/prefix" "$work/proof" \
+  "$candidate" "$(git rev-parse HEAD)" "$version" literal 19780
+```
+
+The released CLI saves and runs a reminder. After the update, the test checks the
+installed commit, saved settings, run history, and which account reached the loopback
+model. Use a fresh prefix and proof directory for each run. The other account cases
+are `stored`, `env-ref`, and `no-model`. Like the node auto-update proof, this is an
+explicit E2E command, not part of the default test suite.
+
 ## Docker lanes
 
 The Docker lanes are the product-level proof. They install or update a real
