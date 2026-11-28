@@ -38,8 +38,7 @@ import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js"
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
-const RESUME =
-  "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.";
+const RESUME = "The Gateway restarted while you were working.";
 const SHELL_CHECKPOINT = "no saved terminal result";
 const shellCases = [
   { cycle: 30, effect: "committed", expected: "Verified the file; no repeat." },
