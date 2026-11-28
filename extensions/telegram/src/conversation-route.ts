@@ -245,6 +245,19 @@ export function resolveTelegramOutboundDirectBaseSessionKey(params: {
   });
 }
 
+/** A DM thread gets a session of its own unless a binding selects the session. */
+export function hasTelegramDmThreadSession(params: {
+  bindingMode: TelegramConversationBindingMode;
+  dmThreadId?: number;
+  botHasTopicsEnabled?: boolean;
+}): boolean {
+  return (
+    params.bindingMode.kind !== "runtime-bound" &&
+    params.bindingMode.kind !== "configured" &&
+    shouldUseTelegramDmThreadSession(params)
+  );
+}
+
 export function resolveTelegramTargetSession(params: {
   cfg: OpenClawConfig;
   route: TelegramResolvedRoute;
@@ -263,7 +276,7 @@ export function resolveTelegramTargetSession(params: {
     resolveDefaultTelegramAccountId(params.cfg),
     params,
   );
-  return shouldUseTelegramDmThreadSession(params) && params.dmThreadId != null
+  return hasTelegramDmThreadSession(params) && params.dmThreadId != null
     ? resolveThreadSessionKeys({
         baseSessionKey,
         threadId: `${params.chatId}:${params.dmThreadId}`,

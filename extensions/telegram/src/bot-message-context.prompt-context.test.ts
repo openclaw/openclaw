@@ -127,18 +127,46 @@ const ambientRows = [
 ] as const;
 
 describe("Telegram prompt composition", () => {
+  const topicThread = { message_thread_id: 77, is_topic_message: true };
   it.each([
-    { name: "fresh plain DM", existing: false, reply: false, include: true },
-    { name: "existing plain DM", existing: true, reply: false, include: false },
-    { name: "existing DM reply", existing: true, reply: true, include: true },
+    { name: "fresh plain DM", existing: false, reply: false, window: true, deliveryOnly: false },
+    { name: "existing plain DM", existing: true, reply: false, window: false, deliveryOnly: true },
+    { name: "existing DM reply", existing: true, reply: true, window: true, deliveryOnly: false },
+    {
+      name: "existing DM topic with its own session",
+      existing: true,
+      reply: false,
+      thread: topicThread,
+      sessionKey: "agent:main:main:thread:1234:77",
+      window: false,
+      deliveryOnly: true,
+    },
+    {
+      name: "fresh DM topic",
+      existing: false,
+      reply: false,
+      thread: topicThread,
+      sessionKey: "agent:main:main:thread:1234:77",
+      window: true,
+      deliveryOnly: false,
+    },
+    {
+      // Without topics the thread shares the DM session, so its native window stays.
+      name: "existing DM reply thread sharing the DM session",
+      existing: true,
+      reply: false,
+      thread: { message_thread_id: 77 },
+      window: true,
+      deliveryOnly: false,
+    },
   ])(
     "selects cached context for $name from recorded session state",
-    async ({ existing, reply, include }) => {
+    async ({ existing, reply, thread, sessionKey = "agent:main:main", window, deliveryOnly }) => {
       const cfg = config();
       if (existing) {
         await upsertSessionEntry({
           storePath: cfg.session!.store!,
-          sessionKey: "agent:main:main",
+          sessionKey,
           entry: {
             sessionId: "existing-dm",
             updatedAt: 1_700_000_000_000,
@@ -149,29 +177,29 @@ describe("Telegram prompt composition", () => {
         cfg,
         sessionRuntime: null,
         message: {
-          ...message(12, "continue"),
+          ...message(12, "continue", thread),
           ...(reply
             ? { reply_to_message: { ...message(10, "older target"), reply_to_message: undefined } }
             : {}),
         },
         promptContext: chatWindow([{ message_id: "10", body: "Earlier DM turn" }]),
       });
-      if (include) {
+      expect(ctx?.ctxPayload.SessionKey).toBe(sessionKey);
+      if (window) {
         expect(ctx?.ctxPayload.ChannelStructuredContext).toMatchObject([
           { payload: { messages: [{ message_id: "10", body: "Earlier DM turn" }] } },
         ]);
-        expect(ctx?.ctxPayload.SessionTranscriptContext).toMatchObject({
-          chatWindow: true,
-          historyLimit: 10,
-        });
-        expect(ctx?.ctxPayload.SessionTranscriptContext).not.toHaveProperty("deliveryOnly");
       } else {
         expect(ctx?.ctxPayload.ChannelStructuredContext).toBeUndefined();
-        expect(ctx?.ctxPayload.SessionTranscriptContext).toMatchObject({
-          chatWindow: true,
-          deliveryOnly: true,
-          historyLimit: 10,
-        });
+      }
+      expect(ctx?.ctxPayload.SessionTranscriptContext).toMatchObject({
+        chatWindow: true,
+        historyLimit: 10,
+      });
+      if (deliveryOnly) {
+        expect(ctx?.ctxPayload.SessionTranscriptContext).toHaveProperty("deliveryOnly", true);
+      } else {
+        expect(ctx?.ctxPayload.SessionTranscriptContext).not.toHaveProperty("deliveryOnly");
       }
     },
   );

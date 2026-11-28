@@ -33,6 +33,8 @@ export type BuildTelegramInboundContextPayloadParams = {
   senderUsername: string;
   resolvedThreadId?: number;
   dmThreadId?: number;
+  /** The DM thread routes to a session of its own, not a bound or shared one. */
+  dmThreadHasOwnSession: boolean;
   threadSpec: TelegramThreadSpec;
   route: ResolvedAgentRoute;
   bodyResult: NonNullable<Awaited<ReturnType<typeof resolveTelegramInboundBody>>>;
