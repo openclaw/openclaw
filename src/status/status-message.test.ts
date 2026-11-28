@@ -138,8 +138,8 @@ describe("buildStatusMessageParts presentation", () => {
           selectedCacheKey: "not sent",
         }),
       ).get("🌐 Endpoint");
-    expect(endpointRow("https://user:secret@relay.example/v1?token=private")).toBe(
-      "https://relay.example/v1 · cache key: not sent",
+    expect(endpointRow("https://relay.example/private/route?token=private")).toBe(
+      "https://relay.example/[path hidden] · cache key: not sent",
     );
     // A suppressed endpoint stays "unknown"; the fixed note reveals nothing about it.
     const hidden = endpointRow("file:///private/relay");
