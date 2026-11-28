@@ -102,11 +102,15 @@ enum ChatSpeedBolt: String {
     case fast = "on"
     case ultrafast
 
-    var image: Image {
+    var assetName: String {
         switch self {
-        case .fast: Image("zapFilled", bundle: .module)
-        case .ultrafast: Image("zapDouble", bundle: .module)
+        case .fast: "zapFilled"
+        case .ultrafast: "zapDouble"
         }
+    }
+
+    var image: Image {
+        Image(self.assetName, bundle: .module)
     }
 }
 
