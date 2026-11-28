@@ -6,6 +6,7 @@ enum ChatActivitySheet: Identifiable, Hashable {
     case goal
     case progress
     case subagents
+    case pullRequest(String)
 
     var id: Self {
         self
@@ -17,6 +18,9 @@ enum ChatActivitySheet: Identifiable, Hashable {
 struct ChatActivityPillRow: View {
     let pills: [ChatActivityPill]
     let sheetIsOpen: Bool
+    var pullRequests: [ChatActivityPullRequest] = []
+    var onHide: (String) -> Void = { _ in }
+    @Environment(\.openURL) private var openURL
     let onOpen: (ChatActivityPill.Kind) -> Void
     @Environment(\.openClawChatComposerPanels) private var panels
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -27,10 +31,22 @@ struct ChatActivityPillRow: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: ChatActivityPillMetrics.spacing) {
                 ForEach(self.pills) { pill in
-                    ChatActivityPillButton(
+                    let button = ChatActivityPillButton(
                         pill: pill,
                         canWave: !self.sheetIsOpen && self.panels?.panel == nil) { self.onOpen(pill.kind) }
                             .transition(.opacity)
+                    if case let .pullRequest(id) = pill.kind, let pr = self.pullRequests.first(where: { $0.id == id }) {
+                        button.contextMenu {
+                            Button { self.onHide(id) } label: {
+                                Label("Hide", systemImage: "eye.slash")
+                            }
+                            if let url = URL(string: pr.url) {
+                                Button { self.openURL(url) } label: {
+                                    Label("Open on GitHub", systemImage: "arrow.up.right.square")
+                                }
+                            }
+                        }.tint(.primary)
+                    } else { button }
                 }
             }
             .animation(self.reduceMotion ? nil : .smooth(duration: 0.2), value: self.pills)
@@ -88,15 +104,21 @@ private struct ChatActivityPillButton: View {
 
     var body: some View {
         Button(action: self.action) {
-            HStack(spacing: 8) {
-                self.leadingMark
-                self.label
-                if let count = self.pill.count {
-                    Text(verbatim: count)
-                        .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .footnote))
-                        .monospacedDigit()
-                        .foregroundStyle(OpenClawChatTheme.muted)
-                        .fixedSize()
+            Group {
+                if case .pullRequest = self.pill.kind {
+                    ChatPullRequestPillFace(pill: self.pill)
+                } else {
+                    HStack(spacing: 8) {
+                        self.leadingMark
+                        self.label
+                        if let count = self.pill.count {
+                            Text(verbatim: count)
+                                .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .footnote))
+                                .monospacedDigit()
+                                .foregroundStyle(OpenClawChatTheme.muted)
+                                .fixedSize()
+                        }
+                    }
                 }
             }
             .padding(.horizontal, 14)
@@ -116,6 +138,7 @@ private struct ChatActivityPillButton: View {
         case .subagents: "chat-activity-pill-subagents"
         case .goal: "chat-activity-pill-goal"
         case .progress: "chat-activity-pill-progress"
+        case let .pullRequest(id): "chat-activity-pill-pr-\(id)"
         }
     }
 

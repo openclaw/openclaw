@@ -134,8 +134,11 @@ public final class OpenClawChatViewModel {
     var narration = ChatNarration()
     @ObservationIgnored var cliAssistantStream: (runID: String, text: String, sealedPrefix: String)?
     public internal(set) var progressCard: ProgressCard?
+    /// The current chat's PRs as the Gateway last pushed them, with the key they belong to.
+    var sessionPullRequests: (key: String, snapshot: OpenClawSessionPullRequestSnapshot)?
     var activityChildren = ChatActivityChildren()
     var goalActivity = ChatGoalActivity()
+    @ObservationIgnored var pullRequestWatch = ChatPullRequestWatch()
     var progressCardStoreAvailable: Bool?
     var progressCardRefreshAvailable = false
     var progressCardRefreshPending = false

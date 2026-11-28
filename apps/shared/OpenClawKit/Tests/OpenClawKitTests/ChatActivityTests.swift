@@ -101,10 +101,62 @@ struct ChatActivityTests {
             refreshPending: false)
     }
 
+    private func pullRequests(
+        _ states: [String],
+        status: String = "ready") throws -> OpenClawSessionPullRequestSnapshot
+    {
+        let rows = states.enumerated().map { index, state in
+            let number = 100 + index
+            let checks = #""checks":{"state":"failing","passed":1,"failed":1,"skipped":0,"running":0}"#
+            return #"{"number":\#(number),"owner":"o","repo":"r","branch":"b\#(index)","title":"T\#(index)","#
+                + #""url":"https://github.com/o/r/pull/\#(number)","state":"\#(state)",\#(checks)}"#
+        }
+        let json = #"{"pullRequests":[\#(rows.joined(separator: ","))],"rateLimited":false,"status":"\#(status)"}"#
+        return try JSONDecoder().decode(OpenClawSessionPullRequestSnapshot.self, from: Data(json.utf8))
+    }
+
     @Test func `no activity shows no row at all`() {
         #expect(ChatActivityRules.pills(ChatActivityInput()).isEmpty)
         let input = ChatActivityInput(children: [self.child("a", .done), self.child("b", .stopped)])
         #expect(ChatActivityRules.pills(input).isEmpty)
+    }
+
+    @Test func `pills follow the web order with all four kinds`() throws {
+        let input = try ChatActivityInput(
+            children: [self.child("a", .working), self.child("b", .working), self.child("c", .done)],
+            goal: self.goal(),
+            plan: self.plan([.completed, .inProgress, .pending]),
+            pullRequests: self.pullRequests(["merged", "open"]))
+        let pills = ChatActivityRules.pills(input)
+        #expect(pills.map(\.kind) == [
+            .subagents, .goal, .progress, .pullRequest("o/r#101"), .pullRequest("o/r#100"),
+        ])
+        #expect(pills[0].label == "2 working")
+    }
+
+    @Test func `the subagents pill leads with the working children's avatars and sweeps its label`() throws {
+        let input = try ChatActivityInput(
+            children: ["a", "b", "c", "d"].map { self.child($0, .working) } + [self.child("e", .done)],
+            goal: self.goal(),
+            plan: self.plan([.inProgress]),
+            pullRequests: self.pullRequests(["open"]))
+        let pills = ChatActivityRules.pills(input)
+        #expect(pills[0].avatarKeys == ["a", "b", "c"])
+        #expect(pills[0].label == "4 working")
+        #expect(pills.map(\.shimmers) == [true, false, false, false])
+        // Each child keeps the web's hue (FNV-1a over UTF-16, mod 360).
+        #expect(ChatSubagentAvatarColors.hue("agent:main:subagent:activity-flights") == 311)
+        #expect(ChatSubagentAvatarColors.hue("agent:main:subagent:activity-hotels") == 291)
+    }
+
+    @Test func `a waiting approval leaves only the Goal`() throws {
+        let input = try ChatActivityInput(
+            approvalPending: true,
+            children: [self.child("a", .working)],
+            goal: self.goal(.paused),
+            plan: self.plan([.inProgress]),
+            pullRequests: self.pullRequests(["open"]))
+        #expect(ChatActivityRules.pills(input).map(\.kind) == [.goal])
     }
 
     @Test func `an active Goal never claims work in progress`() {
@@ -169,6 +221,86 @@ struct ChatActivityTests {
         #expect(pill.label == "Task progress")
         #expect(pill.count == nil)
         #expect(pill.badge == nil)
+    }
+
+    private func pill(
+        _ state: String,
+        checks: OpenClawSessionPullRequestSnapshot.Checks?,
+        status: String = "ready") -> ChatActivityPill
+    {
+        let pr = OpenClawSessionPullRequestSnapshot.PullRequest(
+            number: 7, owner: "o", repo: "r", branch: "b", title: "T", url: "u7", state: state, checks: checks)
+        return ChatActivityRules.pullRequestPills(.init(pullRequests: [pr], status: status))[0]
+    }
+
+    private func checks(_ state: String, failed: Int = 0, running: Int = 0, passed: Int = 0)
+        -> OpenClawSessionPullRequestSnapshot.Checks
+    {
+        .init(state: state, passed: passed, failed: failed, skipped: 0, running: running)
+    }
+
+    @Test func `the PR pill shows live check rollups separately from lifecycle`() {
+        let running = self.pill("open", checks: self.checks("pending", running: 4, passed: 8))
+        #expect(running.label == "#7")
+        #expect(running.pullRequestState == .open)
+        #expect(running.checkMark == .running)
+        #expect(self.pill("open", checks: self.checks("failing", failed: 1)).checkMark == .failed)
+        #expect(self.pill("open", checks: self.checks("passing")).checkMark == nil)
+        #expect(self.pill("draft", checks: nil).checkMark == nil)
+        let merged = self.pill("merged", checks: self.checks("failing", failed: 1))
+        #expect(merged.pullRequestState == .merged)
+        #expect(merged.checkMark == nil)
+        let stale = self.pill("open", checks: self.checks("failing", failed: 1), status: "unavailable")
+        #expect(stale.checkMark == nil)
+        #expect(stale.accessibilityLabel.contains("Couldn’t update"))
+    }
+
+    @Test func `a passing PR announces its checks without drawing a mark`() {
+        let pill = self.pill("draft", checks: self.checks("passing", passed: 12))
+        #expect(pill.checkMark == nil)
+        #expect(pill.accessibilityLabel == "Pull request #7 in o/r, T, Draft, Checks passed")
+    }
+
+    @Test func `a published PR without verified details is listed once and claims no state`() throws {
+        let verified = OpenClawSessionPullRequestSnapshot.PullRequest(
+            number: 2, owner: "o", repo: "r", branch: "b", title: "Two", url: "u2", state: "open")
+        let snapshot = OpenClawSessionPullRequestSnapshot(
+            pullRequests: [verified],
+            taskPullRequests: [
+                .init(url: "u1", owner: "o", repo: "notes", number: 1, branch: "x"),
+                .init(url: "u2", owner: "o", repo: "r", number: 2, branch: "b", pullRequest: verified),
+            ])
+        let list = ChatActivityPullRequest.list(snapshot)
+        // The same URL from the branch and a publication is one PR; open before one without details.
+        #expect(list.map(\.number) == [2, 1])
+        let locked = ChatActivityRules.pullRequestPills(snapshot)[1]
+        #expect(locked.pullRequestState == nil)
+        #expect(locked.checkMark == nil)
+        #expect(locked.accessibilityLabel.contains("Details unavailable"))
+        #expect(list[1].title == nil)
+        #expect(list[1].branch == "x")
+        // The Gateway's JSON decodes the publication without its details.
+        let decoded = try JSONDecoder().decode(OpenClawSessionPullRequestSnapshot.self, from: Data(#"""
+        {"pullRequests":[],"rateLimited":false,"status":"unavailable","taskPullRequests":[{"url":"u1","owner":"o",
+        "repo":"notes","number":1,"branch":"x","sourceSessionKey":"agent:main:c","sourceAgentId":"main"}]}
+        """#.utf8))
+        #expect(ChatActivityPullRequest.list(decoded).first?.details == nil)
+    }
+
+    @Test func `the PR sheet lists only the checks that aren't zero, failed first`() {
+        let rows = ChatActivityCheckRow.rows(self.checks("failing", failed: 1, running: 0, passed: 11))
+        #expect(rows == [.init(kind: .failed, count: 1), .init(kind: .passed, count: 11)])
+        let all = ChatActivityCheckRow.rows(self.checks("pending", failed: 2, running: 3, passed: 4))
+        #expect(all.map(\.kind) == [.failed, .running, .passed])
+        #expect(all.map(\.label).joined(separator: ", ") == "2 failed, 3 running, 4 passed")
+        #expect(ChatActivityCheckRow.rows(self.checks("pending")).isEmpty)
+        let skipped = OpenClawSessionPullRequestSnapshot.Checks(
+            state: "passing",
+            passed: 0,
+            failed: 0,
+            skipped: 2,
+            running: 0)
+        #expect(ChatActivityCheckRow.rows(skipped) == [.init(kind: .skipped, count: 2)])
     }
 
     @Test func `children keep launch order and read their state from the row`() {

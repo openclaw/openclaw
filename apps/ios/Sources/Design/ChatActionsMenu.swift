@@ -70,6 +70,7 @@ struct ChatActionsMenu: View {
 
     var body: some View {
         Menu {
+            if let viewModel { ChatPRRestoreMenu(viewModel: viewModel) }
             ForEach(Array(self.sections.enumerated()), id: \.offset) { _, section in
                 Section {
                     ForEach(section, id: \.self) { item in
