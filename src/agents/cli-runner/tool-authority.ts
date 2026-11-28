@@ -60,6 +60,7 @@ function prepareCliReplyToolAuthority(
         cwd: workspace.cwd,
         permissionMode: params.sessionEntry?.permissionMode,
         toolOverrides: params.toolOverrides ?? params.sessionEntry?.toolOverrides,
+        toolBindings: params.toolBindings,
         senderId: params.senderId ?? undefined,
         senderName: params.senderName ?? undefined,
         senderUsername: params.senderUsername ?? undefined,

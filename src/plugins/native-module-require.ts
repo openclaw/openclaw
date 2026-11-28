@@ -365,6 +365,29 @@ export function clearPluginSourceCaptureModuleCache(directory: string): void {
   }
 }
 
+/**
+ * Non-isolated test workers retire each file's module generation. Natively required
+ * repository sources sit outside the test module graph, so evict them as well: a
+ * later file must evaluate fresh copies bound to its own published singletons.
+ */
+export function clearNativeRepositorySourceModulesForTest(root: string): void {
+  const cache = createRequire(import.meta.url).cache;
+  const isRepositorySource = (filename: string) =>
+    path.isAbsolute(filename) &&
+    isPathInside(root, filename) &&
+    !path.relative(root, filename).split(path.sep).includes("node_modules");
+  for (const id of Object.keys(cache)) {
+    if (isRepositorySource(id)) {
+      delete cache[id];
+    }
+  }
+  for (const filename of nativeModuleLoadFailures.keys()) {
+    if (isRepositorySource(filename)) {
+      nativeModuleLoadFailures.delete(filename);
+    }
+  }
+}
+
 /** Explicit public-library invalidation refreshes the current path synchronously. */
 export function clearPluginModuleRequireCache(modulePath: string, dependencyRoot: string): void {
   const require = createRequire(import.meta.url);

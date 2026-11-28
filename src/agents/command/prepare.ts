@@ -187,6 +187,9 @@ export async function prepareAgentCommandExecution(
   if (opts.verbose && !verboseOverride) {
     throw new Error('Invalid verbose level. Use "on", "full", or "off".');
   }
+  if (opts.verboseOnce && !normalizeVerboseLevel(opts.verboseOnce)) {
+    throw new Error('Invalid one-shot verbose level. Use "on", "full", or "off".');
+  }
 
   const isSubagentLane = normalizeOptionalString(opts.lane) === AGENT_LANE_SUBAGENT;
   const hasExplicitTimeoutOption = opts.timeout !== undefined;

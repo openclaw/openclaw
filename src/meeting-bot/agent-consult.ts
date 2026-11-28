@@ -170,6 +170,7 @@ async function consultMeetingAgent(
     runIdPrefix: `${params.surface.id}:${params.meetingSessionId}`,
     spawnedBy: requesterSessionKey,
     contextMode: "fork",
+    runner: "agent-turn",
     args: params.args,
     transcript: params.transcript,
     surface: params.surface.surface,

@@ -353,16 +353,24 @@ CLI logs render these diagnostics automatically; successful runs remain quiet.
 Native RPC error messages retain their original text; `agent.wait` renders the
 supplemental diagnostic at its terminal result boundary.
 
-Channel plugins run agent turns for their senders through the injected
-`api.runtime.agent.runCommandFromIngress(options, runtime)` capability. Only the
-active plugin registered for `options.messageChannel` can call it. Pass the
-sender as `runContext.senderId` and the channel account as `accountId`: the host
-makes the turn an owner turn exactly when `commands.ownerAllowFrom` lists that
-sender, the same rule as a text message from that channel. Any other sender runs
-as a non-owner.
-`options.senderIsOwner` is deprecated and ignored; passing `true` logs one
-deprecation warning per plugin. The public `agentCommandFromIngress` SDK helper
-never makes a turn an owner turn.
+Channel plugins must admit authenticated agent turns through their injected
+`api.runtime.agent.runCommandFromIngress(options, runtime)` capability. A named
+`options.messageChannel` must be a channel the calling plugin registers. Owner
+authority for a named channel comes from its authenticated `runContext.senderId`
+when `commands.ownerAllowFrom` lists that sender. A plugin-supplied
+`senderIsOwner` claim is ignored for named channels and logs a deprecation
+warning. Plugins without a channel, such as phone, meeting, and FaceTime
+bridges, omit `messageChannel`; bundled or trusted official plugins may mark
+their authenticated sender as owner. Other turns remain guests.
+`options.toolBindings` may scope only tools the calling plugin declares in
+`contracts.tools`. The public `agentCommandFromIngress` SDK helper never accepts
+a caller-supplied owner claim.
+
+`consultRealtimeVoiceAgent` from `openclaw/plugin-sdk/realtime-voice` accepts
+`runner: "agent-turn"` to run the consult as a turn of the consult session through
+`runCommandFromIngress`. The agent's runtime selection (including Claude CLI),
+fallbacks, and tool policy then apply as they do for a typed message. The default
+`runner: "embedded"` runs `runEmbeddedAgent` on the given provider and model.
 
 Model-picker integrations use two focused runtime subpaths. Import the typed
 `ModelPickerAction` and `ModelPickerCapabilityProfile` contracts from

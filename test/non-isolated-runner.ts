@@ -19,6 +19,7 @@ import type { SharedAuthStoreOwnership } from "../src/agents/auth-profiles/types
 import { resetAgentEventsForTest } from "../src/infra/agent-events.js";
 import { loggingState } from "../src/logging/state.js";
 import { clearNamedPluginRuntimeStoresForTest } from "../src/plugin-sdk/runtime-store-registry.js";
+import { clearNativeRepositorySourceModulesForTest } from "../src/plugins/native-module-require.js";
 import {
   isGatewayWorkAdmissionClosed,
   markGatewayRestartDraining,
@@ -698,6 +699,15 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
         ["document body", resetSharedDocumentBody],
         ["Gateway admission", resetGatewayWorkAdmission],
         ["module mocks", () => internals.moduleRunner?.mocker?.reset?.()],
+        // Retained SQLite custody keeps this generation, including its native copies.
+        [
+          "native source modules",
+          () => {
+            if (!hasRetainedSqliteTestCustody()) {
+              clearNativeRepositorySourceModulesForTest(this.config.root);
+            }
+          },
+        ],
         ["evaluated modules", () => resetEvaluatedModules(modules, executions, testFiles)],
       ] as const) {
         clean(phase, run);
